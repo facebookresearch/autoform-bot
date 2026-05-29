@@ -22,6 +22,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+aristotle = [
+    "aristotlelib>=2.0",
+]
 webapp = [
     "fastapi>=0.100",
     "flask>=3.0",

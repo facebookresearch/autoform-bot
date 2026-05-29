@@ -24,6 +24,7 @@ class Backend(StrEnum):
     GEMINI = "gemini"
     OPENAI_RESPONSE = "openai_response"
     OPENAI_CHAT = "openai_chat"
+    ARISTOTLE = "aristotle"
 
     def create(
         self, *, api_key: str, url: str, model_name: str, is_local: bool, pricing: ModelPricing | None = None
@@ -64,6 +65,15 @@ class Backend(StrEnum):
 
                 client = AsyncOpenAI(api_key=api_key, base_url=url)
                 return OpenAIChatInference(client, model_name=model_name, is_local=is_local, pricing=pricing)
+
+            case Backend.ARISTOTLE:
+                import aristotlelib
+
+                from .sdk.aristotle import AristotleInference
+
+                # aristotlelib reads the key from a module-global / env var.
+                aristotlelib.set_api_key(api_key)
+                return AristotleInference(model_name=model_name)
 
             case _:
                 raise ValueError(f"Unknown backend: {self}")
@@ -210,6 +220,24 @@ class Gemini_3_1_Pro(Model):
     provider_url = ""
     env_key = "GEMINI_API_KEY"
     backend = Backend.GEMINI
+
+
+# ---------------------------------------------------------------------------
+# Aristotle (Harmonic) — autonomous formal-reasoning agent, not a chat model.
+# See core/inference/sdk/aristotle.py for the job-based integration and its
+# limitations (no per-turn tool calls, no in-flight steering, no token usage).
+# ---------------------------------------------------------------------------
+
+
+class Aristotle(Model):
+    model_name = "aristotle"
+    abbreviation = "Aristotle"
+    # Aristotle bills by compute, not tokens, so per-token pricing does not
+    # apply; report zero so cost accounting treats it as untracked.
+    pricing = _FREE
+    provider_url = ""  # aristotlelib targets its own base URL internally
+    env_key = "ARISTOTLE_API_KEY"
+    backend = Backend.ARISTOTLE
 
 
 # ---------------------------------------------------------------------------
