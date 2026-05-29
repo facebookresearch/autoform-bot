@@ -107,3 +107,21 @@ autoform-pipeline/
 ## License
 
 This project is licensed under the [CC BY-NC 4.0](LICENSE) license.
+
+
+## Citation
+
+If you find this work useful, please cite our paper:
+
+```bibtex
+@misc{rammal2026formalizingmathematicsscale,
+      title={Formalizing Mathematics at Scale}, 
+      author={Ahmad Rammal and Niket Patel and Fabian Gloeckle and Amaury Hayat and Julia Kempe and Remi Munos and Charles Arnal and Vivien Cabannes},
+      year={2026},
+      eprint={2605.29955},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2605.29955}, 
+}
+```
+
