@@ -30,12 +30,17 @@ Honest limitations (documented for callers):
 * **No per-turn tool calling.** Aristotle runs its own tools internally, so
   ``tools`` passed by the agent loop are ignored and ``TurnResult.tool_calls``
   is always empty. Drive Aristotle with plain instructions, not tool schemas.
-* **No in-flight steering.** A running task can only be observed (events) or
-  cancelled; to redirect, cancel/finish then ``ask`` again. This adapter
-  steers between turns, not mid-task.
 * **No token usage / prompt caching.** Aristotle bills by compute, not
   tokens, so ``TokenUsage`` is reported as zeros and ``CacheConfig`` is a
   no-op.
+
+In-flight steering IS supported. While a task is running you can issue
+``project.ask(...)`` to redirect the live session (this is what Marathon's
+"Hermes" watcher does). Pass a ``steer`` callback to observe the event stream
+as it arrives and optionally return a steering prompt, which is injected via
+``project.ask`` while the task is still in flight. An ``on_event`` callback is
+also available for pure observation (progress, logging). Between-turn steering
+via follow-up ``complete()`` calls works too (each reuses the live session).
 
 The status-classification vocabulary (``IN_FLIGHT`` / ``CONTINUABLE`` /
 terminal) mirrors the design used in Marathon (https://github.com/Deicyde/marathon),
@@ -48,6 +53,7 @@ from __future__ import annotations
 import logging
 import tarfile
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +67,18 @@ from ..protocol import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Callback contracts for live observation / steering. ``Any`` stands for
+# aristotlelib's ``Event`` / ``AgentTask`` (kept untyped so the module imports
+# without the optional ``aristotlelib`` dependency installed).
+#
+# - EventObserver: called once per new event as it arrives during a run.
+# - SteerCallback: called with each batch of new events plus the running task;
+#   return a non-empty prompt to redirect the live task via ``project.ask``,
+#   or ``None``/empty to let it continue. This is the upstreamable
+#   generalization of Marathon's Hermes watcher.
+EventObserver = Callable[[Any], Awaitable[None]]
+SteerCallback = Callable[[list[Any], Any], Awaitable[str | None]]
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +130,13 @@ class AristotleInference(InferenceProtocol):
         poll_interval: Seconds between status polls while a task runs.
         max_wait_seconds: Optional ceiling on how long to wait for a single
             task; ``None`` waits indefinitely.
+        on_event: Optional async callback invoked once per new event as the
+            task runs (observation only — progress bars, logging).
+        steer: Optional async callback for in-flight steering. Called with
+            ``(new_events, task)`` on each poll that surfaces new events; if it
+            returns a non-empty prompt and the task is still in flight, the
+            prompt is injected via ``project.ask`` to redirect the live
+            session, and polling switches to the resulting task.
         lib: The ``aristotlelib`` module (injected for testing). When ``None``
             it is imported lazily on first use.
     """
@@ -124,6 +149,8 @@ class AristotleInference(InferenceProtocol):
         download_dir: Path | str | None = None,
         poll_interval: int = 10,
         max_wait_seconds: float | None = None,
+        on_event: EventObserver | None = None,
+        steer: SteerCallback | None = None,
         lib: Any | None = None,
     ) -> None:
         super().__init__()
@@ -132,6 +159,9 @@ class AristotleInference(InferenceProtocol):
         self._download_dir = Path(download_dir) if download_dir is not None else None
         self._poll_interval = poll_interval
         self._max_wait_seconds = max_wait_seconds
+        self._on_event = on_event
+        self._steer = steer
+
         self._lib = lib
 
         # Conversation state. ``_messages`` is a simple role/content log used
@@ -141,6 +171,7 @@ class AristotleInference(InferenceProtocol):
         self._messages: list[dict[str, Any]] = []
         self._project: Any | None = None
         self._last_status: str = ""
+        self._steer_count: int = 0
 
     # ------------------------------------------------------------------
     # Lazy SDK access
@@ -260,10 +291,35 @@ class AristotleInference(InferenceProtocol):
             )
         return await self._project.ask(user_content)
 
+    async def _fetch_new_events(self, task: Any, seen: set[str]) -> list[Any]:
+        """Return events on ``task`` not already in ``seen``, oldest-first.
+
+        Updates ``seen`` in place. Best-effort: a transient fetch error
+        returns no new events rather than aborting the run.
+        """
+        try:
+            events, _ = await task.get_events(limit=50, newest_first=True)
+        except Exception as err:  # pragma: no cover - transient API hiccup
+            logger.debug("event fetch failed (continuing): %s", err)
+            return []
+        fresh = [e for e in events if getattr(e, "event_id", None) not in seen]
+        for e in fresh:
+            seen.add(getattr(e, "event_id", None))
+        fresh.reverse()
+        return fresh
+
     async def _poll_to_terminal(self, task: Any) -> Any:
-        """Poll ``task.refresh`` until it leaves the in-flight statuses."""
+        """Poll ``task`` until it leaves the in-flight statuses.
+
+        When ``on_event``/``steer`` are configured, the event stream is polled
+        alongside status. A ``steer`` callback that returns a prompt while the
+        task is still in flight injects it via ``project.ask`` (in-flight
+        steering) and polling switches to the resulting task.
+        """
         import asyncio
 
+        watching = self._on_event is not None or self._steer is not None
+        seen: set[str] = set()
         start = time.monotonic()
         while _status_value(task.status) in _IN_FLIGHT_STATUSES:
             if self._max_wait_seconds is not None and (time.monotonic() - start) > self._max_wait_seconds:
@@ -275,6 +331,31 @@ class AristotleInference(InferenceProtocol):
                 break
             await asyncio.sleep(self._poll_interval)
             await task.refresh()
+
+            if not watching:
+                continue
+
+            new_events = await self._fetch_new_events(task, seen)
+            for event in new_events:
+                if self._on_event is not None:
+                    await self._on_event(event)
+
+            if self._steer is not None and new_events:
+                prompt = await self._steer(new_events, task)
+                if prompt:
+                    # Only redirect a task that is still running; ``ask`` on an
+                    # idle project would start an unrelated task instead.
+                    await task.refresh()
+                    if _status_value(task.status) in _IN_FLIGHT_STATUSES and self._project is not None:
+                        steered = await self._project.ask(prompt)
+                        self._steer_count += 1
+                        logger.info(
+                            "Steered Aristotle in-flight (#%d): %s",
+                            self._steer_count,
+                            prompt[:120],
+                        )
+                        # Follow the live session onto the new task.
+                        task = steered
         return task
 
     async def _maybe_download(self) -> str:

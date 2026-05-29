@@ -26,8 +26,11 @@ backend — install with `pip install -e ".[aristotle]"` (pulls in
 own internal tools and returns finished Lean files rather than per-turn tool
 calls, it carries integration caveats documented in
 [`core/inference/sdk/aristotle.py`](core/inference/sdk/aristotle.py): no
-per-turn tool calling, no in-flight steering (steer between turns via
-follow-up prompts), and no token-usage/caching accounting.
+per-turn tool calling and no token-usage/caching accounting. In-flight
+steering *is* supported — pass a `steer` (and/or `on_event`) callback to
+observe the live event stream and inject `project.ask(...)` to redirect a
+running task; between-turn steering via follow-up `complete()` calls works
+too.
 
 ## Quick Start
 

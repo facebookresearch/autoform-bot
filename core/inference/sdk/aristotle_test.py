@@ -33,24 +33,46 @@ from ..sdk.aristotle import (
 # ---------------------------------------------------------------------------
 
 
-class FakeTask:
-    """A task that walks through ``statuses`` on successive ``refresh`` calls."""
+class FakeEvent:
+    def __init__(self, event_id: str, event_type_name: str) -> None:
+        self.event_id = event_id
+        self.event_type = types.SimpleNamespace(name=event_type_name)
 
-    def __init__(self, statuses: list[str], output_summary: str = "Proved the theorem.") -> None:
+
+class FakeTask:
+    """A task that walks through ``statuses`` on successive ``refresh`` calls.
+
+    Optionally surfaces ``events`` (newest-first) so the event-watcher /
+    steering path can be exercised.
+    """
+
+    def __init__(
+        self,
+        statuses: list[str],
+        output_summary: str = "Proved the theorem.",
+        events: list[FakeEvent] | None = None,
+        agent_task_id: str = "task-1",
+    ) -> None:
         self._statuses = statuses
         self._i = 0
         self.status = statuses[0]
         self.output_summary = output_summary
-        self.agent_task_id = "task-1"
+        self.agent_task_id = agent_task_id
+        self._events = events or []
 
     async def refresh(self) -> None:
         self._i = min(self._i + 1, len(self._statuses) - 1)
         self.status = self._statuses[self._i]
 
+    async def get_events(self, limit: int = 50, newest_first: bool = True) -> tuple[list[FakeEvent], None]:
+        evs = list(reversed(self._events)) if newest_first else list(self._events)
+        return evs[:limit], None
+
 
 class FakeProject:
-    def __init__(self, task: FakeTask) -> None:
+    def __init__(self, task: FakeTask, ask_returns: FakeTask | None = None) -> None:
         self._task = task
+        self._ask_returns = ask_returns
         self.project_id = "proj-1"
         self.ask_prompts: list[str] = []
 
@@ -59,7 +81,7 @@ class FakeProject:
 
     async def ask(self, prompt: str) -> FakeTask:
         self.ask_prompts.append(prompt)
-        return self._task
+        return self._ask_returns if self._ask_returns is not None else self._task
 
 
 def _make_lib(project: FakeProject) -> Any:
@@ -234,3 +256,76 @@ class TestComplete:
         inf.add_user_message("prove it")
         result = await inf.complete()
         assert "no summary" in result.text
+
+
+# ---------------------------------------------------------------------------
+# In-flight observation + steering
+# ---------------------------------------------------------------------------
+
+
+class TestSteering:
+    @pytest.mark.asyncio
+    async def test_on_event_observer_receives_events(self):
+        events = [FakeEvent("e1", "THINKING"), FakeEvent("e2", "EDITING_FILE")]
+        project = FakeProject(FakeTask(["IN_PROGRESS", "COMPLETE"], events=events))
+        seen: list[str] = []
+
+        async def observer(ev):
+            seen.append(ev.event_type.name)
+
+        inf = _make_inference(project, on_event=observer)
+        inf.add_user_message("prove it")
+        await inf.complete()
+        assert seen == ["THINKING", "EDITING_FILE"]
+        assert project.ask_prompts == []  # observation only, no steering
+
+    @pytest.mark.asyncio
+    async def test_steer_injects_ask_while_in_flight(self):
+        events = [FakeEvent("e1", "EDITING_FILE")]
+        running = FakeTask(["IN_PROGRESS", "IN_PROGRESS", "IN_PROGRESS"], events=events)
+        steered = FakeTask(["COMPLETE"], output_summary="fixed", agent_task_id="task-2")
+        project = FakeProject(running, ask_returns=steered)
+
+        async def steer(new_events, task):
+            if any(e.event_type.name == "EDITING_FILE" for e in new_events):
+                return "you are off-course; use `norm_num`"
+            return None
+
+        inf = _make_inference(project, steer=steer)
+        inf.add_user_message("prove it")
+        result = await inf.complete()
+
+        assert project.ask_prompts == ["you are off-course; use `norm_num`"]
+        assert inf._steer_count == 1
+        # Polling followed the live session onto the steered task.
+        assert result.text == "fixed"
+        assert result.call_id == "task-2"
+
+    @pytest.mark.asyncio
+    async def test_steer_returning_none_does_not_ask(self):
+        events = [FakeEvent("e1", "THINKING")]
+        project = FakeProject(FakeTask(["IN_PROGRESS", "COMPLETE"], events=events))
+
+        async def steer(new_events, task):
+            return None
+
+        inf = _make_inference(project, steer=steer)
+        inf.add_user_message("prove it")
+        await inf.complete()
+        assert project.ask_prompts == []
+        assert inf._steer_count == 0
+
+    @pytest.mark.asyncio
+    async def test_no_duplicate_events_across_polls(self):
+        events = [FakeEvent("e1", "THINKING")]
+        # Stays in flight several polls; the same event must be delivered once.
+        project = FakeProject(FakeTask(["IN_PROGRESS", "IN_PROGRESS", "IN_PROGRESS", "COMPLETE"], events=events))
+        count = {"n": 0}
+
+        async def observer(ev):
+            count["n"] += 1
+
+        inf = _make_inference(project, on_event=observer)
+        inf.add_user_message("prove it")
+        await inf.complete()
+        assert count["n"] == 1
