@@ -316,6 +316,26 @@ class TestSteering:
         assert inf._steer_count == 0
 
     @pytest.mark.asyncio
+    async def test_steer_ask_failure_does_not_crash_run(self):
+        events = [FakeEvent("e1", "EDITING_FILE")]
+        running = FakeTask(["IN_PROGRESS", "IN_PROGRESS", "COMPLETE"], events=events)
+        project = FakeProject(running)
+
+        async def boom(prompt: str):
+            raise RuntimeError("429 too many requests")
+
+        project.ask = boom  # type: ignore[method-assign]
+
+        async def steer(new_events, task):
+            return "redirect"
+
+        inf = _make_inference(project, steer=steer)
+        inf.add_user_message("prove it")
+        result = await inf.complete()  # must not raise
+        assert result.finish_reason == "stop"
+        assert inf._steer_count == 0
+
+    @pytest.mark.asyncio
     async def test_no_duplicate_events_across_polls(self):
         events = [FakeEvent("e1", "THINKING")]
         # Stays in flight several polls; the same event must be delivered once.

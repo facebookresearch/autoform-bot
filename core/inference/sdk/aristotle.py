@@ -347,15 +347,21 @@ class AristotleInference(InferenceProtocol):
                     # idle project would start an unrelated task instead.
                     await task.refresh()
                     if _status_value(task.status) in _IN_FLIGHT_STATUSES and self._project is not None:
-                        steered = await self._project.ask(prompt)
-                        self._steer_count += 1
-                        logger.info(
-                            "Steered Aristotle in-flight (#%d): %s",
-                            self._steer_count,
-                            prompt[:120],
-                        )
-                        # Follow the live session onto the new task.
-                        task = steered
+                        try:
+                            steered = await self._project.ask(prompt)
+                        except Exception as err:
+                            # A steer failure (e.g. 429, race with termination)
+                            # must not kill a long run; log and keep polling.
+                            logger.warning("in-flight steer ask() failed (continuing): %s", err)
+                        else:
+                            self._steer_count += 1
+                            logger.info(
+                                "Steered Aristotle in-flight (#%d): %s",
+                                self._steer_count,
+                                prompt[:120],
+                            )
+                            # Follow the live session onto the new task.
+                            task = steered
         return task
 
     async def _maybe_download(self) -> str:
