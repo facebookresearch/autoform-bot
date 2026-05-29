@@ -15,7 +15,22 @@ Create `.env` with the API key for your chosen provider:
 ANTHROPIC_API_KEY=your-key-here   # for Claude models
 OPENAI_API_KEY=your-key-here      # for GPT models
 GEMINI_API_KEY=your-key-here      # for Gemini models
+ARISTOTLE_API_KEY=arstl_...       # for Harmonic's Aristotle (see note below)
 ```
+
+**Aristotle (Harmonic).** The `"Aristotle"` model routes to Harmonic's
+autonomous formal-reasoning agent instead of a chat LLM. It is an optional
+backend — install with `pip install -e ".[aristotle]"` (pulls in
+`aristotlelib`) and mint a key at
+<https://aristotle.harmonic.fun/dashboard/keys>. Because Aristotle runs its
+own internal tools and returns finished Lean files rather than per-turn tool
+calls, it carries integration caveats documented in
+[`core/inference/sdk/aristotle.py`](core/inference/sdk/aristotle.py): no
+per-turn tool calling and no token-usage/caching accounting. In-flight
+steering *is* supported — pass a `steer` (and/or `on_event`) callback to
+observe the live event stream and inject `project.ask(...)` to redirect a
+running task; between-turn steering via follow-up `complete()` calls works
+too.
 
 ## Quick Start
 

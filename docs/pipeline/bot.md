@@ -224,6 +224,7 @@ workers:
 
 llm:
   model: "Opus 4.6"           # Model name resolved via core.inference.client.lookup_model
+                              # "Aristotle" routes to Harmonic's agent (see note below)
 
 book:
   path: books/my_textbook     # Path to book data under autoform/data/
