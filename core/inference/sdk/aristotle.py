@@ -383,6 +383,55 @@ class AristotleInference(InferenceProtocol):
             logger.warning("Failed to download Aristotle result files: %s", err)
             return f"\n\n[Aristotle file download failed: {err}]"
 
+    @property
+    def last_status(self) -> str:
+        """Terminal ``TaskStatus`` value of the most recent ``complete()``."""
+        return self._last_status
+
+    async def download_result(
+        self,
+        dest_dir: Path | str,
+        *,
+        retries: int = 3,
+        retry_delay: float = 5.0,
+    ) -> Path | None:
+        """Download + extract the project's result, returning the extracted
+        project-root directory (or ``None`` if unavailable after retries).
+
+        Unlike the best-effort ``_maybe_download`` side channel, this is
+        explicit and **retries**: when a task first reaches a terminal status
+        the result files can be momentarily unavailable, so a single
+        ``get_files`` can transiently fail. Callers that must land the output
+        (e.g. the Aristotle worker) should use this and treat ``None`` as a
+        hard failure.
+        """
+        import asyncio
+
+        if self._project is None:
+            return None
+        dest = Path(dest_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        last_err: Exception | None = None
+        for attempt in range(1, retries + 1):
+            try:
+                await self._project.refresh()
+                project_id = getattr(self._project, "project_id", "aristotle")
+                tar_path = dest / f"{project_id}.tar.gz"
+                await self._project.get_files(destination=tar_path)
+                with tarfile.open(tar_path) as tar:
+                    tar.extractall(dest)  # noqa: S202 - trusted Aristotle output
+                roots = [p for p in dest.iterdir() if p.is_dir()]
+                if roots:
+                    return next((p for p in roots if p.name.endswith("_aristotle")), roots[0])
+                last_err = RuntimeError("tarball extracted no project directory")
+            except Exception as err:
+                last_err = err
+                logger.warning("download_result attempt %d/%d failed: %s", attempt, retries, err)
+            if attempt < retries:
+                await asyncio.sleep(retry_delay)
+        logger.error("download_result exhausted %d retries: %s", retries, last_err)
+        return None
+
     # ------------------------------------------------------------------
     # Protocol: complete
     # ------------------------------------------------------------------

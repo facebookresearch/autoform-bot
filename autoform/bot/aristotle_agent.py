@@ -116,11 +116,9 @@ class AristotleAgent:
         prompt = user_message or ""
 
         with tempfile.TemporaryDirectory() as td:
-            download_dir = Path(td)
             inf = AristotleInference(
                 model_name=self._model_name,
                 project_dir=self.worktree_path,
-                download_dir=download_dir,
                 poll_interval=self._poll_interval,
                 max_wait_seconds=self._max_wait_seconds,
                 on_event=self._on_event,
@@ -132,8 +130,15 @@ class AristotleAgent:
             result = await inf.complete()
             self._messages = inf.get_messages()
 
-            landed = self._overlay_result(download_dir)
-            if landed:
+            # Explicit, retrying download — landing must not be best-effort, or
+            # run_task sees an empty worktree and reports a spurious failure.
+            root = await inf.download_result(td)
+            if root is None:
+                raise RuntimeError(
+                    f"Agent {self.id}: Aristotle task finished "
+                    f"({inf.last_status}) but its result could not be downloaded"
+                )
+            if self._overlay_from(root):
                 self._commit(prompt or "formalize target")
             else:
                 logger.warning("Agent %s: Aristotle returned no project files to land", self.id)
@@ -169,23 +174,15 @@ class AristotleAgent:
     # Landing Aristotle's output into the worktree
     # ------------------------------------------------------------------
 
-    def _overlay_result(self, download_dir: Path) -> bool:
-        """Copy Aristotle's returned project files over the worktree.
-
-        The backend extracts the result tarball as ``download_dir/<root>/…``
-        (a single top-level project directory). We overlay every file from
-        there onto the worktree at the same relative path; git then sees only
-        genuine changes. Returns True if at least one file was copied.
+    def _overlay_from(self, root: Path) -> bool:
+        """Copy Aristotle's returned project files (under ``root``) over the
+        worktree at the same relative paths; git then sees only genuine
+        changes. Skips dirs, symlinks, and ``.git``/``.lake``. Returns True if
+        at least one file was copied.
         """
-        roots = [p for p in download_dir.iterdir() if p.is_dir()]
-        if not roots:
-            return False
-        # Prefer the conventional ``*_aristotle`` root; else the sole directory.
-        root = next((p for p in roots if p.name.endswith("_aristotle")), roots[0])
-
         copied = 0
         for src in root.rglob("*"):
-            if src.is_dir():
+            if src.is_dir() or src.is_symlink():
                 continue
             rel = src.relative_to(root)
             if rel.parts and rel.parts[0] in _SKIP_TOP:

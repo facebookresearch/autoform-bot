@@ -30,14 +30,19 @@ from .aristotle_agent import AristotleAgent, create_aristotle_agents, create_ari
 # ---------------------------------------------------------------------------
 
 
-def _make_fake_inference(generated: dict[str, str]):
-    """Return a fake AristotleInference class that writes ``generated`` (relpath
-    → contents) into download_dir/<root>/ on complete()."""
+def _make_fake_inference(generated: dict[str, str] | None, *, download_ok: bool = True):
+    """Return a fake AristotleInference class.
+
+    ``download_result`` writes ``generated`` (relpath → contents) into a
+    ``proj_aristotle`` root and returns it (or ``None`` when ``download_ok``
+    is False, simulating an exhausted-retry download failure).
+    """
 
     class FakeInference:
+        last_status = "COMPLETE"
+
         def __init__(self, **kwargs):
             self.kwargs = kwargs
-            self._download_dir = Path(kwargs["download_dir"])
             self._u = ""
 
         def set_system_prompt(self, p):
@@ -50,12 +55,18 @@ def _make_fake_inference(generated: dict[str, str]):
             return [{"role": "user", "content": self._u}, {"role": "assistant", "content": "done"}]
 
         async def complete(self):
-            root = self._download_dir / "proj_aristotle"
-            for rel, content in generated.items():
+            return types.SimpleNamespace(text="Formalized the target.")
+
+        async def download_result(self, dest_dir, *, retries=3, retry_delay=5.0):
+            if not download_ok:
+                return None
+            root = Path(dest_dir) / "proj_aristotle"
+            root.mkdir(parents=True, exist_ok=True)
+            for rel, content in (generated or {}).items():
                 dest = root / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(content)
-            return types.SimpleNamespace(text="Formalized the target.")
+            return root
 
     return FakeInference
 
@@ -112,14 +123,32 @@ class TestCall:
         wt = worktree.create_worktree(repo, "wt1", worktrees_dir=tmp_path / "worktrees")
         before = _git(["rev-parse", "HEAD"], wt).stdout.strip()
 
+        # Download succeeds but the returned project has no changed files.
         monkeypatch.setattr(
             "autoform.bot.aristotle_agent.AristotleInference",
-            _make_fake_inference({}),  # returns no files
+            _make_fake_inference({}),
         )
         agent = AristotleAgent(id="a1", worktree_path=wt)
         await agent.call("do nothing")
         after = _git(["rev-parse", "HEAD"], wt).stdout.strip()
         assert before == after  # no commit created
+
+    @pytest.mark.asyncio
+    async def test_call_raises_on_download_failure(self, tmp_path, monkeypatch):
+        """The bug that made a real run report a spurious failure: a terminal
+        task whose result couldn't be downloaded must raise loudly, not land
+        nothing silently."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        wt = worktree.create_worktree(repo, "wt_dl", worktrees_dir=tmp_path / "worktrees")
+
+        monkeypatch.setattr(
+            "autoform.bot.aristotle_agent.AristotleInference",
+            _make_fake_inference({"X.lean": "x"}, download_ok=False),
+        )
+        agent = AristotleAgent(id="a2", worktree_path=wt)
+        with pytest.raises(RuntimeError, match="could not be downloaded"):
+            await agent.call("prove")
 
     def test_create_aristotle_agents(self, tmp_path):
         agents = create_aristotle_agents(worktrees=[tmp_path / "a", tmp_path / "b"])
