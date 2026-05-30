@@ -160,6 +160,7 @@ def _build_worker_node(
         trace_store=trace_store,
         run_id=run_id,
         max_review_cycles=pipeline_config.max_review_cycles,
+        solver=pipeline_config.solver,
     )
 
 

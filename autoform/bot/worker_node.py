@@ -65,6 +65,7 @@ class LeanWorkerNode(WorkerNode):
         trace_store: TraceStore | None = None,
         run_id: str | None = None,
         max_review_cycles: int = 0,
+        solver: str = "agent",
     ) -> None:
         super().__init__(rank=rank, host=host, port=port)
         self._code_path = code_path
@@ -77,6 +78,7 @@ class LeanWorkerNode(WorkerNode):
         self._trace_store = trace_store
         self._run_id = run_id
         self._max_review_cycles = max_review_cycles
+        self._solver = solver
         self._pool: AgentPool | None = None
         self._concurrent: ConcurrentAgents | None = None
         self._merge_client: MergeQueueClient | None = None
@@ -88,19 +90,36 @@ class LeanWorkerNode(WorkerNode):
         return len(self._pool.available()) if self._pool is not None else 0
 
     async def initialize(self) -> None:
-        """Create pool and warm up all agents (REPL + LSP start, worktrees ready)."""
-        self._pool = create_lean_pool(
-            repo_root=self._code_path,
-            num_agents=self._num_agents,
-            inference_factory=self._inference_factory,
-            worker_def=self._worker_def,
-            reviewer_def=self._reviewer_def,
-            agent_id_prefix=f"rank{self.rank}",
-            allowed_paths=self._allowed_paths,
-            trace_store=self._trace_store,
-            repl_config=self._repl_config,
-            run_id=self._run_id,
-        )
+        """Create pool and warm up all agents (REPL + LSP start, worktrees ready).
+
+        When ``solver == "aristotle"`` the worker pool is built from
+        ``AristotleAgent``s (Mode B): same worktrees, but Aristotle solves each
+        target instead of a tool-calling agent. The build gate and merge path
+        below are unchanged.
+        """
+        if self._solver == "aristotle":
+            from .aristotle_agent import create_aristotle_pool
+
+            logger.info("[rank %d] solver=aristotle: building Aristotle worker pool", self.rank)
+            self._pool = create_aristotle_pool(
+                repo_root=self._code_path,
+                num_agents=self._num_agents,
+                agent_id_prefix=f"rank{self.rank}",
+                run_id=self._run_id,
+            )
+        else:
+            self._pool = create_lean_pool(
+                repo_root=self._code_path,
+                num_agents=self._num_agents,
+                inference_factory=self._inference_factory,
+                worker_def=self._worker_def,
+                reviewer_def=self._reviewer_def,
+                agent_id_prefix=f"rank{self.rank}",
+                allowed_paths=self._allowed_paths,
+                trace_store=self._trace_store,
+                repl_config=self._repl_config,
+                run_id=self._run_id,
+            )
         self._merge_client = MergeQueueClient(
             host=self.host,
             port=self.port + _MERGE_PORT_OFFSET,

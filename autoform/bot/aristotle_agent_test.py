@@ -22,7 +22,7 @@ import pytest
 from core.task import Task
 from core.coordination.concurrent_agents import ConcurrentAgents
 from core import worktree
-from .aristotle_agent import AristotleAgent, create_aristotle_agents
+from .aristotle_agent import AristotleAgent, create_aristotle_agents, create_aristotle_pool
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +125,21 @@ class TestCall:
         agents = create_aristotle_agents(worktrees=[tmp_path / "a", tmp_path / "b"])
         assert [a.id for a in agents] == ["aristotle-0", "aristotle-1"]
         assert all(isinstance(a, AristotleAgent) for a in agents)
+
+    @pytest.mark.asyncio
+    async def test_create_aristotle_pool_builds_worktrees(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        pool = create_aristotle_pool(repo, num_agents=2, agent_id_prefix="rank0", run_id="run-test")
+
+        assert pool.size == 2
+        agents = pool.checkout(2)
+        assert all(isinstance(a, AristotleAgent) for a in agents)
+        assert all(Path(a.worktree_path).is_dir() for a in agents)  # worktrees created
+        assert pool.get_reviewer(agents[0].id) is None  # no reviewers in Mode B
+        # Pool lifecycle no-ops don't raise.
+        await pool.initialize()
+        await pool.shutdown()
 
 
 # ---------------------------------------------------------------------------

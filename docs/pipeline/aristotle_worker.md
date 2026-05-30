@@ -49,26 +49,43 @@ output and are author-agnostic.
 
 ## What's implemented
 
-- `AristotleAgent` + `create_aristotle_agents` (`autoform/bot/aristotle_agent.py`)
-- `solver` config field (`llm.solver: agent | aristotle`) in `autoform/bot/config.py`
-- Unit + integration tests (`autoform/bot/aristotle_agent_test.py`) — including
-  driving a real `ConcurrentAgents.run_task` to a merge with a fake backend.
+- `AristotleAgent` + `create_aristotle_agents` + `create_aristotle_pool`
+  (`autoform/bot/aristotle_agent.py`).
+- `solver` config field (`llm.solver: agent | aristotle`) in `autoform/bot/config.py`.
+- **Full pipeline wiring:** `LeanWorkerNode.initialize()` branches on `solver` —
+  when `aristotle`, it builds an Aristotle worker pool (`create_aristotle_pool`:
+  same worktrees + `.lake` symlink, no REPL/LSP, no reviewers) instead of the
+  LLM pool. `main.py` threads `solver` from the config. The `LeanConcurrentAgents`
+  build gate (`lake build`) and merge queue are reused unchanged.
+- Unit + integration tests (`autoform/bot/aristotle_agent_test.py`): land/commit,
+  pool construction (real worktrees + `AgentPool` lifecycle), and driving a real
+  `ConcurrentAgents.run_task` to a merge with a fake backend.
 - A runnable worker-tier demo (`examples/aristotle_worker_demo.py`) that takes a
   *real* Aristotle submission all the way to `main`.
 
-## What remains to fully activate `solver: aristotle`
+## Running it
 
-The demo constructs the agent directly. To flip the whole pipeline over, the
-node still needs to build Aristotle agents instead of LLM agents:
+```yaml
+# config.yaml
+llm:
+  solver: aristotle      # workers are Aristotle; model only matters if reviewers are enabled
+workers:
+  agents_per_node: 1     # Aristotle jobs are slow/expensive — don't race many
+  min_agents_per_task: 1
+  max_agents_per_task: 1
+```
 
-- In `autoform/bot/worker_node.py` / `pool.py`, branch on `config.solver`: when
-  `aristotle`, create a pool of `AristotleAgent`s over the per-agent worktrees
-  (reusing worktree creation; skipping the REPL/LSP/MCP setup Aristotle doesn't
-  use). Reviewers can remain LLM agents, or the `steer` hook can play the
-  reviewer role in-flight (Hermes-style).
-- Thread `solver` from `main.py` into `LeanWorkerNode`.
+`ARISTOTLE_API_KEY` must be in the environment (the SDK reads it directly).
+Everything else — orchestrator DAG planning, the supervisor's eval harness,
+the merge queue — is unchanged.
 
-These are mechanical wiring changes; the design above is the substantive part.
+## Not yet done (deliberately)
+
+- **Reviewers.** Mode-B workers currently have no paired reviewer; the build
+  gate + supervisor eval still apply. A natural next step is to let the `steer`
+  hook play an in-flight reviewer (Hermes-style) rather than a post-hoc one.
+- **Separate concurrency budget.** Aristotle jobs are long; the LLM-call
+  resource-pool sizing isn't the right knob for them.
 
 ## Caveats
 

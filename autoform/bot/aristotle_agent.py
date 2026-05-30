@@ -30,13 +30,17 @@ workers is expensive; prefer ``min_agents_per_task: 1``.
 
 from __future__ import annotations
 
+import fcntl
 import logging
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core import worktree
+from core.coordination.pool import AgentPool
 from core.inference.sdk.aristotle import AristotleInference, EventObserver, SteerCallback
 
 logger = logging.getLogger(__name__)
@@ -148,6 +152,20 @@ class AristotleAgent:
         return self._messages
 
     # ------------------------------------------------------------------
+    # Pool lifecycle (AgentPool.initialize/__aenter__ + shutdown/close).
+    # Aristotle needs no warm-up (no REPL/LSP/subprocesses), so these no-op.
+    # ------------------------------------------------------------------
+
+    async def __aenter__(self) -> AristotleAgent:
+        return self
+
+    async def __aexit__(self, *exc: Any) -> bool:
+        return False
+
+    async def close(self) -> None:
+        return None
+
+    # ------------------------------------------------------------------
     # Landing Aristotle's output into the worktree
     # ------------------------------------------------------------------
 
@@ -228,3 +246,61 @@ def create_aristotle_agents(
         )
         for i, wt in enumerate(worktrees)
     ]
+
+
+def create_aristotle_pool(
+    repo_root: Path,
+    num_agents: int,
+    *,
+    agent_id_prefix: str = "aristotle",
+    run_id: str | None = None,
+    system_prompt: str = DEFAULT_WORKER_SYSTEM_PROMPT,
+    poll_interval: int = 20,
+    max_wait_seconds: float | None = 5400,
+    on_event: EventObserver | None = None,
+    steer: SteerCallback | None = None,
+) -> AgentPool:
+    """Create an ``AgentPool`` of Aristotle workers — the Mode-B analog of
+    ``create_lean_pool``.
+
+    Mirrors the LLM pool's worktree setup (NFS-safe lock + ``git worktree``
+    + a ``.lake/packages`` symlink so ``lake build`` works in the worktree),
+    but builds ``AristotleAgent``s and no reviewers (the build gate and the
+    supervisor's eval harness still hold Aristotle's output to the same bar;
+    a reviewer can later be added, or the ``steer`` hook can play that role
+    in-flight).
+    """
+    if run_id is None:
+        run_id = "run-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    run_worktrees_dir = repo_root.parent / "worktrees" / run_id
+    run_worktrees_dir.mkdir(parents=True, exist_ok=True)
+
+    wt_paths: list[Path] = []
+    lock_path = repo_root / ".worktree_lock"
+    with open(lock_path, "w") as lock_file:
+        logger.info("[%s] Waiting for worktree lock...", agent_id_prefix)
+        fcntl.lockf(lock_file, fcntl.LOCK_EX)
+        subprocess.run(["git", "-C", str(repo_root), "worktree", "prune"], capture_output=True)
+        for i in range(num_agents):
+            wt_name = f"{run_id}-{agent_id_prefix}-worker-{i}"
+            wt_paths.append(worktree.create_worktree(repo_root, wt_name, worktrees_dir=run_worktrees_dir))
+        logger.info("[%s] Created %d Aristotle worktrees", agent_id_prefix, num_agents)
+
+    # Share pre-resolved Mathlib deps so `lake build` in the worktree is cheap.
+    for wt in wt_paths:
+        lake_src = repo_root / ".lake" / "packages"
+        lake_dst = Path(wt) / ".lake" / "packages"
+        if lake_src.exists() and not lake_dst.exists():
+            lake_dst.parent.mkdir(parents=True, exist_ok=True)
+            lake_dst.symlink_to(lake_src.resolve())
+
+    agents = create_aristotle_agents(
+        worktrees=[Path(w) for w in wt_paths],
+        id_prefix=f"{agent_id_prefix}-worker",
+        system_prompt=system_prompt,
+        poll_interval=poll_interval,
+        max_wait_seconds=max_wait_seconds,
+        on_event=on_event,
+        steer=steer,
+    )
+    return AgentPool(agents=agents, reviewers={})
