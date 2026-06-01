@@ -22,7 +22,7 @@ import pytest
 from core.task import Task
 from core.coordination.concurrent_agents import ConcurrentAgents
 from core import worktree
-from .aristotle_agent import AristotleAgent, create_aristotle_agents, create_aristotle_pool
+from .aristotle_agent import AristotleAgent, create_aristotle_agents, create_aristotle_pool, make_claude_steer
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +174,54 @@ class TestCall:
 # ---------------------------------------------------------------------------
 # run_task integration: AristotleAgent drives the real race/build/merge loop
 # ---------------------------------------------------------------------------
+
+
+def _ev(type_name: str, content: str = ""):
+    """Minimal stand-in for an aristotlelib Event (what a steer callback sees)."""
+    return types.SimpleNamespace(event_type=types.SimpleNamespace(name=type_name), content=content)
+
+
+class TestClaudeSteer:
+    @pytest.mark.asyncio
+    async def test_steer_fires_then_rate_limits(self, monkeypatch):
+        calls = {"n": 0}
+
+        def fake_cli(prompt, *, timeout=180):
+            calls["n"] += 1
+            return '{"steer": true, "reason": "forcing k = top", "prompt": "Do not pin k; keep it general."}'
+
+        monkeypatch.setattr("autoform.bot.aristotle_agent._claude_cli", fake_cli)
+        steer = make_claude_steer("generalize k", min_gap_s=120.0, max_steers=3)
+        evs = [_ev("EDITING_FILE")]
+
+        p1 = await steer(evs, None)
+        assert p1 and "keep it general" in p1
+        # immediate second call is rate-limited (no extra CLI call, no steer)
+        assert await steer(evs, None) is None
+        assert calls["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_steer_respects_no_steer_verdict(self, monkeypatch):
+        monkeypatch.setattr(
+            "autoform.bot.aristotle_agent._claude_cli",
+            lambda prompt, **k: '{"steer": false, "reason": "on track", "prompt": ""}',
+        )
+        steer = make_claude_steer("g")
+        assert await steer([_ev("EDITING_FILE")], None) is None
+
+    @pytest.mark.asyncio
+    async def test_steer_ignores_irrelevant_events(self, monkeypatch):
+        called = {"n": 0}
+
+        def fake_cli(prompt, *, timeout=180):
+            called["n"] += 1
+            return '{"steer": false}'
+
+        monkeypatch.setattr("autoform.bot.aristotle_agent._claude_cli", fake_cli)
+        steer = make_claude_steer("g")
+        # BUILDING is not a judged event type -> no CLI call, no steer
+        assert await steer([_ev("BUILDING")], None) is None
+        assert called["n"] == 0
 
 
 class TestRunTaskIntegration:

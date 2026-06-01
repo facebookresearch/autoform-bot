@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import fcntl
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -44,6 +45,10 @@ from core.coordination.pool import AgentPool
 from core.inference.sdk.aristotle import AristotleInference, EventObserver, SteerCallback
 
 logger = logging.getLogger(__name__)
+
+_STANDARD_AXIOMS = {"propext", "Classical.choice", "Quot.sound"}
+_DECL_RE = re.compile(r"^(?:noncomputable )?(?:theorem|lemma|def|instance)\s+([A-Za-z_][\w'.]*)", re.M)
+_AXIOM_RE = re.compile(r"(?:^|[^A-Za-z])axiom\s")
 
 # Credit Aristotle as the author of the Lean it writes (committer stays the
 # pipeline identity so git history is well-formed).
@@ -243,6 +248,276 @@ def create_aristotle_agents(
         )
         for i, wt in enumerate(worktrees)
     ]
+
+
+REVIEWER_SYSTEM_PROMPT = (
+    "You are a STRICT, ADVERSARIAL reviewer of Lean 4 / Mathlib formalizations produced "
+    "by an autonomous prover. Your default verdict is REJECTED; APPROVE only if, after "
+    "actively hunting for defects, you find none. You are given MECHANICAL GROUND TRUTH "
+    "(a full-file scan and `#print axioms` results) — trust it over any prose or "
+    "docstring. REJECT if ANY of the following holds:\n"
+    "1. **Hidden gaps / axioms** — the scan shows `sorry`/`admit`/raw `axiom`/`native_decide`, "
+    "OR `#print axioms` lists `sorryAx` or any axiom outside {propext, Classical.choice, "
+    "Quot.sound}.\n"
+    "2. **Vacuity / triviality** — a theorem restates `True`/something trivially provable; an "
+    "`instance` is vacuous; a proof closes a goal via `False.elim` of a false hypothesis.\n"
+    "3. **Forced generality** — a parameter advertised as general is secretly pinned (e.g. a "
+    "smoothness `k` constrained to `⊤`, or `k = c`), making the 'general' result trivial.\n"
+    "4. **Weakened statement** — extra hypotheses not warranted, or content hidden in "
+    "structure/class fields (a Theorem/Proposition must be a proved theorem, not an assumed "
+    "field). The claimed result must actually be established (e.g. an `IsManifold` instance "
+    "must really prove `ContDiffOn` of the transitions, not merely assert a ChartedSpace).\n"
+    "5. **Task not met** — the change does not actually accomplish the stated task.\n"
+    "When uncertain, REJECT. Begin your reply with exactly `APPROVED` or `REJECTED`, then give "
+    "specific reasons grounded in the mechanical evidence and the code."
+)
+
+
+def _line_has_nonstandard_axiom(line: str) -> bool:
+    """True if a `#print axioms` line mentions `sorryAx` or any axiom outside the
+    standard set."""
+    if "sorryAx" in line:
+        return True
+    tail = line.split("axioms:", 1)[-1]
+    names = re.findall(r"[A-Za-z_][\w.]*", tail)
+    return any(nm not in _STANDARD_AXIOMS for nm in names)
+
+
+def _axiom_audit(worktree: Path, file_to_decls: dict[Path, list[str]]) -> str:
+    """`#print axioms` on each changed file's top-level declarations — the
+    un-foolable check for hidden `sorryAx` / non-standard axioms.
+
+    Appends `#print axioms` lines to a copy of each file and elaborates it
+    (reliable: the copy is self-contained, so no cross-module import resolution
+    is needed). Flags any non-standard axiom. Best-effort per file.
+    """
+    out_lines: list[str] = []
+    any_bad = False
+    for f, decls in file_to_decls.items():
+        if not decls:
+            continue
+        tmp = f.parent / f"_AxiomAudit_{f.stem}.lean"
+        try:
+            tmp.write_text(f.read_text() + "\n\n" + "".join(f"#print axioms {d}\n" for d in decls))
+            proc = subprocess.run(
+                ["lake", "env", "lean", str(tmp.relative_to(worktree))],
+                cwd=str(worktree), capture_output=True, text=True, timeout=900,
+            )
+        except Exception as err:  # pragma: no cover
+            out_lines.append(f"- {f.name}: axiom audit could not run: {err}")
+            continue
+        finally:
+            tmp.unlink(missing_ok=True)
+        ax = [ln.strip() for ln in (proc.stdout + proc.stderr).splitlines() if "depends on axioms" in ln]
+        for ln in ax:
+            if _line_has_nonstandard_axiom(ln):
+                any_bad = True
+                out_lines.append("  ⚠️ " + ln)
+            else:
+                out_lines.append("  " + ln)
+        if not ax:
+            out_lines.append(f"- {f.name}: (no axiom output — elaboration may have failed)")
+    header = "⚠️ NON-STANDARD AXIOM / sorryAx DETECTED" if any_bad else "OK: only standard axioms"
+    return header + "\n" + ("\n".join(out_lines) or "(nothing to audit)")
+
+
+def _mechanical_audit(worktree: Path) -> tuple[str, list[Path]]:
+    """Full-file scan of the changed `.lean` files + `#print axioms`. Returns the
+    report text and the list of changed Lean files."""
+    names = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD~1"], cwd=str(worktree),
+        capture_output=True, text=True,
+    ).stdout.split()
+    lean_files = [worktree / n for n in names if n.endswith(".lean")]
+    scan_lines, file_to_decls = [], {}
+    for f in lean_files:
+        txt = f.read_text() if f.exists() else ""
+        rel = f.relative_to(worktree)
+        scan_lines.append(
+            f"- {rel}: sorry={txt.count('sorry')} admit={txt.count('admit')} "
+            f"axiom={len(_AXIOM_RE.findall(txt))} native_decide={txt.count('native_decide')}"
+        )
+        file_to_decls[f] = _DECL_RE.findall(txt)
+    report = (
+        "## Mechanical full-file scan (ground truth)\n" + "\n".join(scan_lines)
+        + "\n\n## #print axioms (ground truth)\n" + _axiom_audit(worktree, file_to_decls)
+    )
+    return report, lean_files
+
+
+class ClaudeReviewer:
+    """A Claude-backed reviewer that duck-types the reviewer surface
+    ``ConcurrentAgents.review`` uses (``id``, async ``call``, ``reset``,
+    ``set_trace``, ``total_turns``, ``messages``).
+
+    Unlike the full tool-calling reviewer agent, it has no tools: it computes
+    the worktree diff itself and asks Claude for an ``APPROVED``/``REJECTED``
+    verdict. The verdict gates the merge exactly like the pipeline's reviewer.
+    """
+
+    def __init__(
+        self, *, id: str, worktree_path: Path | str, model: str = "Opus 4.6",
+        use_cli: bool = False, rigorous: bool = True,
+    ) -> None:
+        self.id = id
+        self.worktree_path = Path(worktree_path)
+        self._model = model
+        self._use_cli = use_cli  # route via the `claude` CLI (Max OAuth) instead of the SDK
+        self._rigorous = rigorous  # run mechanical ground-truth checks (scan + #print axioms)
+        self.total_turns = 0
+        self._messages: list[dict[str, Any]] = []
+
+    async def call(self, user_message: str | None = None) -> str:
+        import asyncio
+
+        self.total_turns += 1
+        diff = subprocess.run(
+            ["git", "diff", "HEAD~1"], cwd=str(self.worktree_path),
+            capture_output=True, text=True,
+        ).stdout
+        if self._rigorous:
+            # Un-foolable ground truth: full-file scan + `#print axioms`, plus the
+            # whole changed files (not just the diff) so nothing escapes review.
+            audit, lean_files = await asyncio.to_thread(_mechanical_audit, self.worktree_path)
+            full = []
+            for f in lean_files:
+                try:
+                    full.append(f"### {f.name} (full)\n```lean\n{f.read_text()[:30000]}\n```")
+                except OSError:
+                    pass
+            context = audit + "\n\n" + "\n\n".join(full) + f"\n\n## Diff\n```diff\n{diff[:20000]}\n```"
+        else:
+            context = f"## Changed code (git diff HEAD~1)\n```diff\n{diff[:40000]}\n```"
+        prompt = (
+            f"{user_message or ''}\n\n{context}\n\n"
+            "Reply APPROVED or REJECTED (first word), then specific reasons grounded in the evidence."
+        )
+        self._messages = [{"role": "user", "content": prompt}]
+        if self._use_cli:
+            # Scrub ANTHROPIC_API_KEY so the CLI uses Max OAuth (not API billing).
+            import os
+
+            env = os.environ.copy()
+            env.pop("ANTHROPIC_API_KEY", None)
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                ["claude", "-p", REVIEWER_SYSTEM_PROMPT + "\n\n" + prompt, "--output-format", "text"],
+                capture_output=True, text=True, env=env,
+            )
+            answer = (proc.stdout or "").strip() or "REJECTED: reviewer produced no output"
+        else:
+            from core.inference.client import create_inference, lookup_model
+
+            inf = create_inference(lookup_model(self._model))
+            inf.set_system_prompt(REVIEWER_SYSTEM_PROMPT)
+            inf.add_user_message(prompt)
+            result = await inf.complete()
+            answer = (result.text or "").strip()
+        self._messages.append({"role": "assistant", "content": answer})
+        return answer
+
+    def reset(self) -> None:
+        self.total_turns = 0
+        self._messages = []
+
+    def set_trace(self, trace: Any | None) -> None:
+        return None
+
+    @property
+    def messages(self) -> list[dict[str, Any]]:
+        return self._messages
+
+    async def __aenter__(self) -> ClaudeReviewer:
+        return self
+
+    async def __aexit__(self, *exc: Any) -> bool:
+        return False
+
+    async def close(self) -> None:
+        return None
+
+
+def _claude_cli(prompt: str, *, timeout: int = 180) -> str:
+    """Invoke the `claude` CLI (Max OAuth — `ANTHROPIC_API_KEY` scrubbed). Returns
+    stdout, or "" on failure."""
+    import os
+
+    env = os.environ.copy()
+    env.pop("ANTHROPIC_API_KEY", None)
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", prompt, "--output-format", "text"],
+            capture_output=True, text=True, env=env, timeout=timeout,
+        )
+        return (proc.stdout or "").strip()
+    except Exception as err:  # pragma: no cover
+        logger.warning("claude CLI failed: %s", err)
+        return ""
+
+
+STEER_JUDGE_RUBRIC = (
+    "You are the live-steering judge ('Hermes') for an autonomous Lean prover. You see a "
+    "window of its recent events (thinking, file edits, errors). Decide whether it is going "
+    "OFF-COURSE relative to the GOAL — e.g. abandoning the goal, axiomatizing/`sorry`-ing what "
+    "it was asked to prove, weakening or pinning a parameter it was told to keep general, "
+    "going in circles, or building the wrong thing. Only steer when genuinely warranted; a "
+    "needless steer wastes a turn. If steering, give a SHORT, concrete corrective instruction."
+)
+
+
+def make_claude_steer(goal: str, *, min_gap_s: float = 120.0, max_steers: int = 3):
+    """Build a `steer` callback (for AristotleInference) backed by a Claude judge.
+
+    On each batch of new events it (rate-limited) asks Claude whether the prover
+    is off-course w.r.t. ``goal``; if so, returns a corrective prompt that the
+    backend injects via ``project.ask`` mid-run. This is the working replacement
+    for the keyword heuristic (which never fired): it reads the actual reasoning
+    in the event stream rather than grepping for tokens.
+    """
+    import json
+    import time
+
+    state = {"last": 0.0, "count": 0, "reasons": []}
+
+    async def steer(new_events: list[Any], task: Any) -> str | None:
+        import asyncio
+
+        if state["count"] >= max_steers:
+            return None
+        relevant = [
+            e for e in new_events
+            if getattr(getattr(e, "event_type", None), "name", "") in ("EDITING_FILE", "THINKING", "MESSAGE", "ERROR")
+        ]
+        if not relevant:
+            return None
+        now = time.monotonic()
+        if now - state["last"] < min_gap_s:
+            return None
+        window = "\n".join(
+            f"[{getattr(e.event_type, 'name', '?')}] {(getattr(e, 'content', None) or '')[:300]}"
+            for e in relevant[-8:]
+        )
+        prompt = (
+            f"{STEER_JUDGE_RUBRIC}\n\n## GOAL\n{goal}\n\n## RECENT EVENTS\n{window}\n\n"
+            f"## PRIOR STEER REASONS\n{state['reasons'] or '(none)'}\n\n"
+            'Return ONE LINE of JSON: {"steer": <bool>, "reason": "<short>", "prompt": "<corrective instruction or empty>"}'
+        )
+        raw = await asyncio.to_thread(_claude_cli, prompt)
+        if not raw or "{" not in raw:
+            return None
+        try:
+            decision = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+        except Exception:
+            return None
+        if decision.get("steer") and (decision.get("prompt") or "").strip():
+            state["last"] = now
+            state["count"] += 1
+            state["reasons"].append((decision.get("reason") or "")[:120])
+            logger.info("Claude steer #%d: %s", state["count"], state["reasons"][-1])
+            return decision["prompt"].strip()
+        return None
+
+    return steer
 
 
 def create_aristotle_pool(
