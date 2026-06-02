@@ -29,6 +29,7 @@ class PipelineConfig:
     max_agents_per_task: int
     max_concurrent_llm_calls: int
     model: str
+    solver: str = "agent"
     num_repls_per_node: int | None = None
     pick_strategy: NodePickStrategy = NodePickStrategy.BIGGEST_FIRST
     lib_name: str = "Formalization"
@@ -78,6 +79,7 @@ class PipelineConfig:
             max_agents_per_task=workers_config.get("max_agents_per_task", 1),
             max_concurrent_llm_calls=workers_config.get("max_concurrent_llm_calls", 2),
             model=llm_config.get("model", "Opus 4.6"),
+            solver=llm_config.get("solver", "agent"),
             num_repls_per_node=workers_config.get("num_repls_per_node"),
             pick_strategy=NodePickStrategy(raw_strategy),
             lib_name=workspace_config.get("lib_name", "Formalization"),
