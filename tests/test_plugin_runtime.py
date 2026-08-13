@@ -10,11 +10,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 
-def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
+def test_deicyde_plugin_surface_advertises_orchestrate_overlay(repo_root):
     skills = {path.parent.name for path in (repo_root / "skills").glob("*/SKILL.md")}
     assert skills == {
         "setup",
         "roadmap",
+        "orchestrate",
         "human-review",
         "agent-review",
         "develop-plugin",
@@ -49,11 +50,13 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
             assert config["mcpServers"][name]["args"][-2:] == ["-m", module]
 
     codex_manifest = json.loads((repo_root / ".codex-plugin/plugin.json").read_text())
-    assert len(codex_manifest["interface"]["defaultPrompt"]) == 5
+    assert len(codex_manifest["interface"]["defaultPrompt"]) == 6
+    assert any("claim-backed workers" in prompt for prompt in codex_manifest["interface"]["defaultPrompt"])
     muse = json.loads((repo_root / ".muse-plugin/plugin.json").read_text())
     assert [command["id"] for command in muse["capabilities"]["commands"]] == [
         "setup",
         "roadmap",
+        "orchestrate",
         "human-review",
         "agent-review",
         "develop-plugin",
@@ -93,6 +96,9 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
             "autoform_cli/__main__.py",
             "autoform_cli/graph.py",
             "autoform_cli/visualize.py",
+            "autoform_worker/cli.py",
+            "autoform_worker/executor.py",
+            "autoform_worker/scheduler.py",
             "servers/lean_client.py",
             "servers/lean_runtime.py",
             "servers/lsp/server.py",
@@ -109,6 +115,7 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
             next(name for name in names if name.endswith(".dist-info/entry_points.txt"))
         ).decode()
         assert "autoform-lean-runtime = servers.lean_runtime:main" in entry_points
+        assert "autoform-worker = autoform_worker.cli:main" in entry_points
         metadata = archive.read(
             next(name for name in names if name.endswith(".dist-info/METADATA"))
         ).decode()

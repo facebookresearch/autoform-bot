@@ -27,6 +27,7 @@ dependencies = [
 autoform = "autoform_cli.__main__:main"
 autoform-visualize = "autoform_cli.visualize:main"
 autoform-lean-runtime = "servers.lean_runtime:main"
+autoform-worker = "autoform_worker.cli:main"
 
 [project.optional-dependencies]
 # Kept as an empty compatibility extra for existing plugin launch commands.
@@ -41,7 +42,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["autoform_cli", "servers"]
+packages = ["autoform_cli", "autoform_worker", "servers"]
 
 [tool.ruff]
 line-length = 120

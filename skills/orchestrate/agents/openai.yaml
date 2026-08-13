@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestrate"
+  short_description: "Coordinate claimed Markdown-to-Lean work"
+  default_prompt: "Use $orchestrate to work through ready Autoform nodes with fail-closed claims and verified Lean checks."
