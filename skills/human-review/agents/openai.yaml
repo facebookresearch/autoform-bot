@@ -1,0 +1,4 @@
+interface:
+  display_name: "Human Review"
+  short_description: "Prepare visual Autoform review surfaces"
+  default_prompt: "Use $human-review to build the visual review surfaces and guide me through this Autoform project."

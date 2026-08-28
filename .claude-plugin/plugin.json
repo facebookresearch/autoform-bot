@@ -1,0 +1,23 @@
+{
+  "name": "autoform",
+  "description": "Set up Lean repositories, build source-grounded Markdown roadmaps, and support human or agent review with Lean LSP and REPL tools.",
+  "version": "0.5.0",
+  "author": {
+    "name": "Vivien Cabannes",
+    "url": "https://github.com/facebookresearch/autoform-bot"
+  },
+  "mcpServers": {
+    "autoform-lsp": {
+      "command": "uv",
+      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "python", "-m", "servers.lsp.server"],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}",
+      "description": "Shared node-local Lean diagnostics and hover; each call requires project_dir"
+    },
+    "autoform-repl": {
+      "command": "uv",
+      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--extra", "repl", "python", "-m", "servers.repl.server"],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}",
+      "description": "Shared node-local Lean snippet execution; each call requires project_dir"
+    }
+  }
+}

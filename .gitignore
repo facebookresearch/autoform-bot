@@ -1,32 +1,10 @@
-# Python
-__pycache__/
-*.pyc
-*.egg-info/
-dist/
-.pytest_cache/
-
-# Environment
-.env
-.env.*
-.venv/
-
-# Lean
-.lake/
-lake-manifest.json
-
-# OS
 .DS_Store
-
-# Editor/IDE settings
 .claude/
-.mcp.json
-.vscode/
-
-# Output artifacts
-logs/
-output/
-slurm_logs/
-slurm/
-runs/
-traces/
-cost.json
+.zuliprc
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+dist/
+node_modules/

@@ -1,9 +1,0 @@
-[submodule "submodules/mathlib"]
-	path = submodules/mathlib
-	url = https://github.com/leanprover-community/mathlib4.git
-[submodule "submodules/repl"]
-	path = submodules/repl
-	url = https://github.com/leanprover-community/repl
-[submodule "submodules/lean-lsp-mcp"]
-	path = submodules/lean-lsp-mcp
-	url = https://github.com/oOo0oOo/lean-lsp-mcp.git

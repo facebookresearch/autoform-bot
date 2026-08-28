@@ -1,0 +1,4 @@
+.lake/
+site/
+site-src/
+*.log

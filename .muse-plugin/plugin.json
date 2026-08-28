@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "name": "autoform",
+  "displayName": "AutoForm Bot",
+  "version": "0.5.0",
+  "description": "Set up Lean repositories, build Markdown roadmaps, and support human or agent review.",
+  "compat": {
+    "source": "native",
+    "manifestDir": ".muse-plugin"
+  },
+  "capabilities": {
+    "skills": [],
+    "commands": [
+      {
+        "id": "setup",
+        "path": "skills/setup/SKILL.md",
+        "enabledDefault": true
+      },
+      {
+        "id": "roadmap",
+        "path": "skills/roadmap/SKILL.md",
+        "enabledDefault": true
+      },
+      {
+        "id": "human-review",
+        "path": "skills/human-review/SKILL.md",
+        "enabledDefault": true
+      },
+      {
+        "id": "agent-review",
+        "path": "skills/agent-review/SKILL.md",
+        "enabledDefault": true
+      },
+      {
+        "id": "develop-plugin",
+        "path": "skills/develop-plugin/SKILL.md",
+        "enabledDefault": true
+      }
+    ],
+    "hooks": [],
+    "mcpServers": [
+      {
+        "id": "autoform-lsp",
+        "transport": "stdio",
+        "command": [
+          "uv",
+          "run",
+          "--project",
+          ".",
+          "--locked",
+          "python",
+          "-m",
+          "servers.lsp.server"
+        ]
+      },
+      {
+        "id": "autoform-repl",
+        "transport": "stdio",
+        "command": [
+          "uv",
+          "run",
+          "--project",
+          ".",
+          "--locked",
+          "--extra",
+          "repl",
+          "python",
+          "-m",
+          "servers.repl.server"
+        ]
+      }
+    ],
+    "reminders": []
+  }
+}

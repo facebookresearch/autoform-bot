@@ -1,126 +1,152 @@
-# Autoformalization Pipeline
+# AutoformBot
 
-Multi-agent system for translating LaTeX mathematics into verified Lean 4 proofs using Mathlib.
+AutoformBot is a coding-agent plugin and Python CLI for Lean 4 formalization
+projects. It builds source-grounded Markdown roadmaps, validates dependencies,
+publishes progress views, and prepares human or agent review. The plugin and
+CLI use the identifier `autoform`.
 
-![Visualizer Dashboard](docs/assets/visualizer.png)
+`main` provides planning, publication, review, and shared Lean LSP/REPL tools.
+It does **not** include autonomous orchestration. Execution work lives on
+[`deicyde/main`](https://github.com/VivienCabannes/autoform-bot/tree/deicyde/main),
+which currently trails `main` and is not a compatible overlay until rebased and
+validated.
 
-## Setup
+## Prerequisites
+
+- Python 3.10 or newer and [`uv`](https://docs.astral.sh/uv/)
+- Git
+- Lean and Lake for Lean tooling and verification
+- Claude Code or Codex for the installation flows below
+
+## Install
+
+Claude Code:
 
 ```bash
-make setup    # creates venv, installs deps, builds Lean + REPL (~20 min)
+claude plugin marketplace add VivienCabannes/autoform-bot
+claude plugin install autoform@autoform
 ```
 
-Create `.env` with the API key for your chosen provider:
-```
-ANTHROPIC_API_KEY=your-key-here   # for Claude models
-OPENAI_API_KEY=your-key-here      # for GPT models
-GEMINI_API_KEY=your-key-here      # for Gemini models
-```
+Codex:
 
-## Quick Start
-
-**1. Prepare book data** — place `book.md` (and optionally `book.pdf`) in `autoform/data/<name>/`. See `autoform/data/example/` for a sample.
-
-**2. Extract targets:**
 ```bash
-python -m autoform.statement_extraction run \
-    --book-dir=autoform/data/my_book \
-    --output=autoform/data/my_book/targets.yaml
+codex plugin marketplace add VivienCabannes/autoform-bot --ref main
+codex plugin add autoform@autoform
 ```
 
-**3. Create a config** (see `autoform/bot/configs/` for examples):
-```yaml
-workspace:
-  path: ../my-workspace
-  mathlib_path: submodules/mathlib
-  lib_name: My_Book
+Start a new agent session so the skills and MCP servers reload. A native Muse
+manifest is included, but Muse installation is not covered here.
 
-book:
-  path: my_book
-  files: [book.md]
-  targets: targets.yaml
+## Quick start
 
-llm:
-  model: Opus 4.6
+Work from an existing Lean repository. First scaffold the blueprint and site
+configuration from an Autoform checkout:
 
-workers:
-  agents_per_node: 5
-  num_repls_per_node: 5
-  min_agents_per_task: 3
-  max_agents_per_task: 5
-```
-
-**4. Run:**
 ```bash
-# Start fresh
-python -m autoform.bot.main run --config=path/to/config.yaml --name=my-run --fresh
-
-# Resume an interrupted run (omit --fresh)
-python -m autoform.bot.main run --config=path/to/config.yaml --name=my-run
-
-# Multi-node with SLURM
-srun --nodes=N --ntasks-per-node=1 python -m autoform.bot.main run --config=... --name=my-run
+uv run autoform init /path/to/lean-project \
+  --autoform-ref <full-commit-sha>
 ```
 
-**5. Monitor:**
+This creates `blueprint/`, `mkdocs.yml`, and `requirements-docs.txt`. GitHub
+workflows are created only when Autoform has an immutable commit pin. The Setup
+skill is a guided wrapper around this flow, but it still refers to legacy
+project helpers that are not packaged on `main`; use `autoform init` when those
+helpers are unavailable.
+
+Next use the host skills from the Lean project:
+
+| Goal | Claude Code | Codex |
+| --- | --- | --- |
+| Build a source-grounded roadmap | `/autoform:roadmap` | `$roadmap` |
+| Prepare a person-led review | `/autoform:human-review` | `$human-review` |
+| Run an independent agent review | `/autoform:agent-review` | `$agent-review` |
+
+For example: “Build a roadmap for Sections 2–4 of `paper.pdf`; confirm the scope
+and completion criteria before writing articles.” Keep the source in the
+repository or provide an accessible path. Human and agent review are
+alternatives; review the roadmap before treating it as an execution plan.
+
+## Blueprint model
+
+```text
+blueprint/
+├── README.md
+├── coverage/README.md
+├── roadmap/
+│   ├── README.md
+│   └── convexity/
+│       ├── README.md
+│       ├── convex.md
+│       └── separating-hyperplane.md
+└── sources/paper.md
+```
+
+Every Markdown file below `blueprint/roadmap/` is an article. A nested
+`README.md` represents its directory and contains the articles below it.
+Optional `declaration: theorem`, `declaration: def`, and similar frontmatter
+marks a formalizable article. Inline relative links under `## Depends on` and
+`## Proof depends on` define dependency edges; reference-style links do not.
+
+Markdown is the source of truth; Mermaid graphs and MkDocs pages are derived
+views. See the [blueprint format and CLI reference](autoform_cli/README.md) for
+complete frontmatter, hierarchy, status, and validation rules.
+
+## CLI and publication
+
+| Command | Purpose |
+| --- | --- |
+| `autoform init` | Scaffold the blueprint and site; add CI when immutably pinned. |
+| `autoform check` | Validate Markdown structure and dependencies. |
+| `autoform audit` | Audit completeness and checked facts. |
+| `autoform doctor` | Diagnose the local blueprint contract. |
+| `autoform claim` | Coordinate temporary ownership through Git refs. |
+| `autoform render` | Generate publishable MkDocs source. |
+| `autoform-visualize` | Generate the Mermaid dependency graph. |
+
+Inside an Autoform checkout, use `uv run`:
+
 ```bash
-python -m autoform.visualizer.app --runs-dir=../my-workspace --port=8003
+uv run autoform check /path/to/project/blueprint --lean-root /path/to/project
+uv run autoform-visualize /path/to/project/blueprint
+uv run autoform render /path/to/project/blueprint \
+  --output /path/to/project/site-src \
+  --lean-root /path/to/project --require-declarations
 ```
 
-**6. Evaluate:**
-```bash
-python -m autoform.eval run \
-    --repo-dir=../my-workspace/my-run/code \
-    --task-file=autoform/data/my_book/targets.yaml \
-    --book-dir=autoform/data/my_book
-```
+From a consumer project, resolve the installed plugin root and prefix commands
+with `uv run --project "<AUTOFORM_PLUGIN_ROOT>"`, or separately install the
+Python package so its console scripts are on `PATH`.
 
-## Architecture
+`check --lean-root` lexically resolves names in local Lean files; it does not
+compile them or prove that they belong to a Lake target. Use `lake build` and
+the verification workflow for compilation and audit, while treating the
+blueprint-to-declaration match as a separate contract.
 
-```
-autoform-pipeline/
-├── autoform/
-│   ├── bot/                  Multi-agent pipeline (orchestrator, workers, reviewers)
-│   ├── eval/                 Evaluation (grading, lean checks, metrics, rubrics)
-│   ├── visualizer/           Web dashboard for inspecting runs and traces
-│   ├── statement_extraction/ Statement chunking and extraction from LaTeX
-│   └── data/                 Book datasets (book.md + targets.yaml)
-├── core/                     Framework (agent, inference, trace, coordination)
-├── tools/                    MCP tool servers (filesystem, git, bash, Lean REPL/LSP, mathlib)
-├── template/                 Lean 4 + Mathlib workspace template
-├── submodules/               Git submodules (mathlib, repl, lean-lsp-mcp)
-└── docs/                     Documentation
-```
+`render` writes MkDocs source, not a deployed site. The generated Pages workflow
+deploys from `main` only after GitHub Pages is enabled in repository settings.
 
 ## Documentation
 
-**Pipeline:**
-- [Bot](docs/pipeline/bot.md) — multi-agent architecture, DAG workflow, multi-node SLURM, agent roles, config reference
-- [Evaluation](docs/pipeline/eval.md) — matching, axiom checking, LLM grading rubrics, dependency graphs
-- [Statement Extraction](docs/pipeline/statement_extraction.md) — chunking, multi-agent extraction, deduplication
-- [Visualizer](docs/pipeline/visualizer.md) — dashboard views, API endpoints, hub mode
+- [Cabannes thesis example](skills/setup/assets/cabannes-thesis-project/README.md)
+- [Roadmap example](skills/roadmap/references/cabannes-thesis-roadmap.md)
+- [Lean server architecture and operations](servers/README.md)
 
-**Tools:**
-- [Tools Overview](docs/tools/overview.md) — MCP tool system, available servers, adding new tools
-- [REPL Reference](docs/tools/repl.md) — Lean REPL architecture, pooled server, Python API
+## Development
 
-## License
+Development also requires Make:
 
-This project is licensed under the [MIT](LICENSE) license.
-
-
-## Citation
-
-If you find this work useful, please cite our paper:
-
-```bibtex
-@misc{rammal2026formalizingmathematicsscale,
-      title={Formalizing Mathematics at Scale}, 
-      author={Ahmad Rammal and Niket Patel and Fabian Gloeckle and Amaury Hayat and Julia Kempe and Remi Munos and Charles Arnal and Vivien Cabannes},
-      year={2026},
-      eprint={2605.29955},
-      archivePrefix={arXiv},
-      primaryClass={cs.AI},
-      url={https://arxiv.org/abs/2605.29955}, 
-}
+```bash
+git clone https://github.com/VivienCabannes/autoform-bot.git
+cd autoform-bot
+make setup
+make lint
+make test
+make check-example
 ```
+
+Claude Code uses `/autoform:develop-plugin`; Codex uses `$develop-plugin`.
+`make check-example` validates, renders, and builds the example documentation.
+Run `lake build` in the Cabannes fixture when changing its Lean sources or
+declarations.
+
+AutoformBot is released under the [MIT License](LICENSE).

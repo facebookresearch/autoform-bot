@@ -1,0 +1,101 @@
+# Builds the Lean project and validates its Autoform blueprint on neutral
+# hardware. Actions and the Autoform source are pinned immutably.
+
+name: autoform verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  AUTOFORM_SOURCE: "https://github.com/VivienCabannes/autoform-bot.git"
+  AUTOFORM_REF: "43097b2c07e68df899d6b8bca7849d091c294754"
+
+concurrency:
+  group: autoform-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out project
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+
+      - name: Validate the theorem DAG
+        run: >-
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          autoform check blueprint
+
+      - name: Install elan
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            https://github.com/leanprover/elan/releases/download/v4.2.3/elan-x86_64-unknown-linux-gnu.tar.gz \
+            -o elan.tar.gz
+          echo "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2  elan.tar.gz" \
+            | sha256sum --check --strict
+          tar xzf elan.tar.gz
+          ./elan-init -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Reject kernel-check bypass options
+        run: |
+          set -euo pipefail
+          # Scan all tracked text, including Lake configuration. Keep the
+          # forbidden token split so this checker does not match itself.
+          forbidden="skip""KernelTC"
+          if matches="$(git grep -n -I "$forbidden" -- .)"; then
+            printf 'Kernel-check bypass option found:\n%s\n' "$matches" >&2
+            exit 1
+          else
+            grep_status=$?
+            if [ "$grep_status" -ne 1 ]; then
+              echo "failed to scan tracked files" >&2
+              exit "$grep_status"
+            fi
+          fi
+          echo "no kernel-check bypass option found"
+
+      - name: Fetch the Mathlib build cache
+        run: lake exe cache get || echo "no cache available — building from source"
+
+      # Evaluate either Lake manifest language, then clean only the root package.
+      # Bare `lake clean` would also delete dependency build caches.
+      - name: Build Lean
+        run: |
+          set -euo pipefail
+          evaluated_config="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-lake-config.XXXXXX.toml")"
+          trap 'rm -f "$evaluated_config"' EXIT
+          rm -f "$evaluated_config"
+          lake translate-config toml "$evaluated_config"
+          root_package="$(python3 .github/autoform_audit.py --root-package "$evaluated_config")"
+          echo "AUTOFORM_ROOT_PACKAGE=$root_package" >> "$GITHUB_ENV"
+          lake check-build
+          lake clean "$root_package"
+          lake build
+
+      - name: Audit every root-package declaration
+        run: |
+          set -euo pipefail
+          archive="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-root-build.XXXXXX.tgz")"
+          probe="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-axiom-probe.XXXXXX.lean")"
+          trap 'rm -f "$archive" "$probe"' EXIT
+          # Lake resolves both manifest languages and package/custom buildDir.
+          # `lake pack` archives only the root package's actual build directory,
+          # leaving dependency package artifacts outside the audit boundary.
+          lake pack "$archive"
+          python3 .github/autoform_audit.py \
+            "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
+          lake env lean "$probe"

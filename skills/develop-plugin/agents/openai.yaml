@@ -1,0 +1,4 @@
+interface:
+  display_name: "Develop Autoform Plugin"
+  short_description: "Develop Autoform through its formalization example"
+  default_prompt: "Use $develop-plugin to change Autoform through its representative formalization example and validate the installed-project behavior."
