@@ -22,4 +22,6 @@ entire managed checklist section so declarations that disappeared or left the
 dependency closure are deleted and newly relevant declarations are added.
 Whenever the source is available, the refreshed section must include the
 original mathematical statement or definition as a verbatim quotation with its
-locator. Preserve all content outside that section.
+locator, paired with the existing GitHub link to the Lean declaration that
+implements it. Do not copy the Lean implementation into the Markdown. Preserve
+all content outside that section.

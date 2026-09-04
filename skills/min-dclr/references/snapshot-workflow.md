@@ -14,10 +14,12 @@ judged.
 
 For each source-facing root, if the source text is available, the managed
 section **must** include the original mathematical statement or definition as a
-verbatim quotation with its exact source locator. This applies on every refresh.
-If the source text is unavailable, state that explicitly and do not reconstruct
-a quotation from comments or memory. A clearly labeled paraphrase may be added
-when it is grounded in an available secondary source.
+verbatim quotation with its exact source locator, paired in the same checklist
+entry with the GitHub link to the Lean declaration that implements it. Link to
+the Lean code; do not copy that code into the Markdown. This applies on every
+refresh. If the source text is unavailable, state that explicitly and do not
+reconstruct a quotation from comments or memory. A clearly labeled paraphrase
+may be added when it is grounded in an available secondary source.
 
 At the start of every invocation, record:
 
@@ -113,9 +115,9 @@ Write the managed section in this order:
 1. source locator and exact snapshot, including dirty-state disclosure;
 2. build and proof-integrity warning, if any;
 3. introduced definitions in the roots' statement dependency closure;
-4. source-facing declarations grouped by source locator, with the available
-   original mathematical statement or definition quoted verbatim alongside
-   each one;
+4. source-facing declarations grouped by source locator, with each available
+   original mathematical statement or definition quoted verbatim and paired
+   with its implementing Lean declaration's GitHub link;
 5. partial or absent source clauses;
 6. omitted implementation helpers and named pre-existing dependencies; and
 7. commands run and unresolved evidence.

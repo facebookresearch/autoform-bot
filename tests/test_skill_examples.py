@@ -425,6 +425,8 @@ def test_min_dclr_refreshes_the_current_snapshot(repo_root: Path) -> None:
     assert "references/snapshot-workflow.md" in skill
     assert "every invocation as a fresh snapshot" in skill
     assert "original mathematical statement or definition" in normalized_skill
+    assert "paired with the existing GitHub link" in normalized_skill
+    assert "Do not copy the Lean implementation" in skill
     assert "declarations that disappeared or left the dependency closure are deleted" in normalized_skill
     assert "$min-dclr" in metadata
     for required in (
@@ -437,6 +439,8 @@ def test_min_dclr_refreshes_the_current_snapshot(repo_root: Path) -> None:
         "Do not traverse theorem proof bodies",
         "original mathematical statement or definition",
         "the managed section **must** include",
+        "paired in the same checklist entry with the GitHub link",
+        "do not copy that code into the Markdown",
         "This applies on every refresh",
         "do not reconstruct a quotation from comments or memory",
         "FULL_COMMIT_SHA",
