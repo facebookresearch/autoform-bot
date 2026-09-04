@@ -424,6 +424,7 @@ def test_min_dclr_refreshes_the_current_snapshot(repo_root: Path) -> None:
 
     assert "references/snapshot-workflow.md" in skill
     assert "every invocation as a fresh snapshot" in skill
+    assert "original mathematical statement or definition" in normalized_skill
     assert "declarations that disappeared or left the dependency closure are deleted" in normalized_skill
     assert "$min-dclr" in metadata
     for required in (
@@ -434,6 +435,10 @@ def test_min_dclr_refreshes_the_current_snapshot(repo_root: Path) -> None:
         "introduced between the comparison base and the current snapshot",
         "meaning-bearing body",
         "Do not traverse theorem proof bodies",
+        "original mathematical statement or definition",
+        "the managed section **must** include",
+        "This applies on every refresh",
+        "do not reconstruct a quotation from comments or memory",
         "FULL_COMMIT_SHA",
         "absolute local file links",
         "validate every generated link against the captured snapshot",

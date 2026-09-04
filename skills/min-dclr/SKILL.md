@@ -20,4 +20,6 @@ than choosing a file silently.
 Read [the snapshot workflow](references/snapshot-workflow.md). Replace the
 entire managed checklist section so declarations that disappeared or left the
 dependency closure are deleted and newly relevant declarations are added.
-Preserve all content outside that section.
+Whenever the source is available, the refreshed section must include the
+original mathematical statement or definition as a verbatim quotation with its
+locator. Preserve all content outside that section.
