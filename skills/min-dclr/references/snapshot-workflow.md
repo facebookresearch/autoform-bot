@@ -60,6 +60,14 @@ class or predicate can hide the conclusion being reviewed. Do not traverse
 theorem proof bodies: definitions used only to build proofs are implementation
 dependencies, not dependencies of the statements.
 
+For every included structure, class, or inductive declaration, inspect every
+field or constructor type and add introduced definitions referenced there,
+including references nested beneath `∀`, `∃`, function arrows, typeclass
+arguments, and other binders. Repeat this expansion for each newly included
+definition until no new statement dependency is found. Do not stop at a public
+wrapper when its witness or coherence data is supplied by another introduced
+predicate; that predicate is part of the wrapper's mathematical data.
+
 Exclude unrelated definitions from the same file or change, convenience
 aliases, duplicate wrappers, constructor lemmas, arithmetic implementations,
 and proof-only helpers. Name a pre-existing dependency separately only when it
