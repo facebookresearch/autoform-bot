@@ -436,6 +436,8 @@ def test_min_dclr_refreshes_the_current_snapshot(repo_root: Path) -> None:
         "Do not traverse theorem proof bodies",
         "FULL_COMMIT_SHA",
         "absolute local file links",
+        "validate every generated link against the captured snapshot",
+        "anchor must be the declaration's first line",
         "partial",
         "absent",
         "#print axioms",
@@ -444,6 +446,8 @@ def test_min_dclr_refreshes_the_current_snapshot(repo_root: Path) -> None:
         "Never incrementally append to the old list",
         "delete stale entries and add current ones",
         "preserving all unrelated content",
+        "unmarked target consists entirely of an older declaration checklist",
+        "replacing that checklist with one marked section",
     ):
         assert required in normalized_reference
 

@@ -71,6 +71,11 @@ local and mutable. On the next invocation after a commit, replace them with
 commit-pinned links. Never retain an old link merely because its declaration
 name still exists.
 
+Before writing, validate every generated link against the captured snapshot:
+the commit must match, the path must exist at that commit, and the anchor must
+be the declaration's first line. Reusing an old checklist's line number without
+checking it is not validation.
+
 Build the smallest target containing the selected roots. Search changed Lean
 files for `sorry`, `admit`, and raw `axiom`. If the target builds, run
 `#print axioms` on each source-facing endpoint. Report failures without calling
@@ -90,6 +95,11 @@ Create the marked section if it does not exist. If either marker is duplicated
 or only one marker exists, stop instead of guessing which content to replace.
 Never incrementally append to the old list. Replacement must delete stale
 entries and add current ones while preserving all unrelated content.
+
+When an unmarked target consists entirely of an older declaration checklist,
+migrate it by replacing that checklist with one marked section. When the file
+also has unrelated content, preserve that content and insert the new marked
+section separately.
 
 Write the managed section in this order:
 
