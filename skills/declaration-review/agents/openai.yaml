@@ -1,4 +1,0 @@
-interface:
-  display_name: "Declaration Review"
-  short_description: "Refresh minimal source-to-Lean checklists"
-  default_prompt: "Use $declaration-review to recompute and update the minimal declaration checklist for the current snapshot."

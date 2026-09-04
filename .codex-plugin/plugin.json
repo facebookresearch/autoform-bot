@@ -11,7 +11,7 @@
   "interface": {
     "displayName": "AutoForm Bot",
     "shortDescription": "Lean setup, roadmaps, review, LSP, and REPL",
-    "longDescription": "AutoForm separates repository setup from source-grounded roadmap construction, keeps the plan in an Obsidian-compatible Markdown vault, publishes it with GitHub Pages, checks proofs through two public Lean MCP servers, and provides visual, rubric-driven, and refreshable declaration-review workflows.",
+    "longDescription": "AutoForm separates repository setup from source-grounded roadmap construction, keeps the plan in an Obsidian-compatible Markdown vault, publishes it with GitHub Pages, checks proofs through two public Lean MCP servers, and provides visual, rubric-driven, and refreshable declaration-checklist workflows.",
     "developerName": "Vivien Cabannes",
     "category": "Coding",
     "capabilities": [

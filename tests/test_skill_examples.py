@@ -408,24 +408,24 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
     assert (repo_root / "skills/agent-review/references/roadmap-quality.md").is_file()
 
 
-def test_declaration_review_refreshes_the_current_snapshot(repo_root: Path) -> None:
-    skill = (repo_root / "skills/declaration-review/SKILL.md").read_text(
+def test_min_dclr_refreshes_the_current_snapshot(repo_root: Path) -> None:
+    skill = (repo_root / "skills/min-dclr/SKILL.md").read_text(
         encoding="utf-8"
     )
     reference_path = (
-        repo_root / "skills/declaration-review/references/snapshot-workflow.md"
+        repo_root / "skills/min-dclr/references/snapshot-workflow.md"
     )
     reference = reference_path.read_text(encoding="utf-8")
     normalized_skill = " ".join(skill.split())
     normalized_reference = " ".join(reference.split())
-    metadata = (repo_root / "skills/declaration-review/agents/openai.yaml").read_text(
+    metadata = (repo_root / "skills/min-dclr/agents/openai.yaml").read_text(
         encoding="utf-8"
     )
 
     assert "references/snapshot-workflow.md" in skill
     assert "every invocation as a fresh snapshot" in skill
     assert "declarations that disappeared or left the dependency closure are deleted" in normalized_skill
-    assert "$declaration-review" in metadata
+    assert "$min-dclr" in metadata
     for required in (
         "Do not wait for all formalization runs to finish",
         "confirm that its commit, status, and reviewed files have not changed",
@@ -439,8 +439,8 @@ def test_declaration_review_refreshes_the_current_snapshot(repo_root: Path) -> N
         "partial",
         "absent",
         "#print axioms",
-        "<!-- declaration-review:start -->",
-        "<!-- declaration-review:end -->",
+        "<!-- min-dclr:start -->",
+        "<!-- min-dclr:end -->",
         "Never incrementally append to the old list",
         "delete stale entries and add current ones",
         "preserving all unrelated content",

@@ -17,7 +17,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
         "roadmap",
         "human-review",
         "agent-review",
-        "declaration-review",
+        "min-dclr",
         "develop-plugin",
     }
 
@@ -57,7 +57,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
         "roadmap",
         "human-review",
         "agent-review",
-        "declaration-review",
+        "min-dclr",
         "develop-plugin",
     ]
     for command in muse["capabilities"]["commands"]:

@@ -82,8 +82,8 @@ Recompute the output from scratch on every invocation. In the target Markdown
 file, replace everything between these markers:
 
 ```markdown
-<!-- declaration-review:start -->
-<!-- declaration-review:end -->
+<!-- min-dclr:start -->
+<!-- min-dclr:end -->
 ```
 
 Create the marked section if it does not exist. If either marker is duplicated

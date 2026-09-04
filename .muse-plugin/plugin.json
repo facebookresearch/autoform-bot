@@ -32,8 +32,8 @@
         "enabledDefault": true
       },
       {
-        "id": "declaration-review",
-        "path": "skills/declaration-review/SKILL.md",
+        "id": "min-dclr",
+        "path": "skills/min-dclr/SKILL.md",
         "enabledDefault": true
       },
       {

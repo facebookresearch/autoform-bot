@@ -65,7 +65,7 @@ Next use the host skills from the Lean project:
 | Build a source-grounded roadmap | `/autoform:roadmap` | `$roadmap` |
 | Prepare a person-led review | `/autoform:human-review` | `$human-review` |
 | Run an independent agent review | `/autoform:agent-review` | `$agent-review` |
-| Refresh a minimal declaration checklist | `/autoform:declaration-review` | `$declaration-review` |
+| Refresh a minimal declaration checklist | `/autoform:min-dclr` | `$min-dclr` |
 
 For example: “Build a roadmap for Sections 2–4 of `paper.pdf`; confirm the scope
 and completion criteria before writing articles.” Keep the source in the

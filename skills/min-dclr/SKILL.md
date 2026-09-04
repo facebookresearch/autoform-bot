@@ -1,5 +1,5 @@
 ---
-name: declaration-review
+name: min-dclr
 description: >-
   Recompute and update a minimal source-to-Lean declaration checklist for the
   current repository or pull-request snapshot. Use when someone wants a
