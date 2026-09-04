@@ -26,6 +26,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
         "proof-integrity.md",
         "code-quality.md",
         "mathlib-style.md",
+        "minimal-declaration-review.md",
         "roadmap-quality.md",
         "thesis-review-case.md",
     }

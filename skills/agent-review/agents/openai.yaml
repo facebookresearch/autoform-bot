@@ -1,4 +1,4 @@
 interface:
   display_name: "Agent Review"
-  short_description: "Judge Lean work with evidence-based rubrics"
-  default_prompt: "Use $agent-review to audit this Autoform roadmap or Lean formalization with deterministic evidence-based rubrics."
+  short_description: "Audit Lean work and build review checklists"
+  default_prompt: "Use $agent-review to audit this Autoform roadmap or Lean formalization, or produce a minimal source-to-code declaration checklist with stable links."

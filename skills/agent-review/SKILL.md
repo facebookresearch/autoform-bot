@@ -3,8 +3,9 @@ name: agent-review
 description: >-
   Judge an Autoform mathematical roadmap or Lean formalization with explicit,
   evidence-based rubrics. Use for an independent agent audit of source coverage,
-  DAG quality, statement faithfulness, proof integrity, axioms, sorries, or
-  Mathlib contribution quality; do not use merely to prepare a visualization for
+  DAG quality, statement faithfulness, proof integrity, axioms, sorries,
+  Mathlib contribution quality, or a minimal source-to-code declaration review
+  checklist with stable links; do not use merely to prepare a visualization for
   a human reviewer.
 ---
 
@@ -33,3 +34,9 @@ asks for fixes.
 
 Use the short [Cabannes thesis review case](references/thesis-review-case.md)
 when a concrete Lean example helps distinguish faithfulness from integrity.
+
+When the user wants the smallest set of declarations needed to review whether a
+source has been formalized correctly, follow
+[minimal declaration review](references/minimal-declaration-review.md). If the
+user names an output Markdown file, write the checklist there as well as
+summarizing the result in chat.
