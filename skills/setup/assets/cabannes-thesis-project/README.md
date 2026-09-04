@@ -8,7 +8,7 @@ slice as a handoff example.
 
 Developed with [AutoformBot](https://github.com/facebookresearch/autoform-bot).
 
-- `lean-toolchain`, `lakefile.toml`, and `CabannesThesis/` pin matching stable
+- `lean-toolchain`, `lakefile.toml`, and `src/CabannesThesis/` pin matching stable
   Lean and Mathlib `v4.32.2` releases.
 - `blueprint/` is an Obsidian-compatible Markdown vault with roadmap, coverage,
   sources, and a seven-node theorem DAG spanning two formalization chapters.

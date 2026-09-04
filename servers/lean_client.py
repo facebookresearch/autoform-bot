@@ -28,20 +28,23 @@ DEFAULT_RESPONSE_TIMEOUT = 900.0
 DEFAULT_STARTUP_TIMEOUT = 15.0
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_PATH_ID = hashlib.sha256(os.fsencode(PACKAGE_ROOT)).hexdigest()[:10]
+_RUNTIME_FILES = (
+    PACKAGE_ROOT / "servers" / "__init__.py",
+    Path(__file__).resolve(),
+    PACKAGE_ROOT / "servers" / "lean_runtime.py",
+    PACKAGE_ROOT / "servers" / "lsp" / "server.py",
+    PACKAGE_ROOT / "servers" / "repl" / "__init__.py",
+    PACKAGE_ROOT / "servers" / "repl" / "server.py",
+    PACKAGE_ROOT / "servers" / "repl" / "core.py",
+    PACKAGE_ROOT / "servers" / "repl" / "imports.py",
+    PACKAGE_ROOT / "servers" / "repl" / "pool.py",
+)
 
 
 def _build_id() -> str:
     """Fingerprint code that can change persistent runtime behavior."""
     digest = hashlib.sha256()
-    runtime_files = (
-        PACKAGE_ROOT / "servers" / "__init__.py",
-        Path(__file__).resolve(),
-        PACKAGE_ROOT / "servers" / "lean_runtime.py",
-        PACKAGE_ROOT / "servers" / "lsp" / "server.py",
-        PACKAGE_ROOT / "servers" / "repl" / "core.py",
-        PACKAGE_ROOT / "servers" / "repl" / "pool.py",
-    )
-    for path in runtime_files:
+    for path in _RUNTIME_FILES:
         try:
             digest.update(path.read_bytes())
         except OSError:
@@ -51,15 +54,8 @@ def _build_id() -> str:
 
 def _build_generation() -> int:
     """Order in-place builds so an older live wrapper cannot replace a newer one."""
-    candidates = (
-        Path(__file__).resolve(),
-        PACKAGE_ROOT / "servers" / "lean_runtime.py",
-        PACKAGE_ROOT / "servers" / "lsp" / "server.py",
-        PACKAGE_ROOT / "servers" / "repl" / "core.py",
-        PACKAGE_ROOT / "servers" / "repl" / "pool.py",
-    )
     mtimes: list[int] = []
-    for path in candidates:
+    for path in _RUNTIME_FILES:
         try:
             mtimes.append(path.stat().st_mtime_ns)
         except OSError:
@@ -337,12 +333,13 @@ class LeanRuntimeClient:
             os.close(lock_fd)
 
     def stop(self) -> dict[str, Any]:
-        """Ask a running daemon to finish active calls and shut down."""
+        """Ask a running daemon to finish active calls within one deadline."""
+        deadline = time.monotonic() + self.response_timeout
         try:
             result = self.request(
                 "daemon.shutdown",
                 autostart=False,
-                response_timeout=10.0,
+                response_timeout=min(self.response_timeout, 10.0),
             )
         except LeanRuntimeUnavailable:
             stopped = self._stop_previous_builds()
@@ -351,7 +348,6 @@ class LeanRuntimeClient:
             raise
         if not isinstance(result, dict):
             raise LeanRuntimeProtocolError("daemon.shutdown returned a non-object result")
-        deadline = time.monotonic() + self.response_timeout
         while self.paths.socket.exists() and time.monotonic() < deadline:
             time.sleep(0.025)
         if self.paths.socket.exists():

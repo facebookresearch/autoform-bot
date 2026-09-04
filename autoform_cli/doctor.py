@@ -13,17 +13,17 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path, PureWindowsPath
 
-from .audit import AuditFinding, audit_graph
-from .graph import GraphValidationError, load_graph
+from .audit import AuditFinding, load_audit_graph
+from .lean import snapshot_project_sources
 from .runtime import (
     RUNTIME_AUTHORITY,
     RUNTIME_SCHEMA,
-    RuntimeGraph,
     RuntimePaths,
     RuntimeProjectionError,
     build_runtime_graph,
     resolve_runtime_paths,
 )
+from .workspace_manifest import WorkspaceError
 
 _LEAN_FINDING_CODES = frozenset(
     {
@@ -70,16 +70,19 @@ def diagnose_project(
     project_or_blueprint: str | Path,
     *,
     lean_root: str | Path | None = None,
+    project_id: str | None = None,
 ) -> DoctorResult:
     """Diagnose one project using only its local authored source files."""
 
     paths: RuntimePaths | None = None
-    graph = None
-    runtime: RuntimeGraph | None = None
     checks: list[DoctorCheck] = []
 
     try:
-        paths = resolve_runtime_paths(project_or_blueprint)
+        paths = resolve_runtime_paths(
+            project_or_blueprint,
+            project_id=project_id,
+            _retain_workspace=True,
+        )
     except RuntimeProjectionError as error:
         checks.append(DoctorCheck("blueprint", False, _issues(error.issues)))
     except (OSError, RuntimeError, ValueError):
@@ -97,9 +100,51 @@ def diagnose_project(
         return _blocked_result(checks, "blueprint resolution failed", lean_root=lean_root)
 
     try:
-        graph = load_graph(paths.blueprint_dir)
-    except GraphValidationError as error:
-        reason = _sanitize_issues(error.issues, paths)
+        try:
+            return _diagnose_bound_project(paths, checks, lean_root=lean_root)
+        except (RuntimeProjectionError, WorkspaceError) as error:
+            reason = _sanitize_issues(error.issues, paths)
+            return _blocked_result(
+                [DoctorCheck("blueprint", False, reason)],
+                "project changed during diagnosis",
+                lean_root=lean_root,
+            )
+    finally:
+        paths.close()
+
+
+def _diagnose_bound_project(
+    paths: RuntimePaths,
+    checks: list[DoctorCheck],
+    *,
+    lean_root: str | Path | None,
+) -> DoctorResult:
+    """Run diagnostics while retaining one selected filesystem generation."""
+
+    lean_snapshot = None
+    lean_root_valid = True
+    lean_root_error: str | None = None
+    if lean_root is not None:
+        try:
+            lean_snapshot = snapshot_project_sources(lean_root)
+        except (OSError, RuntimeError, ValueError) as error:
+            lean_root_valid = False
+            lean_root_error = _sanitize_issues((str(error),), paths)
+
+    runtime = None
+    graph, audit = load_audit_graph(
+        paths.blueprint_dir,
+        lean_index=lean_snapshot.index if lean_snapshot is not None else None,
+        _expected_blueprint_identity=paths.blueprint_identity,
+        _expected_roadmap_identity=paths.roadmap_identity,
+    )
+    if graph is None:
+        reasons = tuple(
+            finding.reason
+            for finding in audit.findings
+            if finding.code == "invalid-graph"
+        )
+        reason = _sanitize_issues(reasons, paths) if reasons else "canonical graph is invalid"
         checks.append(DoctorCheck("runtime", False, "canonical graph is invalid"))
         checks.append(DoctorCheck("graph", False, reason))
         checks.append(DoctorCheck("references", False, "not checked because graph validation failed"))
@@ -107,12 +152,11 @@ def diagnose_project(
         checks.append(_blocked_lean_check("graph validation failed", lean_root))
         return _result(checks)
 
-    resolved_lean_root, lean_root_valid = _resolve_lean_root(lean_root)
     try:
         runtime = build_runtime_graph(
             graph,
             project_root=paths.project_root,
-            lean_root=resolved_lean_root,
+            _lean_index=lean_snapshot.index if lean_snapshot is not None else None,
         )
     except RuntimeProjectionError as error:
         checks.append(DoctorCheck("runtime", False, _issues(error.issues)))
@@ -151,11 +195,14 @@ def diagnose_project(
         )
     )
 
-    audit = audit_graph(graph, lean_root=resolved_lean_root)
     lean_findings = tuple(finding for finding in audit.findings if finding.code in _LEAN_FINDING_CODES)
     if lean_root is not None and not lean_root_valid:
         lean_findings = (
-            AuditFinding(".", "invalid-lean-root", "Lean root does not exist or is not a directory"),
+            AuditFinding(
+                ".",
+                "invalid-lean-root",
+                lean_root_error or "Lean root could not be inspected safely",
+            ),
             *lean_findings,
         )
     roadmap_findings = tuple(finding for finding in audit.findings if finding.code not in _LEAN_FINDING_CODES)
@@ -164,6 +211,7 @@ def diagnose_project(
         checks.append(DoctorCheck("lean targets", True, "not checked; no Lean root supplied"))
     else:
         checks.append(_finding_check("lean targets", lean_findings, "all asserted local Lean targets resolve"))
+    paths.verify()
     return _result(checks)
 
 
@@ -188,6 +236,12 @@ def _blocked_lean_check(reason: str, lean_root: str | Path | None) -> DoctorChec
 def _finding_check(name: str, findings: tuple[AuditFinding, ...], clean_detail: str) -> DoctorCheck:
     if not findings:
         return DoctorCheck(name, True, clean_detail)
+    if len(findings) == 1 and findings[0].code == "invalid-lean-root":
+        return DoctorCheck(
+            name,
+            False,
+            f"1 finding(s): invalid-lean-root: {findings[0].reason}",
+        )
     codes = ", ".join(sorted({finding.code for finding in findings}))
     return DoctorCheck(name, False, f"{len(findings)} finding(s): {codes}")
 

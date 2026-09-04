@@ -13,7 +13,9 @@ description: >-
 Inspect the repository without changing mathematical content. Require an
 existing Autoform vault and site configuration; hand missing infrastructure to
 Setup. Keep the Markdown vault as the source of truth and regenerate only
-derived review views.
+derived review views. When `.autoform.toml` exists, inspect it and select one
+registered project; unregistered sibling directories are outside Autoform's
+review scope.
 
 Regenerate the review views from `<PROJECT>`: validate the blueprint, refresh
 the Mermaid graph with `autoform-visualize` so Obsidian shows current
@@ -24,8 +26,8 @@ unformalized, and a missing declaration is something for the reviewer to see
 rather than a reason to refuse to render.
 
 Stop on structural failures and present them before asking for mathematical
-judgment. For vault review, point the user to `blueprint/README.md`, coverage,
-chapter pages, and `blueprint/dependencies.md` in Obsidian. For browser review,
+judgment. For vault review, point the user to the selected vault's `README.md`,
+coverage, chapter pages, and generated `dependencies.md` in Obsidian. For browser review,
 serve the built site over localhost and provide the overview, progress, project
 graph, relevant chapter graph, and node-neighborhood links.
 
@@ -35,4 +37,5 @@ and Lean-source links. Record each human decision as `approve`, `revise`, or
 `block`, with the exact page or node and rationale. Separate validator output
 from the person's judgment. Do not silently apply requested revisions: hand
 mathematical-plan changes to Roadmap, Lean implementation changes to
-Orchestrate, and autonomous rubric scoring to Agent Review.
+Orchestrate, and rubric scoring to Agent Review. Autoform does not ship a
+detached autonomous runner.

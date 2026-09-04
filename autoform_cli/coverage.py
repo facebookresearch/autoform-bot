@@ -10,11 +10,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 from collections import Counter
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass, field
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import unquote, urlsplit
+
+from .graph import GraphValidationError, SOURCE_UNIT_PATTERN, load_graph
 
 from .markdown import (
     INLINE_CODE,
@@ -28,9 +33,31 @@ from .markdown import (
 )
 
 COVERAGE_SCHEMA = "autoform-coverage/v1"
+COVERAGE_V2_SCHEMA = "autoform-coverage/v2"
 COVERAGE_DISPOSITIONS = ("MAPPED", "DECOMPOSED", "DEFERRED", "OUT")
 _EXPECTED_HEADER = ("Area", "Coverage", "Evidence")
+_V2_EXPECTED_HEADER = (
+    "Unit",
+    "Area",
+    "Lines",
+    "Locator",
+    "Unit SHA-256",
+    "Coverage",
+    "Evidence",
+)
 _SEPARATOR = re.compile(r"^:?-{3,}:?$")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_LINE_SPAN = re.compile(r"([1-9][0-9]*)-([1-9][0-9]*)\Z")
+_FRONTMATTER_LIKE_FENCE = re.compile(
+    r"(?:--(?:[ \t]*(?:ya?ml|#.*))?|-{3,}.*)\Z",
+    re.IGNORECASE,
+)
+_FRONTMATTER_KEY = re.compile(r"^[ \t]*[\"']?(?P<key>[A-Za-z][A-Za-z0-9_-]*)[\"']?")
+_YAML_HEX_ESCAPE = re.compile(
+    r"\\U(?P<long>[0-9A-Fa-f]{8})|"
+    r"\\u(?P<short>[0-9A-Fa-f]{4})|"
+    r"\\x(?P<byte>[0-9A-Fa-f]{2})"
+)
 
 #: Stem of the marker that stands in for a row's cells when tracing which
 #: published table those source lines became. Grown by `_unique_marker` until
@@ -49,6 +76,7 @@ class CoverageIssue:
 
     line: int
     reason: str
+    code: str = "invalid-coverage-contract"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +93,47 @@ class CoverageEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class CoverageUnit:
+    """One exact, LF-terminated span in a v2 source artifact."""
+
+    unit: str
+    area: str
+    start_line: int
+    end_line: int
+    locator: str
+    unit_sha256: str
+    disposition: str
+    evidence: str
+    line: int
+    roadmap_nodes: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "area": self.area,
+            "coverage": self.disposition,
+            "end_line": self.end_line,
+            "evidence": self.evidence,
+            "line": self.line,
+            "locator": self.locator,
+            "roadmap_nodes": list(self.roadmap_nodes),
+            "start_line": self.start_line,
+            "unit": self.unit,
+            "unit_sha256": self.unit_sha256,
+        }
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class CoverageNodeBinding:
+    """A reciprocal source-unit to roadmap-leaf binding."""
+
+    node_id: str
+    unit: str
+
+    def as_dict(self) -> dict[str, str]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
 class CoverageSummary:
     """Canonical coverage rows, counts, and source binding.
 
@@ -77,6 +146,11 @@ class CoverageSummary:
     source_path: str
     source_sha256: str
     entries: tuple[CoverageEntry, ...]
+    artifact_path: str | None = None
+    artifact_sha256: str | None = None
+    units: tuple[CoverageUnit, ...] = ()
+    node_bindings: tuple[CoverageNodeBinding, ...] = ()
+    _roadmap_sha256: str | None = field(default=None, repr=False, compare=False)
 
     @property
     def counts(self) -> dict[str, int]:
@@ -101,7 +175,7 @@ class CoverageSummary:
         return bool(self.entries) and not self.counts["MAPPED"]
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "complete": self.complete,
             "counts": self.counts,
             "entries": [entry.as_dict() for entry in self.entries],
@@ -109,6 +183,17 @@ class CoverageSummary:
             "source_path": self.source_path,
             "source_sha256": self.source_sha256,
         }
+        if self.schema == COVERAGE_V2_SCHEMA:
+            result.update(
+                {
+                    "artifact_path": self.artifact_path,
+                    "artifact_sha256": self.artifact_sha256,
+                    "contract_sha256": self.source_sha256,
+                    "node_bindings": [binding.as_dict() for binding in self.node_bindings],
+                    "units": [unit.as_dict() for unit in self.units],
+                }
+            )
+        return result
 
     def to_json(self) -> str:
         return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
@@ -123,11 +208,68 @@ def load_coverage(blueprint_dir: str | Path) -> tuple[CoverageSummary | None, tu
         content = path.read_bytes()
         text = content.decode("utf-8")
     except FileNotFoundError:
-        return None, (CoverageIssue(0, "coverage contract is missing"),)
+        return None, (
+            CoverageIssue(0, "coverage contract is missing", "missing-coverage-contract"),
+        )
     except UnicodeError:
         return None, (CoverageIssue(0, "coverage contract cannot be read as UTF-8"),)
     except OSError:
         return None, (CoverageIssue(0, "coverage contract cannot be read"),)
+
+    schema_values, frontmatter, frontmatter_end, frontmatter_issues = _coverage_frontmatter(text)
+    ambiguous_schema_line = _ambiguous_v2_schema_line(text)
+    if frontmatter_issues and (schema_values or ambiguous_schema_line is not None):
+        return None, tuple(frontmatter_issues)
+    if schema_values:
+        if len(schema_values) != 1:
+            return None, (
+                CoverageIssue(
+                    schema_values[1][0],
+                    "coverage contract declares more than one schema",
+                    "coverage-schema-mixed",
+                ),
+            )
+        schema_line, schema = schema_values[0]
+        if schema != COVERAGE_V2_SCHEMA:
+            return None, (
+                CoverageIssue(
+                    schema_line,
+                    f"unsupported coverage schema {schema!r}",
+                    "coverage-schema-unknown",
+                ),
+            )
+        return _load_coverage_v2(
+            blueprint,
+            path,
+            content,
+            text,
+            frontmatter,
+            frontmatter_end,
+        )
+
+    if ambiguous_schema_line is not None:
+        return None, (
+            CoverageIssue(
+                ambiguous_schema_line,
+                "autoform-coverage/v2 appears in malformed or unsupported coverage frontmatter",
+                "coverage-schema-ambiguous",
+            ),
+        )
+
+    published_headers = {table.headers for table in published_tables(text)}
+    if _V2_EXPECTED_HEADER in published_headers:
+        code = (
+            "coverage-schema-mixed"
+            if _EXPECTED_HEADER in published_headers
+            else "coverage-v2-schema-required"
+        )
+        return None, (
+            CoverageIssue(
+                0,
+                "a rendered v2 coverage table requires exact 'schema: autoform-coverage/v2' frontmatter",
+                code,
+            ),
+        )
 
     rows, issues = _parse_table(text)
     issues.extend(_validate_evidence(rows, blueprint=blueprint, coverage_path=path))
@@ -142,6 +284,749 @@ def load_coverage(blueprint_dir: str | Path) -> tuple[CoverageSummary | None, tu
         ),
         (),
     )
+
+
+def _coverage_frontmatter(
+    text: str,
+) -> tuple[list[tuple[int, str]], dict[str, tuple[int, str]], int, list[CoverageIssue]]:
+    """Read the intentionally small coverage frontmatter language.
+
+    V1 remains schema-less. The presence of any ``schema`` declaration opts
+    into strict schema selection, so a typo or two competing declarations can
+    never be interpreted as the legacy contract.
+    """
+
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return [], {}, 0, []
+    try:
+        end = next(index for index in range(1, len(lines)) if lines[index].strip() == "---")
+    except StopIteration:
+        return [], {}, len(lines), [
+            CoverageIssue(1, "coverage frontmatter is unterminated", "coverage-frontmatter-invalid")
+        ]
+
+    schemas: list[tuple[int, str]] = []
+    values: dict[str, tuple[int, str]] = {}
+    issues: list[CoverageIssue] = []
+    for line_number, raw in enumerate(lines[1:end], start=2):
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if ":" not in stripped:
+            issues.append(
+                CoverageIssue(
+                    line_number,
+                    "expected 'key: value' in coverage frontmatter",
+                    "coverage-frontmatter-invalid",
+                )
+            )
+            continue
+        key, value = (part.strip() for part in stripped.split(":", 1))
+        value = _unquote_frontmatter_scalar(value)
+        if key == "schema":
+            schemas.append((line_number, value))
+            if key in values:
+                continue
+        if key in values:
+            issues.append(
+                CoverageIssue(
+                    line_number,
+                    f"duplicate coverage frontmatter key {key!r}",
+                    "coverage-frontmatter-duplicate-key",
+                )
+            )
+            continue
+        values[key] = (line_number, value)
+    return schemas, values, end + 1, issues
+
+
+def _ambiguous_v2_schema_line(text: str) -> int | None:
+    """Find v2 intent inside a frontmatter block we could not select.
+
+    Exact frontmatter is strict about the selector's spelling, quoting, and
+    separator. Detection is deliberately broader only inside that block: any
+    un-commented v2 schema token means a malformed selector must not downgrade
+    to permissive legacy v1. A near frontmatter fence at the start gets the same
+    treatment, while prose and fenced examples in the Markdown body do not.
+    """
+
+    lines = text.splitlines()
+    if not lines:
+        return None
+    opening = lines[0].lstrip("\ufeff").strip()
+    if _FRONTMATTER_LIKE_FENCE.fullmatch(opening) is None:
+        return None
+    try:
+        end = next(index for index in range(1, len(lines)) if lines[index].strip() == "---")
+    except StopIteration:
+        end = len(lines)
+    for line_number, line in enumerate(lines[1:end], start=2):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if _frontmatter_line_signals_v2(stripped):
+            return line_number
+    return None
+
+
+def _frontmatter_line_signals_v2(line: str) -> bool:
+    def decode_hex_escape(match: re.Match[str]) -> str:
+        value = match.group("short") or match.group("long") or match.group("byte")
+        assert value is not None
+        try:
+            return chr(int(value, 16))
+        except ValueError:
+            return match.group(0)
+
+    folded = _YAML_HEX_ESCAPE.sub(decode_hex_escape, line).casefold()
+    if COVERAGE_V2_SCHEMA.casefold() in folded:
+        return True
+    normalized = re.sub(r"[\s\"'\\]", "", folded).replace("_", "-")
+    if COVERAGE_V2_SCHEMA.casefold() in normalized:
+        return True
+    key_match = _FRONTMATTER_KEY.match(folded)
+    return (
+        key_match is not None
+        and _within_one_schema_edit(key_match.group("key").casefold())
+        and "autoform-coverage/" in normalized
+    )
+
+
+def _within_one_schema_edit(value: str) -> bool:
+    expected = "schema"
+    if value == expected:
+        return True
+    if abs(len(value) - len(expected)) > 1:
+        return False
+    if len(value) == len(expected):
+        differences = [
+            index
+            for index, pair in enumerate(zip(value, expected))
+            if pair[0] != pair[1]
+        ]
+        if len(differences) == 1:
+            return True
+        return (
+            len(differences) == 2
+            and differences[1] == differences[0] + 1
+            and value[differences[0]] == expected[differences[1]]
+            and value[differences[1]] == expected[differences[0]]
+        )
+    shorter, longer = (value, expected) if len(value) < len(expected) else (expected, value)
+    mismatch = next(
+        (index for index, pair in enumerate(zip(shorter, longer)) if pair[0] != pair[1]),
+        len(shorter),
+    )
+    return shorter[mismatch:] == longer[mismatch + 1 :]
+
+
+def _unquote_frontmatter_scalar(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    return value
+
+
+def _load_coverage_v2(
+    blueprint: Path,
+    path: Path,
+    contract_bytes: bytes,
+    text: str,
+    frontmatter: dict[str, tuple[int, str]],
+    frontmatter_end: int,
+) -> tuple[CoverageSummary | None, tuple[CoverageIssue, ...]]:
+    issues: list[CoverageIssue] = []
+    allowed = {"schema", "artifact", "artifact_sha256"}
+    for key, (line, _) in frontmatter.items():
+        if key not in allowed:
+            issues.append(
+                CoverageIssue(
+                    line,
+                    f"unsupported v2 coverage frontmatter key {key!r}",
+                    "coverage-frontmatter-unknown-key",
+                )
+            )
+    for key in ("artifact", "artifact_sha256"):
+        if key not in frontmatter:
+            issues.append(
+                CoverageIssue(
+                    1,
+                    f"v2 coverage frontmatter is missing {key!r}",
+                    f"coverage-{key.replace('_', '-')}-missing",
+                )
+            )
+    if issues:
+        return None, tuple(issues)
+
+    artifact_line, artifact_value = frontmatter["artifact"]
+    hash_line, declared_artifact_hash = frontmatter["artifact_sha256"]
+    artifact_relative, artifact_issue = _artifact_relative_path(artifact_value)
+    if artifact_issue is not None:
+        return None, (CoverageIssue(artifact_line, artifact_issue, "coverage-artifact-path-invalid"),)
+    if _SHA256.fullmatch(declared_artifact_hash) is None:
+        return None, (
+            CoverageIssue(
+                hash_line,
+                "artifact_sha256 must be exactly 64 lowercase hexadecimal characters",
+                "coverage-artifact-hash-invalid",
+            ),
+        )
+    assert artifact_relative is not None
+    artifact_path = blueprint.joinpath(*artifact_relative.parts)
+    artifact_bytes, read_issue = _read_source_artifact(blueprint, artifact_path)
+    if read_issue is not None:
+        return None, (CoverageIssue(artifact_line, read_issue[1], read_issue[0]),)
+    assert artifact_bytes is not None
+    format_issue = _canonical_artifact_issue(artifact_bytes)
+    if format_issue is not None:
+        return None, (CoverageIssue(artifact_line, format_issue[1], format_issue[0]),)
+    actual_artifact_hash = hashlib.sha256(artifact_bytes).hexdigest()
+    if actual_artifact_hash != declared_artifact_hash:
+        return None, (
+            CoverageIssue(
+                hash_line,
+                "artifact_sha256 does not match the named source artifact",
+                "coverage-artifact-hash-stale",
+            ),
+        )
+
+    units, table_issues = _parse_v2_table(text, frontmatter_end)
+    issues.extend(table_issues)
+    if not table_issues:
+        issues.extend(_validate_unit_partition(units, artifact_bytes))
+    bindings: tuple[CoverageNodeBinding, ...] = ()
+    roadmap_sha256: str | None = None
+    if not issues:
+        units, bindings, roadmap_sha256, binding_issues = _validate_v2_bindings(
+            units,
+            blueprint=blueprint,
+            coverage_path=path,
+        )
+        issues.extend(binding_issues)
+    if issues:
+        return None, tuple(issues)
+
+    entries = tuple(
+        CoverageEntry(unit.area, unit.disposition, unit.evidence, unit.line) for unit in units
+    )
+    return (
+        CoverageSummary(
+            schema=COVERAGE_V2_SCHEMA,
+            source_path="coverage/README.md",
+            source_sha256=hashlib.sha256(contract_bytes).hexdigest(),
+            entries=entries,
+            artifact_path=artifact_relative.as_posix(),
+            artifact_sha256=actual_artifact_hash,
+            units=tuple(units),
+            node_bindings=bindings,
+            _roadmap_sha256=roadmap_sha256,
+        ),
+        (),
+    )
+
+
+def _artifact_relative_path(value: str) -> tuple[PurePosixPath | None, str | None]:
+    windows = PureWindowsPath(value)
+    path = PurePosixPath(value)
+    if (
+        not value
+        or "\\" in value
+        or path.is_absolute()
+        or windows.is_absolute()
+        or path.parts[:1] != ("sources",)
+        or len(path.parts) < 2
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        return None, "artifact must be a portable relative file below sources/"
+    return path, None
+
+
+def _read_source_artifact(
+    blueprint: Path, artifact: Path
+) -> tuple[bytes | None, tuple[str, str] | None]:
+    """Read one regular artifact without following a symlink in its path."""
+
+    try:
+        relative = artifact.relative_to(blueprint)
+        current = blueprint
+        identities: list[tuple[Path, tuple[int, int]]] = []
+        for part in relative.parts[:-1]:
+            current /= part
+            metadata = current.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                return None, (
+                    "coverage-artifact-symlink",
+                    "source artifact path contains a symbolic link or non-directory component",
+                )
+            identities.append((current, (metadata.st_dev, metadata.st_ino)))
+        final_metadata = artifact.lstat()
+        if stat.S_ISLNK(final_metadata.st_mode):
+            return None, (
+                "coverage-artifact-symlink",
+                "source artifact is a symbolic link",
+            )
+        if not stat.S_ISREG(final_metadata.st_mode):
+            return None, (
+                "coverage-artifact-not-regular",
+                "source artifact is not a regular file",
+            )
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(artifact, flags)
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode):
+                return None, (
+                    "coverage-artifact-not-regular",
+                    "source artifact is not a regular file",
+                )
+            stream = os.fdopen(descriptor, "rb", buffering=0, closefd=False)
+            try:
+                artifact_bytes = stream.read()
+            finally:
+                stream.close()
+            after = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+        current_metadata = artifact.lstat()
+        if stat.S_ISLNK(current_metadata.st_mode) or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ) or (after.st_dev, after.st_ino) != (
+            current_metadata.st_dev,
+            current_metadata.st_ino,
+        ):
+            return None, (
+                "coverage-artifact-changed",
+                "source artifact changed while it was read",
+            )
+        for parent, identity in identities:
+            metadata = parent.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or (metadata.st_dev, metadata.st_ino) != identity:
+                return None, (
+                    "coverage-artifact-changed",
+                    "source artifact path changed while it was read",
+                )
+        return artifact_bytes, None
+    except FileNotFoundError:
+        return None, ("coverage-artifact-missing", "source artifact does not exist")
+    except OSError:
+        return None, ("coverage-artifact-unreadable", "source artifact cannot be read safely")
+
+
+def _canonical_artifact_issue(data: bytes) -> tuple[str, str] | None:
+    if not data:
+        return "coverage-artifact-empty", "source artifact is empty"
+    if data.startswith(b"\xef\xbb\xbf"):
+        return "coverage-artifact-bom", "source artifact must not contain a UTF-8 BOM"
+    if b"\x00" in data:
+        return "coverage-artifact-nul", "source artifact contains a NUL byte"
+    if b"\r" in data:
+        return "coverage-artifact-cr", "source artifact must use LF line endings"
+    if not data.endswith(b"\n"):
+        return "coverage-artifact-final-lf", "source artifact must end with LF"
+    try:
+        decoded = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return "coverage-artifact-utf8", "source artifact is not canonical UTF-8"
+    if decoded.encode("utf-8") != data:
+        return "coverage-artifact-utf8", "source artifact is not canonical UTF-8"
+    return None
+
+
+def _parse_v2_table(text: str, frontmatter_end: int) -> tuple[list[CoverageUnit], list[CoverageIssue]]:
+    view = content(text)
+    lines = view.lines
+    source_lines = text.splitlines()
+    header_indexes: list[int] = []
+    for index in range(frontmatter_end, len(lines) - 1):
+        if view.is_hidden(index) or view.is_hidden(index + 1):
+            continue
+        if _cells(lines[index]) != _V2_EXPECTED_HEADER:
+            continue
+        separator = _cells(lines[index + 1])
+        if len(separator) == len(_V2_EXPECTED_HEADER) and all(
+            _SEPARATOR.fullmatch(cell) for cell in separator
+        ):
+            header_indexes.append(index)
+    page_tables = published_tables(text)
+    if any(table.headers == _EXPECTED_HEADER for table in page_tables):
+        return [], [
+            CoverageIssue(
+                0,
+                "coverage contract mixes v1 and v2 rendered tables",
+                "coverage-schema-mixed",
+            )
+        ]
+    contract_tables = [table for table in page_tables if table.headers == _V2_EXPECTED_HEADER]
+    if not header_indexes:
+        return [], [
+            CoverageIssue(
+                0,
+                "v2 coverage contract has no 'Unit | Area | Lines | Locator | Unit SHA-256 | Coverage | Evidence' table",
+                "coverage-table-missing",
+            )
+        ]
+    if len(header_indexes) == 1 and not contract_tables:
+        return [], [
+            CoverageIssue(header_indexes[0] + 1, "v2 coverage table does not render as a table", "coverage-table-unrendered")
+        ]
+    if len(header_indexes) != 1 or len(contract_tables) != 1:
+        line = header_indexes[1] + 1 if len(header_indexes) > 1 else header_indexes[0] + 1
+        return [], [
+            CoverageIssue(line, "v2 coverage contract must have exactly one coverage table", "coverage-table-ambiguous")
+        ]
+    header_index = header_indexes[0]
+    units: list[CoverageUnit] = []
+    issues: list[CoverageIssue] = []
+    seen: dict[str, int] = {}
+    parsed_rows: list[tuple[str, ...]] = []
+    row_indexes: list[int] = []
+    for index in range(header_index + 2, len(lines)):
+        raw = lines[index]
+        if view.ends_block(index) or not raw.strip():
+            break
+        cells = _cells(raw)
+        line_number = index + 1
+        if len(_cells(source_lines[index])) != len(cells):
+            issues.append(
+                CoverageIssue(
+                    line_number,
+                    "an HTML comment changes this v2 coverage row's column layout",
+                    "coverage-row-hidden-layout",
+                )
+            )
+            continue
+        if len(cells) != len(_V2_EXPECTED_HEADER):
+            issues.append(
+                CoverageIssue(line_number, "v2 coverage row must have exactly seven columns", "coverage-row-columns")
+            )
+            continue
+        parsed_rows.append(cells)
+        row_indexes.append(index)
+        unit, area, span_text, locator, unit_hash, disposition_text, evidence = cells
+        disposition = _inline_code(disposition_text).upper()
+        span_match = _LINE_SPAN.fullmatch(_inline_code(span_text))
+        valid = True
+        if SOURCE_UNIT_PATTERN.fullmatch(unit) is None:
+            issues.append(CoverageIssue(line_number, f"invalid source unit id {unit!r}", "coverage-unit-id-invalid"))
+            valid = False
+        elif unit in seen:
+            issues.append(
+                CoverageIssue(
+                    line_number,
+                    f"duplicate source unit id {unit!r}; first declared at line {seen[unit]}",
+                    "coverage-unit-id-duplicate",
+                )
+            )
+            valid = False
+        else:
+            seen[unit] = line_number
+        for label, value in (("area", area), ("locator", locator), ("evidence", evidence)):
+            visible = _visible_markdown(value)
+            if not _has_substance(visible):
+                issues.append(
+                    CoverageIssue(
+                        line_number,
+                        f"coverage {label} has no substantive visible text",
+                        f"coverage-{label}-empty",
+                    )
+                )
+                valid = False
+            elif label == "evidence" and _is_placeholder(visible):
+                issues.append(CoverageIssue(line_number, "coverage evidence is a placeholder", "coverage-evidence-placeholder"))
+                valid = False
+        if span_match is None:
+            issues.append(
+                CoverageIssue(
+                    line_number,
+                    "source line span must use inclusive one-based START-END syntax",
+                    "coverage-unit-span-invalid",
+                )
+            )
+            valid = False
+            start_line = end_line = 0
+        else:
+            start_line, end_line = (int(value) for value in span_match.groups())
+            if end_line < start_line:
+                issues.append(CoverageIssue(line_number, "source line span ends before it starts", "coverage-unit-span-invalid"))
+                valid = False
+        if _SHA256.fullmatch(unit_hash) is None:
+            issues.append(
+                CoverageIssue(
+                    line_number,
+                    "unit SHA-256 must be exactly 64 lowercase hexadecimal characters",
+                    "coverage-unit-hash-invalid",
+                )
+            )
+            valid = False
+        if disposition not in COVERAGE_DISPOSITIONS:
+            issues.append(
+                CoverageIssue(
+                    line_number,
+                    f"unknown coverage disposition {disposition_text!r}",
+                    "coverage-disposition-invalid",
+                )
+            )
+            valid = False
+        if valid:
+            units.append(
+                CoverageUnit(
+                    unit,
+                    area,
+                    start_line,
+                    end_line,
+                    locator,
+                    unit_hash,
+                    disposition,
+                    evidence,
+                    line_number,
+                )
+            )
+    if not units and not issues:
+        issues.append(CoverageIssue(header_index + 1, "v2 coverage table has no rows", "coverage-table-empty"))
+    if not issues:
+        issues.extend(
+            _correlation_issues(
+                source_lines,
+                contract_tables[0],
+                page_tables,
+                row_indexes,
+                parsed_rows,
+                header_index,
+            )
+        )
+    return units, issues
+
+
+def _validate_unit_partition(units: list[CoverageUnit], artifact: bytes) -> list[CoverageIssue]:
+    issues: list[CoverageIssue] = []
+    source_lines = artifact.splitlines(keepends=True)
+    expected_start = 1
+    for unit in units:
+        if unit.start_line > expected_start:
+            issues.append(
+                CoverageIssue(
+                    unit.line,
+                    f"source coverage has a gap before line {unit.start_line}",
+                    "coverage-unit-gap",
+                )
+            )
+        elif unit.start_line < expected_start:
+            issues.append(
+                CoverageIssue(
+                    unit.line,
+                    f"source coverage overlaps or is out of order at line {unit.start_line}",
+                    "coverage-unit-overlap",
+                )
+            )
+        if unit.end_line > len(source_lines):
+            issues.append(
+                CoverageIssue(
+                    unit.line,
+                    f"source line span exceeds the artifact's {len(source_lines)} lines",
+                    "coverage-unit-bounds",
+                )
+            )
+        elif unit.start_line <= unit.end_line:
+            actual = hashlib.sha256(
+                b"".join(source_lines[unit.start_line - 1 : unit.end_line])
+            ).hexdigest()
+            if actual != unit.unit_sha256:
+                issues.append(
+                    CoverageIssue(
+                        unit.line,
+                        f"unit SHA-256 is stale for {unit.unit!r}",
+                        "coverage-unit-hash-stale",
+                    )
+                )
+        expected_start = max(expected_start, unit.end_line + 1)
+    if units and expected_start <= len(source_lines):
+        issues.append(
+            CoverageIssue(
+                units[-1].line,
+                f"source coverage stops at line {expected_start - 1} of {len(source_lines)}",
+                "coverage-unit-gap",
+            )
+        )
+    return issues
+
+
+def _validate_v2_bindings(
+    units: list[CoverageUnit],
+    *,
+    blueprint: Path,
+    coverage_path: Path,
+) -> tuple[
+    list[CoverageUnit],
+    tuple[CoverageNodeBinding, ...],
+    str | None,
+    list[CoverageIssue],
+]:
+    issues: list[CoverageIssue] = []
+    try:
+        graph = load_graph(blueprint)
+    except GraphValidationError as error:
+        return (
+            units,
+            (),
+            None,
+            [
+                CoverageIssue(
+                    0,
+                    f"roadmap cannot be validated for source bindings: {reason}",
+                    "coverage-roadmap-invalid",
+                )
+                for reason in error.issues
+            ],
+        )
+    roadmap_sha256 = _roadmap_source_provenance(
+        (
+            node.path.resolve().relative_to(graph.blueprint_dir.resolve()).as_posix(),
+            node.source_sha256 or "",
+        )
+        for node in graph.nodes.values()
+    )
+    by_path = {node.path.resolve(): node for node in graph.nodes.values()}
+    units_by_id = {unit.unit: unit for unit in units}
+    expected: set[tuple[str, str]] = set()
+    updated: list[CoverageUnit] = []
+    for unit in units:
+        node_ids: list[str] = []
+        targets = link_targets(unit.evidence) if unit.disposition == "DECOMPOSED" else ()
+        if unit.disposition == "DECOMPOSED" and not targets:
+            issues.append(
+                CoverageIssue(
+                    unit.line,
+                    "DECOMPOSED coverage evidence must link to at least one roadmap leaf",
+                    "coverage-decomposed-target-missing",
+                )
+            )
+        seen_targets: set[str] = set()
+        for target in targets:
+            split = urlsplit(target)
+            raw_path = unquote(split.path)
+            if split.scheme or split.netloc or not raw_path:
+                issues.append(
+                    CoverageIssue(
+                        unit.line,
+                        f"DECOMPOSED evidence target is not a local roadmap article: {target!r}",
+                        "coverage-decomposed-target-outside-roadmap",
+                    )
+                )
+                continue
+            problem = local_target_issue(coverage_path, target, blueprint, label="coverage")
+            if problem is not None:
+                issues.append(CoverageIssue(unit.line, problem[1], "coverage-decomposed-target-invalid"))
+                continue
+            candidate = (coverage_path.parent / raw_path).resolve()
+            node = by_path.get(candidate)
+            if node is None:
+                issues.append(
+                    CoverageIssue(
+                        unit.line,
+                        f"DECOMPOSED evidence target is outside blueprint/roadmap: {target!r}",
+                        "coverage-decomposed-target-outside-roadmap",
+                    )
+                )
+                continue
+            if node.id in seen_targets:
+                issues.append(
+                    CoverageIssue(
+                        unit.line,
+                        f"duplicate source-unit mapping to roadmap node {node.id!r}",
+                        "coverage-node-binding-duplicate",
+                    )
+                )
+                continue
+            seen_targets.add(node.id)
+            if not node.formalizable or graph.children(node.id):
+                issues.append(
+                    CoverageIssue(
+                        unit.line,
+                        f"DECOMPOSED evidence target {node.id!r} is not a formalizable roadmap leaf",
+                        "coverage-decomposed-target-not-leaf",
+                    )
+                )
+                continue
+            node_ids.append(node.id)
+            expected.add((unit.unit, node.id))
+        updated.append(
+            CoverageUnit(
+                unit.unit,
+                unit.area,
+                unit.start_line,
+                unit.end_line,
+                unit.locator,
+                unit.unit_sha256,
+                unit.disposition,
+                unit.evidence,
+                unit.line,
+                tuple(sorted(node_ids)),
+            )
+        )
+
+    authored: set[tuple[str, str]] = set()
+    for node in graph.nodes.values():
+        for unit_id in node.source_units:
+            if unit_id not in units_by_id:
+                issues.append(
+                    CoverageIssue(
+                        0,
+                        f"roadmap node {node.id!r} names unknown source unit {unit_id!r}",
+                        "coverage-node-binding-unknown-unit",
+                    )
+                )
+                continue
+            if not node.formalizable or graph.children(node.id):
+                issues.append(
+                    CoverageIssue(
+                        0,
+                        f"roadmap node {node.id!r} binds source units but is not a formalizable leaf",
+                        "coverage-node-binding-not-leaf",
+                    )
+                )
+            authored.add((unit_id, node.id))
+    for unit_id, node_id in sorted(expected - authored):
+        issues.append(
+            CoverageIssue(
+                units_by_id[unit_id].line,
+                f"roadmap node {node_id!r} does not reciprocally list source unit {unit_id!r}",
+                "coverage-node-binding-missing-reciprocal",
+            )
+        )
+    for unit_id, node_id in sorted(authored - expected):
+        issues.append(
+            CoverageIssue(
+                0,
+                f"roadmap node {node_id!r} lists source unit {unit_id!r} without reciprocal DECOMPOSED evidence",
+                "coverage-node-binding-one-way",
+            )
+        )
+    bindings = tuple(
+        CoverageNodeBinding(node_id=node_id, unit=unit_id)
+        for unit_id, node_id in sorted(expected & authored)
+    )
+    return updated, bindings, roadmap_sha256, issues
+
+
+def _roadmap_source_provenance(sources: Iterable[tuple[str, str]]) -> str:
+    """Identify exact roadmap bytes without retaining another source copy."""
+
+    digest = hashlib.sha256(b"autoform-roadmap-provenance/v1\0")
+    for relative, source_sha256 in sorted(sources):
+        encoded_path = os.fsencode(relative)
+        encoded_sha256 = source_sha256.encode("ascii")
+        digest.update(len(encoded_path).to_bytes(8, "big"))
+        digest.update(encoded_path)
+        digest.update(encoded_sha256)
+    return digest.hexdigest()
 
 
 def _parse_table(text: str) -> tuple[list[CoverageEntry], list[CoverageIssue]]:
@@ -314,7 +1199,7 @@ def _correlation_issues(
     for position, index in enumerate(row_indexes):
         token = f"{marker}{position}"
         markers.append(token)
-        marked[index] = f"| {token} | {token} | {token} |"
+        marked[index] = f"| {' | '.join(token for _ in published.headers)} |"
     untraceable = [
         CoverageIssue(
             header_index + 1,
@@ -609,8 +1494,11 @@ def _inline_code(value: str) -> str:
 __all__ = [
     "COVERAGE_DISPOSITIONS",
     "COVERAGE_SCHEMA",
+    "COVERAGE_V2_SCHEMA",
     "CoverageEntry",
     "CoverageIssue",
+    "CoverageNodeBinding",
     "CoverageSummary",
+    "CoverageUnit",
     "load_coverage",
 ]

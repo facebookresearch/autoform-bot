@@ -99,6 +99,39 @@ def test_missing_or_invalid_graph_returns_failed_checks_without_host_paths(tmp_p
     assert str(tmp_path) not in invalid.to_json()
 
 
+def test_unsafe_roadmap_entry_invalidates_the_doctor_graph(tmp_path: Path) -> None:
+    project = _clean_project(tmp_path)
+    outside = tmp_path / "outside.md"
+    outside.write_text("# Outside\n", encoding="utf-8")
+    try:
+        (project / "blueprint/roadmap/linked.md").symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    result = diagnose_project(project)
+
+    assert not result.clean
+    assert _checks(result)["runtime"] == (False, "canonical graph is invalid")
+    assert _checks(result)["graph"][0] is False
+    assert "symbolic links are not supported" in _checks(result)["graph"][1]
+    assert _checks(result)["references"] == (
+        False,
+        "not checked because graph validation failed",
+    )
+
+
+def test_graph_diagnostic_does_not_mix_in_coverage_findings(tmp_path: Path) -> None:
+    project = _clean_project(tmp_path)
+    (project / "blueprint/coverage/README.md").unlink()
+    (project / "blueprint/roadmap/result.md").write_text("no heading\n", encoding="utf-8")
+
+    result = diagnose_project(project)
+
+    graph_detail = _checks(result)["graph"][1]
+    assert "missing H1 title" in graph_detail
+    assert "coverage contract is missing" not in graph_detail
+
+
 @pytest.mark.parametrize("directory", ["private", "private'area", 'private"area'])
 def test_graph_errors_redact_absolute_authored_paths(tmp_path: Path, directory: str) -> None:
     project = _clean_project(tmp_path)
@@ -192,7 +225,8 @@ def test_invalid_lean_root_is_a_sanitized_lean_failure(tmp_path: Path) -> None:
 
     assert not result.clean
     assert _checks(result)["runtime"][0]
-    assert _checks(result)["lean targets"] == (False, "1 finding(s): invalid-lean-root")
+    assert _checks(result)["lean targets"][0] is False
+    assert _checks(result)["lean targets"][1].startswith("1 finding(s): invalid-lean-root:")
     assert str(tmp_path) not in result.to_json()
 
     loop = tmp_path / "lean-loop"
@@ -202,26 +236,112 @@ def test_invalid_lean_root_is_a_sanitized_lean_failure(tmp_path: Path) -> None:
         pytest.skip("symbolic links are unavailable")
     loop_result = diagnose_project(project, lean_root=loop)
     assert len(loop_result.checks) == 6
-    assert _checks(loop_result)["lean targets"] == (False, "1 finding(s): invalid-lean-root")
+    assert _checks(loop_result)["lean targets"][0] is False
+    assert _checks(loop_result)["lean targets"][1].startswith(
+        "1 finding(s): invalid-lean-root:"
+    )
     assert str(tmp_path) not in loop_result.to_json()
+
+
+def test_doctor_reports_the_reason_an_existing_lean_root_is_unsafe(tmp_path: Path) -> None:
+    project = _clean_project(tmp_path)
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    outside = tmp_path / "outside.lean"
+    outside.write_text("theorem outside : True := trivial\n", encoding="utf-8")
+    try:
+        (lean_root / "Linked.lean").symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    result = diagnose_project(project, lean_root=lean_root)
+
+    assert not result.clean
+    assert _checks(result)["lean targets"] == (
+        False,
+        "1 finding(s): invalid-lean-root: unsafe Lean source Linked.lean: "
+        "symbolic links are not supported",
+    )
 
 
 def test_doctor_loads_the_canonical_graph_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _clean_project(tmp_path)
     from autoform_cli import doctor
 
-    original = doctor.load_graph
+    original = doctor.load_audit_graph
     calls = 0
 
-    def counted_load_graph(blueprint: str | Path):
+    def counted_load_graph(*args, **kwargs):
         nonlocal calls
         calls += 1
-        return original(blueprint)
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(doctor, "load_graph", counted_load_graph)
+    monkeypatch.setattr(doctor, "load_audit_graph", counted_load_graph)
 
     assert diagnose_project(project).clean
     assert calls == 1
+
+
+def test_doctor_audit_uses_the_same_captured_blueprint_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _clean_project(tmp_path, metadata=("declaration: theorem", "origin: cited"))
+    article = project / "blueprint/roadmap/result.md"
+    article.write_text(
+        article.read_text(encoding="utf-8")
+        + "\n## Sources\n\n- [Paper](../sources/paper.md)\n",
+        encoding="utf-8",
+    )
+    source = project / "blueprint/sources/paper.md"
+    source.parent.mkdir()
+    stable = b"# Paper\n"
+    source.write_bytes(stable)
+    from autoform_cli import audit as audit_module
+
+    original = audit_module.audit_graph
+
+    def remove_live_source(*args, **kwargs):
+        source.unlink()
+        try:
+            return original(*args, **kwargs)
+        finally:
+            source.write_bytes(stable)
+
+    monkeypatch.setattr(audit_module, "audit_graph", remove_live_source)
+
+    result = diagnose_project(project)
+
+    assert result.clean
+
+
+def test_doctor_reports_project_replacement_without_raising(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _clean_project(tmp_path / "selected")
+    replacement = _clean_project(tmp_path / "replacement")
+    held = tmp_path / "held-project"
+    from autoform_cli import doctor
+
+    original = doctor.load_audit_graph
+
+    def replace_after_load(*args, **kwargs):
+        result = original(*args, **kwargs)
+        project.rename(held)
+        replacement.rename(project)
+        return result
+
+    monkeypatch.setattr(doctor, "load_audit_graph", replace_after_load)
+
+    result = diagnose_project(project)
+
+    assert not result.clean
+    assert len(result.checks) == 6
+    assert _checks(result)["blueprint"] == (
+        False,
+        "blueprint directory changed during use",
+    )
 
 
 def test_doctor_is_byte_for_byte_read_only_and_uses_no_network_or_subprocess(

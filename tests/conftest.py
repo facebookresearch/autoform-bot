@@ -2,12 +2,63 @@
 
 from __future__ import annotations
 
+import os
 import shutil
+import signal
+import stat
 import tempfile
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+from servers.lean_client import LeanRuntimeClient, LeanRuntimeError
+
+
+def _process_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _terminate_test_runtime(pid: int) -> None:
+    for signum, timeout in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 1.0)):
+        if not _process_is_alive(pid):
+            return
+        os.kill(pid, signum)
+        deadline = time.monotonic() + timeout
+        while _process_is_alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.025)
+
+
+def _stop_test_runtimes(directory: Path) -> None:
+    for path in directory.iterdir():
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISSOCK(metadata.st_mode):
+            continue
+        client = LeanRuntimeClient(
+            socket_path=path,
+            autostart=False,
+            connect_timeout=0.25,
+            response_timeout=2.0,
+            startup_timeout=2.0,
+        )
+        pid = None
+        try:
+            status = client.ping()
+            candidate = status.get("pid")
+            if isinstance(candidate, int) and candidate != os.getpid():
+                pid = candidate
+            client.stop()
+        except LeanRuntimeError:
+            if pid is not None:
+                _terminate_test_runtime(pid)
 
 
 @pytest.fixture
@@ -35,4 +86,5 @@ def runtime_dir() -> Iterator[Path]:
     try:
         yield directory
     finally:
+        _stop_test_runtimes(directory)
         shutil.rmtree(directory, ignore_errors=True)

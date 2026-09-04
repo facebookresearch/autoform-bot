@@ -34,7 +34,10 @@ The private socket lives below `$XDG_RUNTIME_DIR/autoform`, falling back to a
 uid-specific directory in `/tmp`; the rotating runtime log is beside it.
 `AUTOFORM_RUNTIME_DIR` overrides that location. Node-wide limits are controlled
 by `AUTOFORM_REPL_TOTAL_WORKERS`, `AUTOFORM_REPL_WORKERS_PER_PROJECT`,
-`AUTOFORM_MAX_LEAN_PROJECTS`, and `AUTOFORM_LEAN_IDLE_SECONDS`. The first
-process to start the runtime supplies those settings until it is stopped.
+`AUTOFORM_REPL_MAX_CONTEXTS_PER_PROCESS`, `AUTOFORM_MAX_LEAN_PROJECTS`, and
+`AUTOFORM_LEAN_IDLE_SECONDS`. The context limit accounts for environments and
+proof snapshots retained by one Lean worker; reaching it restarts that worker
+rather than evicting only Python cache metadata. The first process to start the
+runtime supplies these settings until it is stopped.
 `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` can raise the client/daemon response budget
 when unusually large worker pools need more than the default 15 minutes to warm.

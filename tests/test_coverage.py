@@ -6,6 +6,27 @@ from pathlib import Path
 from autoform_cli.coverage import COVERAGE_SCHEMA, load_coverage
 
 
+def test_schema_less_v1_preserves_unrelated_page_frontmatter(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _raw_contract(
+        blueprint,
+        "---\n"
+        "title: Coverage\n"
+        "tags:\n"
+        "  - planning\n"
+        "---\n\n"
+        "# Coverage\n\n"
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Scope | OUT | Explicitly excluded |\n",
+    )
+
+    summary, issues = load_coverage(blueprint)
+
+    assert issues == ()
+    assert summary is not None and summary.schema == COVERAGE_SCHEMA
+
+
 def _article(blueprint: Path, relative: str) -> None:
     path = blueprint / "roadmap" / relative
     path.parent.mkdir(parents=True, exist_ok=True)

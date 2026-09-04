@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+import autoform_cli.graph as graph_module
 from autoform_cli.graph import (
     GraphValidationError,
     load_graph,
@@ -46,6 +48,17 @@ def _ensure_chapter(blueprint: Path, relative: str) -> None:
 def _node(blueprint: Path, relative: str, body: str, **metadata: str) -> Path:
     _ensure_chapter(blueprint, relative)
     return _roadmap_page(blueprint, relative, _node_text(body, **metadata))
+
+
+def test_hidden_roadmap_pages_are_not_graph_nodes(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "visible.md", "# Visible\n")
+    _node(blueprint, ".draft.md", "# Draft\n", declaration="theorem")
+    _node(blueprint, ".drafts/hidden.md", "# Hidden\n", declaration="theorem")
+
+    graph = load_graph(blueprint)
+
+    assert set(graph.nodes) == {"visible"}
 
 
 def test_loads_nested_wiki_and_metadata(tmp_path: Path) -> None:
@@ -214,6 +227,151 @@ def test_requires_blueprint_and_roadmap_directories(tmp_path: Path) -> None:
     blueprint.mkdir()
     with pytest.raises(GraphValidationError, match="roadmap directory does not exist"):
         load_graph(blueprint)
+
+
+def test_rejects_nested_roadmap_replacement_during_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "chapter/README.md", "# Chapter\n")
+    _roadmap_page(blueprint, "chapter/a.md", "# Old A\n")
+    replacement = tmp_path / "replacement"
+    (replacement / "roadmap/chapter").mkdir(parents=True)
+    (replacement / "roadmap/chapter/README.md").write_text("# Chapter\n", encoding="utf-8")
+    (replacement / "roadmap/chapter/a.md").write_text("# New A\n", encoding="utf-8")
+    (replacement / "roadmap/chapter/b.md").write_text("# New B\n", encoding="utf-8")
+    held = tmp_path / "held-chapter"
+    chapter = blueprint / "roadmap/chapter"
+    changed = False
+
+    def replace_after_listing(event: str, relative: str) -> None:
+        nonlocal changed
+        if event != "after-directory-list" or relative != "chapter" or changed:
+            return
+        chapter.rename(held)
+        (replacement / "roadmap/chapter").rename(chapter)
+        changed = True
+
+    monkeypatch.setattr(graph_module, "_graph_snapshot_checkpoint", replace_after_listing)
+
+    with pytest.raises(GraphValidationError, match="roadmap changed while the graph was loaded"):
+        load_graph(blueprint)
+
+    assert changed
+
+
+def test_legacy_graph_loading_has_a_portable_snapshot_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "result.md", "# Result\n")
+    monkeypatch.setattr(graph_module, "_DIRECTORY_BINDING_SUPPORTED", False)
+
+    graph = load_graph(blueprint)
+
+    assert tuple(graph.nodes) == ("result",)
+
+
+def test_portable_graph_does_not_traverse_reparse_point_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    nested = blueprint / "roadmap/junction"
+    nested.mkdir()
+    (nested / "escaped.md").write_text("# Escaped\n", encoding="utf-8")
+    original = graph_module._path_is_reparse_point
+
+    monkeypatch.setattr(graph_module, "_DIRECTORY_BINDING_SUPPORTED", False)
+    monkeypatch.setattr(
+        graph_module,
+        "_path_is_reparse_point",
+        lambda path, metadata: path == nested or original(path, metadata),
+    )
+
+    with pytest.raises(GraphValidationError, match="reparse point"):
+        load_graph(blueprint)
+
+
+def test_closes_roadmap_descriptor_when_initial_fstat_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "result.md", "# Result\n")
+    original_open = graph_module.os.open
+    original_close = graph_module.os.close
+    original_fstat = graph_module.os.fstat
+    roadmap_descriptors: list[int] = []
+    replacement_descriptors: list[int] = []
+    roadmap_close_count = 0
+
+    def record_open(path, *args, **kwargs):
+        descriptor = original_open(path, *args, **kwargs)
+        if path == "roadmap":
+            roadmap_descriptors.append(descriptor)
+        return descriptor
+
+    def fail_roadmap_fstat(descriptor: int):
+        if descriptor in roadmap_descriptors:
+            raise OSError("injected fstat failure")
+        return original_fstat(descriptor)
+
+    def close_and_reuse(descriptor: int) -> None:
+        nonlocal roadmap_close_count
+        original_close(descriptor)
+        if descriptor in roadmap_descriptors:
+            roadmap_close_count += 1
+            if roadmap_close_count == 1:
+                replacement_descriptors.append(original_open(os.devnull, os.O_RDONLY))
+
+    monkeypatch.setattr(graph_module.os, "open", record_open)
+    monkeypatch.setattr(graph_module.os, "fstat", fail_roadmap_fstat)
+    monkeypatch.setattr(graph_module.os, "close", close_and_reuse)
+
+    with pytest.raises(GraphValidationError, match="roadmap directory does not exist"):
+        load_graph(blueprint)
+
+    assert len(roadmap_descriptors) == 1
+    assert roadmap_close_count == 1
+    assert replacement_descriptors == roadmap_descriptors
+    original_fstat(replacement_descriptors[0])
+    original_close(replacement_descriptors[0])
+
+
+def test_closes_nested_descriptor_when_initial_fstat_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "chapter/README.md", "# Chapter\n")
+    original_open = graph_module.os.open
+    original_fstat = graph_module.os.fstat
+    child_descriptors: list[int] = []
+
+    def record_open(path, *args, **kwargs):
+        descriptor = original_open(path, *args, **kwargs)
+        if path == "chapter":
+            child_descriptors.append(descriptor)
+        return descriptor
+
+    def fail_child_fstat(descriptor: int):
+        if descriptor in child_descriptors:
+            raise OSError("injected fstat failure")
+        return original_fstat(descriptor)
+
+    monkeypatch.setattr(graph_module.os, "open", record_open)
+    monkeypatch.setattr(graph_module.os, "fstat", fail_child_fstat)
+
+    with pytest.raises(GraphValidationError, match="roadmap changed while the graph was loaded"):
+        load_graph(blueprint)
+
+    assert len(child_descriptors) == 1
+    with pytest.raises(OSError):
+        original_fstat(child_descriptors[0])
 
 
 def test_loads_container_articles_and_infers_single_parent_hierarchy(tmp_path: Path) -> None:

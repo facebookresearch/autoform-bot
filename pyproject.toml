@@ -21,6 +21,10 @@ dependencies = [
     # construction, not tokenising: browsers repair malformed markup rather than
     # reject it, and the repair decides what stays hidden.
     "html5lib>=1.1,<2",
+    # Workspace manifests are user-authored TOML. Mutations must preserve
+    # comments and support equivalent table and inline-table representations.
+    "tomlkit>=0.13,<1",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.scripts]
@@ -42,6 +46,14 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["autoform_cli", "servers"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
+markers = [
+    "daemon: detached shared Lean runtime lifecycle and process tests",
+    "installed_wheel: built-wheel installation and console-entry-point tests",
+    "real_lean: integration tests that require the pinned Lean/Lake toolchain",
+]
 
 [tool.ruff]
 line-length = 120

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestrate"
+  short_description: "Work ready nodes through the Autoform CLI"
+  default_prompt: "Use $orchestrate to work through ready Autoform nodes using the CLI and durable claims."

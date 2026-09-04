@@ -6,15 +6,23 @@ on:
     paths:
       - "blueprint/**"
       - "**.lean"
+      - "lakefile.*"
+      - "lake-manifest.json"
+      - "lean-toolchain"
       - "mkdocs.yml"
       - "theme/**"
+      - ".github/autoform_audit.py"
       - ".github/workflows/blueprint-pages.yml"
   pull_request:
     paths:
       - "blueprint/**"
       - "**.lean"
+      - "lakefile.*"
+      - "lake-manifest.json"
+      - "lean-toolchain"
       - "mkdocs.yml"
       - "theme/**"
+      - ".github/autoform_audit.py"
       - ".github/workflows/blueprint-pages.yml"
   workflow_dispatch:
 
@@ -30,8 +38,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - name: Check out project
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,12 +50,81 @@ jobs:
         with:
           version: "0.12.1"
 
-      # Rejects cycles and dangling links, and fails when a node names a Lean
-      # declaration that is not in the sources.
-      - name: Validate the theorem DAG and its declarations
+      - name: Validate the theorem DAG and source declarations
         run: >-
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           autoform check blueprint --lean-root .
+
+      - name: Install elan
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            https://github.com/leanprover/elan/releases/download/v4.2.3/elan-x86_64-unknown-linux-gnu.tar.gz \
+            -o elan.tar.gz
+          echo "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2  elan.tar.gz" \
+            | sha256sum --check --strict
+          tar xzf elan.tar.gz
+          ./elan-init -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Reject kernel-check bypass options
+        run: |
+          set -euo pipefail
+          forbidden="skip""KernelTC"
+          if matches="$(git grep -n -I "$forbidden" -- .)"; then
+            printf 'Kernel-check bypass option found:\n%s\n' "$matches" >&2
+            exit 1
+          else
+            grep_status=$?
+            if [ "$grep_status" -ne 1 ]; then
+              echo "failed to scan tracked files" >&2
+              exit "$grep_status"
+            fi
+          fi
+          echo "no kernel-check bypass option found"
+
+      - name: Fetch the Mathlib build cache
+        run: lake exe cache get || echo "no cache available, building from source"
+
+      - name: Build Lean
+        run: |
+          set -euo pipefail
+          evaluated_config="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-lake-config.XXXXXX.toml")"
+          trap 'rm -f "$evaluated_config"' EXIT
+          rm -f "$evaluated_config"
+          lake translate-config toml "$evaluated_config"
+          root_package="$(uv run --no-project --with "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            python .github/autoform_audit.py --root-package "$evaluated_config")"
+          echo "AUTOFORM_ROOT_PACKAGE=$root_package" >> "$GITHUB_ENV"
+          lake check-build
+          lake clean "$root_package"
+          lake build
+
+      - name: Bind blueprint claims to built artifacts and audit the root package
+        run: |
+          set -euo pipefail
+          archive="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-root-build.XXXXXX.tgz")"
+          probe="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-artifact-probe.XXXXXX.lean")"
+          trap 'rm -f "$archive" "$probe"' EXIT
+          # Keep root ownership in its archive. The helper binds Mathlib claims
+          # to the manifest-pinned canonical Git checkout and build traces.
+          lake pack "$archive"
+          uv run --no-project --with "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            python .github/autoform_audit.py \
+            "$AUTOFORM_ROOT_PACKAGE" "$archive" blueprint . "$probe"
+          lake env lean "$probe"
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out project
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
 
       # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
       # and permalinks into the Lean code at this exact commit.

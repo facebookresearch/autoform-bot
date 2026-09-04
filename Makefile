@@ -1,12 +1,25 @@
-.PHONY: setup test lint check-example
+.PHONY: setup test test-deterministic test-daemon test-wheel test-real-lean lint check-example
 
 THESIS_EXAMPLE := skills/setup/assets/cabannes-thesis-project
+PYTEST := uv run pytest -q
 
 setup:
 	uv sync --extra dev --extra repl
 
 test:
-	uv run pytest -q
+	$(PYTEST)
+
+test-deterministic:
+	$(PYTEST) -m "not daemon and not installed_wheel and not real_lean"
+
+test-daemon:
+	$(PYTEST) -m daemon
+
+test-wheel:
+	$(PYTEST) -m installed_wheel
+
+test-real-lean:
+	$(PYTEST) -m real_lean
 
 lint:
 	uv run ruff check autoform_cli servers tests

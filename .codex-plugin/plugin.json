@@ -1,7 +1,7 @@
 {
   "name": "autoform",
   "version": "0.5.0+codex.20260812000640",
-  "description": "Set up Lean repositories, build source-grounded Markdown roadmaps, and support human or agent review.",
+  "description": "Set up Lean repositories, build source-grounded Markdown roadmaps, orchestrate ready work, and support human or agent review.",
   "author": {
     "name": "Vivien Cabannes"
   },
@@ -21,6 +21,7 @@
     "defaultPrompt": [
       "Set up this Lean repository with an Autoform vault, verification CI, and GitHub Pages without planning the mathematics.",
       "Build or refine an Autoform roadmap from my mathematical sources.",
+      "Work through ready nodes using the Autoform CLI and durable claims.",
       "Prepare the visual blueprint surfaces so I can review this formalization.",
       "Judge this roadmap or Lean formalization with evidence-based review rubrics.",
       "Develop Autoform itself through its executable formalization example."

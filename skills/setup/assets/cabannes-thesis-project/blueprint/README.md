@@ -1,8 +1,3 @@
----
-kind: blueprint
-status: active
----
-
 # Cabannes thesis formalization
 
 This blueprint follows Vivien Cabannes's thesis, *From Weakly Supervised

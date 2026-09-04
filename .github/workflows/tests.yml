@@ -2,15 +2,23 @@ name: tests
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  deterministic:
+    name: deterministic (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.13"]
     steps:
@@ -20,7 +28,109 @@ jobs:
           version: "0.12.1"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-      - run: uv sync --extra dev --extra repl
-      - run: uv run ruff check autoform_cli servers tests
-      - run: uv run pytest -q
-      - run: make check-example
+      - name: Install locked development environment
+        run: timeout --signal=TERM --kill-after=30s 3m uv sync --frozen --extra dev --extra repl
+      - name: Run deterministic tests
+        run: timeout --signal=TERM --kill-after=30s 8m make test-deterministic
+      - name: Lint
+        if: matrix.python-version == '3.13'
+        run: timeout --signal=TERM --kill-after=30s 2m make lint
+      - name: Validate and build the example
+        if: matrix.python-version == '3.13'
+        run: timeout --signal=TERM --kill-after=30s 4m make check-example
+
+  daemon:
+    name: daemon (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Install locked development environment
+        run: timeout --signal=TERM --kill-after=30s 3m uv sync --frozen --extra dev --extra repl
+      - name: Run detached runtime tests
+        env:
+          AUTOFORM_REPL_TOTAL_WORKERS: "1"
+          AUTOFORM_MAX_LEAN_PROJECTS: "1"
+        run: timeout --signal=TERM --kill-after=30s 8m make test-daemon
+
+  installed-wheel:
+    name: installed wheel (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Install locked development environment
+        run: timeout --signal=TERM --kill-after=30s 3m uv sync --frozen --extra dev --extra repl
+      - name: Build, install, and probe the wheel
+        run: timeout --signal=TERM --kill-after=30s 10m make test-wheel
+
+  real-lean:
+    name: real Lean (pinned v4.32.2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          python-version: "3.13"
+          enable-cache: true
+      - name: Install locked development environment
+        run: timeout --signal=TERM --kill-after=30s 3m uv sync --frozen --extra dev --extra repl
+      - name: Verify the repository Lean and Mathlib pins
+        run: |
+          set -euo pipefail
+          test "$(tr -d '\r\n' < skills/setup/assets/cabannes-thesis-project/lean-toolchain)" = "leanprover/lean4:v4.32.2"
+          grep -Fq 'rev = "v4.32.2"' skills/setup/assets/cabannes-thesis-project/lakefile.toml
+          uv run python - <<'PY'
+          import json
+          from pathlib import Path
+
+          catalog = json.loads(Path("autoform_cli/project/releases.json").read_text(encoding="utf-8"))
+          pinned = [
+              release
+              for release in catalog["releases"]
+              if release["lean"]["toolchain"] == "leanprover/lean4:v4.32.2"
+              and release["mathlib"]["revision"] == "v4.32.2"
+          ]
+          assert len(pinned) == 1
+          PY
+      - name: Install pinned Elan
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=15s 2m curl -sSfL \
+            https://github.com/leanprover/elan/releases/download/v4.2.3/elan-x86_64-unknown-linux-gnu.tar.gz \
+            -o elan.tar.gz
+          echo "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2  elan.tar.gz" \
+            | sha256sum --check --strict
+          tar xzf elan.tar.gz
+          ./elan-init -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Install and verify pinned Lean
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 10m elan toolchain install leanprover/lean4:v4.32.2
+          version="$(timeout --signal=TERM --kill-after=10s 30s elan run leanprover/lean4:v4.32.2 lean --version)"
+          printf '%s\n' "$version"
+          grep -Fq "Lean (version 4.32.2" <<<"$version"
+          command -v lake
+      - name: Run mandatory real-Lean tests
+        run: timeout --signal=TERM --kill-after=30s 25m make test-real-lean

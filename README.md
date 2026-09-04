@@ -1,27 +1,25 @@
 # AutoformBot
 
-AutoformBot is a coding-agent plugin and Python CLI for Lean 4 formalization
-projects. It builds source-grounded Markdown roadmaps, validates dependencies,
-publishes progress views, and prepares human or agent review. The plugin and
-CLI use the identifier `autoform`; the canonical repository is
-[`facebookresearch/autoform-bot`](https://github.com/facebookresearch/autoform-bot).
+AutoformBot is a Claude Code and Codex plugin for turning mathematical sources
+into a Lean 4 formalization and a readable companion site. It provides:
 
-The default `main` branch provides repository setup, roadmap planning,
-publication, human and agent review, and shared Lean LSP/REPL tools. It does
-**not** include autonomous orchestration.
+- repository setup for Lean, Mathlib, CI, and GitHub Pages;
+- source-grounded Markdown roadmaps with explicit theorem dependencies;
+- exhaustive source-unit coverage checks;
+- shared Lean LSP and REPL tools;
+- human and independent agent review workflows; and
+- CLI-backed work discovery and durable claims for concurrent contributors.
 
-Autonomous execution is an opt-in overlay on the
-[`execution`](https://github.com/facebookresearch/autoform-bot/tree/execution)
-branch. It adds orchestration, claim-backed workers, specialist agents, and
-prover adapters on top of `main`. Use `main` unless you are explicitly
-evaluating that execution stack.
+The plugin and Python commands use the name `autoform`. The canonical repository
+is [`facebookresearch/autoform-bot`](https://github.com/facebookresearch/autoform-bot).
 
-## Prerequisites
+## Requirements
 
-- Python 3.10 or newer and [`uv`](https://docs.astral.sh/uv/)
+- Python 3.10 or newer
+- [`uv`](https://docs.astral.sh/uv/)
 - Git
-- Lean and Lake for Lean tooling and verification
-- Claude Code or Codex for the installation flows below
+- Lean and Lake for proof checking
+- Claude Code or Codex
 
 ## Install
 
@@ -36,109 +34,143 @@ Codex:
 
 ```bash
 codex plugin marketplace add facebookresearch/autoform-bot --ref main
-codex plugin add autoform@autoform
+codex
+/plugins
 ```
 
-Start a new agent session so the skills and MCP servers reload. A native Muse
-manifest is included, but Muse installation is not covered here.
+Select Autoform in the plugin browser and install it. Start a new agent session
+after installation so the skills and MCP servers are loaded. A Muse manifest is
+bundled, but Muse installation is separate.
 
-## Quick start
+## Use the plugin
 
-Work from an existing Lean repository. First scaffold the blueprint and site
-configuration from an Autoform checkout:
+Invoke the skill that matches the current stage:
+
+| Task | Claude Code | Codex |
+| --- | --- | --- |
+| Set up or repair a repository | `/autoform:setup` | `$autoform:setup` |
+| Build or refine the roadmap | `/autoform:roadmap` | `$autoform:roadmap` |
+| Inspect the rendered plan yourself | `/autoform:human-review` | `$autoform:human-review` |
+| Run an independent audit | `/autoform:agent-review` | `$autoform:agent-review` |
+| Work through ready nodes | `/autoform:orchestrate` | `$autoform:orchestrate` |
+
+A typical request is:
+
+> Use Autoform to set up this Lean repository, build a roadmap for every result
+> in `sources/book.pdf`, have an independent agent audit it, then formalize the
+> ready nodes and maintain the readable companion.
+
+Autoform keeps authored state in an Obsidian-compatible blueprint vault. Each
+roadmap article records its sources, statement dependencies, proof dependencies,
+and verified Lean declarations. Status, graphs, and publication pages are
+derived from those files.
+
+The skills invoke the bundled Python tools for you. Plugin installation does
+not add their console scripts to the shell `PATH`. For manual use, first obtain
+the absolute root of the loaded Autoform plugin, then run every command through
+that project:
 
 ```bash
-uv run autoform init /path/to/lean-project \
+export AUTOFORM_PLUGIN_ROOT="<absolute-installed-plugin-root>"
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform --help
+```
+
+## Create a project
+
+For a new Lean repository, let the Setup skill select the bundled compatible
+Lean and Mathlib release. The underlying commands are:
+
+```bash
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project provenance --json
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project versions --json
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project new MyProject --package MyProject \
+  --release <release-id> \
+  --autoform-source https://github.com/facebookresearch/autoform-bot.git \
   --autoform-ref <full-commit-sha>
 ```
 
-This creates `blueprint/`, `mkdocs.yml`, and `requirements-docs.txt`. GitHub
-workflows are created only when Autoform has an immutable commit pin. The Setup
-skill can inspect and repair this infrastructure, but its new-project Lean
-bootstrap helper is not packaged on `main`; start from an existing Lean project
-and use `autoform init` for the blueprint and publication files.
-
-Next use the host skills from the Lean project:
-
-| Goal | Claude Code | Codex |
-| --- | --- | --- |
-| Build a source-grounded roadmap | `/autoform:roadmap` | `$roadmap` |
-| Prepare a person-led review | `/autoform:human-review` | `$human-review` |
-| Run an independent agent review | `/autoform:agent-review` | `$agent-review` |
-
-For example: “Build a roadmap for Sections 2–4 of `paper.pdf`; confirm the scope
-and completion criteria before writing articles.” Keep the source in the
-repository or provide an accessible path. Human and agent review are
-alternatives; review the roadmap before treating it as an execution plan.
-
-## Blueprint model
-
-```text
-blueprint/
-├── README.md
-├── coverage/README.md
-├── roadmap/
-│   ├── README.md
-│   └── convexity/
-│       ├── README.md
-│       ├── convex.md
-│       └── separating-hyperplane.md
-└── sources/paper.md
-```
-
-Every Markdown file below `blueprint/roadmap/` is an article. A nested
-`README.md` represents its directory and contains the articles below it.
-Optional `declaration: theorem`, `declaration: def`, and similar frontmatter
-marks a formalizable article. Inline relative links under `## Depends on` and
-`## Proof depends on` define dependency edges; reference-style links do not.
-
-Markdown is the source of truth; Mermaid graphs and MkDocs pages are derived
-views. See the [blueprint format and CLI reference](autoform_cli/README.md) for
-complete frontmatter, hierarchy, status, and validation rules.
-
-## CLI and publication
-
-| Command | Purpose |
-| --- | --- |
-| `autoform init` | Scaffold the blueprint and site; add CI when immutably pinned. |
-| `autoform check` | Validate Markdown structure and dependencies. |
-| `autoform audit` | Audit completeness and checked facts. |
-| `autoform doctor` | Diagnose the local blueprint contract. |
-| `autoform claim` | Coordinate temporary ownership through Git refs. |
-| `autoform render` | Generate publishable MkDocs source. |
-| `autoform-visualize` | Generate the Mermaid dependency graph. |
-
-Inside an Autoform checkout, use `uv run`:
+For an existing repository that needs several independent formalization
+projects, create a workspace and register each blueprint:
 
 ```bash
-uv run autoform check /path/to/project/blueprint --lean-root /path/to/project
-uv run autoform-visualize /path/to/project/blueprint
-uv run autoform render /path/to/project/blueprint \
-  --output /path/to/project/site-src \
-  --lean-root /path/to/project --require-declarations
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform workspace init . \
+  --blueprint-root docs/blueprints
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform blueprint new textbook \
+  --path Textbook --title "Textbook"
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform workspace inspect .
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform workspace check . --lean-root .
 ```
 
-From a consumer project, resolve the installed plugin root and prefix commands
-with `uv run --project "<AUTOFORM_PLUGIN_ROOT>"`, or separately install the
-Python package so its console scripts are on `PATH`.
+The root `.autoform.toml` is the only workspace registry. Registered blueprint
+paths must not overlap. The original single-project layout remains available:
 
-`check --lean-root` lexically resolves names in local Lean files; it does not
-compile them or prove that they belong to a Lake target. Use `lake build` and
-the verification workflow for compilation and audit, while treating the
-blueprint-to-declaration match as a separate contract.
+```bash
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform init . \
+  --autoform-source https://github.com/facebookresearch/autoform-bot.git \
+  --autoform-ref <full-commit-sha>
+```
 
-`render` writes MkDocs source, not a deployed site. The generated Pages workflow
-deploys from `main` only after GitHub Pages is enabled in repository settings.
+## Validate and publish
 
-## Documentation
+Run these commands from a Lean project that uses the original single-project
+layout:
 
-- [Cabannes thesis example](skills/setup/assets/cabannes-thesis-project/README.md)
-- [Roadmap example](skills/roadmap/references/cabannes-thesis-roadmap.md)
-- [Lean server architecture and operations](servers/README.md)
+```bash
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform doctor . --lean-root .
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform check blueprint --lean-root .
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform audit blueprint --lean-root .
+lake build
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform render blueprint --output site-src \
+  --lean-root . --require-declarations
+```
+
+In a registered multi-project workspace, use `.` instead of `blueprint` and add
+`--project <id>` to each `autoform` command.
+
+`check` validates the Markdown dependency graph. `audit` checks roadmap and
+source coverage. `lake build` checks Lean. `render` produces MkDocs source for
+the human-readable companion; the generated Pages workflow can publish it once
+GitHub Pages is enabled.
+
+For the complete blueprint format and command flags, see the
+[CLI reference](autoform_cli/README.md).
+
+## Formalize ready work
+
+The Orchestrate skill uses the public CLI rather than a separate worker
+runtime. First list the statement or proof phases whose roadmap prerequisites
+are satisfied. This command also requires a complete source-unit coverage
+contract:
+
+```bash
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform ready . --lean-root . --json
+```
+
+Before editing an item, acquire its returned `article_id`. Each concurrent
+contributor uses a separate Git worktree and a fail-closed Git-ref claim:
+
+```bash
+export AUTOFORM_WORKER_ID="worker-name"
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform claim acquire <article-id>
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform claim renew <article-id>
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform claim release <article-id>
+```
+
+Use the `claim list` subcommand to inspect ownership. Contributors also claim shared
+resources such as `lake-build` before using a shared build cache. The current
+host agent performs the Lean work with the bundled LSP and REPL, runs the
+focused Lake build, obtains an independent source-faithfulness and proof review,
+records the exact verified metadata, and then runs `autoform check` and
+`autoform audit` against that final state. Release the
+article claim only after the verified commit reaches the authorized shared
+branch. If an attempt is abandoned without a candidate, release it. For an
+integration failure or handoff, report the branch, commit, and claim state
+instead of making unfinished work appear available. Then call `autoform ready`
+again from the updated shared base.
+In a registered workspace, pass the same `--project <id>` to the ready, claim,
+check, and audit commands.
 
 ## Development
-
-Development also requires Make:
 
 ```bash
 git clone https://github.com/facebookresearch/autoform-bot.git
@@ -149,9 +181,6 @@ make test
 make check-example
 ```
 
-Claude Code uses `/autoform:develop-plugin`; Codex uses `$develop-plugin`.
-`make check-example` validates, renders, and builds the example documentation.
-Run `lake build` in the Cabannes fixture when changing its Lean sources or
-declarations.
-
-AutoformBot is released under the [MIT License](LICENSE).
+Plugin maintainers can use `/autoform:develop-plugin` in Claude Code or
+`$autoform:develop-plugin` in Codex. AutoformBot is released under the
+[MIT License](LICENSE).

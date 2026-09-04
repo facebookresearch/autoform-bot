@@ -1,8 +1,3 @@
----
-kind: coverage
-status: in-progress
----
-
 # Thesis coverage
 
 Coverage is tracked at chapter level before every chapter has a theorem DAG.

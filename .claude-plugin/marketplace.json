@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "autoform",
-  "description": "Lean repository setup, Markdown-vault roadmaps, proving, and human or agent review with Lean LSP and REPL tools.",
+  "description": "Lean repository setup, Markdown-vault roadmaps, publication, and human or agent review with Lean LSP and REPL tools.",
   "owner": {
     "name": "Vivien Cabannes",
     "url": "https://github.com/facebookresearch/autoform-bot"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "autoform",
-      "description": "Set up, plan, publish, prove, and review Lean formalizations as linked Markdown nodes checked through Lean LSP and REPL.",
+      "description": "Set up, plan, publish, and review Lean formalizations as linked Markdown nodes checked through Lean LSP and REPL.",
       "source": "./",
       "category": "productivity"
     }

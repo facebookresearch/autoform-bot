@@ -1,4 +1,4 @@
-"""The vault layout is fixed, so the tool writes it rather than describing it.
+"""The internal vault layout is fixed, so the tool writes it rather than describing it.
 
 A real project came back from an agent-driven setup with chapter pages as
 siblings of their directories instead of ``<chapter>/README.md``. That parses
@@ -11,7 +11,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -38,6 +37,13 @@ _EXPECTED = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _disable_network_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scaffold unit tests opt into a pin explicitly; verifier tests own I/O."""
+
+    monkeypatch.setattr(scaffold_module, "plugin_pin", lambda: ("", ""))
+
+
 def test_scaffold_ignores_python_cache_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -49,7 +55,12 @@ def test_scaffold_ignores_python_cache_artifacts(
     monkeypatch.setattr(scaffold_module, "_TEMPLATES", templates)
 
     project = tmp_path / "project"
-    result = scaffold_project(project, title="Cache-safe")
+    result = scaffold_project(
+        project,
+        title="Cache-safe",
+        autoform_source="https://example.test/autoform.git",
+        autoform_ref="0" * 40,
+    )
 
     assert ".github/autoform_audit.py" in result.written
     assert not (project / ".github/__pycache__").exists()
@@ -57,12 +68,37 @@ def test_scaffold_ignores_python_cache_artifacts(
 
 
 def test_scaffold_writes_the_whole_vault(tmp_path: Path) -> None:
-    result = scaffold_project(tmp_path, title="Finite Flat", repository_url="https://example.test/repo")
+    result = scaffold_project(
+        tmp_path,
+        title="Finite Flat",
+        repository_url="https://example.test/repo",
+        autoform_source="https://example.test/autoform.git",
+        autoform_ref="0" * 40,
+    )
 
     assert set(result.written) == _EXPECTED
     assert result.skipped == ()
     for relative in _EXPECTED:
         assert (tmp_path / relative).is_file(), relative
+
+
+def test_init_does_not_create_a_lean_project_shell(tmp_path: Path) -> None:
+    scaffold_project(tmp_path, title="Finite Flat")
+
+    assert not (tmp_path / "lakefile.toml").exists()
+    assert not (tmp_path / "lean-toolchain").exists()
+    assert not (tmp_path / "src/FiniteFlat.lean").exists()
+
+
+def test_legacy_init_refuses_a_manifest_managed_workspace(tmp_path: Path) -> None:
+    (tmp_path / ".autoform.toml").write_text(
+        'schema = "autoform-workspace/v1"\n', encoding="utf-8"
+    )
+
+    with pytest.raises(ScaffoldError, match="legacy single-vault"):
+        scaffold_project(tmp_path, title="Finite Flat", force=True)
+
+    assert not (tmp_path / "blueprint").exists()
 
 
 def test_scaffolded_vault_validates_immediately(tmp_path: Path) -> None:
@@ -121,7 +157,11 @@ def test_substitutions_reach_the_site_config(tmp_path: Path) -> None:
     assert 'AUTOFORM_SOURCE: "https://example.test/autoform.git"' in verify
     assert f'AUTOFORM_REF: "{"0" * 40}"' in verify
     assert '"git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in verify
-    assert "python3 .github/autoform_audit.py" in verify
+    assert "python .github/autoform_audit.py" in verify
+    assert '"$AUTOFORM_ROOT_PACKAGE" "$archive" blueprint . "$probe"' in verify
+    assert "if [[ -f .autoform.toml ]]" in verify
+    assert "autoform workspace check . --lean-root ." in verify
+    assert "autoform check blueprint --lean-root ." in verify
 
 
 def test_no_placeholder_survives_anywhere(tmp_path: Path) -> None:
@@ -140,10 +180,14 @@ def test_no_placeholder_survives_anywhere(tmp_path: Path) -> None:
 
 
 def test_rerun_is_idempotent_and_reports_what_it_left(tmp_path: Path) -> None:
-    scaffold_project(tmp_path, title="Finite Flat")
+    options = {
+        "autoform_source": "https://example.test/autoform.git",
+        "autoform_ref": "0" * 40,
+    }
+    scaffold_project(tmp_path, title="Finite Flat", **options)
     (tmp_path / "blueprint/README.md").write_text("# Hand written\n", encoding="utf-8")
 
-    again = scaffold_project(tmp_path, title="Finite Flat")
+    again = scaffold_project(tmp_path, title="Finite Flat", **options)
 
     assert again.written == ()
     assert set(again.skipped) == _EXPECTED
@@ -203,7 +247,19 @@ def test_refuses_a_symlinked_target(tmp_path: Path) -> None:
 def test_cli_reports_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from autoform_cli.__main__ import main
 
-    assert main(["init", str(tmp_path), "--title", "Finite Flat", "--json"]) == 0
+    assert main(
+        [
+            "init",
+            str(tmp_path),
+            "--title",
+            "Finite Flat",
+            "--autoform-source",
+            "https://example.test/autoform.git",
+            "--autoform-ref",
+            "0" * 40,
+            "--json",
+        ]
+    ) == 0
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["project"] == "Finite Flat"
@@ -295,19 +351,13 @@ def test_scaffolded_theme_defers_navigation_to_the_book(tmp_path: Path) -> None:
     assert "name: material" in mkdocs
 
 
-def test_generated_ci_pins_the_checkout_that_scaffolded_it(tmp_path: Path) -> None:
-    """A floating ref installs an Autoform that may not have this CLI.
-
-    `facebookresearch/autoform-bot@main` predates `autoform_cli` entirely, so
-    defaulting to it meant every scaffolded project's first CI run installed a
-    build with no `autoform` command. The pin now comes from the checkout doing
-    the scaffolding, which is immutable and known-good by construction.
-    """
-
-    from autoform_cli.scaffold import plugin_pin
-
+def test_generated_ci_uses_the_verified_plugin_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = "https://example.test/autoform.git"
+    ref = "4" * 40
+    monkeypatch.setattr(scaffold_module, "plugin_pin", lambda: (source, ref))
     scaffold_project(tmp_path, title="Finite Flat")
-    source, ref = plugin_pin()
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
 
     assert f"AUTOFORM_SOURCE: {json.dumps(source)}" in verify
@@ -317,7 +367,11 @@ def test_generated_ci_pins_the_checkout_that_scaffolded_it(tmp_path: Path) -> No
     assert "@main" not in verify
 
 
-def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:
+def test_explicit_pin_skips_discovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden() -> tuple[str, str]:
+        raise AssertionError("explicit provenance invoked discovery")
+
+    monkeypatch.setattr(scaffold_module, "plugin_pin", forbidden)
     scaffold_project(
         tmp_path,
         title="Finite Flat",
@@ -354,22 +408,17 @@ def test_no_ci_rather_than_a_guessed_pin(tmp_path: Path, monkeypatch: pytest.Mon
     assert (tmp_path / "mkdocs.yml").is_file()
 
 
-def test_a_ref_alone_restores_ci(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The commit is the unguessable half; the repository has a sane default.
+def test_a_ref_alone_is_refused_without_discovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden() -> tuple[str, str]:
+        raise AssertionError("partial explicit provenance invoked discovery")
 
-    Setup tells the agent to pass `--autoform-ref`. If the source had to be
-    supplied too, following that instruction would still yield no CI, and the
-    fail-closed behaviour would be indistinguishable from a broken flag.
-    """
-    from autoform_cli import scaffold as scaffold_module
+    monkeypatch.setattr(scaffold_module, "plugin_pin", forbidden)
+    with pytest.raises(ScaffoldError, match="must be provided together"):
+        scaffold_project(tmp_path, title="Finite Flat", autoform_ref="2" * 40)
 
-    monkeypatch.setattr(scaffold_module, "plugin_pin", lambda: ("", ""))
-    result = scaffold_module.scaffold_project(tmp_path, title="Finite Flat", autoform_ref="2" * 40)
-
-    assert result.unpinned is False
-    verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
-    assert f"AUTOFORM_SOURCE: {json.dumps(scaffold_module.DEFAULT_AUTOFORM_SOURCE)}" in verify
-    assert f'AUTOFORM_REF: "{"2" * 40}"' in verify
+    assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize("ref", ["main", "0f018613", "v1.0.0", "2" * 39, ("2" * 39) + "Z"])
@@ -469,121 +518,6 @@ def test_an_unsafe_plugin_pin_fails_closed_without_persisting_credentials(
     )
 
 
-def test_plugin_pin_is_empty_outside_a_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
-    from autoform_cli import scaffold as scaffold_module
-
-    monkeypatch.setattr(scaffold_module, "_git", lambda *args, **kwargs: None)
-    monkeypatch.setattr(scaffold_module, "_marketplace_checkout", lambda: None)
-    assert scaffold_module.plugin_pin() == ("", "")
-
-
-def _repository(path: Path, remote: str) -> str:
-    """Make *path* a real one-commit checkout and return its HEAD sha."""
-    path.mkdir(parents=True, exist_ok=True)
-    run = ["git", "-c", "user.email=t@test", "-c", "user.name=Test"]
-    subprocess.run([*run, "init", "-q"], cwd=path, check=True)
-    subprocess.run([*run, "remote", "add", "origin", remote], cwd=path, check=True)
-    subprocess.run([*run, "commit", "-q", "--allow-empty", "-m", "first"], cwd=path, check=True)
-    done = subprocess.run(
-        [*run, "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=True
-    )
-    return done.stdout.strip()
-
-
-def _fake_plugin_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str]:
-    """Lay out a plugin cache copy and the real checkout it was copied from."""
-    from autoform_cli import scaffold as scaffold_module
-
-    checkout = tmp_path / "src" / "autoform-bot"
-    (checkout / "autoform_cli").mkdir(parents=True)
-    (checkout / "autoform_cli" / "scaffold.py").write_text("", encoding="utf-8")
-    head = _repository(checkout, "git@github.com:owner/autoform-bot.git")
-
-    copied = tmp_path / ".claude/plugins/cache/autoform/autoform/0.5.0/autoform_cli"
-    copied.mkdir(parents=True)
-    monkeypatch.setattr(scaffold_module, "_here", lambda: copied.parent)
-
-    registry = tmp_path / "known_marketplaces.json"
-    registry.write_text(
-        json.dumps({"autoform": {"installLocation": str(checkout)}}), encoding="utf-8"
-    )
-    monkeypatch.setattr(scaffold_module, "_PLUGIN_REGISTRY", registry)
-    return checkout, head
-
-
-def test_an_installed_plugin_pins_from_the_marketplace_checkout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The copy has no `.git`, but the checkout it was copied from does.
-
-    Without this, `init` under a plugin can only fail closed, and the operator
-    is asked for a commit that nothing on their machine reports. That is a real
-    provenance record, not the guess `plugin_pin` refuses to make.
-    """
-    from autoform_cli import scaffold as scaffold_module
-
-    _, head = _fake_plugin_install(tmp_path, monkeypatch)
-
-    assert scaffold_module.plugin_pin() == (
-        "https://github.com/owner/autoform-bot.git",
-        head,
-    )
-
-
-def test_an_unrelated_marketplace_checkout_is_not_trusted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A location that is not Autoform would pin CI to somebody else's repo."""
-    from autoform_cli import scaffold as scaffold_module
-
-    checkout, _ = _fake_plugin_install(tmp_path, monkeypatch)
-    (checkout / "autoform_cli" / "scaffold.py").unlink()
-
-    assert scaffold_module._marketplace_checkout() is None
-    assert scaffold_module.plugin_pin() == ("", "")
-
-
-def test_a_copy_inside_an_unrelated_repository_is_not_its_provenance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`git -C` searches upwards, and the answer it finds is confidently wrong.
-
-    Installed into a project's own virtualenv, Autoform sits under that
-    project's checkout. Asking for "its" origin and HEAD then describes the
-    project, so its CI would be pinned to install the project instead of
-    Autoform, at a sha that moves with every commit the author makes.
-    """
-    from autoform_cli import scaffold as scaffold_module
-
-    project = tmp_path / "their-project"
-    _repository(project, "https://github.com/someone/their-project.git")
-    installed = project / ".venv/lib/python3.12/site-packages"
-    installed.mkdir(parents=True)
-    monkeypatch.setattr(scaffold_module, "_here", lambda: installed)
-    monkeypatch.setattr(scaffold_module, "_PLUGIN_REGISTRY", tmp_path / "absent.json")
-
-    assert scaffold_module._checkout_root(installed) is None
-    assert scaffold_module.plugin_pin() == ("", "")
-
-
-def test_a_branch_in_the_marketplace_checkout_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Whatever the provenance says, only a full sha may reach the workflows."""
-    from autoform_cli import scaffold as scaffold_module
-
-    checkout, _ = _fake_plugin_install(tmp_path, monkeypatch)
-
-    def fake_git(*args: str, root: Path | None = None) -> str | None:
-        if args[:2] == ("rev-parse", "--show-toplevel"):
-            return str(checkout)
-        return "https://example.test/a.git" if args[0] == "remote" else "main"
-
-    monkeypatch.setattr(scaffold_module, "_git", fake_git)
-
-    assert scaffold_module.plugin_pin() == ("", "")
-
-
 def test_a_symlinked_subdirectory_cannot_redirect_the_scaffold(tmp_path: Path) -> None:
     """Rejecting a symlinked root is not enough; any component can redirect.
 
@@ -620,6 +554,418 @@ def test_a_dangling_destination_symlink_cannot_redirect_the_scaffold(tmp_path: P
     assert not outside.exists()
 
 
+def test_blueprint_scaffold_never_replaces_a_concurrently_created_file(tmp_path: Path) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+    descriptor = os.open(
+        target,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        (target / "README.md").write_bytes(b"concurrent owner\n")
+        with pytest.raises(ScaffoldError, match="already exists"):
+            scaffold_module._exclusive_write_at(
+                descriptor,
+                "README.md",
+                b"Autoform content\n",
+                mode=0o644,
+            )
+    finally:
+        os.close(descriptor)
+
+    assert (target / "README.md").read_bytes() == b"concurrent owner\n"
+
+
+def test_blueprint_scaffold_closes_a_nonempty_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+    (target / "concurrent-owner").write_text("claimed\n", encoding="utf-8")
+    original = scaffold_module._open_directory_chain
+    opened: list[int] = []
+
+    def record(path: Path) -> int:
+        descriptor = original(path)
+        opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(scaffold_module, "_open_directory_chain", record)
+
+    with pytest.raises(ScaffoldError, match="not empty"):
+        scaffold_module.scaffold_blueprint(target, title="Probe")
+
+    assert len(opened) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened[0])
+
+
+def test_blueprint_scaffold_requires_atomic_directory_publication_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+    monkeypatch.setattr(scaffold_module, "_atomic_directory_publication_available", lambda: False)
+
+    with pytest.raises(ScaffoldError, match="platform"):
+        scaffold_module.scaffold_blueprint(target, title="Probe")
+
+    assert list(target.iterdir()) == []
+
+
+def test_blueprint_scaffold_rejects_a_racing_directory_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original = scaffold_module._open_or_create_directory
+    injected = False
+
+    def race(parent_descriptor: int, name: str) -> int:
+        nonlocal injected
+        if not injected:
+            injected = True
+            os.symlink(outside, name, target_is_directory=True, dir_fd=parent_descriptor)
+        return original(parent_descriptor, name)
+
+    monkeypatch.setattr(scaffold_module, "_open_or_create_directory", race)
+
+    with pytest.raises(ScaffoldError, match="cannot open blueprint directory safely"):
+        scaffold_module.scaffold_blueprint(target, title="Probe")
+
+    assert injected
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "event",
+    ["identity-captured-before-bind", "bound-before-publication"],
+)
+def test_blueprint_scaffold_rejects_staged_child_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    event: str,
+) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+    held = target / "held-coverage-stage"
+    staged_name = ""
+
+    def replace_stage(
+        current_event: str,
+        _parent_descriptor: int,
+        current_staging_name: str,
+        target_name: str,
+    ) -> None:
+        nonlocal staged_name
+        if current_event != event or target_name != "coverage" or staged_name:
+            return
+        staged_name = current_staging_name
+        staged = target / staged_name
+        staged.rename(held)
+        (held / "owned").write_text("original\n", encoding="utf-8")
+        staged.mkdir()
+        (staged / "foreign").write_text("replacement\n", encoding="utf-8")
+
+    monkeypatch.setattr(scaffold_module, "_scaffold_directory_checkpoint", replace_stage)
+
+    with pytest.raises(ScaffoldError, match="blueprint directory changed"):
+        scaffold_module.scaffold_blueprint(target, title="Probe")
+
+    assert (held / "owned").read_text(encoding="utf-8") == "original\n"
+    if event == "identity-captured-before-bind":
+        assert not (target / "coverage").exists()
+        foreign = target / staged_name
+    else:
+        foreign = target / "coverage"
+    assert (foreign / "foreign").read_text(encoding="utf-8") == "replacement\n"
+
+
+def test_blueprint_scaffold_preserves_a_directory_publication_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+    staged_name = ""
+
+    def claim_target(
+        event: str,
+        _parent_descriptor: int,
+        current_staging_name: str,
+        target_name: str,
+    ) -> None:
+        nonlocal staged_name
+        if event != "bound-before-publication" or target_name != "coverage" or staged_name:
+            return
+        staged_name = current_staging_name
+        (target / "coverage").mkdir()
+        (target / "coverage/foreign").write_text("winner\n", encoding="utf-8")
+
+    monkeypatch.setattr(scaffold_module, "_scaffold_directory_checkpoint", claim_target)
+
+    with pytest.raises(ScaffoldError, match="blueprint directory changed"):
+        scaffold_module.scaffold_blueprint(target, title="Probe")
+
+    assert (target / "coverage/foreign").read_text(encoding="utf-8") == "winner\n"
+    assert (target / staged_name).is_dir()
+    assert list((target / staged_name).iterdir()) == []
+
+
+def test_directory_stage_captures_identity_at_first_portable_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    parent_descriptor = os.open(target, flags)
+    original_mkdir = scaffold_module.os.mkdir
+    original_stat = scaffold_module.os.stat
+    staging_name = ""
+    events: list[str] = []
+
+    def record_mkdir(name, *args, **kwargs) -> None:
+        nonlocal staging_name
+        original_mkdir(name, *args, **kwargs)
+        if isinstance(name, str) and name.startswith(scaffold_module._DIRECTORY_STAGE_PREFIX):
+            staging_name = name
+            events.append("mkdir")
+
+    def record_stat(name, *args, **kwargs):
+        if name == staging_name and "stat" not in events:
+            events.append("stat")
+        return original_stat(name, *args, **kwargs)
+
+    def record_checkpoint(event: str, *_args) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(scaffold_module.os, "mkdir", record_mkdir)
+    monkeypatch.setattr(scaffold_module.os, "stat", record_stat)
+    monkeypatch.setattr(scaffold_module, "_scaffold_directory_checkpoint", record_checkpoint)
+    try:
+        descriptor = scaffold_module._open_or_create_directory(parent_descriptor, "coverage")
+        os.close(descriptor)
+    finally:
+        os.close(parent_descriptor)
+
+    assert events[:3] == ["mkdir", "stat", "identity-captured-before-bind"]
+    assert len(os.fsencode(staging_name)) == len(os.fsencode(scaffold_module._DIRECTORY_STAGE_PREFIX)) + 32
+
+
+def test_directory_stage_rejects_an_exact_public_name_alias_before_mkdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+    first_token = "a" * 32
+    second_token = "b" * 32
+    public_name = f"{scaffold_module._DIRECTORY_STAGE_PREFIX}{first_token}"
+    expected_stage = f"{scaffold_module._DIRECTORY_STAGE_PREFIX}{second_token}"
+    tokens = iter((first_token, second_token))
+    mkdir_names: list[str] = []
+    original_mkdir = scaffold_module.os.mkdir
+
+    def record_mkdir(name, *args, **kwargs) -> None:
+        mkdir_names.append(name)
+        original_mkdir(name, *args, **kwargs)
+
+    monkeypatch.setattr(scaffold_module.secrets, "token_hex", lambda _size: next(tokens))
+    monkeypatch.setattr(scaffold_module.os, "mkdir", record_mkdir)
+    parent_descriptor = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        descriptor = scaffold_module._open_or_create_directory(parent_descriptor, public_name)
+        os.close(descriptor)
+    finally:
+        os.close(parent_descriptor)
+
+    assert mkdir_names == [expected_stage]
+    assert (target / public_name).is_dir()
+    assert not (target / expected_stage).exists()
+
+
+def test_directory_stage_rejects_a_darwin_casefold_public_alias_before_mkdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+    first_token = "a1" * 16
+    second_token = "b2" * 16
+    candidate = f"{scaffold_module._DIRECTORY_STAGE_PREFIX}{first_token}"
+    public_name = candidate.upper()
+    expected_stage = f"{scaffold_module._DIRECTORY_STAGE_PREFIX}{second_token}"
+    tokens = iter((first_token, second_token))
+    mkdir_names: list[str] = []
+    original_mkdir = scaffold_module.os.mkdir
+
+    def record_mkdir(name, *args, **kwargs) -> None:
+        mkdir_names.append(name)
+        original_mkdir(name, *args, **kwargs)
+
+    monkeypatch.setattr(scaffold_module.secrets, "token_hex", lambda _size: next(tokens))
+    monkeypatch.setattr(scaffold_module.os, "mkdir", record_mkdir)
+    parent_descriptor = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        descriptor = scaffold_module._open_or_create_directory(parent_descriptor, public_name)
+        os.close(descriptor)
+    finally:
+        os.close(parent_descriptor)
+
+    assert candidate.casefold() == public_name.casefold()
+    assert mkdir_names == [expected_stage]
+    assert (target / public_name).is_dir()
+    assert not (target / expected_stage).exists()
+
+
+def test_created_scaffold_directory_is_bound_before_parent_fsync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+    replacement = target / "coverage"
+    displaced = target / "held-coverage"
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    parent_descriptor = os.open(target, flags)
+    original_sync = scaffold_module.os.fsync
+    raced = False
+
+    def replace_after_parent_fsync(descriptor: int) -> None:
+        nonlocal raced
+        original_sync(descriptor)
+        if descriptor == parent_descriptor and not raced and replacement.is_dir():
+            replacement.rename(displaced)
+            replacement.mkdir()
+            raced = True
+
+    monkeypatch.setattr(scaffold_module.os, "fsync", replace_after_parent_fsync)
+    try:
+        with pytest.raises(ScaffoldError, match="blueprint directory changed"):
+            scaffold_module._open_or_create_directory(parent_descriptor, "coverage")
+    finally:
+        os.close(parent_descriptor)
+
+    assert raced
+    assert list(replacement.iterdir()) == []
+    assert list(displaced.iterdir()) == []
+
+
+def test_blueprint_scaffold_retains_child_bindings_until_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+    held = target / "held-coverage"
+    original_write = scaffold_module._exclusive_write_at
+    raced = False
+
+    def replace_earlier_child(
+        parent_descriptor: int,
+        name: str,
+        content: bytes,
+        *,
+        mode: int,
+    ) -> None:
+        nonlocal raced
+        if name == ".gitignore" and not raced:
+            (target / "coverage").rename(held)
+            (target / "coverage").mkdir()
+            raced = True
+        original_write(parent_descriptor, name, content, mode=mode)
+
+    monkeypatch.setattr(scaffold_module, "_exclusive_write_at", replace_earlier_child)
+
+    with pytest.raises(ScaffoldError, match="coverage"):
+        scaffold_module.scaffold_blueprint(target, title="Probe")
+
+    assert raced
+    assert (held / "README.md").is_file()
+    assert list((target / "coverage").iterdir()) == []
+
+
+def test_blueprint_scaffold_rejects_file_replacement_after_parent_fsync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+    displaced = target / "coverage/original-readme"
+    replaced = False
+
+    def replace_file(
+        event: str,
+        relative: str,
+        _binding: scaffold_module._BlueprintScaffoldBinding,
+    ) -> None:
+        nonlocal replaced
+        if event != "after-parent-fsync" or relative != "coverage" or replaced:
+            return
+        readme = target / "coverage/README.md"
+        readme.rename(displaced)
+        readme.write_text("foreign replacement\n", encoding="utf-8")
+        replaced = True
+
+    monkeypatch.setattr(scaffold_module, "_scaffold_binding_checkpoint", replace_file)
+
+    with pytest.raises(ScaffoldError, match="blueprint file changed"):
+        scaffold_module.scaffold_blueprint(target, title="Probe")
+
+    assert replaced
+    assert displaced.is_file()
+    assert (target / "coverage/README.md").read_text(encoding="utf-8") == (
+        "foreign replacement\n"
+    )
+
+
+def test_blueprint_scaffold_fsyncs_every_generated_parent_deepest_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+    events: list[tuple[str, str]] = []
+
+    def record(
+        event: str,
+        relative: str,
+        _binding: scaffold_module._BlueprintScaffoldBinding,
+    ) -> None:
+        events.append((event, relative))
+
+    monkeypatch.setattr(scaffold_module, "_scaffold_binding_checkpoint", record)
+
+    scaffold_module.scaffold_blueprint(target, title="Probe")
+
+    parents = ["coverage", "javascripts", "roadmap", "sources", "."]
+    assert events == [
+        item
+        for parent in parents
+        for item in (
+            ("before-parent-fsync", parent),
+            ("after-parent-fsync", parent),
+        )
+    ]
+
+
+def test_blueprint_scaffold_fails_closed_on_generated_parent_fsync_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "blueprint"
+    target.mkdir()
+
+    def fail(
+        event: str,
+        relative: str,
+        _binding: scaffold_module._BlueprintScaffoldBinding,
+    ) -> None:
+        if event == "before-parent-fsync" and relative == "roadmap":
+            raise OSError("injected parent fsync failure")
+
+    monkeypatch.setattr(scaffold_module, "_scaffold_binding_checkpoint", fail)
+
+    with pytest.raises(ScaffoldError, match="durably: roadmap"):
+        scaffold_module.scaffold_blueprint(target, title="Probe")
+
+    assert (target / "roadmap/README.md").is_file()
+
+
 def test_a_title_with_a_colon_stays_one_yaml_key(tmp_path: Path) -> None:
     """`site_name: Algebra: Foundations` is a nested mapping, not a title."""
     from autoform_cli import scaffold as scaffold_module
@@ -639,25 +985,21 @@ def test_a_quoted_title_is_escaped_not_just_wrapped(tmp_path: Path) -> None:
     assert 'site_name: "The \\"Hard\\" Case"' in config
 
 
-def test_a_source_without_a_ref_does_not_borrow_this_checkouts_commit(
+def test_a_source_without_a_ref_is_refused_without_discovery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A sha identifies a commit in one repository, not in any repository.
+    def forbidden() -> tuple[str, str]:
+        raise AssertionError("partial explicit provenance invoked discovery")
 
-    Keeping the inferred ref while replacing the source emitted
-    `git+other.git@our-sha`, which does not resolve in `other`.
-    """
-    from autoform_cli import scaffold as scaffold_module
+    monkeypatch.setattr(scaffold_module, "plugin_pin", forbidden)
+    with pytest.raises(ScaffoldError, match="must be provided together"):
+        scaffold_project(
+            tmp_path,
+            title="Probe",
+            autoform_source="https://example.test/other.git",
+        )
 
-    monkeypatch.setattr(
-        scaffold_module, "plugin_pin", lambda: ("https://example.test/ours.git", "1" * 40)
-    )
-    result = scaffold_module.scaffold_project(
-        tmp_path, title="Probe", autoform_source="https://example.test/other.git"
-    )
-
-    assert result.unpinned is True
-    assert not (tmp_path / ".github/workflows/autoform-verify.yml").exists()
+    assert not list(tmp_path.iterdir())
 
 
 def test_a_source_with_its_own_ref_is_honoured(tmp_path: Path) -> None:
@@ -695,7 +1037,12 @@ def test_control_characters_in_yaml_values_are_escaped(tmp_path: Path) -> None:
 def test_an_uppercase_ref_is_accepted(tmp_path: Path) -> None:
     """Git prints shas lowercase but resolves them either way; a sha copied
     from a web UI is valid input rather than a mistake."""
-    result = scaffold_project(tmp_path, title="Probe", autoform_ref="A" * 40)
+    result = scaffold_project(
+        tmp_path,
+        title="Probe",
+        autoform_source="https://example.test/autoform.git",
+        autoform_ref="A" * 40,
+    )
 
     assert result.unpinned is False
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")

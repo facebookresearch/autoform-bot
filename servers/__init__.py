@@ -6,9 +6,51 @@ server process's working directory.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 LAKE_PROJECT_MARKERS = ("lakefile.lean", "lakefile.toml", "lake-manifest.json")
+LEAN_PROJECT_CONFIG_FILES = (
+    "lean-toolchain",
+    "lake-manifest.json",
+    "lakefile.toml",
+    "lakefile.lean",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectFingerprint:
+    """Filesystem identity of a project root and its Lean configuration."""
+
+    root: tuple[int, int, int]
+    files: tuple[tuple[str, int, int, int, int, int, int], ...]
+
+
+def lean_project_fingerprint(project_dir: Path) -> ProjectFingerprint:
+    """Return the project metadata that makes resident Lean state stale."""
+    root = project_dir.stat()
+    fingerprint: list[tuple[str, int, int, int, int, int, int]] = []
+    for name in LEAN_PROJECT_CONFIG_FILES:
+        path = project_dir / name
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            continue
+        fingerprint.append(
+            (
+                name,
+                info.st_dev,
+                info.st_ino,
+                info.st_mode,
+                info.st_size,
+                info.st_mtime_ns,
+                info.st_ctime_ns,
+            )
+        )
+    return ProjectFingerprint(
+        root=(root.st_dev, root.st_ino, root.st_mode),
+        files=tuple(fingerprint),
+    )
 
 
 def resolve_lean_project_dir(project_dir: str) -> Path:

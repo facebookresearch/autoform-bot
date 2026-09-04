@@ -480,10 +480,16 @@ def _direct_child(graph: Graph, scope: str, node_id: str) -> str | None:
 
 
 def _leaf_descendants(graph: Graph, node_id: str) -> tuple[str, ...]:
-    children = graph.children(node_id)
-    if not children:
-        return (node_id,)
-    return tuple(leaf for child in children for leaf in _leaf_descendants(graph, child))
+    leaves: list[str] = []
+    pending = [node_id]
+    while pending:
+        current = pending.pop()
+        children = graph.children(current)
+        if children:
+            pending.extend(reversed(children))
+        else:
+            leaves.append(current)
+    return tuple(leaves)
 
 
 __all__ = [

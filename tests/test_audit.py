@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-from autoform_cli.audit import audit_blueprint
+import pytest
+
+import autoform_cli.audit as audit_module
+from autoform_cli.audit import audit_blueprint, load_audit_graph
+from autoform_cli.runtime import bind_runtime_paths
 
 
 def _ensure_chapter(blueprint: Path, relative: str) -> None:
@@ -147,9 +152,33 @@ def test_audit_requires_mathlib_declaration_and_declaration_intent_on_evidenced_
 
     upstream_codes = {code for code, _reason in findings["roadmap/upstream.md"]}
     local_codes = {code for code, _reason in findings["roadmap/local.md"]}
-    assert upstream_codes == {"mathlib-without-declaration", "missing-declaration-intent"}
+    assert upstream_codes == {
+        "mathlib-without-declaration",
+        "mathlib-without-file",
+        "missing-declaration-intent",
+    }
     assert local_codes == {"missing-declaration-intent"}
     assert "roadmap/exposition.md" not in findings
+
+
+def test_audit_requires_a_canonical_mathlib_source_path(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(
+        blueprint,
+        "upstream.md",
+        declaration="theorem",
+        mathlib="true",
+        mathlib_declaration="Nat.prime_def_lt",
+        mathlib_file="Mathlib/../Fake.lean",
+    )
+
+    assert _finding_map(blueprint)["roadmap/upstream.md"] == [
+        (
+            "invalid-mathlib-file",
+            "mathlib_file must be a canonical Mathlib/**/*.lean source path",
+        )
+    ]
 
 
 def test_audit_validates_local_source_links_without_network_access(tmp_path: Path, monkeypatch) -> None:
@@ -187,6 +216,30 @@ def test_audit_validates_local_source_links_without_network_access(tmp_path: Pat
         ("unsupported-source-link", "source link uses a network location: '//example.invalid/paper'"),
         ("unsupported-source-link", "source link uses unsupported scheme: 'ftp://example.invalid/paper'"),
     ]
+
+
+def test_audit_preserves_non_markdown_source_existence_without_reading_its_bytes(
+    tmp_path: Path,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    source = blueprint / "assets" / "paper.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"not needed for link validation")
+    _article(
+        blueprint,
+        "result.md",
+        declaration="theorem",
+        origin="cited",
+        sources=("../assets/paper.pdf",),
+    )
+    source.chmod(0)
+    try:
+        result = audit_blueprint(blueprint)
+    finally:
+        source.chmod(0o600)
+
+    assert result.clean
 
 
 def test_audit_rejects_missing_markdown_source_anchor(tmp_path: Path) -> None:
@@ -233,11 +286,14 @@ def test_audit_validates_lean_targets_only_when_root_is_supplied(tmp_path: Path)
         "wrong-kind.md",
         declaration="theorem",
         statement="formalized",
-        lean="Project.value",
+        lean="Project.value Project.good",
     )
     lean_root = tmp_path / "lean"
     lean_root.mkdir()
-    (lean_root / "Value.lean").write_text("def Project.value : Nat := 1\n", encoding="utf-8")
+    (lean_root / "Value.lean").write_text(
+        "def Project.value : Nat := 1\ntheorem Project.good : True := trivial\n",
+        encoding="utf-8",
+    )
 
     without_lean = _finding_map(blueprint)
     with_lean = _finding_map(blueprint, lean_root=lean_root)
@@ -270,6 +326,20 @@ def test_audit_reports_invalid_lean_root_once(tmp_path: Path) -> None:
     assert [(finding.article_path, finding.code) for finding in result.findings] == [
         (".", "invalid-lean-root")
     ]
+
+
+def test_load_audit_graph_returns_paths_in_the_requested_blueprint(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    article = _article(blueprint, "result.md")
+
+    graph, _result = load_audit_graph(blueprint)
+
+    assert graph is not None
+    assert graph.blueprint_dir == blueprint.resolve()
+    assert graph.blueprint_dir.is_dir()
+    assert graph.nodes["result"].path == article.resolve()
+    assert graph.nodes["result"].path.is_file()
+    assert graph.source_bytes("result") == article.read_bytes()
 
 
 def test_audit_reports_coverage_gaps_provable_from_files(tmp_path: Path) -> None:
@@ -494,6 +564,113 @@ def test_audit_is_read_only(tmp_path: Path) -> None:
         if path.is_file()
     }
     assert after == before
+
+
+def test_audit_coverage_uses_the_captured_blueprint_during_an_a_b_a_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    replacement = tmp_path / "replacement"
+    retained = tmp_path / "retained"
+    _article(blueprint, "result.md", declaration="theorem")
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Old area | OUT | Original scope |",
+    )
+    _article(replacement, "result.md", declaration="theorem")
+    _coverage(
+        replacement,
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| New area | MAPPED | Replacement scope |",
+    )
+    original = audit_module._coverage_findings
+
+    def inspect_while_reselected(snapshot_root: Path):
+        blueprint.rename(retained)
+        replacement.rename(blueprint)
+        try:
+            return original(snapshot_root)
+        finally:
+            blueprint.rename(replacement)
+            retained.rename(blueprint)
+
+    monkeypatch.setattr(audit_module, "_coverage_findings", inspect_while_reselected)
+    with bind_runtime_paths(blueprint) as paths:
+        result = audit_blueprint(
+            paths.blueprint_dir,
+            _expected_blueprint_identity=paths.blueprint_identity,
+            _expected_roadmap_identity=paths.roadmap_identity,
+        )
+        paths.verify()
+
+    assert result.coverage is not None
+    assert [entry.area for entry in result.coverage.entries] == ["Old area"]
+    assert not any(finding.code == "declared-coverage-gap" for finding in result.findings)
+
+
+def test_audit_does_not_sanitize_a_roadmap_symlink(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    outside = tmp_path / "outside.md"
+    outside.write_text("# Outside\n", encoding="utf-8")
+    linked = blueprint / "roadmap" / "linked.md"
+    linked.parent.mkdir(parents=True)
+    linked.symlink_to(outside)
+
+    result = audit_blueprint(blueprint)
+
+    assert not result.clean
+    assert result.coverage is not None
+    assert (
+        "roadmap/linked.md",
+        "invalid-graph",
+        "roadmap path is invalid: symbolic links are not supported",
+    ) in {
+        (finding.article_path, finding.code, finding.reason)
+        for finding in result.findings
+    }
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="named pipes are unavailable")
+def test_audit_does_not_sanitize_a_special_roadmap_entry(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    special = blueprint / "roadmap" / "input.md"
+    special.parent.mkdir(parents=True)
+    os.mkfifo(special)
+
+    result = audit_blueprint(blueprint)
+
+    assert not result.clean
+    assert result.coverage is not None
+    assert (
+        "roadmap/input.md",
+        "invalid-graph",
+        "roadmap path is invalid: named pipe is not a regular file or directory",
+    ) in {
+        (finding.article_path, finding.code, finding.reason)
+        for finding in result.findings
+    }
+
+
+def test_audit_does_not_read_excluded_obsidian_state(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "result.md", declaration="theorem")
+    private = blueprint / ".obsidian" / "private"
+    private.mkdir(parents=True)
+    (private / "large.bin").write_bytes(b"excluded")
+    private.chmod(0)
+    try:
+        result = audit_blueprint(blueprint)
+    finally:
+        private.chmod(0o700)
+
+    assert result.clean
 
 
 def test_an_explicit_attr_list_anchor_resolves(tmp_path: Path) -> None:

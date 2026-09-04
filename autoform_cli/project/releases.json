@@ -1,0 +1,44 @@
+{
+  "schema": "autoform-project-release-catalog/v1",
+  "releases": [
+    {
+      "id": "lean-v4.32.2-mathlib-v4.32.2",
+      "channel": "stable",
+      "recommended": false,
+      "lean": {
+        "toolchain": "leanprover/lean4:v4.32.2",
+        "version": "v4.32.2"
+      },
+      "mathlib": {
+        "git": "https://github.com/leanprover-community/mathlib4.git",
+        "revision": "v4.32.2"
+      }
+    },
+    {
+      "id": "lean-v4.33.0-mathlib-v4.33.0",
+      "channel": "stable",
+      "recommended": false,
+      "lean": {
+        "toolchain": "leanprover/lean4:v4.33.0",
+        "version": "v4.33.0"
+      },
+      "mathlib": {
+        "git": "https://github.com/leanprover-community/mathlib4.git",
+        "revision": "v4.33.0"
+      }
+    },
+    {
+      "id": "lean-v4.33.1-mathlib-v4.33.1",
+      "channel": "stable",
+      "recommended": true,
+      "lean": {
+        "toolchain": "leanprover/lean4:v4.33.1",
+        "version": "v4.33.1"
+      },
+      "mathlib": {
+        "git": "https://github.com/leanprover-community/mathlib4.git",
+        "revision": "v4.33.1"
+      }
+    }
+  ]
+}

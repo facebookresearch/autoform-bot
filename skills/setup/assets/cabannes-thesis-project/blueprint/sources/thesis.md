@@ -1,8 +1,3 @@
----
-kind: source
-status: adopted
----
-
 # Thesis source map
 
 Vivien Cabannes, *From Weakly Supervised Learning to Active Labeling*, PhD

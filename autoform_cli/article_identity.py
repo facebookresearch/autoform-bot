@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from .graph import GraphValidationError, load_graph
+from .graph import Graph, GraphValidationError, load_graph
 
 IDENTITY_PLAN_SCHEMA = "autoform-article-id-plan/v1"
 
@@ -61,10 +61,14 @@ class ArticleIdentityPlan:
         return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
 
 
-def plan_article_ids(blueprint_dir: str | Path) -> ArticleIdentityPlan:
+def plan_article_ids(
+    blueprint_dir: str | Path,
+    *,
+    _graph: Graph | None = None,
+) -> ArticleIdentityPlan:
     """Validate a blueprint and propose IDs for articles that do not have one."""
 
-    graph = load_graph(blueprint_dir)
+    graph = _graph if _graph is not None else load_graph(blueprint_dir)
     entries = []
     owners: dict[str, str] = {}
     for node in sorted(graph.nodes.values(), key=lambda candidate: candidate.id):

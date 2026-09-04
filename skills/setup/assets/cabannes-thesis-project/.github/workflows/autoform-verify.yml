@@ -1,5 +1,6 @@
-# Builds the Lean project and validates its Autoform blueprint on neutral
-# hardware. Actions and the Autoform source are pinned immutably.
+# Builds the Lean project and validates its registered Autoform blueprints, or
+# its legacy single vault, on neutral hardware. Actions and the Autoform source
+# are pinned immutably.
 
 name: autoform verify
 
@@ -33,10 +34,15 @@ jobs:
         with:
           version: "0.12.1"
 
-      - name: Validate the theorem DAG
-        run: >-
-          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          autoform check blueprint
+      - name: Validate the theorem DAG and source declarations
+        run: |
+          if [[ -f .autoform.toml ]]; then
+            uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+              autoform workspace check . --lean-root .
+          else
+            uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+              autoform check blueprint --lean-root .
+          fi
 
       - name: Install elan
         run: |
@@ -80,13 +86,14 @@ jobs:
           trap 'rm -f "$evaluated_config"' EXIT
           rm -f "$evaluated_config"
           lake translate-config toml "$evaluated_config"
-          root_package="$(python3 .github/autoform_audit.py --root-package "$evaluated_config")"
+          root_package="$(uv run --no-project --with "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            python .github/autoform_audit.py --root-package "$evaluated_config")"
           echo "AUTOFORM_ROOT_PACKAGE=$root_package" >> "$GITHUB_ENV"
           lake check-build
           lake clean "$root_package"
           lake build
 
-      - name: Audit every root-package declaration
+      - name: Bind blueprint claims to built artifacts and audit the root package
         run: |
           set -euo pipefail
           archive="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-root-build.XXXXXX.tgz")"
@@ -95,7 +102,10 @@ jobs:
           # Lake resolves both manifest languages and package/custom buildDir.
           # `lake pack` archives only the root package's actual build directory,
           # leaving dependency package artifacts outside the audit boundary.
+          # The helper separately validates the manifest-pinned canonical
+          # Mathlib Git checkout, then confines queried modules to its traces.
           lake pack "$archive"
-          python3 .github/autoform_audit.py \
-            "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
+          uv run --no-project --with "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            python .github/autoform_audit.py \
+            "$AUTOFORM_ROOT_PACKAGE" "$archive" blueprint . "$probe"
           lake env lean "$probe"

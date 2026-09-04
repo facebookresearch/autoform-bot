@@ -14,18 +14,28 @@ def create_repl_server(runtime: LeanRuntimeClient) -> FastMCP:
     server = FastMCP(name="autoform-repl")
 
     @server.tool
-    def run_lean_code(project_dir: str, code: str, timeout: float | None = None) -> str:
+    def run_lean_code(
+        project_dir: str,
+        code: str,
+        timeout: float | None = None,
+        imports: list[str] | None = None,
+    ) -> str:
         """Compile a Lean snippet in a project's persistent REPL.
 
         Args:
             project_dir: Absolute path to the Lake project root.
             code: Lean code to execute.
             timeout: Optional timeout in seconds.
+            imports: Optional ordered module names already built by Lake.
         """
-        return runtime.request(
-            "repl.run",
-            {"project_dir": project_dir, "code": code, "timeout": timeout},
-        )
+        params = {
+            "project_dir": project_dir,
+            "code": code,
+            "timeout": timeout,
+        }
+        if imports is not None:
+            params["imports"] = imports
+        return runtime.request("repl.run", params)
 
     @server.tool
     def get_repl_status(project_dir: str) -> str:

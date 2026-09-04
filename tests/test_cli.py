@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from autoform_cli import __main__ as cli
 from autoform_cli.__main__ import main
 from autoform_cli.runtime import load_runtime_graph
 
@@ -79,6 +82,33 @@ def test_audit_cli_reports_clean_human_output(tmp_path: Path, capsys) -> None:
     )
 
 
+def test_check_cli_rejects_replacement_before_printing_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    blueprint = _clean_blueprint(tmp_path / "selected")
+    replacement = _clean_blueprint(tmp_path / "replacement")
+    held = tmp_path / "held-blueprint"
+    original_derive = cli.status.derive
+
+    def replace_after_graph(graph):
+        result = original_derive(graph)
+        blueprint.rename(held)
+        replacement.rename(blueprint)
+        return result
+
+    monkeypatch.setattr(cli.status, "derive", replace_after_graph)
+    try:
+        assert main(["check", str(blueprint)]) == 1
+        output = capsys.readouterr().out
+        assert "blueprint directory changed during use" in output
+        assert "OK:" not in output
+    finally:
+        blueprint.rename(replacement)
+        held.rename(blueprint)
+
+
 def test_audit_cli_prints_coverage_summary_with_findings(tmp_path: Path, capsys) -> None:
     blueprint = _clean_blueprint(tmp_path)
     (blueprint / "coverage/README.md").write_text(
@@ -112,3 +142,24 @@ def test_audit_cli_reports_stable_json_and_failure(tmp_path: Path, capsys) -> No
             }
         ],
     }
+
+
+@pytest.mark.parametrize("command", ("check", "audit"))
+def test_validation_commands_report_unsafe_lean_tree_without_traceback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+) -> None:
+    blueprint = _clean_blueprint(tmp_path)
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    outside = tmp_path / "Outside.lean"
+    outside.write_text("def outside : Nat := 0\n", encoding="utf-8")
+    try:
+        (lean_root / "Linked.lean").symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    assert main([command, str(blueprint), "--lean-root", str(lean_root)]) == 1
+    output = capsys.readouterr().out
+    assert "unsafe Lean source Linked.lean: symbolic links are not supported" in output

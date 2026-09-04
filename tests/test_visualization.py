@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -8,7 +9,13 @@ import pytest
 from autoform_cli import mermaid
 from autoform_cli.graph import load_graph
 from autoform_cli.status import STATES, derive
-from autoform_cli.visualize import GENERATED_STRUCTURE_MARKER, export_graph, export_structure, main
+from autoform_cli.visualize import (
+    GENERATED_STRUCTURE_MARKER,
+    VisualizationError,
+    export_graph,
+    export_structure,
+    main,
+)
 
 
 def _state(key: str):
@@ -193,6 +200,37 @@ def test_cli_writes_structure_only_when_requested(
     assert capsys.readouterr().out == f"{graph}\n"
 
 
+def test_nested_pages_named_like_generated_outputs_remain_in_the_graph(
+    tmp_path: Path,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "README.md", "Roadmap")
+    _write_node(blueprint / "roadmap" / "dependencies.md", "Authored dependencies")
+    _write_node(blueprint / "roadmap" / "structure.md", "Authored structure")
+
+    assert main([str(blueprint), "--structure"]) == 0
+
+    graph_page = (blueprint / "dependencies.md").read_text(encoding="utf-8")
+    structure_page = (blueprint / "structure.md").read_text(encoding="utf-8")
+    assert "Authored dependencies" in graph_page
+    assert "Authored structure" in graph_page
+    assert "roadmap/dependencies.md" in structure_page
+    assert "roadmap/structure.md" in structure_page
+
+
+def test_nested_custom_graph_output_is_excluded_by_its_exact_path(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "only.md", "Only")
+    output = blueprint / "roadmap" / "generated" / "graph.md"
+
+    assert export_graph(blueprint, output) == output
+    assert export_graph(blueprint, output) == output
+
+    page = output.read_text(encoding="utf-8")
+    assert "Only" in page
+    assert "generated/graph" not in page
+
+
 
 def test_cli_accepts_html_link_extension(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     blueprint = tmp_path / "blueprint"
@@ -289,6 +327,19 @@ def test_generated_structure_can_be_refreshed(tmp_path: Path) -> None:
     assert "[Second](roadmap/second.md)" in page
 
 
+def test_custom_structure_omits_default_generated_views(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "only.md", "Only")
+    assert main([str(blueprint), "--structure"]) == 0
+    output = tmp_path / "published" / "structure.md"
+
+    export_structure(blueprint, output)
+
+    page = output.read_text(encoding="utf-8")
+    assert "dependencies.md" not in page
+    assert "structure.md" not in page
+
+
 
 def test_export_structure_refuses_an_unmarked_existing_file(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
@@ -341,11 +392,15 @@ def test_atomic_write_failure_preserves_the_previous_graph(
     output = blueprint / "dependencies.md"
     output.write_text("old graph\n", encoding="utf-8")
 
-    def fail_replace(source: Path, destination: Path) -> None:
-        assert source.parent == destination.parent == blueprint.resolve()
+    def fail_replace(source: str, destination: str, directory_descriptor: int) -> None:
+        assert source.startswith(".dependencies.md.")
+        assert destination == "dependencies.md"
+        opened = os.fstat(directory_descriptor)
+        expected = blueprint.stat()
+        assert (opened.st_dev, opened.st_ino) == (expected.st_dev, expected.st_ino)
         raise OSError("replace failed")
 
-    monkeypatch.setattr(visualize, "_replace", fail_replace)
+    monkeypatch.setattr(visualize, "_replace_at", fail_replace)
 
     with pytest.raises(OSError, match="replace failed"):
         export_graph(blueprint)
@@ -365,17 +420,373 @@ def test_atomic_write_failure_preserves_the_previous_structure(
     output = export_structure(blueprint)
     previous = output.read_text(encoding="utf-8")
 
-    def fail_replace(source: Path, destination: Path) -> None:
-        assert source.parent == destination.parent == blueprint.resolve()
+    def fail_replace(source: str, destination: str, directory_descriptor: int) -> None:
+        assert source.startswith(".structure.md.")
+        assert destination == "structure.md"
+        opened = os.fstat(directory_descriptor)
+        expected = blueprint.stat()
+        assert (opened.st_dev, opened.st_ino) == (expected.st_dev, expected.st_ino)
         raise OSError("replace failed")
 
-    monkeypatch.setattr(visualize, "_replace", fail_replace)
+    monkeypatch.setattr(visualize, "_replace_at", fail_replace)
 
     with pytest.raises(OSError, match="replace failed"):
         export_structure(blueprint)
 
     assert output.read_text(encoding="utf-8") == previous
     assert list(blueprint.glob(".structure.md.*.tmp")) == []
+
+
+def test_external_graph_output_rejects_parent_replacement_during_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from autoform_cli import visualize
+
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "only.md", "Only")
+    output_parent = tmp_path / "output"
+    output_parent.mkdir()
+    replacement = tmp_path / "replacement-output"
+    replacement.mkdir()
+    retained = tmp_path / "retained-output"
+    output = output_parent / "graph.md"
+    original_replace = visualize._replace_at
+
+    def replace_after_parent_swap(
+        source: str,
+        destination: str,
+        directory_descriptor: int,
+    ) -> bool:
+        output_parent.rename(retained)
+        replacement.rename(output_parent)
+        (output_parent / source).write_text("planted\n", encoding="utf-8")
+        return original_replace(source, destination, directory_descriptor)
+
+    monkeypatch.setattr(visualize, "_replace_at", replace_after_parent_swap)
+
+    with pytest.raises(VisualizationError, match="output directory changed"):
+        export_graph(blueprint, output)
+
+    assert not output.exists()
+    assert (output_parent / next(output_parent.iterdir()).name).read_text(
+        encoding="utf-8"
+    ) == "planted\n"
+
+
+def test_structure_refuses_authored_replacement_after_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from autoform_cli import visualize
+
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "only.md", "Only")
+    structure = export_structure(blueprint)
+    original_prepare = visualize._prepare_structure_page
+
+    def replace_after_preflight(*args, **kwargs):
+        result = original_prepare(*args, **kwargs)
+        structure.write_text("# Authored replacement\n", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(visualize, "_prepare_structure_page", replace_after_preflight)
+
+    with pytest.raises(VisualizationError, match="changed after ownership preflight"):
+        export_structure(blueprint)
+
+    assert structure.read_text(encoding="utf-8") == "# Authored replacement\n"
+
+
+def test_structure_restores_a_concurrent_edit_displaced_at_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from autoform_cli import visualize
+
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "only.md", "Only")
+    structure = export_structure(blueprint)
+    concurrent = f"{GENERATED_STRUCTURE_MARKER}\n\n# Concurrent edit\n"
+    original = visualize._replace_at
+    changed = False
+
+    def edit_before_exchange(
+        source: str,
+        destination: str,
+        directory_descriptor: int,
+    ) -> bool:
+        nonlocal changed
+        if destination == "structure.md" and not changed:
+            changed = True
+            structure.write_text(concurrent, encoding="utf-8")
+        return original(source, destination, directory_descriptor)
+
+    monkeypatch.setattr(visualize, "_replace_at", edit_before_exchange)
+
+    with pytest.raises(VisualizationError, match="displaced generated output changed"):
+        export_structure(blueprint)
+
+    assert structure.read_text(encoding="utf-8") == concurrent
+
+
+def test_structure_restores_replacement_after_final_expectation_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from autoform_cli import visualize
+
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "only.md", "Only")
+    structure = export_structure(blueprint)
+    authored = "# Concurrent authored replacement\n"
+    original = visualize._verify_output_expectation
+    changed = False
+
+    def replace_after_verify(*args, **kwargs):
+        nonlocal changed
+        state = original(*args, **kwargs)
+        if not changed:
+            changed = True
+            attacker = blueprint / ".attacker"
+            attacker.write_text(authored, encoding="utf-8")
+            attacker.replace(structure)
+        return state
+
+    monkeypatch.setattr(visualize, "_verify_output_expectation", replace_after_verify)
+
+    with pytest.raises(VisualizationError, match="displaced generated output changed"):
+        export_structure(blueprint)
+
+    assert structure.read_text(encoding="utf-8") == authored
+
+
+def test_graph_refuses_concurrent_creation_after_absent_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from autoform_cli import visualize
+
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "only.md", "Only")
+    output = blueprint / "dependencies.md"
+    original = visualize.mermaid.render_page
+
+    def create_after_preflight(*args, **kwargs):
+        page = original(*args, **kwargs)
+        output.write_text("# Concurrent authored file\n", encoding="utf-8")
+        return page
+
+    monkeypatch.setattr(visualize.mermaid, "render_page", create_after_preflight)
+
+    with pytest.raises(VisualizationError, match="changed after ownership preflight"):
+        export_graph(blueprint)
+
+    assert output.read_text(encoding="utf-8") == "# Concurrent authored file\n"
+
+
+def test_graph_rejects_source_edit_after_rendering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from autoform_cli import visualize
+
+    blueprint = tmp_path / "blueprint"
+    article = blueprint / "roadmap" / "only.md"
+    _write_node(article, "Old title")
+    original = visualize.mermaid.render_page
+
+    def edit_after_render(*args, **kwargs):
+        page = original(*args, **kwargs)
+        _write_node(article, "New title")
+        return page
+
+    monkeypatch.setattr(visualize.mermaid, "render_page", edit_after_render)
+
+    with pytest.raises(VisualizationError, match="blueprint changed"):
+        export_graph(blueprint)
+
+    assert not (blueprint / "dependencies.md").exists()
+
+
+def test_graph_rolls_back_when_source_changes_during_output_replace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from autoform_cli import visualize
+
+    blueprint = tmp_path / "blueprint"
+    article = blueprint / "roadmap" / "only.md"
+    _write_node(article, "Old title")
+    output = export_graph(blueprint)
+    previous = output.read_bytes()
+    _write_node(article, "Second title")
+    original = visualize._replace_at
+    changed = False
+
+    def edit_during_replace(source: str, destination: str, descriptor: int) -> bool:
+        nonlocal changed
+        exchanged = original(source, destination, descriptor)
+        if not changed:
+            changed = True
+            _write_node(article, "Changed during commit")
+        return exchanged
+
+    monkeypatch.setattr(visualize, "_replace_at", edit_during_replace)
+
+    with pytest.raises(VisualizationError, match="blueprint changed"):
+        export_graph(blueprint)
+
+    assert output.read_bytes() == previous
+
+
+def test_combined_visualization_rolls_back_both_outputs_on_source_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from autoform_cli import visualize
+
+    blueprint = tmp_path / "blueprint"
+    article = blueprint / "roadmap" / "only.md"
+    _write_node(article, "Old title")
+    assert main([str(blueprint), "--structure"]) == 0
+    graph = blueprint / "dependencies.md"
+    structure = blueprint / "structure.md"
+    previous_graph = graph.read_bytes()
+    previous_structure = structure.read_bytes()
+    _write_node(article, "Second title")
+    original = visualize._replace_at
+    changed = False
+
+    def edit_during_structure_replace(
+        source: str,
+        destination: str,
+        descriptor: int,
+    ) -> bool:
+        nonlocal changed
+        exchanged = original(source, destination, descriptor)
+        if destination == "structure.md" and not changed:
+            changed = True
+            _write_node(article, "Changed during commit")
+        return exchanged
+
+    monkeypatch.setattr(visualize, "_replace_at", edit_during_structure_replace)
+
+    with pytest.raises(SystemExit, match="2"):
+        main([str(blueprint), "--structure"])
+
+    assert graph.read_bytes() == previous_graph
+    assert structure.read_bytes() == previous_structure
+
+
+def test_default_graph_write_stays_with_the_selected_blueprint_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from autoform_cli import visualize
+
+    blueprint = tmp_path / "blueprint"
+    replacement = tmp_path / "replacement"
+    retained = tmp_path / "retained"
+    _write_node(blueprint / "roadmap" / "selected.md", "Selected")
+    _write_node(replacement / "roadmap" / "replacement.md", "Replacement")
+    original_replace = visualize._replace_at
+
+    def replace_during_swap(
+        source: str,
+        destination: str,
+        directory_descriptor: int,
+    ) -> bool:
+        blueprint.rename(retained)
+        replacement.rename(blueprint)
+        try:
+            exchanged = original_replace(source, destination, directory_descriptor)
+            assert not (blueprint / destination).exists()
+            return exchanged
+        finally:
+            blueprint.rename(replacement)
+            retained.rename(blueprint)
+
+    monkeypatch.setattr(visualize, "_replace_at", replace_during_swap)
+
+    output = export_graph(blueprint)
+
+    assert "Selected" in output.read_text(encoding="utf-8")
+    assert not (replacement / "dependencies.md").exists()
+
+
+def test_structure_inventory_never_enumerates_a_reselected_blueprint_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    replacement = tmp_path / "replacement"
+    retained = tmp_path / "retained"
+    _write_node(blueprint / "roadmap" / "old.md", "Old")
+    _write_node(replacement / "roadmap" / "new.md", "New")
+    original_rglob = Path.rglob
+    attacked = False
+
+    def substitute_during_rglob(path: Path, pattern: str):
+        nonlocal attacked
+        if path == blueprint:
+            attacked = True
+            blueprint.rename(retained)
+            replacement.rename(blueprint)
+            try:
+                return iter(tuple(original_rglob(blueprint, pattern)))
+            finally:
+                blueprint.rename(replacement)
+                retained.rename(blueprint)
+        return original_rglob(path, pattern)
+
+    monkeypatch.setattr(Path, "rglob", substitute_during_rglob)
+
+    page = export_structure(blueprint).read_text(encoding="utf-8")
+
+    assert not attacked
+    assert "[Old](roadmap/old.md)" in page
+    assert "new.md" not in page
+
+
+def test_structure_reports_the_unsafe_snapshot_path(
+    tmp_path: Path,
+) -> None:
+    from autoform_cli.visualize import VisualizationError
+
+    blueprint = tmp_path / "blueprint"
+    outside = tmp_path / "outside.md"
+    outside.write_text("# Outside\n", encoding="utf-8")
+    _write_node(blueprint / "roadmap" / "result.md", "Result")
+    (blueprint / "notes.md").symlink_to(outside)
+
+    with pytest.raises(
+        VisualizationError,
+        match=r"notes\.md: symbolic links are not supported",
+    ):
+        export_structure(blueprint)
+
+    assert not (blueprint / "structure.md").exists()
+
+
+def test_cli_prepares_structure_before_publishing_the_graph(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    outside = tmp_path / "outside.md"
+    outside.write_text("# Outside\n", encoding="utf-8")
+    _write_node(blueprint / "roadmap" / "result.md", "Result")
+    (blueprint / "notes.md").symlink_to(outside)
+    graph_output = blueprint / "dependencies.md"
+    graph_output.write_text("previous graph\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="2"):
+        main([str(blueprint), "--structure"])
+
+    assert "notes.md: symbolic links are not supported" in capsys.readouterr().err
+    assert graph_output.read_text(encoding="utf-8") == "previous graph\n"
+    assert not (blueprint / "structure.md").exists()
 
 
 

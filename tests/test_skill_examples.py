@@ -28,10 +28,18 @@ def test_root_readme_uses_the_canonical_repository(repo_root: Path) -> None:
         in readme
     )
     assert "git clone https://github.com/facebookresearch/autoform-bot.git" in readme
-    assert (
-        "https://github.com/facebookresearch/autoform-bot/tree/execution" in readme
-    )
+    assert "https://github.com/facebookresearch/autoform-bot/tree/execution" not in readme
     assert "VivienCabannes/autoform-bot" not in readme
+
+
+def test_orchestrator_uses_the_public_cli(repo_root: Path) -> None:
+    skill = (repo_root / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8")
+
+    assert "autoform ready" in skill
+    assert "autoform claim acquire" in skill
+    assert "autoform check" in skill
+    assert "autoform audit" in skill
+    assert "autoform_worker" not in skill
 
 
 def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
@@ -103,8 +111,8 @@ def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
     assert "structure.md" not in ignored
 
     overview = (blueprint / "README.md").read_text(encoding="utf-8")
-    assert "kind: blueprint" in overview
-    assert "status: active" in overview
+    assert "kind:" not in overview
+    assert "status:" not in overview
     assert "[Thesis roadmap](roadmap/README.md)" in overview
     assert "[coverage notes](coverage/README.md)" in overview
 
@@ -137,7 +145,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
 
     assert report.unresolved == []
     manifest = json.loads((site / "publication.json").read_text(encoding="utf-8"))
-    assert manifest["schema"] == "autoform-publication/v1"
+    assert manifest["schema"] == "autoform-publication/v2"
     assert manifest["nodes"] == 10
     assert manifest["dependencies"] == 9
     assert manifest["git_ref"] == "0" * 40
@@ -285,18 +293,21 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert '<a href="{{ config.repo_url }}">Formalization source</a>.' in theme
     workflow = (example / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8")
     assert "autoform check blueprint --lean-root ." in workflow
+    assert "needs: verify" in workflow
+    assert '"$AUTOFORM_ROOT_PACKAGE" "$archive" blueprint . "$probe"' in workflow
     assert "autoform render blueprint" in workflow
     assert "--require-declarations" in workflow
     assert "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128" in workflow
     assert "@main" not in workflow
 
     verify = (example / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
-    assert "autoform check blueprint" in verify
+    assert "autoform check blueprint --lean-root ." in verify
     assert 'lake clean "$root_package"' in verify
     assert "lake build" in verify
     assert "Reject kernel-check bypass options" in verify
-    assert "Audit every root-package declaration" in verify
-    assert "python3 .github/autoform_audit.py" in verify
+    assert "Bind blueprint claims to built artifacts" in verify
+    assert "python .github/autoform_audit.py" in verify
+    assert '"$AUTOFORM_ROOT_PACKAGE" "$archive" blueprint . "$probe"' in verify
     assert "lake pack" in verify
     assert "lake-modules" not in verify
     assert "contains no ILean artifacts" in (
@@ -350,9 +361,9 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
         assert required in setup
     for required in (
         "references/cabannes-thesis-roadmap.md",
-        "blueprint/roadmap/",
-        "blueprint/coverage/",
-        "blueprint/roadmap/**/*.md",
+        "<BLUEPRINT>/roadmap/",
+        "<BLUEPRINT>/coverage/",
+        "<BLUEPRINT>/roadmap/**/*.md",
         "declaration",
         "coarse roadmap",
         "## Depends on",
@@ -430,6 +441,36 @@ def test_setup_skill_offers_opt_in_zulip_project_sync(repo_root: Path) -> None:
     assert "../setup/references/zulip.md" in roadmap
 
 
+def test_setup_resolves_provenance_before_creating_a_consumer(repo_root: Path) -> None:
+    setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
+
+    provenance = setup.index("autoform project provenance --json")
+    creation = setup.index("autoform project new <TARGET>")
+    assert provenance < creation
+    for required in (
+        "<AUTOFORM_PLUGIN_ROOT>",
+        "plain wheel cannot infer provenance",
+        "single\nrecommended release",
+        "--autoform-source <VERIFIED_HTTPS_GIT_SOURCE>",
+        "--autoform-ref <VERIFIED_40_CHAR_SHA>",
+        "without running Git, Lake, Lean, or\nnetwork operations",
+    ):
+        assert required in setup
+
+
+def test_setup_does_not_force_unlisted_stable_patch_upgrades(repo_root: Path) -> None:
+    setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
+    normalized = " ".join(setup.split())
+
+    for required in (
+        "structurally valid stable patch pair",
+        "do not silently upgrade the consumer or patch its installed Autoform cache",
+        "reviewed plugin change",
+        "without replacing the catalog's recommended release",
+    ):
+        assert required in normalized
+
+
 def test_skills_teach_the_shipped_frontmatter_model(repo_root: Path) -> None:
     """Agent instructions must match what `autoform_cli.graph` actually parses.
 
@@ -441,9 +482,27 @@ def test_skills_teach_the_shipped_frontmatter_model(repo_root: Path) -> None:
         for stale in ("kind: node", "kind: article", "kind: roadmap", "status: active"):
             assert stale not in text, f"{skill.relative_to(repo_root)} still teaches `{stale}`"
 
-    example = repo_root / _EXAMPLE / "blueprint/roadmap"
-    for article in sorted(example.rglob("*.md")):
-        assert "kind:" not in article.read_text(encoding="utf-8")
+    example = repo_root / _EXAMPLE / "blueprint"
+    authored = [example / "README.md", example / "coverage/README.md"]
+    authored += sorted((example / "roadmap").rglob("*.md"))
+    authored += sorted((example / "sources").rglob("*.md"))
+    for article in authored:
+        text = article.read_text(encoding="utf-8")
+        assert "kind:" not in text
+        assert not re.search(r"^status:", text, flags=re.MULTILINE)
+
+
+def test_roadmap_skill_teaches_exhaustive_execution_coverage(repo_root: Path) -> None:
+    roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")
+
+    for required in (
+        "schema: autoform-coverage/v2",
+        "Unit | Area | Lines | Locator | Unit SHA-256 | Coverage | Evidence",
+        "source_units: [unit-id, other-unit]",
+        "coverage-v2-required",
+        "excludes the complete `blueprint/sources/` authority tree",
+    ):
+        assert required in roadmap
 
 
 def _documented_invocations(reference: str) -> set[tuple[str, ...]]:
@@ -506,6 +565,14 @@ def test_skills_delegate_the_command_line_to_the_reference(repo_root: Path) -> N
     assert citing >= 3
 
 
+def test_setup_uses_the_packaged_in_place_project_creator(repo_root: Path) -> None:
+    setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
+
+    assert "autoform project new ." in setup
+    assert "preserves the current directory inode and mode" in setup
+    assert "scripts/make_project.sh" not in setup
+
+
 def test_roadmap_reconciles_the_pages_setup_wrote(repo_root: Path) -> None:
     """Setup declares the project empty; Roadmap must retract that.
 
@@ -518,8 +585,63 @@ def test_roadmap_reconciles_the_pages_setup_wrote(repo_root: Path) -> None:
 
     roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")
 
-    for required in ("blueprint/README.md", "repository `README.md`"):
+    for required in ("<BLUEPRINT>/README.md", "repository `README.md`"):
         assert required in roadmap, f"Roadmap never reconciles {required}"
+
+
+def test_workspace_guidance_is_registry_based_and_repository_neutral(repo_root: Path) -> None:
+    setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
+    roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")
+    cli = (repo_root / "autoform_cli/README.md").read_text(encoding="utf-8")
+    implementation = "\n".join(
+        (repo_root / path).read_text(encoding="utf-8")
+        for path in (
+            "autoform_cli/workspace.py",
+            "autoform_cli/workspace_cli.py",
+            "autoform_cli/workspace_manifest.py",
+            "autoform_cli/workspace_mutation.py",
+        )
+    )
+
+    for required in (
+        ".autoform.toml",
+        "autoform workspace inspect",
+        "autoform workspace check",
+        "autoform blueprint new",
+        "autoform blueprint register",
+        "unregistered siblings",
+    ):
+        assert required in setup
+    for required in (
+        ".autoform.toml",
+        "registered project",
+        "<BLUEPRINT>",
+        "unregistered siblings",
+    ):
+        assert required in roadmap
+    for required in (
+        "sole ownership registry",
+        "No `autoform.toml` is written inside a vault",
+        "Location and project identifiers are user-defined",
+        "workspace check",
+        "--project",
+    ):
+        assert required in cli
+    assert "workspace_project_binding_sha256" in implementation
+    assert "paths.workspace_manifest_sha256 != workspace.manifest_sha256" in implementation
+    assert "_rename_exchange" in implementation
+    for repository_specific_name in (
+        "formal-math",
+        "MathlibExt",
+        "OpenConjectures",
+        "Hartshorne",
+        "LieGroupoids",
+        "SyntheticHomotopy",
+    ):
+        assert repository_specific_name not in setup
+        assert repository_specific_name not in roadmap
+        assert repository_specific_name not in cli
+        assert repository_specific_name not in implementation
 
 
 def test_roadmap_commits_so_the_published_site_can_catch_up(repo_root: Path) -> None:
@@ -533,6 +655,20 @@ def test_roadmap_commits_so_the_published_site_can_catch_up(repo_root: Path) -> 
 
     assert "Commit the vault" in roadmap
     assert "outward-facing" in roadmap
+
+
+def test_roadmap_records_kernel_verifiable_mathlib_provenance(repo_root: Path) -> None:
+    roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")
+
+    for required in (
+        "mathlib_declaration",
+        "mathlib_file: Mathlib/.../*.lean",
+        "declaration kind",
+        "declaring module",
+        "manifest-pinned commit",
+        "canonical upstream Mathlib Git checkout",
+    ):
+        assert required in roadmap
 
 
 def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None:

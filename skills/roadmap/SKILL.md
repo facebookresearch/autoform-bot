@@ -5,7 +5,7 @@ description: >-
   dependency DAG in an existing Autoform Markdown blueprint. Use for discovering
   prior work, choosing or drafting mathematical sources, confirming scope,
   writing roadmap and coverage notes, decomposing mathematics into Markdown
-  article pages under blueprint/roadmap/, or
+  article pages under a selected vault's roadmap/, or
   checking roadmap completeness; do not install repository infrastructure or
   prove Lean declarations.
 ---
@@ -14,15 +14,16 @@ description: >-
 
 Turn an agreed mathematical specification into a human-editable roadmap and a
 DAG of pull-request-sized formalization units. Keep Markdown as the sole source
-of truth. Use `internal/runbooks/planning.md` for the preserved detailed planning
-workflow when this concise skill needs deeper operational guidance.
+of truth. This skill is the authoritative planning workflow; its references are
+worked examples and review guidance, not a second procedure.
 
 ## Discover prior work and sources
 
 Before fixing the architecture, search the pinned Mathlib checkout for existing
-primitives and gaps. When network access is available, also make targeted,
-read-only searches of relevant GitHub pull requests and issues, Zulip topics,
-and authoritative mathematical literature. Report overlapping work, active
+primitives and gaps. When the host separately provides network/search tools,
+also make targeted, read-only searches of relevant
+GitHub pull requests and issues, Zulip topics, and authoritative mathematical
+literature. Autoform ships no general search or Zulip client. Report overlapping work, active
 contributors, design rationale, and candidate references; never contact people
 or post externally without explicit user approval.
 
@@ -34,15 +35,22 @@ choose whether to adopt a reference, ask the agent to locate one, or develop a
 project-authored specification collaboratively. For the last option, brainstorm
 the representation and downstream API first, then record explicit definitions,
 assumptions, intended equivalences, and unresolved choices under
-`blueprint/sources/`; label this material as project-authored rather than
+`<BLUEPRINT>/sources/`; label this material as project-authored rather than
 implying external provenance. Do not expand a fine DAG until its statements are
 grounded in an adopted reference or this agreed specification.
 
 ## Establish the planning boundary
 
-Inspect the Lean repository and existing `blueprint/` before writing. Require
-the vault, ignore rules, and site configuration to exist; if they do not, hand
-the task to Setup rather than creating repository infrastructure here.
+Inspect the Lean repository and resolve the exact vault before writing. When a
+root `.autoform.toml` exists, run `autoform workspace inspect`, select one
+registered project, and use only its resolved path as `<BLUEPRINT>`; never scan
+the collection for marker files or treat unregistered siblings as managed. At a
+workspace root with several projects, pass `--project` to single-vault commands.
+Do the same from any directory outside the selected registered vault; a sole
+project is inferred only at the workspace root itself.
+Without a manifest, `<BLUEPRINT>` is the explicitly supplied vault, normally
+the legacy `blueprint/`. Require the vault and ignore rules to exist; if they do
+not, hand the task to Setup rather than creating repository infrastructure here.
 
 State the exact source files, requested chapters or sections, current roadmap
 state, and files that may change. Do not infer missing scope or silently reset
@@ -54,7 +62,7 @@ mathematics.
 
 ## Build from coarse to fine
 
-1. Record source notes under `blueprint/sources/`, including stable locations
+1. Record source notes under `<BLUEPRINT>/sources/`, including stable locations
    for every definition or theorem used in the plan. Work from the source text;
    for large sources, use targeted lookups for a named result or definition and
    record the exact passage rather than relying on memory. Surface prerequisites
@@ -62,7 +70,7 @@ mathematics.
    are vault material, not chapters: the site does not publish them, and a
    statement's `## Sources` list is rewritten to the file in the repository, so
    write them for a reader with the repository open.
-2. Write the high-level direction and milestones under `blueprint/roadmap/`.
+2. Write the high-level direction and milestones under `<BLUEPRINT>/roadmap/`.
    Group milestones by coherent mathematical significance, not by source
    section size.
    A chapter page needs no frontmatter at all: its H1 is the title and its
@@ -72,13 +80,13 @@ mathematics.
    chapter page leaves every article in that directory hanging off the root
    and publishes a book with no chapters. `autoform check` refuses a chapter
    directory with no chapter page, so a vault in that shape never renders.
-   Treat `blueprint/README.md` and the roadmap pages it
+   Treat `<BLUEPRINT>/README.md` and the roadmap pages it
    links as an ordered mathematical book: link meaningful chapter pages in
    their intended reading order. The renderer derives bottom-of-page previous
    and next chapter links from this Markdown structure, so do not maintain a
    second navigation manifest.
 3. Define project-specific coverage targets and completion rules in
-   `blueprint/coverage/README.md`. Include exactly one
+   `<BLUEPRINT>/coverage/README.md`. Include exactly one
    `Area | Coverage | Evidence` table. Use `MAPPED` when an area is known but
    not yet dispositioned, `DECOMPOSED` when it is represented by roadmap
    nodes, `DEFERRED` for an explicit later milestone, and `OUT` for material
@@ -106,10 +114,24 @@ mathematics.
    linked articles are formalized or proved. Deciding the table is exhaustive is
    the author's judgement and cannot be checked locally, so state what the rows
    are meant to span rather than implying the tool verified it.
+
+   Before CLI-backed orchestration, replace the exploratory v1 table with an
+   exhaustive v2 contract selected by `schema: autoform-coverage/v2`. Its
+   frontmatter must name one canonical UTF-8 source
+   artifact below `blueprint/sources/` and its lowercase SHA-256. Use exactly
+   `Unit | Area | Lines | Locator | Unit SHA-256 | Coverage | Evidence`; each
+   stable lowercase unit id owns one ordered inclusive `START-END` span, and the
+   rows must partition every LF-terminated source line. Hash the exact raw bytes
+   in each span, including its final LF. Every `DECOMPOSED` row links only to
+   formalizable roadmap leaves, and each linked leaf must reciprocate with the
+   strict inline frontmatter form `source_units: [unit-id, other-unit]`.
+   `load_execution_input` refuses schema-less v1 with `coverage-v2-required`.
+   A v2 publication excludes the complete `blueprint/sources/` authority tree;
+   use Markdown links to those files so publication can rewrite or remove them.
 4. Present this coarse roadmap and coverage contract for user approval before
    expanding it into a fine DAG.
 5. After approval, create one file per pull-request-sized unit beside its
-   milestone under `blueprint/roadmap/**/*.md`. A node may contain several
+   milestone under `<BLUEPRINT>/roadmap/**/*.md`. A node may contain several
    supporting definitions or statements when they should land and be reviewed
    together, but it must identify one unique main result that determines when
    the node is complete. Nothing authored in an article predicts how much Lean
@@ -127,11 +149,18 @@ mathematics.
    a prerequisite the proof needs but the statement does not. Keep roadmap,
    coverage, and source links under other headings.
 7. Search the pinned Mathlib checkout before planning new work. Set
-   `mathlib: true` only for an exact verified upstream result; record partial or
-   uncertain candidates as notes, never as formalization status.
+   `mathlib: true` only for an exact verified upstream result, and record both
+   its compiled name in `mathlib_declaration` and its exact declaring source
+   file as `mathlib_file: Mathlib/.../*.lean`. Generated CI checks the name,
+   declaration kind, and declaring module. It accepts provenance only from the
+   manifest-pinned commit of the clean canonical upstream Mathlib Git checkout,
+   then verifies the module's `mathlib` package trace. A local package, fork, or
+   mirror exporting the same `Mathlib.*` module does not establish Mathlib
+   provenance. Record partial or uncertain candidates as notes, never as
+   formalization status.
 8. Reconcile every page whose claims this work has just invalidated. That means
    the coarse milestone pages and the coverage contract, and also the two
-   landing pages Setup wrote before any scope existed: `blueprint/README.md`
+   landing pages Setup wrote before any scope existed: `<BLUEPRINT>/README.md`
    and the repository `README.md`. Setup states there that no chapters exist
    and nothing is planned. The moment a chapter exists that is false, and it is
    the first thing a visitor to the published site reads. Newly discovered
@@ -139,14 +168,15 @@ mathematics.
    stale either.
 
 Assert only what is checked: `statement: formalized`, `proof: formalized`,
-`mathlib: true`, `not_ready: true`, and the compiled name in `lean`. Ready,
+`mathlib: true` with its exact `mathlib_declaration` and `mathlib_file`,
+`not_ready: true`, and the compiled name in `lean`. Ready,
 blocked, and fully-proved are derived from the DAG — never hand-write them, and
 never start proof workers merely to advance a state. The
 [blueprint format reference](../../autoform_cli/README.md) has the full table.
 
 ## Validate and report
 
-Validate `<PROJECT>/blueprint` and refresh its Mermaid graph before handing
+Validate `<BLUEPRINT>` and refresh its Mermaid graph before handing
 off. Rendering and the strict site build belong to Setup and Human Review; here
 only the first two steps of the publication sequence in the
 [CLI reference](../../autoform_cli/README.md#commands) apply.
@@ -162,7 +192,8 @@ already asked you to push.
 
 Report roadmap and coverage status, node and edge
 counts, the derived state summary, unresolved source questions, and the
-vault/graph paths. Hand nodes that are ready to state or prove to Orchestrate;
-hand the draft to Agent Review for mathematical-plan judgment or Human Review
+vault/graph paths. Return nodes that are ready to state or prove to the user or
+the Orchestrate skill, which discovers work through the public CLI. Hand the
+draft to Agent Review for mathematical-plan judgment or Human Review
 for visual inspection; hand CI, Pages, Lean-project, or vault infrastructure
 changes back to Setup.

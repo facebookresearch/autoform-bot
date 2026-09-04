@@ -1,16 +1,18 @@
 # Blueprint format and CLI
 
 The Autoform CLI validates, visualizes, and publishes the multilevel dependency
-graph embedded in `blueprint/roadmap/`. The Markdown book is the graph: no
-separate authored or generated graph file exists.
+graph embedded in a blueprint vault's `roadmap/` directory. A root
+`.autoform.toml` can register multiple vaults in one repository; the original
+single-vault layout remains available at `blueprint/`. The Markdown book is the
+graph: no separate authored or generated graph file exists.
 
 ## Articles and containment
 
-Every Markdown file below `blueprint/roadmap/` is an article node. A
+Every Markdown file below a selected vault's `roadmap/` is an article node. A
 `README.md` represents its directory and strictly contains the articles below
 it; the nearest ancestor `README.md` is the single parent. This supports any
 number of levels, from book to chapter to section to declaration. Ordinary
-files use their path without `.md` as a stable ID; `README.md` uses its
+files use their path without `.md` as the current graph ID; `README.md` uses its
 directory path, with the root article named `roadmap`.
 
 The H1 is the article's human title. Container
@@ -60,9 +62,12 @@ relative to the current article and must point at another roadmap article.
 The optional `declaration` field marks a formalizable leaf and describes its
 intended Lean artifact, for example `def`, `theorem`, `lemma`, `structure`, or
 `instance`. Container and exposition articles omit it. Autoform records this
-hint but does not constrain the set of Lean declaration commands. Declarations
-that introduce data rather than a proposition carry no separate proof
-obligation.
+intent and generated CI checks it against the built declaration. The supported
+intents are `abbrev`, `axiom`, `class`, `corollary`, `def`, `definition`,
+`inductive`, `instance`, `lemma`, `opaque`, `proposition`, `structure`, and
+`theorem`; theorem-like aliases share Lean's kernel-level theorem kind.
+Declarations that introduce data rather than a proposition carry no separate
+proof obligation.
 
 `origin` records provenance for formalizable work: `cited` for a direct source
 target, `bridged` for a result introduced between source targets, and
@@ -79,7 +84,9 @@ An article asserts only facts a human or agent verified:
 | --- | --- |
 | `statement: formalized` | The Lean statement exists and compiles. |
 | `proof: formalized` | The Lean proof is complete. |
-| `mathlib: true` | The result is upstreamed into Mathlib. |
+| `mathlib: true` | The exact result exists in the pinned Mathlib dependency. Requires `mathlib_declaration` and `mathlib_file`. |
+| `mathlib_declaration: Ns.decl` | Exact upstream declaration name(s). |
+| `mathlib_file: Mathlib/Path/File.lean` | Exact Mathlib source file that declares the upstream name(s). |
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
 | `lean: Ns.decl` | Declaration name(s) that discharge the article. |
 | `discussion: 42` | Issue number or URL where the article is being discussed. |
@@ -115,17 +122,190 @@ the loaded plugin and prefix each one, running from the project root:
 uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform check blueprint --lean-root .
 ```
 
+### Multi-project workspaces
+
+Use a workspace manifest when a repository contains several blueprint efforts,
+when the legacy `blueprint/` name conflicts with its established layout, or when
+Autoform must coexist with unrelated documentation. Initialize the
+repository-level registry without creating a vault, then add projects
+independently:
+
+```bash
+autoform workspace init . --blueprint-root docs/blueprints
+autoform blueprint new finite-flat \
+  --path FiniteFlat --title "Finite Flat Group Schemes"
+autoform blueprint new another-project \
+  --path AnotherProject --title "Another Project"
+autoform blueprint register imported-project \
+  --path ExistingVault --title "Imported Project"
+autoform workspace inspect .
+autoform blueprint list .
+autoform workspace check . --lean-root .
+```
+
+The generated `.autoform.toml` is the sole ownership registry:
+
+```toml
+schema = "autoform-workspace/v1"
+
+[locations.blueprints]
+path = "docs/blueprints"
+provides = ["blueprints"]
+
+[projects."finite-flat"]
+title = "Finite Flat Group Schemes"
+blueprint = { location = "blueprints", path = "FiniteFlat" }
+```
+
+Location and project identifiers are user-defined. Autoform recognizes the
+generic `blueprints` capability; it never special-cases repository names such
+as those shown in examples. A repository may declare additional named locations
+and capabilities for other tooling or future Autoform features. Project
+blueprint paths name immediate child directories of their selected collection,
+and registered vault paths may not overlap, so every managed vault has a
+distinct boundary even when a repository declares several locations.
+
+No `autoform.toml` is written inside a vault. Autoform checks only entries under
+`projects`; unregistered siblings are ignored. Paths are repository-relative,
+portable to common case-sensitive and case-insensitive filesystems, confined
+beneath the workspace root, distinct under Unicode-normalized case-insensitive
+comparison, and may not traverse symbolic links. Windows-reserved names,
+forbidden characters, control characters, trailing dots, and surrounding
+whitespace are rejected before any filesystem mutation. Registration uses a
+TOML-aware edit, preserving comments and supporting both standard and inline
+`projects` tables while validating the complete result before publishing it
+atomically.
+Workspace mutation currently requires POSIX-style file locking, no-follow
+opens, and directory-descriptor support; unsupported platforms fail before
+writing. The manifest format itself remains portable across common
+case-sensitive and case-insensitive filesystems.
+
+From inside a registered vault, single-project commands select that project. A
+workspace root also selects its sole registered project. Autoform never infers
+a project from an unrelated directory; pass `--project` there and at a
+workspace root containing multiple projects:
+
+```bash
+autoform check . --project finite-flat --lean-root .
+autoform audit . --project finite-flat --lean-root .
+autoform doctor . --project finite-flat --lean-root .
+autoform-visualize . --project finite-flat
+autoform render . --project finite-flat --output site-src/finite-flat
+```
+
+`workspace check` is the repository-wide verification command and visits every
+registered project exactly once, applying the same path and symlink checks as
+single-project commands. Explicit vault paths continue to work for
+ad-hoc inspection, but do not add an unregistered directory to repository-wide
+checks. Workspace initialization currently creates only the manifest and its
+blueprint collection; publication remains an explicit per-vault setup decision.
+`blueprint register` validates an existing vault and adds only the root registry
+entry, which is the migration path for pre-existing blueprint directories.
+Workspace JSON responses carry operation-specific versioned schemas so callers
+can distinguish initialization, blueprint changes, listing, inspection,
+checking, and errors.
+
+### Legacy single-vault setup
+
 Create a new project's vault, site configuration, and CI. The layout is fixed,
-so it is written rather than described; existing files are left alone, which
-makes the same command the repair path:
+so it is written rather than described. This command is retained for dedicated
+repositories already using the canonical lowercase `blueprint/` layout:
 
 ```bash
 autoform init . --title "Finite Flat Group Schemes" \
   --repository-url https://github.com/owner/repo
 ```
 
-Pass `--autoform-ref <sha>` to pin the generated workflows at an immutable
-commit, `--force` to overwrite, and `--json` for machine-readable output.
+Pass `--autoform-source <credential-free-https-git-url>` and
+`--autoform-ref <sha>` together to pin the generated workflows at an immutable
+commit. Passing only one is an error. Use `--force` to overwrite and `--json`
+for machine-readable output.
+
+Do not run legacy `init` in a manifest-managed workspace: it would create an
+unregistered `blueprint/` vault. Use `workspace init` and `blueprint new`
+instead. Likewise, `project repair` deliberately refuses manifest-managed
+workspaces until shared publication infrastructure has a workspace-aware repair
+contract.
+
+Create or inspect a Lean project and list Autoform's bundled known-good release pairs:
+
+```bash
+autoform project versions
+autoform project provenance --json
+autoform project new ./FiniteFlat \
+  --package FiniteFlat \
+  --release lean-v4.32.2-mathlib-v4.32.2 \
+  --autoform-source https://github.com/facebookresearch/autoform-bot.git \
+  --autoform-ref <full-commit-sha>
+autoform project new . \
+  --package FiniteFlat \
+  --release lean-v4.32.2-mathlib-v4.32.2 \
+  --autoform-source https://github.com/facebookresearch/autoform-bot.git \
+  --autoform-ref <full-commit-sha>
+autoform project inspect .
+autoform project inspect path/inside/project --json
+autoform project repair . --dry-run --json
+autoform project repair . --title "Finite Flat Group Schemes" \
+  --repository-url https://github.com/owner/repo
+autoform project versions --json
+```
+
+`project new` requires an absent target, or the literal target `.` when the
+current directory is empty, plus an explicit release ID. An absent target uses
+one atomic no-replace rename. The `.` form preserves the directory inode and
+mode and uses a durable, recoverable transaction to publish each top-level
+entry without replacement. It never overwrites an existing path. Exactly one
+cooperative concurrent creator can win; ambiguous recovery state is preserved
+for inspection rather than deleted.
+The command does not run Git, Lake, Lean, subprocesses, or network operations.
+It accepts an already verified Autoform source and full commit together, and
+omits generated workflows when neither is supplied.
+
+`project provenance` is the online step. It accepts only the exact plugin-root
+checkout or the bounded Codex installer record, fetches the recorded commit,
+and compares the installed plugin and importable packages with that commit.
+It reports a credential-free HTTPS source and full SHA only after all checks
+pass. A plain wheel cannot infer provenance. Run it before creating the
+consumer target, then pass both returned values to `project new`.
+
+`project repair` operates only on an explicitly named project root that already
+has a clean, supported Lake/Lean configuration. It preserves every existing
+managed path byte-for-byte and adds only absent Autoform overlay files whose
+content is canonical and unambiguous. Missing parameterized files require their
+exact inputs: `--title`, `--repository-url` (use an explicit empty value when
+that is intended), and the `--autoform-source`/`--autoform-ref` pair for
+workflows. A project whose workflows were deliberately omitted remains valid;
+a partial workflow pair does not. Repair never writes when preflight finds a
+symlink, unsafe or missing parent, stale repair temporary, malformed
+configuration, unsupported release, or missing input. `--dry-run` performs the
+same plan without mutation. Calls serialize on the project root, and
+publication is atomic per file without replacing a concurrent writer. After an
+interrupted multi-file repair, inspect any reported retained path, then retry
+with the same inputs; there is no operation-wide transaction. If the project
+changes after a file is published, repair retains that file and reports it for
+manual recovery rather than risk unlinking a concurrent replacement. A failed
+pre-publication attempt likewise retains and reports its exact temporary path
+rather than deleting by pathname after a separate identity check. Like creation
+and inspection, repair runs no Git, Lake, Lean, subprocess, or network operation.
+
+`project inspect` is deterministic, local, and read-only. It discovers the
+nearest project root; parses bounded `lakefile.toml`, `lean-toolchain`, the
+optional `.autoform.toml`, and known Autoform paths; records configuration
+hashes; and reports whether the
+configured Lean/Mathlib pair exactly matches the bundled catalog. It does not
+run Lake, Lean, Git, subprocesses, or network operations. A `lakefile.lean` is
+reported as present but unevaluated because executing it would violate that
+boundary. Symlinked decision-bearing configuration and malformed consumed
+fields fail inspection. Reports contain only project-relative paths, never the
+host's absolute project location.
+
+`project versions` reads the catalog packaged with the installed wheel. The
+catalog is an explicit known-good allowlist, not a resolver: the command never
+contacts a registry, selects a version, or mutates a project. An unlisted but
+structurally valid pair is advisory; absence from this catalog does not prove a
+project is incompatible. It is a snapshot refreshed when Autoform is released;
+its single recommended entry is the newest stable Lean and Mathlib pair
+validated at that time.
 
 Publishing a project runs four steps in order: validate, write the Mermaid
 graph into the vault, render the site source, then strict-build the site.
@@ -138,6 +318,20 @@ uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform render blueprint \
 uv run --with mkdocs --with mkdocs-material --with mkdocs-literate-nav \
   --with pymdown-extensions mkdocs build --strict
 ```
+
+Generated CI additionally rebuilds the root Lake package, then checks every
+local `lean:` target belongs to one of those built modules. Each
+`mathlib_declaration` must exist in the module named by `mathlib_file`. Lake
+must resolve that module from the sole `mathlib` entry in `lake-manifest.json`.
+That entry must pin a full commit from the canonical upstream Mathlib URL, and
+the checked-out dependency must have the matching clean Git `HEAD` and origin.
+The queried artifacts must remain inside that checkout's build directory, and
+must carry a valid Lake build or cache trace; a full build trace must record the
+`mathlib` package id. Local path packages, forks, mirrors, dirty or mismatched
+checkouts, and other dependencies exporting a `Mathlib.*` module are rejected,
+as is a root-package declaration impersonating a Mathlib result. Existence and
+declaration kind are read from Lean's environment, not inferred from source
+text.
 
 Drop `--require-declarations` when reviewing work in progress, where a
 statement may name a Lean declaration that does not exist yet.
@@ -161,6 +355,52 @@ nonterminal; the other three explicitly disposition an area. Audit JSON includes
 canonical rows, counts, and the exact coverage source hash, while
 `publication.json` records aggregate counts without duplicating the authored
 rows.
+
+For exhaustive source work, opt in with exact frontmatter:
+
+```markdown
+---
+schema: autoform-coverage/v2
+artifact: sources/book.txt
+artifact_sha256: <64 lowercase hex characters>
+---
+
+| Unit | Area | Lines | Locator | Unit SHA-256 | Coverage | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| chapter-one | First chapter | 1-42 | Chapter 1 | <span hash> | DECOMPOSED | [Result](../roadmap/result.md) |
+```
+
+The artifact must be a nonempty, regular, non-symlink UTF-8 file with LF line
+endings and a final LF. Ordered one-based spans must partition it exactly, and
+each unit hash covers the raw LF-terminated bytes in that span. A decomposed
+unit may link only to formalizable roadmap leaves. Those leaves reciprocate in
+their frontmatter with `source_units: [chapter-one]`. The immutable
+`load_execution_input` API binds this contract to the unchanged
+`autoform-runtime/v1` projection; schema-less v1 remains valid for audit and
+render but is refused for ready-work discovery with `coverage-v2-required`.
+
+List the formalization phases that are ready for the current agent:
+
+```bash
+autoform ready blueprint --lean-root .
+autoform ready . --project finite-flat --lean-root . --json
+```
+
+`ready` is read-only. It loads the same immutable execution input, requires
+durable `article_id` frontmatter, and returns only dispatchable formalizable
+leaves whose statement or proof prerequisites are satisfied. Its deterministic
+JSON includes the roadmap and source-contract revisions, structured blocked
+items with unmet dependency IDs, and counts for ready, blocked, and complete
+work. With local formalized progress, pass `--lean-root`; `ready` rejects
+missing or unresolved Lean targets rather than treating stale metadata as
+complete. It does not acquire a claim or edit files; use the claim commands
+below before beginning the returned item.
+
+A v2 publication excludes the entire `blueprint/sources/` authority tree, so
+renamed artifacts cannot survive an incremental render. With repository
+coordinates its authored Markdown links become repository blob links; without
+them, those links become plain text instead of dangling site links. Raw HTML
+links into the excluded tree are rejected.
 
 The contract is read as published Markdown and fails closed. A table inside an
 HTML comment, a fenced block, or a four-space-indented block is documentation
@@ -282,8 +522,9 @@ autoform migrate article-ids blueprint --check
 `article_id` accepts opaque values in the form `af_` plus 24 lowercase hex
 digits. The planner validates uniqueness, proposes deterministic IDs for
 missing articles, includes exact source hashes, and is strictly read-only.
-Applying plans, moving runtime consumers and claims to durable IDs, and
-preserving publication routes are intentionally deferred to follow-up changes.
+Apply the proposed IDs to article frontmatter before dispatching collaborative
+work. Claims resolve current roadmap paths to these durable IDs, so renaming an
+article does not change its lock.
 
 Coordinate temporary cross-machine ownership without modifying the book:
 
@@ -292,13 +533,22 @@ export AUTOFORM_WORKER_ID="agent-name"
 autoform claim acquire "chapter/main-result"
 autoform claim renew "chapter/main-result"
 autoform claim release "chapter/main-result"
+autoform claim acquire --resource lake-build
+autoform claim list
+autoform claim cleanup
 ```
 
 Claims are fail-closed compare-and-swap leases under
 `refs/autoform-claims/` on the Git `origin`; pass `--repo` for another claim
-board. A failed acquire or renew means the caller cannot prove ownership and
-must stop before committing or pushing protected work. Claims do not prove
-mathematical correctness and do not replace branch-level Git CAS.
+board. Article targets are resolved against the current project's `blueprint/`
+and keyed by their durable `article_id`; use `--blueprint` when invoking the
+command elsewhere. Raw locks require `--resource`. The CLI derives a stable
+session from the worktree, with `--session-id` or
+`AUTOFORM_CLAIM_SESSION_ID` as an explicit override. A failed acquire or renew
+means the caller cannot prove ownership and must stop before committing or
+pushing protected work. Claims do not prove mathematical correctness and do
+not replace branch-level Git CAS. `list` and `cleanup` need neither a worker nor
+a worktree when `--repo` and, if needed, `--scratch` are supplied.
 
 Write the Mermaid dependency graph into the vault, where Obsidian renders it:
 
@@ -325,6 +575,22 @@ Every graph article returns to the book, and every formal statement links to
 its local context. Point `mkdocs.yml` at `docs_dir: site-src` and enable
 `md_in_html` plus a `pymdownx.superfences` mermaid fence; see the [repository
 example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
+
+Publication is staged, synced, validated, and atomically exchanged with the
+previous generated site. This fail-closed transaction requires macOS
+`renameatx_np` or Linux `renameat2`; other platforms can still use the remaining
+CLI commands but cannot run `autoform render`. A legacy
+`autoform-publication/v1` output is never deleted automatically. Remove it
+explicitly or choose an empty output directory once, then subsequent v2 renders
+can replace only the exact checksummed generation they inspected.
+The renderer hashes both the blueprint snapshot and the exact Lean-file
+generation used for declaration links, then rechecks both under the publication
+lock immediately before the atomic rename. That check is the publication
+linearization point; later source edits belong to the next render. Generated
+v1/v2 publication trees and private staging directories are never indexed as
+Lean source.
+An existing v2 publication from before Lean-source hashing is still replaced
+only after its complete inventory is verified, then upgraded in place.
 
 ## Validation
 
@@ -387,22 +653,43 @@ work, stamps articles, or creates another graph artifact.
 
 ## Claim contract
 
-Claims use canonical `autoform-claim/v1` JSON in orphan commit messages and
-exact observed object IDs as update preconditions. Absent and verifiably expired
-leases may be acquired; live peer leases are refused. Malformed or unreadable
-refs are unverifiable and may not be acquired, renewed, released, or removed by
-cleanup. A heartbeat verifies ownership on entry and permanently records any
-later refusal or transport uncertainty as lost ownership.
+Claims use canonical `autoform-claim/v2` JSON in orphan commit messages. A
+cryptographically random lease ID and a session-local receipt for the exact
+pushed object fence every ownership operation; `worker_id` is display metadata,
+not authority. Live peer leases cannot be stolen. Leases are limited to 3600
+seconds and assume clocks differ by at most 300 seconds. Entries outside those
+bounds fail closed, appear as `_recovery_required` in `claim list`, and are
+recovered only by an explicit CAS-safe `claim cleanup`. A heartbeat captures one
+lease ID, records any refusal or transport uncertainty as lost ownership, and
+waits for an in-flight renewal before exiting.
 
-A claim key is a slug and digest of any string, not a validated node id, so a
-shared resource is locked the same way a node is. Parallel agents get one Git
-worktree each and serialize `lake build` behind a `lake-build` claim, because
-builds share the elan toolchain and the Mathlib cache even when the checkouts
-are separate.
+Owners must stop at `expires_at`. Other observers cannot take over or clean up
+the ref until `expires_at + 300` seconds, so the intervening skew window fails
+closed instead of admitting two owners. A valid unrenewed lease is bounded by
+its 3600-second TTL plus this 300-second reclaim grace; a timestamp already 300
+seconds ahead of an observer can add at most one further 300-second offset.
+Renewals clamp their timestamp and expiry to the prior values when a clock steps
+backward.
 
-Claims are temporary operational state, never article frontmatter. Future
-Deicyde workers may share this protocol, but their current continue-uncoordinated
-failure behavior must be removed before they use the canonical claim API.
+Moving from v1 path keys to v2 durable IDs is a one-way rollout. Stop v1 clients
+before the first v2 claim. Autoform refuses live or unreadable v1 author refs,
+replaces expired v1 refs with permanent compatibility fences, and installs a
+fence for the current article path or raw resource name before acquiring its v2
+key. Old clients reject those fences, so they cannot acquire a path already
+owned by v2. Historical renamed paths with no claim ref cannot be discovered;
+retiring v1 clients is therefore part of the protocol, not an optional cleanup.
+Use `claim cleanup --blueprint PROJECT` during rollout so expired v1 path refs
+become fences while expired durable-ID refs remain reusable.
+
+Article claims require a real graph node with materialized `article_id`
+frontmatter. Separate raw-resource keys cover coordination outside the roadmap.
+Parallel contributors get one Git worktree each and serialize shared build state with
+`autoform claim acquire --resource lake-build`.
+
+Leases are temporary operational state; compatibility fences are persistent
+migration state. Neither belongs in article frontmatter. The Orchestrate skill
+is a thin client of `ready`, `claim`, `check`, and `audit`; there is no second
+worker scheduler or provider-specific execution service.
 
 ## Local runtime doctor
 
@@ -423,10 +710,10 @@ review. The bundled example intentionally exits nonzero while its declared
 coverage still holds `MAPPED` rows.
 
 This command is strictly read-only and local. It does not invoke Git, GitHub,
-subprocesses, network services, claims, queues, reviews, recovery state,
-providers, workers, renderers, or dashboards, and it creates no cache, scratch
+subprocesses, network services, claims, reviews, orchestration state,
+providers, renderers, or dashboards, and it creates no cache, scratch
 repository, service, state directory, or `graph.json`. It is a project/runtime
-doctor, separate from any future Deicyde fleet or machine-capability preflight.
+doctor, separate from ready-work discovery and machine-capability preflight.
 
 ## Runtime contract
 
@@ -447,12 +734,10 @@ and bytes, excluding timestamps, absolute paths, Git state, and operational
 state. Optional Lean locations come from a local lexical scan and do not by
 themselves establish compilation or proof correctness.
 
-Schema v1 retains the graph's path-derived article ID. That is suitable for
-an ephemeral runtime projection and temporary claims, but it is not yet an
-approved durable identity. Queues, reviews, recovery records, PR markers,
-dashboard routes, providers, and logs must not persist against this ID until a
-path-move identity and migration policy is defined. Those records remain private
-and excluded from runtime snapshots and publication.
+Each node retains its path-derived `id` for links and carries optional authored
+`article_id` frontmatter for identity across path moves. `autoform ready` and
+article claims require that durable identity; ordinary check, audit, render,
+and human review continue to support roadmaps while IDs are being migrated.
 
 ## Publication contract
 
@@ -463,6 +748,14 @@ credentials, logs, provider state, and agent/task state inside the blueprint
 cause the render to fail rather than silently leak them. Source and output
 directories must be disjoint.
 
-Every render writes `publication.json` with the source-content hash, Git ref,
-article and dependency counts, and available views. It contains no timestamp or
-absolute path, so identical inputs produce identical output files.
+Every render writes `publication.json` with blueprint and Lean-source hashes,
+Git ref, article and dependency counts, complete file inventory, and available
+views. It contains no timestamp or absolute path, so identical inputs produce
+identical output files. Autoform validates and syncs the staged tree before one
+atomic filesystem commit, then verifies ownership and syncs both parent
+directories. Once the commit begins, Autoform never tries to exchange a recovery
+path back into the live destination. If it cannot verify the final state or
+durability, it preserves the private workspace and reports its exact recovery
+path instead of deleting a potentially unique generation. If the site was fully
+verified before cleanup becomes unsafe, the render succeeds and reports the
+retained workspace as a warning.

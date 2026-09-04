@@ -165,26 +165,35 @@ def _classify(
 def topological_order(graph: Graph) -> list[str]:
     """Order nodes so every prerequisite precedes its dependents.
 
-    ``load_graph`` rejects cycles, so a plain depth-first walk suffices; the
-    ``visiting`` guard only protects callers who build a ``Graph`` by hand.
+    ``load_graph`` rejects cycles. The explicit stack keeps the same depth-first
+    order without depending on Python's recursion limit; the ``visiting`` guard
+    only protects callers who build a ``Graph`` by hand.
     """
     order: list[str] = []
     seen: set[str] = set()
     visiting: set[str] = set()
 
-    def visit(node_id: str) -> None:
-        if node_id in seen or node_id in visiting:
-            return
-        visiting.add(node_id)
-        for dependency in graph.nodes[node_id].dependencies:
-            if dependency in graph.nodes:
-                visit(dependency)
-        visiting.discard(node_id)
-        seen.add(node_id)
-        order.append(node_id)
+    for root_id in sorted(graph.nodes):
+        if root_id in seen:
+            continue
+        visiting.add(root_id)
+        frames = [(root_id, 0)]
+        while frames:
+            node_id, dependency_index = frames[-1]
+            dependencies = graph.nodes[node_id].dependencies
+            if dependency_index == len(dependencies):
+                frames.pop()
+                visiting.discard(node_id)
+                seen.add(node_id)
+                order.append(node_id)
+                continue
 
-    for node_id in sorted(graph.nodes):
-        visit(node_id)
+            dependency = dependencies[dependency_index]
+            frames[-1] = (node_id, dependency_index + 1)
+            if dependency not in graph.nodes or dependency in seen or dependency in visiting:
+                continue
+            visiting.add(dependency)
+            frames.append((dependency, 0))
     return order
 
 

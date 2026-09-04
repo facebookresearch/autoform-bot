@@ -8,15 +8,29 @@ contacts a network service or writes generated state back into the blueprint.
 from __future__ import annotations
 
 import json
+import stat
 import statistics
+import tempfile
 from bisect import bisect_right
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path, PurePosixPath
 
 from . import status
+from ._tree_snapshot import (
+    TreeSelection,
+    TreeSnapshot,
+    TreeSnapshotError,
+    bind_directory_tree,
+)
 from .coverage import CoverageSummary, load_coverage
 from .graph import Graph, GraphValidationError, Node, load_graph
-from .lean import SourceIndex, declaration_names, index_project
+from .lean import (
+    SourceIndex,
+    declaration_keywords,
+    declaration_names,
+    index_project,
+    mathlib_module_name,
+)
 from .markdown import FENCE as _FENCE
 from .markdown import frontmatter_end as _frontmatter_end
 from .markdown import HEADING as _HEADING
@@ -35,22 +49,26 @@ _MAX_DIRECT_CHILDREN = 24
 _NODE_SIZE_FLOOR = 200
 _NODE_SIZE_MULTIPLE = 4
 
-_DECLARATION_KEYWORDS = {
-    "abbrev": frozenset({"abbrev"}),
-    "axiom": frozenset({"axiom"}),
-    "class": frozenset({"class"}),
-    "corollary": frozenset({"lemma", "theorem"}),
-    "def": frozenset({"def"}),
-    "definition": frozenset({"def"}),
-    "inductive": frozenset({"inductive"}),
-    "instance": frozenset({"instance"}),
-    "lemma": frozenset({"lemma", "theorem"}),
-    "opaque": frozenset({"opaque"}),
-    "proposition": frozenset({"lemma", "theorem"}),
-    "structure": frozenset({"structure"}),
-    "theorem": frozenset({"lemma", "theorem"}),
-}
 
+def _visible_snapshot_path(relative: PurePosixPath) -> bool:
+    return not any(part.startswith(".") for part in relative.parts)
+
+
+def _audit_snapshot_includes(relative: PurePosixPath, mode: int) -> bool:
+    return _visible_snapshot_path(relative) and (
+        not stat.S_ISREG(mode)
+        or relative.suffix.casefold() == ".md"
+        or relative.parts[:1] == ("sources",)
+    )
+
+
+_AUDIT_SNAPSHOT_SELECTION = TreeSelection(
+    include=_audit_snapshot_includes,
+    descend=_visible_snapshot_path,
+    placeholder=lambda relative, mode: (
+        _visible_snapshot_path(relative) and stat.S_ISREG(mode)
+    ),
+)
 
 @dataclass(frozen=True, order=True, slots=True)
 class AuditFinding:
@@ -93,6 +111,8 @@ def audit_blueprint(
     blueprint_dir: str | Path,
     *,
     lean_root: str | Path | None = None,
+    _expected_blueprint_identity: tuple[int, int] | None = None,
+    _expected_roadmap_identity: tuple[int, int] | None = None,
 ) -> AuditResult:
     """Audit *blueprint_dir* using only local, committed-style source files.
 
@@ -100,13 +120,155 @@ def audit_blueprint(
     Semantic checks run only after :func:`load_graph` has produced a valid graph.
     """
 
+    _graph, result = load_audit_graph(
+        blueprint_dir,
+        lean_root=lean_root,
+        _expected_blueprint_identity=_expected_blueprint_identity,
+        _expected_roadmap_identity=_expected_roadmap_identity,
+    )
+    return result
+
+
+def load_audit_graph(
+    blueprint_dir: str | Path,
+    *,
+    lean_root: str | Path | None = None,
+    lean_index: SourceIndex | None = None,
+    _expected_blueprint_identity: tuple[int, int] | None = None,
+    _expected_roadmap_identity: tuple[int, int] | None = None,
+) -> tuple[Graph | None, AuditResult]:
+    """Return a graph and audit derived from one immutable blueprint capture."""
+
     blueprint = Path(blueprint_dir).expanduser().resolve()
+    if not blueprint.is_dir():
+        return _audit_snapshot_graph(
+            blueprint,
+            lean_root=lean_root,
+            lean_index=lean_index,
+            expected_blueprint_identity=_expected_blueprint_identity,
+            expected_roadmap_identity=_expected_roadmap_identity,
+        )
+    expected_children = (
+        {"roadmap": _expected_roadmap_identity}
+        if _expected_roadmap_identity is not None
+        else None
+    )
+    try:
+        with bind_directory_tree(
+            blueprint,
+            expected_identity=_expected_blueprint_identity,
+            expected_children=expected_children,
+            selection=_AUDIT_SNAPSHOT_SELECTION,
+        ) as bound:
+            snapshot = bound.capture()
+            entry_findings = _snapshot_entry_findings(snapshot)
+            with tempfile.TemporaryDirectory(prefix="autoform-audit-") as temporary:
+                snapshot_root = Path(temporary) / "blueprint"
+                snapshot.materialize_regular_files(snapshot_root)
+                graph, result = _audit_snapshot_graph(
+                    snapshot_root,
+                    lean_root=lean_root,
+                    lean_index=lean_index,
+                )
+                if graph is not None:
+                    graph = _rebase_captured_graph(graph, blueprint)
+            bound.verify()
+            graph_is_invalid = any(
+                finding.code == "invalid-graph" for finding in entry_findings
+            )
+            return (
+                None if graph_is_invalid else graph,
+                _result(
+                    [*result.findings, *entry_findings],
+                    coverage=result.coverage,
+                ),
+            )
+    except TreeSnapshotError as error:
+        return None, _result(
+            [AuditFinding(".", "invalid-graph", str(error))]
+        )
+
+
+def _rebase_captured_graph(graph: Graph, blueprint: Path) -> Graph:
+    """Return a captured graph whose public paths name the requested blueprint."""
+
+    nodes = {
+        node_id: replace(
+            node,
+            path=blueprint / node.path.relative_to(graph.blueprint_dir),
+        )
+        for node_id, node in graph.nodes.items()
+    }
+    rebased = Graph(blueprint_dir=blueprint, nodes=nodes)
+    object.__setattr__(
+        rebased,
+        "_source_bytes",
+        {
+            node_id: content
+            for node_id in graph.nodes
+            if (content := graph.source_bytes(node_id)) is not None
+        },
+    )
+    return rebased
+
+
+def _snapshot_entry_findings(snapshot: TreeSnapshot) -> list[AuditFinding]:
+    """Preserve unsafe-entry diagnostics that cannot survive materialization."""
+
+    findings: list[AuditFinding] = []
+    for relative, reason in snapshot.unsupported_entries():
+        roadmap_entry = relative == "roadmap" or relative.startswith("roadmap/")
+        findings.append(
+            AuditFinding(
+                relative,
+                "invalid-graph" if roadmap_entry else "unsafe-blueprint-entry",
+                (
+                    f"roadmap path is invalid: {reason}"
+                    if roadmap_entry
+                    else f"blueprint path is unsafe: {reason}"
+                ),
+            )
+        )
+    return findings
+
+
+def _audit_snapshot(
+    blueprint: Path,
+    *,
+    lean_root: str | Path | None,
+    expected_blueprint_identity: tuple[int, int] | None = None,
+    expected_roadmap_identity: tuple[int, int] | None = None,
+) -> AuditResult:
+    """Audit one immutable, private blueprint snapshot."""
+
+    return _audit_snapshot_graph(
+        blueprint,
+        lean_root=lean_root,
+        expected_blueprint_identity=expected_blueprint_identity,
+        expected_roadmap_identity=expected_roadmap_identity,
+    )[1]
+
+
+def _audit_snapshot_graph(
+    blueprint: Path,
+    *,
+    lean_root: str | Path | None,
+    lean_index: SourceIndex | None = None,
+    expected_blueprint_identity: tuple[int, int] | None = None,
+    expected_roadmap_identity: tuple[int, int] | None = None,
+) -> tuple[Graph | None, AuditResult]:
+    """Audit one immutable tree and retain its parsed graph for sibling checks."""
+
     if blueprint.is_dir():
         coverage, coverage_findings = _coverage_findings(blueprint)
     else:
         coverage, coverage_findings = None, []
     try:
-        graph = load_graph(blueprint)
+        graph = load_graph(
+            blueprint,
+            _expected_blueprint_identity=expected_blueprint_identity,
+            _expected_roadmap_identity=expected_roadmap_identity,
+        )
     except GraphValidationError as error:
         findings = [
             AuditFinding(
@@ -116,12 +278,16 @@ def audit_blueprint(
             )
             for issue in error.issues
         ]
-        return _result([*findings, *coverage_findings], coverage=coverage)
-    return audit_graph(
+        return None, _result([*findings, *coverage_findings], coverage=coverage)
+    return (
         graph,
-        lean_root=lean_root,
-        coverage=coverage,
-        coverage_findings=coverage_findings,
+        audit_graph(
+            graph,
+            lean_root=lean_root,
+            lean_index=lean_index,
+            coverage=coverage,
+            coverage_findings=coverage_findings,
+        ),
     )
 
 
@@ -129,6 +295,7 @@ def audit_graph(
     graph: Graph,
     *,
     lean_root: str | Path | None = None,
+    lean_index: SourceIndex | None = None,
     coverage: CoverageSummary | None = None,
     coverage_findings: list[AuditFinding] | None = None,
 ) -> AuditResult:
@@ -141,7 +308,7 @@ def audit_graph(
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
         children = graph.children(node_id)
-        article = _read_article(node.path)
+        article = _read_article(node.path, content=graph.source_bytes(node.id))
 
         if node.formalizable:
             if children:
@@ -204,6 +371,22 @@ def audit_graph(
                     "mathlib is true but mathlib_declaration metadata is missing",
                 )
             )
+        if node.mathlib and not node.mathlib_file:
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "mathlib-without-file",
+                    "mathlib is true but mathlib_file metadata is missing",
+                )
+            )
+        elif node.mathlib and mathlib_module_name(node.mathlib_file or "") is None:
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "invalid-mathlib-file",
+                    "mathlib_file must be a canonical Mathlib/**/*.lean source path",
+                )
+            )
 
         formalization_evidence = (
             bool(node.lean)
@@ -228,8 +411,10 @@ def audit_graph(
     if coverage_findings is None:
         coverage, coverage_findings = _coverage_findings(graph.blueprint_dir)
     findings.extend(coverage_findings)
-    if lean_root is not None:
-        findings.extend(_lean_findings(graph, lean_root))
+    if lean_index is not None:
+        findings.extend(_lean_findings(graph, lean_index=lean_index))
+    elif lean_root is not None:
+        findings.extend(_lean_findings(graph, lean_root=lean_root))
     return _result(findings, coverage=coverage)
 
 
@@ -239,11 +424,17 @@ class _ArticleShape:
     has_depends_section: bool
 
 
-def _read_article(path: Path) -> _ArticleShape:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return _ArticleShape(False, False)
+def _read_article(path: Path, *, content: bytes | None = None) -> _ArticleShape:
+    if content is None:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return _ArticleShape(False, False)
+    else:
+        try:
+            text = content.decode("utf-8")
+        except UnicodeError:
+            return _ArticleShape(False, False)
 
     lines = text.splitlines()
     start = _frontmatter_end(lines)
@@ -302,11 +493,7 @@ def _coverage_findings(
     findings = [
         AuditFinding(
             "coverage/README.md",
-            (
-                "missing-coverage-contract"
-                if issue.reason == "coverage contract is missing"
-                else "invalid-coverage-contract"
-            ),
+            issue.code,
             f"{issue.reason}{f' (line {issue.line})' if issue.line else ''}",
         )
         for issue in issues
@@ -351,20 +538,29 @@ def _coverage_findings(
     return coverage, findings
 
 
-def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
-    root = Path(lean_root).expanduser().resolve()
-    if not root.is_dir():
-        return [
-            AuditFinding(
-                ".",
-                "invalid-lean-root",
-                "Lean root does not exist or is not a directory",
-            )
-        ]
-
+def _lean_findings(
+    graph: Graph,
+    *,
+    lean_root: str | Path | None = None,
+    lean_index: SourceIndex | None = None,
+) -> list[AuditFinding]:
+    if lean_index is None:
+        assert lean_root is not None
+        root = Path(lean_root).expanduser().resolve()
+        if not root.is_dir():
+            return [
+                AuditFinding(
+                    ".",
+                    "invalid-lean-root",
+                    "Lean root does not exist or is not a directory",
+                )
+            ]
+        try:
+            lean_index = index_project(root)
+        except OSError as error:
+            return [AuditFinding(".", "invalid-lean-root", str(error))]
     findings: list[AuditFinding] = []
-    index = index_project(root)
-    spans = _source_spans(index)
+    spans = _source_spans(lean_index)
     sizes: dict[str, int] = {}
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
@@ -382,7 +578,7 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
 
         resolved = []
         for name in names:
-            declaration = index.find(name)
+            declaration = lean_index.find(name)
             if declaration is None:
                 findings.append(
                     AuditFinding(
@@ -394,9 +590,14 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
             else:
                 resolved.append(declaration)
 
-        expected = _DECLARATION_KEYWORDS.get((node.declaration or "").casefold())
-        if expected and resolved and not any(declaration.keyword in expected for declaration in resolved):
-            actual = ", ".join(sorted({declaration.keyword for declaration in resolved}))
+        expected = declaration_keywords(node.declaration)
+        mismatched = [
+            declaration
+            for declaration in resolved
+            if expected is not None and declaration.keyword not in expected
+        ]
+        if mismatched:
+            actual = ", ".join(sorted({declaration.keyword for declaration in mismatched}))
             findings.append(
                 AuditFinding(
                     article_path,
@@ -425,7 +626,11 @@ def _source_spans(index: SourceIndex) -> dict[str, int]:
     tails: dict[Path, int] = {}
     for path, lines in starts.items():
         lines.sort()
-        tails[path] = _line_count(index.root / path)
+        tails[path] = (
+            index.line_counts[path]
+            if path in index.line_counts
+            else _line_count(index.root / path)
+        )
 
     spans: dict[str, int] = {}
     for declaration in index.declarations.values():
@@ -498,4 +703,10 @@ def _result(
     return AuditResult(tuple(sorted(set(findings))), coverage)
 
 
-__all__ = ["AuditFinding", "AuditResult", "audit_blueprint", "audit_graph"]
+__all__ = [
+    "AuditFinding",
+    "AuditResult",
+    "audit_blueprint",
+    "audit_graph",
+    "load_audit_graph",
+]
