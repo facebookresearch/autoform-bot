@@ -1,0 +1,105 @@
+# Snapshot declaration review
+
+Produce the smallest current list a person must inspect to decide whether a
+paper, book section, theorem, or other mathematical source is represented by
+the Lean statements. This is a refreshable source-to-code checklist, not a full
+inventory or a rubric-based audit.
+
+## Capture one coherent snapshot
+
+Read the original mathematical source. A roadmap, issue, pull-request
+description, or docstring is evidence about intent but is not a substitute for
+the source. If it is unavailable, report that statement faithfulness cannot be
+judged.
+
+At the start of every invocation, record:
+
+- the repository and branch;
+- the current commit SHA and intended comparison base;
+- staged, unstaged, and untracked files relevant to the review; and
+- the source revision or locator.
+
+Do not wait for all formalization runs to finish. The current checkout is the
+requested snapshot. Before writing the result, confirm that its commit, status,
+and reviewed files have not changed. If they changed during the review, discard
+the computed list and rerun once from the new snapshot. If the repository keeps
+changing, stop and report that no coherent snapshot could be captured.
+
+Use the base-to-snapshot diff to distinguish introduced declarations from
+pre-existing library declarations. A dirty checkout is reviewable, but label it
+as uncommitted and do not pretend it has immutable GitHub links.
+
+## Select statements and definitions
+
+For each source clause, select the strongest single public Lean declaration
+that states it. Use multiple roots only when no single declaration contains all
+parts. Mark a clause **partial** when the Lean statement weakens its structure,
+strengthens assumptions, narrows its domain, or omits a conclusion. Mark it
+**absent** when no declaration in the snapshot states it.
+
+The selected source-facing declarations are the roots. Compute their transitive
+statement dependency closure. Include a definition only when both are true:
+
+1. the definition was introduced between the comparison base and the current
+   snapshot; and
+2. it is reachable from a root through constants in a declaration's type,
+   fields, constructors, or the meaning-bearing body of another included
+   definition.
+
+Inspect complete signatures and meaning-bearing definition bodies. A custom
+class or predicate can hide the conclusion being reviewed. Do not traverse
+theorem proof bodies: definitions used only to build proofs are implementation
+dependencies, not dependencies of the statements.
+
+Exclude unrelated definitions from the same file or change, convenience
+aliases, duplicate wrappers, constructor lemmas, arithmetic implementations,
+and proof-only helpers. Name a pre-existing dependency separately only when it
+is needed to understand an included declaration; never count it as an
+introduced definition.
+
+## Link and verify the snapshot
+
+For a clean committed snapshot, link declaration names to immutable GitHub blob
+URLs at the full commit SHA:
+
+```text
+https://github.com/OWNER/REPO/blob/FULL_COMMIT_SHA/path/to/File.lean#L123
+```
+
+For an uncommitted snapshot, use absolute local file links and label them as
+local and mutable. On the next invocation after a commit, replace them with
+commit-pinned links. Never retain an old link merely because its declaration
+name still exists.
+
+Build the smallest target containing the selected roots. Search changed Lean
+files for `sorry`, `admit`, and raw `axiom`. If the target builds, run
+`#print axioms` on each source-facing endpoint. Report failures without calling
+the declarations verified or axiom-clean.
+
+## Replace the managed list
+
+Recompute the output from scratch on every invocation. In the target Markdown
+file, replace everything between these markers:
+
+```markdown
+<!-- declaration-review:start -->
+<!-- declaration-review:end -->
+```
+
+Create the marked section if it does not exist. If either marker is duplicated
+or only one marker exists, stop instead of guessing which content to replace.
+Never incrementally append to the old list. Replacement must delete stale
+entries and add current ones while preserving all unrelated content.
+
+Write the managed section in this order:
+
+1. source locator and exact snapshot, including dirty-state disclosure;
+2. build and proof-integrity warning, if any;
+3. introduced definitions in the roots' statement dependency closure;
+4. source-facing declarations grouped by source locator;
+5. partial or absent source clauses;
+6. omitted implementation helpers and named pre-existing dependencies; and
+7. commands run and unresolved evidence.
+
+Never fabricate a source locator, declaration, repository URL, commit SHA, or
+line anchor.

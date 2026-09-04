@@ -32,6 +32,11 @@
         "enabledDefault": true
       },
       {
+        "id": "declaration-review",
+        "path": "skills/declaration-review/SKILL.md",
+        "enabledDefault": true
+      },
+      {
         "id": "develop-plugin",
         "path": "skills/develop-plugin/SKILL.md",
         "enabledDefault": true

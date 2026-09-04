@@ -17,6 +17,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
         "roadmap",
         "human-review",
         "agent-review",
+        "declaration-review",
         "develop-plugin",
     }
 
@@ -26,7 +27,6 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
         "proof-integrity.md",
         "code-quality.md",
         "mathlib-style.md",
-        "minimal-declaration-review.md",
         "roadmap-quality.md",
         "thesis-review-case.md",
     }
@@ -50,13 +50,14 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
             assert config["mcpServers"][name]["args"][-2:] == ["-m", module]
 
     codex_manifest = json.loads((repo_root / ".codex-plugin/plugin.json").read_text())
-    assert len(codex_manifest["interface"]["defaultPrompt"]) == 5
+    assert len(codex_manifest["interface"]["defaultPrompt"]) == 6
     muse = json.loads((repo_root / ".muse-plugin/plugin.json").read_text())
     assert [command["id"] for command in muse["capabilities"]["commands"]] == [
         "setup",
         "roadmap",
         "human-review",
         "agent-review",
+        "declaration-review",
         "develop-plugin",
     ]
     for command in muse["capabilities"]["commands"]:

@@ -408,38 +408,42 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
     assert (repo_root / "skills/agent-review/references/roadmap-quality.md").is_file()
 
 
-def test_agent_review_supports_minimal_declaration_checklists(repo_root: Path) -> None:
-    skill = (repo_root / "skills/agent-review/SKILL.md").read_text(encoding="utf-8")
+def test_declaration_review_refreshes_the_current_snapshot(repo_root: Path) -> None:
+    skill = (repo_root / "skills/declaration-review/SKILL.md").read_text(
+        encoding="utf-8"
+    )
     reference_path = (
-        repo_root / "skills/agent-review/references/minimal-declaration-review.md"
+        repo_root / "skills/declaration-review/references/snapshot-workflow.md"
     )
     reference = reference_path.read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
     normalized_reference = " ".join(reference.split())
-    metadata = (repo_root / "skills/agent-review/agents/openai.yaml").read_text(
+    metadata = (repo_root / "skills/declaration-review/agents/openai.yaml").read_text(
         encoding="utf-8"
     )
 
-    assert "references/minimal-declaration-review.md" in skill
-    assert "minimal source-to-code declaration review" in skill
-    assert "minimal source-to-code declaration checklist" in metadata
+    assert "references/snapshot-workflow.md" in skill
+    assert "every invocation as a fresh snapshot" in skill
+    assert "declarations that disappeared or left the dependency closure are deleted" in normalized_skill
+    assert "$declaration-review" in metadata
     for required in (
-        "full head commit SHA",
-        "introduced definitions only",
-        "Semantic definitions",
-        "Source-facing endpoints",
-        "Implementation helpers",
+        "Do not wait for all formalization runs to finish",
+        "confirm that its commit, status, and reviewed files have not changed",
+        "discard the computed list and rerun once",
         "transitive statement dependency closure",
-        "roots are the minimal source-facing endpoints",
-        "it was introduced by the pull request",
+        "introduced between the comparison base and the current snapshot",
         "meaning-bearing body",
         "Do not traverse theorem proof bodies",
-        "immutable GitHub blob links",
         "FULL_COMMIT_SHA",
+        "absolute local file links",
         "partial",
         "absent",
         "#print axioms",
-        "temporary detached worktree",
-        "preserve unrelated existing content",
+        "<!-- declaration-review:start -->",
+        "<!-- declaration-review:end -->",
+        "Never incrementally append to the old list",
+        "delete stale entries and add current ones",
+        "preserving all unrelated content",
     ):
         assert required in normalized_reference
 
