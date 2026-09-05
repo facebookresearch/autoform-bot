@@ -6,7 +6,8 @@ from pathlib import Path
 
 from autoform_cli import declaration_closure as closure_module
 from autoform_cli.__main__ import main
-from autoform_cli.declaration_closure import declaration_closure
+from autoform_cli.declaration_closure import ClosureReport, declaration_closure
+from autoform_cli.lean import Declaration
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -63,6 +64,38 @@ def test_generated_structure_constants_preserve_source_dependency_order() -> Non
     )
 
 
+def test_source_facing_definition_is_not_duplicated_as_a_dependency(
+    tmp_path: Path,
+) -> None:
+    dependency = Declaration("Dependency", Path("Demo.lean"), 1, "def")
+    root = Declaration("Root", Path("Demo.lean"), 2, "def")
+    report = ClosureReport(
+        root=tmp_path,
+        base="base",
+        head="head",
+        dirty=True,
+        modules=("Demo",),
+        roots=(root,),
+        reachable=(dependency, root),
+        dependency_edges=(("Root", "Dependency"),),
+    )
+
+    assert report.definitions == (dependency,)
+
+
+def test_imported_module_disambiguates_duplicate_source_names() -> None:
+    draft = Declaration(
+        "sameName", Path("Blueprint/Example/Suggested.lean"), 10, "theorem"
+    )
+    production = Declaration(
+        "sameName", Path("MathlibExt/Project/Result.lean"), 20, "theorem"
+    )
+
+    assert closure_module._resolve_occurrence(
+        (draft, production), "MathlibExt.Project.Result"
+    ) == production
+
+
 def test_declaration_closure_filters_to_changed_source_declarations(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -77,9 +110,9 @@ def test_declaration_closure_filters_to_changed_source_declarations(
             "AUTOFORM_DECLARATION_NODE\tFoundation\n"
             "AUTOFORM_DECLARATION_EDGE\tRoot\tAdded\n"
             "AUTOFORM_DECLARATION_EDGE\tAdded\tFoundation\n"
-            "AUTOFORM_DECLARATION_SOURCE\tRoot\tRoot\n"
-            "AUTOFORM_DECLARATION_SOURCE\tAdded\tAdded\n"
-            "AUTOFORM_DECLARATION_SOURCE\tFoundation\tFoundation\n"
+            "AUTOFORM_DECLARATION_SOURCE\tRoot\tRoot\tDemo\n"
+            "AUTOFORM_DECLARATION_SOURCE\tAdded\tAdded\tDemo\n"
+            "AUTOFORM_DECLARATION_SOURCE\tFoundation\tFoundation\tDemo\n"
         )
 
     monkeypatch.setattr(closure_module, "_run", fake_run)
@@ -126,7 +159,12 @@ def test_declaration_closure_normalizes_a_nested_lean_root(
         return (
             ""
             if stage == "lake build"
-            else "AUTOFORM_DECLARATION_NODE\tAdded\nAUTOFORM_DECLARATION_SOURCE\tAdded\tAdded\n"
+            else (
+                "AUTOFORM_DECLARATION_NODE\tAdded\n"
+                "AUTOFORM_DECLARATION_NODE\tRoot\n"
+                "AUTOFORM_DECLARATION_SOURCE\tAdded\tAdded\tDemo\n"
+                "AUTOFORM_DECLARATION_SOURCE\tRoot\tRoot\tDemo\n"
+            )
         )
 
     monkeypatch.setattr(closure_module, "_run", fake_run)
@@ -145,7 +183,7 @@ def test_declaration_closure_cli_emits_stable_json(
         return (
             ""
             if stage == "lake build"
-            else "AUTOFORM_DECLARATION_NODE\tRoot\nAUTOFORM_DECLARATION_SOURCE\tRoot\tRoot\n"
+            else "AUTOFORM_DECLARATION_NODE\tRoot\nAUTOFORM_DECLARATION_SOURCE\tRoot\tRoot\tDemo\n"
         )
 
     monkeypatch.setattr(closure_module, "_run", fake_run)
@@ -196,3 +234,11 @@ def test_declaration_closure_cli_fails_closed_when_build_fails(
     assert capsys.readouterr().err == (
         "error: lake build failed; exact closure unavailable\n"
     )
+
+
+def test_build_cache_does_not_make_snapshot_dirty(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q")
+    (tmp_path / ".lake").mkdir()
+    (tmp_path / ".lake/cache").write_text("generated\n", encoding="utf-8")
+
+    assert closure_module._has_relevant_changes(tmp_path) is False

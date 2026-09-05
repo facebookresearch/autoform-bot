@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from autoform_cli.lean import (
+    Declaration,
     SourceLinker,
     declaration_names,
     index_project,
@@ -59,6 +60,16 @@ def test_qualifies_names_with_their_namespace(tmp_path: Path) -> None:
         "Outer.Inner.delta",
         "toplevel",
     }
+
+
+def test_preserves_duplicate_declaration_occurrences(tmp_path: Path) -> None:
+    _index(tmp_path, "def duplicate : Nat := 1\n", "Blueprint/Draft.lean")
+    index = _index(tmp_path, "def duplicate : Nat := 2\n", "Project/Production.lean")
+
+    assert [declaration.path for declaration in index.occurrences["duplicate"]] == [
+        Path("Blueprint/Draft.lean"),
+        Path("Project/Production.lean"),
+    ]
 
 
 def test_records_the_declaring_line(tmp_path: Path) -> None:
@@ -129,6 +140,13 @@ def test_permalink_pins_the_commit(tmp_path: Path) -> None:
         "https://github.com/owner/repo/blob/deadbeef/Project/Basic.lean#L6"
     )
     assert linker.url("Outer.missing") is None
+
+    duplicate = Declaration(
+        "Outer.alpha", Path("Different/Alpha.lean"), 9, "def"
+    )
+    assert linker.declaration_url(duplicate) == (
+        "https://github.com/owner/repo/blob/deadbeef/Different/Alpha.lean#L9"
+    )
 
 
 def test_no_link_without_repository_coordinates(tmp_path: Path) -> None:

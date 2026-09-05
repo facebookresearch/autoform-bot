@@ -39,7 +39,13 @@ class ClosureReport:
 
     @property
     def definitions(self) -> tuple[Declaration, ...]:
-        return tuple(d for d in self.reachable if d.keyword in _DEFINITION_KEYWORDS)
+        roots = {declaration.name for declaration in self.roots}
+        return tuple(
+            declaration
+            for declaration in self.reachable
+            if declaration.keyword in _DEFINITION_KEYWORDS
+            and declaration.name not in roots
+        )
 
     def as_dict(self) -> dict[str, object]:
         linker = build_linker(self.root, ref=self.head)
@@ -50,7 +56,7 @@ class ClosureReport:
                 "line": declaration.line,
                 "name": declaration.name,
                 "path": declaration.path.as_posix(),
-                "url": None if self.dirty else linker.url(declaration.name),
+                "url": None if self.dirty else linker.declaration_url(declaration),
             }
 
         return {
@@ -98,7 +104,12 @@ def declaration_closure(
     if missing:
         raise DeclarationClosureError(f"root declaration not found in sources: {missing[0]}")
 
-    changed = _changed_declarations(root, base, index.declarations.values())
+    all_declarations = (
+        declaration
+        for occurrences in index.occurrences.values()
+        for declaration in occurrences
+    )
+    changed = _changed_declarations(root, base, all_declarations)
     allowed = sorted(changed)
     _run(root, ["lake", "build", *modules], "lake build")
     source = _lean_driver(modules, roots, allowed)
@@ -109,15 +120,23 @@ def declaration_closure(
 
     nodes, edges, source_names = _parse_lean_output(output)
     ordered = _dependency_order(nodes, edges)
-    names = [source_names[name] for name in ordered if name in source_names]
-    reachable = tuple(index.declarations[name] for name in names if name in changed)
-    dependency_edges = _source_dependency_edges(source_names, edges)
-    root_declarations = tuple(index.declarations[name] for name in roots)
+    resolved = {
+        actual: _resolve_occurrence(index.occurrences[display], module)
+        for actual, (display, module) in source_names.items()
+    }
+    reachable = tuple(
+        resolved[actual]
+        for actual in ordered
+        if actual in resolved and source_names[actual][0] in changed
+    )
+    display_names = {actual: display for actual, (display, _) in source_names.items()}
+    dependency_edges = _source_dependency_edges(display_names, edges)
+    root_declarations = tuple(resolved[name] for name in roots)
     return ClosureReport(
         root=root,
         base=_git(root, "rev-parse", base),
         head=_git(root, "rev-parse", "HEAD"),
-        dirty=bool(_git(root, "status", "--porcelain", "--untracked-files=all")),
+        dirty=_has_relevant_changes(root),
         modules=tuple(modules),
         roots=root_declarations,
         reachable=reachable,
@@ -127,10 +146,10 @@ def declaration_closure(
 
 def _parse_lean_output(
     output: str,
-) -> tuple[set[str], set[tuple[str, str]], dict[str, str]]:
+) -> tuple[set[str], set[tuple[str, str]], dict[str, tuple[str, str]]]:
     nodes: set[str] = set()
     edges: set[tuple[str, str]] = set()
-    source_names: dict[str, str] = {}
+    source_names: dict[str, tuple[str, str]] = {}
     for line in output.splitlines():
         if line.startswith(_NODE_MARKER):
             nodes.add(line.removeprefix(_NODE_MARKER))
@@ -138,9 +157,28 @@ def _parse_lean_output(
             declaration, dependency = line.removeprefix(_EDGE_MARKER).split("\t", 1)
             edges.add((declaration, dependency))
         elif line.startswith(_SOURCE_MARKER):
-            actual, display = line.removeprefix(_SOURCE_MARKER).split("\t", 1)
-            source_names[actual] = display
+            actual, display, module = line.removeprefix(_SOURCE_MARKER).split("\t", 2)
+            source_names[actual] = (display, module)
     return nodes, edges, source_names
+
+
+def _resolve_occurrence(
+    occurrences: tuple[Declaration, ...], module: str
+) -> Declaration:
+    suffix = module.replace(".", "/") + ".lean"
+    matches = [
+        declaration
+        for declaration in occurrences
+        if declaration.path.as_posix().endswith(suffix)
+    ]
+    if len(matches) != 1:
+        locations = ", ".join(
+            f"{declaration.path}:{declaration.line}" for declaration in occurrences
+        )
+        raise DeclarationClosureError(
+            f"could not uniquely resolve declaration from module {module}: {locations}"
+        )
+    return matches[0]
 
 
 def _dependency_order(nodes: set[str], edges: set[tuple[str, str]]) -> list[str]:
@@ -194,7 +232,7 @@ def _source_dependency_edges(
 
 def _changed_declarations(
     root: Path, base: str, declarations: Iterable[Declaration]
-) -> dict[str, Declaration]:
+) -> set[str]:
     by_path: dict[Path, list[Declaration]] = {}
     for declaration in declarations:
         by_path.setdefault(declaration.path, []).append(declaration)
@@ -223,11 +261,11 @@ def _changed_declarations(
     untracked = _git(root, "ls-files", "--others", "--exclude-standard", "--", "*.lean")
     statuses.update({local_path(line): "A" for line in untracked.splitlines() if line})
 
-    changed: dict[str, Declaration] = {}
+    changed: set[str] = set()
     for path, status in statuses.items():
         declarations_in_file = sorted(by_path.get(path, []), key=lambda d: d.line)
         if status == "A":
-            changed.update((d.name, d) for d in declarations_in_file)
+            changed.update(d.name for d in declarations_in_file)
             continue
         added_lines = _added_lines(root, base, path)
         for index, declaration in enumerate(declarations_in_file):
@@ -237,7 +275,7 @@ def _changed_declarations(
                 else 1 << 60
             )
             if any(declaration.line <= line < next_line for line in added_lines):
-                changed[declaration.name] = declaration
+                changed.add(declaration.name)
     return changed
 
 
@@ -262,6 +300,16 @@ def _git(root: Path, *arguments: str) -> str:
         detail = result.stderr.strip() or result.stdout.strip()
         raise DeclarationClosureError(f"git {' '.join(arguments)} failed: {detail}")
     return result.stdout.strip()
+
+
+def _has_relevant_changes(root: Path) -> bool:
+    ignored = frozenset({".git", ".lake", "build", "lake-packages"})
+    status = _git(root, "status", "--porcelain", "--untracked-files=all")
+    for line in status.splitlines():
+        raw_path = line[3:].split(" -> ")[-1]
+        if not ignored.intersection(Path(raw_path).parts):
+            return True
+    return False
 
 
 def _run(root: Path, command: list[str], stage: str) -> str:
@@ -336,7 +384,11 @@ elab "#autoform_declaration_closure" : command => do
             liftIO <| IO.println ("{_EDGE_MARKER}" ++ name.toString ++ "\t" ++ dependency.toString)
         let shown := displayName name
         if sourceNames.contains shown then
-          liftIO <| IO.println ("{_SOURCE_MARKER}" ++ name.toString ++ "\t" ++ shown.toString)
+          let some moduleIdx := env.getModuleIdxFor? name
+            | throwError "declaration has no imported module: {{name}}"
+          let moduleName := env.header.moduleNames[moduleIdx.toNat]!
+          liftIO <| IO.println ("{_SOURCE_MARKER}" ++ name.toString ++ "\t" ++
+            shown.toString ++ "\t" ++ moduleName.toString)
 
 #autoform_declaration_closure
 """
