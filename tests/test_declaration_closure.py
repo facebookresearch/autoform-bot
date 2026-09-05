@@ -71,6 +71,34 @@ def test_declaration_closure_filters_to_changed_source_declarations(
     assert report.as_dict()["definitions"][0]["url"] is None
 
 
+def test_declaration_closure_normalizes_a_nested_lean_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "autoform@example.invalid")
+    _git(tmp_path, "config", "user.name", "Autoform Test")
+    lean_root = tmp_path / "consumer"
+    lean_root.mkdir()
+    source = lean_root / "Demo.lean"
+    source.write_text("def Existing : Nat := 0\n", encoding="utf-8")
+    _git(tmp_path, "add", "consumer/Demo.lean")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _git(tmp_path, "rev-parse", "HEAD")
+    source.write_text(
+        "def Existing : Nat := 0\ndef Added : Nat := 1\ntheorem Root : Added = 1 := by rfl\n",
+        encoding="utf-8",
+    )
+
+    def fake_run(_root: Path, _command: list[str], stage: str) -> str:
+        return "" if stage == "lake build" else "AUTOFORM_DECLARATION_CLOSURE\tAdded\n"
+
+    monkeypatch.setattr(closure_module, "_run", fake_run)
+    report = declaration_closure(
+        lean_root, base=base, modules=["Demo"], roots=["Root"]
+    )
+    assert [declaration.name for declaration in report.definitions] == ["Added"]
+
+
 def test_declaration_closure_cli_emits_stable_json(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

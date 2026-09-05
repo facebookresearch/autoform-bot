@@ -6,6 +6,7 @@ import json
 import re
 import subprocess
 import tempfile
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -120,11 +121,22 @@ def declaration_closure(
 
 
 def _changed_declarations(
-    root: Path, base: str, declarations: object
+    root: Path, base: str, declarations: Iterable[Declaration]
 ) -> dict[str, Declaration]:
     by_path: dict[Path, list[Declaration]] = {}
     for declaration in declarations:
         by_path.setdefault(declaration.path, []).append(declaration)
+
+    prefix = Path(_git(root, "rev-parse", "--show-prefix"))
+
+    def local_path(raw: str) -> Path:
+        path = Path(raw)
+        if prefix == Path("."):
+            return path
+        try:
+            return path.relative_to(prefix)
+        except ValueError:
+            return path
 
     statuses: dict[Path, str] = {}
     output = _git(root, "diff", "--name-status", "--find-renames", base, "--", "*.lean")
@@ -133,11 +145,11 @@ def _changed_declarations(
         if not fields:
             continue
         status = fields[0][0]
-        path = Path(fields[-1])
+        path = local_path(fields[-1])
         if status != "D":
             statuses[path] = status
     untracked = _git(root, "ls-files", "--others", "--exclude-standard", "--", "*.lean")
-    statuses.update({Path(line): "A" for line in untracked.splitlines() if line})
+    statuses.update({local_path(line): "A" for line in untracked.splitlines() if line})
 
     changed: dict[str, Declaration] = {}
     for path, status in statuses.items():
@@ -193,7 +205,9 @@ def _run(root: Path, command: list[str], stage: str) -> str:
     return result.stdout
 
 
-def _lean_driver(modules: object, roots: object, allowed: object) -> str:
+def _lean_driver(
+    modules: Sequence[str], roots: Sequence[str], allowed: Sequence[str]
+) -> str:
     imports = "\n".join(f"import {name}" for name in modules)
     root_names = ", ".join(f"`{name}" for name in roots)
     allowed_names = ", ".join(f"`{name}" for name in allowed)
