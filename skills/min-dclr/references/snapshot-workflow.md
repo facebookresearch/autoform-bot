@@ -47,18 +47,32 @@ strengthens assumptions, narrows its domain, or omits a conclusion. Mark it
 **absent** when no declaration in the snapshot states it.
 
 The selected source-facing declarations are the roots. Compute their transitive
-statement dependency closure. Include a definition only when both are true:
+statement dependency closure with the deterministic CLI, repeating `--module`
+and `--root` as needed:
 
-1. the definition was introduced between the comparison base and the current
-   snapshot; and
-2. it is reachable from a root through constants in a declaration's type,
-   fields, constructors, or the meaning-bearing body of another included
+```bash
+autoform declaration-closure --lean-root . --base BASE_SHA \
+  --module Project.Entry --root Project.result --json
+```
+
+The CLI builds and imports the requested modules, reads Lean's elaborated
+constant expressions, traverses root types and reachable definition values,
+and intersects the result with declarations added or changed relative to the
+Git base. Its JSON result is the sole authority for closure membership. Do not
+add or remove closure entries based on an LLM reading of identifiers.
+
+Include a definition only when both are true:
+
+1. the definition was introduced or materially changed between the comparison
+   base and the current snapshot; and
+2. the CLI reports it reachable from a root through elaborated constants in a
+   declaration's type, fields, constructors, or the value of another included
    definition.
 
-Inspect complete signatures and meaning-bearing definition bodies. A custom
-class or predicate can hide the conclusion being reviewed. Do not traverse
-theorem proof bodies: definitions used only to build proofs are implementation
-dependencies, not dependencies of the statements.
+The CLI traverses complete signatures and definition values. A custom class or
+predicate can hide the conclusion being reviewed. It traverses theorem types
+but never theorem proof values, so proof-only dependencies do not enter the
+closure.
 
 For every included structure, class, or inductive declaration, inspect every
 field or constructor type and add introduced definitions referenced there,
@@ -68,11 +82,17 @@ definition until no new statement dependency is found. Do not stop at a public
 wrapper when its witness or coherence data is supplied by another introduced
 predicate; that predicate is part of the wrapper's mathematical data.
 
-Exclude unrelated definitions from the same file or change, convenience
-aliases, duplicate wrappers, constructor lemmas, arithmetic implementations,
-and proof-only helpers. Name a pre-existing dependency separately only when it
-is needed to understand an included declaration; never count it as an
-introduced definition.
+Exclude unrelated definitions from the same file or change and declarations
+used only by theorem proof values. Do not manually exclude a reported
+definition because it looks like a convenience alias, private helper,
+arithmetic implementation, or representation detail: if the CLI reports it,
+it is in the requested transitive closure. Name a pre-existing dependency
+separately only when it is needed to understand an included declaration; never
+count it as an introduced definition.
+
+If `lake build` or Lean elaboration fails, the CLI exits unsuccessfully and no
+exact closure exists for that snapshot. Record the failure and omit the closure
+list; never substitute a lexical or LLM-generated approximation.
 
 ## Link and verify the snapshot
 

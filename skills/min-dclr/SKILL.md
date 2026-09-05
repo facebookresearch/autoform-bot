@@ -20,6 +20,10 @@ than choosing a file silently.
 Read [the snapshot workflow](references/snapshot-workflow.md). Replace the
 entire managed checklist section so declarations that disappeared or left the
 dependency closure are deleted and newly relevant declarations are added.
+Use `autoform declaration-closure` as the sole authority for the Lean
+dependency closure; do not ask the language model to infer that graph from
+source text. If Lean cannot elaborate the requested modules, report that the
+exact closure is unavailable rather than publishing a partial closure.
 Whenever the source is available, the refreshed section must include the
 original mathematical statement or definition as a verbatim quotation with its
 locator, paired with the existing GitHub link to the Lean declaration that

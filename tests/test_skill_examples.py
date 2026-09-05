@@ -427,6 +427,8 @@ def test_min_dclr_refreshes_the_current_snapshot(repo_root: Path) -> None:
     assert "original mathematical statement or definition" in normalized_skill
     assert "paired with the existing GitHub link" in normalized_skill
     assert "Do not copy the Lean implementation" in skill
+    assert "autoform declaration-closure" in skill
+    assert "sole authority" in normalized_skill
     assert "declarations that disappeared or left the dependency closure are deleted" in normalized_skill
     assert "$min-dclr" in metadata
     for required in (
@@ -434,13 +436,17 @@ def test_min_dclr_refreshes_the_current_snapshot(repo_root: Path) -> None:
         "confirm that its commit, status, and reviewed files have not changed",
         "discard the computed list and rerun once",
         "transitive statement dependency closure",
-        "introduced between the comparison base and the current snapshot",
-        "meaning-bearing body",
+        "autoform declaration-closure",
+        "reads Lean's elaborated constant expressions",
+        "sole authority for closure membership",
+        "introduced or materially changed between the comparison",
+        "the value of another included definition",
         "inspect every field or constructor type",
         "including references nested beneath `∀`, `∃`",
         "until no new statement dependency is found",
         "witness or coherence data",
-        "Do not traverse theorem proof bodies",
+        "never theorem proof values",
+        "never substitute a lexical or LLM-generated approximation",
         "original mathematical statement or definition",
         "the managed section **must** include",
         "paired in the same checklist entry with the GitHub link",

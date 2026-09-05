@@ -80,6 +80,10 @@ def test_attributes_and_modifiers_do_not_hide_a_declaration(tmp_path: Path) -> N
     assert _index(tmp_path).find("Outer.Inner.gamma") is not None
 
 
+def test_public_modifier_does_not_hide_a_declaration(tmp_path: Path) -> None:
+    assert _index(tmp_path, "public def visible : Nat := 1\n").find("visible") is not None
+
+
 def test_commented_out_code_is_not_indexed(tmp_path: Path) -> None:
     index = _index(tmp_path)
 

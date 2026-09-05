@@ -106,6 +106,7 @@ complete frontmatter, hierarchy, status, and validation rules.
 | `autoform audit` | Audit completeness and checked facts. |
 | `autoform doctor` | Diagnose the local blueprint contract. |
 | `autoform claim` | Coordinate temporary ownership through Git refs. |
+| `autoform declaration-closure` | Compute an exact Lean-elaborated closure for source review. |
 | `autoform render` | Generate publishable MkDocs source. |
 | `autoform-visualize` | Generate the Mermaid dependency graph. |
 

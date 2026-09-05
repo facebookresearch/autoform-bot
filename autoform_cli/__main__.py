@@ -16,6 +16,7 @@ from . import status
 from .article_identity import plan_article_ids
 from .audit import audit_blueprint
 from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_key
+from .declaration_closure import DeclarationClosureError, declaration_closure
 from .doctor import diagnose_project
 from .graph import GraphValidationError, load_graph
 from .lean import build_linker, declaration_names
@@ -93,6 +94,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     render = subparsers.add_parser
 
+    closure = subparsers.add_parser(
+        "declaration-closure",
+        help="compute the exact PR-changed dependency closure of Lean declarations",
+    )
+    closure.add_argument("--lean-root", type=Path, default=Path("."))
+    closure.add_argument("--base", required=True, help="Git base revision for changed declarations")
+    closure.add_argument("--module", action="append", required=True, help="Lean module to build and import")
+    closure.add_argument("--root", action="append", required=True, help="source-facing Lean declaration")
+    closure.add_argument("--json", action="store_true", help="write stable machine-readable output")
+
     render = subparsers.add_parser("render", help="build the publishable blueprint")
     render.add_argument("blueprint_dir")
     render.add_argument("-o", "--output", default="site-src", help="output directory")
@@ -119,6 +130,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _claim(args)
     if args.command == "migrate":
         return _migrate(args)
+    if args.command == "declaration-closure":
+        return _declaration_closure(args)
     if args.command == "render":
         return _render(args)
     return 2
@@ -300,6 +313,26 @@ def _claim_board(args: argparse.Namespace) -> ClaimBoard:
     repo = args.repo or _origin_url()
     scratch = args.scratch or _default_claim_scratch(repo, worker_id)
     return ClaimBoard(repo, worker_id, scratch)
+
+
+def _declaration_closure(args: argparse.Namespace) -> int:
+    try:
+        report = declaration_closure(
+            args.lean_root,
+            base=args.base,
+            modules=args.module,
+            roots=args.root,
+        )
+    except DeclarationClosureError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(report.to_json())
+        return 0
+    print(f"OK: {len(report.definitions)} changed definition(s) in exact closure")
+    for declaration in report.definitions:
+        print(f"{declaration.name}\t{declaration.path}:{declaration.line}")
+    return 0
 
 
 def _origin_url() -> str:

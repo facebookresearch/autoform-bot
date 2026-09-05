@@ -24,7 +24,7 @@ _SECTION = re.compile(r"^\s*section\b\s*(\S*)")
 _END = re.compile(r"^\s*end\b\s*(\S*)")
 _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
-    r"(?:(?:private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
+    r"(?:(?:public|private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
     r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom)\s+"
     r"([^\s:(){}\[\]⦃⦄,]+)"
 )
