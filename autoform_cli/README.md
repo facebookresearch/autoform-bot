@@ -154,6 +154,10 @@ autoform declaration-closure --lean-root . --base <base-sha> \
 The command first builds the requested modules. It then traverses constants in
 the elaborated root types and in reachable definition values, while excluding
 theorem proof values, and retains declarations added or changed since the base.
+The JSON `definitions` array is ordered with dependencies before declarations
+that use them, and `dependency_edges` exposes the source-level graph behind that
+order. Consumers should preserve this order instead of reconstructing the
+graph.
 If the modules do not build, it exits nonzero instead of returning an
 approximate source-text closure. Repeat `--module` and `--root` for multiple
 entries.

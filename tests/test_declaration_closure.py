@@ -27,8 +27,9 @@ def _project(tmp_path: Path) -> tuple[Path, str]:
     base = _git(tmp_path, "rev-parse", "HEAD")
     source.write_text(
         "def Existing : Nat := 0\n"
-        "def Added : Nat := Existing + 1\n"
-        "theorem Root : Added = 1 := by rfl\n",
+        "def Foundation : Nat := Existing + 1\n"
+        "def Added : Nat := Foundation + 1\n"
+        "theorem Root : Added = 2 := by rfl\n",
         encoding="utf-8",
     )
     return tmp_path, base
@@ -43,7 +44,23 @@ def test_lean_driver_uses_elaborated_types_and_definition_values() -> None:
     assert "value.value.getUsedConstantsAsSet" in source
     assert "NameSet.ofList value.ctors" in source
     assert "privateToUserName?" in source
-    assert "AUTOFORM_DECLARATION_CLOSURE\t" in source
+    assert "AUTOFORM_DECLARATION_NODE\t" in source
+    assert "AUTOFORM_DECLARATION_EDGE\t" in source
+    assert "AUTOFORM_DECLARATION_SOURCE\t" in source
+
+
+def test_generated_structure_constants_preserve_source_dependency_order() -> None:
+    nodes = {"Root", "Root.mk", "WitnessData"}
+    edges = {("Root", "Root.mk"), ("Root.mk", "WitnessData")}
+    source_names = {"Root": "Root", "WitnessData": "WitnessData"}
+
+    order = closure_module._dependency_order(nodes, edges)
+    source_order = [source_names[name] for name in order if name in source_names]
+
+    assert source_order == ["WitnessData", "Root"]
+    assert closure_module._source_dependency_edges(source_names, edges) == (
+        ("Root", "WitnessData"),
+    )
 
 
 def test_declaration_closure_filters_to_changed_source_declarations(
@@ -55,9 +72,14 @@ def test_declaration_closure_filters_to_changed_source_declarations(
         if stage == "lake build":
             return ""
         return (
-            "AUTOFORM_DECLARATION_CLOSURE\tExisting\n"
-            "AUTOFORM_DECLARATION_CLOSURE\tAdded\n"
-            "AUTOFORM_DECLARATION_CLOSURE\tRoot\n"
+            "AUTOFORM_DECLARATION_NODE\tRoot\n"
+            "AUTOFORM_DECLARATION_NODE\tAdded\n"
+            "AUTOFORM_DECLARATION_NODE\tFoundation\n"
+            "AUTOFORM_DECLARATION_EDGE\tRoot\tAdded\n"
+            "AUTOFORM_DECLARATION_EDGE\tAdded\tFoundation\n"
+            "AUTOFORM_DECLARATION_SOURCE\tRoot\tRoot\n"
+            "AUTOFORM_DECLARATION_SOURCE\tAdded\tAdded\n"
+            "AUTOFORM_DECLARATION_SOURCE\tFoundation\tFoundation\n"
         )
 
     monkeypatch.setattr(closure_module, "_run", fake_run)
@@ -65,8 +87,19 @@ def test_declaration_closure_filters_to_changed_source_declarations(
         root, base=base, modules=["Demo"], roots=["Root"]
     )
 
-    assert [declaration.name for declaration in report.reachable] == ["Added", "Root"]
-    assert [declaration.name for declaration in report.definitions] == ["Added"]
+    assert [declaration.name for declaration in report.reachable] == [
+        "Foundation",
+        "Added",
+        "Root",
+    ]
+    assert [declaration.name for declaration in report.definitions] == [
+        "Foundation",
+        "Added",
+    ]
+    assert report.dependency_edges == (
+        ("Added", "Foundation"),
+        ("Root", "Added"),
+    )
     assert report.dirty is True
     assert report.as_dict()["definitions"][0]["url"] is None
 
@@ -90,7 +123,11 @@ def test_declaration_closure_normalizes_a_nested_lean_root(
     )
 
     def fake_run(_root: Path, _command: list[str], stage: str) -> str:
-        return "" if stage == "lake build" else "AUTOFORM_DECLARATION_CLOSURE\tAdded\n"
+        return (
+            ""
+            if stage == "lake build"
+            else "AUTOFORM_DECLARATION_NODE\tAdded\nAUTOFORM_DECLARATION_SOURCE\tAdded\tAdded\n"
+        )
 
     monkeypatch.setattr(closure_module, "_run", fake_run)
     report = declaration_closure(
@@ -105,7 +142,11 @@ def test_declaration_closure_cli_emits_stable_json(
     root, base = _project(tmp_path)
 
     def fake_run(_root: Path, _command: list[str], stage: str) -> str:
-        return "" if stage == "lake build" else "AUTOFORM_DECLARATION_CLOSURE\tRoot\n"
+        return (
+            ""
+            if stage == "lake build"
+            else "AUTOFORM_DECLARATION_NODE\tRoot\nAUTOFORM_DECLARATION_SOURCE\tRoot\tRoot\n"
+        )
 
     monkeypatch.setattr(closure_module, "_run", fake_run)
     assert main(
@@ -125,6 +166,7 @@ def test_declaration_closure_cli_emits_stable_json(
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema"] == "autoform-declaration-closure/v1"
     assert payload["roots"][0]["name"] == "Root"
+    assert payload["dependency_edges"] == []
 
 
 def test_declaration_closure_cli_fails_closed_when_build_fails(

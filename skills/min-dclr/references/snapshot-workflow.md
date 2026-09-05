@@ -46,6 +46,30 @@ parts. Mark a clause **partial** when the Lean statement weakens its structure,
 strengthens assumptions, narrows its domain, or omits a conclusion. Mark it
 **absent** when no declaration in the snapshot states it.
 
+This source-to-root mapping is the agent's only responsibility for choosing
+Lean declarations. Pass every selected root to one CLI invocation. Do not ask
+the agent to discover, complete, prune, or repair the dependency closure.
+
+## Keep the review work outside the CLI
+
+Delegate only dependency-closure discovery and dependency ordering to the CLI.
+The agent still must:
+
+- capture and report the coherent repository and source snapshot;
+- read the mathematical source and choose the minimal source-facing roots;
+- quote each available original statement or definition with its locator;
+- pair each source quotation with the implementing Lean declaration link;
+- judge statement faithfulness and identify partial or absent source clauses;
+- report build, `sorry`/`admit`/raw-`axiom`, and `#print axioms` evidence;
+- distinguish pre-existing explanatory dependencies from PR-changed closure
+  definitions; and
+- replace the complete managed Markdown section, including commands and
+  unresolved evidence.
+
+Do not paste the CLI JSON as the final review. Use its `definitions`, links,
+and dependency ordering inside the full human-readable checklist specified
+below.
+
 The selected source-facing declarations are the roots. Compute their transitive
 statement dependency closure with the deterministic CLI, repeating `--module`
 and `--root` as needed:
@@ -59,7 +83,11 @@ The CLI builds and imports the requested modules, reads Lean's elaborated
 constant expressions, traverses root types and reachable definition values,
 and intersects the result with declarations added or changed relative to the
 Git base. Its JSON result is the sole authority for closure membership. Do not
-add or remove closure entries based on an LLM reading of identifiers.
+add or remove closure entries based on an LLM reading of identifiers. The
+`definitions` array is already dependency-first topologically ordered; preserve
+that order in the Markdown. `dependency_edges` records the graph used for the
+ordering. When a dependency cycle exists, the CLI uses a deterministic order
+within that cycle because no strict topological order exists there.
 
 Include a definition only when both are true:
 
@@ -142,7 +170,8 @@ Write the managed section in this order:
 
 1. source locator and exact snapshot, including dirty-state disclosure;
 2. build and proof-integrity warning, if any;
-3. introduced definitions in the roots' statement dependency closure;
+3. introduced definitions in the roots' statement dependency closure, in the
+   dependency-first order returned by the CLI;
 4. source-facing declarations grouped by source locator, with each available
    original mathematical statement or definition quoted verbatim and paired
    with its implementing Lean declaration's GitHub link;

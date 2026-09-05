@@ -17,7 +17,9 @@ _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 _DEFINITION_KEYWORDS = frozenset(
     {"abbrev", "class", "def", "inductive", "instance", "opaque", "structure"}
 )
-_MARKER = "AUTOFORM_DECLARATION_CLOSURE\t"
+_NODE_MARKER = "AUTOFORM_DECLARATION_NODE\t"
+_EDGE_MARKER = "AUTOFORM_DECLARATION_EDGE\t"
+_SOURCE_MARKER = "AUTOFORM_DECLARATION_SOURCE\t"
 
 
 class DeclarationClosureError(RuntimeError):
@@ -33,6 +35,7 @@ class ClosureReport:
     modules: tuple[str, ...]
     roots: tuple[Declaration, ...]
     reachable: tuple[Declaration, ...]
+    dependency_edges: tuple[tuple[str, str], ...]
 
     @property
     def definitions(self) -> tuple[Declaration, ...]:
@@ -53,6 +56,10 @@ class ClosureReport:
         return {
             "base": self.base,
             "definitions": [item(d) for d in self.definitions],
+            "dependency_edges": [
+                {"declaration": declaration, "depends_on": dependency}
+                for declaration, dependency in self.dependency_edges
+            ],
             "dirty": self.dirty,
             "head": self.head,
             "modules": list(self.modules),
@@ -100,14 +107,11 @@ def declaration_closure(
         driver.write_text(source, encoding="utf-8")
         output = _run(root, ["lake", "env", "lean", str(driver)], "Lean elaboration")
 
-    names = sorted(
-        {
-            line.removeprefix(_MARKER)
-            for line in output.splitlines()
-            if line.startswith(_MARKER)
-        }
-    )
+    nodes, edges, source_names = _parse_lean_output(output)
+    ordered = _dependency_order(nodes, edges)
+    names = [source_names[name] for name in ordered if name in source_names]
     reachable = tuple(index.declarations[name] for name in names if name in changed)
+    dependency_edges = _source_dependency_edges(source_names, edges)
     root_declarations = tuple(index.declarations[name] for name in roots)
     return ClosureReport(
         root=root,
@@ -117,7 +121,75 @@ def declaration_closure(
         modules=tuple(modules),
         roots=root_declarations,
         reachable=reachable,
+        dependency_edges=dependency_edges,
     )
+
+
+def _parse_lean_output(
+    output: str,
+) -> tuple[set[str], set[tuple[str, str]], dict[str, str]]:
+    nodes: set[str] = set()
+    edges: set[tuple[str, str]] = set()
+    source_names: dict[str, str] = {}
+    for line in output.splitlines():
+        if line.startswith(_NODE_MARKER):
+            nodes.add(line.removeprefix(_NODE_MARKER))
+        elif line.startswith(_EDGE_MARKER):
+            declaration, dependency = line.removeprefix(_EDGE_MARKER).split("\t", 1)
+            edges.add((declaration, dependency))
+        elif line.startswith(_SOURCE_MARKER):
+            actual, display = line.removeprefix(_SOURCE_MARKER).split("\t", 1)
+            source_names[actual] = display
+    return nodes, edges, source_names
+
+
+def _dependency_order(nodes: set[str], edges: set[tuple[str, str]]) -> list[str]:
+    """Order dependencies before dependants, deterministically within cycles."""
+    dependencies: dict[str, set[str]] = {name: set() for name in nodes}
+    for declaration, dependency in edges:
+        if declaration in nodes and dependency in nodes:
+            dependencies[declaration].add(dependency)
+
+    order: list[str] = []
+    permanent: set[str] = set()
+    temporary: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in permanent or name in temporary:
+            return
+        temporary.add(name)
+        for dependency in sorted(dependencies[name]):
+            visit(dependency)
+        temporary.remove(name)
+        permanent.add(name)
+        order.append(name)
+
+    for name in sorted(nodes):
+        visit(name)
+    return order
+
+
+def _source_dependency_edges(
+    source_names: dict[str, str], edges: set[tuple[str, str]]
+) -> tuple[tuple[str, str], ...]:
+    """Collapse generated Lean constants between source declarations."""
+    dependencies: dict[str, set[str]] = {}
+    for declaration, dependency in edges:
+        dependencies.setdefault(declaration, set()).add(dependency)
+    result: set[tuple[str, str]] = set()
+    for source, display in source_names.items():
+        pending = list(dependencies.get(source, ()))
+        seen: set[str] = set()
+        while pending:
+            dependency = pending.pop()
+            if dependency in seen:
+                continue
+            seen.add(dependency)
+            if dependency in source_names:
+                result.add((display, source_names[dependency]))
+            else:
+                pending.extend(dependencies.get(dependency, ()))
+    return tuple(sorted(result))
 
 
 def _changed_declarations(
@@ -251,14 +323,20 @@ private partial def visit (env : Environment) (allowed : NameSet)
 elab "#autoform_declaration_closure" : command => do
   let roots : List Name := [{root_names}]
   let allowed : NameSet := NameSet.ofList [{allowed_names}]
+  let sourceNames : NameSet := allowed ++ NameSet.ofList roots
   let env ← getEnv
-  match visit env allowed roots with
+  match visit env sourceNames roots with
   | .error message => throwError message
   | .ok names =>
       for name in names.toList do
+        liftIO <| IO.println ("{_NODE_MARKER}" ++ name.toString)
+        let some info := env.find? name | continue
+        for dependency in (directDependencies info).toList do
+          if belongsTo sourceNames dependency then
+            liftIO <| IO.println ("{_EDGE_MARKER}" ++ name.toString ++ "\t" ++ dependency.toString)
         let shown := displayName name
-        if allowed.contains shown then
-          liftIO <| IO.println ("{_MARKER}" ++ shown.toString)
+        if sourceNames.contains shown then
+          liftIO <| IO.println ("{_SOURCE_MARKER}" ++ name.toString ++ "\t" ++ shown.toString)
 
 #autoform_declaration_closure
 """

@@ -429,6 +429,10 @@ def test_min_dclr_refreshes_the_current_snapshot(repo_root: Path) -> None:
     assert "Do not copy the Lean implementation" in skill
     assert "autoform declaration-closure" in skill
     assert "sole authority" in normalized_skill
+    assert "agent decides which declarations directly represent" in normalized_skill
+    assert "dependency-first order returned by the CLI" in normalized_skill
+    assert "Delegate only closure discovery and ordering" in normalized_skill
+    assert "complete managed Markdown section" in normalized_skill
     assert "declarations that disappeared or left the dependency closure are deleted" in normalized_skill
     assert "$min-dclr" in metadata
     for required in (
@@ -439,6 +443,15 @@ def test_min_dclr_refreshes_the_current_snapshot(repo_root: Path) -> None:
         "autoform declaration-closure",
         "reads Lean's elaborated constant expressions",
         "sole authority for closure membership",
+        "source-to-root mapping is the agent's only responsibility",
+        "Pass every selected root to one CLI invocation",
+        "Delegate only dependency-closure discovery and dependency ordering",
+        "Do not paste the CLI JSON as the final review",
+        "quote each available original statement or definition with its locator",
+        "judge statement faithfulness",
+        "report build, `sorry`/`admit`/raw-`axiom`, and `#print axioms` evidence",
+        "`definitions` array is already dependency-first topologically ordered",
+        "`dependency_edges` records the graph",
         "introduced or materially changed between the comparison",
         "the value of another included definition",
         "inspect every field or constructor type",
