@@ -32,6 +32,11 @@
         "enabledDefault": true
       },
       {
+        "id": "min-dclr",
+        "path": "skills/min-dclr/SKILL.md",
+        "enabledDefault": true
+      },
+      {
         "id": "develop-plugin",
         "path": "skills/develop-plugin/SKILL.md",
         "enabledDefault": true

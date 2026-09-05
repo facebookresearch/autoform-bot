@@ -65,6 +65,7 @@ Next use the host skills from the Lean project:
 | Build a source-grounded roadmap | `/autoform:roadmap` | `$roadmap` |
 | Prepare a person-led review | `/autoform:human-review` | `$human-review` |
 | Run an independent agent review | `/autoform:agent-review` | `$agent-review` |
+| Refresh a minimal declaration checklist | `/autoform:min-dclr` | `$min-dclr` |
 
 For example: “Build a roadmap for Sections 2–4 of `paper.pdf`; confirm the scope
 and completion criteria before writing articles.” Keep the source in the
@@ -105,6 +106,7 @@ complete frontmatter, hierarchy, status, and validation rules.
 | `autoform audit` | Audit completeness and checked facts. |
 | `autoform doctor` | Diagnose the local blueprint contract. |
 | `autoform claim` | Coordinate temporary ownership through Git refs. |
+| `autoform declaration-closure` | Compute an exact Lean-elaborated closure for source review. |
 | `autoform render` | Generate publishable MkDocs source. |
 | `autoform-visualize` | Generate the Mermaid dependency graph. |
 

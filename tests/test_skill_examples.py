@@ -408,6 +408,82 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
     assert (repo_root / "skills/agent-review/references/roadmap-quality.md").is_file()
 
 
+def test_min_dclr_refreshes_the_current_snapshot(repo_root: Path) -> None:
+    skill = (repo_root / "skills/min-dclr/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    reference_path = (
+        repo_root / "skills/min-dclr/references/snapshot-workflow.md"
+    )
+    reference = reference_path.read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
+    normalized_reference = " ".join(reference.split())
+    metadata = (repo_root / "skills/min-dclr/agents/openai.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "references/snapshot-workflow.md" in skill
+    assert "every invocation as a fresh snapshot" in skill
+    assert "original mathematical statement or definition" in normalized_skill
+    assert "paired with the existing GitHub link" in normalized_skill
+    assert "Do not copy the Lean implementation" in skill
+    assert "autoform declaration-closure" in skill
+    assert "sole authority" in normalized_skill
+    assert "agent decides which declarations directly represent" in normalized_skill
+    assert "dependency-first order returned by the CLI" in normalized_skill
+    assert "Delegate only closure discovery and ordering" in normalized_skill
+    assert "complete managed Markdown section" in normalized_skill
+    assert "declarations that disappeared or left the dependency closure are deleted" in normalized_skill
+    assert "$min-dclr" in metadata
+    for required in (
+        "Do not wait for all formalization runs to finish",
+        "confirm that its commit, status, and reviewed files have not changed",
+        "discard the computed list and rerun once",
+        "transitive statement dependency closure",
+        "autoform declaration-closure",
+        "reads Lean's elaborated constant expressions",
+        "sole authority for closure membership",
+        "source-to-root mapping is the agent's only responsibility",
+        "Pass every selected root to one CLI invocation",
+        "Delegate only dependency-closure discovery and dependency ordering",
+        "Do not paste the CLI JSON as the final review",
+        "quote each available original statement or definition with its locator",
+        "judge statement faithfulness",
+        "report build, `sorry`/`admit`/raw-`axiom`, and `#print axioms` evidence",
+        "`definitions` array is already dependency-first topologically ordered",
+        "`dependency_edges` records the graph",
+        "introduced or materially changed between the comparison",
+        "the value of another included definition",
+        "inspect every field or constructor type",
+        "including references nested beneath `∀`, `∃`",
+        "until no new statement dependency is found",
+        "witness or coherence data",
+        "never theorem proof values",
+        "never substitute a lexical or LLM-generated approximation",
+        "original mathematical statement or definition",
+        "the managed section **must** include",
+        "paired in the same checklist entry with the GitHub link",
+        "do not copy that code into the Markdown",
+        "This applies on every refresh",
+        "do not reconstruct a quotation from comments or memory",
+        "FULL_COMMIT_SHA",
+        "absolute local file links",
+        "validate every generated link against the captured snapshot",
+        "anchor must be the declaration's first line",
+        "partial",
+        "absent",
+        "#print axioms",
+        "<!-- min-dclr:start -->",
+        "<!-- min-dclr:end -->",
+        "Never incrementally append to the old list",
+        "delete stale entries and add current ones",
+        "preserving all unrelated content",
+        "unmarked target consists entirely of an older declaration checklist",
+        "replacing that checklist with one marked section",
+    ):
+        assert required in normalized_reference
+
+
 def test_setup_skill_offers_opt_in_zulip_project_sync(repo_root: Path) -> None:
     setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
     roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")

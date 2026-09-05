@@ -24,7 +24,7 @@ _SECTION = re.compile(r"^\s*section\b\s*(\S*)")
 _END = re.compile(r"^\s*end\b\s*(\S*)")
 _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
-    r"(?:(?:private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
+    r"(?:(?:public|private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
     r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom)\s+"
     r"([^\s:(){}\[\]⦃⦄,]+)"
 )
@@ -47,6 +47,7 @@ class SourceIndex:
 
     root: Path
     declarations: dict[str, Declaration]
+    occurrences: dict[str, tuple[Declaration, ...]]
 
     def find(self, name: str) -> Declaration | None:
         return self.declarations.get(name)
@@ -56,8 +57,9 @@ def index_project(root: str | Path) -> SourceIndex:
     """Scan ``*.lean`` beneath *root* and index declarations by full name."""
     root_path = Path(root).expanduser().resolve()
     declarations: dict[str, Declaration] = {}
+    occurrences: dict[str, list[Declaration]] = {}
     if not root_path.is_dir():
-        return SourceIndex(root=root_path, declarations=declarations)
+        return SourceIndex(root=root_path, declarations=declarations, occurrences={})
 
     for path in sorted(root_path.rglob("*.lean")):
         if _IGNORED_DIRECTORIES.intersection(path.relative_to(root_path).parts):
@@ -68,10 +70,15 @@ def index_project(root: str | Path) -> SourceIndex:
             continue
         relative = path.relative_to(root_path)
         for declaration in _scan(text, relative):
+            occurrences.setdefault(declaration.name, []).append(declaration)
             # First definition wins, so an earlier file is not masked by a later
             # one when a name is genuinely duplicated across namespaces.
             declarations.setdefault(declaration.name, declaration)
-    return SourceIndex(root=root_path, declarations=declarations)
+    return SourceIndex(
+        root=root_path,
+        declarations=declarations,
+        occurrences={name: tuple(found) for name, found in occurrences.items()},
+    )
 
 
 def _scan(text: str, relative: Path) -> list[Declaration]:
@@ -158,7 +165,11 @@ class SourceLinker:
     def url(self, name: str) -> str | None:
         """Return a permanent link to *name*, or ``None`` if it cannot be built."""
         declaration = self.index.find(name)
-        if declaration is None or not self.repository_url or not self.ref:
+        return self.declaration_url(declaration) if declaration is not None else None
+
+    def declaration_url(self, declaration: Declaration) -> str | None:
+        """Return a permanent link to a particular declaration occurrence."""
+        if not self.repository_url or not self.ref:
             return None
         path = declaration.path.as_posix()
         return f"{self.repository_url}/blob/{self.ref}/{path}#L{declaration.line}"

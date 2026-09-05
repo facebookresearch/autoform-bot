@@ -1,0 +1,4 @@
+interface:
+  display_name: "Minimal Declaration Review"
+  short_description: "Refresh minimal source-to-Lean checklists"
+  default_prompt: "Use $min-dclr to recompute and update the minimal declaration checklist for the current snapshot."

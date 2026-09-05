@@ -142,6 +142,26 @@ uv run --with mkdocs --with mkdocs-material --with mkdocs-literate-nav \
 Drop `--require-declarations` when reviewing work in progress, where a
 statement may name a Lean declaration that does not exist yet.
 
+Compute the deterministic dependency closure used by `min-dclr` by naming the
+comparison base, every module that contains a review root, and every
+source-facing root:
+
+```bash
+autoform declaration-closure --lean-root . --base <base-sha> \
+  --module Project.Entry --root Project.mainTheorem --json
+```
+
+The command first builds the requested modules. It then traverses constants in
+the elaborated root types and in reachable definition values, while excluding
+theorem proof values, and retains declarations added or changed since the base.
+The JSON `definitions` array is ordered with dependencies before declarations
+that use them, and `dependency_edges` exposes the source-level graph behind that
+order. Consumers should preserve this order instead of reconstructing the
+graph.
+If the modules do not build, it exits nonzero instead of returning an
+approximate source-text closure. Repeat `--module` and `--root` for multiple
+entries.
+
 Validate structure, and optionally check that every `lean:` name really exists
 in the project's Lean sources:
 
