@@ -17,8 +17,8 @@ MkDocs, CI, and optionally publication. It does not scope sources, choose
 theorems, write roadmap nodes, or prove results; Roadmap owns that work.
 
 Inspect before writing and preserve existing Lean, Markdown, workflow, and
-ignore files. Use `scripts/workspace_inspector.py` when auditing an existing
-Lean workspace. Infer safe local defaults from the request and repository. If a
+ignore files. Start with the offline, read-only `autoform project inspect`
+command. Infer safe local defaults from the request and repository. If a
 material choice is missing, ask once for the run type (new, repair, or inspect),
 UpperCamelCase package name, target directory, and whether publication is
 wanted. Without explicit publication approval, make no remote changes. Setup
@@ -31,15 +31,9 @@ package, check the current matching stable Lean/Mathlib release, update branch
 and immutable workflow pins, and merge rather than overwrite. Its populated
 thesis notes illustrate later skills; Setup does not reproduce that mathematics.
 
-For a new repository, require a target directory that does not already exist and
-bootstrap the Lean/Mathlib shell with the plugin's internal helper:
-
-```bash
-bash "<AUTOFORM_PLUGIN_ROOT>/scripts/make_project.sh" \
-  <ProjectName> [target-dir]
-```
-
-For a new or incomplete repository:
+For a new repository, first create a standard Lean/Lake project using the
+recommended pair reported by `autoform project versions --json`. For a new or
+incomplete Autoform installation inside that repository:
 
 - create or repair a buildable Lean project with matching `lean-toolchain` and
   Mathlib revisions; and
@@ -54,16 +48,17 @@ a book with no chapters. `init` never overwrites an existing file, so it is
 also the repair path; it reports what it left alone. See the
 [CLI reference](../../autoform_cli/README.md#commands) for its flags.
 
-`init` pins the generated workflows to the Autoform commit that ran it, but it
-can only do that when Autoform is running from a Git checkout. Installed as a
-plugin it is a plain directory copy, so there is nothing to read and `init`
-writes no CI rather than guess a ref: guessing produced projects whose first
-push failed with nothing in the workflow to explain why. When it reports that,
-find the commit the plugin was installed from and pass
-`--autoform-ref <40-char-sha>`, or say plainly that CI was not configured.
-Never invent a ref. It must be a full 40-character commit sha: `init` refuses a
-branch, a tag, or an abbreviated sha, because CI would silently reinstall a
-different Autoform later and break a project that was passing.
+Before writing, run `autoform project provenance --json`. This online check
+verifies the plugin checkout or its Codex or Claude installation record against
+the recorded remote commit. With neither provenance flag supplied, `init`
+repeats that verification and pins generated workflows to the verified source
+and commit. If verification fails, it writes no CI rather than guessing.
+
+For an explicit override, pass both
+`--autoform-source <VERIFIED_HTTPS_GIT_SOURCE>` and
+`--autoform-ref <VERIFIED_40_CHAR_SHA>`. A ref alone targets the canonical
+Autoform repository. Never invent either value; branches, tags, abbreviated
+SHAs, credential-bearing URLs, and unverifiable installs are not provenance.
 
 The two workflows it writes are `autoform-verify.yml`, which validates the
 Markdown DAG, builds Lean, rejects unfinished or unsafe proofs, and audits

@@ -128,8 +128,11 @@ autoform init . --title "Finite Flat Group Schemes" \
   --repository-url https://github.com/owner/repo
 ```
 
-Pass `--autoform-ref <sha>` to pin the generated workflows at an immutable
-commit, `--force` to overwrite, and `--json` for machine-readable output.
+When neither provenance flag is supplied, `init` verifies the installed plugin
+and pins the generated workflows to its source and commit. To override that
+pair, pass both `--autoform-source <https-git-url>` and `--autoform-ref <sha>`.
+A ref supplied alone is resolved against the canonical repository. Use
+`--force` to overwrite and `--json` for machine-readable output.
 
 Inspect a Lean project and list Autoform's bundled known-good release pairs:
 
@@ -137,6 +140,7 @@ Inspect a Lean project and list Autoform's bundled known-good release pairs:
 autoform project inspect .
 autoform project inspect path/inside/project --json
 autoform project versions --json
+autoform project provenance --json
 ```
 
 `project inspect` reads the nearest enclosing project's `lean-toolchain`,
@@ -168,6 +172,12 @@ pairs. It is an allowlist, not a resolver.
 full Lake configuration or build-validity check. `ok` likewise means the files
 and fields used by this report were readable and decodable. Target and package
 options outside the report are left to Lake.
+
+`project provenance` is the online step. It reads an exact plugin-root checkout,
+a bounded Codex installer record, or bounded Claude installation and marketplace
+records. It fetches the recorded commit and compares the installed plugin and
+importable packages with that commit. It reports a credential-free HTTPS source
+and full SHA only after all checks pass. A plain wheel cannot infer provenance.
 
 Publishing a project runs four steps in order: validate, write the Mermaid
 graph into the vault, render the site source, then strict-build the site.

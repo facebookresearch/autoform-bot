@@ -11,7 +11,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -49,7 +48,7 @@ def test_scaffold_ignores_python_cache_artifacts(
     monkeypatch.setattr(scaffold_module, "_TEMPLATES", templates)
 
     project = tmp_path / "project"
-    result = scaffold_project(project, title="Cache-safe")
+    result = scaffold_project(project, title="Cache-safe", autoform_ref="0" * 40)
 
     assert ".github/autoform_audit.py" in result.written
     assert not (project / ".github/__pycache__").exists()
@@ -57,7 +56,12 @@ def test_scaffold_ignores_python_cache_artifacts(
 
 
 def test_scaffold_writes_the_whole_vault(tmp_path: Path) -> None:
-    result = scaffold_project(tmp_path, title="Finite Flat", repository_url="https://example.test/repo")
+    result = scaffold_project(
+        tmp_path,
+        title="Finite Flat",
+        repository_url="https://example.test/repo",
+        autoform_ref="0" * 40,
+    )
 
     assert set(result.written) == _EXPECTED
     assert result.skipped == ()
@@ -203,7 +207,17 @@ def test_refuses_a_symlinked_target(tmp_path: Path) -> None:
 def test_cli_reports_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from autoform_cli.__main__ import main
 
-    assert main(["init", str(tmp_path), "--title", "Finite Flat", "--json"]) == 0
+    assert main(
+        [
+            "init",
+            str(tmp_path),
+            "--title",
+            "Finite Flat",
+            "--autoform-ref",
+            "0" * 40,
+            "--json",
+        ]
+    ) == 0
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["project"] == "Finite Flat"
@@ -295,29 +309,41 @@ def test_scaffolded_theme_defers_navigation_to_the_book(tmp_path: Path) -> None:
     assert "name: material" in mkdocs
 
 
-def test_generated_ci_pins_the_checkout_that_scaffolded_it(tmp_path: Path) -> None:
-    """A floating ref installs an Autoform that may not have this CLI.
-
-    `facebookresearch/autoform-bot@main` predates `autoform_cli` entirely, so
-    defaulting to it meant every scaffolded project's first CI run installed a
-    build with no `autoform` command. The pin now comes from the checkout doing
-    the scaffolding, which is immutable and known-good by construction.
-    """
-
-    from autoform_cli.scaffold import plugin_pin
+def test_generated_ci_uses_verified_plugin_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = "https://example.test/autoform.git"
+    ref = "1" * 40
+    monkeypatch.setattr(scaffold_module, "plugin_pin", lambda: (source, ref))
 
     scaffold_project(tmp_path, title="Finite Flat")
-    source, ref = plugin_pin()
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
 
     assert f"AUTOFORM_SOURCE: {json.dumps(source)}" in verify
     assert f"AUTOFORM_REF: {json.dumps(ref)}" in verify
     assert '"git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in verify
-    assert re.fullmatch(r"[0-9a-f]{40}", ref), "the pin must be an immutable commit"
     assert "@main" not in verify
 
 
-def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:
+def test_scaffold_pin_delegates_to_verified_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from autoform_cli import provenance
+
+    expected = ("https://example.test/autoform.git", "1" * 40)
+    monkeypatch.setattr(provenance, "plugin_pin", lambda: expected)
+
+    assert scaffold_module.plugin_pin() == expected
+
+
+def test_explicit_pin_overrides_without_discovering_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        scaffold_module,
+        "plugin_pin",
+        lambda: pytest.fail("explicit provenance must not trigger discovery"),
+    )
     scaffold_project(
         tmp_path,
         title="Finite Flat",
@@ -354,16 +380,17 @@ def test_no_ci_rather_than_a_guessed_pin(tmp_path: Path, monkeypatch: pytest.Mon
     assert (tmp_path / "mkdocs.yml").is_file()
 
 
-def test_a_ref_alone_restores_ci(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The commit is the unguessable half; the repository has a sane default.
-
-    Setup tells the agent to pass `--autoform-ref`. If the source had to be
-    supplied too, following that instruction would still yield no CI, and the
-    fail-closed behaviour would be indistinguishable from a broken flag.
-    """
+def test_a_ref_alone_restores_ci_without_discovering_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ref-only override explicitly targets the canonical repository."""
     from autoform_cli import scaffold as scaffold_module
 
-    monkeypatch.setattr(scaffold_module, "plugin_pin", lambda: ("", ""))
+    monkeypatch.setattr(
+        scaffold_module,
+        "plugin_pin",
+        lambda: pytest.fail("an explicit ref must not trigger provenance discovery"),
+    )
     result = scaffold_module.scaffold_project(tmp_path, title="Finite Flat", autoform_ref="2" * 40)
 
     assert result.unpinned is False
@@ -469,121 +496,6 @@ def test_an_unsafe_plugin_pin_fails_closed_without_persisting_credentials(
     )
 
 
-def test_plugin_pin_is_empty_outside_a_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
-    from autoform_cli import scaffold as scaffold_module
-
-    monkeypatch.setattr(scaffold_module, "_git", lambda *args, **kwargs: None)
-    monkeypatch.setattr(scaffold_module, "_marketplace_checkout", lambda: None)
-    assert scaffold_module.plugin_pin() == ("", "")
-
-
-def _repository(path: Path, remote: str) -> str:
-    """Make *path* a real one-commit checkout and return its HEAD sha."""
-    path.mkdir(parents=True, exist_ok=True)
-    run = ["git", "-c", "user.email=t@test", "-c", "user.name=Test"]
-    subprocess.run([*run, "init", "-q"], cwd=path, check=True)
-    subprocess.run([*run, "remote", "add", "origin", remote], cwd=path, check=True)
-    subprocess.run([*run, "commit", "-q", "--allow-empty", "-m", "first"], cwd=path, check=True)
-    done = subprocess.run(
-        [*run, "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=True
-    )
-    return done.stdout.strip()
-
-
-def _fake_plugin_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str]:
-    """Lay out a plugin cache copy and the real checkout it was copied from."""
-    from autoform_cli import scaffold as scaffold_module
-
-    checkout = tmp_path / "src" / "autoform-bot"
-    (checkout / "autoform_cli").mkdir(parents=True)
-    (checkout / "autoform_cli" / "scaffold.py").write_text("", encoding="utf-8")
-    head = _repository(checkout, "git@github.com:owner/autoform-bot.git")
-
-    copied = tmp_path / ".claude/plugins/cache/autoform/autoform/0.5.0/autoform_cli"
-    copied.mkdir(parents=True)
-    monkeypatch.setattr(scaffold_module, "_here", lambda: copied.parent)
-
-    registry = tmp_path / "known_marketplaces.json"
-    registry.write_text(
-        json.dumps({"autoform": {"installLocation": str(checkout)}}), encoding="utf-8"
-    )
-    monkeypatch.setattr(scaffold_module, "_PLUGIN_REGISTRY", registry)
-    return checkout, head
-
-
-def test_an_installed_plugin_pins_from_the_marketplace_checkout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The copy has no `.git`, but the checkout it was copied from does.
-
-    Without this, `init` under a plugin can only fail closed, and the operator
-    is asked for a commit that nothing on their machine reports. That is a real
-    provenance record, not the guess `plugin_pin` refuses to make.
-    """
-    from autoform_cli import scaffold as scaffold_module
-
-    _, head = _fake_plugin_install(tmp_path, monkeypatch)
-
-    assert scaffold_module.plugin_pin() == (
-        "https://github.com/owner/autoform-bot.git",
-        head,
-    )
-
-
-def test_an_unrelated_marketplace_checkout_is_not_trusted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A location that is not Autoform would pin CI to somebody else's repo."""
-    from autoform_cli import scaffold as scaffold_module
-
-    checkout, _ = _fake_plugin_install(tmp_path, monkeypatch)
-    (checkout / "autoform_cli" / "scaffold.py").unlink()
-
-    assert scaffold_module._marketplace_checkout() is None
-    assert scaffold_module.plugin_pin() == ("", "")
-
-
-def test_a_copy_inside_an_unrelated_repository_is_not_its_provenance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`git -C` searches upwards, and the answer it finds is confidently wrong.
-
-    Installed into a project's own virtualenv, Autoform sits under that
-    project's checkout. Asking for "its" origin and HEAD then describes the
-    project, so its CI would be pinned to install the project instead of
-    Autoform, at a sha that moves with every commit the author makes.
-    """
-    from autoform_cli import scaffold as scaffold_module
-
-    project = tmp_path / "their-project"
-    _repository(project, "https://github.com/someone/their-project.git")
-    installed = project / ".venv/lib/python3.12/site-packages"
-    installed.mkdir(parents=True)
-    monkeypatch.setattr(scaffold_module, "_here", lambda: installed)
-    monkeypatch.setattr(scaffold_module, "_PLUGIN_REGISTRY", tmp_path / "absent.json")
-
-    assert scaffold_module._checkout_root(installed) is None
-    assert scaffold_module.plugin_pin() == ("", "")
-
-
-def test_a_branch_in_the_marketplace_checkout_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Whatever the provenance says, only a full sha may reach the workflows."""
-    from autoform_cli import scaffold as scaffold_module
-
-    checkout, _ = _fake_plugin_install(tmp_path, monkeypatch)
-
-    def fake_git(*args: str, root: Path | None = None) -> str | None:
-        if args[:2] == ("rev-parse", "--show-toplevel"):
-            return str(checkout)
-        return "https://example.test/a.git" if args[0] == "remote" else "main"
-
-    monkeypatch.setattr(scaffold_module, "_git", fake_git)
-
-    assert scaffold_module.plugin_pin() == ("", "")
-
-
 def test_a_symlinked_subdirectory_cannot_redirect_the_scaffold(tmp_path: Path) -> None:
     """Rejecting a symlinked root is not enough; any component can redirect.
 
@@ -650,7 +562,9 @@ def test_a_source_without_a_ref_does_not_borrow_this_checkouts_commit(
     from autoform_cli import scaffold as scaffold_module
 
     monkeypatch.setattr(
-        scaffold_module, "plugin_pin", lambda: ("https://example.test/ours.git", "1" * 40)
+        scaffold_module,
+        "plugin_pin",
+        lambda: pytest.fail("an explicit source must not trigger provenance discovery"),
     )
     result = scaffold_module.scaffold_project(
         tmp_path, title="Probe", autoform_source="https://example.test/other.git"

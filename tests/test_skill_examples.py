@@ -522,6 +522,20 @@ def test_roadmap_skill_commits_the_final_checked_pass(repo_root: Path) -> None:
         assert required in normalized
 
 
+def test_setup_skill_uses_verified_plugin_provenance(repo_root: Path) -> None:
+    setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+
+    assert "autoform project provenance --json" in setup
+    assert "--autoform-source <VERIFIED_HTTPS_GIT_SOURCE>" in setup
+    assert "--autoform-ref <VERIFIED_40_CHAR_SHA>" in setup
+    assert "plain directory copy" not in setup
+    assert "scripts/workspace_inspector.py" not in setup
+    assert "scripts/make_project.sh" not in setup
+    assert "autoform project provenance --json" in readme
+    assert "--autoform-ref <full-commit-sha>" not in readme
+
+
 def test_setup_skill_offers_opt_in_zulip_project_sync(repo_root: Path) -> None:
     setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
     roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")

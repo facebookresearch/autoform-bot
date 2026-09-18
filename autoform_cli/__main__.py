@@ -20,6 +20,7 @@ from .doctor import diagnose_project
 from .graph import GraphValidationError, load_graph
 from .lean import build_linker, declaration_names
 from .project import ProjectCatalogError, inspect_project, load_release_catalog
+from .provenance import ProvenanceError, verify_plugin_provenance
 from .render import PublicationError, render_site
 from .scaffold import ScaffoldError, scaffold_project
 from .skeleton import (
@@ -44,12 +45,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     init.add_argument(
         "--autoform-source",
         default="",
-        help="Autoform Git source the generated workflows install from (default: this checkout's origin)",
+        help="Autoform Git source for generated workflows (default: verified installation source)",
     )
     init.add_argument(
         "--autoform-ref",
         default="",
-        help="immutable ref the workflows pin (default: this checkout's HEAD commit)",
+        help="full commit SHA for generated workflows (default: verified installed commit)",
     )
     init.add_argument("--force", action="store_true", help="overwrite files that already exist")
     init.add_argument("--json", action="store_true", help="write stable machine-readable output")
@@ -85,6 +86,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "versions", help="list bundled known-good Lean and Mathlib releases"
     )
     project_versions.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    project_provenance = project_subparsers.add_parser(
+        "provenance",
+        help="verify immutable provenance for this Autoform installation",
+    )
+    project_provenance.add_argument(
+        "--json", action="store_true", help="write stable machine-readable output"
+    )
+
     claim = subparsers.add_parser("claim", help="coordinate temporary node ownership through Git refs")
     claim_subparsers = claim.add_subparsers(dest="claim_command", required=True)
     for operation in ("acquire", "renew", "release"):
@@ -239,9 +248,9 @@ def _init(args: argparse.Namespace) -> int:
         sys.stdout.flush()
         print(
             "\nCI was not written: generated workflows install Autoform from a Git\n"
-            "ref, and this Autoform is not running from a checkout, so there is\n"
-            "nothing to pin. Re-run with the commit to add them:\n"
-            "  autoform init --autoform-ref <40-char-sha>",
+            "ref, and this Autoform installation could not be verified. Re-run\n"
+            "from a verified installation or supply both provenance values:\n"
+            "  autoform init --autoform-source <https-git-url> --autoform-ref <40-char-sha>",
             file=sys.stderr,
         )
     return 0
@@ -314,12 +323,35 @@ def _doctor(args: argparse.Namespace) -> int:
 
 def _project(args: argparse.Namespace) -> int:
     try:
+        if args.project_command == "provenance":
+            result = verify_plugin_provenance()
+            if args.json:
+                print(json.dumps(result.as_dict(), sort_keys=True, separators=(",", ":")))
+            else:
+                print(f"Source: {result.source}")
+                print(f"Revision: {result.revision}")
+            return 0
         catalog = load_release_catalog()
     except ProjectCatalogError as error:
         if args.json:
             print(json.dumps({"error": {"code": "project-catalog-invalid", "message": str(error)}, "ok": False}))
         else:
             print(f"error: {error}", file=sys.stderr)
+        return 1
+    except ProvenanceError as error:
+        if getattr(args, "json", False):
+            print(
+                json.dumps(
+                    {
+                        "error": {"code": error.code, "message": error.message},
+                        "ok": False,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(f"error[{error.code}]: {error.message}", file=sys.stderr)
         return 1
     if args.project_command == "versions":
         if args.json:

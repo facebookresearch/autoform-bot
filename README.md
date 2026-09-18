@@ -55,6 +55,10 @@ or run its commands.
 | Prepare a person-led review | `/autoform:human-review` | `$human-review` |
 | Run an independent agent review | `/autoform:agent-review` | `$agent-review` |
 
+During setup, the skill runs `autoform project provenance --json` and uses
+`autoform init` to create the vault and site. Generated workflows are written
+only after Autoform's source and full commit have been verified.
+
 For example: “Build a complete roadmap for Sections 2–4 of `paper.pdf`.” Keep
 the source in the repository or provide an accessible path. Roadmap treats
 coarse planning as an internal checkpoint unless staged review was requested;
