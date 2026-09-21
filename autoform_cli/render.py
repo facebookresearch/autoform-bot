@@ -9,21 +9,53 @@ from Markdown instead.
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import html
 import json
+import os
 import re
-import shutil
-from collections.abc import Iterable
+import secrets
+import stat
+import unicodedata
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from pathlib import PurePosixPath
+from types import MappingProxyType
+from typing import Callable
 from urllib.parse import quote, unquote, urlsplit
 
 from . import graph_pages, graph_views, mermaid, status
-from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage
-from .graph import Graph, Node, load_graph
-from .lean import SourceLinker, build_linker, declaration_names, index_failure_message
+from ._directory_binding import RetainedDirectory
+from ._tree_snapshot import (
+    BoundDirectoryTree,
+    TreeCaptureLimitError,
+    TreeCaptureLimits,
+    TreeSelection,
+    TreeSnapshot,
+    TreeSnapshotError,
+    bind_directory_tree,
+)
+from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage_snapshot
+from .graph import Graph, Node, load_graph_snapshot
+from .lean import (
+    BoundProjectSources,
+    IndexedSourceSnapshot,
+    SourceLinker,
+    build_linker,
+    declaration_names,
+    detect_ref,
+    detect_repository_url,
+    open_project_sources,
+)
 from .status import is_definition
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows import compatibility
+    fcntl = None  # type: ignore[assignment]
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
@@ -44,6 +76,19 @@ _SKIPPED_DIRECTORIES = frozenset({".obsidian", ".trash", ".git"})
 #: Transcriptions of the paper being formalised. Vault material, not chapters.
 SOURCES_DIR = "sources"
 PUBLICATION_MANIFEST = "publication.json"
+PUBLICATION_SCHEMA = "autoform-publication/v2"
+_PUBLICATION_STAGE_PREFIX = ".autoform-publication-"
+_PUBLICATION_MAX_ENTRIES = 100_000
+_PUBLICATION_MAX_DEPTH = 128
+_PUBLICATION_MAX_FILE_BYTES = 256 * 1024 * 1024
+_PUBLICATION_MAX_TOTAL_BYTES = 512 * 1024 * 1024
+_PUBLICATION_MANIFEST_MAX_BYTES = 8 * 1024 * 1024
+_PUBLICATION_CAPTURE_LIMITS = TreeCaptureLimits(
+    max_entries=_PUBLICATION_MAX_ENTRIES,
+    max_depth=_PUBLICATION_MAX_DEPTH,
+    max_file_bytes=_PUBLICATION_MAX_FILE_BYTES,
+    max_total_bytes=_PUBLICATION_MAX_TOTAL_BYTES,
+)
 #: Derived views this command rewrites; stale copies must not leak into the site.
 _GENERATED_FILES = frozenset(
     {
@@ -67,6 +112,41 @@ _LOCAL_ONLY_NAMES = frozenset(
         "secrets.json",
         "task_queue.json",
     }
+)
+
+
+def _is_generated_path(relative: PurePosixPath | Path) -> bool:
+    """Generated views occupy only the publication root."""
+
+    return len(relative.parts) == 1 and relative.name.casefold() in _GENERATED_FILES
+
+
+def _publication_snapshot_descends(relative: PurePosixPath) -> bool:
+    if relative.parts and relative.parts[0].casefold() == ".autoform":
+        return True
+    return not (
+        any(part.startswith(".") for part in relative.parts)
+        or {part.casefold() for part in relative.parts}.intersection(_LOCAL_ONLY_NAMES)
+    )
+
+
+def _publication_snapshot_includes(relative: PurePosixPath, _mode: int) -> bool:
+    folded_parts = {part.casefold() for part in relative.parts}
+    name = relative.name.casefold()
+    return not (
+        any(part.startswith(".") for part in relative.parts)
+        or folded_parts.intersection(_LOCAL_ONLY_NAMES)
+        or _is_generated_path(relative)
+        or name == ".env"
+        or name.startswith(".env.")
+        or name.endswith((".key", ".log", ".pem"))
+    )
+
+
+_PUBLICATION_SNAPSHOT_SELECTION = TreeSelection(
+    include=_publication_snapshot_includes,
+    descend=_publication_snapshot_descends,
+    limits=_PUBLICATION_CAPTURE_LIMITS,
 )
 
 #: How a ``declaration:`` value is announced in the statement box.
@@ -224,6 +304,7 @@ class RenderReport:
     nodes: int = 0
     linked: int = 0
     unresolved: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 class PublicationError(ValueError):
@@ -232,6 +313,202 @@ class PublicationError(ValueError):
     def __init__(self, issues: Iterable[str]) -> None:
         self.issues = tuple(issues)
         super().__init__("; ".join(self.issues))
+
+
+class _PublicationRecoveryError(PublicationError):
+    """A publication result is uncertain and recovery material must be retained."""
+
+
+@dataclass(frozen=True, slots=True)
+class _DestinationState:
+    """The exact destination generation a render is allowed to replace."""
+
+    kind: str
+    identity: tuple[int, int] | None = None
+    manifest_sha256: str | None = None
+    directories: tuple[str, ...] = ()
+    files: tuple[tuple[str, str], ...] = ()
+    source_revision: str | None = None
+    lean_source_revision: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _CleanupInventory:
+    directories: tuple[tuple[str, tuple[int, ...]], ...]
+    files: tuple[tuple[str, tuple[int, ...], str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _CleanupIndex:
+    directories: dict[str, tuple[int, ...]]
+    files: dict[str, tuple[tuple[int, ...], str]]
+    children: dict[str, tuple[str, ...]]
+
+
+@dataclass(frozen=True, slots=True)
+class _CapturedBlueprint:
+    root: Path
+    files: dict[PurePosixPath, bytes]
+    directories: frozenset[PurePosixPath]
+
+    @classmethod
+    def from_snapshot(cls, root: Path, snapshot: TreeSnapshot) -> "_CapturedBlueprint":
+        return cls(
+            root,
+            {PurePosixPath(relative): data for relative, data in snapshot.files},
+            frozenset(PurePosixPath(relative or ".") for relative in snapshot.directories),
+        )
+
+    def path(self, relative: PurePosixPath | Path | str) -> Path:
+        parts = PurePosixPath(relative).parts
+        return self.root.joinpath(*parts)
+
+    def relative(self, path: Path) -> PurePosixPath:
+        relative = _lexical_path(path).relative_to(self.root)
+        return PurePosixPath(relative.as_posix())
+
+    def read_text(self, relative: PurePosixPath | Path | str) -> str:
+        return self.files[PurePosixPath(relative)].decode("utf-8")
+
+
+@dataclass(slots=True)
+class _PublicationPlanBuilder:
+    root: Path
+    files: dict[PurePosixPath, bytes] = field(default_factory=dict)
+
+    def _relative(self, path: PurePosixPath | Path | str) -> PurePosixPath:
+        return _publication_plan_relative(self.root, path)
+
+    def write_bytes(self, path: PurePosixPath | Path | str, data: bytes) -> None:
+        self.files[self._relative(path)] = bytes(data)
+
+    def write_text(self, path: PurePosixPath | Path | str, text: str) -> None:
+        self.write_bytes(path, text.encode("utf-8"))
+
+    def read_text(self, path: PurePosixPath | Path | str) -> str:
+        return self.files[self._relative(path)].decode("utf-8")
+
+    def is_file(self, path: PurePosixPath | Path | str) -> bool:
+        return self._relative(path) in self.files
+
+    def inventory(self) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+        return _publication_plan_inventory(self.files)
+
+    def freeze(self) -> "_PublicationFilePlan":
+        self.inventory()
+        return _PublicationFilePlan(self.root, MappingProxyType(dict(self.files)))
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationFilePlan:
+    root: Path
+    files: Mapping[PurePosixPath, bytes]
+
+    def _relative(self, path: PurePosixPath | Path | str) -> PurePosixPath:
+        return _publication_plan_relative(self.root, path)
+
+    def read_text(self, path: PurePosixPath | Path | str) -> str:
+        return self.files[self._relative(path)].decode("utf-8")
+
+    def is_file(self, path: PurePosixPath | Path | str) -> bool:
+        return self._relative(path) in self.files
+
+    def inventory(self) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+        return _publication_plan_inventory(self.files)
+
+
+def _publication_plan_relative(
+    root: Path,
+    path: PurePosixPath | Path | str,
+) -> PurePosixPath:
+    if isinstance(path, Path) and path.is_absolute():
+        path = path.relative_to(root)
+    relative = PurePosixPath(path.as_posix() if isinstance(path, Path) else path)
+    if not _valid_inventory_path(relative.as_posix()):
+        raise PublicationError([f"invalid planned publication path: {relative}"])
+    return relative
+
+
+def _publication_plan_inventory(
+    planned_files: Mapping[PurePosixPath, bytes],
+) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+    directories: set[PurePosixPath] = set()
+    files: list[tuple[str, str]] = []
+    spellings: dict[tuple[str, ...], PurePosixPath] = {}
+    budget = _InventoryBudget()
+    for relative, data in sorted(
+        planned_files.items(), key=lambda item: item[0].as_posix()
+    ):
+        budget.add_entry(depth=len(relative.parts))
+        budget.add_file(len(data))
+        for parent in relative.parents:
+            if parent != PurePosixPath("."):
+                directories.add(parent)
+        for length in range(1, len(relative.parts) + 1):
+            prefix = PurePosixPath(*relative.parts[:length])
+            key = tuple(
+                unicodedata.normalize("NFC", part).casefold()
+                for part in prefix.parts
+            )
+            prior = spellings.setdefault(key, prefix)
+            if prior != prefix:
+                raise PublicationError(
+                    [f"planned publication paths collide: {prior} and {prefix}"]
+                )
+        if relative.as_posix() != PUBLICATION_MANIFEST:
+            files.append((relative.as_posix(), hashlib.sha256(data).hexdigest()))
+    if directories.intersection(planned_files):
+        raise PublicationError(["planned publication path is both a file and directory"])
+    if len(directories) + len(planned_files) > _PUBLICATION_MAX_ENTRIES:
+        raise PublicationError(
+            [f"publication tree exceeds max_entries={_PUBLICATION_MAX_ENTRIES}"]
+        )
+    return (
+        tuple(sorted(path.as_posix() for path in directories)),
+        tuple(files),
+    )
+
+
+@dataclass(slots=True)
+class _InventoryBudget:
+    entries: int = 0
+    total_bytes: int = 0
+
+    def add_entry(self, *, depth: int) -> None:
+        if depth > _PUBLICATION_MAX_DEPTH:
+            raise PublicationError(
+                [f"publication tree exceeds max_depth={_PUBLICATION_MAX_DEPTH}"]
+            )
+        self.entries += 1
+        if self.entries > _PUBLICATION_MAX_ENTRIES:
+            raise PublicationError(
+                [f"publication tree exceeds max_entries={_PUBLICATION_MAX_ENTRIES}"]
+            )
+
+    def add_file(self, size: int) -> None:
+        if size > _PUBLICATION_MAX_FILE_BYTES:
+            raise PublicationError(
+                [
+                    "publication tree exceeds "
+                    f"max_file_bytes={_PUBLICATION_MAX_FILE_BYTES}"
+                ]
+            )
+        self.total_bytes += size
+        if self.total_bytes > _PUBLICATION_MAX_TOTAL_BYTES:
+            raise PublicationError(
+                [
+                    "publication tree exceeds "
+                    f"max_total_bytes={_PUBLICATION_MAX_TOTAL_BYTES}"
+                ]
+            )
+
+
+@dataclass(slots=True)
+class _PublicationCommitState:
+    """Whether the filesystem commit may have run and was fully verified."""
+
+    attempted: bool = False
+    verified: bool = False
 
 
 def render_site(
@@ -243,62 +520,371 @@ def render_site(
     ref: str | None = None,
     clean: bool = True,
 ) -> RenderReport:
-    """Write deterministic, read-only projections of the Markdown blueprint.
+    """Atomically publish deterministic projections of one source generation."""
+
+    try:
+        blueprint = Path(blueprint_dir).expanduser().resolve()
+        requested_destination = Path(output_dir).expanduser()
+    except (OSError, RuntimeError, ValueError) as error:
+        raise PublicationError(["publication paths could not be resolved safely"]) from error
+    if requested_destination.name in {"", ".", ".."}:
+        raise PublicationError(["output directory must name one ordinary directory"])
+    requested_destination = requested_destination.absolute()
+    try:
+        destination = requested_destination.parent.resolve() / requested_destination.name
+    except (OSError, RuntimeError, ValueError) as error:
+        raise PublicationError(["output directory could not be resolved safely"]) from error
+
+    _require_publication_platform()
+    if destination.is_symlink():
+        raise PublicationError(["refusing symlink output directory"])
+    if _publication_paths_overlap(destination, blueprint):
+        raise PublicationError(
+            ["blueprint and output directories must be disjoint; refusing destructive render"]
+        )
+
+    try:
+        with bind_directory_tree(
+            blueprint,
+            selection=_PUBLICATION_SNAPSHOT_SELECTION,
+        ) as source_tree:
+            source_snapshot = source_tree.capture()
+            _validate_publication_snapshot(source_snapshot)
+            return _render_bound_site(
+                blueprint,
+                destination,
+                source_tree=source_tree,
+                source_snapshot=source_snapshot,
+                lean_root=lean_root,
+                repository_url=repository_url,
+                ref=ref,
+                clean=clean,
+            )
+    except TreeCaptureLimitError as error:
+        raise PublicationError([f"blueprint {error}"]) from error
+    except TreeSnapshotError as error:
+        raise PublicationError(
+            ["blueprint changed during publication; previous site was preserved"]
+        ) from error
+
+
+def _render_bound_site(
+    blueprint: Path,
+    destination: Path,
+    *,
+    source_tree: BoundDirectoryTree,
+    source_snapshot: TreeSnapshot,
+    lean_root: str | Path | None,
+    repository_url: str | None,
+    ref: str | None,
+    clean: bool,
+) -> RenderReport:
+    """Render captured inputs beside the destination and commit them once."""
+
+    try:
+        output_parent = _open_or_create_output_parent(destination.parent)
+    except OSError as error:
+        raise PublicationError(
+            ["could not create and bind the output parent safely"]
+        ) from error
+    try:
+        return _render_in_bound_output_parent(
+            blueprint,
+            destination,
+            source_tree=source_tree,
+            source_snapshot=source_snapshot,
+            lean_root=lean_root,
+            repository_url=repository_url,
+            ref=ref,
+            clean=clean,
+            output_parent=output_parent,
+        )
+    finally:
+        output_parent.close()
+
+
+def _render_in_bound_output_parent(
+    blueprint: Path,
+    destination: Path,
+    *,
+    source_tree: BoundDirectoryTree,
+    source_snapshot: TreeSnapshot,
+    lean_root: str | Path | None,
+    repository_url: str | None,
+    ref: str | None,
+    clean: bool,
+    output_parent: RetainedDirectory,
+) -> RenderReport:
+    """Render while retaining the exact output-parent generation."""
+
+    try:
+        repo_root = (
+            Path(lean_root).expanduser().resolve()
+            if lean_root is not None
+            else blueprint.parent
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        raise PublicationError(["Lean source root could not be resolved safely"]) from error
+    captured_blueprint = _CapturedBlueprint.from_snapshot(blueprint, source_snapshot)
+    source_revision = _source_revision(captured_blueprint)
+    graph, coverage = _load_publication_contract(captured_blueprint)
+    source_generation_revision = source_snapshot.generation_revision
+    workspace, workspace_identity = _create_workspace(
+        destination.parent,
+        output_parent,
+    )
+    workspace_descriptor = _open_workspace_directory(
+        output_parent,
+        workspace.name,
+        workspace_identity,
+    )
+    remove_workspace = True
+    publication_succeeded = False
+    commit_state = _PublicationCommitState()
+    report: RenderReport | None = None
+    stage_identity: tuple[int, int] | None = None
+    stage_cleanup_inventory: _CleanupInventory | None = None
+    stage_descriptor: int | None = None
+    expected_destination: _DestinationState | None = None
+    expected_destination_inventory: _CleanupInventory | None = None
+    lean_sources: BoundProjectSources | None = None
+    active_failure: BaseException | None = None
+    try:
+        _require_output_parent(output_parent, "before destination inspection")
+        expected_destination = _inspect_destination_at(
+            output_parent.descriptor,
+            destination.name,
+            destination,
+        )
+        if expected_destination.kind != "absent":
+            assert expected_destination.identity is not None
+            expected_destination_inventory = _publication_inventory_at(
+                output_parent.descriptor,
+                destination.name,
+                expected_destination.identity,
+            )
+            _require_destination_inventory(
+                expected_destination_inventory,
+                expected_destination,
+            )
+
+        lean_exclusions = (destination, workspace)
+        lean_sources = _open_lean_sources(repo_root, exclude_roots=lean_exclusions)
+        lean_snapshot = _capture_bound_lean_source_snapshot(lean_sources)
+        lean_source_revision = lean_snapshot.revision
+        lean_generation_revision = lean_snapshot.generation_revision
+        resolved_repository_url = repository_url or detect_repository_url(repo_root)
+        resolved_ref = ref or detect_ref(repo_root)
+        linker = build_linker(
+            repo_root,
+            repository_url=resolved_repository_url,
+            ref=resolved_ref,
+            exclude_roots=lean_exclusions,
+            source_index=lean_snapshot.index,
+            detect_missing=False,
+        )
+
+        initial_files: dict[PurePosixPath, bytes] = {}
+        if not clean and expected_destination.kind == "owned":
+            initial_files = _read_owned_publication_files_at(
+                output_parent.descriptor,
+                destination.name,
+                expected_destination,
+            )
+        plan, report = _build_publication_plan(
+            captured_blueprint,
+            graph,
+            coverage,
+            repo_root=repo_root,
+            linker=linker,
+            source_revision=source_revision,
+            lean_source_revision=lean_source_revision,
+            initial_files=initial_files,
+        )
+        stage = workspace / "site"
+        stage_descriptor, stage_identity = _create_stage_directory(
+            workspace_descriptor,
+        )
+        _materialize_publication_plan(stage_descriptor, plan)
+        stage_cleanup_inventory = _cleanup_inventory_descriptor(stage_descriptor)
+        try:
+            _sync_tree_descriptor(stage_descriptor)
+        except (OSError, PublicationError) as error:
+            raise _PublicationRecoveryError(
+                [
+                    "publication stage integrity failed; workspace retained "
+                    f"{_workspace_recovery_location(workspace, output_parent)}"
+                ]
+            ) from error
+
+        synced_stage_inventory = _cleanup_inventory_descriptor(stage_descriptor)
+        os.close(stage_descriptor)
+        stage_descriptor = None
+        staged = _inspect_destination_at(workspace_descriptor, stage.name, stage)
+        if (
+            staged.kind != "owned"
+            or staged.identity != stage_identity
+            or staged.source_revision != source_revision
+            or staged.lean_source_revision != lean_source_revision
+            or synced_stage_inventory != stage_cleanup_inventory
+        ):
+            raise _PublicationRecoveryError(
+                [
+                    "publication stage changed; workspace retained "
+                    f"{_workspace_recovery_location(workspace, output_parent)}"
+                ]
+            )
+        _require_destination_inventory(stage_cleanup_inventory, staged)
+
+        def require_current_inputs() -> None:
+            try:
+                current_source = source_tree.capture()
+            except TreeSnapshotError as error:
+                raise PublicationError(
+                    ["blueprint changed during publication; previous site was preserved"]
+                ) from error
+            if current_source.generation_revision != source_generation_revision:
+                raise PublicationError(
+                    ["blueprint changed during publication; previous site was preserved"]
+                )
+            _require_bound_lean_source_revision(
+                lean_sources,
+                lean_generation_revision,
+            )
+
+        _publish_staged_site(
+            stage,
+            destination,
+            expected_destination,
+            staged,
+            expected_inventory=expected_destination_inventory,
+            staged_inventory=stage_cleanup_inventory,
+            commit_state=commit_state,
+            input_guard=require_current_inputs,
+            output_parent=output_parent,
+            workspace_identity=workspace_identity,
+            workspace_descriptor=workspace_descriptor,
+        )
+        report.output_dir = destination
+        publication_succeeded = True
+        return report
+    except _PublicationRecoveryError:
+        remove_workspace = False
+        raise
+    except BaseException as error:
+        active_failure = error
+        raise
+    finally:
+        try:
+            if commit_state.attempted and not commit_state.verified:
+                remove_workspace = False
+            expected_children: dict[
+                str,
+                dict[tuple[int, int], _CleanupInventory],
+            ] = {}
+            if stage_identity is not None and stage_cleanup_inventory is not None:
+                if commit_state.verified:
+                    if (
+                        expected_destination is not None
+                        and expected_destination.kind != "absent"
+                        and expected_destination.identity is not None
+                        and expected_destination_inventory is not None
+                    ):
+                        expected_children["site"] = {
+                            expected_destination.identity: expected_destination_inventory,
+                        }
+                else:
+                    expected_children["site"] = {
+                        stage_identity: stage_cleanup_inventory,
+                    }
+            parent_changed = not _output_parent_is_current(output_parent)
+            cleaned = False
+            if remove_workspace and not parent_changed:
+                cleaned = _remove_owned_workspace(
+                    workspace,
+                    workspace_identity,
+                    expected_children=expected_children,
+                    parent_binding=output_parent,
+                )
+            if remove_workspace and parent_changed and commit_state.verified:
+                raise _PublicationRecoveryError(
+                    [
+                        "publication commit was verified in its bound output parent, "
+                        "but that parent path changed afterward; output location is "
+                        f"uncertain and workspace {workspace.name} remains in the "
+                        "original output-parent generation"
+                    ]
+                )
+            if remove_workspace and not cleaned:
+                issue = (
+                    (
+                        "output parent changed; publication workspace "
+                        f"{workspace.name} was retained in the original output-parent "
+                        f"generation created at {workspace.parent}"
+                    )
+                    if parent_changed
+                    else (
+                        "publication staging workspace changed; cleanup was refused at "
+                        f"{workspace}"
+                    )
+                )
+                if commit_state.verified and report is not None:
+                    report.warnings.append(issue)
+                elif publication_succeeded:
+                    raise PublicationError([issue])
+                elif active_failure is not None:
+                    raise PublicationError(
+                        [
+                            f"publication failed: {active_failure}; {issue}; "
+                            "workspace was retained"
+                        ]
+                    ) from active_failure
+                else:
+                    raise PublicationError([issue])
+        finally:
+            if stage_descriptor is not None:
+                try:
+                    os.close(stage_descriptor)
+                except OSError:
+                    pass
+            try:
+                os.close(workspace_descriptor)
+            except OSError:
+                pass
+            if lean_sources is not None:
+                lean_sources.close()
+
+
+def _build_publication_plan(
+    blueprint: _CapturedBlueprint,
+    graph: Graph,
+    coverage: CoverageSummary,
+    *,
+    repo_root: Path,
+    linker: SourceLinker,
+    source_revision: str,
+    lean_source_revision: str,
+    initial_files: dict[PurePosixPath, bytes],
+) -> tuple[_PublicationFilePlan, RenderReport]:
+    """Build one bounded immutable publication without touching source paths.
 
     Authored Markdown remains the only graph authority. The output joins three
     reader surfaces over it: a book, derived progress, and multiscale dependency
     maps. Publication excludes hidden and operational files, rejects symlinks,
     and never embeds timestamps or machine-specific paths.
     """
-    blueprint = Path(blueprint_dir).expanduser().resolve()
-    requested_destination = Path(output_dir).expanduser()
-    if requested_destination.is_symlink():
-        raise PublicationError(["refusing symlink output directory"])
-    destination = requested_destination.resolve()
-    if _is_within(destination, blueprint) or _is_within(blueprint, destination):
-        raise PublicationError(
-            ["blueprint and output directories must be disjoint; refusing destructive render"]
-        )
-    _validate_publication_tree(blueprint)
-
-    graph = load_graph(blueprint)
-    coverage, coverage_issues = load_coverage(blueprint)
-    if coverage_issues:
-        raise PublicationError(
-            [
-                f"coverage contract line {issue.line}: {issue.reason}"
-                if issue.line
-                else f"coverage contract: {issue.reason}"
-                for issue in coverage_issues
-            ]
-        )
-    if coverage is None:
-        raise PublicationError(["coverage contract could not be loaded"])
+    destination = Path("/__autoform_publication_plan__")
+    plan = _PublicationPlanBuilder(destination, dict(initial_files))
     statuses = status.derive(graph)
     # The repository root, not the vault's parent. A blueprint nested at
     # <repo>/docs/blueprint would otherwise be described as <repo>/blueprint,
     # and every generated permalink would 404.
-    repo_root = Path(lean_root).expanduser().resolve() if lean_root is not None else blueprint.parent
-    try:
-        linker = build_linker(repo_root, repository_url=repository_url, ref=ref)
-    except OSError as error:
-        raise PublicationError([index_failure_message(error)]) from error
     numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
-    sources_base = _sources_base(blueprint, repo_root, linker)
-
-    _prepare_destination(destination, clean=clean)
-    _write_publication_manifest(
-        destination,
-        blueprint,
-        graph,
-        linker,
-        coverage=coverage,
-        complete=False,
-    )
+    sources_base = _sources_base(blueprint.root, repo_root, linker)
 
     report = RenderReport(output_dir=destination)
-    node_paths = {node.path.resolve(): node for node in graph.nodes.values()}
+    node_paths = {_lexical_path(node.path): node for node in graph.nodes.values()}
     # Nodes are published as environments on their milestone page, the way a
     # blueprint chapter carries many statements in sequence. Each keeps an
     # anchor so every cross-reference still lands on the statement itself.
@@ -317,57 +903,54 @@ def render_site(
     }
     targets.update(
         {
-            node_id: (destination / node.path.relative_to(blueprint), "")
+            node_id: (destination / node.path.relative_to(blueprint.root), "")
             for node_id, node in graph.nodes.items()
             if node_id in containers or not node.formalizable
         }
     )
-    node_sources = {
-        node.path.resolve(): node_id for node_id, node in graph.nodes.items()
-    }
+    node_sources = {_lexical_path(node.path): node_id for node_id, node in graph.nodes.items()}
 
-    for source in sorted(blueprint.rglob("*")):
-        relative = source.relative_to(blueprint)
+    for captured_relative, data in sorted(
+        blueprint.files.items(), key=lambda item: item[0].as_posix()
+    ):
+        relative = Path(captured_relative.as_posix())
         if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
             continue
-        if relative.name in _GENERATED_FILES:
+        if _is_generated_path(relative):
             continue
         # Source notes leave the site entirely once readers can reach them in
         # the repository, so the book has one reference surface rather than two.
         if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
             continue
+        source_path = blueprint.path(captured_relative)
         target = destination / relative
-        # Directories are created on demand below, so a directory holding
-        # nothing but absorbed nodes leaves no empty shell behind.
-        if source.is_dir():
-            continue
         # Narrative articles remain book pages. Only formalizable leaves are
         # consolidated into their containing article with stable anchors.
-        article = node_paths.get(source.resolve())
+        article = node_paths.get(_lexical_path(source_path))
         if article is not None and article.formalizable and article.id not in containers:
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if source.suffix.lower() == ".md":
+        if relative.suffix.lower() == ".md":
             rewritten = _rewrite_links(
-                source.read_text(encoding="utf-8"),
-                source_dir=source.parent,
+                data.decode("utf-8"),
+                source_dir=source_path.parent,
                 page=target,
-                blueprint=blueprint,
+                blueprint=blueprint.root,
                 destination=destination,
                 node_sources=node_sources,
                 targets=targets,
                 sources_base=sources_base,
             )
-            target.write_text(rewritten, encoding="utf-8")
+            plan.write_text(target, rewritten)
         else:
-            shutil.copy2(source, target)
+            plan.write_bytes(target, data)
         report.pages += 1
 
     overview = destination / "README.md"
-    if overview.is_file():
-        overview.write_text(
+    if plan.is_file(overview):
+        plan.write_text(
+            overview,
             _render_landing_page(
-                overview.read_text(encoding="utf-8"),
+                plan.read_text(overview),
                 graph=graph,
                 statuses=statuses,
                 coverage=coverage,
@@ -375,14 +958,13 @@ def render_site(
                 group_pages=group_pages,
                 page=overview,
                 destination=destination,
+                read_page=plan.read_text,
             ),
-            encoding="utf-8",
         )
 
     for group, node_ids in groups.items():
         page = group_pages[group]
-        page.parent.mkdir(parents=True, exist_ok=True)
-        narrative = page.read_text(encoding="utf-8") if page.is_file() else None
+        narrative = plan.read_text(page) if plan.is_file(page) else None
         chapter, linked, unresolved = _render_chapter(
             group,
             node_ids,
@@ -394,14 +976,16 @@ def render_site(
             page=page,
             targets=targets,
             narrative=narrative,
-            blueprint=blueprint,
+            blueprint=blueprint.root,
             repo_root=repo_root,
             destination=destination,
             node_sources=node_sources,
             containers=containers,
             sources_base=sources_base,
+            source_blueprint=blueprint.root,
+            read_source=lambda path: blueprint.read_text(blueprint.relative(path)),
         )
-        page.write_text(chapter, encoding="utf-8")
+        plan.write_text(page, chapter)
         if narrative is None:  # a milestone with no narrative page of its own
             report.pages += 1
         report.nodes += len(node_ids)
@@ -410,14 +994,15 @@ def render_site(
 
     book_pages = _book_page_order(
         blueprint,
-        destination,
+        plan,
         graph,
     )
     # The landing page is a dashboard, not chapter one. Previous/next belongs
     # to the book, so the strip starts at the contents page.
-    _append_book_navigation([p for p in book_pages if p != overview])
+    _append_book_navigation([p for p in book_pages if p != overview], plan=plan)
     structure = destination / STRUCTURE_PAGE
-    structure.write_text(
+    plan.write_text(
+        structure,
         _render_structure_page(
             blueprint,
             graph,
@@ -426,12 +1011,16 @@ def render_site(
             targets=targets,
             sources_base=sources_base,
         ),
-        encoding="utf-8",
     )
     report.pages += 1
-    (destination / "SUMMARY.md").write_text(
-        _render_summary_nav(book_pages, destination=destination, overview=overview),
-        encoding="utf-8",
+    plan.write_text(
+        destination / "SUMMARY.md",
+        _render_summary_nav(
+            book_pages,
+            destination=destination,
+            overview=overview,
+            plan=plan,
+        ),
     )
 
     generated_graph_pages = graph_pages.write_graph_pages(
@@ -439,6 +1028,7 @@ def render_site(
         statuses,
         destination,
         node_links=lambda page: _anchored_links(targets, page),
+        page_writer=plan.write_text,
     )
     report.pages += len(generated_graph_pages)
 
@@ -448,60 +1038,1526 @@ def render_site(
         (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
         (LOGO, _logo()),
     ):
-        asset = destination / relative
-        asset.parent.mkdir(parents=True, exist_ok=True)
-        asset.write_text(contents, encoding="utf-8")
+        plan.write_text(destination / relative, contents)
     _write_publication_manifest(
-        destination,
-        blueprint,
+        plan,
         graph,
         linker,
         coverage=coverage,
         complete=True,
+        source_revision=source_revision,
+        lean_source_revision=lean_source_revision,
     )
-    return report
+    return plan.freeze(), report
 
 
-def _prepare_destination(destination: Path, *, clean: bool) -> None:
-    """Create an output directory without overwriting unrelated user data."""
-    if not destination.exists():
-        destination.mkdir(parents=True)
-        return
-    if not destination.is_dir():
+def _inspect_destination(destination: Path) -> _DestinationState:
+    """Return the exact safe generation at *destination*, or fail closed."""
+    try:
+        parent_descriptor = _open_directory_path(destination.parent)
+    except OSError as error:
+        raise PublicationError(["could not inspect the output directory safely"]) from error
+    try:
+        return _inspect_destination_at(parent_descriptor, destination.name, destination)
+    finally:
+        os.close(parent_descriptor)
+
+
+def _inspect_destination_at(
+    parent_descriptor: int, name: str, display_path: Path
+) -> _DestinationState:
+    try:
+        metadata = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return _DestinationState("absent")
+    except OSError as error:
+        raise PublicationError(["could not inspect the output directory safely"]) from error
+    if stat.S_ISLNK(metadata.st_mode):
+        raise PublicationError(["refusing symlink output directory"])
+    if not stat.S_ISDIR(metadata.st_mode):
         raise PublicationError(["output path exists and is not a directory"])
-    if not any(destination.iterdir()):
-        return
+    identity = metadata.st_dev, metadata.st_ino
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_descriptor,
+        )
+    except OSError as error:
+        raise PublicationError(["could not inspect the output directory safely"]) from error
+    try:
+        if _descriptor_identity(descriptor) != identity:
+            raise PublicationError(["output directory changed while it was inspected"])
+        if _directory_names_match(descriptor, ()):
+            current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+            if _descriptor_identity(descriptor) != identity or (
+                current.st_dev,
+                current.st_ino,
+            ) != identity or not _directory_names_match(descriptor, ()):
+                raise PublicationError(["output directory changed while it was inspected"])
+            return _DestinationState("empty", identity=identity)
 
-    manifest = destination / PUBLICATION_MANIFEST
-    publication = None
-    if not manifest.is_symlink() and manifest.is_file():
         try:
-            publication = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            pass
+            manifest_metadata = os.stat(
+                PUBLICATION_MANIFEST,
+                dir_fd=descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            publication = None
+            manifest_bytes = b""
+        else:
+            if not stat.S_ISREG(manifest_metadata.st_mode):
+                publication = None
+                manifest_bytes = b""
+            else:
+                manifest_bytes = _read_regular_file_at(
+                    descriptor,
+                    PUBLICATION_MANIFEST,
+                    display_path / PUBLICATION_MANIFEST,
+                    max_bytes=_PUBLICATION_MANIFEST_MAX_BYTES,
+                )
+                try:
+                    publication = json.loads(manifest_bytes.decode("utf-8"))
+                except (UnicodeError, json.JSONDecodeError):
+                    publication = None
+        if not isinstance(publication, dict) or publication.get("schema") != PUBLICATION_SCHEMA:
+            raise PublicationError(
+                [
+                    "refusing to overwrite a non-Autoform output directory or legacy "
+                    "publication; choose an empty directory or remove it explicitly"
+                ]
+            )
+        canonical_manifest = (json.dumps(publication, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8"
+        )
+        if manifest_bytes != canonical_manifest:
+            raise PublicationError(["publication manifest is not in canonical form"])
+        if publication.get("complete") is not True:
+            raise PublicationError(["refusing to overwrite an incomplete Autoform publication"])
+        expected_files = _parse_inventory_files(publication.get("files"))
+        expected_directories = _parse_inventory_directories(publication.get("directories"))
+        source_revision = publication.get("source_revision")
+        lean_source_revision = publication.get("lean_source_revision")
+        if (
+            not isinstance(source_revision, str)
+            or re.fullmatch(r"[0-9a-f]{64}", source_revision) is None
+            or not isinstance(lean_source_revision, str)
+            or re.fullmatch(r"[0-9a-f]{64}", lean_source_revision) is None
+        ):
+            raise PublicationError(["publication manifest has invalid source revisions"])
+        actual_directories, actual_files = _publication_inventory_descriptor(descriptor)
+        if actual_directories != expected_directories:
+            raise PublicationError(
+                ["refusing to overwrite an output directory with untracked or missing directories"]
+            )
+        if tuple(path for path, _ in actual_files) != tuple(path for path, _ in expected_files):
+            expected_paths = {path for path, _ in expected_files}
+            actual_paths = {path for path, _ in actual_files}
+            difference = sorted(expected_paths ^ actual_paths)
+            raise PublicationError(
+                [
+                    "refusing to overwrite an output directory with untracked or missing files: "
+                    + ", ".join(difference)
+                ]
+            )
+        if actual_files != expected_files:
+            raise PublicationError(["refusing to overwrite a modified Autoform publication"])
+        if (
+            _read_regular_file_at(
+                descriptor,
+                PUBLICATION_MANIFEST,
+                display_path / PUBLICATION_MANIFEST,
+                max_bytes=_PUBLICATION_MANIFEST_MAX_BYTES,
+            )
+            != manifest_bytes
+            or _publication_inventory_descriptor(descriptor)
+            != (actual_directories, actual_files)
+        ):
+            raise PublicationError(["publication output changed while it was inspected"])
+        current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        if _descriptor_identity(descriptor) != identity or (
+            current.st_dev,
+            current.st_ino,
+        ) != identity:
+            raise PublicationError(["output directory changed while it was inspected"])
+        return _DestinationState(
+            "owned",
+            identity=identity,
+            manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+            directories=expected_directories,
+            files=expected_files,
+            source_revision=source_revision,
+            lean_source_revision=lean_source_revision,
+        )
+    finally:
+        os.close(descriptor)
+
+
+def _descriptor_identity(descriptor: int) -> tuple[int, int]:
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise PublicationError(["output path changed while it was inspected"])
+    return metadata.st_dev, metadata.st_ino
+
+
+def _stat_signature(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _directory_path_identity(path: Path) -> tuple[int, int]:
+    descriptor = _open_directory_path(path)
+    try:
+        return _descriptor_identity(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _output_parent_is_current(binding: RetainedDirectory) -> bool:
+    try:
+        binding.verify()
+    except OSError:
+        return False
+    return True
+
+
+def _require_output_parent(binding: RetainedDirectory, phase: str) -> None:
+    if not _output_parent_is_current(binding):
+        raise PublicationError([f"output parent changed {phase}"])
+
+
+def _workspace_recovery_location(
+    workspace: Path,
+    output_parent: RetainedDirectory,
+) -> str:
+    if _output_parent_is_current(output_parent):
+        return f"at {workspace}"
+    return (
+        f"as {workspace.name} in the original output-parent generation "
+        f"created at {workspace.parent}"
+    )
+
+
+def _require_publication_platform() -> None:
+    required_options = ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")
     if (
-        manifest.is_symlink()
-        or not isinstance(publication, dict)
-        or publication.get("schema") != "autoform-publication/v1"
+        fcntl is None
+        or any(not hasattr(os, option) for option in required_options)
+        or os.mkdir not in os.supports_dir_fd
+        or os.open not in os.supports_dir_fd
+        or os.rename not in os.supports_dir_fd
+        or os.stat not in os.supports_dir_fd
+        or os.scandir not in os.supports_fd
     ):
         raise PublicationError(
-            [
-                "refusing to overwrite a non-Autoform output directory; "
-                "choose an empty directory or remove it explicitly"
-            ]
+            ["transactional publication is unavailable on this platform"]
         )
-    if clean:
-        shutil.rmtree(destination)
-        destination.mkdir(parents=True)
+    _rename_implementation(exchange=False)
+    _rename_implementation(exchange=True)
 
 
-def _validate_publication_tree(blueprint: Path) -> None:
-    """Reject inputs that could leak local state through a public artifact."""
-    issues: list[str] = []
-    if not blueprint.is_dir():
+def _open_directory_path(path: Path) -> int:
+    """Open every component without following a symbolic link."""
+    absolute = path.absolute()
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptor = os.open(absolute.anchor, flags)
+    try:
+        for part in absolute.parts[1:]:
+            child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _open_or_create_output_parent(path: Path) -> RetainedDirectory:
+    """Retain an output-parent chain and durably create missing components."""
+
+    absolute = path.absolute()
+    anchor = absolute.anchor
+    if not anchor:
+        raise OSError("output parent is not absolute")
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptors: list[int] = []
+    identities: list[tuple[int, int]] = []
+    first_created_index: int | None = None
+    binding: RetainedDirectory | None = None
+    try:
+        descriptor = os.open(anchor, flags)
+        descriptors.append(descriptor)
+        opened = os.fstat(descriptor)
+        named = os.stat(anchor, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not stat.S_ISDIR(named.st_mode)
+            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+        ):
+            raise OSError(errno.ESTALE, "output-parent anchor changed")
+        identities.append((opened.st_dev, opened.st_ino))
+
+        for part in absolute.parts[1:]:
+            parent_descriptor = descriptor
+            created = False
+            try:
+                expected = os.stat(
+                    part,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, mode=0o777, dir_fd=parent_descriptor)
+                except FileExistsError:
+                    pass
+                else:
+                    created = True
+                expected = os.stat(
+                    part,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            if not stat.S_ISDIR(expected.st_mode):
+                raise OSError(errno.ENOTDIR, "output-parent component is not a directory")
+            child = os.open(part, flags, dir_fd=parent_descriptor)
+            descriptors.append(child)
+            opened = os.fstat(child)
+            named = os.stat(
+                part,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            identity = (opened.st_dev, opened.st_ino)
+            if (
+                not stat.S_ISDIR(opened.st_mode)
+                or identity != (expected.st_dev, expected.st_ino)
+                or identity != (named.st_dev, named.st_ino)
+            ):
+                raise OSError(errno.ESTALE, "output-parent component changed")
+            identities.append(identity)
+            descriptor = child
+            if created and first_created_index is None:
+                first_created_index = len(descriptors) - 1
+
+        binding = RetainedDirectory(absolute, tuple(descriptors), tuple(identities))
+        binding.verify()
+        if first_created_index is not None:
+            for containing_descriptor in reversed(
+                descriptors[first_created_index - 1 :]
+            ):
+                os.fsync(containing_descriptor)
+            binding.verify()
+        return binding
+    except BaseException:
+        if binding is not None:
+            binding.close()
+        else:
+            for descriptor in reversed(descriptors):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+        raise
+
+
+def _create_workspace(
+    parent: Path,
+    parent_binding: RetainedDirectory,
+) -> tuple[Path, tuple[int, int]]:
+    try:
+        parent_binding.verify()
+    except OSError as error:
+        raise PublicationError(["output parent changed before staging"]) from error
+    parent_descriptor = parent_binding.descriptor
+    for _ in range(128):
+        name = f"{_PUBLICATION_STAGE_PREFIX}{secrets.token_hex(16)}"
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=parent_descriptor)
+        except FileExistsError:
+            continue
+        metadata = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        identity = metadata.st_dev, metadata.st_ino
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent_descriptor,
+            )
+            if _descriptor_identity(descriptor) != identity:
+                raise OSError(errno.ESTALE, "workspace changed during creation")
+        except BaseException:
+            try:
+                current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) == identity:
+                    os.rmdir(name, dir_fd=parent_descriptor)
+            except OSError:
+                pass
+            raise
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        return parent / name, identity
+    raise PublicationError(["could not create a private publication workspace"])
+
+
+def _open_workspace_directory(
+    parent_binding: RetainedDirectory,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> int:
+    _require_output_parent(parent_binding, "before opening the publication workspace")
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=parent_binding.descriptor,
+    )
+    if _descriptor_identity(descriptor) != expected_identity:
+        os.close(descriptor)
+        raise PublicationError(["publication workspace changed before staging"])
+    return descriptor
+
+
+def _create_stage_directory(workspace_descriptor: int) -> tuple[int, tuple[int, int]]:
+    try:
+        os.mkdir("site", mode=0o700, dir_fd=workspace_descriptor)
+        metadata = os.stat("site", dir_fd=workspace_descriptor, follow_symlinks=False)
+        descriptor = os.open(
+            "site",
+            os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=workspace_descriptor,
+        )
+        try:
+            identity = _descriptor_identity(descriptor)
+            if identity != (metadata.st_dev, metadata.st_ino):
+                raise PublicationError(["publication stage changed during creation"])
+            return descriptor, identity
+        except BaseException:
+            os.close(descriptor)
+            raise
+    except BaseException:
+        raise
+
+
+def _remove_owned_workspace(
+    workspace: Path,
+    identity: tuple[int, int],
+    *,
+    expected_children: dict[str, dict[tuple[int, int], _CleanupInventory]],
+    parent_binding: RetainedDirectory | None = None,
+) -> bool:
+    """Remove only inventoried trees in Autoform's random mode-0700 workspace.
+
+    The inventory and atomic per-file claim protect against ordinary concurrent
+    path replacement. POSIX has no unlink-if-inode operation, so code running
+    as the same user must not be given a path or callback into this private
+    workspace while cleanup is active.
+    """
+
+    parent_descriptor: int | None = None
+    workspace_descriptor: int | None = None
+    close_parent = False
+    try:
+        if parent_binding is None:
+            parent_descriptor = _open_directory_path(workspace.parent)
+            close_parent = True
+        else:
+            if not _output_parent_is_current(parent_binding):
+                return False
+            parent_descriptor = parent_binding.descriptor
+        try:
+            metadata = os.stat(
+                workspace.name, dir_fd=parent_descriptor, follow_symlinks=False
+            )
+        except FileNotFoundError:
+            return False
+        if not stat.S_ISDIR(metadata.st_mode) or (
+            metadata.st_dev,
+            metadata.st_ino,
+        ) != identity:
+            return False
+        workspace_descriptor = os.open(
+            workspace.name,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_descriptor,
+        )
+        if _descriptor_identity(workspace_descriptor) != identity:
+            return False
+        names = set(
+            _bounded_directory_names(
+                workspace_descriptor,
+                budget=_InventoryBudget(),
+                depth=1,
+            )
+        )
+        if names != set(expected_children):
+            return False
+        for name in names:
+            child = os.stat(name, dir_fd=workspace_descriptor, follow_symlinks=False)
+            child_identity = (child.st_dev, child.st_ino)
+            expected_inventory = expected_children[name].get(child_identity)
+            if not stat.S_ISDIR(child.st_mode) or expected_inventory is None:
+                return False
+            child_descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=workspace_descriptor,
+            )
+            try:
+                if _descriptor_identity(child_descriptor) != child_identity:
+                    return False
+                if _cleanup_inventory_descriptor(child_descriptor) != expected_inventory:
+                    return False
+            finally:
+                os.close(child_descriptor)
+        for name in sorted(names):
+            current = os.stat(name, dir_fd=workspace_descriptor, follow_symlinks=False)
+            child_identity = (current.st_dev, current.st_ino)
+            expected_inventory = expected_children[name].get(child_identity)
+            if not stat.S_ISDIR(current.st_mode) or expected_inventory is None:
+                return False
+            child_descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=workspace_descriptor,
+            )
+            try:
+                _remove_inventory_contents(
+                    child_descriptor,
+                    expected_inventory,
+                )
+            finally:
+                os.close(child_descriptor)
+            os.rmdir(name, dir_fd=workspace_descriptor)
+        current = os.stat(
+            workspace.name, dir_fd=parent_descriptor, follow_symlinks=False
+        )
+        if (current.st_dev, current.st_ino) != identity:
+            return False
+        os.rmdir(workspace.name, dir_fd=parent_descriptor)
+        return True
+    except (OSError, PublicationError):
+        return False
+    finally:
+        if workspace_descriptor is not None:
+            try:
+                os.close(workspace_descriptor)
+            except OSError:
+                pass
+        if close_parent and parent_descriptor is not None:
+            try:
+                os.close(parent_descriptor)
+            except OSError:
+                pass
+
+
+def _cleanup_inventory(
+    root: Path,
+    *,
+    expected_identity: tuple[int, int] | None = None,
+) -> _CleanupInventory:
+    descriptor = _open_directory_path(root)
+    try:
+        if expected_identity is not None and _descriptor_identity(descriptor) != expected_identity:
+            raise PublicationError(["publication tree changed before cleanup inventory"])
+        return _cleanup_inventory_descriptor(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _bounded_directory_names(
+    descriptor: int,
+    *,
+    budget: _InventoryBudget,
+    depth: int,
+) -> tuple[str, ...]:
+    names: list[str] = []
+    try:
+        with os.scandir(descriptor) as iterator:
+            for entry in iterator:
+                budget.add_entry(depth=depth)
+                names.append(entry.name)
+    except (OSError, TypeError) as error:
+        raise PublicationError(
+            ["bounded publication traversal is unavailable on this platform"]
+        ) from error
+    return tuple(sorted(names))
+
+
+def _directory_names_match(descriptor: int, expected: tuple[str, ...]) -> bool:
+    names: list[str] = []
+    with os.scandir(descriptor) as iterator:
+        for entry in iterator:
+            if len(names) == len(expected):
+                return False
+            names.append(entry.name)
+    return tuple(sorted(names)) == expected
+
+
+def _cleanup_inventory_descriptor(descriptor: int) -> _CleanupInventory:
+    directories: list[tuple[str, tuple[int, ...]]] = []
+    files: list[tuple[str, tuple[int, ...], str]] = []
+    budget = _InventoryBudget()
+
+    def visit(current: int, prefix: str, depth: int) -> None:
+        names = _bounded_directory_names(
+            current,
+            budget=budget,
+            depth=depth + 1,
+        )
+        for name in names:
+            relative = f"{prefix}/{name}" if prefix else name
+            metadata = os.stat(name, dir_fd=current, follow_symlinks=False)
+            identity = _stat_signature(metadata)
+            if stat.S_ISDIR(metadata.st_mode):
+                directories.append((relative, identity))
+                child = os.open(
+                    name,
+                    os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=current,
+                )
+                try:
+                    if _stat_signature(os.fstat(child)) != identity:
+                        raise OSError(errno.ESTALE, "workspace changed during cleanup inventory")
+                    visit(child, relative, depth + 1)
+                finally:
+                    os.close(child)
+                if _stat_signature(
+                    os.stat(name, dir_fd=current, follow_symlinks=False)
+                ) != identity:
+                    raise OSError(errno.ESTALE, "workspace changed during cleanup inventory")
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise OSError(errno.ESTALE, "workspace contains an unowned filesystem entry")
+            budget.add_file(metadata.st_size)
+            data = _read_regular_file_at(
+                current,
+                name,
+                Path(relative),
+                max_bytes=_PUBLICATION_MAX_FILE_BYTES,
+            )
+            after = os.stat(name, dir_fd=current, follow_symlinks=False)
+            if _stat_signature(after) != identity:
+                raise OSError(errno.ESTALE, "workspace changed during cleanup inventory")
+            files.append((relative, identity, hashlib.sha256(data).hexdigest()))
+        if not _directory_names_match(current, names):
+            raise OSError(errno.ESTALE, "workspace changed during cleanup inventory")
+
+    visit(descriptor, "", 0)
+    return _CleanupInventory(tuple(sorted(directories)), tuple(sorted(files)))
+
+
+def _remove_inventory_contents(
+    descriptor: int,
+    inventory: _CleanupInventory,
+    *,
+    prefix: str = "",
+    budget: _InventoryBudget | None = None,
+    index: _CleanupIndex | None = None,
+    depth: int = 0,
+) -> None:
+    if budget is None:
+        budget = _InventoryBudget()
+    if index is None:
+        index = _index_cleanup_inventory(inventory)
+    expected_names = set(index.children.get(prefix, ()))
+    names = set(
+        _bounded_directory_names(
+            descriptor,
+            budget=budget,
+            depth=depth + 1,
+        )
+    )
+    if names != expected_names:
+        raise OSError(errno.ESTALE, "workspace changed during cleanup")
+    for name in sorted(names):
+        relative = f"{prefix}/{name}" if prefix else name
+        metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        expected_directory = index.directories.get(relative)
+        if expected_directory is not None:
+            if _stat_signature(metadata) != expected_directory:
+                raise OSError(errno.ESTALE, "workspace changed during cleanup")
+            child = os.open(
+                name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=descriptor,
+            )
+            try:
+                if _stat_signature(os.fstat(child)) != expected_directory:
+                    raise OSError(errno.ESTALE, "workspace changed during cleanup")
+                _remove_inventory_contents(
+                    child,
+                    inventory,
+                    prefix=relative,
+                    budget=budget,
+                    index=index,
+                    depth=depth + 1,
+                )
+            finally:
+                os.close(child)
+            current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if not stat.S_ISDIR(current.st_mode) or (
+                current.st_dev,
+                current.st_ino,
+            ) != (metadata.st_dev, metadata.st_ino):
+                raise OSError(errno.ESTALE, "workspace changed during cleanup")
+            os.rmdir(name, dir_fd=descriptor)
+            continue
+        expected_file = index.files.get(relative)
+        if expected_file is None or _stat_signature(metadata) != expected_file[0]:
+            raise OSError(errno.ESTALE, "workspace changed during cleanup")
+        quarantine = f".autoform-cleanup-{secrets.token_hex(16)}"
+        _cleanup_rename_noreplace(descriptor, name, quarantine)
+        try:
+            claimed = os.stat(
+                quarantine,
+                dir_fd=descriptor,
+                follow_symlinks=False,
+            )
+            data = _read_regular_file_at(
+                descriptor,
+                quarantine,
+                Path(relative),
+                max_bytes=_PUBLICATION_MAX_FILE_BYTES,
+            )
+            final = os.stat(
+                quarantine,
+                dir_fd=descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                _rename_stable_signature(claimed) != expected_file[0][:-1]
+                or _rename_stable_signature(final) != expected_file[0][:-1]
+                or hashlib.sha256(data).hexdigest() != expected_file[1]
+            ):
+                raise OSError(errno.ESTALE, "workspace changed during cleanup")
+        except BaseException:
+            try:
+                _cleanup_rename_noreplace(descriptor, quarantine, name)
+            except BaseException:
+                pass
+            raise
+        os.unlink(quarantine, dir_fd=descriptor)
+    if not _directory_names_match(descriptor, ()):
+        raise OSError(errno.ESTALE, "workspace changed during cleanup")
+
+
+def _index_cleanup_inventory(inventory: _CleanupInventory) -> _CleanupIndex:
+    """Index each cleanup record once by path and immediate parent."""
+
+    directories: dict[str, tuple[int, ...]] = {}
+    files: dict[str, tuple[tuple[int, ...], str]] = {}
+    children: dict[str, set[str]] = {}
+
+    def add_path(relative: str) -> None:
+        if not _valid_inventory_path(relative):
+            raise PublicationError(["cleanup inventory contains an invalid path"])
+        parent, separator, name = relative.rpartition("/")
+        if not separator:
+            parent = ""
+            name = relative
+        children.setdefault(parent, set()).add(name)
+
+    for relative, identity in inventory.directories:
+        if relative in directories or relative in files:
+            raise PublicationError(["cleanup inventory contains duplicate paths"])
+        add_path(relative)
+        directories[relative] = identity
+    for relative, identity, digest in inventory.files:
+        if relative in directories or relative in files:
+            raise PublicationError(["cleanup inventory contains duplicate paths"])
+        add_path(relative)
+        files[relative] = identity, digest
+    for paths in (directories, files):
+        for relative in paths:
+            parent = relative.rpartition("/")[0]
+            if parent and parent not in directories:
+                raise PublicationError(
+                    ["cleanup inventory has a missing parent directory"]
+                )
+    return _CleanupIndex(
+        directories,
+        files,
+        {parent: tuple(sorted(names)) for parent, names in children.items()},
+    )
+
+
+def _cleanup_rename_noreplace(descriptor: int, source: str, target: str) -> None:
+    """Claim a cleanup entry without using the publication commit hooks."""
+
+    function, flag = _rename_implementation(exchange=False)
+    result = function(
+        descriptor,
+        os.fsencode(source),
+        descriptor,
+        os.fsencode(target),
+        flag,
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), target)
+
+
+def _rename_stable_signature(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+
+
+def _require_destination_inventory(
+    inventory: _CleanupInventory,
+    state: _DestinationState,
+) -> None:
+    directories = tuple(path for path, _identity in inventory.directories)
+    files = tuple(
+        (path, digest)
+        for path, _identity, digest in inventory.files
+        if path != PUBLICATION_MANIFEST
+    )
+    manifests = tuple(
+        digest
+        for path, _identity, digest in inventory.files
+        if path == PUBLICATION_MANIFEST
+    )
+    if state.kind == "empty":
+        valid = not directories and not files and not manifests
+    else:
+        valid = (
+            state.kind == "owned"
+            and directories == state.directories
+            and files == state.files
+            and manifests == (state.manifest_sha256,)
+        )
+    if not valid:
+        raise PublicationError(["publication tree changed before cleanup inventory"])
+
+
+def _parse_inventory_files(value: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(value, dict):
+        raise PublicationError(["publication manifest has no valid file inventory"])
+    files: list[tuple[str, str]] = []
+    for path, digest in value.items():
+        if (
+            not isinstance(path, str)
+            or not _valid_inventory_path(path)
+            or path == PUBLICATION_MANIFEST
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            raise PublicationError(["publication manifest has an invalid file inventory"])
+        files.append((path, digest))
+    if files != sorted(files):
+        raise PublicationError(["publication manifest file inventory is not canonical"])
+    return tuple(files)
+
+
+def _parse_inventory_directories(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise PublicationError(["publication manifest has no valid directory inventory"])
+    if any(not isinstance(path, str) or not _valid_inventory_path(path) for path in value):
+        raise PublicationError(["publication manifest has an invalid directory inventory"])
+    if value != sorted(set(value)):
+        raise PublicationError(["publication manifest directory inventory is not canonical"])
+    return tuple(value)
+
+
+def _valid_inventory_path(value: str) -> bool:
+    path = PurePosixPath(value)
+    return (
+        bool(value)
+        and value != "."
+        and "\x00" not in value
+        and "\\" not in value
+        and not path.is_absolute()
+        and path.as_posix() == value
+        and ".." not in path.parts
+    )
+
+
+def _publication_inventory_descriptor(
+    root_descriptor: int,
+) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+    directories: list[str] = []
+    files: list[tuple[str, str]] = []
+    budget = _InventoryBudget()
+
+    def visit(descriptor: int, prefix: str, depth: int) -> None:
+        try:
+            names = _bounded_directory_names(
+                descriptor,
+                budget=budget,
+                depth=depth + 1,
+            )
+            for name in names:
+                relative = f"{prefix}/{name}" if prefix else name
+                metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                if stat.S_ISLNK(metadata.st_mode):
+                    raise PublicationError(
+                        [f"refusing symlink in publication output: {relative}"]
+                    )
+                if stat.S_ISDIR(metadata.st_mode):
+                    directories.append(relative)
+                    child = os.open(
+                        name,
+                        os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=descriptor,
+                    )
+                    try:
+                        if _descriptor_identity(child) != (metadata.st_dev, metadata.st_ino):
+                            raise PublicationError(
+                                ["publication output changed while it was inspected"]
+                            )
+                        visit(child, relative, depth + 1)
+                    finally:
+                        os.close(child)
+                    current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                    if (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino):
+                        raise PublicationError(
+                            ["publication output changed while it was inspected"]
+                        )
+                    continue
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise PublicationError(
+                        [f"refusing non-regular publication output: {relative}"]
+                    )
+                budget.add_file(metadata.st_size)
+                if relative == PUBLICATION_MANIFEST:
+                    continue
+                data = _read_regular_file_at(
+                    descriptor,
+                    name,
+                    Path(relative),
+                    max_bytes=_PUBLICATION_MAX_FILE_BYTES,
+                )
+                files.append((relative, hashlib.sha256(data).hexdigest()))
+            if not _directory_names_match(descriptor, names):
+                raise PublicationError(
+                    ["publication output changed while it was inspected"]
+                )
+        except OSError as error:
+            raise PublicationError(
+                ["publication output changed while it was inspected"]
+            ) from error
+
+    visit(root_descriptor, "", 0)
+    return tuple(sorted(directories)), tuple(sorted(files))
+
+
+def _read_owned_publication_files_at(
+    parent_descriptor: int,
+    name: str,
+    state: _DestinationState,
+) -> dict[PurePosixPath, bytes]:
+    """Read an exact prior generation through its retained parent descriptor."""
+
+    if state.kind != "owned" or state.identity is None:
+        raise PublicationError(["cannot seed from an unowned publication"])
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=parent_descriptor,
+    )
+    try:
+        if _descriptor_identity(descriptor) != state.identity:
+            raise PublicationError(["publication output changed while it was copied"])
+        copied: dict[PurePosixPath, bytes] = {}
+        for relative, expected_digest in state.files:
+            path = PurePosixPath(relative)
+            data = _read_relative_regular_file(descriptor, path)
+            if hashlib.sha256(data).hexdigest() != expected_digest:
+                raise PublicationError(["publication output changed while it was copied"])
+            copied[path] = data
+        return copied
+    finally:
+        os.close(descriptor)
+
+
+def _read_relative_regular_file(
+    root_descriptor: int,
+    relative: PurePosixPath,
+) -> bytes:
+    descriptor = os.dup(root_descriptor)
+    try:
+        for part in relative.parts[:-1]:
+            child = os.open(
+                part,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = child
+        return _read_regular_file_at(
+            descriptor,
+            relative.name,
+            Path(relative.as_posix()),
+            max_bytes=_PUBLICATION_MAX_FILE_BYTES,
+        )
+    finally:
+        os.close(descriptor)
+
+
+def _publication_plan_checkpoint(_event: str, _relative: str) -> None:
+    """A test hook for adversarial pathname replacement."""
+
+
+def _materialize_publication_plan(
+    stage_descriptor: int,
+    plan: _PublicationFilePlan,
+) -> None:
+    """Write a validated plan only through retained, no-follow descriptors."""
+
+    plan.inventory()
+    tree: dict[str, object] = {"directories": {}, "files": {}}
+    for relative, data in plan.files.items():
+        node = tree
+        for part in relative.parts[:-1]:
+            directories = node["directories"]
+            assert isinstance(directories, dict)
+            node = directories.setdefault(part, {"directories": {}, "files": {}})
+            assert isinstance(node, dict)
+        files = node["files"]
+        assert isinstance(files, dict)
+        files[relative.name] = data
+
+    os.fchmod(stage_descriptor, 0o755)
+
+    def write_node(descriptor: int, node: dict[str, object], prefix: str) -> None:
+        directories = node["directories"]
+        files = node["files"]
+        assert isinstance(directories, dict)
+        assert isinstance(files, dict)
+        for name in sorted(directories):
+            relative = f"{prefix}/{name}" if prefix else name
+            os.mkdir(name, mode=0o755, dir_fd=descriptor)
+            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            child = os.open(
+                name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=descriptor,
+            )
+            try:
+                if _descriptor_identity(child) != (metadata.st_dev, metadata.st_ino):
+                    raise PublicationError(["publication stage changed during materialization"])
+                os.fchmod(child, 0o755)
+                _publication_plan_checkpoint("after-directory-open", relative)
+                child_node = directories[name]
+                assert isinstance(child_node, dict)
+                write_node(child, child_node, relative)
+            finally:
+                os.close(child)
+        for name in sorted(files):
+            relative = f"{prefix}/{name}" if prefix else name
+            file_descriptor = os.open(
+                name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | os.O_CLOEXEC
+                | os.O_NOFOLLOW
+                | os.O_NONBLOCK,
+                0o644,
+                dir_fd=descriptor,
+            )
+            try:
+                metadata = os.fstat(file_descriptor)
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != 0:
+                    raise PublicationError(["publication stage file was not created safely"])
+                _publication_plan_checkpoint("after-file-open", relative)
+                data = files[name]
+                assert isinstance(data, bytes)
+                view = memoryview(data)
+                while view:
+                    written = os.write(file_descriptor, view)
+                    if written <= 0:
+                        raise OSError(errno.EIO, "publication stage write made no progress")
+                    view = view[written:]
+                os.fchmod(file_descriptor, 0o644)
+                if os.fstat(file_descriptor).st_size != len(data):
+                    raise OSError(errno.EIO, "publication stage write was incomplete")
+            finally:
+                os.close(file_descriptor)
+
+    write_node(stage_descriptor, tree, "")
+
+
+def _update_source_digest(digest, relative: Path, data: bytes) -> None:
+    path = os.fsencode(relative.as_posix())
+    digest.update(len(path).to_bytes(8, "big"))
+    digest.update(path)
+    digest.update(len(data).to_bytes(8, "big"))
+    digest.update(data)
+
+
+def _read_regular_file_at(
+    parent_descriptor: int,
+    name: str,
+    display_path: Path,
+    *,
+    max_bytes: int,
+) -> bytes:
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_descriptor)
+    except OSError as error:
+        raise PublicationError(
+            [f"could not safely read regular file: {display_path.name}"]
+        ) from error
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise PublicationError([f"refusing non-regular file: {display_path.name}"])
+        if before.st_size > max_bytes:
+            raise PublicationError(
+                [f"publication file exceeds max_file_bytes={max_bytes}: {display_path}"]
+            )
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1
+        while True:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+            if remaining == 0:
+                raise PublicationError(
+                    [f"publication file exceeds max_file_bytes={max_bytes}: {display_path}"]
+                )
+        after = os.fstat(descriptor)
+        if (
+            (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+        ):
+            raise PublicationError([f"file changed while it was read: {display_path.name}"])
+        entry = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        if (entry.st_dev, entry.st_ino) != (after.st_dev, after.st_ino):
+            raise PublicationError([f"file changed while it was read: {display_path.name}"])
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def _open_lean_sources(
+    root: Path, *, exclude_roots: Iterable[Path]
+) -> BoundProjectSources:
+    try:
+        return open_project_sources(
+            root,
+            exclude_roots=exclude_roots,
+            limits=_PUBLICATION_CAPTURE_LIMITS,
+        )
+    except (OSError, TreeSnapshotError) as error:
+        raise PublicationError(["could not capture a stable Lean source revision"]) from error
+
+
+def _capture_bound_lean_source_snapshot(
+    sources: BoundProjectSources,
+) -> IndexedSourceSnapshot:
+    try:
+        return sources.capture()
+    except TreeCaptureLimitError as error:
+        raise PublicationError([f"Lean source {error}"]) from error
+    except (OSError, TreeSnapshotError) as error:
+        raise PublicationError(["could not capture a stable Lean source revision"]) from error
+
+
+def _require_bound_lean_source_revision(
+    sources: BoundProjectSources,
+    expected_generation: str,
+) -> None:
+    try:
+        sources.verify()
+        actual = sources.capture().generation_revision
+        sources.verify()
+    except TreeCaptureLimitError as error:
+        raise PublicationError([f"Lean source {error}"]) from error
+    except (OSError, TreeSnapshotError) as error:
+        raise PublicationError(
+            ["Lean sources changed during publication; previous site was preserved"]
+        ) from error
+    if actual != expected_generation:
+        raise PublicationError(
+            ["Lean sources changed during publication; previous site was preserved"]
+        )
+
+
+def _sync_tree_descriptor(root_descriptor: int) -> None:
+    """Sync a staged generation without resolving its pathname."""
+
+    budget = _InventoryBudget()
+    os.fchmod(root_descriptor, 0o755)
+
+    def visit(descriptor: int, prefix: str, depth: int) -> None:
+        names = _bounded_directory_names(
+            descriptor,
+            budget=budget,
+            depth=depth + 1,
+        )
+        for name in names:
+            relative = f"{prefix}/{name}" if prefix else name
+            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            signature = _stat_signature(metadata)
+            if stat.S_ISDIR(metadata.st_mode):
+                child = os.open(
+                    name,
+                    os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+                try:
+                    if _stat_signature(os.fstat(child)) != signature:
+                        raise PublicationError(
+                            ["staged publication changed while syncing"]
+                        )
+                    visit(child, relative, depth + 1)
+                finally:
+                    os.close(child)
+                if _stat_signature(
+                    os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                ) != signature:
+                    raise PublicationError(
+                        ["staged publication changed while syncing"]
+                    )
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise PublicationError(
+                    [f"refusing non-regular staged publication entry: {relative}"]
+                )
+            budget.add_file(metadata.st_size)
+            file_descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=descriptor,
+            )
+            try:
+                if _stat_signature(os.fstat(file_descriptor)) != signature:
+                    raise PublicationError(
+                        ["staged publication changed while syncing"]
+                    )
+                os.fsync(file_descriptor)
+                if _stat_signature(os.fstat(file_descriptor)) != signature:
+                    raise PublicationError(
+                        ["staged publication changed while syncing"]
+                    )
+            finally:
+                os.close(file_descriptor)
+            if _stat_signature(
+                os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            ) != signature:
+                raise PublicationError(["staged publication changed while syncing"])
+        if not _directory_names_match(descriptor, names):
+            raise PublicationError(["staged publication changed while syncing"])
+        os.fsync(descriptor)
+
+    visit(root_descriptor, "", 0)
+
+
+def _publication_inventory_at(
+    parent_descriptor: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> _CleanupInventory:
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=parent_descriptor,
+    )
+    try:
+        if _descriptor_identity(descriptor) != expected_identity:
+            raise PublicationError(["publication tree changed while it was inspected"])
+        return _cleanup_inventory_descriptor(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _publish_staged_site(
+    stage: Path,
+    destination: Path,
+    expected: _DestinationState,
+    staged: _DestinationState,
+    *,
+    expected_inventory: _CleanupInventory | None,
+    staged_inventory: _CleanupInventory,
+    commit_state: _PublicationCommitState,
+    input_guard: Callable[[], None],
+    output_parent: RetainedDirectory,
+    workspace_identity: tuple[int, int],
+    workspace_descriptor: int,
+) -> None:
+    """Commit one verified stage, without ever moving it back into place."""
+
+    stage_parent_descriptor = workspace_descriptor
+    try:
+        _require_output_parent(output_parent, "before publication commit")
+        parent_descriptor = output_parent.descriptor
+        if _descriptor_identity(stage_parent_descriptor) != workspace_identity:
+            raise _PublicationRecoveryError(
+                [
+                    "publication workspace changed; workspace retained "
+                    f"{_workspace_recovery_location(stage.parent, output_parent)}"
+                ]
+            )
+        if os.fstat(parent_descriptor).st_dev != os.fstat(stage_parent_descriptor).st_dev:
+            raise PublicationError(
+                ["publication staging and output directories are on different filesystems"]
+            )
+        if staged.kind != "owned" or staged.identity is None:
+            raise _PublicationRecoveryError(
+                [
+                    "publication stage changed; workspace retained "
+                    f"{_workspace_recovery_location(stage.parent, output_parent)}"
+                ]
+            )
+        if (
+            _inspect_destination_at(stage_parent_descriptor, stage.name, stage)
+            != staged
+            or _publication_inventory_at(
+                stage_parent_descriptor,
+                stage.name,
+                staged.identity,
+            )
+            != staged_inventory
+        ):
+            raise _PublicationRecoveryError(
+                [
+                    "publication stage changed; workspace retained "
+                    f"{_workspace_recovery_location(stage.parent, output_parent)}"
+                ]
+            )
+        try:
+            fcntl.flock(parent_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise PublicationError(
+                ["another publication is committing in the output directory; retry"]
+            ) from error
+
+        current = _inspect_destination_at(
+            parent_descriptor,
+            destination.name,
+            destination,
+        )
+        if current != expected:
+            raise PublicationError(
+                ["output directory changed during publication; previous site was preserved"]
+            )
+        if expected.kind == "absent":
+            if expected_inventory is not None:
+                raise PublicationError(["invalid absent-destination publication state"])
+        else:
+            if expected.identity is None or expected_inventory is None:
+                raise PublicationError(["invalid destination publication state"])
+            if (
+                _publication_inventory_at(
+                    parent_descriptor,
+                    destination.name,
+                    expected.identity,
+                )
+                != expected_inventory
+            ):
+                raise PublicationError(
+                    ["output directory changed during publication; previous site was preserved"]
+                )
+
+        if (
+            _inspect_destination_at(stage_parent_descriptor, stage.name, stage)
+            != staged
+            or _publication_inventory_at(
+                stage_parent_descriptor,
+                stage.name,
+                staged.identity,
+            )
+            != staged_inventory
+        ):
+            raise _PublicationRecoveryError(
+                [
+                    "publication stage changed; workspace retained "
+                    f"{_workspace_recovery_location(stage.parent, output_parent)}"
+                ]
+            )
+
+        input_guard()
+        _require_output_parent(output_parent, "at the publication commit boundary")
+
+        if _inspect_destination_at(
+            parent_descriptor,
+            destination.name,
+            destination,
+        ) != expected:
+            raise PublicationError(
+                ["publication inputs changed at the commit boundary"]
+            )
+        if (
+            _inspect_destination_at(stage_parent_descriptor, stage.name, stage)
+            != staged
+            or _publication_inventory_at(
+                stage_parent_descriptor,
+                stage.name,
+                staged.identity,
+            )
+            != staged_inventory
+        ):
+            raise _PublicationRecoveryError(
+                [
+                    "publication stage changed; workspace retained "
+                    f"{_workspace_recovery_location(stage.parent, output_parent)}"
+                ]
+            )
+
+        commit_state.attempted = True
+        if expected.kind == "absent":
+            _rename_noreplace(
+                stage_parent_descriptor,
+                stage.name,
+                parent_descriptor,
+                destination.name,
+            )
+        else:
+            _rename_exchange(
+                stage_parent_descriptor,
+                stage.name,
+                parent_descriptor,
+                destination.name,
+            )
+            displaced = _inspect_destination_at(
+                stage_parent_descriptor,
+                stage.name,
+                stage,
+            )
+            if displaced != expected or (
+                expected.identity is not None
+                and expected_inventory is not None
+                and _publication_inventory_at(
+                    stage_parent_descriptor,
+                    stage.name,
+                    expected.identity,
+                )
+                != expected_inventory
+            ):
+                raise PublicationError(
+                    ["the displaced publication changed during the commit operation"]
+                )
+
+        published = _inspect_destination_at(
+            parent_descriptor,
+            destination.name,
+            destination,
+        )
+        if published != staged or _publication_inventory_at(
+            parent_descriptor,
+            destination.name,
+            staged.identity,
+        ) != staged_inventory:
+            raise PublicationError(
+                ["the published generation changed before its final ownership check"]
+            )
+        os.fsync(stage_parent_descriptor)
+        os.fsync(parent_descriptor)
+        _require_output_parent(output_parent, "after publication commit")
+    except BaseException as publication_error:
+        if commit_state.attempted:
+            raise _PublicationRecoveryError(
+                [
+                    "publication commit began but its final state or durability "
+                    f"could not be verified; output may have changed and the workspace "
+                    f"was retained {_workspace_recovery_location(stage.parent, output_parent)}"
+                ]
+            ) from publication_error
+        raise
+    commit_state.verified = True
+
+
+def _rename_noreplace(
+    source_parent: int, source: str, target_parent: int, target: str
+) -> None:
+    function, flag = _rename_implementation(exchange=False)
+    result = function(
+        source_parent,
+        os.fsencode(source),
+        target_parent,
+        os.fsencode(target),
+        flag,
+    )
+    if result == 0:
         return
-    for source in sorted(blueprint.rglob("*")):
-        relative = source.relative_to(blueprint)
+    error = ctypes.get_errno()
+    if error in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise PublicationError(
+            ["output directory changed during publication; previous site was preserved"]
+        )
+    raise OSError(error, os.strerror(error), target)
+
+
+def _rename_exchange(
+    source_parent: int, source: str, target_parent: int, target: str
+) -> None:
+    function, flag = _rename_implementation(exchange=True)
+    result = function(
+        source_parent,
+        os.fsencode(source),
+        target_parent,
+        os.fsencode(target),
+        flag,
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), target)
+
+
+def _rename_implementation(*, exchange: bool):
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+    except OSError as error:
+        raise PublicationError(["atomic publication is unavailable on this platform"]) from error
+    if hasattr(libc, "renameatx_np"):
+        function = libc.renameatx_np
+        flag = 0x00000002 if exchange else 0x00000004
+    elif hasattr(libc, "renameat2"):
+        function = libc.renameat2
+        flag = 2 if exchange else 1
+    else:
+        raise PublicationError(["atomic publication is unavailable on this platform"])
+    function.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    function.restype = ctypes.c_int
+    return function, flag
+
+
+def _validate_publication_snapshot(snapshot: TreeSnapshot) -> None:
+    """Reject captured entries that could leak local or non-regular state."""
+
+    issues: list[str] = []
+    paths = [
+        *(relative for relative in snapshot.directories if relative),
+        *(relative for relative, _data in snapshot.files),
+        *(relative for relative, _target in snapshot.symlinks),
+        *(relative for relative, _mode in snapshot.special),
+        *(relative for relative, _kind in snapshot.omitted),
+    ]
+    symlinks = {relative for relative, _target in snapshot.symlinks}
+    specials = {
+        relative: reason
+        for relative, reason in snapshot.unsupported_entries()
+        if relative not in symlinks
+    }
+    for raw_relative in sorted(paths):
+        relative = PurePosixPath(raw_relative)
         folded_parts = {part.casefold() for part in relative.parts}
         name = relative.name.casefold()
         if (
@@ -510,14 +2566,50 @@ def _validate_publication_tree(blueprint: Path) -> None:
             or name.startswith(".env.")
             or name.endswith((".key", ".log", ".pem"))
         ):
-            issues.append(f"refusing local or sensitive publication input: {relative.as_posix()}")
+            issues.append(
+                f"refusing local or sensitive publication input: {raw_relative}"
+            )
             continue
-        if _is_hidden(relative):
+        if any(part.startswith(".") for part in relative.parts):
             continue
-        if source.is_symlink():
-            issues.append(f"refusing symlink in blueprint publication: {relative.as_posix()}")
+        if raw_relative in symlinks:
+            issues.append(
+                f"refusing symlink in blueprint publication: {raw_relative}"
+            )
+        elif raw_relative in specials:
+            issues.append(
+                "refusing non-regular blueprint publication input: "
+                f"{raw_relative}: {specials[raw_relative]}"
+            )
     if issues:
         raise PublicationError(issues)
+
+
+def _load_publication_contract(
+    blueprint: _CapturedBlueprint,
+) -> tuple[Graph, CoverageSummary]:
+    files = {relative.as_posix(): data for relative, data in blueprint.files.items()}
+    graph = load_graph_snapshot(
+        blueprint.root,
+        files,
+        directories=(
+            "" if relative == PurePosixPath(".") else relative.as_posix()
+            for relative in blueprint.directories
+        ),
+    )
+    coverage, coverage_issues = load_coverage_snapshot(blueprint.root, files)
+    if coverage_issues:
+        raise PublicationError(
+            [
+                f"coverage contract line {issue.line}: {issue.reason}"
+                if issue.line
+                else f"coverage contract: {issue.reason}"
+                for issue in coverage_issues
+            ]
+        )
+    if coverage is None:
+        raise PublicationError(["coverage contract could not be loaded"])
+    return graph, coverage
 
 
 def _is_hidden(relative: Path) -> bool:
@@ -540,7 +2632,9 @@ def _sources_base(blueprint: Path, repo_root: Path, linker: SourceLinker) -> "_S
     if not linker.repository_url or not linker.ref:
         return None
     try:
-        relative = (blueprint / SOURCES_DIR).resolve().relative_to(repo_root).as_posix()
+        relative = _lexical_path(blueprint / SOURCES_DIR).relative_to(
+            _lexical_path(repo_root)
+        ).as_posix()
     except ValueError:
         # The vault is outside the repository being linked, so no blob URL
         # describes it. Better no link than one that 404s.
@@ -574,22 +2668,17 @@ def _source_href(sources_base: _SourceBase, tail: tuple[str, ...]) -> str:
     return sources_base.href(tail)
 
 
-def _published_source_files(blueprint: Path):
-    """Yield the regular authored inputs that contribute to the static site."""
-    for source in sorted(blueprint.rglob("*")):
-        relative = source.relative_to(blueprint)
-        if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
+def _source_revision(blueprint: _CapturedBlueprint) -> str:
+    digest = hashlib.sha256(b"autoform-markdown-publication/v2\0")
+    for relative, data in sorted(
+        blueprint.files.items(), key=lambda item: item[0].as_posix()
+    ):
+        path = Path(relative.as_posix())
+        if _SKIPPED_DIRECTORIES.intersection(path.parts) or _is_hidden(path):
             continue
-        if relative.name in _GENERATED_FILES or not source.is_file():
+        if _is_generated_path(path):
             continue
-        yield source, relative
-
-
-def _source_revision(blueprint: Path) -> str:
-    digest = hashlib.sha256(b"autoform-markdown-publication/v1\0")
-    for source, relative in _published_source_files(blueprint):
-        digest.update(relative.as_posix().encode("utf-8") + b"\0")
-        digest.update(source.read_bytes() + b"\0")
+        _update_source_digest(digest, path, data)
     return digest.hexdigest()
 
 
@@ -600,14 +2689,16 @@ def publication_source_revision(blueprint_dir: str | Path) -> str:
 
 
 def _write_publication_manifest(
-    destination: Path,
-    blueprint: Path,
+    plan: _PublicationPlanBuilder,
     graph: Graph,
     linker: SourceLinker,
     *,
     coverage: CoverageSummary,
     complete: bool,
+    source_revision: str,
+    lean_source_revision: str,
 ) -> None:
+    directories, files = plan.inventory()
     manifest = {
         "complete": complete,
         "coverage": {
@@ -617,18 +2708,26 @@ def _write_publication_manifest(
             "source_path": coverage.source_path,
             "source_sha256": coverage.source_sha256,
         },
-        "schema": "autoform-publication/v1",
+        "directories": list(directories),
+        "files": dict(files),
+        "schema": PUBLICATION_SCHEMA,
         "source": "blueprint/roadmap Markdown",
-        "source_revision": publication_source_revision(blueprint),
+        "source_revision": source_revision,
         "git_ref": linker.ref,
+        "lean_source_revision": lean_source_revision,
         "nodes": len(graph.nodes),
         "dependencies": graph.edge_count,
         "views": ["book", "progress", "project", "chapter", "focus", "full"],
     }
-    (destination / PUBLICATION_MANIFEST).write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    if len(encoded) > _PUBLICATION_MANIFEST_MAX_BYTES:
+        raise PublicationError(
+            [
+                "generated publication manifest exceeds "
+                f"max_file_bytes={_PUBLICATION_MANIFEST_MAX_BYTES}"
+            ]
+        )
+    plan.write_bytes(PUBLICATION_MANIFEST, encoded)
 
 
 def _group_nodes(graph: Graph) -> dict[str, list[str]]:
@@ -663,29 +2762,34 @@ def _group_page(group: str) -> Path:
     )
 
 
-def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
+def _book_page_order(
+    blueprint: _CapturedBlueprint,
+    plan: _PublicationPlanBuilder | _PublicationFilePlan,
+    graph: Graph,
+) -> list[Path]:
     """Follow authored container links to recover the book's page order."""
+    destination = plan.root
     ordered: list[Path] = []
     seen_outputs: set[Path] = set()
     visited_sources: set[Path] = set()
     containers = _containers(graph)
     book_sources = {
-        node.path.resolve()
+        _lexical_path(node.path)
         for node in graph.nodes.values()
         if node.id in containers or not node.formalizable
     }
-    pending = [blueprint / "README.md"]
+    pending = [blueprint.root / "README.md"]
     while pending:
-        source = pending.pop().resolve()
+        source = _lexical_path(pending.pop())
         try:
-            relative = source.relative_to(blueprint)
+            relative = blueprint.relative(source)
         except ValueError:
             continue
-        output = (destination / relative).resolve()
-        if output.is_file() and output not in seen_outputs:
+        output = destination.joinpath(*relative.parts)
+        if plan.is_file(output) and output not in seen_outputs:
             seen_outputs.add(output)
             ordered.append(output)
-        if source in visited_sources or not source.is_file():
+        if source in visited_sources or relative not in blueprint.files:
             continue
         visited_sources.add(source)
         linked_sources: list[Path] = []
@@ -697,9 +2801,9 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
                 path = bare.partition("#")[0]
                 if not path or urlsplit(path).scheme or path.startswith("/"):
                     continue
-                candidate = (source.parent / unquote(path)).resolve()
+                candidate = _lexical_path(source.parent / unquote(path))
                 try:
-                    candidate_relative = candidate.relative_to(blueprint)
+                    candidate_relative = candidate.relative_to(blueprint.root)
                 except ValueError:
                     continue
                 if (
@@ -713,16 +2817,20 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
                 linked_sources.append(candidate)
             return line
 
-        _outside_fences(source.read_text(encoding="utf-8"), collect)
+        _outside_fences(blueprint.read_text(relative), collect)
         pending.extend(reversed(linked_sources))
     return ordered
 
 
-def _append_book_navigation(pages: list[Path]) -> None:
+def _append_book_navigation(
+    pages: list[Path],
+    *,
+    plan: _PublicationPlanBuilder | _PublicationFilePlan,
+) -> None:
     """Add previous/next links to the bottom of Blueprint pages, never global nav."""
     if len(pages) < 2:
         return
-    titles = [_first_h1(page.read_text(encoding="utf-8")) or page.stem for page in pages]
+    titles = [_first_h1(plan.read_text(page)) or page.stem for page in pages]
     for index, page in enumerate(pages):
         links: list[str] = []
         if index:
@@ -748,9 +2856,9 @@ def _append_book_navigation(pages: list[Path]) -> None:
             + "".join(links)
             + "</nav>"
         )
-        page.write_text(
-            page.read_text(encoding="utf-8").rstrip() + "\n\n" + navigation + "\n",
-            encoding="utf-8",
+        plan.write_text(
+            page,
+            plan.read_text(page).rstrip() + "\n\n" + navigation + "\n",
         )
 
 
@@ -808,6 +2916,7 @@ def _next_target(
     destination: Path,
     group_pages: dict[str, Path] | None = None,
     targets: dict[str, str] | None = None,
+    read_page: Callable[[Path], str],
 ) -> str:
     """Name the result a contributor could pick up right now, with the way in.
 
@@ -848,7 +2957,7 @@ def _next_target(
         )
         actions = [f'<a href="{html.escape(graph_href, quote=True)}">Dependencies</a>']
         if chapter_page is not None:
-            chapter_title = _first_h1(chapter_page.read_text(encoding="utf-8")) or "chapter"
+            chapter_title = _first_h1(read_page(chapter_page)) or "chapter"
             href = mermaid.relative_link(chapter_page, page, ".html")
             actions.insert(
                 0, f'<a href="{html.escape(href, quote=True)}">{html.escape(chapter_title)}</a>'
@@ -879,7 +2988,7 @@ STRUCTURE_PAGE = "structure.md"
 
 
 def _render_structure_page(
-    blueprint: Path,
+    blueprint: _CapturedBlueprint,
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     *,
@@ -900,17 +3009,21 @@ def _render_structure_page(
     chapter is; without them every `README.md` looks like every other one.
     """
     links = _anchored_links(targets, page, extension=".md")
-    by_path = {node.path.resolve(): node for node in graph.nodes.values()}
+    by_path = {_lexical_path(node.path): node for node in graph.nodes.values()}
 
     def keep(relative: Path) -> bool:
         if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
             return False
-        if relative.name in _GENERATED_FILES:
+        if _is_generated_path(relative):
             return False
         return not (sources_base is not None and relative.parts[:1] == (SOURCES_DIR,))
 
-    files = [p for p in sorted(blueprint.rglob("*.md")) if keep(p.relative_to(blueprint))]
-    directories = {p.relative_to(blueprint).parent for p in files}
+    files = [
+        Path(relative.as_posix())
+        for relative in sorted(blueprint.files, key=lambda path: path.as_posix())
+        if relative.suffix == ".md" and keep(Path(relative.as_posix()))
+    ]
+    directories = {path.parent for path in files}
     directories.discard(Path("."))
     for directory in list(directories):
         for parent in directory.parents:
@@ -938,13 +3051,13 @@ def _render_structure_page(
         )
 
     rows = [row(0, "<strong>blueprint/</strong>", "vault root", "")]
-    for entry in sorted(directories | {p.relative_to(blueprint) for p in files}):
+    for entry in sorted(directories | set(files)):
         depth = len(entry.parts)
         if entry in directories:
             rows.append(row(depth, f"<strong>{html.escape(entry.name)}/</strong>", "", ""))
             continue
-        source = blueprint / entry
-        node = by_path.get(source.resolve())
+        source = blueprint.root / entry
+        node = by_path.get(_lexical_path(source))
         name = html.escape(entry.name)
         if node is None:
             # Everything under `roadmap/` is a node or the graph refuses to
@@ -966,7 +3079,7 @@ def _render_structure_page(
             )
         )
 
-    article_depths = {len(p.relative_to(blueprint).parts) - 1 for p in by_path}
+    article_depths = {len(p.relative_to(blueprint.root).parts) - 1 for p in by_path}
     warnings = []
     if len(by_path) > 3 and article_depths <= {1}:
         warnings.append(
@@ -999,6 +3112,7 @@ def _render_summary_nav(
     *,
     destination: Path,
     overview: Path,
+    plan: _PublicationPlanBuilder | _PublicationFilePlan,
 ) -> str:
     """Write the site nav as Markdown so the Book tab holds real chapters.
 
@@ -1011,7 +3125,7 @@ def _render_summary_nav(
     for page in book_pages:
         if page == overview:
             continue
-        title = _first_h1(page.read_text(encoding="utf-8")) or page.parent.name
+        title = _first_h1(plan.read_text(page)) or page.parent.name
         depth = len(page.relative_to(destination).parts) - 1
         indent = "    " * max(depth, 1)
         lines.append(f"{indent}- [{title}]({page.relative_to(destination).as_posix()})")
@@ -1019,8 +3133,8 @@ def _render_summary_nav(
     # page used to be the only route to it, which made the page impossible to
     # simplify without stranding it.
     coverage = destination / "coverage/README.md"
-    if coverage.is_file():
-        title = _first_h1(coverage.read_text(encoding="utf-8")) or "Coverage"
+    if plan.is_file(coverage):
+        title = _first_h1(plan.read_text(coverage)) or "Coverage"
         lines.append(f"    - [{title}](coverage/README.md)")
     lines.extend(
         [
@@ -1043,6 +3157,7 @@ def _render_landing_page(
     page: Path,
     destination: Path,
     targets: dict[str, str] | None = None,
+    read_page: Callable[[Path], str],
 ) -> str:
     """The landing page: what this is, how far it has got, and what is next.
 
@@ -1086,6 +3201,7 @@ def _render_landing_page(
             destination=destination,
             group_pages=group_pages,
             targets=targets,
+            read_page=read_page,
         ),
     ]
     breakdown = mermaid.render_legend(statuses)
@@ -1362,7 +3478,7 @@ def _anchored_links(
     and extension can share *hrefs*, so each target page is linked once across
     all of them.
     """
-    resolved_page = page.resolve()
+    resolved_page = _lexical_path(page)
     # Many nodes share a chapter page, and resolving a path walks the disk, so
     # each target page is linked once. The current page is cached as "" and
     # links as a bare fragment.
@@ -1372,7 +3488,7 @@ def _anchored_links(
     for node_id, (target, anchor) in targets.items():
         href = hrefs.get(target)
         if href is None:
-            if target.resolve() == resolved_page:
+            if _lexical_path(target) == resolved_page:
                 href = ""
             else:
                 href = mermaid.relative_link(target, page, extension)
@@ -1428,7 +3544,7 @@ def _rewrite_links(
         path, separator, fragment = bare.partition("#")
         if not path or urlsplit(path).scheme or path.startswith("/"):
             return None
-        candidate = (source_dir / unquote(path)).resolve()
+        candidate = _lexical_path(source_dir / unquote(path))
         node_id = node_sources.get(candidate)
         if node_id is not None:
             href = _anchored_links({node_id: targets[node_id]}, page, extension=".md", hrefs=page_hrefs)[node_id]
@@ -1469,6 +3585,53 @@ def _is_within(path: Path, directory: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _lexical_path(path: Path) -> Path:
+    return Path(os.path.normpath(os.fspath(path)))
+
+
+def _publication_paths_overlap(first: Path, second: Path) -> bool:
+    """Recognize lexical and filesystem aliases before creating render state."""
+
+    return (
+        _is_within(first, second)
+        or _is_within(second, first)
+        or _path_reaches_directory_identity(first, second)
+        or _path_reaches_directory_identity(second, first)
+    )
+
+
+def _path_reaches_directory_identity(path: Path, directory: Path) -> bool:
+    try:
+        target = directory.stat()
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise PublicationError(["could not verify publication path separation"]) from error
+    if not stat.S_ISDIR(target.st_mode):
+        return False
+    target_identity = (target.st_dev, target.st_ino)
+    cursor = path
+    while True:
+        try:
+            metadata = cursor.stat()
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise PublicationError(
+                ["could not verify publication path separation"]
+            ) from error
+        else:
+            if stat.S_ISDIR(metadata.st_mode) and (
+                metadata.st_dev,
+                metadata.st_ino,
+            ) == target_identity:
+                return True
+        parent = cursor.parent
+        if parent == cursor:
+            return False
+        cursor = parent
 
 
 def _outside_fences(text: str, transform) -> str:
@@ -1530,6 +3693,8 @@ def _render_chapter(
     node_sources: dict[Path, str],
     containers: frozenset[str],
     sources_base: "_SourceBase | None" = None,
+    source_blueprint: Path,
+    read_source: Callable[[Path], str],
 ) -> tuple[str, int, list[str]]:
     """Render one narrative article with statements at its authored link slots."""
     links = _anchored_links(targets, page)
@@ -1553,6 +3718,8 @@ def _render_chapter(
             node_sources=node_sources,
             targets=targets,
             sources_base=sources_base,
+            source_blueprint=source_blueprint,
+            read_source=read_source,
         )
         environments[node_id] = environment
         linked += node_linked
@@ -1617,7 +3784,7 @@ def _place_environments(
         elif not path or urlsplit(path).scheme or path.startswith("/"):
             node_id = None
         else:
-            node_id = node_sources.get((source_dir / unquote(path)).resolve())
+            node_id = node_sources.get(_lexical_path(source_dir / unquote(path)))
         if node_id is None or node_id not in environments or node_id in placed:
             output.append(line)
             continue
@@ -1643,10 +3810,12 @@ def _render_environment(
     node_sources: dict[Path, str],
     targets: dict[str, tuple[Path, str]],
     sources_base: "_SourceBase | None" = None,
+    source_blueprint: Path,
+    read_source: Callable[[Path], str],
 ) -> tuple[str, int, list[str]]:
     node_status = statuses[node.id]
     caption, _, number = numbers[node.id].rpartition(" ")
-    statement, remainder = _split_body(node.path.read_text(encoding="utf-8"))
+    statement, remainder = _split_body(read_source(node.path))
     # The body is leaving its own directory for the chapter page, so its
     # relative links have to be recomputed from the chapter's location.
     statement, remainder = (
@@ -1665,7 +3834,13 @@ def _render_environment(
 
     code_links, implementation_rows, linked, unresolved = _lean_presentation(node, linker)
     context_link = _graph_context_link(node, page=page, destination=destination)
-    source_link = _vault_source_link(node, repo_root=repo_root, linker=linker)
+    source_link = _vault_source_link(
+        node,
+        blueprint=blueprint,
+        source_blueprint=source_blueprint,
+        repo_root=repo_root,
+        linker=linker,
+    )
     meta_rows = implementation_rows
     if node_status.key == "conditional":
         # A conditional proof must never read as finished, so the open
@@ -1766,7 +3941,14 @@ def _code_icon() -> str:
     )
 
 
-def _vault_source_link(node: Node, *, repo_root: Path, linker) -> str:
+def _vault_source_link(
+    node: Node,
+    *,
+    blueprint: Path,
+    source_blueprint: Path,
+    repo_root: Path,
+    linker,
+) -> str:
     """Link a statement to the Markdown article it was authored in.
 
     The graph view and the published statement are both derived. This is the
@@ -1775,10 +3957,11 @@ def _vault_source_link(node: Node, *, repo_root: Path, linker) -> str:
     if not linker.repository_url or not linker.ref:
         return ""
     try:
-        relative = node.path.resolve().relative_to(repo_root).as_posix()
+        article = source_blueprint / _lexical_path(node.path).relative_to(blueprint)
+        relative = article.relative_to(repo_root).as_posix()
     except ValueError:
         return ""
-    href = f"{linker.repository_url}/blob/{linker.ref}/{relative}"
+    href = f"{linker.repository_url}/blob/{linker.ref}/{quote(relative, safe='/')}"
     label = html.escape(f"Edit the Markdown source for {node.title}", quote=True)
     icon = (
         '<svg class="bp-source-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'

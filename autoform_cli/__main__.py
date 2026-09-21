@@ -985,6 +985,8 @@ def _render(args: argparse.Namespace) -> int:
     print(f"{report.output_dir}: {report.pages} pages, {report.nodes} nodes, {report.linked} code links")
     for issue in report.unresolved:
         print(f"warning: declaration not found in the Lean sources: {issue}")
+    for issue in report.warnings:
+        print(f"warning: {issue}")
     if report.unresolved and args.require_declarations:
         return 1
     return 0

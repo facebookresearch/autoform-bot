@@ -335,7 +335,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
 
     assert report.unresolved == []
     manifest = json.loads((site / "publication.json").read_text(encoding="utf-8"))
-    assert manifest["schema"] == "autoform-publication/v1"
+    assert manifest["schema"] == "autoform-publication/v2"
     assert manifest["nodes"] == 10
     assert manifest["dependencies"] == 9
     assert manifest["git_ref"] == "0" * 40

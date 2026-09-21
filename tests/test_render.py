@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import shutil
+import stat
 import subprocess
-from pathlib import Path
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path, PurePosixPath
 
 import pytest
 
+import autoform_cli._tree_snapshot as tree_snapshot_module
+import autoform_cli.render as render_module
+from autoform_cli._tree_snapshot import TreeCaptureLimits, TreeSelection
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS
 from autoform_cli.graph import load_graph
 from autoform_cli.lean import LeanSourceError, _normalize_remote
@@ -740,14 +748,33 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path
             "source_sha256": manifest["coverage"]["source_sha256"],
         },
         "dependencies": 1,
+        "directories": manifest["directories"],
+        "files": manifest["files"],
         "git_ref": "a" * 40,
+        "lean_source_revision": manifest["lean_source_revision"],
         "nodes": 3,
-        "schema": "autoform-publication/v1",
+        "schema": "autoform-publication/v2",
         "source": "blueprint/roadmap Markdown",
         "source_revision": manifest["source_revision"],
         "views": ["book", "progress", "project", "chapter", "focus", "full"],
     }
     assert re.fullmatch(r"[0-9a-f]{64}", manifest["source_revision"])
+    assert re.fullmatch(r"[0-9a-f]{64}", manifest["lean_source_revision"])
+    expected_files = {path for path in first if path != PUBLICATION_MANIFEST}
+    assert set(manifest["files"]) == expected_files
+    assert all(
+        digest == hashlib.sha256(first[path]).hexdigest()
+        for path, digest in manifest["files"].items()
+    )
+    expected_directories = sorted(
+        {
+            parent.as_posix()
+            for path in expected_files
+            for parent in Path(path).parents
+            if parent != Path(".")
+        }
+    )
+    assert manifest["directories"] == expected_directories
     assert str(tmp_path).encode() not in b"".join(first.values())
 
 
@@ -911,17 +938,935 @@ def test_render_refuses_decomposition_evidence_with_a_missing_anchor(tmp_path: P
     assert manifest["coverage"]["complete"]
 
 
-def test_render_cleans_only_an_owned_publication(tmp_path: Path) -> None:
+def test_render_replaces_only_an_exact_owned_publication(tmp_path: Path) -> None:
     project = _project(tmp_path)
     output = tmp_path / "out"
     render_site(project / "blueprint", output, lean_root=project)
+    render_site(project / "blueprint", output, lean_root=project)
+    assert json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["complete"]
+
     stale = output / "stale.txt"
     stale.write_text("old generated output\n", encoding="utf-8")
 
+    with pytest.raises(PublicationError, match="untracked or missing files.*stale.txt"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert stale.read_text(encoding="utf-8") == "old generated output\n"
+
+
+def test_render_rejects_a_v2_publication_without_a_lean_revision(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    manifest_path = output / PUBLICATION_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("lean_source_revision")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    before = manifest_path.read_bytes()
+    with pytest.raises(PublicationError, match="invalid source revisions"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert manifest_path.read_bytes() == before
+
+
+def test_schema_only_manifest_cannot_authorize_deletion(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    output.mkdir()
+    sentinel = output / "keep.txt"
+    sentinel.write_text("user data\n", encoding="utf-8")
+    (output / PUBLICATION_MANIFEST).write_text(
+        json.dumps(
+            {"schema": "autoform-publication/v2", "complete": True},
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PublicationError, match="valid file inventory"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert sentinel.read_text(encoding="utf-8") == "user data\n"
+
+
+def test_render_refuses_a_modified_owned_file(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    overview = output / "README.md"
+    overview.write_text("changed after publication\n", encoding="utf-8")
+
+    with pytest.raises(PublicationError, match="modified Autoform publication"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert overview.read_text(encoding="utf-8") == "changed after publication\n"
+
+
+def test_failed_plan_build_preserves_the_previous_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    before = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("injected render failure")
+
+    monkeypatch.setattr(render_module, "_render_summary_nav", fail)
+    with pytest.raises(RuntimeError, match="injected render failure"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    after = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
+def test_source_change_during_render_aborts_before_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    old_manifest = (output / PUBLICATION_MANIFEST).read_bytes()
+    article = project / "blueprint/roadmap/top.md"
+    original = render_module._build_publication_plan
+
+    def mutate_after_render(*args, **kwargs):
+        report = original(*args, **kwargs)
+        article.write_text(article.read_text(encoding="utf-8") + "\nChanged concurrently.\n")
+        return report
+
+    monkeypatch.setattr(render_module, "_build_publication_plan", mutate_after_render)
+    with pytest.raises(PublicationError, match="blueprint changed during publication"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert (output / PUBLICATION_MANIFEST).read_bytes() == old_manifest
+    assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
+def test_source_revision_frames_file_names_and_contents_unambiguously(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "a").write_bytes(b"X\0b\0Y")
+    (second / "a").write_bytes(b"X")
+    (second / "b").write_bytes(b"Y")
+
+    first_snapshot = render_module._CapturedBlueprint(
+        first,
+        {PurePosixPath("a"): b"X\0b\0Y"},
+        frozenset({PurePosixPath(".")}),
+    )
+    second_snapshot = render_module._CapturedBlueprint(
+        second,
+        {PurePosixPath("a"): b"X", PurePosixPath("b"): b"Y"},
+        frozenset({PurePosixPath(".")}),
+    )
+
+    assert render_module._source_revision(first_snapshot) != render_module._source_revision(
+        second_snapshot
+    )
+
+
+def test_source_change_during_lean_indexing_aborts_before_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    article = project / "blueprint/roadmap/top.md"
+    original = render_module.build_linker
+
+    def mutate_after_index(*args, **kwargs):
+        linker = original(*args, **kwargs)
+        article.write_text(article.read_text(encoding="utf-8") + "\nChanged while indexing.\n")
+        return linker
+
+    monkeypatch.setattr(render_module, "build_linker", mutate_after_index)
+    with pytest.raises(PublicationError, match="blueprint changed during publication"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert not output.exists()
+
+
+def test_lean_source_change_during_indexing_aborts_before_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    lean_source = project / "Project/Basic.lean"
+    original = render_module.build_linker
+
+    def mutate_after_index(*args, **kwargs):
+        linker = original(*args, **kwargs)
+        lean_source.write_text(
+            "namespace Project\n\ndef Base : Nat := 0\n\nend Project\n",
+            encoding="utf-8",
+        )
+        return linker
+
+    monkeypatch.setattr(render_module, "build_linker", mutate_after_index)
+    with pytest.raises(PublicationError, match="Lean sources changed"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert not output.exists()
+
+
+def test_lean_a_b_a_change_during_linker_construction_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    lean_source = project / "Project/Basic.lean"
+    stable = lean_source.read_text(encoding="utf-8")
+    transient = stable.replace("theorem top", "\n\n\n\n\ntheorem top")
+    original = render_module.build_linker
+
+    def expose_transient_generation(*args, **kwargs):
+        lean_source.write_text(transient, encoding="utf-8")
+        try:
+            return original(*args, **kwargs)
+        finally:
+            lean_source.write_text(stable, encoding="utf-8")
+
+    monkeypatch.setattr(render_module, "build_linker", expose_transient_generation)
+    with pytest.raises(PublicationError, match="Lean sources changed"):
+        render_site(
+            project / "blueprint",
+            output,
+            lean_root=project,
+            repository_url="https://github.com/owner/repo",
+            ref="abc",
+        )
+
+    assert not output.exists()
+
+
+def test_source_snapshot_is_never_materialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+
+    def fail_materialize(*args, **kwargs):
+        raise AssertionError("captured source must stay in memory")
+
+    monkeypatch.setattr(tree_snapshot_module.TreeSnapshot, "materialize", fail_materialize)
+
     render_site(project / "blueprint", output, lean_root=project)
 
-    assert not stale.exists()
+    assert (output / PUBLICATION_MANIFEST).is_file()
+    assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
+def test_temporary_source_directory_substitution_never_enters_the_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    other = _project(tmp_path / "other")
+    foreign_article = other / "blueprint/roadmap/top.md"
+    foreign_article.write_text("# FOREIGN BYTES\n", encoding="utf-8")
+    foreign_before = foreign_article.read_bytes()
+    blueprint = project / "blueprint"
+    foreign_blueprint = other / "blueprint"
+    held = tmp_path / "held-blueprint"
+    output = tmp_path / "out"
+    original = render_module._build_publication_plan
+
+    def substitute_source_temporarily(*args, **kwargs):
+        blueprint.rename(held)
+        foreign_blueprint.rename(blueprint)
+        try:
+            plan, report = original(*args, **kwargs)
+            assert all(b"FOREIGN BYTES" not in data for data in plan.files.values())
+            return plan, report
+        finally:
+            blueprint.rename(foreign_blueprint)
+            held.rename(blueprint)
+
+    monkeypatch.setattr(
+        render_module,
+        "_build_publication_plan",
+        substitute_source_temporarily,
+    )
+    render_site(project / "blueprint", output, lean_root=project)
+
+    assert b"FOREIGN BYTES" not in (output / "roadmap/README.md").read_bytes()
+    assert foreign_article.read_bytes() == foreign_before
+
+
+def test_source_change_during_stage_sync_aborts_before_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    article = project / "blueprint/roadmap/top.md"
+    original = render_module._sync_tree_descriptor
+
+    def mutate_after_sync(stage_descriptor):
+        original(stage_descriptor)
+        article.write_text(article.read_text(encoding="utf-8") + "\nChanged during sync.\n")
+
+    monkeypatch.setattr(render_module, "_sync_tree_descriptor", mutate_after_sync)
+    with pytest.raises(PublicationError, match="blueprint changed during publication"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert not output.exists()
+
+
+def test_workspace_path_substitution_is_not_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    moved = tmp_path / "owned-workspace-moved-aside"
+
+    def substitute_workspace(*args, **kwargs):
+        workspace = next(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+        workspace.rename(moved)
+        workspace.mkdir()
+        (workspace / "unrelated-user-data.txt").write_text("keep me\n", encoding="utf-8")
+        raise RuntimeError("injected render failure")
+
+    monkeypatch.setattr(render_module, "_build_publication_plan", substitute_workspace)
+    with pytest.raises(PublicationError, match="cleanup was refused"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    replacements = list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+    assert len(replacements) == 1
+    assert (replacements[0] / "unrelated-user-data.txt").read_text() == "keep me\n"
+    assert moved.is_dir()
+
+
+def test_stage_substitution_before_publish_is_rejected_and_retained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    old_manifest = (output / PUBLICATION_MANIFEST).read_bytes()
+
+    other_project = _project(tmp_path / "other")
+    substitute = tmp_path / "substitute"
+    render_site(other_project / "blueprint", substitute, lean_root=other_project)
+    substitute_manifest = (substitute / PUBLICATION_MANIFEST).read_bytes()
+    original = render_module._publish_staged_site
+
+    def substitute_stage(stage, *args, **kwargs):
+        displaced = stage.parent / "intended-stage"
+        stage.rename(displaced)
+        substitute.rename(stage)
+        return original(stage, *args, **kwargs)
+
+    monkeypatch.setattr(render_module, "_publish_staged_site", substitute_stage)
+    with pytest.raises(PublicationError, match="stage changed"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert (output / PUBLICATION_MANIFEST).read_bytes() == old_manifest
+    workspaces = list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+    assert len(workspaces) == 1
+    assert (workspaces[0] / "site/publication.json").read_bytes() == substitute_manifest
+    assert (workspaces[0] / "intended-stage/publication.json").is_file()
+
+
+def test_pre_exchange_destination_substitution_retains_unverified_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    old_manifest = (output / PUBLICATION_MANIFEST).read_bytes()
+    article = project / "blueprint/roadmap/top.md"
+    article.write_text(article.read_text(encoding="utf-8") + "\nNew generation.\n")
+
+    other_project = _project(tmp_path / "other")
+    substitute = tmp_path / "substitute"
+    render_site(other_project / "blueprint", substitute, lean_root=other_project)
+    substitute_manifest = (substitute / PUBLICATION_MANIFEST).read_bytes()
+    original = render_module._rename_exchange
+    exchanges = 0
+
+    def substitute_before_exchange(source_parent, source, target_parent, target):
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 1:
+            original(target_parent, substitute.name, target_parent, target)
+        original(source_parent, source, target_parent, target)
+
+    monkeypatch.setattr(render_module, "_rename_exchange", substitute_before_exchange)
+    with pytest.raises(PublicationError, match="workspace was retained"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert (output / PUBLICATION_MANIFEST).read_bytes() not in {
+        old_manifest,
+        substitute_manifest,
+    }
+    assert (substitute / PUBLICATION_MANIFEST).read_bytes() == old_manifest
+    workspaces = list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+    assert len(workspaces) == 1
+    assert (workspaces[0] / "site/publication.json").read_bytes() == substitute_manifest
+
+
+def test_post_commit_verification_failure_retains_previous_site_for_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    before = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+    article = project / "blueprint/roadmap/top.md"
+    article.write_text(article.read_text(encoding="utf-8") + "\nNew generation.\n")
+    original_inspect = render_module._inspect_destination_at
+    original_exchange = render_module._rename_exchange
+    destination_inspections = 0
+    exchanges = 0
+
+    def substitute_final_state(parent_descriptor, name, display_path):
+        nonlocal destination_inspections
+        state = original_inspect(parent_descriptor, name, display_path)
+        if display_path == output:
+            destination_inspections += 1
+            if destination_inspections == 4:
+                return render_module._DestinationState(
+                    state.kind,
+                    identity=state.identity,
+                    manifest_sha256="0" * 64,
+                    directories=state.directories,
+                    files=state.files,
+                )
+        return state
+
+    def track_exchange(*args):
+        nonlocal exchanges
+        exchanges += 1
+        return original_exchange(*args)
+
+    monkeypatch.setattr(render_module, "_inspect_destination_at", substitute_final_state)
+    monkeypatch.setattr(render_module, "_rename_exchange", track_exchange)
+    with pytest.raises(PublicationError, match="workspace was retained"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert exchanges == 1
+    workspaces = list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+    assert len(workspaces) == 1
+    recovered = {
+        path.relative_to(workspaces[0] / "site").as_posix(): path.read_bytes()
+        for path in (workspaces[0] / "site").rglob("*")
+        if path.is_file()
+    }
+    assert recovered == before
+
+
+def test_interrupt_after_exchange_retains_previous_site_for_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    before_manifest = (output / PUBLICATION_MANIFEST).read_bytes()
+    article = project / "blueprint/roadmap/top.md"
+    article.write_text(article.read_text(encoding="utf-8") + "\nNew generation.\n")
+
+    original_exchange = render_module._rename_exchange
+
+    def exchange_then_interrupt(*args):
+        original_exchange(*args)
+        raise KeyboardInterrupt("injected after exchange")
+
+    monkeypatch.setattr(render_module, "_rename_exchange", exchange_then_interrupt)
+    with pytest.raises(PublicationError, match="commit began"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert (output / PUBLICATION_MANIFEST).read_bytes() != before_manifest
+    workspaces = list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+    assert len(workspaces) == 1
+    assert (workspaces[0] / "site/publication.json").read_bytes() == before_manifest
+
+
+def test_interrupt_after_first_install_retains_uncertain_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    original_noreplace = render_module._rename_noreplace
+
+    def install_then_interrupt(*args):
+        original_noreplace(*args)
+        raise KeyboardInterrupt("injected after install")
+
+    monkeypatch.setattr(render_module, "_rename_noreplace", install_then_interrupt)
+    with pytest.raises(PublicationError, match="commit began") as error:
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert (output / PUBLICATION_MANIFEST).is_file()
+    assert "output may have changed" in str(error.value)
+    assert "previous site" not in str(error.value)
+    workspaces = list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+    assert len(workspaces) == 1
+    assert not any(workspaces[0].iterdir())
+
+
+def test_descriptor_close_failure_after_exchange_retains_previous_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    before_manifest = (output / PUBLICATION_MANIFEST).read_bytes()
+    article = project / "blueprint/roadmap/top.md"
+    article.write_text(article.read_text(encoding="utf-8") + "\nNew generation.\n")
+
+    original_exchange = render_module._rename_exchange
+    original_close = render_module.os.close
+    exchanged = False
+    failed_close = False
+
+    def track_exchange(*args):
+        nonlocal exchanged
+        original_exchange(*args)
+        exchanged = True
+
+    def fail_first_close_after_exchange(descriptor):
+        nonlocal failed_close
+        original_close(descriptor)
+        if exchanged and not failed_close:
+            failed_close = True
+            raise OSError("injected descriptor close failure")
+
+    monkeypatch.setattr(render_module, "_rename_exchange", track_exchange)
+    monkeypatch.setattr(render_module.os, "close", fail_first_close_after_exchange)
+    with pytest.raises(PublicationError, match="commit began"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert failed_close
+    assert (output / PUBLICATION_MANIFEST).read_bytes() != before_manifest
+    workspaces = list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+    assert len(workspaces) == 1
+    assert (workspaces[0] / "site/publication.json").read_bytes() == before_manifest
+
+
+def test_post_commit_destination_change_does_not_trigger_a_second_exchange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    before_manifest = (output / PUBLICATION_MANIFEST).read_bytes()
+    article = project / "blueprint/roadmap/top.md"
+    article.write_text(article.read_text(encoding="utf-8") + "\nIntended generation.\n")
+
+    other_project = _project(tmp_path / "other")
+    other_article = other_project / "blueprint/roadmap/top.md"
+    other_article.write_text(other_article.read_text(encoding="utf-8") + "\nSubstitute.\n")
+    substitute = tmp_path / "substitute"
+    render_site(other_project / "blueprint", substitute, lean_root=other_project)
+    substitute_manifest = (substitute / PUBLICATION_MANIFEST).read_bytes()
+
+    original_exchange = render_module._rename_exchange
+    exchanges = 0
+
+    def exchange_then_substitute(source_parent, source, target_parent, target):
+        nonlocal exchanges
+        exchanges += 1
+        original_exchange(source_parent, source, target_parent, target)
+        if exchanges == 1:
+            original_exchange(target_parent, substitute.name, target_parent, target)
+
+    monkeypatch.setattr(render_module, "_rename_exchange", exchange_then_substitute)
+    with pytest.raises(PublicationError, match="workspace was retained"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert exchanges == 1
+    assert (output / PUBLICATION_MANIFEST).read_bytes() == substitute_manifest
+    workspaces = list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+    assert len(workspaces) == 1
+    assert (workspaces[0] / "site/publication.json").read_bytes() == before_manifest
+    assert (substitute / PUBLICATION_MANIFEST).read_bytes() not in {
+        before_manifest,
+        substitute_manifest,
+    }
+
+
+def test_post_commit_stage_change_never_reenters_live_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    old_manifest = (output / PUBLICATION_MANIFEST).read_bytes()
+    article = project / "blueprint/roadmap/top.md"
+    article.write_text(article.read_text(encoding="utf-8") + "\nIntended generation.\n")
+
+    other_project = _project(tmp_path / "other")
+    other_article = other_project / "blueprint/roadmap/top.md"
+    other_article.write_text(other_article.read_text(encoding="utf-8") + "\nAttacker.\n")
+    substitute = tmp_path / "substitute"
+    render_site(other_project / "blueprint", substitute, lean_root=other_project)
+    (substitute / "attacker.txt").write_text("must not publish\n", encoding="utf-8")
+    substitute_manifest = (substitute / PUBLICATION_MANIFEST).read_bytes()
+
+    original_exchange = render_module._rename_exchange
+    exchanges = 0
+
+    def exchange_then_substitute_stage(source_parent, source, target_parent, target):
+        nonlocal exchanges
+        exchanges += 1
+        original_exchange(source_parent, source, target_parent, target)
+        if exchanges == 1:
+            workspace = next(
+                tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*")
+            )
+            recovery_stage = workspace / "site"
+            displaced = workspace / "expected-old-generation"
+            recovery_stage.rename(displaced)
+            substitute.rename(recovery_stage)
+
+    monkeypatch.setattr(
+        render_module,
+        "_rename_exchange",
+        exchange_then_substitute_stage,
+    )
+    with pytest.raises(PublicationError, match="workspace was retained"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert exchanges == 1
+    assert (output / PUBLICATION_MANIFEST).read_bytes() not in {
+        old_manifest,
+        substitute_manifest,
+    }
+    assert not (output / "attacker.txt").exists()
+
+
+def test_in_repo_staging_never_supplies_lean_source_links(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    proof = project / "blueprint/proofs.lean"
+    proof.write_text("theorem BlueprintProof : True := trivial\n", encoding="utf-8")
+    article = project / "blueprint/roadmap/top.md"
+    article.write_text(
+        article.read_text(encoding="utf-8").replace("lean: Project.top", "lean: BlueprintProof"),
+        encoding="utf-8",
+    )
+
+    links = []
+    for name in ("aaa-output", "zzz-output"):
+        output = project / name
+        render_site(
+            project / "blueprint",
+            output,
+            lean_root=project,
+            repository_url="https://github.com/owner/repo",
+            ref="abc",
+        )
+        page = (output / "roadmap/README.md").read_text(encoding="utf-8")
+        match = re.search(r"https://github.com/owner/repo/blob/abc/[^)]+proofs\.lean#L1", page)
+        assert match is not None
+        links.append(match.group())
+
+    assert links == [
+        "https://github.com/owner/repo/blob/abc/blueprint/proofs.lean#L1",
+        "https://github.com/owner/repo/blob/abc/blueprint/proofs.lean#L1",
+    ]
+
+
+def test_render_fsyncs_staged_files_and_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = os.fsync
+    synced_modes: list[int] = []
+
+    def record(descriptor: int) -> None:
+        synced_modes.append(os.fstat(descriptor).st_mode)
+        original(descriptor)
+
+    monkeypatch.setattr(render_module.os, "fsync", record)
+    _render(tmp_path)
+
+    assert any(stat.S_ISREG(mode) for mode in synced_modes)
+    assert any(stat.S_ISDIR(mode) for mode in synced_modes)
+
+
+def test_render_fsyncs_every_new_output_parent_component(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output_parent = tmp_path / "publish" / "nested" / "site-parent"
+    output = output_parent / "out"
+    original = os.fsync
+    synced_directories: set[tuple[int, int]] = set()
+
+    def record(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        if stat.S_ISDIR(metadata.st_mode):
+            synced_directories.add((metadata.st_dev, metadata.st_ino))
+        original(descriptor)
+
+    monkeypatch.setattr(render_module.os, "fsync", record)
+    render_site(project / "blueprint", output, lean_root=project)
+
+    required = {
+        (path.stat().st_dev, path.stat().st_ino)
+        for path in (
+            tmp_path,
+            tmp_path / "publish",
+            tmp_path / "publish/nested",
+            output_parent,
+        )
+    }
+    assert required <= synced_directories
+    assert (output / PUBLICATION_MANIFEST).is_file()
+
+
+@pytest.mark.parametrize("failure_index", range(1, 5))
+def test_nested_output_parent_fsync_failure_prevents_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_index: int,
+) -> None:
+    project = _project(tmp_path)
+    output_parent = tmp_path / "publish" / "nested" / "site-parent"
+    output = output_parent / "out"
+    original = os.fsync
+    directory_syncs = 0
+
+    def fail_at_boundary(descriptor: int) -> None:
+        nonlocal directory_syncs
+        metadata = os.fstat(descriptor)
+        if stat.S_ISDIR(metadata.st_mode):
+            directory_syncs += 1
+            if directory_syncs == failure_index:
+                raise OSError("injected output-parent fsync failure")
+        original(descriptor)
+
+    monkeypatch.setattr(render_module.os, "fsync", fail_at_boundary)
+
+    with pytest.raises(PublicationError, match="create and bind the output parent"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert directory_syncs == failure_index
+    assert output_parent.is_dir()
+    assert not output.exists()
+    assert not list(output_parent.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
+def test_publish_fsyncs_both_directories_after_cross_directory_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_rename = render_module._rename_noreplace
+    original_sync = os.fsync
+    renamed = False
+    directory_identities: list[tuple[int, int]] = []
+
+    def rename(*args) -> None:
+        nonlocal renamed
+        original_rename(*args)
+        renamed = True
+
+    def record(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        if renamed and stat.S_ISDIR(metadata.st_mode):
+            directory_identities.append((metadata.st_dev, metadata.st_ino))
+        original_sync(descriptor)
+
+    monkeypatch.setattr(render_module, "_rename_noreplace", rename)
+    monkeypatch.setattr(render_module.os, "fsync", record)
+    _render(tmp_path)
+
+    assert len(set(directory_identities)) >= 2
+
+
+def test_publish_refuses_a_cross_filesystem_stage_before_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stage = tmp_path / "workspace/site"
+    stage.mkdir(parents=True)
+    destination = tmp_path / "out"
+    original_fstat = render_module.os.fstat
+    workspace_identity = render_module._directory_path_identity(stage.parent)
+    workspace_descriptor = render_module._open_directory_path(stage.parent)
+    workspace_fstats = 0
+
+    def report_another_device(descriptor: int):
+        nonlocal workspace_fstats
+        metadata = original_fstat(descriptor)
+        if (metadata.st_dev, metadata.st_ino) != workspace_identity:
+            return metadata
+        workspace_fstats += 1
+        if workspace_fstats == 1:
+            return metadata
+        return type("OtherDevice", (), {"st_dev": metadata.st_dev + 1})()
+
+    monkeypatch.setattr(render_module.os, "fstat", report_another_device)
+    output_parent = render_module._open_or_create_output_parent(tmp_path)
+    try:
+        with pytest.raises(PublicationError, match="different filesystems"):
+            render_module._publish_staged_site(
+                stage,
+                destination,
+                render_module._DestinationState("absent"),
+                render_module._DestinationState("owned", identity=(0, 0)),
+                expected_inventory=None,
+                staged_inventory=render_module._CleanupInventory((), ()),
+                commit_state=render_module._PublicationCommitState(),
+                input_guard=lambda: None,
+                output_parent=output_parent,
+                workspace_identity=workspace_identity,
+                workspace_descriptor=workspace_descriptor,
+            )
+    finally:
+        os.close(workspace_descriptor)
+        output_parent.close()
+
+    assert stage.is_dir()
+    assert not destination.exists()
+
+
+def test_workspace_descriptor_cleanup_does_not_mask_the_original_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    destination = tmp_path / "out"
+    original_close = render_module.os.close
+    fail_close = False
+    close_failed = False
+    original_build = render_module._build_publication_plan
+
+    def fail_plan(*args, **kwargs):
+        nonlocal fail_close
+        original_build(*args, **kwargs)
+        fail_close = True
+        raise RuntimeError("original precommit failure")
+
+    def fail_one_close(descriptor: int) -> None:
+        nonlocal close_failed
+        original_close(descriptor)
+        if fail_close and not close_failed:
+            close_failed = True
+            raise OSError("injected descriptor cleanup failure")
+
+    monkeypatch.setattr(render_module.os, "close", fail_one_close)
+    monkeypatch.setattr(render_module, "_build_publication_plan", fail_plan)
+
+    with pytest.raises(RuntimeError, match="original precommit failure"):
+        render_site(project / "blueprint", destination, lean_root=project)
+
+    assert close_failed
+    assert not destination.exists()
+
+
+def test_failed_stage_inspection_does_not_leak_file_descriptors(tmp_path: Path) -> None:
+    descriptor_root = Path("/dev/fd") if Path("/dev/fd").is_dir() else Path("/proc/self/fd")
+    if not descriptor_root.is_dir():
+        pytest.skip("process file descriptors are not inspectable")
+    stage = tmp_path / "workspace/site"
+    stage.mkdir(parents=True)
+    destination = tmp_path / "out"
+    expected = render_module._DestinationState("absent")
+    before = len(list(descriptor_root.iterdir()))
+    output_parent = render_module._open_or_create_output_parent(tmp_path)
+    workspace_descriptor = render_module._open_directory_path(stage.parent)
+    try:
+        for _ in range(40):
+            with pytest.raises(PublicationError, match="stage changed"):
+                render_module._publish_staged_site(
+                    stage,
+                    destination,
+                    expected,
+                    render_module._DestinationState("owned"),
+                    expected_inventory=None,
+                    staged_inventory=render_module._CleanupInventory((), ()),
+                    commit_state=render_module._PublicationCommitState(),
+                    input_guard=lambda: None,
+                    output_parent=output_parent,
+                    workspace_identity=render_module._directory_path_identity(stage.parent),
+                    workspace_descriptor=workspace_descriptor,
+                )
+    finally:
+        os.close(workspace_descriptor)
+        output_parent.close()
+
+    assert len(list(descriptor_root.iterdir())) <= before + 1
+
+
+def test_unsupported_platform_fails_before_creating_a_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    monkeypatch.setattr(render_module, "fcntl", None)
+
+    with pytest.raises(PublicationError, match="unavailable on this platform"):
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
+def test_concurrent_renders_publish_one_generation_without_leaking_stages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    barrier = threading.Barrier(2)
+    original = render_module._publish_staged_site
+
+    def publish_together(*args, **kwargs):
+        barrier.wait(timeout=10)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(render_module, "_publish_staged_site", publish_together)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(render_site, project / "blueprint", output, lean_root=project)
+            for _ in range(2)
+        ]
+        outcomes = []
+        for future in futures:
+            try:
+                outcomes.append(future.result())
+            except Exception as error:
+                outcomes.append(error)
+
+    assert sum(isinstance(outcome, render_module.RenderReport) for outcome in outcomes) == 1
+    failures = [outcome for outcome in outcomes if isinstance(outcome, PublicationError)]
+    assert len(failures) == 1
+    assert "another publication is committing" in str(failures[0])
     assert json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["complete"]
+    assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
+def test_non_clean_render_preserves_only_verified_prior_files(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    source = project / "blueprint/appendix.txt"
+    source.write_text("generated companion asset\n", encoding="utf-8")
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    source.unlink()
+
+    render_site(project / "blueprint", output, lean_root=project, clean=False)
+
+    assert (output / "appendix.txt").read_text(encoding="utf-8") == "generated companion asset\n"
+    manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert "appendix.txt" in manifest["files"]
 
 
 def test_render_refuses_to_overwrite_an_unowned_directory(tmp_path: Path) -> None:
@@ -1096,6 +2041,29 @@ def test_permalinks_are_relative_to_the_repository_not_the_vaults_parent(
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
     assert "blob/cafe1234/docs/project/blueprint/roadmap/top.md" in chapter
     assert "blob/cafe1234/blueprint/roadmap/top.md" not in chapter
+
+
+def test_markdown_source_permalink_quotes_the_original_repository_path(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repo"
+    project = _project(repository / "docs with spaces")
+    out = tmp_path / "out"
+
+    render_site(
+        project / "blueprint",
+        out,
+        lean_root=repository,
+        repository_url="https://github.com/owner/repo",
+        ref="cafe1234",
+    )
+
+    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
+    assert (
+        "blob/cafe1234/docs%20with%20spaces/project/blueprint/roadmap/top.md"
+        in chapter
+    )
+    assert ".autoform-publication-" not in chapter
 
 
 def test_reference_style_links_are_rewritten_with_the_inline_ones(tmp_path: Path) -> None:
@@ -1400,3 +2368,768 @@ def test_next_up_explains_readiness_without_naming_a_policy(tmp_path: Path, drop
 
     assert '<div class="bp-next-target" data-autoform-node-id="top">' in landing
     assert f'<div class="bp-next-why">{why}</div>' in landing
+
+
+def test_nested_authored_page_named_like_generated_output_is_published(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/dependencies.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Authored dependencies\n\nA theorem.\n",
+        encoding="utf-8",
+    )
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert report.nodes == 3
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert "Authored dependencies" in chapter
+
+
+def test_output_must_have_an_ordinary_final_component(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+
+    with pytest.raises(PublicationError, match="ordinary directory"):
+        render_site(project / "blueprint", tmp_path / "child" / "..", lean_root=project)
+
+    assert not (tmp_path / "child").exists()
+
+
+def test_render_rejects_a_case_alias_destination_inside_the_blueprint(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    alias = project / "BLUEPRINT"
+    if not alias.exists():
+        pytest.skip("filesystem is case-sensitive")
+
+    output = alias / "site"
+    with pytest.raises(PublicationError, match="must be disjoint"):
+        render_site(blueprint, output, lean_root=project)
+
+    assert not output.exists()
+    assert not any(
+        path.name.startswith(render_module._PUBLICATION_STAGE_PREFIX)
+        for path in blueprint.iterdir()
+    )
+
+
+def test_render_reports_visible_special_file_before_publication(tmp_path: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFOs are unavailable")
+    project = _project(tmp_path)
+    fifo = project / "blueprint/roadmap/trap.md"
+    os.mkfifo(fifo)
+    output = tmp_path / "out"
+
+    with pytest.raises(PublicationError, match=r"trap\.md: named pipe"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert not output.exists()
+
+
+def test_render_cleans_up_a_workspace_containing_a_near_name_max_file(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    filename = "a" * 240 + ".txt"
+    (project / "blueprint" / filename).write_text("large name\n", encoding="utf-8")
+    output = tmp_path / "out"
+
+    report = render_site(project / "blueprint", output, lean_root=project)
+
+    assert report.warnings == []
+    assert (output / filename).read_text(encoding="utf-8") == "large name\n"
+    assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
+def test_blueprint_reselection_during_capture_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    other_project = _project(tmp_path / "other")
+    blueprint = project / "blueprint"
+    replacement = other_project / "blueprint"
+    retained = tmp_path / "retained-blueprint"
+    output = tmp_path / "out"
+    swapped = False
+
+    def swap_after_root_list(event: str, relative: str) -> None:
+        nonlocal swapped
+        if not swapped and event == "after-directory-list" and not relative:
+            blueprint.rename(retained)
+            replacement.rename(blueprint)
+            swapped = True
+
+    monkeypatch.setattr(
+        tree_snapshot_module,
+        "_tree_snapshot_checkpoint",
+        swap_after_root_list,
+    )
+    try:
+        with pytest.raises(PublicationError, match="blueprint changed"):
+            render_site(blueprint, output, lean_root=project)
+    finally:
+        if swapped:
+            blueprint.rename(replacement)
+            retained.rename(blueprint)
+
+    assert not output.exists()
+
+
+def test_blueprint_a_b_a_change_during_render_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    article = project / "blueprint/roadmap/top.md"
+    stable = article.read_text(encoding="utf-8")
+    original = render_module._build_publication_plan
+
+    def mutate_and_restore(*args, **kwargs):
+        report = original(*args, **kwargs)
+        article.write_text(stable + "\nTransient.\n", encoding="utf-8")
+        article.write_text(stable, encoding="utf-8")
+        return report
+
+    monkeypatch.setattr(render_module, "_build_publication_plan", mutate_and_restore)
+
+    with pytest.raises(PublicationError, match="blueprint changed"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert not output.exists()
+
+
+def test_git_remote_a_b_a_change_cannot_change_published_links(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for variable in ("GITHUB_REPOSITORY", "GITHUB_SERVER_URL"):
+        monkeypatch.delenv(variable, raising=False)
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    subprocess.run(
+        ["git", "config", "remote.origin.url", "https://github.com/correct/source.git"],
+        cwd=project,
+        check=True,
+    )
+    original = render_module.build_linker
+
+    def expose_transient_remote(*args, **kwargs):
+        assert kwargs["detect_missing"] is False
+        subprocess.run(
+            ["git", "config", "remote.origin.url", "https://github.com/wrong/source.git"],
+            cwd=project,
+            check=True,
+        )
+        try:
+            return original(*args, **kwargs)
+        finally:
+            subprocess.run(
+                [
+                    "git",
+                    "config",
+                    "remote.origin.url",
+                    "https://github.com/correct/source.git",
+                ],
+                cwd=project,
+                check=True,
+            )
+
+    monkeypatch.setattr(render_module, "build_linker", expose_transient_remote)
+    render_site(project / "blueprint", output, lean_root=project, ref="abc123")
+
+    page = (output / "roadmap/README.md").read_text(encoding="utf-8")
+    assert "github.com/correct/source" in page
+    assert "github.com/wrong/source" not in page
+
+
+def test_blueprint_capture_enforces_file_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    existing = [
+        path.stat().st_size
+        for path in (project / "blueprint").rglob("*")
+        if path.is_file()
+    ]
+    maximum = max(existing)
+    (project / "blueprint/oversized.bin").write_bytes(b"x" * (maximum + 1))
+    monkeypatch.setattr(
+        render_module,
+        "_PUBLICATION_SNAPSHOT_SELECTION",
+        TreeSelection(
+            include=render_module._publication_snapshot_includes,
+            descend=render_module._publication_snapshot_descends,
+            limits=TreeCaptureLimits(
+                max_entries=10_000,
+                max_depth=128,
+                max_file_bytes=maximum,
+                max_total_bytes=10 * 1024 * 1024,
+            ),
+        ),
+    )
+
+    with pytest.raises(PublicationError, match="max_file_bytes"):
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert not (tmp_path / "out").exists()
+
+
+def test_lean_capture_enforces_file_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    monkeypatch.setattr(
+        render_module,
+        "_PUBLICATION_CAPTURE_LIMITS",
+        TreeCaptureLimits(
+            max_entries=10_000,
+            max_depth=128,
+            max_file_bytes=8,
+            max_total_bytes=1024,
+        ),
+    )
+
+    with pytest.raises(PublicationError, match="Lean source.*max_file_bytes"):
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert not (tmp_path / "out").exists()
+
+
+def test_manifest_read_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    before = (output / PUBLICATION_MANIFEST).read_bytes()
+    monkeypatch.setattr(render_module, "_PUBLICATION_MANIFEST_MAX_BYTES", 8)
+
+    with pytest.raises(PublicationError, match="max_file_bytes=8"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert (output / PUBLICATION_MANIFEST).read_bytes() == before
+
+
+def test_generated_manifest_is_bounded_before_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    monkeypatch.setattr(render_module, "_PUBLICATION_MANIFEST_MAX_BYTES", 8)
+
+    with pytest.raises(PublicationError, match="generated publication manifest.*max_file_bytes=8"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert not output.exists()
+    assert not list(tmp_path.glob(".autoform-publication-*"))
+
+
+def test_inventory_enumeration_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "tree"
+    root.mkdir()
+    for name in ("a", "b", "c"):
+        (root / name).write_text(name, encoding="utf-8")
+    monkeypatch.setattr(render_module, "_PUBLICATION_MAX_ENTRIES", 2)
+
+    with pytest.raises(PublicationError, match="max_entries=2"):
+        render_module._cleanup_inventory(root)
+
+
+@pytest.mark.parametrize(
+    ("target", "retained_name"),
+    (("workspace", "."), ("site", "site")),
+)
+def test_post_commit_nested_injection_is_retained_instead_of_deleted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    retained_name: str,
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    if target == "site":
+        render_site(project / "blueprint", output, lean_root=project)
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "PRECIOUS").write_text("keep\n", encoding="utf-8")
+    original = render_module._publish_staged_site
+
+    def inject_after_publish(*args, **kwargs):
+        original(*args, **kwargs)
+        workspace = Path(args[0]).parent
+        root = workspace if target == "workspace" else workspace / target
+        victim.rename(root / "injected-victim")
+
+    monkeypatch.setattr(render_module, "_publish_staged_site", inject_after_publish)
+
+    report = render_site(project / "blueprint", output, lean_root=project)
+
+    assert (output / PUBLICATION_MANIFEST).is_file()
+    assert len(report.warnings) == 1
+    workspace = Path(report.warnings[0].rsplit(" at ", 1)[1])
+    assert (workspace / retained_name / "injected-victim/PRECIOUS").read_text(
+        encoding="utf-8"
+    ) == "keep\n"
+
+
+def test_post_commit_displaced_generation_disappearance_is_not_reported_as_cleaned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    original = render_module._publish_staged_site
+
+    def remove_displaced_after_publish(*args, **kwargs):
+        original(*args, **kwargs)
+        shutil.rmtree(Path(args[0]).parent / "site")
+
+    monkeypatch.setattr(
+        render_module,
+        "_publish_staged_site",
+        remove_displaced_after_publish,
+    )
+
+    report = render_site(project / "blueprint", output, lean_root=project)
+
+    assert (output / PUBLICATION_MANIFEST).is_file()
+    assert len(report.warnings) == 1
+    workspace = Path(report.warnings[0].rsplit(" at ", 1)[1])
+    assert workspace.is_dir()
+
+
+def test_cleanup_claim_retains_a_replacement_injected_after_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    victim = tmp_path / "victim"
+    victim.write_text("PRECIOUS\n", encoding="utf-8")
+    original = render_module._read_regular_file_at
+    injected = False
+
+    def inject_after_read(parent_descriptor, name, display_path, *, max_bytes):
+        nonlocal injected
+        data = original(
+            parent_descriptor,
+            name,
+            display_path,
+            max_bytes=max_bytes,
+        )
+        if ".autoform-cleanup-" in name and not injected:
+            injected = True
+            displaced = f"{name}.displaced"
+            os.rename(
+                name,
+                displaced,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+            os.rename(victim, name, dst_dir_fd=parent_descriptor)
+        return data
+
+    monkeypatch.setattr(render_module, "_read_regular_file_at", inject_after_read)
+
+    report = render_site(project / "blueprint", output, lean_root=project)
+
+    assert injected
+    assert len(report.warnings) == 1
+    workspace = Path(report.warnings[0].rsplit(" at ", 1)[1])
+    retained = [
+        path
+        for path in workspace.rglob("*")
+        if path.is_file() and path.read_text(encoding="utf-8") == "PRECIOUS\n"
+    ]
+    assert len(retained) == 1
+
+
+def test_nested_cleanup_disappearance_is_not_reported_as_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / ".autoform-publication-test"
+    child = workspace / "source"
+    child.mkdir(parents=True)
+    (child / "a").write_text("a", encoding="utf-8")
+    disappearing = child / "b"
+    disappearing.write_text("b", encoding="utf-8")
+    workspace_identity = render_module._directory_path_identity(workspace)
+    child_identity = render_module._directory_path_identity(child)
+    inventory = render_module._cleanup_inventory(child)
+    original = render_module._cleanup_rename_noreplace
+
+    def remove_sibling(descriptor, source, target):
+        original(descriptor, source, target)
+        if source == "a" and disappearing.exists():
+            os.unlink("b", dir_fd=descriptor)
+
+    monkeypatch.setattr(render_module, "_cleanup_rename_noreplace", remove_sibling)
+
+    assert not render_module._remove_owned_workspace(
+        workspace,
+        workspace_identity,
+        expected_children={"source": {child_identity: inventory}},
+    )
+    assert workspace.exists()
+
+
+def test_verified_replacement_cleanup_never_deletes_a_swapped_new_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    previous_manifest = (output / PUBLICATION_MANIFEST).read_bytes()
+    article = project / "blueprint/roadmap/top.md"
+    article.write_text(
+        article.read_text(encoding="utf-8") + "\nNew generation.\n",
+        encoding="utf-8",
+    )
+    original = render_module._publish_staged_site
+
+    def restore_previous_after_verified_commit(stage, destination, *args, **kwargs):
+        original(stage, destination, *args, **kwargs)
+        published = tmp_path / "published-generation"
+        destination.rename(published)
+        stage.rename(destination)
+        published.rename(stage)
+
+    monkeypatch.setattr(
+        render_module,
+        "_publish_staged_site",
+        restore_previous_after_verified_commit,
+    )
+
+    report = render_site(project / "blueprint", output, lean_root=project)
+
+    assert (output / PUBLICATION_MANIFEST).read_bytes() == previous_manifest
+    assert len(report.warnings) == 1
+    workspace = Path(report.warnings[0].rsplit(" at ", 1)[1])
+    assert (workspace / "site/publication.json").read_bytes() != previous_manifest
+
+
+def test_verified_replacement_reports_a_whole_workspace_disappearance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    previous_manifest = (output / PUBLICATION_MANIFEST).read_bytes()
+    article = project / "blueprint/roadmap/top.md"
+    article.write_text(
+        article.read_text(encoding="utf-8") + "\nNew generation.\n",
+        encoding="utf-8",
+    )
+    moved_workspace = tmp_path / "moved-publication-workspace"
+    original = render_module._publish_staged_site
+
+    def move_workspace_after_verified_commit(stage, destination, *args, **kwargs):
+        original(stage, destination, *args, **kwargs)
+        stage.parent.rename(moved_workspace)
+
+    monkeypatch.setattr(
+        render_module,
+        "_publish_staged_site",
+        move_workspace_after_verified_commit,
+    )
+
+    report = render_site(project / "blueprint", output, lean_root=project)
+
+    assert (output / PUBLICATION_MANIFEST).read_bytes() != previous_manifest
+    assert len(report.warnings) == 1
+    assert "cleanup was refused" in report.warnings[0]
+    assert (moved_workspace / "site/publication.json").read_bytes() == previous_manifest
+
+
+def test_precommit_cleanup_never_deletes_a_moved_prior_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    previous_manifest = (output / PUBLICATION_MANIFEST).read_bytes()
+    article = project / "blueprint/roadmap/top.md"
+    article.write_text(
+        article.read_text(encoding="utf-8") + "\nNew generation.\n",
+        encoding="utf-8",
+    )
+    intended_stage = tmp_path / "intended-stage"
+
+    def move_prior_into_workspace(stage, destination, *args, **kwargs):
+        stage.rename(intended_stage)
+        destination.rename(stage)
+        raise RuntimeError("injected before commit")
+
+    monkeypatch.setattr(
+        render_module,
+        "_publish_staged_site",
+        move_prior_into_workspace,
+    )
+
+    with pytest.raises(PublicationError, match="cleanup was refused") as error:
+        render_site(project / "blueprint", output, lean_root=project)
+
+    workspace = Path(str(error.value).split("cleanup was refused at ", 1)[1].split(";", 1)[0])
+    assert not output.exists()
+    assert (workspace / "site/publication.json").read_bytes() == previous_manifest
+    assert (intended_stage / PUBLICATION_MANIFEST).read_bytes() != previous_manifest
+
+
+def test_first_install_parent_swap_never_publishes_into_the_replacement_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    publication_parent = tmp_path / "publication-parent"
+    publication_parent.mkdir()
+    destination = publication_parent / "out"
+    replacement_parent = tmp_path / "replacement-parent"
+    replacement_parent.mkdir()
+    sentinel = replacement_parent / "sentinel"
+    sentinel.write_text("keep\n", encoding="utf-8")
+    moved_parent = tmp_path / "original-parent"
+    original = render_module._rename_noreplace
+
+    def swap_parent_then_install(*args):
+        publication_parent.rename(moved_parent)
+        replacement_parent.rename(publication_parent)
+        original(*args)
+
+    monkeypatch.setattr(render_module, "_rename_noreplace", swap_parent_then_install)
+
+    with pytest.raises(PublicationError, match="original output-parent generation"):
+        render_site(project / "blueprint", destination, lean_root=project)
+
+    assert (publication_parent / "sentinel").read_text(encoding="utf-8") == "keep\n"
+    assert not destination.exists()
+    assert (moved_parent / "out/publication.json").is_file()
+    assert len(list(moved_parent.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))) == 1
+
+
+def test_replacement_parent_swap_never_overwrites_the_replacement_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    publication_parent = tmp_path / "publication-parent"
+    publication_parent.mkdir()
+    destination = publication_parent / "out"
+    render_site(project / "blueprint", destination, lean_root=project)
+    previous_manifest = (destination / PUBLICATION_MANIFEST).read_bytes()
+    article = project / "blueprint/roadmap/top.md"
+    article.write_text(
+        article.read_text(encoding="utf-8") + "\nNew generation.\n",
+        encoding="utf-8",
+    )
+    replacement_parent = tmp_path / "replacement-parent"
+    replacement_destination = replacement_parent / "out"
+    replacement_destination.mkdir(parents=True)
+    sentinel = replacement_destination / "sentinel"
+    sentinel.write_text("keep\n", encoding="utf-8")
+    moved_parent = tmp_path / "original-parent"
+    original = render_module._rename_exchange
+
+    def swap_parent_then_exchange(*args):
+        publication_parent.rename(moved_parent)
+        replacement_parent.rename(publication_parent)
+        original(*args)
+
+    monkeypatch.setattr(render_module, "_rename_exchange", swap_parent_then_exchange)
+
+    with pytest.raises(PublicationError, match="original output-parent generation"):
+        render_site(project / "blueprint", destination, lean_root=project)
+
+    assert (destination / "sentinel").read_text(encoding="utf-8") == "keep\n"
+    assert (moved_parent / "out/publication.json").read_bytes() != previous_manifest
+    workspace = next(moved_parent.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+    assert (workspace / "site/publication.json").read_bytes() == previous_manifest
+
+
+def test_explicit_symlink_lean_root_is_canonicalized_once(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    alias = tmp_path / "project-alias"
+    alias.symlink_to(project, target_is_directory=True)
+    output = tmp_path / "out"
+
+    report = render_site(
+        project / "blueprint",
+        output,
+        lean_root=alias,
+        repository_url="https://github.com/owner/repo",
+        ref="abc",
+    )
+
+    assert report.linked == 2
+    chapter = (output / "roadmap/README.md").read_text(encoding="utf-8")
+    assert "/blob/abc/blueprint/roadmap/top.md" in chapter
+
+
+def test_explicit_macos_var_alias_lean_root_is_canonicalized(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    physical = str(project)
+    if not physical.startswith("/private/var/"):
+        pytest.skip("macOS /var alias is unavailable")
+    alias = Path("/var") / Path(physical).relative_to("/private/var")
+    if not alias.exists() or alias.resolve() != project.resolve():
+        pytest.skip("macOS /var alias is unavailable")
+
+    report = render_site(
+        project / "blueprint",
+        tmp_path / "out",
+        lean_root=alias,
+        repository_url="https://github.com/owner/repo",
+        ref="abc",
+    )
+
+    assert report.linked == 2
+
+
+def test_cleanup_indexes_each_inventory_record_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "cleanup-tree"
+    root.mkdir()
+    for index in range(200):
+        directory = root / f"directory-{index:03d}"
+        directory.mkdir()
+        (directory / "file.txt").write_text(str(index), encoding="utf-8")
+    inventory = render_module._cleanup_inventory(root)
+    expected_visits = len(inventory.directories) + len(inventory.files)
+    original = render_module.PurePosixPath
+    visits = 0
+
+    def count_path(value: str):
+        nonlocal visits
+        visits += 1
+        return original(value)
+
+    monkeypatch.setattr(render_module, "PurePosixPath", count_path)
+    descriptor = render_module._open_directory_path(root)
+    try:
+        render_module._remove_inventory_contents(descriptor, inventory)
+    finally:
+        os.close(descriptor)
+
+    assert visits == expected_visits
+    assert not any(root.iterdir())
+
+
+def test_stage_directory_symlink_substitution_never_receives_plan_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    foreign = tmp_path / "foreign-directory"
+    foreign.mkdir()
+    sentinel = foreign / "SENTINEL"
+    sentinel.write_text("untouched\n", encoding="utf-8")
+    substituted = False
+
+    def substitute_directory(event: str, relative: str) -> None:
+        nonlocal substituted
+        if substituted or event != "after-directory-open" or relative != "roadmap":
+            return
+        workspace = next(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+        roadmap = workspace / "site/roadmap"
+        roadmap.rename(workspace / "site/roadmap-owned")
+        roadmap.symlink_to(foreign, target_is_directory=True)
+        substituted = True
+
+    monkeypatch.setattr(
+        render_module,
+        "_publication_plan_checkpoint",
+        substitute_directory,
+    )
+
+    with pytest.raises(PublicationError, match="workspace was retained"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert substituted
+    assert not output.exists()
+    assert sentinel.read_text(encoding="utf-8") == "untouched\n"
+    assert list(foreign.iterdir()) == [sentinel]
+
+
+def test_output_parent_loss_after_verified_commit_is_uncertain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    publication_parent = tmp_path / "publication-parent"
+    publication_parent.mkdir()
+    output = publication_parent / "out"
+    replacement_parent = tmp_path / "replacement-parent"
+    replacement_parent.mkdir()
+    (replacement_parent / "sentinel").write_text("keep\n", encoding="utf-8")
+    moved_parent = tmp_path / "moved-output-parent"
+    original = render_module._publish_staged_site
+
+    def move_parent_after_verified_commit(*args, **kwargs):
+        original(*args, **kwargs)
+        publication_parent.rename(moved_parent)
+        replacement_parent.rename(publication_parent)
+
+    monkeypatch.setattr(
+        render_module,
+        "_publish_staged_site",
+        move_parent_after_verified_commit,
+    )
+
+    with pytest.raises(PublicationError, match="output location is uncertain") as error:
+        render_site(project / "blueprint", output, lean_root=project)
+
+    workspace = next(moved_parent.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+    assert workspace.name in str(error.value)
+    assert str(workspace) not in str(error.value)
+    assert (moved_parent / "out/publication.json").is_file()
+    assert (publication_parent / "sentinel").read_text(encoding="utf-8") == "keep\n"
+
+
+def test_precommit_parent_loss_does_not_report_a_false_workspace_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    publication_parent = tmp_path / "publication-parent"
+    publication_parent.mkdir()
+    output = publication_parent / "out"
+    replacement_parent = tmp_path / "replacement-parent"
+    replacement_parent.mkdir()
+    (replacement_parent / "sentinel").write_text("keep\n", encoding="utf-8")
+    moved_parent = tmp_path / "moved-output-parent"
+
+    def lose_parent_before_commit(_descriptor: int) -> None:
+        publication_parent.rename(moved_parent)
+        replacement_parent.rename(publication_parent)
+        raise OSError("injected stage sync failure")
+
+    monkeypatch.setattr(render_module, "_sync_tree_descriptor", lose_parent_before_commit)
+
+    with pytest.raises(PublicationError, match="original output-parent generation") as error:
+        render_site(project / "blueprint", output, lean_root=project)
+
+    workspace = next(moved_parent.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+    assert workspace.name in str(error.value)
+    assert str(publication_parent / workspace.name) not in str(error.value)
+    assert (publication_parent / "sentinel").read_text(encoding="utf-8") == "keep\n"

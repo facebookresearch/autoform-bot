@@ -5,7 +5,7 @@ import random
 import threading
 from collections.abc import Callable
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -19,7 +19,12 @@ from autoform_cli.graph import (
 from autoform_cli import graph_pages, graph_views, render
 from autoform_cli.audit import audit_graph
 from autoform_cli.graph_views import chapter_view, group_nodes, project_view, scope_view
-from autoform_cli.render import _book_page_order, render_site
+from autoform_cli.render import (
+    _CapturedBlueprint,
+    _PublicationPlanBuilder,
+    _book_page_order,
+    render_site,
+)
 from autoform_cli.runtime import (
     _validate_depths,
     _validate_runtime,
@@ -221,21 +226,25 @@ def test_scope_view_handles_a_1200_level_containment_chain(tmp_path: Path) -> No
 def test_book_order_handles_a_1200_page_link_chain(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     roadmap = blueprint / "roadmap"
-    roadmap.mkdir(parents=True)
-    (blueprint / "README.md").write_text(
-        "# Book\n\n[First](roadmap/page0000.md)\n",
-        encoding="utf-8",
-    )
+    files = {PurePosixPath("README.md"): b"# Book\n\n[First](roadmap/page0000.md)\n"}
     nodes: dict[str, Node] = {}
     for index in range(1_200):
         node_id = f"page{index:04d}"
         path = roadmap / f"{node_id}.md"
         next_link = f"\n[Next](page{index + 1:04d}.md)\n" if index + 1 < 1_200 else ""
-        path.write_text(f"# {node_id}\n{next_link}", encoding="utf-8")
+        files[PurePosixPath("roadmap") / f"{node_id}.md"] = (
+            f"# {node_id}\n{next_link}".encode()
+        )
         nodes[node_id] = Node(node_id, node_id, path, ())
     graph = Graph(blueprint, nodes)
+    captured = _CapturedBlueprint(
+        blueprint,
+        files,
+        frozenset({PurePosixPath("."), PurePosixPath("roadmap")}),
+    )
+    plan = _PublicationPlanBuilder(blueprint, dict(files))
 
-    ordered = _book_page_order(blueprint, blueprint, graph)
+    ordered = _book_page_order(captured, plan, graph)
 
     assert len(ordered) == 1_201
     assert ordered[0] == blueprint / "README.md"
