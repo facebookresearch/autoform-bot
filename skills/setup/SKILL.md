@@ -65,11 +65,16 @@ Never invent a ref. It must be a full 40-character commit sha: `init` refuses a
 branch, a tag, or an abbreviated sha, because CI would silently reinstall a
 different Autoform later and break a project that was passing.
 
-The two workflows it writes are `autoform-verify.yml`, which validates the
-Markdown DAG, builds Lean, rejects unfinished or unsafe proofs, and audits
-theorem axioms on pull requests, and `blueprint-pages.yml`, which validates the
-DAG and its `lean:` declarations, renders the blueprint, builds MkDocs, and
-deploys GitHub Pages. Pass `--autoform-ref` to pin them at an immutable commit.
+The two workflows it writes are `autoform-verify.yml`, a reusable gate that
+validates the Markdown DAG, rebuilds Lean, binds local declaration claims to the
+checked root-package artifacts, and rejects unfinished or unsafe proofs, and
+`blueprint-pages.yml`, which must pass that gate before rendering, building, and
+deploying GitHub Pages. The local gate fails closed on `mathlib: true` until a
+separate Mathlib verifier is installed. Pass `--autoform-ref` to pin the
+installed policy at an immutable commit.
+
+The verification workflow preflights blueprint claims before installing elan
+or fetching build caches, so an unsupported claim fails before expensive work.
 
 After it runs, fill in what only a human or a source can supply: the project
 description in `blueprint/README.md`, the coverage contract, and a verified

@@ -100,6 +100,7 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
         names = set(archive.namelist())
         assert {
             "autoform_cli/__main__.py",
+            "autoform_cli/artifact_audit.py",
             "autoform_cli/graph.py",
             "autoform_cli/probes/skeleton_probe.lean",
             "autoform_cli/project/README.md",
@@ -140,10 +141,11 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
                 "-c",
                 """
 import sys
+import runpy
 from pathlib import Path
 site = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(site))
-from autoform_cli import graph, visualize
+from autoform_cli import artifact_audit, graph, visualize
 from servers import lean_client, lean_runtime
 from servers.lsp import server as lsp_server
 from servers.repl import server as repl_server
@@ -153,6 +155,10 @@ assert Path(lean_runtime.__file__).resolve().is_relative_to(site)
 assert Path(lsp_server.__file__).resolve().is_relative_to(site)
 assert Path(repl_server.__file__).resolve().is_relative_to(site)
 assert Path(visualize.__file__).resolve().is_relative_to(site)
+assert artifact_audit.__all__ == ["main"]
+wrapper = site / "autoform_cli/templates/github/autoform_audit.py"
+namespace = runpy.run_path(str(wrapper), run_name="autoform_wrapper")
+assert namespace["main"] is artifact_audit.main
 client = lean_client.LeanRuntimeClient(socket_path=sys.argv[2], startup_timeout=15)
 try:
     assert client.ensure_running()["install_id"] == lean_client.INSTALL_ID

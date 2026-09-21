@@ -121,7 +121,15 @@ def test_substitutions_reach_the_site_config(tmp_path: Path) -> None:
     assert 'AUTOFORM_SOURCE: "https://example.test/autoform.git"' in verify
     assert f'AUTOFORM_REF: "{"0" * 40}"' in verify
     assert '"git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in verify
-    assert "python3 .github/autoform_audit.py" in verify
+    assert "python -I .github/autoform_audit.py preflight blueprint" in verify
+    assert "python -I .github/autoform_audit.py verify" in verify
+    assert "blueprint\n          ." in verify
+    assert "workflow_call:" in verify
+
+    pages = (tmp_path / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8")
+    assert "uses: ./.github/workflows/autoform-verify.yml" in pages
+    assert "needs: verify" in pages
+    assert "lake build" not in pages
 
 
 def test_no_placeholder_survives_anywhere(tmp_path: Path) -> None:

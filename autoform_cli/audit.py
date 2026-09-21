@@ -16,7 +16,13 @@ from pathlib import Path
 from . import status
 from .coverage import CoverageSummary, load_coverage
 from .graph import Graph, GraphValidationError, Node, load_graph
-from .lean import SourceIndex, declaration_names, index_failure_message, index_project
+from .lean import (
+    SourceIndex,
+    declaration_keywords,
+    declaration_names,
+    index_failure_message,
+    index_project,
+)
 from .markdown import FENCE as _FENCE
 from .markdown import frontmatter_end as _frontmatter_end
 from .markdown import HEADING as _HEADING
@@ -34,23 +40,6 @@ _MAX_DIRECT_CHILDREN = 24
 #: meaningful median cannot clear the multiple at all.
 _NODE_SIZE_FLOOR = 200
 _NODE_SIZE_MULTIPLE = 4
-
-_DECLARATION_KEYWORDS = {
-    "abbrev": frozenset({"abbrev"}),
-    "axiom": frozenset({"axiom"}),
-    "class": frozenset({"class"}),
-    "corollary": frozenset({"lemma", "theorem"}),
-    "def": frozenset({"def"}),
-    "definition": frozenset({"def"}),
-    "inductive": frozenset({"inductive"}),
-    "instance": frozenset({"instance"}),
-    "lemma": frozenset({"lemma", "theorem"}),
-    "opaque": frozenset({"opaque"}),
-    "proposition": frozenset({"lemma", "theorem"}),
-    "structure": frozenset({"structure"}),
-    "theorem": frozenset({"lemma", "theorem"}),
-}
-
 
 @dataclass(frozen=True, order=True, slots=True)
 class AuditFinding:
@@ -407,9 +396,14 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
             else:
                 resolved.append(declaration)
 
-        expected = _DECLARATION_KEYWORDS.get((node.declaration or "").casefold())
-        if expected and resolved and not any(declaration.keyword in expected for declaration in resolved):
-            actual = ", ".join(sorted({declaration.keyword for declaration in resolved}))
+        expected = declaration_keywords(node.declaration)
+        mismatched = [
+            declaration
+            for declaration in resolved
+            if expected is not None and declaration.keyword not in expected
+        ]
+        if mismatched:
+            actual = ", ".join(sorted({declaration.keyword for declaration in mismatched}))
             findings.append(
                 AuditFinding(
                     article_path,

@@ -26,6 +26,8 @@ from autoform_cli._tree_snapshot import (
 from autoform_cli.lean import (
     SourceLinker,
     build_linker,
+    declaration_kind,
+    declaration_keywords,
     declaration_names,
     index_project,
     open_project_sources,
@@ -2244,6 +2246,14 @@ def test_double_brace_in_interpolation_opens_a_structure_instance(tmp_path: Path
 
     assert strip_lean_comments(line + " -- remove me") == line
     assert index.find("t") is not None
+
+
+def test_declaration_intent_aliases_have_one_shared_normalization() -> None:
+    assert declaration_kind("lemma") == "theorem"
+    assert declaration_kind("Corollary") == "theorem"
+    assert declaration_kind("definition") == "def"
+    assert declaration_kind("unknown") is None
+    assert declaration_keywords("proposition") == frozenset({"lemma", "theorem"})
 
 
 def test_permalink_pins_the_commit(tmp_path: Path) -> None:

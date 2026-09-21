@@ -239,9 +239,19 @@ def test_audit_validates_lean_targets_only_when_root_is_supplied(tmp_path: Path)
         statement="formalized",
         lean="Project.value",
     )
+    _article(
+        blueprint,
+        "one-wrong-kind.md",
+        declaration="theorem",
+        statement="formalized",
+        lean="Project.result Project.value",
+    )
     lean_root = tmp_path / "lean"
     lean_root.mkdir()
-    (lean_root / "Value.lean").write_text("def Project.value : Nat := 1\n", encoding="utf-8")
+    (lean_root / "Value.lean").write_text(
+        "theorem Project.result : True := by trivial\ndef Project.value : Nat := 1\n",
+        encoding="utf-8",
+    )
 
     without_lean = _finding_map(blueprint)
     with_lean = _finding_map(blueprint, lean_root=lean_root)
@@ -254,6 +264,9 @@ def test_audit_validates_lean_targets_only_when_root_is_supplied(tmp_path: Path)
         ("missing-lean-target", "formalized local work has no lean declaration target")
     ]
     assert with_lean["roadmap/wrong-kind.md"] == [
+        ("lean-target-kind-mismatch", "Lean target kind def does not match declaration intent theorem")
+    ]
+    assert with_lean["roadmap/one-wrong-kind.md"] == [
         ("lean-target-kind-mismatch", "Lean target kind def does not match declaration intent theorem")
     ]
 

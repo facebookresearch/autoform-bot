@@ -64,9 +64,11 @@ Write milestone pages under `blueprint/roadmap/` by mathematical significance,
 then one fine article per coherent unit with one unique main result. Ground each
 statement and proof sketch in the source. Put genuine statement prerequisites
 under `## Depends on` and proof-only prerequisites under `## Proof depends on`.
-Assert formalization or `mathlib: true` only after exact verification. For a
-large source, divide independent sections among available agents while
-retaining one owner for global coverage and dependency consistency.
+Assert formalization or `mathlib: true` only after exact verification. The
+generated local artifact gate rejects `mathlib: true` until a separate Mathlib
+verification gate is installed. For a large source, divide independent sections
+among available agents while retaining one owner for global coverage and
+dependency consistency.
 
 Reconcile every affected source and milestone page, the coverage contract,
 `blueprint/README.md`, and the repository `README.md`.

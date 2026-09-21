@@ -204,6 +204,16 @@ canonical rows, counts, and the exact coverage source hash, while
 `publication.json` records aggregate counts without duplicating the authored
 rows.
 
+Generated repositories also run a local artifact gate in GitHub Actions. It
+retains bounded project-input snapshots while rebuilding the root package,
+requires complete packed `.ilean`/`.olean`/`.trace` triples, and runs Lean at
+trust level zero. Every `lean:` claim must have the declared kind and belong to
+a root module; unfinished, unsafe, partial, and unexpected-axiom dependencies
+fail. The gate rejects `mathlib: true` until a separate Mathlib verifier is
+installed, and Pages reuses the same gate before publishing. The snapshots
+detect ordinary concurrent changes; they do not sandbox malicious Lake code or
+same-user processes capable of exact ABA restoration.
+
 The contract is read as published Markdown and fails closed. A table inside an
 HTML comment, a fenced block, or a four-space-indented block is documentation
 rather than contract, and is not discovered at all. A closing fence must carry

@@ -6,15 +6,27 @@ on:
     paths:
       - "blueprint/**"
       - "**.lean"
+      - "lakefile.lean"
+      - "lakefile.toml"
+      - "lake-manifest.json"
+      - "lean-toolchain"
       - "mkdocs.yml"
       - "theme/**"
+      - ".github/autoform_audit.py"
+      - ".github/workflows/autoform-verify.yml"
       - ".github/workflows/blueprint-pages.yml"
   pull_request:
     paths:
       - "blueprint/**"
       - "**.lean"
+      - "lakefile.lean"
+      - "lakefile.toml"
+      - "lake-manifest.json"
+      - "lean-toolchain"
       - "mkdocs.yml"
       - "theme/**"
+      - ".github/autoform_audit.py"
+      - ".github/workflows/autoform-verify.yml"
       - ".github/workflows/blueprint-pages.yml"
   workflow_dispatch:
 
@@ -26,11 +38,17 @@ env:
   AUTOFORM_REF: {{AUTOFORM_REF_YAML}}
 
 concurrency:
-  group: blueprint-pages
+  group: blueprint-pages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  verify:
+    uses: ./.github/workflows/autoform-verify.yml
+    permissions:
+      contents: read
+
   build:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - name: Check out project
@@ -41,16 +59,7 @@ jobs:
         with:
           version: "0.12.1"
 
-      # Rejects cycles and dangling links, and fails when a node names a Lean
-      # declaration that is not in the sources.
-      - name: Validate the theorem DAG and its declarations
-        run: >-
-          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          autoform check blueprint --lean-root .
-
-      # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
-      # and permalinks into the Lean code at this exact commit.
-      - name: Render the blueprint
+      - name: Render the verified blueprint
         run: >-
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           autoform render blueprint

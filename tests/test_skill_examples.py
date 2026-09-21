@@ -382,7 +382,8 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "https://github.com/facebookresearch/autoform-bot" in theme
     assert '<a href="{{ config.repo_url }}">Formalization source</a>.' in theme
     workflow = (example / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8")
-    assert "autoform check blueprint --lean-root ." in workflow
+    assert "uses: ./.github/workflows/autoform-verify.yml" in workflow
+    assert "needs: verify" in workflow
     assert "autoform render blueprint" in workflow
     assert "--require-declarations" in workflow
     assert "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128" in workflow
@@ -390,16 +391,19 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
 
     verify = (example / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
     assert "autoform check blueprint" in verify
-    assert 'lake clean "$root_package"' in verify
-    assert "lake build" in verify
     assert "Reject kernel-check bypass options" in verify
-    assert "Audit every root-package declaration" in verify
-    assert "python3 .github/autoform_audit.py" in verify
-    assert "lake pack" in verify
+    assert "Preflight artifact claims" in verify
+    assert "python -I .github/autoform_audit.py preflight blueprint" in verify
+    assert "Verify roadmap claims and build artifacts" in verify
+    assert "python -I .github/autoform_audit.py verify" in verify
+    assert "lake build" not in verify
+    assert "lake pack" not in verify
     assert "lake-modules" not in verify
-    assert "contains no ILean artifacts" in (
-        example / ".github/autoform_audit.py"
-    ).read_text(encoding="utf-8")
+    assert verify.index("Preflight artifact claims") < verify.index("Install elan")
+    assert verify.index("Preflight artifact claims") < verify.index("Fetch the Mathlib build cache")
+    helper = (example / ".github/autoform_audit.py").read_text(encoding="utf-8")
+    assert "from autoform_cli.artifact_audit import main" in helper
+    assert len(helper.splitlines()) < 12
     assert 'forbidden="skip""KernelTC"' in verify
     assert 'git grep -n -I "$forbidden" -- .' in verify
     assert 'version: "0.12.1"' in verify
@@ -758,6 +762,41 @@ def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None
             expected = expected.replace(placeholder, value)
         actual = (example_dir / name).read_text(encoding="utf-8")
         assert actual == expected
+
+
+def test_setup_and_roadmap_explain_the_artifact_gate(repo_root: Path) -> None:
+    setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
+    roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")
+
+    assert "reusable gate" in setup
+    assert "before rendering" in setup
+    assert "before installing elan" in setup
+    assert "local artifact gate" in roadmap
+    assert "rejects `mathlib: true`" in roadmap
+
+
+def test_verification_gate_is_reused_and_retriggers_on_all_evidence(repo_root: Path) -> None:
+    workflows = repo_root / _EXAMPLE / ".github/workflows"
+    verify = (workflows / "autoform-verify.yml").read_text(encoding="utf-8")
+    pages = (workflows / "blueprint-pages.yml").read_text(encoding="utf-8")
+    evidence_paths = (
+        "lakefile.lean",
+        "lakefile.toml",
+        "lake-manifest.json",
+        "lean-toolchain",
+        ".github/autoform_audit.py",
+        ".github/workflows/autoform-verify.yml",
+        ".github/workflows/blueprint-pages.yml",
+    )
+
+    assert "workflow_call:" in verify
+    assert "uses: ./.github/workflows/autoform-verify.yml" in pages
+    assert "needs: verify" in pages
+    assert "autoform-verification-" in verify
+    assert "group: blueprint-pages-" in pages
+    for path in evidence_paths:
+        assert path in verify
+        assert path in pages
 
 
 def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> None:
