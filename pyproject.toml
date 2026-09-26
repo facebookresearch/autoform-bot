@@ -15,8 +15,8 @@ dependencies = [
     # The blueprint checks predict what the generated MkDocs site publishes.
     # Anchor prediction runs the configured renderer itself rather than
     # approximating it, so these are runtime requirements, not build extras.
-    "markdown>=3.4,<4",
-    "pymdown-extensions>=11.0.1,<12",
+    "markdown==3.10.3",
+    "pymdown-extensions==10.21.3",
     # Evidence is judged on what a browser shows. That needs HTML5 tree
     # construction, not tokenising: browsers repair malformed markup rather than
     # reject it, and the repair decides what stays hidden.
@@ -35,7 +35,7 @@ dev = [
     "mkdocs>=1.6,<2",
     "mkdocs-material>=9.5,<10",
     "mkdocs-literate-nav>=0.6,<1",
-    "pymdown-extensions>=11.0.1,<12",
+    "pymdown-extensions==10.21.3",
     "pytest>=7.0",
     "ruff>=0.4",
 ]

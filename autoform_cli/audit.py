@@ -17,12 +17,13 @@ from . import status
 from .coverage import CoverageSummary, load_coverage
 from .graph import Graph, GraphValidationError, Node, load_graph
 from .lean import SourceIndex, declaration_names, index_project
-from .markdown import FENCE as _FENCE
+from .markdown import content_lines as _content_lines
 from .markdown import frontmatter_end as _frontmatter_end
 from .markdown import HEADING as _HEADING
-from .markdown import HTML_COMMENT as _HTML_COMMENT
 from .markdown import local_target_issue as _local_target_issue
 from .markdown import markdown_links as _markdown_links
+from .review import ReviewBundle, review_findings
+from .skeleton import SkeletonReport
 
 #: More siblings than this at one level is a table of contents, not a chapter.
 _MAX_DIRECT_CHILDREN = 24
@@ -93,6 +94,8 @@ def audit_blueprint(
     blueprint_dir: str | Path,
     *,
     lean_root: str | Path | None = None,
+    skeleton: SkeletonReport | None = None,
+    review_bundle: ReviewBundle | None = None,
 ) -> AuditResult:
     """Audit *blueprint_dir* using only local, committed-style source files.
 
@@ -122,6 +125,8 @@ def audit_blueprint(
         lean_root=lean_root,
         coverage=coverage,
         coverage_findings=coverage_findings,
+        skeleton=skeleton,
+        review_bundle=review_bundle,
     )
 
 
@@ -131,6 +136,8 @@ def audit_graph(
     lean_root: str | Path | None = None,
     coverage: CoverageSummary | None = None,
     coverage_findings: list[AuditFinding] | None = None,
+    skeleton: SkeletonReport | None = None,
+    review_bundle: ReviewBundle | None = None,
 ) -> AuditResult:
     """Audit an already loaded graph without modifying it or its source files."""
 
@@ -230,7 +237,53 @@ def audit_graph(
     findings.extend(coverage_findings)
     if lean_root is not None:
         findings.extend(_lean_findings(graph, lean_root))
+    findings.extend(_review_findings(graph, review_bundle, skeleton))
     return _result(findings, coverage=coverage)
+
+
+def _review_findings(
+    graph: Graph,
+    bundle: ReviewBundle | None,
+    current_skeleton: SkeletonReport | None,
+) -> list[AuditFinding]:
+    """Fail closed when recorded approval lacks fully current review evidence."""
+
+    approved = [node for node in graph.nodes.values() if node.review_approved is not None]
+    if bundle is None:
+        return [
+            AuditFinding(
+                _relative_path(node.path, graph.blueprint_dir),
+                "review-bundle-missing",
+                "review_approved is present but no prepared review bundle was supplied",
+            )
+            for node in approved
+        ]
+    if current_skeleton is None:
+        target_ids = {
+            *(node.id for node in approved),
+            *(node.id for node in graph.nodes.values() if node.lean),
+            *(article.node_id for article in bundle.articles),
+        }
+        if not target_ids:
+            target_ids.add("")
+        findings = []
+        for node_id in sorted(target_ids):
+            node = graph.nodes.get(node_id)
+            article_path = _relative_path(node.path, graph.blueprint_dir) if node is not None else node_id
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "review-bundle-unverified",
+                    "a review bundle was supplied without a freshly extracted current skeleton",
+                )
+            )
+        return findings
+    findings: list[AuditFinding] = []
+    for finding in review_findings(graph, bundle, current_skeleton):
+        node = graph.nodes.get(finding.node_id)
+        article_path = _relative_path(node.path, graph.blueprint_dir) if node else finding.node_id
+        findings.append(AuditFinding(article_path, finding.code, finding.reason))
+    return findings
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,25 +300,12 @@ def _read_article(path: Path) -> _ArticleShape:
 
     lines = text.splitlines()
     start = _frontmatter_end(lines)
-    body = _HTML_COMMENT.sub("", "\n".join(lines[start:]))
+    body = "\n".join(lines[start:])
     seen_h1 = False
     before_first_h2 = True
     statement_text = False
     has_depends_section = False
-    fence: tuple[str, int] | None = None
-
-    for line in body.splitlines():
-        fence_match = _FENCE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if fence is None:
-                fence = (marker[0], len(marker))
-            elif marker[0] == fence[0] and len(marker) >= fence[1]:
-                fence = None
-            continue
-        if fence is not None:
-            continue
-
+    for line in _content_lines(body):
         heading = _HEADING.match(line)
         if heading:
             level = len(heading.group(1))

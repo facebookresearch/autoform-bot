@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.lean import _normalize_remote
-from autoform_cli.render import PUBLICATION_MANIFEST, PublicationError, render_site
+from autoform_cli.render import PUBLICATION_MANIFEST, PublicationError, _split_body, render_site
 from autoform_cli.status import STATES
 
 
@@ -674,6 +674,30 @@ def test_render_refuses_a_contract_truncated_by_a_fenced_block(tmp_path: Path) -
         render_site(project / "blueprint", output, lean_root=project)
 
     assert not (output / PUBLICATION_MANIFEST).exists()
+
+
+def test_statement_split_uses_commonmark_closing_fences() -> None:
+    statement, remainder = _split_body(
+        "---\n---\n\n# Result\n\nClaim.\n\n```text\n"
+        "``` trailing text\n## still fenced\n```\n\nAfter the fence.\n\n"
+        "## Sources\n\n[Book](source.txt#L1-L1)\n"
+    )
+
+    assert "## still fenced" in statement
+    assert statement.endswith("After the fence.")
+    assert remainder.startswith("###### Sources")
+
+
+def test_statement_split_ignores_headings_inside_html_comments() -> None:
+    statement, remainder = _split_body(
+        "---\n---\n\n# Result\n\nClaim A.\n\n<!--\n## hidden section\n-->\n"
+        "Claim B.\n\n## Sources\n\n[Book](source.txt#L1-L1)\n"
+    )
+
+    assert "Claim A." in statement
+    assert "Claim B." in statement
+    assert "## hidden section" in statement
+    assert remainder.startswith("###### Sources")
 
 
 def test_render_refuses_a_contract_whose_header_layout_is_hidden(tmp_path: Path) -> None:

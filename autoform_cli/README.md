@@ -83,6 +83,7 @@ An article asserts only facts a human or agent verified:
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
 | `lean: Ns.decl` | Declaration name(s) that discharge the article. |
 | `discussion: 42` | Issue number or URL where the article is being discussed. |
+| `review_approved: sha256:<64 hex>` | A person approved the complete current review surface for this article. |
 
 Everything a reader thinks of as progress is *derived* from the DAG on every
 run, so it cannot go stale:
@@ -271,6 +272,199 @@ each one as a `declared-coverage-gap`. That is intended: a roadmap is published
 while it is still being decomposed, and the published `coverage.complete: false`
 is how a reader sees that. Run `autoform audit` in CI when you want mapped rows
 to block a merge.
+
+Extract what a reader must trust for each formalized statement:
+
+```bash
+autoform skeleton blueprint --lean-root .
+autoform skeleton blueprint --lean-root . --node chapter/main-result
+autoform skeleton blueprint --lean-root . --output skeleton.json --packets review-packets --passages review-passages
+```
+
+A theorem means what its statement means. The skeleton of a `lean:`
+declaration is the reading list a person needs to agree that the Lean says what
+the article claims: the elaborated signature, then every project declaration
+the *statement* rests on, transitively, quoted from the sources in dependency
+order. A definition contributes its body as well as its type, because the body
+is part of its meaning; a theorem met along the way contributes only its type.
+Proofs are never entered. The proof beneath a skeleton may be orders of
+magnitude longer, and it is the kernel's to check, not the reader's. Each
+skeleton also reports the axioms the declaration finally rests on, so a `sorry`
+shows up as `sorryAx` beside the statement rather than under it, and the
+non-core constants it assumes from Mathlib or another dependency, listed by
+name so a reader can see that a statement uses the library's notion of a limit
+rather than a homemade one.
+
+The closure is computed from elaborated terms, which is why this is the one
+command that runs Lean: it writes a small probe and runs it with
+`lake env lean` against the built project. Before the probe, Lake must confirm
+without rebuilding that every imported module matches its exact source inputs;
+a missing `lake-manifest.json`, stale artifacts, or a source tree that changes
+during extraction makes the command fail. A lexical closure would
+miss what
+`open`, notation, implicit instances, and auto-bound variables bring in, and
+every miss silently shrinks the surface a reader is told to trust. Constructors,
+projections, recursors, matchers, and equation lemmas are folded onto the
+declaration the reader sees in the source, so a structure appears once, as its
+`structure` block. Names outside the project are the trusted base and are not
+expanded. The command exits nonzero when a `lean:` name is absent from the
+sources or from the built environment, and it writes nothing into the vault;
+`--output` records the `autoform-skeleton/v2` report, which contains no
+timestamp or absolute path, for a later render or review to consume. The
+report quotes each trusted definition's source and records theorem
+dependencies by elaborated signature, so it stands on its own without ever
+copying a theorem proof.
+
+Every skeleton carries a full SHA-256 **hash** of its meaning. It is derived
+from canonical elaborated expressions for the root, every trusted declaration,
+each direct external assumption, and each axiom, together with the dependency
+edges, Lean version, and compiled-module identities for the transitive external
+boundary. Local source spelling and comments do not enter the semantic hash,
+while macro expansion, synthesized instance bodies, types, and definition
+bodies do. Because external modules are bound as compiled artifacts, an
+unrelated change in one of those modules may conservatively rotate the hash.
+An article with several `lean:` names has one hash over all of them, printed as
+the article skeleton. The hash is how packets and reports are compared across
+builds, and testimony written about a packet can name the skeleton it was
+written about.
+
+Reports and packet manifests also carry an evidence hash over the exact
+proof-free text shown to a reviewer. Semantic hashes survive presentation-only
+edits; evidence hashes identify the bytes that were actually read. Human
+approval does not record either hash alone. It records one `review_approved`
+hash over the complete review surface: the article's title and statement, cited source
+passage and locator, exact joint packet, and every validated read-back card.
+Changing any reviewed input invalidates the approval.
+
+A read-back is an independent agent's mathematical-English account of one
+declaration packet. The coordinator gives that agent only an opaque packet and
+the read-back instructions, then records the returned testimony through the
+CLI. Cards live at
+`blueprint/readbacks/<article_id>/<encoded-declaration>.md`; the durable
+`article_id` keeps testimony attached when an article moves, while the encoded
+filename avoids platform-specific Lean-name collisions. Each versioned card
+contains the exact packet, both hashes, a model label, and nonempty testimony.
+The loader rejects missing or unknown fields, altered packets, identity
+mismatches, and malformed or empty testimony. Testimony must show a reader
+everything it says: invisible and reordering characters (zero-width spaces,
+bidirectional overrides), whether typed or written as HTML entities, and TeX
+that hides, overlaps, or redefines content (`\phantom`, `\rlap`, `\kern`,
+`\toggle`, `\bbox`, `\unicode`, macro definitions, comments) are rejected, as
+is testimony that renders no visible text. Before any card is parsed its
+testimony must fit limits several times what real read-backs use: 32 KiB, 500
+lines, 1,024 math delimiters, 512 backticks in runs of at most 16, 256 opening
+brackets, and 64 columns of nesting. The Markdown parser is superlinear in each
+of these, so a byte limit alone would not bound it, and every card in a pull
+request is read before its validity is known. Writes use a no-follow directory
+walk, an exclusive lock, a unique temporary file, atomic replacement, and an
+optional expected-card hash for compare-and-swap updates. `model:` remains a
+label supplied by the coordinator, not authenticated provenance.
+
+`--packets DIR` writes one comment-stripped packet per skeleton, with a
+manifest mapping packets to articles and hashes. The destination must be empty
+or carry Autoform's packet manifest; each run replaces the complete managed
+tree, so removed declarations cannot leave stale packets behind. A concurrent
+change to the existing tree aborts publication instead of being overwritten.
+A packet holds only what a blind auditor may see: the signature, the statement
+as written, and the source of every project definition it rests on, with every
+comment and docstring removed, so that a reader who is asked what the Lean
+literally asserts cannot read the author's intent into it.
+
+Each theorem's packet also carries the statement *as written*, cut before its
+value by Lean's parser with the file's opened namespaces in scope so that
+scoped notation parses, beside the elaborated signature: the printed form
+shows binders that `variable` and `include` inject and the type every cast
+lands in, the written form shows what the pretty-printer elides, and neither
+can hide what the other shows.
+
+A statement's source passage can travel with it. A `## Sources` link to a
+non-Markdown file inside the blueprint with a `#L<start>-L<end>` fragment, for
+example `../../../sources/lebl-ra/ch-real-nums.tex#L693-L714`, names the exact
+text the statement came from. `--passages DIR` writes those passages beside
+the packets, one per article, in a separate, disjoint managed directory. It
+requires `--packets`. Each article directory
+also holds `article.lean`, the joint packet of every declaration the article
+names, because a source theorem is often formalized by several declarations
+together and each alone is honestly incomplete. A faithfulness judge is given
+the article packet and its passage; a read-back auditor is given one
+declaration's packet alone, since a read-back is testimony about one
+declaration.
+
+Prepare and check the complete review protocol through first-class commands:
+
+```bash
+autoform review prepare blueprint --lean-root . \
+  --output review.json --packets review-packets
+autoform review record blueprint --lean-root . --bundle review.json \
+  --article-id af_0123456789abcdef01234567 --declaration Ns.result \
+  --packet review-packets/blind/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.lean \
+  --testimony read-back.md --model muse-spark-1.1
+autoform review record blueprint --lean-root . --bundle review.json \
+  --manifest records.json --model muse-spark-1.1
+autoform review check blueprint --lean-root . --bundle review.json
+autoform audit blueprint --lean-root . --review-bundle review.json
+autoform render blueprint --lean-root . --review-bundle review.json
+autoform review check blueprint --lean-root .
+autoform render blueprint --lean-root . --review
+```
+
+`review prepare` extracts Lean evidence from the current built tree and writes
+a strict, versioned bundle plus opaque packets. The bundle contains the exact
+article titles and statements, cited passages, declaration mapping, and packet bytes, but
+not the later testimony. A Lean-mapped article marked `origin: cited` must link
+to an in-vault, non-Markdown source snapshot with an exact
+`#L<start>-L<end>` range; preparation refuses a citation it cannot put before
+the reviewer. `review record` rechecks the selected current article
+and the exact packet bytes before filing a card; an unrelated article changing
+does not block that record.
+
+`--manifest` files a batch against one extraction, where one record per card
+would pay a Lake freshness check and a Lean start each. The manifest reuses
+the packet manifest's field names, so a coordinator derives it from the one
+`review prepare` writes by adding the testimony for each packet:
+
+```json
+{
+  "schema": "autoform-review-records/v1",
+  "records": [
+    {"article_id": "af_0123456789abcdef01234567", "declaration": "Ns.result",
+     "packet": "review-packets/blind/0123….lean", "testimony": "read-back.md"}
+  ]
+}
+```
+
+Relative paths resolve against the manifest's directory, a record may carry its
+own `expected_card_hash`, and a declaration may appear once. Every packet and
+testimony is read and checked against the bundle before Lean starts. So is
+every card the batch would write over: a re-review lands on the path of the
+card it supersedes, which it may replace only by naming that card's hash, and
+the batch lists every card that needs one, with the hash, before extracting. The
+extraction is scoped to exactly the batch's articles, and each article is
+validated against its own part of it, as a single record would be. The
+blueprint is then reloaded: if any selected article changed while Lean ran,
+nothing is filed. Every card is built and checked before the first is written,
+so one bad record stops the batch. Publishing then goes card by card, each
+under its own compare-and-swap; only a concurrent writer can stop it midway,
+the command says how many cards it filed, and because filing identical content
+is a no-op, running the same batch again completes it.
+
+`review check`, `audit`, and `render` re-extract the
+current Lean evidence and reject unresolved, partial, foreign, or stale
+bundles. `review check` also requires complete current cards and matching human
+approvals. The rendered review disclosure uses the same packet bytes that were
+hashed, never a reconstructed or comment-bearing approximation. Read-back
+cards are absorbed into their article and are not published as standalone
+pages. Without `--bundle`, `review check` derives the bundle from its own
+extraction, and `render --review` does the same: each extracts the tree once
+instead of once to prepare and again to check.
+
+Newly scaffolded projects commit the versioned `.autoform-review` policy marker,
+so generated CI enforces this gate from the first formalized statement. Older
+projects opt in by adding that marker; cards or `review_approved` assertions
+without it fail instead of silently disabling review. CI never trusts a
+committed bundle: after the Lean build it runs the review-only check against
+one derived in the same run, and Pages renders its review disclosures the same
+way, without turning advisory roadmap or coverage findings into merge blockers.
 
 Plan durable article identity metadata without changing the blueprint:
 

@@ -48,21 +48,75 @@ jobs:
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           autoform check blueprint --lean-root .
 
+      - name: Detect statement review
+        run: |
+          set -euo pipefail
+          marker="blueprint/.autoform-review"
+          has_review_artifacts=false
+          if [[ -d blueprint/readbacks ]] || git grep -q '^[[:space:]]*review_approved:' -- blueprint; then
+            has_review_artifacts=true
+          fi
+          if [[ -e "$marker" || -L "$marker" ]]; then
+            if [[ ! -f "$marker" || -L "$marker" ]] || \
+              ! echo "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620  $marker" \
+                | sha256sum --check --strict; then
+              echo "invalid Autoform review policy marker: $marker" >&2
+              exit 1
+            fi
+            echo "AUTOFORM_REVIEW_ENABLED=true" >> "$GITHUB_ENV"
+          elif [[ "$has_review_artifacts" == true ]]; then
+            echo "review cards or approvals exist without $marker" >&2
+            exit 1
+          fi
+
+      - name: Install elan for statement review
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            https://github.com/leanprover/elan/releases/download/v4.2.3/elan-x86_64-unknown-linux-gnu.tar.gz \
+            -o elan.tar.gz
+          echo "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2  elan.tar.gz" \
+            | sha256sum --check --strict
+          tar xzf elan.tar.gz
+          ./elan-init -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Build Lean for statement review
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        run: |
+          lake exe cache get || echo "no cache available; building from source"
+          lake build
+
+      # Without --bundle the check derives the bundle from its own extraction.
+      - name: Verify statement reviews
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        run: >-
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          autoform review check blueprint --lean-root .
+
       # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
       # and permalinks into the Lean code at this exact commit.
       - name: Render the blueprint
-        run: >-
-          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          autoform render blueprint
-          --output site-src
-          --lean-root .
-          --require-declarations
+        run: |
+          set -euo pipefail
+          review_args=()
+          if [[ "${AUTOFORM_REVIEW_ENABLED:-}" == true ]]; then
+            review_args=(--review)
+          fi
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            autoform render blueprint \
+            --output site-src \
+            --lean-root . \
+            --require-declarations \
+            "${review_args[@]}"
 
       - name: Build the Markdown site
         run: >-
           uvx --from mkdocs==1.6.1
           --with mkdocs-material==9.6.21
           --with mkdocs-literate-nav==0.6.2
+          --with markdown==3.10.3
           --with pymdown-extensions==10.21.3
           mkdocs build --strict
 

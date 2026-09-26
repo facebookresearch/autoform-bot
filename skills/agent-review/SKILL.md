@@ -26,6 +26,14 @@ declaration resolution, axiom cleanliness, source coverage, or dependency
 correctness without showing how it was checked. If required sources are absent,
 return insufficient evidence rather than guessing.
 
+Regenerate skeleton evidence from the exact candidate after its Lean build.
+Treat a stale-build refusal as insufficient evidence; never approve a current
+source excerpt paired with an older compiled declaration. Bind any approval to
+the skeleton's elaborated-semantic hash, not its displayed source formatting.
+Also record the evidence hash for the exact proof-free packet that was read.
+For a source-faithfulness verdict, record the article review hash that binds
+the joint packet to the cited passage and locator.
+
 Report findings first, ordered by severity and tied to files or nodes. Then give
 the rubric scores, weighted verdict, commands run, unresolved questions, and a
 short remediation list. Do not edit the reviewed work unless the user separately

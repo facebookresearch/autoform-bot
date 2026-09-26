@@ -36,3 +36,58 @@ and Lean-source links. Record each human decision as `approve`, `revise`, or
 from the person's judgment. Do not silently apply requested revisions: hand
 mathematical-plan changes to Roadmap, Lean implementation changes to
 Orchestrate, and autonomous rubric scoring to Agent Review.
+
+## Review formalized statements through prepared evidence and read-backs
+
+A compiled proof says nothing about whether the statement means what the book
+says. The person reviews a *prepared review bundle*: the current article
+statement and cited passage, the elaborated Lean signature, and the project
+definitions it rests on. Beside that evidence they read an independent
+*read-back*, a blind rendering in mathematical English of what one exact Lean
+packet literally asserts. The kernel covers everything below this surface.
+
+Use the `review` commands and review-bundle flags documented in the
+[CLI reference](../../autoform_cli/README.md#commands). Do not substitute a
+saved skeleton report: preparation, recording, auditing, and rendering each
+check that the evidence still describes the current blueprint and built Lean
+tree.
+
+1. Confirm that the repository has opted into enforcement with the versioned
+   `blueprint/.autoform-review` policy marker. Require durable `article_id`
+   metadata for every Lean-mapped article, using the article-ID migration check
+   in the CLI reference. Every `origin: cited` Lean article must identify an
+   exact line range in a local, non-Markdown source snapshot. Build the Lean project, then prepare a versioned review
+   bundle and its blind packets. Keep the bundle and its identity manifest with
+   the coordinator. A packet is the only input that crosses the blind-review
+   boundary; its opaque filename must not reveal the article or declaration.
+2. Obtain a read-back for every packet that has none or whose card is invalid.
+   Never write one yourself: you know what the code is meant to say. Launch an
+   independent sub-agent in a fresh workspace containing only that packet and
+   [the read-back reference](references/readback.md). Do not give it the
+   repository, article, source passage, bundle manifest, or a revealing task
+   description. Ask for testimony only.
+3. Back in the coordinator's workspace, record the testimony through the CLI.
+   Pass the prepared bundle and the exact packet file the agent read. The
+   command resolves the durable article ID, re-extracts the current Lean
+   evidence, rejects a stale bundle or changed packet, and writes the vault
+   card. With several testimonies, record them as one batch from a manifest:
+   one extraction then serves every card instead of one per card. Never
+   hand-author or repair a card's path, hashes, or frontmatter.
+4. Audit and render from that same bundle, then strict-build the site. Both
+   commands re-extract current evidence and fail closed if the bundle is stale,
+   incomplete, or inconsistent. Every formalized statement gains a *Review*
+   disclosure showing the exact hashed packet, its read-back, the article and
+   source evidence it is bound to, and the approval state.
+5. Walk the person through each statement: source and book text first, then the
+   read-back, then the exact packet. Ask whether the read-back says what the
+   book says, whether any hypothesis is missing or added, and whether the
+   definitions mean what the book's do. When they approve, copy the complete
+   per-article review hash shown by the validated review view into
+   `review_approved`. That hash binds the article title and statement, cited passage,
+   exact packets, and current read-backs. This edit is the person's assertion,
+   not the agent's. When they do not approve, record `revise` with their reason
+   and hand the change to Roadmap or Orchestrate.
+6. Run the review-aware audit again before reporting. Treat missing testimony,
+   unresolved extraction, an incomplete bundle, any packet or read-back
+   mismatch, and any approval drift as failures. An edit to any reviewed input
+   must invalidate the approval it changed.

@@ -23,10 +23,15 @@ from . import graph_pages, graph_views, mermaid, status
 from .coverage import CoverageSummary, load_coverage
 from .graph import Graph, Node, load_graph
 from .lean import SourceLinker, build_linker, declaration_names
+from .markdown import content_lines as _content_lines
+from .markdown import FENCE as _FENCE
+from .markdown import FENCE_CLOSE as _FENCE_CLOSE
+from .readback import READBACKS_DIR, Readback, load_readbacks
+from .review import ReviewBundle, ReviewError, ReviewDeclaration, validate_review_bundle
+from .skeleton import DeclarationSkeleton, SkeletonReport
 from .status import is_definition
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
-_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _MARKDOWN_LINK = re.compile(r"(?<!!)\[(?P<label>[^\]]*)\]\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)")
 #: A reference-style link definition, `[label]: target "title"`. Markdown
 #: resolves `[Paper][paper]` through one of these, so a rewrite that only sees
@@ -233,6 +238,8 @@ def render_site(
     repository_url: str | None = None,
     ref: str | None = None,
     clean: bool = True,
+    skeleton: SkeletonReport | None = None,
+    review_bundle: ReviewBundle | None = None,
 ) -> RenderReport:
     """Write deterministic, read-only projections of the Markdown blueprint.
 
@@ -253,6 +260,18 @@ def render_site(
     _validate_publication_tree(blueprint)
 
     graph = load_graph(blueprint)
+    if review_bundle is not None:
+        if skeleton is None:
+            raise PublicationError(["a review bundle requires a freshly extracted skeleton report"])
+        review_issues = validate_review_bundle(graph, review_bundle, skeleton)
+        if review_issues:
+            raise PublicationError(
+                [f"{issue.node_id}: {issue.code}: {issue.reason}" for issue in review_issues]
+            )
+    elif skeleton is not None:
+        raise PublicationError(
+            ["a skeleton report alone is not review evidence; pass a validated review bundle"]
+        )
     coverage, coverage_issues = load_coverage(blueprint)
     if coverage_issues:
         raise PublicationError(
@@ -274,6 +293,7 @@ def render_site(
     numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
     sources_base = _sources_base(blueprint, repo_root, linker)
+    readbacks = load_readbacks(blueprint) if review_bundle is not None else {}
 
     _prepare_destination(destination, clean=clean)
     _write_publication_manifest(
@@ -322,6 +342,10 @@ def render_site(
         # Source notes leave the site entirely once readers can reach them in
         # the repository, so the book has one reference surface rather than two.
         if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
+            continue
+        # Read-backs are testimony about a statement, shown inside its box,
+        # never pages of their own.
+        if relative.parts[:1] == (READBACKS_DIR,):
             continue
         target = destination / relative
         # Directories are created on demand below, so a directory holding
@@ -385,6 +409,9 @@ def render_site(
             destination=destination,
             node_sources=node_sources,
             sources_base=sources_base,
+            skeleton=skeleton,
+            review_bundle=review_bundle,
+            readbacks=readbacks,
         )
         page.write_text(chapter, encoding="utf-8")
         if narrative is None:  # a milestone with no narrative page of its own
@@ -754,17 +781,8 @@ def _book_navigation_link(
 def _inject_after_title(text: str, block: str) -> str:
     """Place a generated overview immediately after the document's first H1."""
     lines = text.splitlines()
-    fence: tuple[str, int] | None = None
-    for index, line in enumerate(lines):
-        fence_match = _FENCE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if fence is None:
-                fence = (marker[0], len(marker))
-            elif marker[0] == fence[0] and len(marker) >= fence[1]:
-                fence = None
-            continue
-        heading = _HEADING.match(line) if fence is None else None
+    for index, line in enumerate(_content_lines(text)):
+        heading = _HEADING.match(line)
         if heading is not None and len(heading.group(1)) == 1:
             merged = [*lines[: index + 1], "", block.rstrip(), "", *lines[index + 1 :]]
             return "\n".join(merged) + ("\n" if text.endswith("\n") else "")
@@ -774,18 +792,9 @@ def _inject_after_title(text: str, block: str) -> str:
 def _inject_after_lead(text: str, block: str) -> str:
     """Place chapter metadata after its opening prose and before the first section."""
     lines = text.splitlines()
-    fence: tuple[str, int] | None = None
     seen_h1 = False
-    for index, line in enumerate(lines):
-        fence_match = _FENCE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if fence is None:
-                fence = (marker[0], len(marker))
-            elif marker[0] == fence[0] and len(marker) >= fence[1]:
-                fence = None
-            continue
-        heading = _HEADING.match(line) if fence is None else None
+    for index, line in enumerate(_content_lines(text)):
+        heading = _HEADING.match(line)
         if heading is None:
             continue
         level = len(heading.group(1))
@@ -1260,7 +1269,7 @@ def _markdown_table_cell(text: str) -> str:
 
 
 def _first_h1(text: str) -> str | None:
-    for line in text.splitlines():
+    for line in _content_lines(text):
         heading = _HEADING.match(line)
         if heading is not None and len(heading.group(1)) == 1:
             return heading.group(2).strip()
@@ -1279,8 +1288,10 @@ def _document_body(text: str) -> str:
 
     kept: list[str] = []
     dropped_title = False
-    for line in lines[start:]:
-        heading = _HEADING.match(line)
+    source_lines = lines[start:]
+    visible_lines = _content_lines("\n".join(source_lines))
+    for line, visible in zip(source_lines, visible_lines, strict=True):
+        heading = _HEADING.match(visible)
         if heading is not None and len(heading.group(1)) == 1 and not dropped_title:
             dropped_title = True
             continue
@@ -1418,7 +1429,7 @@ def _outside_fences(text: str, transform) -> str:
     fence: tuple[str, int] | None = None
     out: list[str] = []
     for line in text.splitlines():
-        match = _FENCE.match(line)
+        match = _FENCE.match(line) if fence is None else _FENCE_CLOSE.match(line)
         if match:
             marker = match.group(1)
             if fence is None:
@@ -1471,6 +1482,9 @@ def _render_chapter(
     destination: Path,
     node_sources: dict[Path, str],
     sources_base: "_SourceBase | None" = None,
+    skeleton: SkeletonReport | None = None,
+    review_bundle: ReviewBundle | None = None,
+    readbacks: dict[tuple[str, str], Readback] | None = None,
 ) -> tuple[str, int, list[str]]:
     """Render one narrative article with statements at its authored link slots."""
     links = _anchored_links(targets, page)
@@ -1494,6 +1508,9 @@ def _render_chapter(
             node_sources=node_sources,
             targets=targets,
             sources_base=sources_base,
+            skeleton=skeleton,
+            review_bundle=review_bundle,
+            readbacks=readbacks or {},
         )
         environments[node_id] = environment
         linked += node_linked
@@ -1535,18 +1552,10 @@ def _place_environments(
     anchor_nodes = {
         targets[node_id][1]: node_id for node_id in environments if targets[node_id][1]
     }
-    fence: tuple[str, int] | None = None
-    for line in narrative.splitlines():
-        fence_match = _FENCE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if fence is None:
-                fence = (marker[0], len(marker))
-            elif marker[0] == fence[0] and len(marker) >= fence[1]:
-                fence = None
-            output.append(line)
-            continue
-        slot = _ARTICLE_SLOT.match(line) if fence is None else None
+    source_lines = narrative.splitlines()
+    visible_lines = _content_lines(narrative)
+    for line, visible in zip(source_lines, visible_lines, strict=True):
+        slot = _ARTICLE_SLOT.match(visible)
         if slot is None:
             output.append(line)
             continue
@@ -1583,6 +1592,9 @@ def _render_environment(
     node_sources: dict[Path, str],
     targets: dict[str, tuple[Path, str]],
     sources_base: "_SourceBase | None" = None,
+    skeleton: SkeletonReport | None = None,
+    review_bundle: ReviewBundle | None = None,
+    readbacks: dict[tuple[str, str], Readback] | None = None,
 ) -> tuple[str, int, list[str]]:
     node_status = statuses[node.id]
     caption, _, number = numbers[node.id].rpartition(" ")
@@ -1649,8 +1661,152 @@ def _render_environment(
         lines.append(meta)
     if dependencies:
         lines.append(dependencies)
+    if skeleton is not None and review_bundle is not None:
+        review = _review_disclosure(node, skeleton, review_bundle, readbacks or {})
+        if review:
+            lines.extend(["", review, ""])
     lines.append("</div>")
     return "\n".join(lines), linked, unresolved
+
+
+def _review_disclosure(
+    node: Node,
+    skeleton: SkeletonReport,
+    bundle: ReviewBundle,
+    readbacks: dict[tuple[str, str], Readback],
+) -> str:
+    """Show what a reviewer must trust, and what a blind auditor says it means.
+
+    The prepared bundle binds the statement, cited passage, exact packets, and
+    declaration mapping. Read-backs add testimony about those packets. The
+    final approval hash covers both sides of that review surface.
+    """
+
+    record = skeleton.node(node.id)
+    article = bundle.article(node.article_id) if node.article_id is not None else None
+    if record is None or article is None or not record.declarations:
+        return ""
+    count = len(record.declarations)
+    lines_to_read = sum(item.skeleton_lines for item in record.declarations)
+    try:
+        expected_approval = bundle.review_hash(article.article_id, readbacks)
+    except ReviewError:
+        expected_approval = None
+    if node.review_approved is None:
+        approval = ("bp-review-open", "not yet approved")
+        if expected_approval is not None:
+            approval = ("bp-review-open", f"ready to approve · {expected_approval}")
+    elif expected_approval is None:
+        approval = ("bp-review-drift", "approval cannot be verified because testimony is incomplete or invalid")
+    elif node.review_approved == expected_approval:
+        approval = ("bp-review-approved", f"approved · {expected_approval}")
+    else:
+        approval = (
+            "bp-review-drift",
+            f"approval {node.review_approved} does not match the current complete review {expected_approval}",
+        )
+    summary = (
+        f"Review · {count} skeleton{'s' if count != 1 else ''}, {lines_to_read} lines to trust · "
+        f'<span class="{approval[0]}">{html.escape(approval[1])}</span>'
+    )
+    parts = ['<details class="bp-review" markdown="1">', f"<summary>{summary}</summary>", ""]
+    parts.extend(
+        [
+            '<div class="bp-skeleton-meta">',
+            _render_rows(
+                [("Prepared evidence", f"<code>{html.escape(article.evidence_hash)}</code>")],
+                css_class="bp-skeleton-meta",
+            ),
+            "</div>",
+            "",
+        ]
+    )
+    if article.passage is not None:
+        locator = article.passage_locator or "cited source"
+        parts.extend(
+            [
+                '<div class="bp-skeleton">',
+                f'<div class="bp-skeleton-title">Source passage · {html.escape(locator)}</div>',
+                f'<pre><code>{html.escape(article.passage)}</code></pre>',
+                "</div>",
+                "",
+            ]
+        )
+    for declaration in record.declarations:
+        prepared = article.declaration(declaration.name)
+        assert prepared is not None
+        parts.extend(_skeleton_block(declaration, prepared))
+        readback = readbacks.get((article.article_id, declaration.name))
+        parts.extend(_readback_block(declaration, readback))
+    parts.append("</details>")
+    return "\n".join(parts)
+
+
+def _skeleton_block(
+    declaration: DeclarationSkeleton,
+    prepared: ReviewDeclaration | None = None,
+) -> list[str]:
+    # This is the evidence whose hash the card records. Reconstructing a
+    # friendlier view here can show comments or source text that were never in
+    # the blind packet, while still labelling it with the packet's hash.
+    packet_text = declaration.blind_text() if prepared is None else prepared.packet
+    packet_hash = declaration.evidence_hash if prepared is None else prepared.packet_hash
+    packet = html.escape(packet_text.rstrip("\n"))
+    rows = [
+        ("Skeleton", f"<code>{html.escape(declaration.hash)}</code> · {declaration.skeleton_lines} lines"),
+        ("Packet", f"<code>{html.escape(packet_hash)}</code>"),
+        ("Assumes", ", ".join(f"<code>{html.escape(name)}</code>" for name in declaration.assumed) or "nothing beyond Lean core"),
+        ("Axioms", ", ".join(f"<code>{html.escape(name)}</code>" for name in declaration.axioms) or "none"),
+    ]
+    return [
+        '<div class="bp-skeleton">',
+        f'<div class="bp-skeleton-title">{html.escape(declaration.kind)} <code>{html.escape(declaration.name)}</code></div>',
+        f'<pre class="bp-lean"><code>{packet}</code></pre>',
+        _render_rows(rows, css_class="bp-skeleton-meta"),
+        "</div>",
+        "",
+    ]
+
+
+def _readback_block(declaration: DeclarationSkeleton, readback: Readback | None) -> list[str]:
+    if readback is None:
+        return [
+            '<div class="bp-readback bp-readback-missing">No read-back filed for this skeleton yet.</div>',
+            "",
+        ]
+    validation_errors = readback.validate(declaration)
+    status_key = "invalid" if validation_errors else readback.status(declaration)
+    if status_key == "invalid":
+        label = "invalid · " + "; ".join(validation_errors)
+    elif status_key == "altered":
+        label = "altered · the Lean shown below is not the packet this card records"
+    elif status_key == "current":
+        label = "current"
+    elif status_key == "revised":
+        label = "revised · the packet text changed since this was written"
+    else:
+        label = f"stale · written for skeleton {readback.skeleton_hash or '?'}"
+    model = f" · {html.escape(readback.model)}" if readback.model else ""
+    if status_key == "invalid":
+        return [
+            '<div class="bp-readback bp-readback-invalid">',
+            f'<div class="bp-readback-title">Read-back{model} · '
+            f'<span class="bp-readback-status">{html.escape(label)}</span></div>',
+            f"<pre><code>{html.escape(readback.text)}</code></pre>",
+            "</div>",
+            "",
+        ]
+    return [
+        f'<div class="bp-readback bp-readback-{status_key}" markdown="1">',
+        f'<div class="bp-readback-title">Read-back{model} · <span class="bp-readback-status">{html.escape(label)}</span></div>',
+        "",
+        # Read-backs are model-produced Markdown. Keep Markdown and math, but
+        # neutralize raw HTML before placing it inside an md_in_html container.
+        html.escape(readback.text),
+        "",
+        "</div>",
+        "",
+    ]
 
 
 def _lean_presentation(
@@ -1808,17 +1964,8 @@ def _split_body(text: str) -> tuple[str, str]:
     """
     body = _body_without_dependencies(text)
     lines = body.splitlines()
-    fence: tuple[str, int] | None = None
-    for index, line in enumerate(lines):
-        fence_match = _FENCE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if fence is None:
-                fence = (marker[0], len(marker))
-            elif marker[0] == fence[0] and len(marker) >= fence[1]:
-                fence = None
-            continue
-        if fence is None and _HEADING.match(line):
+    for index, line in enumerate(_content_lines(body)):
+        if _HEADING.match(line):
             statement = "\n".join(lines[:index]).strip()
             # Many statements now share one chapter page, so a node's own
             # subheadings must not compete with the chapter's structure.
@@ -1854,25 +2001,10 @@ def _body_without_dependencies(text: str) -> str:
     kept: list[str] = []
     skipping = False
     dropped_title = False
-    fence: tuple[str, int] | None = None
-
-    for line in lines[start:]:
-        fence_match = _FENCE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if fence is None:
-                fence = (marker[0], len(marker))
-            elif marker[0] == fence[0] and len(marker) >= fence[1]:
-                fence = None
-            if not skipping:
-                kept.append(line)
-            continue
-        if fence is not None:
-            if not skipping:
-                kept.append(line)
-            continue
-
-        heading = _HEADING.match(line)
+    source_lines = lines[start:]
+    visible_lines = _content_lines("\n".join(source_lines))
+    for line, visible in zip(source_lines, visible_lines, strict=True):
+        heading = _HEADING.match(visible)
         if heading:
             level = len(heading.group(1))
             name = heading.group(2).strip().casefold()
@@ -2426,6 +2558,48 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-dependencies summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
 .bp-dependency-body {{ margin-top: 0.35rem; color: var(--bp-fg); }}
+.bp-review {{
+  margin: 0.65rem 0 0 2rem;
+  font-family: {sans};
+  font-size: 0.82rem;
+  color: var(--bp-muted);
+}}
+.bp-review summary {{
+  width: fit-content;
+  cursor: pointer;
+  color: var(--bp-link);
+  user-select: none;
+}}
+.bp-review summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+.bp-review-approved {{ color: #31A24C; font-weight: 600; }}
+.bp-review-open {{ color: var(--bp-muted); }}
+.bp-review-drift {{ color: #B77900; font-weight: 600; }}
+.bp-skeleton {{ margin-top: 0.6rem; color: var(--bp-fg); }}
+.bp-skeleton-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
+.bp-lean {{
+  margin: 0 0 0.4rem;
+  padding: 0.6rem 0.8rem;
+  font-family: {mono};
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  border-left: 3px solid var(--bp-rule);
+}}
+.bp-skeleton-meta {{ margin-bottom: 0.5rem; }}
+.bp-readback {{
+  margin: 0.4rem 0 1rem;
+  padding: 0.6rem 0.8rem;
+  color: var(--bp-fg);
+  border-left: 3px solid #0064E0;
+}}
+.bp-readback-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
+.bp-readback-status {{ font-weight: 400; color: var(--bp-muted); }}
+.bp-readback-stale {{ border-left-color: #B77900; }}
+.bp-readback-revised {{ border-left-color: #B77900; }}
+.bp-readback-altered {{ border-left-color: #B77900; }}
+.bp-readback-invalid {{ border-left-color: #B42318; }}
+.bp-readback-missing {{ border-left-color: var(--bp-rule); font-style: italic; }}
 .bp-row {{ display: flex; gap: 0.75rem; }}
 .bp-key {{
   flex: 0 0 7.5rem;

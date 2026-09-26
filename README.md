@@ -104,6 +104,7 @@ complete frontmatter, hierarchy, status, and validation rules.
 | `autoform check` | Validate Markdown structure and dependencies. |
 | `autoform audit` | Audit completeness and checked facts. |
 | `autoform doctor` | Diagnose the local blueprint contract. |
+| `autoform skeleton` | Extract what a reader must trust for each formalized statement. |
 | `autoform claim` | Coordinate temporary ownership through Git refs. |
 | `autoform render` | Generate publishable MkDocs source. |
 | `autoform-visualize` | Generate the Mermaid dependency graph. |

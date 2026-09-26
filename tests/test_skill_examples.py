@@ -287,6 +287,11 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "autoform check blueprint --lean-root ." in workflow
     assert "autoform render blueprint" in workflow
     assert "--require-declarations" in workflow
+    assert "autoform review check blueprint --lean-root .\n" in workflow
+    assert "review prepare" not in workflow
+    assert "review_args=(--review)" in workflow
+    assert "--with markdown==3.10.3" in workflow
+    assert "--with pymdown-extensions==10.21.3" in workflow
     assert "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128" in workflow
     assert "@main" not in workflow
 
@@ -297,6 +302,8 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "Reject kernel-check bypass options" in verify
     assert "Audit every root-package declaration" in verify
     assert "python3 .github/autoform_audit.py" in verify
+    assert "autoform review check blueprint --lean-root .\n" in verify
+    assert "review prepare" not in verify
     assert "lake pack" in verify
     assert "lake-modules" not in verify
     assert "contains no ILean artifacts" in (
@@ -374,6 +381,8 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
     assert "autoform init" in setup
     assert "references/thesis-review-case.md" in agent_review
     assert "references/roadmap-quality.md" in agent_review
+    assert "stale-build refusal" in agent_review
+    assert "elaborated-semantic hash" in agent_review
     assert "autoform-visualize" in human_review
     assert "`approve`, `revise`, or\n`block`" in human_review
     for required in (
@@ -582,3 +591,22 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
     ).read_text(encoding="utf-8")
 
     assert significant(example) == significant(template)
+
+
+def test_review_skills_route_statement_review_through_the_cli_reference(repo_root: Path) -> None:
+    """Skills say what to achieve and link the CLI reference; flags live in one place."""
+
+    human = (repo_root / "skills/human-review/SKILL.md").read_text(encoding="utf-8")
+    reference = (repo_root / "autoform_cli/README.md").read_text(encoding="utf-8")
+    readback = (repo_root / "skills/human-review/references/readback.md").read_text(encoding="utf-8")
+
+    assert "../../autoform_cli/README.md#commands" in human
+    assert "references/readback.md" in human
+    for flag in ("--packets", "--passages", "--review-bundle"):
+        assert flag in reference, flag
+    assert "review_approved" in reference and "readbacks/" in reference
+    assert "Prove2me" in readback
+    assert "Return only testimony" in readback
+    assert "review record" in readback
+    assert "saved skeleton report" in human
+    assert (repo_root / "autoform_cli/probes/skeleton_probe.lean").is_file()

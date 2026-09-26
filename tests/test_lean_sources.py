@@ -6,6 +6,7 @@ from autoform_cli.lean import (
     SourceLinker,
     declaration_names,
     index_project,
+    strip_lean_comments,
 )
 
 _SOURCE = """import Mathlib
@@ -103,6 +104,21 @@ def test_build_output_is_skipped(tmp_path: Path) -> None:
     assert index.find("vendored") is None
 
 
+def test_managed_packet_output_is_not_indexed_as_project_source(tmp_path: Path) -> None:
+    packets = tmp_path / "000-review-packets"
+    packet = packets / "node" / "target.lean"
+    packet.parent.mkdir(parents=True)
+    packet.write_text("def target : Nat := 2\n", encoding="utf-8")
+    (packets / "manifest.json").write_text(
+        '{"kind":"packets","packets":[],"schema":"autoform-skeleton-packets/v1"}\n',
+        encoding="utf-8",
+    )
+
+    index = _index(tmp_path, "def target : Nat := 1\n", name="Actual.lean")
+
+    assert index.find("target").path == Path("Actual.lean")
+
+
 def test_anonymous_instances_are_not_mistaken_for_names(tmp_path: Path) -> None:
     index = _index(tmp_path, "instance : Inhabited Nat := ⟨0⟩\n")
 
@@ -112,6 +128,31 @@ def test_anonymous_instances_are_not_mistaken_for_names(tmp_path: Path) -> None:
 def test_declaration_names_splits_a_list() -> None:
     assert declaration_names("A.b, C.d  E.f") == ["A.b", "C.d", "E.f"]
     assert declaration_names("") == []
+
+
+def test_quoted_names_keep_spaces_and_dots_inside_one_component(tmp_path: Path) -> None:
+    index = _index(tmp_path, "namespace A\ntheorem «b c.d» : True := trivial\nend A\n")
+
+    assert declaration_names("A.«b c.d», X.y") == ["A.«b c.d»", "X.y"]
+    assert index.find("A.«b c.d»") is not None
+
+
+def test_comment_stripping_preserves_comment_markers_inside_strings() -> None:
+    source = (
+        'def a := "a--b /- c -/" -- remove me\n'
+        'def b := r#"d--e /- f -/"# /- remove me -/\n'
+        'def c := s!"value {"a--b"}" -- remove me\n'
+        'def d := s!"brace {\'{\'} and {"a/-b"}" -- remove me\n'
+        "def «e--f» : Char := '-'"
+    )
+
+    assert strip_lean_comments(source) == (
+        'def a := "a--b /- c -/"\n'
+        'def b := r#"d--e /- f -/"#\n'
+        'def c := s!"value {"a--b"}"\n'
+        'def d := s!"brace {\'{\'} and {"a/-b"}"\n'
+        "def «e--f» : Char := '-'"
+    )
 
 
 def test_permalink_pins_the_commit(tmp_path: Path) -> None:

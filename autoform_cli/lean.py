@@ -12,23 +12,29 @@ and deliberately reports nothing it cannot see rather than guessing.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-_LINE_COMMENT = re.compile(r"--.*$")
-_NAMESPACE = re.compile(r"^\s*namespace\s+(\S+)")
+_NAMESPACE = re.compile(r"^\s*namespace\s+(.+)$")
 _SECTION = re.compile(r"^\s*section\b\s*(\S*)")
 _END = re.compile(r"^\s*end\b\s*(\S*)")
 _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
     r"(?:(?:private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
-    r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom)\s+"
-    r"([^\s:(){}\[\]⦃⦄,]+)"
+    r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom)\s+(.+)$"
 )
 _IGNORED_DIRECTORIES = frozenset({".lake", ".git", "lake-packages", "build"})
+_MANAGED_OUTPUT_SCHEMAS = frozenset(
+    {
+        ("packets", "autoform-skeleton-packets/v1"),
+        ("passages", "autoform-skeleton-passages/v1"),
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +53,7 @@ class SourceIndex:
 
     root: Path
     declarations: dict[str, Declaration]
+    source_digest: str
 
     def find(self, name: str) -> Declaration | None:
         return self.declarations.get(name)
@@ -56,38 +63,65 @@ def index_project(root: str | Path) -> SourceIndex:
     """Scan ``*.lean`` beneath *root* and index declarations by full name."""
     root_path = Path(root).expanduser().resolve()
     declarations: dict[str, Declaration] = {}
+    digest = hashlib.sha256()
     if not root_path.is_dir():
-        return SourceIndex(root=root_path, declarations=declarations)
+        return SourceIndex(root=root_path, declarations=declarations, source_digest=digest.hexdigest())
 
-    for path in sorted(root_path.rglob("*.lean")):
-        if _IGNORED_DIRECTORIES.intersection(path.relative_to(root_path).parts):
-            continue
+    paths: list[Path] = []
+    for directory, names, files in os.walk(root_path):
+        current = Path(directory)
+        names[:] = sorted(
+            name
+            for name in names
+            if name not in _IGNORED_DIRECTORIES
+            and not _is_managed_output(current / name)
+        )
+        paths.extend(current / name for name in files if name.endswith(".lean"))
+
+    for path in sorted(paths):
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError):
             continue
         relative = path.relative_to(root_path)
+        digest.update(relative.as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(text.encode("utf-8"))
+        digest.update(b"\0")
         for declaration in _scan(text, relative):
             # First definition wins, so an earlier file is not masked by a later
             # one when a name is genuinely duplicated across namespaces.
             declarations.setdefault(declaration.name, declaration)
-    return SourceIndex(root=root_path, declarations=declarations)
+    return SourceIndex(root=root_path, declarations=declarations, source_digest=digest.hexdigest())
+
+
+def _is_managed_output(path: Path) -> bool:
+    """Whether ``path`` is an Autoform packet tree rather than project source."""
+
+    manifest = path / "manifest.json"
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and (
+        payload.get("kind"), payload.get("schema")
+    ) in _MANAGED_OUTPUT_SCHEMAS
 
 
 def _scan(text: str, relative: Path) -> list[Declaration]:
     found: list[Declaration] = []
     namespaces: list[str] = []
     scopes: list[str | None] = []
-    comment_depth = 0
 
-    for number, raw in enumerate(text.splitlines(), start=1):
-        line, comment_depth = _strip_comments(raw, comment_depth)
+    for number, line in enumerate(_without_lean_comments(text).splitlines(), start=1):
         if not line.strip():
             continue
 
         namespace_match = _NAMESPACE.match(line)
         if namespace_match:
-            name = namespace_match.group(1)
+            name = _name_token(namespace_match.group(1))
+            if name is None:
+                continue
             namespaces.append(name)
             scopes.append(name)
             continue
@@ -107,41 +141,226 @@ def _scan(text: str, relative: Path) -> list[Declaration]:
 
         declaration_match = _DECLARATION.match(line)
         if declaration_match:
-            keyword, name = declaration_match.group(1), declaration_match.group(2)
+            keyword = declaration_match.group(1)
+            name = _name_token(declaration_match.group(2))
+            if name is None:
+                continue
             qualified = ".".join([*namespaces, name])
             found.append(Declaration(qualified, relative, number, keyword))
     return found
 
 
-def _strip_comments(line: str, depth: int) -> tuple[str, int]:
-    """Remove Lean comments from *line*, carrying block-comment depth across."""
+def _name_token(text: str) -> str | None:
+    """Read one possibly guillemet-quoted Lean identifier from ``text``."""
+
+    quoted = False
+    for index, character in enumerate(text):
+        if character == "«":
+            if quoted:
+                return None
+            quoted = True
+        elif character == "»":
+            if not quoted:
+                return None
+            quoted = False
+        elif not quoted and (character.isspace() or character in ":(){}[]⦃⦄,"):
+            return text[:index] or None
+    return None if quoted else text or None
+
+
+def _raw_string_close(text: str, index: int) -> str | None:
+    """Return the closing delimiter when ``text[index:]`` starts a raw string."""
+
+    if text[index : index + 1] != "r":
+        return None
+    cursor = index + 1
+    while text[cursor : cursor + 1] == "#":
+        cursor += 1
+    if text[cursor : cursor + 1] != '"':
+        return None
+    return '"' + "#" * (cursor - index - 1)
+
+
+@dataclass(slots=True)
+class _LexContext:
+    kind: str
+    close: str = ""
+    interpolated: bool = False
+    escaped: bool = False
+    depth: int = 0
+
+
+def _interpolated_quote(text: str, index: int) -> bool:
+    """Whether the quote at ``index`` starts an interpolated string macro."""
+
+    if index < 2 or text[index - 1] != "!":
+        return False
+    cursor = index - 2
+    if not (text[cursor].isalnum() or text[cursor] == "_"):
+        return False
+    while cursor >= 0 and (text[cursor].isalnum() or text[cursor] in {"_", "'"}):
+        cursor -= 1
+    return cursor < index - 2
+
+
+def _starts_char_literal(text: str, index: int) -> bool:
+    """Distinguish a character literal from the apostrophe in a Lean name."""
+
+    if index > 0 and (text[index - 1].isalnum() or text[index - 1] in {"_", "'"}):
+        return False
+    escaped = False
+    for character in text[index + 1 :]:
+        if character == "\n":
+            return False
+        if not escaped and character == "'":
+            return True
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+    return False
+
+
+def _without_lean_comments(text: str) -> str:
+    """Remove nested Lean comments without treating string contents as comments.
+
+    Newlines inside comments are retained so declaration line numbers remain
+    coordinates into the original file.
+    """
+
     out: list[str] = []
     index = 0
-    while index < len(line):
-        pair = line[index : index + 2]
-        if depth:
+    block_depth = 0
+    contexts = [_LexContext("code")]
+    while index < len(text):
+        pair = text[index : index + 2]
+        if block_depth:
             if pair == "-/":
-                depth -= 1
+                block_depth -= 1
                 index += 2
                 continue
             if pair == "/-":
-                depth += 1
+                block_depth += 1
                 index += 2
                 continue
+            if text[index] == "\n":
+                out.append("\n")
             index += 1
             continue
+        context = contexts[-1]
+        if context.kind == "string":
+            if not context.escaped and text.startswith(context.close, index):
+                out.append(context.close)
+                index += len(context.close)
+                contexts.pop()
+                continue
+            char = text[index]
+            if context.interpolated and not context.escaped and char == "{":
+                if text[index : index + 2] == "{{":
+                    out.append("{{")
+                    index += 2
+                    continue
+                out.append(char)
+                index += 1
+                contexts.append(_LexContext("interpolation", depth=1))
+                continue
+            out.append(char)
+            index += 1
+            if context.close in {'"', "'"}:
+                if context.escaped:
+                    context.escaped = False
+                elif char == "\\":
+                    context.escaped = True
+            continue
+        raw_close = _raw_string_close(text, index)
+        if raw_close is not None:
+            prefix_length = len(raw_close) + 1
+            out.append(text[index : index + prefix_length])
+            index += prefix_length
+            contexts.append(_LexContext("string", close=raw_close))
+            continue
+        if text[index] == '"':
+            out.append('"')
+            index += 1
+            contexts.append(
+                _LexContext(
+                    "string",
+                    close='"',
+                    interpolated=_interpolated_quote(text, index - 1),
+                )
+            )
+            continue
+        if text[index] == "«":
+            out.append("«")
+            index += 1
+            contexts.append(_LexContext("string", close="»"))
+            continue
+        if text[index] == "'" and _starts_char_literal(text, index):
+            out.append("'")
+            index += 1
+            contexts.append(_LexContext("string", close="'"))
+            continue
+        if pair == "--":
+            newline = text.find("\n", index + 2)
+            if newline < 0:
+                break
+            out.append("\n")
+            index = newline + 1
+            continue
         if pair == "/-":
-            depth += 1
+            block_depth = 1
+            out.append(" ")
             index += 2
             continue
-        out.append(line[index])
+        if context.kind == "interpolation":
+            if text[index] == "{":
+                context.depth += 1
+            elif text[index] == "}":
+                context.depth -= 1
+                if context.depth == 0:
+                    out.append("}")
+                    index += 1
+                    contexts.pop()
+                    continue
+        out.append(text[index])
         index += 1
-    return _LINE_COMMENT.sub("", "".join(out)), depth
+    return "".join(out)
+
+
+def strip_lean_comments(text: str) -> str:
+    """Remove every line and block comment, docstrings included, from Lean source.
+
+    Blank lines left behind are dropped, so the result is what the kernel sees
+    and nothing an author wrote for a reader.
+    """
+
+    kept: list[str] = []
+    for line in _without_lean_comments(text).splitlines():
+        if line.strip():
+            kept.append(line.rstrip())
+    return "\n".join(kept)
 
 
 def declaration_names(lean: str) -> list[str]:
     """Split a ``lean:`` frontmatter value into individual declaration names."""
-    return [name.strip() for name in lean.replace(",", " ").split() if name.strip()]
+
+    names: list[str] = []
+    current: list[str] = []
+    quoted = False
+    for character in lean:
+        if character == "«":
+            quoted = True
+        elif character == "»":
+            quoted = False
+        if not quoted and (character == "," or character.isspace()):
+            if current:
+                names.append("".join(current))
+                current = []
+        else:
+            current.append(character)
+    if current:
+        names.append("".join(current))
+    return names
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,4 +451,5 @@ __all__ = [
     "detect_ref",
     "detect_repository_url",
     "index_project",
+    "strip_lean_comments",
 ]
