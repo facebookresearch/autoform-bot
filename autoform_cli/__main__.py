@@ -366,12 +366,13 @@ def _check(args: argparse.Namespace) -> int:
 def _audit(args: argparse.Namespace) -> int:
     skeleton = None
     bundle = None
+    cards = None
     if args.review_bundle is not None:
         if args.lean_root is None:
             print("error: --review-bundle requires --lean-root", file=sys.stderr)
             return 2
         try:
-            _, skeleton, bundle, _ = _current_review(
+            _, skeleton, bundle, cards = _current_review(
                 args.blueprint_dir,
                 lean_root=args.lean_root,
                 bundle_path=args.review_bundle,
@@ -386,6 +387,7 @@ def _audit(args: argparse.Namespace) -> int:
         lean_root=args.lean_root,
         skeleton=skeleton,
         review_bundle=bundle,
+        readbacks=cards,
     )
     if args.json:
         print(result.to_json())
@@ -935,7 +937,10 @@ def _current_review(
     blueprint that changes while it runs, and its hash must name the graph read
     here, which covers the time before it took its own snapshot. Cards are not
     articles, so they are read again afterwards and must be unchanged. Callers
-    judge the cards returned here rather than reading the vault again.
+    judge the cards returned here rather than reading the vault again. A caller
+    that loads the articles again, as render and audit do, is held to the same
+    state by ``build_review_bundle``, which refuses a skeleton report paired
+    with a blueprint other than the one it was extracted from.
     """
 
     graph = load_graph(blueprint_dir)

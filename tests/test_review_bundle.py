@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.audit import audit_blueprint
-from autoform_cli.graph import load_graph
+from autoform_cli.graph import Graph, load_graph
 from autoform_cli.readback import Readback, load_readbacks, write_readback
 from autoform_cli.review import (
     ReviewError,
@@ -26,6 +26,7 @@ from autoform_cli.skeleton import (
     SkeletonError,
     SkeletonReport,
     UnresolvedTarget,
+    blueprint_hash,
     write_packets,
 )
 
@@ -84,6 +85,12 @@ def _report(
     )
 
 
+def _extracted(graph: Graph, report: SkeletonReport | None = None) -> SkeletonReport:
+    """``report`` (by default ``_report()``) stamped as extracted from ``graph``, as a real report is."""
+
+    return replace(report or _report(), blueprint_hash=blueprint_hash(graph))
+
+
 def _blueprint(
     root: Path,
     *,
@@ -138,7 +145,7 @@ def _approve(blueprint: Path, value: str) -> None:
 def test_bundle_round_trip_binds_the_complete_prepared_evidence(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     graph = load_graph(blueprint)
-    bundle = build_review_bundle(graph, _report())
+    bundle = build_review_bundle(graph, _extracted(graph))
     article = bundle.article(_ARTICLE_ID)
     assert article is not None
     assert article.statement == "A supremum is **unique**."
@@ -204,7 +211,7 @@ def test_fenced_fake_source_section_cannot_replace_review_evidence(tmp_path: Pat
     )
 
     graph = load_graph(blueprint)
-    bundle = build_review_bundle(graph, _report())
+    bundle = build_review_bundle(graph, _extracted(graph))
     assert graph.nodes["basics/result"].sources == ("sources/book.txt#L2-L2",)
     assert bundle.articles[0].passage == "Source theorem."
 
@@ -234,14 +241,36 @@ def test_bundle_refuses_partial_unresolved_or_wrong_mapping(
 ) -> None:
     graph = load_graph(_blueprint(tmp_path))
     with pytest.raises(ReviewError):
-        build_review_bundle(graph, report)
+        build_review_bundle(graph, _extracted(graph, report))
+
+
+def test_a_report_is_combined_only_with_the_blueprint_it_was_extracted_from(tmp_path: Path) -> None:
+    """Any edit to an article, even one outside the review evidence such as its
+    approval, makes a report extracted before it incoherent with the articles."""
+
+    blueprint = _blueprint(tmp_path)
+    graph = load_graph(blueprint)
+    report = _extracted(graph)
+    bundle = build_review_bundle(graph, report)
+    _approve(blueprint, "sha256:" + "f" * 64)
+    edited = load_graph(blueprint)
+
+    with pytest.raises(ReviewError, match="the blueprint changed after its review evidence was extracted") as refused:
+        build_review_bundle(edited, report)
+    assert [finding.code for finding in refused.value.findings] == ["review-snapshot-changed"]
+    assert [finding.code for finding in validate_review_bundle(edited, bundle, report)] == ["review-snapshot-changed"]
+    assert [finding.code for finding in review_findings(edited, bundle, report, {})] == ["review-snapshot-changed"]
+    assert [finding.code for finding in validate_review_article(edited, bundle, report, _ARTICLE_ID)] == [
+        "review-snapshot-changed"
+    ]
+    assert build_review_bundle(edited, _extracted(edited)) == bundle
 
 
 def test_bundle_requires_a_durable_article_id(tmp_path: Path) -> None:
     graph = load_graph(_blueprint(tmp_path, with_article_id=False))
 
     with pytest.raises(ReviewError, match=r"autoform migrate"):
-        build_review_bundle(graph, _report())
+        build_review_bundle(graph, _extracted(graph))
 
 
 def test_bundle_requires_a_rendered_declaration_sized_article(tmp_path: Path) -> None:
@@ -252,8 +281,9 @@ def test_bundle_requires_a_rendered_declaration_sized_article(tmp_path: Path) ->
         encoding="utf-8",
     )
 
+    graph = load_graph(blueprint)
     with pytest.raises(ReviewError) as error:
-        build_review_bundle(load_graph(blueprint), _report())
+        build_review_bundle(graph, _extracted(graph))
 
     assert "review-article-shape" in {finding.code for finding in error.value.findings}
 
@@ -267,8 +297,9 @@ def test_bundle_requires_exact_source_passage_for_cited_lean_article(tmp_path: P
     )
     report = replace(_report(), nodes=(replace(_report().nodes[0], passage=None, passage_locator=None),))
 
+    graph = load_graph(blueprint)
     with pytest.raises(ReviewError, match="no exact local source passage"):
-        build_review_bundle(load_graph(blueprint), report)
+        build_review_bundle(graph, _extracted(graph, report))
 
 
 def test_bundle_rejects_whitespace_only_cited_passage(tmp_path: Path) -> None:
@@ -277,8 +308,9 @@ def test_bundle_rejects_whitespace_only_cited_passage(tmp_path: Path) -> None:
     source.write_text("Heading\n   \n", encoding="utf-8")
     report = replace(_report(), nodes=(replace(_report().nodes[0], passage="   "),))
 
+    graph = load_graph(blueprint)
     with pytest.raises(ReviewError, match="no exact local source passage"):
-        build_review_bundle(load_graph(blueprint), report)
+        build_review_bundle(graph, _extracted(graph, report))
 
 
 def test_bundle_resolves_url_encoded_source_paths(tmp_path: Path) -> None:
@@ -296,7 +328,8 @@ def test_bundle_resolves_url_encoded_source_paths(tmp_path: Path) -> None:
         passage_locator="roadmap/basics/sources/book notes.txt#L2-L2",
     )
 
-    bundle = build_review_bundle(load_graph(blueprint), replace(_report(), nodes=(node,)))
+    graph = load_graph(blueprint)
+    bundle = build_review_bundle(graph, _extracted(graph, replace(_report(), nodes=(node,))))
     assert bundle.articles[0].passage == "Source theorem."
 
 
@@ -304,14 +337,15 @@ def test_validation_detects_article_source_and_lean_packet_drift(tmp_path: Path)
     blueprint = _blueprint(tmp_path)
     graph = load_graph(blueprint)
     report = _report()
-    bundle = build_review_bundle(graph, report)
+    bundle = build_review_bundle(graph, _extracted(graph, report))
 
     article = blueprint / "roadmap" / "basics" / "result.md"
     article.write_text(
         article.read_text(encoding="utf-8").replace("A supremum is **unique**.", "A different claim."),
         encoding="utf-8",
     )
-    assert {item.code for item in validate_review_bundle(load_graph(blueprint), bundle, report)} == {
+    graph = load_graph(blueprint)
+    assert {item.code for item in validate_review_bundle(graph, bundle, _extracted(graph, report))} == {
         "review-bundle-drift"
     }
 
@@ -321,11 +355,12 @@ def test_validation_detects_article_source_and_lean_packet_drift(tmp_path: Path)
     )
     source = blueprint / "roadmap" / "basics" / "sources" / "book.txt"
     source.write_text("Heading\nChanged source.\n", encoding="utf-8")
-    codes = {item.code for item in validate_review_bundle(load_graph(blueprint), bundle, report)}
+    graph = load_graph(blueprint)
+    codes = {item.code for item in validate_review_bundle(graph, bundle, _extracted(graph, report))}
     assert "review-source-drift" in codes
 
     source.write_text("Heading\nSource theorem.\n", encoding="utf-8")
-    changed = _report(_declaration(signature="Skel.sup_unique (a b : Nat) : a = b"))
+    changed = _extracted(graph, _report(_declaration(signature="Skel.sup_unique (a b : Nat) : a = b")))
     assert {item.code for item in validate_review_bundle(load_graph(blueprint), bundle, changed)} == {
         "review-bundle-drift"
     }
@@ -333,15 +368,16 @@ def test_validation_detects_article_source_and_lean_packet_drift(tmp_path: Path)
 
 def test_validation_binds_the_visible_article_title(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
-    report = _report()
-    bundle = build_review_bundle(load_graph(blueprint), report)
+    graph = load_graph(blueprint)
+    bundle = build_review_bundle(graph, _extracted(graph))
     article = blueprint / "roadmap" / "basics" / "result.md"
     article.write_text(
         article.read_text(encoding="utf-8").replace("# Result", "# Different theorem"),
         encoding="utf-8",
     )
 
-    assert [item.code for item in validate_review_bundle(load_graph(blueprint), bundle, report)] == [
+    graph = load_graph(blueprint)
+    assert [item.code for item in validate_review_bundle(graph, bundle, _extracted(graph))] == [
         "review-bundle-drift"
     ]
 
@@ -349,7 +385,7 @@ def test_validation_binds_the_visible_article_title(tmp_path: Path) -> None:
 def test_approval_hash_binds_ordered_strict_testimony(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     graph = load_graph(blueprint)
-    report = _report()
+    report = _extracted(graph)
     bundle = build_review_bundle(graph, report)
     declaration = report.nodes[0].declarations[0]
     write_readback(
@@ -364,6 +400,7 @@ def test_approval_hash_binds_ordered_strict_testimony(tmp_path: Path) -> None:
     approval = bundle.review_hash(_ARTICLE_ID, cards)
     _approve(blueprint, approval)
     graph = load_graph(blueprint)
+    report = _extracted(graph, report)
 
     assert review_findings(graph, bundle, report, cards) == []
     assert audit_blueprint(blueprint, skeleton=report, review_bundle=bundle).clean
@@ -380,7 +417,7 @@ def test_approval_hash_binds_ordered_strict_testimony(tmp_path: Path) -> None:
 def test_approval_is_unavailable_until_every_card_is_strict_and_current(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     graph = load_graph(blueprint)
-    report = _report()
+    report = _extracted(graph)
     bundle = build_review_bundle(graph, report)
 
     with pytest.raises(ReviewError, match="no read-back filed"):
@@ -404,8 +441,8 @@ def test_approval_is_unavailable_until_every_card_is_strict_and_current(tmp_path
 
 
 def test_approval_rejects_a_hand_constructed_card_with_invented_hashes(tmp_path: Path) -> None:
-    blueprint = _blueprint(tmp_path)
-    bundle = build_review_bundle(load_graph(blueprint), _report())
+    graph = load_graph(_blueprint(tmp_path))
+    bundle = build_review_bundle(graph, _extracted(graph))
     declaration = bundle.articles[0].declarations[0]
     fake = Readback(
         article_id=_ARTICLE_ID,
@@ -425,7 +462,8 @@ def test_approval_rejects_a_hand_constructed_card_with_invented_hashes(tmp_path:
 
 
 def test_packet_writer_revalidates_hand_constructed_bundle(tmp_path: Path) -> None:
-    bundle = build_review_bundle(load_graph(_blueprint(tmp_path)), _report())
+    graph = load_graph(_blueprint(tmp_path))
+    bundle = build_review_bundle(graph, _extracted(graph))
     article = bundle.articles[0]
     declaration = replace(article.declarations[0], packet_hash="sha256:../../outside")
     malformed = replace(bundle, articles=(replace(article, declarations=(declaration,)),))
@@ -436,7 +474,8 @@ def test_packet_writer_revalidates_hand_constructed_bundle(tmp_path: Path) -> No
 
 
 def test_packet_writers_do_not_overwrite_each_others_output(tmp_path: Path) -> None:
-    bundle = build_review_bundle(load_graph(_blueprint(tmp_path)), _report())
+    graph = load_graph(_blueprint(tmp_path))
+    bundle = build_review_bundle(graph, _extracted(graph))
     review_packets = tmp_path / "review-packets"
     write_review_packets(bundle, review_packets)
 
@@ -451,7 +490,8 @@ def test_packet_writers_do_not_overwrite_each_others_output(tmp_path: Path) -> N
 
 def test_audit_refuses_to_trust_approval_without_bundle_and_fresh_skeleton(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path, approved="sha256:" + "a" * 64)
-    bundle = build_review_bundle(load_graph(blueprint), _report())
+    graph = load_graph(blueprint)
+    bundle = build_review_bundle(graph, _extracted(graph))
 
     assert [item.code for item in audit_blueprint(blueprint).findings] == ["review-bundle-missing"]
     assert [item.code for item in audit_blueprint(blueprint, review_bundle=bundle).findings] == [
@@ -462,7 +502,7 @@ def test_audit_refuses_to_trust_approval_without_bundle_and_fresh_skeleton(tmp_p
 def test_article_move_preserves_bundle_card_and_approval(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     original_graph = load_graph(blueprint)
-    original_report = _report()
+    original_report = _extracted(original_graph)
     bundle = build_review_bundle(original_graph, original_report)
     declaration = original_report.nodes[0].declarations[0]
     write_readback(
@@ -491,9 +531,12 @@ def test_article_move_preserves_bundle_card_and_approval(tmp_path: Path) -> None
         encoding="utf-8",
     )
     current_graph = load_graph(blueprint)
-    current_report = _report(
-        node_id="moved/result",
-        article_path="roadmap/moved/result.md",
+    current_report = _extracted(
+        current_graph,
+        _report(
+            node_id="moved/result",
+            article_path="roadmap/moved/result.md",
+        ),
     )
 
     assert validate_review_bundle(current_graph, bundle, current_report) == ()
@@ -537,7 +580,7 @@ def test_scoped_validation_ignores_unrelated_drift_but_rejects_target_drift(
         unresolved=(),
     )
     graph = load_graph(blueprint)
-    bundle = build_review_bundle(graph, full_report)
+    bundle = build_review_bundle(graph, _extracted(graph, full_report))
     scoped = replace(
         full_report,
         selection="filtered",
@@ -549,7 +592,10 @@ def test_scoped_validation_ignores_unrelated_drift_but_rejects_target_drift(
         other_path.read_text(encoding="utf-8").replace("An unrelated claim.", "Changed elsewhere."),
         encoding="utf-8",
     )
-    assert validate_review_article(load_graph(blueprint), bundle, scoped, _ARTICLE_ID) == ()
+    # A record extracts the article it files, and the report still names the
+    # whole blueprint as it is then, other article included.
+    graph = load_graph(blueprint)
+    assert validate_review_article(graph, bundle, _extracted(graph, scoped), _ARTICLE_ID) == ()
 
     target_path = blueprint / "roadmap" / "basics" / "result.md"
     target_path.write_text(
@@ -559,7 +605,8 @@ def test_scoped_validation_ignores_unrelated_drift_but_rejects_target_drift(
         ),
         encoding="utf-8",
     )
+    graph = load_graph(blueprint)
     assert [
         finding.code
-        for finding in validate_review_article(load_graph(blueprint), bundle, scoped, _ARTICLE_ID)
+        for finding in validate_review_article(graph, bundle, _extracted(graph, scoped), _ARTICLE_ID)
     ] == ["review-bundle-drift"]

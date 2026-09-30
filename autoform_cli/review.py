@@ -30,6 +30,7 @@ from .skeleton import (
     SKELETON_SCHEMA,
     DeclarationSkeleton,
     SkeletonReport,
+    blueprint_hash,
     replace_managed_outputs,
     source_passage,
     stage_managed_output,
@@ -258,9 +259,15 @@ def canonical_statement(node: Node) -> str:
 
 
 def build_review_bundle(graph: Graph, skeleton: SkeletonReport) -> ReviewBundle:
-    """Build prepared evidence after proving the report is clean and complete."""
+    """Build prepared evidence after proving the report is clean and complete.
 
-    findings = _report_findings(graph, skeleton)
+    The report must have been extracted from exactly this blueprint: its
+    ``blueprint_hash`` must name ``graph``. A report paired with articles it
+    never saw is incoherent evidence, and is refused before anything in it is
+    compared with them.
+    """
+
+    findings = _snapshot_findings(graph, skeleton) or _report_findings(graph, skeleton)
     if findings:
         raise ReviewError(findings)
 
@@ -360,11 +367,15 @@ def validate_review_article(
     """Validate one article against a deliberately scoped fresh extraction.
 
     Recording one asynchronously produced read-back must not be blocked because
-    another article changed meanwhile. The scoped report must contain exactly
-    the selected article, so omitted evidence cannot accidentally pass as a
-    successful check.
+    another article changed since the bundle was prepared. The scoped report
+    must contain exactly the selected article, so omitted evidence cannot
+    accidentally pass as a successful check. It still hashes the whole
+    blueprint it was extracted from, and that must be ``graph``.
     """
 
+    snapshot = _snapshot_findings(graph, current_skeleton)
+    if snapshot:
+        return tuple(snapshot)
     nodes = [node for node in graph.nodes.values() if node.article_id == article_id]
     if len(nodes) != 1:
         return (
@@ -693,6 +704,24 @@ def write_review_packets(bundle: ReviewBundle, directory: str | Path) -> list[Pa
         shutil.rmtree(stage, ignore_errors=True)
         raise
     return [root / relative for relative in sorted(packet_bytes)]
+
+
+def _snapshot_findings(graph: Graph, skeleton: SkeletonReport) -> list[ReviewFinding]:
+    """Refuse a report extracted from a blueprint other than ``graph``.
+
+    Every other comparison between the two would mix states that never
+    coexisted, so this finding stands alone.
+    """
+
+    if skeleton.blueprint_hash == blueprint_hash(graph):
+        return []
+    return [
+        ReviewFinding(
+            "",
+            "review-snapshot-changed",
+            "the blueprint changed after its review evidence was extracted; rerun once the blueprint is idle",
+        )
+    ]
 
 
 def _report_findings(graph: Graph, skeleton: SkeletonReport) -> list[ReviewFinding]:

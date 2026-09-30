@@ -531,8 +531,9 @@ card it supersedes, which it may replace only by naming that card's hash, and
 the batch lists every card that needs one, with the hash, before extracting. The
 extraction selects the batch's articles, and each article is
 validated against its own part of it, as a single record would be. The
-blueprint is then reloaded: if any selected article changed while Lean ran,
-nothing is filed. Every card is built and checked before the first is written,
+blueprint is then reloaded, and nothing is filed if a selected article changed
+while Lean ran or the reloaded blueprint is not the one the extraction saw.
+Every card is built and checked before the first is written,
 so one bad record stops the batch. Publishing then goes card by card, each
 under its own compare-and-swap; only a concurrent writer can stop it midway,
 the command says how many cards it filed, and because filing identical content
@@ -545,8 +546,13 @@ approvals, and judges them as one state of the blueprint: it reads the articles
 and cards before Lean runs, the extraction must have seen those same articles,
 and the cards must be unchanged when it ends. An edit to either while the check
 runs fails it rather than mixing old and new evidence; run it again once the
-blueprint is idle. `render --review` and `--review-bundle` make the same check
-and show the cards it validated. The rendered review disclosure uses the same packet bytes that were
+blueprint is idle. `audit --review-bundle`, `render --review`, and
+`render --review-bundle` make the same check, then judge or show the cards it
+validated rather than reading them again. They load the articles again to audit
+or render them, and an edit to any article since the check fails them with
+`review-snapshot-changed` too: every skeleton report records a hash of the
+blueprint it was extracted from, and review evidence is never built from a
+report and articles that hash differently. The rendered review disclosure uses the same packet bytes that were
 hashed, never a reconstructed or comment-bearing approximation. Read-back
 cards are absorbed into their article and are not published as standalone
 pages. Without `--bundle`, `review check` derives the bundle from its own

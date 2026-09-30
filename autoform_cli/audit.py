@@ -12,6 +12,7 @@ import statistics
 from bisect import bisect_right
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Mapping
 
 from . import status
 from .coverage import CoverageSummary, load_coverage
@@ -22,6 +23,7 @@ from .markdown import frontmatter_end as _frontmatter_end
 from .markdown import HEADING as _HEADING
 from .markdown import local_target_issue as _local_target_issue
 from .markdown import markdown_links as _markdown_links
+from .readback import Readback
 from .review import ReviewBundle, review_findings
 from .skeleton import SkeletonReport
 
@@ -96,11 +98,16 @@ def audit_blueprint(
     lean_root: str | Path | None = None,
     skeleton: SkeletonReport | None = None,
     review_bundle: ReviewBundle | None = None,
+    readbacks: Mapping[tuple[str, str], Readback] | None = None,
 ) -> AuditResult:
     """Audit *blueprint_dir* using only local, committed-style source files.
 
     Graph syntax errors are returned as structured findings rather than raised.
     Semantic checks run only after :func:`load_graph` has produced a valid graph.
+
+    ``readbacks`` are the cards a caller validated ``review_bundle`` with. When
+    given, review approvals are judged against them instead of the vault read
+    again, so the audit describes the state that was checked.
     """
 
     blueprint = Path(blueprint_dir).expanduser().resolve()
@@ -127,6 +134,7 @@ def audit_blueprint(
         coverage_findings=coverage_findings,
         skeleton=skeleton,
         review_bundle=review_bundle,
+        readbacks=readbacks,
     )
 
 
@@ -138,6 +146,7 @@ def audit_graph(
     coverage_findings: list[AuditFinding] | None = None,
     skeleton: SkeletonReport | None = None,
     review_bundle: ReviewBundle | None = None,
+    readbacks: Mapping[tuple[str, str], Readback] | None = None,
 ) -> AuditResult:
     """Audit an already loaded graph without modifying it or its source files."""
 
@@ -237,7 +246,7 @@ def audit_graph(
     findings.extend(coverage_findings)
     if lean_root is not None:
         findings.extend(_lean_findings(graph, lean_root))
-    findings.extend(_review_findings(graph, review_bundle, skeleton))
+    findings.extend(_review_findings(graph, review_bundle, skeleton, readbacks))
     return _result(findings, coverage=coverage)
 
 
@@ -245,6 +254,7 @@ def _review_findings(
     graph: Graph,
     bundle: ReviewBundle | None,
     current_skeleton: SkeletonReport | None,
+    readbacks: Mapping[tuple[str, str], Readback] | None = None,
 ) -> list[AuditFinding]:
     """Fail closed when recorded approval lacks fully current review evidence."""
 
@@ -279,7 +289,7 @@ def _review_findings(
             )
         return findings
     findings: list[AuditFinding] = []
-    for finding in review_findings(graph, bundle, current_skeleton):
+    for finding in review_findings(graph, bundle, current_skeleton, readbacks=readbacks):
         node = graph.nodes.get(finding.node_id)
         article_path = _relative_path(node.path, graph.blueprint_dir) if node else finding.node_id
         findings.append(AuditFinding(article_path, finding.code, finding.reason))

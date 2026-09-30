@@ -8,9 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.__main__ import main
+from autoform_cli.__main__ import _current_review, main
 from autoform_cli.graph import Graph, load_graph
 from autoform_cli.readback import load_readbacks
+from autoform_cli.render import PublicationError, render_site
 from autoform_cli.review import REVIEW_PACKET_SCHEMA, load_review_bundle
 from autoform_cli.skeleton import (
     DeclarationSkeleton,
@@ -331,7 +332,9 @@ def test_review_record_rejects_packet_bytes_that_differ_from_bundle(
 ) -> None:
     blueprint = _blueprint(tmp_path)
     skeleton = _skeleton()
-    monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", lambda *args, **kwargs: skeleton)
+    monkeypatch.setattr(
+        "autoform_cli.__main__.extract_skeletons", lambda *args, **kwargs: _as_extracted(skeleton, args[0])
+    )
     bundle_path = tmp_path / "review.json"
     packets = tmp_path / "packets"
     assert main(
@@ -383,7 +386,9 @@ def test_review_prepare_reports_output_filesystem_errors(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     blueprint = _blueprint(tmp_path)
-    monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", lambda *args, **kwargs: _skeleton())
+    monkeypatch.setattr(
+        "autoform_cli.__main__.extract_skeletons", lambda *args, **kwargs: _as_extracted(_skeleton(), args[0])
+    )
     output = tmp_path / "review.json"
     output.mkdir()
 
@@ -632,6 +637,29 @@ def test_any_blueprint_edit_during_a_record_extraction_files_nothing(
 
     assert _record(blueprint, bundle, alone, project) == 0
     assert set(load_readbacks(blueprint)) == {(_RESULT_ID, "Review.result")}
+
+
+def test_a_record_files_nothing_if_any_article_changes_after_its_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A record scoped to some articles still pairs its extraction with the whole
+    blueprint, so a page it does not select, edited before the reload, stops it."""
+
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    chapter = blueprint / "roadmap" / "basics" / "README.md"
+
+    def extract_then_edit_the_chapter(*args: object, **kwargs: object) -> SkeletonReport:
+        report = extraction(*args, **kwargs)
+        chapter.write_text(chapter.read_text(encoding="utf-8") + "\nAn unrelated edit.\n", encoding="utf-8")
+        return report
+
+    monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", extract_then_edit_the_chapter)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+    assert load_readbacks(blueprint) == {}
+    assert "the blueprint changed after its review evidence was extracted" in capsys.readouterr().err
 
 
 def _file_alone(blueprint: Path, bundle: Path, manifest: Path, root: Path, record: dict[str, str], text: str) -> None:
@@ -949,3 +977,92 @@ def test_render_review_shows_the_readbacks_its_check_validated(
     pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
     assert "The statement Review.result asserts True." in pages
     assert "bp-review-approved" in pages
+
+
+def test_render_refuses_articles_edited_after_the_review_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """render_site loads the articles itself, after the check: they must be the ones
+    the checked extraction saw, or the cards it was handed describe another state."""
+
+    blueprint = _approved_batch(tmp_path, monkeypatch, _Extraction())
+    _, skeleton, bundle, cards = _current_review(blueprint, lean_root=tmp_path, bundle_path=None)
+    article = blueprint / "roadmap" / "basics" / "result.md"
+    text = article.read_text(encoding="utf-8")
+    article.write_text(re.sub(r"review_approved: \S+", "review_approved: sha256:" + "f" * 64, text), encoding="utf-8")
+    site = tmp_path / "site"
+
+    with pytest.raises(PublicationError, match="the blueprint changed after its review evidence was extracted"):
+        render_site(blueprint, site, lean_root=tmp_path, skeleton=skeleton, review_bundle=bundle, readbacks=cards)
+    assert not site.exists()
+
+
+def _audit(blueprint: Path, root: Path) -> int:
+    """Audit against the bundle `_prepared_batch` wrote, over Lean sources that
+    declare both targets, so that only review evidence can fail it."""
+
+    (root / "Review.lean").write_text(
+        "namespace Review\n\ntheorem result : True := trivial\n\ntheorem other : True := trivial\n\nend Review\n",
+        encoding="utf-8",
+    )
+    return main(["audit", str(blueprint), "--lean-root", str(root), "--review-bundle", str(root / "review.json")])
+
+
+def _after_the_check(monkeypatch: pytest.MonkeyPatch, change: Callable[[], None]) -> None:
+    """Run ``change`` once the review check has returned its snapshot."""
+
+    def check_then_change(*args: object, **kwargs: object) -> object:
+        checked = _current_review(*args, **kwargs)
+        change()
+        return checked
+
+    monkeypatch.setattr("autoform_cli.__main__._current_review", check_then_change)
+
+
+def test_audit_judges_the_readbacks_its_check_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A card edited after the check took its snapshot is not what audit judges:
+    it judges the cards the check validated, and does not read the vault again."""
+
+    blueprint = _approved_batch(tmp_path, monkeypatch, _Extraction())
+    card = load_readbacks(blueprint)[(_RESULT_ID, "Review.result")].path
+    _after_the_check(monkeypatch, lambda: _edit_card(card))
+    reads: list[object] = []
+
+    def read_again(*args: object, **kwargs: object) -> object:
+        reads.append(args)
+        return load_readbacks(*args, **kwargs)
+
+    monkeypatch.setattr("autoform_cli.review.load_readbacks", read_again)
+    capsys.readouterr()
+
+    assert _audit(blueprint, tmp_path) == 0
+    assert "OK: roadmap audit passed" in capsys.readouterr().out
+    assert reads == []
+
+
+def test_audit_refuses_articles_edited_after_the_review_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A card and the approval that matches it, both changed after the check, would
+    agree with each other; audit loads the articles itself and must refuse them,
+    since the check validated neither."""
+
+    blueprint = _approved_batch(tmp_path, monkeypatch, _Extraction())
+    card = load_readbacks(blueprint)[(_RESULT_ID, "Review.result")].path
+    article = blueprint / "roadmap" / "basics" / "result.md"
+
+    def edit_the_card_and_approve_it() -> None:
+        _edit_card(card)
+        approval = load_review_bundle(tmp_path / "review.json").review_hash(_RESULT_ID, load_readbacks(blueprint))
+        text = article.read_text(encoding="utf-8")
+        article.write_text(re.sub(r"review_approved: \S+", f"review_approved: {approval}", text), encoding="utf-8")
+
+    _after_the_check(monkeypatch, edit_the_card_and_approve_it)
+    capsys.readouterr()
+
+    assert _audit(blueprint, tmp_path) == 1
+    out = capsys.readouterr().out
+    assert "review-snapshot-changed: the blueprint changed after its review evidence was extracted" in out
+    assert "OK:" not in out

@@ -251,7 +251,9 @@ def render_site(
 
     ``readbacks`` are the cards a caller validated ``review_bundle`` with. When
     given, they are shown instead of reading the vault again, so the review
-    disclosures describe the state that was checked.
+    disclosures describe the state that was checked. The articles are loaded
+    here, after that check, and the review is refused unless they are the
+    blueprint ``skeleton`` was extracted from.
     """
     blueprint = Path(blueprint_dir).expanduser().resolve()
     requested_destination = Path(output_dir).expanduser()
