@@ -255,6 +255,7 @@ def test_writer_rejects_testimony_that_hides_what_it_says(testimony: str, reason
     "testimony",
     [
         r"For every $x \in [0, 1]$ and the set $\{x\}$, the claim holds.",
+        r"$\alpha \ne \beta$",
         r"Integrate with a thin negative space, $\int\! f$, once.",
         r"At least $50\%$ of cases, or 50\% in prose.",
         "Code such as `a % b` is shown as written.",
@@ -325,6 +326,26 @@ def test_writer_refuses_tex_that_shows_nothing_or_overlaps(testimony: str, reaso
         _file(tmp_path, testimony)
 
     assert reason in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        r"$\quad$",
+        r"$\text{ }$",
+        r"$\,$",
+        "$$ $$",
+        "```\n\n```",
+        r"$\mathrm{}$",
+        r"$\begin{cases}\end{cases}$",
+        "( . , ; )",
+    ],
+)
+def test_writer_refuses_testimony_without_a_letter_or_digit(testimony: str, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unsafe read-back testimony") as refused:
+        _file(tmp_path, testimony)
+
+    assert "renders no visible text: it must show at least one letter or digit" in str(refused.value)
 
 
 @pytest.mark.parametrize(

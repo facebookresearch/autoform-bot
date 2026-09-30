@@ -402,7 +402,7 @@ roots, accents, fonts, `\text`, thin to double-quad spaces, and the `cases`,
 `\phantom`, `\rlap`, `\kern`, `\color`, `\tag`, or a macro definition, is
 refused by name, as are listed commands given arguments that show nothing
 (`\mathrm{}`), two negative spaces or more than four spaces in a row, and row
-spacing after `\\`. Testimony that renders no visible text is rejected too.
+spacing after `\\`. Testimony must also show at least one letter or digit.
 Before any card is parsed its
 testimony must fit limits several times what real read-backs use: 32 KiB, 500
 lines, 1,024 math delimiters, 512 backticks in runs of at most 16, 256 opening

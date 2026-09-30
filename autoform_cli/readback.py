@@ -888,6 +888,8 @@ _TEX_STAR = re.compile(r"\s*\*")
 #: ``\\[<dimension>]`` spaces rows apart, or with a negative dimension draws
 #: one over another.
 _TEX_ROW_SPACING = re.compile(r"\*?\[")
+_TEX_ENVIRONMENT_NAME = re.compile(r"\\(?:begin|end)\s*\{[^{}]*\}")
+_TEX_CONTROL_SEQUENCE = re.compile(r"\\(?:[A-Za-z]+|.)", re.DOTALL)
 
 
 def _testimony_errors(text: str) -> tuple[str, ...]:
@@ -907,7 +909,7 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     HTML entities; in text the typesetter reads, only the TeX listed in
     :data:`_TESTIMONY_TEX`, with arguments that show something and spacing
     that neither overlaps symbols nor pushes them apart; and at least one
-    visible character.
+    visible letter or digit.
     """
 
     if limits := _testimony_limit_errors(text):
@@ -950,9 +952,8 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     errors.extend(_tex_errors(typeset))
     if _TEX_COMMENT.search(typeset):
         errors.append("TeX comments are not allowed: they drop the rest of their line; write \\% for a percent sign")
-    # Math delimiters are text until MathJax runs, and an empty formula shows nothing.
-    if not _MATH_DELIMITER.sub("", "".join(document.itertext())).strip():
-        errors.append("testimony renders no visible text")
+    if not _shows_letter_or_digit("".join(document.itertext())):
+        errors.append("testimony renders no visible text: it must show at least one letter or digit")
     return tuple(dict.fromkeys(errors))
 
 
@@ -1061,6 +1062,16 @@ def _tex_errors(typeset: str) -> list[str]:
             "write {} before a bracket that starts a row"
         )
     return errors
+
+
+def _shows_letter_or_digit(text: str) -> bool:
+    """Whether ``text`` shows a letter or digit. TeX commands and environment
+    names are not shown as written, so they are set aside, except commands
+    that set a letter; spaces, delimiters, and punctuation alone say nothing."""
+
+    text = _TEX_ENVIRONMENT_NAME.sub(" ", text)
+    text = _TEX_CONTROL_SEQUENCE.sub(lambda command: "a" if command.group() in _TEX_LETTERS else " ", text)
+    return any(character.isalnum() for character in text)
 
 
 def _testimony_limit_errors(text: str) -> tuple[str, ...]:
