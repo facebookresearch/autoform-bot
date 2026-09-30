@@ -473,6 +473,31 @@ def test_packet_writer_revalidates_hand_constructed_bundle(tmp_path: Path) -> No
     assert not (tmp_path / "outside.lean").exists()
 
 
+@pytest.mark.parametrize("step", ["packet", "publish"])
+def test_packet_writer_removes_its_stage_when_interrupted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step: str
+) -> None:
+    graph = load_graph(_blueprint(tmp_path))
+    bundle = build_review_bundle(graph, _extracted(graph))
+    write_bytes = Path.write_bytes
+
+    def interrupted(*args: object) -> None:
+        if step == "packet":
+            write_bytes(*args)
+        raise KeyboardInterrupt
+
+    if step == "packet":
+        monkeypatch.setattr(Path, "write_bytes", interrupted)
+    else:
+        monkeypatch.setattr("autoform_cli.review.replace_managed_outputs", interrupted)
+
+    with pytest.raises(KeyboardInterrupt):
+        write_review_packets(bundle, tmp_path / "packets")
+
+    assert list(tmp_path.glob(".packets.autoform-stage-*")) == []
+    assert not (tmp_path / "packets").exists()
+
+
 def test_packet_writers_do_not_overwrite_each_others_output(tmp_path: Path) -> None:
     graph = load_graph(_blueprint(tmp_path))
     bundle = build_review_bundle(graph, _extracted(graph))

@@ -132,6 +132,18 @@ def test_managed_packet_output_is_not_indexed_as_project_source(
     assert index.find("target").path == Path("Actual.lean")
 
 
+def test_unfinished_packet_stage_is_not_indexed_as_project_source(tmp_path: Path) -> None:
+    # A killed writer leaves its stage without a manifest. It sorts before the
+    # project's sources and would shadow the real declaration.
+    packet = tmp_path / ".review-packets.autoform-stage-0123456789abcdef" / "blind" / "0123.lean"
+    packet.parent.mkdir(parents=True)
+    packet.write_text("def target : Nat := 2\n", encoding="utf-8")
+
+    index = _index(tmp_path, "def target : Nat := 1\n", name="Actual.lean")
+
+    assert index.find("target").path == Path("Actual.lean")
+
+
 def test_anonymous_instances_are_not_mistaken_for_names(tmp_path: Path) -> None:
     index = _index(tmp_path, "instance : Inhabited Nat := ⟨0⟩\n")
 

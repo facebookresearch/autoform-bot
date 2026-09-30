@@ -717,7 +717,9 @@ def write_review_packets(bundle: ReviewBundle, directory: str | Path) -> list[Pa
             encoding="utf-8",
         )
         replace_managed_outputs([(root, stage, identity)])
-    except Exception:
+    except BaseException:
+        # Ctrl-C too: a stage left behind has no manifest to mark it as
+        # Autoform output rather than project source.
         shutil.rmtree(stage, ignore_errors=True)
         raise
     return [root / relative for relative in sorted(packet_bytes)]

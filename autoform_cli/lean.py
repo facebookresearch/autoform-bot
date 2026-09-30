@@ -29,6 +29,9 @@ _DECLARATION = re.compile(
     r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom)\s+(.+)$"
 )
 _IGNORED_DIRECTORIES = frozenset({".lake", ".git", "lake-packages", "build"})
+#: A packet tree still being staged beside its destination, which has no
+#: manifest until it is complete, or ever if its writer was killed.
+_OUTPUT_STAGE = re.compile(r"\A\..+\.autoform-stage-[0-9a-f]{16}\Z")
 #: Schemas of the skeleton command's packet and passage manifests.
 PACKET_SCHEMA = "autoform-skeleton-packets/v2"
 PASSAGE_SCHEMA = "autoform-skeleton-passages/v2"
@@ -83,6 +86,7 @@ def index_project(root: str | Path) -> SourceIndex:
             name
             for name in names
             if name not in _IGNORED_DIRECTORIES
+            and not _OUTPUT_STAGE.match(name)
             and not _is_managed_output(current / name)
         )
         paths.extend(current / name for name in files if name.endswith(".lean"))
