@@ -2500,6 +2500,8 @@ def extract_skeletons(
     ``runner`` executes the rendered probe and returns Lean's standard output.
     A declaration the lexical index cannot place is reported as unresolved
     without running Lean, exactly as ``autoform check --lean-root`` reports it.
+    ``node_ids`` narrows the report to those articles; each of their
+    declarations has the same evidence as in a full extraction.
     """
 
     try:
@@ -2609,17 +2611,31 @@ def extract_graph_skeletons(
         if passage_issues:
             broken_passages[node.id] = "; ".join(passage_issues)
 
+    # The probe imports the module of every target the blueprint names, not
+    # only the selected ones. Lean prints signatures, and parses sources, with
+    # the notation and tokens its imports bring into scope, so a declaration's
+    # packet must not depend on which other articles were extracted with it.
+    located: dict[str, tuple[Path | None, str | None]] = {}
+    for _, names in targets:
+        for name in names:
+            if name not in located:
+                location = index.find(name)
+                located[name] = (
+                    (None, None)
+                    if location is None
+                    else (location.path, module_of(lean_root / location.path, libraries))
+                )
+    imports = {module for _, module in located.values() if module is not None}
+
     unresolved: list[UnresolvedTarget] = []
-    imports: set[str] = set()
     roots: list[str] = []
     for node, names in selected:
         for name in names:
             if node.id in broken_passages:
                 unresolved.append(UnresolvedTarget(node.id, name, broken_passages[node.id]))
                 continue
-            location = index.find(name)
-            module = None if location is None else module_of(lean_root / location.path, libraries)
-            if location is None:
+            path, module = located[name]
+            if path is None:
                 unresolved.append(
                     UnresolvedTarget(node.id, name, "declaration not found in the Lean sources")
                 )
@@ -2629,11 +2645,10 @@ def extract_graph_skeletons(
                     UnresolvedTarget(
                         node.id,
                         name,
-                        f"source {location.path.as_posix()} is not built by any library target",
+                        f"source {path.as_posix()} is not built by any library target",
                     )
                 )
                 continue
-            imports.add(module)
             if name not in roots:
                 roots.append(name)
 

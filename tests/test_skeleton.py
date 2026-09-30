@@ -41,6 +41,7 @@ from autoform_cli.skeleton import (
     _hash_module_files,
     _local_safety_issue,
     _without_comments,
+    _probe_modules,
     _probe_record_issue,
     extract_skeletons,
     format_report,
@@ -1506,6 +1507,42 @@ def test_report_distinguishes_full_and_filtered_blueprint_scope(tmp_path: Path) 
     assert full.to_json() != filtered.to_json()
 
 
+def test_node_selection_does_not_change_what_the_probe_imports(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(
+        tmp_path,
+        lean={
+            "determined": "Skel.observation_determined",
+            "notation": "Skel.heavy_of_notation",
+            "scoped": "Skel.ScopedA.activatesScope",
+        },
+    )
+    # An article whose passage cannot be read still names a module.
+    article = blueprint / "roadmap" / "basics" / "scoped.md"
+    article.write_text(
+        article.read_text(encoding="utf-8").replace(
+            "## Depends on", "## Sources\n\n- [book](sources/missing.txt#L1-L1)\n\n## Depends on"
+        ),
+        encoding="utf-8",
+    )
+    probes: list[str] = []
+
+    def runner(probe: str, lean_root: Path) -> str:
+        probes.append(probe)
+        record = _fake_found_record()
+        # As in Lean, a signature prints with the notation its imports bring in.
+        if "import Skel.Uses" in probe:
+            record["signature"] = "Skel.observation_determined : printed with notation from Skel.Uses"
+        return _probe_lines(record)
+
+    full = extract_skeletons(blueprint, lean_root=project, runner=runner)
+    scoped = extract_skeletons(blueprint, lean_root=project, runner=runner, node_ids=("basics/determined",))
+
+    assert _probe_modules(probes[0]) == _probe_modules(probes[1]) == ("Skel.Main", "Skel.ScopedA", "Skel.Uses")
+    assert "Skel.heavy_of_notation" in probes[0] and "Skel.heavy_of_notation" not in probes[1]
+    assert scoped.node("basics/determined") == full.node("basics/determined")
+
+
 def test_report_is_identical_across_checkout_roots(tmp_path: Path) -> None:
     reports = []
     for name in ("first", "second"):
@@ -2323,6 +2360,41 @@ def test_project_notation_cannot_disguise_the_statement(tmp_path: Path) -> None:
     assert "a + b" in (trusted.source or "")
     assert '"HMul"' in trusted.semantic and '"hMul"' in trusted.semantic
     assert f"-- canonical kernel material: {trusted.semantic}" in uses_disguised.blind_text()
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_node_selection_does_not_change_a_declarations_evidence(tmp_path: Path) -> None:
+    # Only the other article's module declares the notation, but a full
+    # extraction imports it and Lean prints the signature with it. The packet
+    # `review record` extracts for one article must be the one `prepare` wrote.
+    project = _project(tmp_path)
+    (project / "Skel" / "PktWrap.lean").write_text(
+        "namespace Skel.PktWrap\n"
+        "def wrap (n : Nat) : Nat := n\n"
+        "theorem wrap_two : wrap 2 = 2 := rfl\n"
+        "end Skel.PktWrap\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "PktWrapNotation.lean").write_text(
+        "import Skel.PktWrap\n"
+        "namespace Skel.PktWrap\n"
+        'notation "⟪" x "⟫" => wrap x\n'
+        "theorem wrap_three : wrap 3 = 3 := rfl\n"
+        "end Skel.PktWrap\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.PktWrap", "Skel.PktWrapNotation")
+    blueprint = _blueprint(
+        tmp_path, lean={"two": "Skel.PktWrap.wrap_two", "three": "Skel.PktWrap.wrap_three"}
+    )
+
+    full = extract_skeletons(blueprint, lean_root=project)
+    scoped = extract_skeletons(blueprint, lean_root=project, node_ids=("basics/two",))
+
+    assert full.clean and scoped.clean
+    (declaration,) = full.declarations("basics/two")
+    assert declaration.signature == "Skel.PktWrap.wrap_two : ⟪2⟫ = 2"
+    assert scoped.node("basics/two") == full.node("basics/two")
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
