@@ -16,7 +16,7 @@ from typing import Mapping
 
 from . import status
 from .coverage import CoverageSummary, load_coverage
-from .graph import Graph, GraphValidationError, Node, load_graph
+from .graph import ArticleChangedError, Graph, GraphValidationError, Node, load_graph, read_node_source
 from .lean import SourceIndex, declaration_names, index_project
 from .markdown import content_lines as _content_lines
 from .markdown import frontmatter_end as _frontmatter_end
@@ -157,7 +157,19 @@ def audit_graph(
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
         children = graph.children(node_id)
-        article = _read_article(node.path)
+        try:
+            article = _read_article(node)
+        except ArticleChangedError:
+            # Judging this text beside metadata parsed from other bytes would
+            # audit a state the file never held.
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "article-changed",
+                    "article changed after the blueprint was loaded for audit; rerun once the blueprint is idle",
+                )
+            )
+            continue
 
         if node.formalizable:
             if children:
@@ -302,9 +314,9 @@ class _ArticleShape:
     has_depends_section: bool
 
 
-def _read_article(path: Path) -> _ArticleShape:
+def _read_article(node: Node) -> _ArticleShape:
     try:
-        text = path.read_text(encoding="utf-8")
+        text = read_node_source(node)
     except (OSError, UnicodeError):
         return _ArticleShape(False, False)
 

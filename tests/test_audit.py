@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from autoform_cli.audit import audit_blueprint
+from autoform_cli.graph import load_graph
 
 
 def _ensure_chapter(blueprint: Path, relative: str) -> None:
@@ -522,3 +523,35 @@ def test_an_explicit_attr_list_anchor_resolves(tmp_path: Path) -> None:
     codes = {finding.code for finding in audit_blueprint(blueprint).findings}
 
     assert "source-anchor-not-found" not in codes
+
+
+def test_audit_reads_article_text_only_as_its_graph_parsed_it(tmp_path: Path, monkeypatch) -> None:
+    """An article rewritten after the graph was loaded is not audited as a blend.
+
+    Before the write the article has no '## Depends on' section; the write adds
+    one but marks the proof formalized without the statement. Each state has a
+    finding, but the old metadata beside the new text has none, so auditing that
+    blend would report a clean roadmap that no file ever held.
+    """
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "result.md", depends=False, declaration="theorem")
+    assert _finding_map(blueprint) == {
+        "roadmap/result.md": [
+            ("missing-depends-section", "formalizable article has no explicit '## Depends on' section")
+        ]
+    }
+
+    def load_then_rewrite(*args, **kwargs):
+        graph = load_graph(*args, **kwargs)
+        _article(blueprint, "result.md", declaration="theorem", proof="formalized")
+        return graph
+
+    monkeypatch.setattr("autoform_cli.audit.load_graph", load_then_rewrite)
+    findings = _finding_map(blueprint)
+    monkeypatch.undo()
+
+    assert {path: [code for code, _reason in items] for path, items in findings.items()} == {
+        "roadmap/result.md": ["article-changed"]
+    }
+    assert {code for code, _reason in _finding_map(blueprint)["roadmap/result.md"]} == {"proof-without-statement"}

@@ -542,17 +542,26 @@ is a no-op, running the same batch again completes it.
 `review check`, `audit`, and `render` re-extract the
 current Lean evidence and reject unresolved, partial, foreign, or stale
 bundles. `review check` also requires complete current cards and matching human
-approvals, and judges them as one state of the blueprint: it reads the articles
-and cards before Lean runs, the extraction must have seen those same articles,
-and the cards must be unchanged when it ends. An edit to either while the check
-runs fails it rather than mixing old and new evidence; run it again once the
-blueprint is idle. `audit --review-bundle`, `render --review`, and
+approvals, and judges them as one state of the blueprint: it loads the
+articles and cards before Lean runs, the extraction must have seen those same
+articles, and the cards must be unchanged when it ends. Article text read
+after that load, such as a statement compared with its prepared evidence, must
+be the bytes the load parsed, and the verdict judges only that state, its
+extraction, and those cards. An edit that breaks any of these comparisons fails the
+check with `review-snapshot-changed` rather than mixing old and new evidence;
+run it again once the blueprint is idle. These are comparisons, not a lock: an
+article or card that changes and is restored between two of them goes unseen,
+and the restored state is what gets judged; an edit after the last comparison
+does not affect a verdict already reached. `audit --review-bundle`, `render --review`, and
 `render --review-bundle` make the same check, then judge or show the cards it
 validated rather than reading them again. They load the articles again to audit
 or render them, and an edit to any article since the check fails them with
 `review-snapshot-changed` too: every skeleton report records a hash of the
 blueprint it was extracted from, and review evidence is never built from a
-report and articles that hash differently. The rendered review disclosure uses the same packet bytes that were
+report and articles that hash differently. The article text they then audit or
+render must be the bytes that second load parsed, as it must for a plain
+`audit` or `render`; otherwise the audit reports `article-changed` and the
+render stops. The rendered review disclosure uses the same packet bytes that were
 hashed, never a reconstructed or comment-bearing approximation. Read-back
 cards are absorbed into their article and are not published as standalone
 pages. Without `--bundle`, `review check` derives the bundle from its own

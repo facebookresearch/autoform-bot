@@ -12,7 +12,7 @@ from autoform_cli.__main__ import _current_review, main
 from autoform_cli.graph import Graph, load_graph
 from autoform_cli.readback import load_readbacks
 from autoform_cli.render import PublicationError, render_site
-from autoform_cli.review import REVIEW_PACKET_SCHEMA, load_review_bundle
+from autoform_cli.review import REVIEW_PACKET_SCHEMA, load_review_bundle, validate_review_bundle
 from autoform_cli.skeleton import (
     DeclarationSkeleton,
     NodeSkeleton,
@@ -961,6 +961,110 @@ def test_check_refuses_a_readback_changed_during_extraction(
     assert captured.out == ""
 
 
+def _once_the_cards_are_rechecked(monkeypatch: pytest.MonkeyPatch, change: Callable[[], None]) -> None:
+    """Run ``change`` once, right after a check reads the cards the second time.
+
+    That read is the check's last snapshot comparison: from there on it only
+    judges what it has already read.
+    """
+
+    reads: list[object] = []
+
+    def read_then_change(*args: object, **kwargs: object) -> object:
+        cards = load_readbacks(*args, **kwargs)
+        reads.append(args)
+        if len(reads) == 2:
+            change()
+        return cards
+
+    monkeypatch.setattr("autoform_cli.__main__.load_readbacks", read_then_change)
+
+
+def _write_statement(article: Path, statement: str) -> None:
+    text = article.read_text(encoding="utf-8")
+    article.write_text(re.sub(r"(# Result\n\n)[^\n]*", lambda match: match.group(1) + statement, text), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("prepared", "stale_exit", "stale_reason"),
+    [
+        (False, 1, "review-drift"),
+        (True, 2, "prepared review evidence differs from the current statement"),
+    ],
+    ids=["derived-bundle", "prepared-bundle"],
+)
+def test_check_judges_the_statement_its_snapshot_parsed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    prepared: bool,
+    stale_exit: int,
+    stale_reason: str,
+) -> None:
+    """The statement is judged as the snapshot parsed it, beside that snapshot's
+    approval. Here the tree fails the check before the edit and after it, but a
+    check reading the statement again would pair the restored statement with the
+    old approval, a state that was never on disk, and print OK."""
+
+    blueprint = _approved_batch(tmp_path, monkeypatch, _Extraction())
+    article = blueprint / "roadmap" / "basics" / "result.md"
+    _write_statement(article, "Every object is different from itself.")
+    check = ["review", "check", str(blueprint), "--lean-root", str(tmp_path)]
+    if prepared:
+        check += ["--bundle", str(tmp_path / "review.json")]
+    capsys.readouterr()
+    assert main(check) == stale_exit
+    captured = capsys.readouterr()
+    assert stale_reason in captured.out + captured.err
+
+    def restore_the_statement_and_approve_something_else() -> None:
+        _write_statement(article, "Every object is equal to itself.")
+        text = article.read_text(encoding="utf-8")
+        article.write_text(
+            re.sub(r"review_approved: \S+", "review_approved: sha256:" + "e" * 64, text), encoding="utf-8"
+        )
+
+    _once_the_cards_are_rechecked(monkeypatch, restore_the_statement_and_approve_something_else)
+    assert main(check) == 2
+    captured = capsys.readouterr()
+    assert "an article changed after its blueprint was loaded for review" in captured.err
+    assert "OK:" not in captured.out
+
+    # The tree the edit left holds an approval of nothing, which an idle check names.
+    assert main(check) == 1
+    assert "review-drift" in capsys.readouterr().out
+
+
+def _edit_chapter_page(blueprint: Path) -> None:
+    page = blueprint / "roadmap" / "basics" / "README.md"
+    page.write_text(page.read_text(encoding="utf-8") + "\nMore prose.\n", encoding="utf-8")
+
+
+def _edit_result_card(blueprint: Path) -> None:
+    _edit_card(load_readbacks(blueprint)[(_RESULT_ID, "Review.result")].path)
+
+
+@pytest.mark.parametrize("change", [_edit_chapter_page, _edit_result_card], ids=["page", "card"])
+def test_check_judges_the_graph_and_cards_it_compared(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    change: Callable[[Path], None],
+) -> None:
+    """Every comparison has passed, so the verdict is about the graph and cards
+    the check read first. An edit landing now, to a page no review reads or to a
+    card, changes nothing. A check that validated against the blueprint loaded
+    again would refuse the page edit, and one that judged the cards read again
+    would reject the card edit."""
+
+    blueprint = _approved_batch(tmp_path, monkeypatch, _Extraction())
+    _once_the_cards_are_rechecked(monkeypatch, lambda: change(blueprint))
+    capsys.readouterr()
+
+    assert _check(blueprint, tmp_path) == 0
+    assert "OK:" in capsys.readouterr().out
+
+
 def test_render_review_shows_the_readbacks_its_check_validated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -995,6 +1099,30 @@ def test_render_refuses_articles_edited_after_the_review_check(
     with pytest.raises(PublicationError, match="the blueprint changed after its review evidence was extracted"):
         render_site(blueprint, site, lean_root=tmp_path, skeleton=skeleton, review_bundle=bundle, readbacks=cards)
     assert not site.exists()
+
+
+def test_render_shows_the_statement_its_review_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A statement written after render validated the review must not appear in
+    that review's box as the approved statement; rendering stops instead."""
+
+    blueprint = _approved_batch(tmp_path, monkeypatch, _Extraction())
+    article = blueprint / "roadmap" / "basics" / "result.md"
+
+    def validate_then_rewrite(*args: object, **kwargs: object) -> object:
+        findings = validate_review_bundle(*args, **kwargs)
+        _write_statement(article, "Every object is different from itself.")
+        return findings
+
+    monkeypatch.setattr("autoform_cli.render.validate_review_bundle", validate_then_rewrite)
+    site = tmp_path / "site"
+    capsys.readouterr()
+
+    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 1
+    assert "basics/result: article changed after the blueprint was loaded" in capsys.readouterr().out
+    pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
+    assert "different from itself" not in pages
 
 
 def _audit(blueprint: Path, root: Path) -> int:

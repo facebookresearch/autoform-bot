@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Mapping
 
-from .graph import ARTICLE_ID_PATTERN, Graph, Node
+from .graph import ARTICLE_ID_PATTERN, ArticleChangedError, Graph, Node, read_node_source
 from .lean import REVIEW_PACKET_SCHEMA, declaration_names
 from .markdown import FENCE, FENCE_CLOSE, HEADING, frontmatter_end, strip_line_comments
 from .readback import Readback, load_readbacks
@@ -213,11 +213,23 @@ def canonical_statement(node: Node) -> str:
 
     Frontmatter and the title identify the article and are bound separately.
     Outer blank lines are formatting, while all Markdown inside the statement
-    is preserved exactly after newline normalization.
+    is preserved exactly after newline normalization. The text is the one
+    ``node`` was parsed from: a statement written since would be judged against
+    that parse's approval, a pairing that never existed on disk.
     """
 
     try:
-        text = node.path.read_text(encoding="utf-8")
+        text = read_node_source(node)
+    except ArticleChangedError as exc:
+        raise ReviewError(
+            [
+                ReviewFinding(
+                    node.id,
+                    "review-snapshot-changed",
+                    "an article changed after its blueprint was loaded for review; rerun once the blueprint is idle",
+                )
+            ]
+        ) from exc
     except (OSError, UnicodeError) as exc:
         raise ReviewError(
             [ReviewFinding(node.id, "review-statement-unreadable", f"cannot read article statement: {exc}")]
@@ -366,11 +378,16 @@ def validate_review_article(
 ) -> tuple[ReviewFinding, ...]:
     """Validate one article against a deliberately scoped fresh extraction.
 
-    Recording one asynchronously produced read-back must not be blocked because
-    another article changed since the bundle was prepared. The scoped report
-    must contain exactly the selected article, so omitted evidence cannot
-    accidentally pass as a successful check. It still hashes the whole
-    blueprint it was extracted from, and that must be ``graph``.
+    Validation is per article: an unrelated article that changed since
+    ``review prepare`` does not block recording this one's read-back. The
+    scoped report must contain exactly the selected article, so omitted
+    evidence cannot pass as a successful check. It still hashes the whole
+    blueprint it was extracted from, and that must be ``graph``, so any
+    blueprint change during the extraction itself, up to the reload that
+    produced ``graph``, refuses with ``review-snapshot-changed``. The
+    extraction also stops on another article's empty or duplicated ``lean:``
+    list. The statement compared is the text ``graph`` parsed; a file that no
+    longer holds it refuses rather than being judged.
     """
 
     snapshot = _snapshot_findings(graph, current_skeleton)

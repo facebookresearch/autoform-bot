@@ -58,6 +58,10 @@ class GraphValidationError(ValueError):
         super().__init__("; ".join(self.issues))
 
 
+class ArticleChangedError(GraphValidationError):
+    """An article no longer holds the bytes its loaded graph was parsed from."""
+
+
 @dataclass(frozen=True, slots=True)
 class Node:
     """One Markdown article in a blueprint.
@@ -234,6 +238,23 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     if issues:
         raise GraphValidationError(issues)
     return Graph(blueprint_dir=blueprint, nodes=nodes)
+
+
+def read_node_source(node: Node) -> str:
+    """Return the text *node* was parsed from, or refuse if the file changed.
+
+    A loaded graph is a snapshot: ``source_sha256`` names the bytes behind each
+    node. Article text judged or shown beside that node later, such as a
+    review statement or a published page, must be those bytes. Whatever the
+    file holds by then may be a state the graph never described.
+    """
+
+    content = node.path.read_bytes()
+    if hashlib.sha256(content).hexdigest() != node.source_sha256:
+        raise ArticleChangedError(
+            [f"{node.id}: article changed after the blueprint was loaded; rerun once the blueprint is idle"]
+        )
+    return content.decode("utf-8")
 
 
 def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
@@ -596,8 +617,10 @@ def _is_within(path: Path, directory: Path) -> bool:
 
 
 __all__ = [
+    "ArticleChangedError",
     "Graph",
     "GraphValidationError",
     "Node",
     "load_graph",
+    "read_node_source",
 ]

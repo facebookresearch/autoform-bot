@@ -937,7 +937,9 @@ def _current_review(
     blueprint that changes while it runs, and its hash must name the graph read
     here, which covers the time before it took its own snapshot. Cards are not
     articles, so they are read again afterwards and must be unchanged. Callers
-    judge the cards returned here rather than reading the vault again. A caller
+    judge the cards returned here rather than reading the vault again. Article
+    text read later, such as a statement compared or rendered, comes through
+    ``read_node_source`` and must be the bytes the graph parsed. A caller
     that loads the articles again, as render and audit do, is held to the same
     state by ``build_review_bundle``, which refuses a skeleton report paired
     with a blueprint other than the one it was extracted from.

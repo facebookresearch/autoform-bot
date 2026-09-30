@@ -21,7 +21,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from . import graph_pages, graph_views, mermaid, status
 from .coverage import CoverageSummary, load_coverage
-from .graph import Graph, Node, load_graph
+from .graph import Graph, Node, load_graph, read_node_source
 from .lean import SourceLinker, build_linker, declaration_names
 from .markdown import content_lines as _content_lines
 from .markdown import FENCE as _FENCE
@@ -253,7 +253,8 @@ def render_site(
     given, they are shown instead of reading the vault again, so the review
     disclosures describe the state that was checked. The articles are loaded
     here, after that check, and the review is refused unless they are the
-    blueprint ``skeleton`` was extracted from.
+    blueprint ``skeleton`` was extracted from. Each article's text is then read
+    only as the bytes that load parsed; one written since stops the render.
     """
     blueprint = Path(blueprint_dir).expanduser().resolve()
     requested_destination = Path(output_dir).expanduser()
@@ -370,7 +371,7 @@ def render_site(
         target.parent.mkdir(parents=True, exist_ok=True)
         if source.suffix.lower() == ".md":
             rewritten = _rewrite_links(
-                source.read_text(encoding="utf-8"),
+                source.read_text(encoding="utf-8") if article is None else read_node_source(article),
                 source_dir=source.parent,
                 page=target,
                 blueprint=blueprint,
@@ -1608,7 +1609,9 @@ def _render_environment(
 ) -> tuple[str, int, list[str]]:
     node_status = statuses[node.id]
     caption, _, number = numbers[node.id].rpartition(" ")
-    statement, remainder = _split_body(node.path.read_text(encoding="utf-8"))
+    # The text the graph parsed, so the box shows the statement its status and
+    # any review disclosure describe, or rendering stops.
+    statement, remainder = _split_body(read_node_source(node))
     # The body is leaving its own directory for the chapter page, so its
     # relative links have to be recomputed from the chapter's location.
     statement, remainder = (
