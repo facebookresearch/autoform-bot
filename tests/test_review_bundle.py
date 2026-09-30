@@ -288,6 +288,24 @@ def test_bundle_requires_a_rendered_declaration_sized_article(tmp_path: Path) ->
     assert "review-article-shape" in {finding.code for finding in error.value.findings}
 
 
+def test_recording_refuses_an_article_that_is_no_longer_declaration_sized(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    graph = load_graph(blueprint)
+    bundle = build_review_bundle(graph, _extracted(graph))
+    article = blueprint / "roadmap" / "basics" / "result.md"
+    article.write_text(
+        article.read_text(encoding="utf-8").replace("declaration: theorem\n", ""),
+        encoding="utf-8",
+    )
+
+    edited = load_graph(blueprint)
+    report = _extracted(edited)
+    assert [finding.code for finding in validate_review_bundle(edited, bundle, report)] == ["review-article-shape"]
+    assert [finding.code for finding in validate_review_article(edited, bundle, report, _ARTICLE_ID)] == [
+        "review-article-shape"
+    ]
+
+
 def test_bundle_requires_exact_source_passage_for_cited_lean_article(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     article = blueprint / "roadmap" / "basics" / "result.md"

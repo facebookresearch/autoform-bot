@@ -411,6 +411,9 @@ def validate_review_article(
                 f"article_id {article_id} is no longer mapped to Lean",
             ),
         )
+    shape = _article_shape_finding(graph, node)
+    if shape is not None:
+        return (shape,)
     if current_skeleton.schema != SKELETON_SCHEMA or current_skeleton.semantic_schema != SEMANTIC_SCHEMA:
         return (
             ReviewFinding(
@@ -743,6 +746,16 @@ def _snapshot_findings(graph: Graph, skeleton: SkeletonReport) -> list[ReviewFin
     ]
 
 
+def _article_shape_finding(graph: Graph, node: Node) -> ReviewFinding | None:
+    if node.formalizable and not graph.children(node.id):
+        return None
+    return ReviewFinding(
+        node.id,
+        "review-article-shape",
+        "Lean-mapped review article must be a declaration-sized leaf rendered by the blueprint site",
+    )
+
+
 def _report_findings(graph: Graph, skeleton: SkeletonReport) -> list[ReviewFinding]:
     findings: list[ReviewFinding] = []
     for node in sorted(graph.nodes.values(), key=lambda item: item.id):
@@ -756,14 +769,9 @@ def _report_findings(graph: Graph, skeleton: SkeletonReport) -> list[ReviewFindi
                     "Lean-mapped article has no durable article_id; run `autoform migrate` before preparing review evidence",
                 )
             )
-        if not node.formalizable or graph.children(node.id):
-            findings.append(
-                ReviewFinding(
-                    node.id,
-                    "review-article-shape",
-                    "Lean-mapped review article must be a declaration-sized leaf rendered by the blueprint site",
-                )
-            )
+        shape = _article_shape_finding(graph, node)
+        if shape is not None:
+            findings.append(shape)
     if skeleton.schema != SKELETON_SCHEMA or skeleton.semantic_schema != SEMANTIC_SCHEMA:
         findings.append(
             ReviewFinding(
