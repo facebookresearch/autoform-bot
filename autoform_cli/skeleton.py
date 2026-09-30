@@ -2755,13 +2755,23 @@ def source_passage(node: Node, blueprint: Path, *, issues: list[str] | None = No
         path = unquote(parsed.path)
         fragment = unquote(parsed.fragment)
         match = _LINE_LOCATOR.fullmatch(fragment or "")
-        if parsed.scheme or parsed.netloc or match is None or not path or path.endswith(".md"):
+        if (
+            parsed.scheme
+            or parsed.netloc
+            or match is None
+            or not path
+            or Path(path).suffix.casefold() == ".md"
+        ):
             continue
+        if "\x00" in path:
+            return broken(target, "contains an invalid path")
         try:
             candidate = (node.path.parent / path).resolve()
             candidate.relative_to(blueprint.resolve())
         except ValueError:
             return broken(target, "points outside the blueprint")
+        if os.path.lexists(candidate) and not candidate.is_file():
+            return broken(target, "names something other than a regular file")
         try:
             captured = _read_snapshot_file(candidate)
             if captured is None:

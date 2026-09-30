@@ -1387,6 +1387,8 @@ def test_probe_comment_ranges_must_cover_comments(tmp_path: Path, ranges: object
         ("../../sources/missing.tex#L1-L1", "names a missing file"),
         ("../../sources/binary.tex#L1-L1", "not readable UTF-8 text"),
         ("../../../outside.tex#L1-L1", "points outside the blueprint"),
+        ("../../sources/chapter#L1-L1", "names something other than a regular file"),
+        ("../../sources/%00book.tex#L1-L1", "contains an invalid path"),
     ],
 )
 def test_extraction_reports_a_locator_that_names_no_passage(tmp_path: Path, link: str, why: str) -> None:
@@ -1394,6 +1396,7 @@ def test_extraction_reports_a_locator_that_names_no_passage(tmp_path: Path, link
     blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
     sources = blueprint / "sources"
     sources.mkdir()
+    (sources / "chapter").mkdir()
     (sources / "book.tex").write_text("one\ntwo\nthree\n", encoding="utf-8")
     (sources / "empty.tex").write_text("", encoding="utf-8")
     (sources / "binary.tex").write_bytes(b"\xff\xfe\n")
@@ -1419,6 +1422,31 @@ def test_extraction_reports_a_locator_that_names_no_passage(tmp_path: Path, link
     report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
     assert report.clean
     assert report.nodes[0].passage == "two\nthree"
+
+
+def test_markdown_locator_is_a_note_whatever_the_case_of_its_suffix(tmp_path: Path) -> None:
+    # Audit reads `NOTES.MD` as Markdown, so its fragment names a heading, not lines.
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    sources = blueprint / "sources"
+    sources.mkdir()
+    (sources / "NOTES.MD").write_text("# Notes\n", encoding="utf-8")
+    (sources / "book.tex").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    article = blueprint / "roadmap" / "basics" / "determined.md"
+    article.write_text(
+        article.read_text(encoding="utf-8").replace(
+            "## Depends on",
+            "## Sources\n\n- [notes](../../sources/NOTES.MD#L1-L1)\n"
+            "- [book](../../sources/book.tex#L2-L3)\n\n## Depends on",
+        ),
+        encoding="utf-8",
+    )
+
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
+
+    assert report.clean
+    assert report.nodes[0].passage == "two\nthree"
+    assert report.nodes[0].passage_locator == "sources/book.tex#L2-L3"
 
 
 def test_extraction_rejects_lake_configuration_changed_during_probe(
