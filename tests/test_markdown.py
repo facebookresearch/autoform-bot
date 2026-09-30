@@ -93,6 +93,27 @@ def test_the_extension_config_matches_the_scaffolded_mkdocs_yml() -> None:
     assert SITE_EXTENSION_CONFIGS["pymdownx.arithmatex"] == {"generic": True}
 
 
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        "autoform_cli/templates/github/workflows/blueprint-pages.yml",
+        "skills/setup/assets/cabannes-thesis-project/.github/workflows/blueprint-pages.yml",
+    ],
+)
+def test_the_renderer_pins_match_the_pages_build(workflow: str) -> None:
+    """The checks run the renderer the CLI installs; the site runs the one its
+    workflow installs. Both must be the same exact versions, or testimony and
+    anchors are judged by a parser that does not build the published page."""
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    pages = (root / workflow).read_text(encoding="utf-8")
+    for package in ("markdown", "pymdown-extensions"):
+        pins = re.findall(rf'^    "{re.escape(package)}==([^"]+)",$', pyproject, re.MULTILINE)
+        assert len(pins) >= 1 and len(set(pins)) == 1, (package, pins)
+        assert re.findall(rf"--with {re.escape(package)}==(\S+)", pages) == pins[:1]
+
+
 def test_frontmatter_cannot_contribute_anchors(tmp_path: Path) -> None:
     # MkDocs strips frontmatter before Markdown sees it, so a setext-looking
     # closing delimiter must not turn a YAML key into a heading.
