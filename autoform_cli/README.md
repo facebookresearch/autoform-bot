@@ -494,7 +494,10 @@ marked `origin: cited` must link
 to an in-vault, non-Markdown source snapshot with an exact
 `#L<start>-L<end>` range; preparation refuses a citation it cannot put before
 the reviewer. `review record` rechecks the selected current article
-and the exact packet bytes before filing a card.
+and the exact packet bytes before filing a card. Its extraction checks the
+whole blueprint, so an edit to any article while it runs, even one the record
+does not touch, aborts the record with nothing filed; running it again once the
+blueprint is idle completes it.
 
 `--manifest` files a batch against one extraction, where one record per card
 would pay a Lake freshness check and a Lean start each. The manifest reuses
@@ -529,7 +532,12 @@ is a no-op, running the same batch again completes it.
 `review check`, `audit`, and `render` re-extract the
 current Lean evidence and reject unresolved, partial, foreign, or stale
 bundles. `review check` also requires complete current cards and matching human
-approvals. The rendered review disclosure uses the same packet bytes that were
+approvals, and judges them as one state of the blueprint: it reads the articles
+and cards before Lean runs, the extraction must have seen those same articles,
+and the cards must be unchanged when it ends. An edit to either while the check
+runs fails it rather than mixing old and new evidence; run it again once the
+blueprint is idle. `render --review` and `--review-bundle` make the same check
+and show the cards it validated. The rendered review disclosure uses the same packet bytes that were
 hashed, never a reconstructed or comment-bearing approximation. Read-back
 cards are absorbed into their article and are not published as standalone
 pages. Without `--bundle`, `review check` derives the bundle from its own

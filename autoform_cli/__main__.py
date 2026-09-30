@@ -20,7 +20,14 @@ from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_k
 from .doctor import diagnose_project
 from .graph import Graph, GraphValidationError, load_graph
 from .lean import build_linker, declaration_names
-from .readback import PreparedReadback, planned_readback, prepare_readback, publish_readback, readback_conflicts
+from .readback import (
+    PreparedReadback,
+    load_readbacks,
+    planned_readback,
+    prepare_readback,
+    publish_readback,
+    readback_conflicts,
+)
 from .render import PublicationError, render_site
 from .review import (
     RecordRequest,
@@ -42,6 +49,7 @@ from .skeleton import (
     DEFAULT_PROBE_TIMEOUT,
     SkeletonError,
     SkeletonReport,
+    blueprint_hash,
     extract_skeletons,
     format_report,
     run_probe,
@@ -363,7 +371,7 @@ def _audit(args: argparse.Namespace) -> int:
             print("error: --review-bundle requires --lean-root", file=sys.stderr)
             return 2
         try:
-            _, skeleton, bundle = _current_review(
+            _, skeleton, bundle, _ = _current_review(
                 args.blueprint_dir,
                 lean_root=args.lean_root,
                 bundle_path=args.review_bundle,
@@ -873,13 +881,13 @@ def _report_recorded(written: list[tuple[Path, str]], total: int) -> None:
 
 def _review_check(args: argparse.Namespace) -> int:
     try:
-        graph, skeleton, bundle = _current_review(
+        graph, skeleton, bundle, cards = _current_review(
             args.blueprint_dir,
             lean_root=args.lean_root,
             bundle_path=args.bundle,
             timeout=args.timeout,
         )
-        findings = review_findings(graph, bundle, skeleton)
+        findings = review_findings(graph, bundle, skeleton, readbacks=cards)
     except (GraphValidationError, ReviewError, SkeletonError) as exc:
         for issue in exc.issues:
             print(f"error: {issue}", file=sys.stderr)
@@ -914,26 +922,53 @@ def _current_review(
     bundle_path: Path | None,
     timeout: float | None = None,
 ):
-    """The graph, one extraction, and a review bundle validated against both.
+    """The graph, one extraction, a review bundle validated against both, and the cards.
 
     With ``bundle_path`` the bundle is the one ``review prepare`` wrote, and it
     must still describe the current tree. Without it, the bundle is derived
     from this same extraction. CI wants the latter: it never trusts a committed
     bundle, and preparing one in a separate command would pay for a second
     extraction of the same unchanged checkout.
+
+    Everything returned describes one state of the blueprint. The graph and the
+    read-back cards are read before Lean runs. The extraction refuses a
+    blueprint that changes while it runs, and its hash must name the graph read
+    here, which covers the time before it took its own snapshot. Cards are not
+    articles, so they are read again afterwards and must be unchanged. Callers
+    judge the cards returned here rather than reading the vault again.
     """
 
     graph = load_graph(blueprint_dir)
+    cards = load_readbacks(graph.blueprint_dir)
     skeleton = extract_skeletons(
         blueprint_dir,
         lean_root=lean_root,
         runner=_probe_runner(timeout),
     )
+    changed: list[ReviewFinding] = []
+    if skeleton.blueprint_hash != blueprint_hash(graph):
+        changed.append(
+            ReviewFinding(
+                "review",
+                "review-snapshot-changed",
+                "an article changed while the review evidence was being extracted; rerun once the blueprint is idle",
+            )
+        )
+    if load_readbacks(graph.blueprint_dir) != cards:
+        changed.append(
+            ReviewFinding(
+                "review",
+                "review-snapshot-changed",
+                "a read-back changed while the review evidence was being extracted; rerun once the blueprint is idle",
+            )
+        )
+    if changed:
+        raise ReviewError(changed)
     bundle = build_review_bundle(graph, skeleton) if bundle_path is None else load_review_bundle(bundle_path)
     findings = validate_review_bundle(graph, bundle, skeleton)
     if findings:
         raise ReviewError(findings)
-    return graph, skeleton, bundle
+    return graph, skeleton, bundle, cards
 
 
 def _review_selection_finding(article_id: str, declaration: str) -> ReviewFinding:
@@ -977,12 +1012,13 @@ def _render(args: argparse.Namespace) -> int:
     try:
         skeleton = None
         bundle = None
+        cards = None
         if args.review_bundle is not None or args.review:
             if args.lean_root is None:
                 flag = "--review" if args.review else "--review-bundle"
                 print(f"error: {flag} requires --lean-root", file=sys.stderr)
                 return 2
-            _, skeleton, bundle = _current_review(
+            _, skeleton, bundle, cards = _current_review(
                 args.blueprint_dir,
                 lean_root=args.lean_root,
                 bundle_path=args.review_bundle,
@@ -996,6 +1032,7 @@ def _render(args: argparse.Namespace) -> int:
             ref=args.ref,
             skeleton=skeleton,
             review_bundle=bundle,
+            readbacks=cards,
         )
     except (GraphValidationError, PublicationError, ReviewError, SkeletonError) as exc:
         for issue in exc.issues:

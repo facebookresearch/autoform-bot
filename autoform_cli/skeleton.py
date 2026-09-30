@@ -1096,7 +1096,7 @@ def _graph_snapshot(graph: Graph) -> tuple[tuple[str, str, str], ...]:
     )
 
 
-def _blueprint_hash(graph: Graph) -> str:
+def blueprint_hash(graph: Graph) -> str:
     """Identify the exact, path-independent blueprint snapshot behind a report."""
 
     material = json.dumps(
@@ -2687,7 +2687,7 @@ def extract_graph_skeletons(
             )
         )
     return SkeletonReport(
-        blueprint_hash=_blueprint_hash(graph),
+        blueprint_hash=blueprint_hash(graph),
         targets=tuple((node.id, names) for node, names in targets),
         selection=selection,
         selected_nodes=tuple(node.id for node, _ in selected),
@@ -3681,6 +3681,7 @@ __all__ = [
     "SkeletonError",
     "SkeletonReport",
     "TrustedDeclaration",
+    "blueprint_hash",
     "declaration_filename",
     "evidence_hash_of",
     "extract_graph_skeletons",

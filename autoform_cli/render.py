@@ -240,6 +240,7 @@ def render_site(
     clean: bool = True,
     skeleton: SkeletonReport | None = None,
     review_bundle: ReviewBundle | None = None,
+    readbacks: dict[tuple[str, str], Readback] | None = None,
 ) -> RenderReport:
     """Write deterministic, read-only projections of the Markdown blueprint.
 
@@ -247,6 +248,10 @@ def render_site(
     reader surfaces over it: a book, derived progress, and multiscale dependency
     maps. Publication excludes hidden and operational files, rejects symlinks,
     and never embeds timestamps or machine-specific paths.
+
+    ``readbacks`` are the cards a caller validated ``review_bundle`` with. When
+    given, they are shown instead of reading the vault again, so the review
+    disclosures describe the state that was checked.
     """
     blueprint = Path(blueprint_dir).expanduser().resolve()
     requested_destination = Path(output_dir).expanduser()
@@ -293,7 +298,10 @@ def render_site(
     numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
     sources_base = _sources_base(blueprint, repo_root, linker)
-    readbacks = load_readbacks(blueprint) if review_bundle is not None else {}
+    if review_bundle is None:
+        readbacks = {}
+    elif readbacks is None:
+        readbacks = load_readbacks(blueprint)
 
     _prepare_destination(destination, clean=clean)
     _write_publication_manifest(

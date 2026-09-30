@@ -1,14 +1,25 @@
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from autoform_cli.__main__ import main
+from autoform_cli.graph import Graph, load_graph
 from autoform_cli.readback import load_readbacks
 from autoform_cli.review import REVIEW_PACKET_SCHEMA, load_review_bundle
-from autoform_cli.skeleton import DeclarationSkeleton, NodeSkeleton, SkeletonError, SkeletonReport
+from autoform_cli.skeleton import (
+    DeclarationSkeleton,
+    NodeSkeleton,
+    SkeletonError,
+    SkeletonReport,
+    blueprint_hash,
+    extract_skeletons,
+)
 
 _BLUEPRINT_HASH = "sha256:" + "0" * 64
 
@@ -85,6 +96,12 @@ def _skeleton() -> SkeletonReport:
     )
 
 
+def _as_extracted(report: SkeletonReport, blueprint_dir: object) -> SkeletonReport:
+    """Stamp ``report`` with the blueprint as it is now, as a real extraction does."""
+
+    return replace(report, blueprint_hash=blueprint_hash(load_graph(blueprint_dir)))
+
+
 def test_review_cli_prepares_records_and_checks_exact_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -104,7 +121,7 @@ def test_review_cli_prepares_records_and_checks_exact_evidence(
         runner = kwargs.get("runner")
         assert callable(runner)
         runner("", tmp_path)
-        return skeleton
+        return _as_extracted(skeleton, args[0])
 
     monkeypatch.setattr("autoform_cli.__main__.run_probe", run_probe)
     monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", extract)
@@ -222,7 +239,7 @@ def test_check_and_render_derive_the_bundle_from_their_own_extraction(
 
     def extract(*args: object, **kwargs: object) -> SkeletonReport:
         extraction_scopes.append(kwargs.get("node_ids"))
-        return skeleton
+        return _as_extracted(skeleton, args[0])
 
     monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", extract)
     bundle_path = tmp_path / "review.json"
@@ -456,8 +473,10 @@ class _Extraction:
         nodes = (_node("basics/other", "Review.other"), _node("basics/result", "Review.result"))
         wanted = None if node_ids is None else set(node_ids)
         selected = tuple(node for node in nodes if wanted is None or node.node_id in wanted)
+        # The hash describes the blueprint as this call reads it, after the
+        # hook: an edit made there lands before the extraction's own snapshot.
         return SkeletonReport(
-            blueprint_hash=_BLUEPRINT_HASH,
+            blueprint_hash=blueprint_hash(load_graph(args[0])),
             targets=tuple(
                 (node.node_id, tuple(declaration.name for declaration in node.declarations))
                 for node in nodes
@@ -573,6 +592,46 @@ def test_an_article_changed_during_extraction_files_nothing(
 
     assert load_readbacks(blueprint) == {}
     assert "changed during extraction; nothing was filed" in capsys.readouterr().err
+
+
+def test_any_blueprint_edit_during_a_record_extraction_files_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The extraction checks the whole blueprint, so an edit to an article the
+    record does not touch still aborts it, and running it again files the card."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    alone = manifest.parent / "result-only.json"
+    alone.write_text(
+        json.dumps(
+            {"schema": "autoform-review-records/v1", "records": [r for r in records if r["article_id"] == _RESULT_ID]}
+        ),
+        encoding="utf-8",
+    )
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "lakefile.toml").write_text('name = "Review"\n', encoding="utf-8")
+    other = blueprint / "roadmap" / "basics" / "other.md"
+    edits: list[int] = []
+
+    def probe_while_other_is_edited(graph: Graph, *, node_ids: tuple[str, ...] | None, **_: object) -> SkeletonReport:
+        if not edits:
+            edits.append(1)
+            other.write_text(other.read_text(encoding="utf-8") + "\nAn unrelated edit.\n", encoding="utf-8")
+        return replace(_Extraction()(graph.blueprint_dir, node_ids=node_ids), blueprint_hash=blueprint_hash(graph))
+
+    # The real extraction, with only the Lean probe replaced.
+    monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", extract_skeletons)
+    monkeypatch.setattr("autoform_cli.skeleton.extract_graph_skeletons", probe_while_other_is_edited)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, alone, project) == 2
+    assert load_readbacks(blueprint) == {}
+    assert "the blueprint changed while skeletons were being extracted" in capsys.readouterr().err
+
+    assert _record(blueprint, bundle, alone, project) == 0
+    assert set(load_readbacks(blueprint)) == {(_RESULT_ID, "Review.result")}
 
 
 def _file_alone(blueprint: Path, bundle: Path, manifest: Path, root: Path, record: dict[str, str], text: str) -> None:
@@ -779,3 +838,114 @@ def test_record_takes_a_manifest_or_one_record_but_not_both(
     assert "--manifest replaces" in capsys.readouterr().err
     assert main([*common, "--article-id", _RESULT_ID]) == 2
     assert "needs --manifest, or all of" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# One snapshot per check
+# --------------------------------------------------------------------------- #
+
+
+def _approved_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extraction: _Extraction) -> Path:
+    """Record and approve both articles, so that `review check` passes."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    assert _record(blueprint, bundle, manifest, tmp_path) == 0
+    cards = load_readbacks(blueprint)
+    prepared = load_review_bundle(bundle)
+    for name, article_id in (("result", _RESULT_ID), ("other", _OTHER_ID)):
+        article = blueprint / "roadmap" / "basics" / f"{name}.md"
+        article.write_text(
+            article.read_text(encoding="utf-8").replace(
+                "statement: formalized\n",
+                f"statement: formalized\nreview_approved: {prepared.review_hash(article_id, cards)}\n",
+            ),
+            encoding="utf-8",
+        )
+    return blueprint
+
+
+def _check(blueprint: Path, root: Path) -> int:
+    return main(["review", "check", str(blueprint), "--lean-root", str(root)])
+
+
+def test_check_judges_the_blueprint_its_extraction_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An approval changed after the check loaded the graph, but before the
+    extraction took its snapshot, must not pass on the strength of the old one."""
+
+    extraction = _Extraction()
+    blueprint = _approved_batch(tmp_path, monkeypatch, extraction)
+    assert _check(blueprint, tmp_path) == 0
+    capsys.readouterr()
+    article = blueprint / "roadmap" / "basics" / "result.md"
+
+    def approve_something_else() -> None:
+        text = article.read_text(encoding="utf-8")
+        article.write_text(
+            re.sub(r"review_approved: \S+", "review_approved: sha256:" + "f" * 64, text), encoding="utf-8"
+        )
+
+    extraction.on_extract = approve_something_else
+    assert _check(blueprint, tmp_path) == 2
+    captured = capsys.readouterr()
+    assert "an article changed while the review evidence was being extracted" in captured.err
+    assert "OK:" not in captured.out
+
+    # The tree does hold an invalid approval, which a check of an idle tree names.
+    extraction.on_extract = None
+    assert _check(blueprint, tmp_path) == 1
+    assert "review-drift" in capsys.readouterr().out
+
+
+def _edit_card(card: Path) -> None:
+    card.write_text(card.read_text(encoding="utf-8").replace("asserts True.", "asserts nothing."), encoding="utf-8")
+
+
+def _add_card(card: Path) -> None:
+    card.with_name("copy-" + card.name).write_bytes(card.read_bytes())
+
+
+def _remove_card(card: Path) -> None:
+    card.unlink()
+
+
+@pytest.mark.parametrize("change", [_edit_card, _add_card, _remove_card], ids=["edited", "added", "removed"])
+def test_check_refuses_a_readback_changed_during_extraction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    change: Callable[[Path], None],
+) -> None:
+    """Cards are read before Lean runs and must be the same after it: the check
+    judges neither the old cards nor the new ones against this extraction."""
+
+    extraction = _Extraction()
+    blueprint = _approved_batch(tmp_path, monkeypatch, extraction)
+    card = load_readbacks(blueprint)[(_RESULT_ID, "Review.result")].path
+    extraction.on_extract = lambda: change(card)
+    capsys.readouterr()
+
+    assert _check(blueprint, tmp_path) == 2
+
+    captured = capsys.readouterr()
+    assert "a read-back changed while the review evidence was being extracted" in captured.err
+    assert captured.out == ""
+
+
+def test_render_review_shows_the_readbacks_its_check_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The cards rendered are the snapshot the review was validated against, not a later read."""
+
+    blueprint = _approved_batch(tmp_path, monkeypatch, _Extraction())
+
+    def read_again(*args: object, **kwargs: object) -> object:
+        raise AssertionError("render read the read-backs again after validating the review")
+
+    monkeypatch.setattr("autoform_cli.render.load_readbacks", read_again)
+    site = tmp_path / "site"
+    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 0
+    pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
+    assert "The statement Review.result asserts True." in pages
+    assert "bp-review-approved" in pages
