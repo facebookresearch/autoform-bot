@@ -89,23 +89,49 @@ _ALLOWED_CONTROLS = frozenset("\t\n\r")
 #: Limits a testimony must meet before the Markdown renderer reads it. Python-
 #: Markdown's inline processing is superlinear in the number of spans and of
 #: unmatched openers, cubic in a run of backticks, and recursive in nesting
-#: depth, so a byte limit alone does not bound the work. Each limit is several
-#: times what 120 read-backs of a real-analysis textbook use: at most 5.9 KB,
-#: 62 lines, 304 math delimiters, 72 backticks in runs of one, 2 brackets, and
-#: 3 columns of indentation. At every limit at once, validation stays near a
-#: second.
+#: depth, so a byte limit alone does not bound the work. Four characters cost
+#: a pass over the rest of the text each: a "[", which three link patterns
+#: scan from to its closing bracket; a "<" before a letter, "/", "!" or "?",
+#: which the HTML block parser scans from for the end of a tag, even inside a
+#: formula; an underscore that starts a word, which the emphasis patterns scan
+#: from for a closing one; and a backslash, since each escape rebuilds the text
+#: and lengthens what the link patterns scan. The byte, line, delimiter,
+#: backtick, bracket, and nesting limits are several times what 120 read-backs
+#: of a real-analysis textbook use: at most 5.9 KB, 62 lines, 304 math
+#: delimiters, 72 backticks in runs of one, 2 brackets, and 3 columns of
+#: indentation. The tag, underscore, and backslash limits keep each of their
+#: passes near half a second at the byte limit, and at every limit at once
+#: validation takes under two seconds.
 TESTIMONY_MAX_BYTES = 32 * 1024
 TESTIMONY_MAX_LINES = 500
 TESTIMONY_MAX_MATH_DELIMITERS = 1024
 TESTIMONY_MAX_BACKTICKS = 512
 TESTIMONY_MAX_BACKTICK_RUN = 16
-TESTIMONY_MAX_BRACKETS = 256
+TESTIMONY_MAX_BRACKETS = 64
 TESTIMONY_MAX_NESTING = 64
+TESTIMONY_MAX_TAG_OPENERS = 256
+TESTIMONY_MAX_UNDERSCORE_OPENERS = 256
+TESTIMONY_MAX_BACKSLASHES = 2048
 _MATH_DELIMITER = re.compile(r"\$|\\[()\[\]]")
 _BACKTICK_RUN = re.compile(r"`+")
+_TAG_OPENER = re.compile(r"<[A-Za-z/!?]")
+_UNDERSCORE_OPENER = re.compile(r"(?<!\w)_")
 #: Everything a line can open before its content: indentation, block quotes,
 #: and list markers, each of which nests one more block.
 _NESTING_PREFIX = re.compile(r"(?:[ >]|[-+*](?= )|\d{1,9}[.)](?= ))*")
+#: Raw HTML, found before the Markdown renderer runs: open and closing tags in
+#: CommonMark's grammar, the openers of declarations and processing
+#: instructions, closed or not, and character references in the forms HTML
+#: parsers decode. Anything else the renderer reads as HTML is refused after
+#: parsing. Autolinks are not tags here; they are refused after parsing, as
+#: links.
+_HTML_TAG = re.compile(
+    r"<\?|<![A-Za-z\[]"
+    r"|</?[A-Za-z][A-Za-z0-9-]*"
+    r"(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s\"'=<>`]+|'[^']*'|\"[^\"]*\"))?)*\s*/?>"
+)
+_HTML_NAME = re.compile(r"<[!?](?:\[CDATA\[|[A-Za-z]*)|</?[A-Za-z][A-Za-z0-9-]*")
+_HTML_ENTITY = re.compile(r"&(?:#[0-9]+;?|#[xX][0-9A-Fa-f]+;?|[A-Za-z][A-Za-z0-9]*;)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -904,9 +930,9 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     A testimony is measured against :data:`TESTIMONY_MAX_BYTES` and the other
     limits first, and one that exceeds any of them is refused unparsed: every
     card in a pull request is validated, so parsing must be bounded before
-    anything is known about it. What is then checked is what a reader is
-    shown: no invisible or reordering characters, whether typed or written as
-    HTML entities; in text the typesetter reads, only the TeX listed in
+    anything is known about it. Raw HTML is refused unparsed too. What is
+    then checked is what a reader is shown: no invisible or reordering
+    characters; in text the typesetter reads, only the TeX listed in
     :data:`_TESTIMONY_TEX`, with arguments that show something and spacing
     that neither overlaps symbols nor pushes them apart; and at least one
     visible letter or digit.
@@ -914,6 +940,8 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
 
     if limits := _testimony_limit_errors(text):
         return limits
+    if markup := _raw_html_errors(text):
+        return markup
     parser = markdown_renderer.Markdown(
         extensions=list(SITE_EXTENSIONS),
         extension_configs=SITE_EXTENSION_CONFIGS,
@@ -1105,7 +1133,56 @@ def _testimony_limit_errors(text: str) -> tuple[str, ...]:
         errors.append(
             f"testimony nests blocks {nesting} columns deep, over the limit of {TESTIMONY_MAX_NESTING}"
         )
+    tags = len(_TAG_OPENER.findall(text))
+    if tags > TESTIMONY_MAX_TAG_OPENERS:
+        errors.append(
+            f"testimony has {tags} tag openers (< before a letter, /, ! or ?), "
+            f"over the limit of {TESTIMONY_MAX_TAG_OPENERS}"
+        )
+    underscores = len(_UNDERSCORE_OPENER.findall(text))
+    if underscores > TESTIMONY_MAX_UNDERSCORE_OPENERS:
+        errors.append(
+            f"testimony has {underscores} underscores that start a word, "
+            f"over the limit of {TESTIMONY_MAX_UNDERSCORE_OPENERS}"
+        )
+    backslashes = text.count("\\")
+    if backslashes > TESTIMONY_MAX_BACKSLASHES:
+        errors.append(f"testimony has {backslashes} backslashes, over the limit of {TESTIMONY_MAX_BACKSLASHES}")
     return tuple(errors)
+
+
+def _raw_html_errors(text: str) -> tuple[str, ...]:
+    """Name the raw HTML in ``text``: tags, comments, declarations, processing
+    instructions, and character references. Read-backs are Markdown and TeX;
+    HTML can hide text, restyle it, or stand for characters a reader cannot
+    see. It is found before parsing, so it is refused wherever it is written,
+    formulas and code included; a space after "<" keeps a formula clear."""
+
+    errors: list[str] = []
+    if "<!--" in text:
+        errors.append("HTML comments are not allowed: they hide the text they enclose")
+    tags: dict[str, None] = {}
+    for markup in _HTML_TAG.finditer(text):
+        name = _HTML_NAME.match(text, markup.start()).group()
+        tags[name if name.startswith(("<!", "<?")) else name + ">"] = None
+    if tags:
+        errors.append("raw HTML is not allowed: " + ", ".join(tags) + "; in a formula, put a space after <")
+    entities = dict.fromkeys(_entity_name(entity) for entity in _HTML_ENTITY.findall(text))
+    if entities:
+        errors.append(
+            "HTML character references are not allowed: " + ", ".join(entities) + "; type the character itself"
+        )
+    return tuple(errors)
+
+
+def _entity_name(entity: str) -> str:
+    """``entity`` and, when it stands for one character, that character's code
+    point and name."""
+
+    character = html.unescape(entity)
+    if len(character) != 1:
+        return entity
+    return f"{entity} (U+{ord(character):04X} {unicodedata.name(character, 'unnamed')})"
 
 
 def _hidden_characters(text: str) -> list[str]:

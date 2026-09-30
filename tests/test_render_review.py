@@ -263,6 +263,7 @@ def test_writer_rejects_testimony_that_hides_what_it_says(testimony: str, reason
         r"Here $\operatorname*{arg\,max}_x f(x)$ and $\langle u, v \rangle \le \|u\|\,\|v\|$ hold.",
         r"$$f(x) = \begin{cases} x^2 & \text{if } x \ge 0, \\ -x & \text{otherwise} \end{cases}$$",
         r"$$A = \begin{pmatrix} a & b \\ c & d \end{pmatrix}, \quad \begin{aligned} x &= y \\ &\le z \end{aligned}$$",
+        r"For $a < b > c$ and the group $\langle g \rangle$, AT&T and R & D; the claim holds.",
     ],
 )
 def test_writer_accepts_ordinary_mathematical_testimony(testimony: str, tmp_path: Path) -> None:
@@ -358,6 +359,12 @@ def test_writer_refuses_testimony_without_a_letter_or_digit(testimony: str, tmp_
         ("".join("  " * depth + "- a\n" for depth in range(512)), "columns deep"),
         ("word " * 7000, "-byte limit"),
         ("x\n" * 600, "-line limit"),
+        ("<a " * 10900, "tag openers"),
+        ("<!--" * 300, "tag openers"),
+        ("<b>" * 1000 + "x", "tag openers"),
+        ("_a " * 300, "underscores that start a word"),
+        ("\\" * 3000 + "x", "backslashes"),
+        ("[" * 256 + "\\*" * 2000, "opening brackets"),
     ],
 )
 def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
@@ -365,7 +372,9 @@ def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
 ) -> None:
     """Parsing is superlinear in spans and openers, cubic in a backtick run,
     and recursive in nesting: 8,000 brackets took ten seconds, 4,000 backticks
-    over two minutes, and a list 512 levels deep overflowed the stack."""
+    over two minutes, and a list 512 levels deep overflowed the stack. 10,900
+    unclosed tags took four seconds, 256 brackets before 16,000 escapes took
+    sixteen, and 1,000 nested tags overflowed the stack."""
 
     def unbounded(*args: object, **kwargs: object) -> None:
         raise AssertionError("the Markdown renderer ran on testimony over a limit")
@@ -373,6 +382,35 @@ def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
     monkeypatch.setattr("autoform_cli.readback.markdown_renderer.Markdown", unbounded)
 
     assert any(limit in error for error in _testimony_errors(testimony))
+
+
+@pytest.mark.parametrize(
+    ("testimony", "reason"),
+    [
+        ("P <!-- and Q --> holds", "HTML comments are not allowed"),
+        ("P <!--\n\nand Q\n\n--> holds", "HTML comments are not allowed"),
+        ("<s>and Q</s>", "raw HTML is not allowed: <s>, </s>"),
+        ('<span style="display:none">and Q</span> P', "raw HTML is not allowed: <span>, </span>"),
+        ("P\n<div markdown=1>\n*and Q*\n</div>", "raw HTML is not allowed: <div>, </div>"),
+        ("<!DOCTYPE html>\nP", "raw HTML is not allowed: <!DOCTYPE"),
+        ("P <?php echo 1 ?> Q", "raw HTML is not allowed: <?php"),
+        ("For $G=<g>$ the claim holds.", "raw HTML is not allowed: <g>; in a formula, put a space after <"),
+        ("P &amp; Q", "HTML character references are not allowed: &amp; (U+0026 AMPERSAND)"),
+        ("P &#8203 Q", "HTML character references are not allowed: &#8203 (U+200B ZERO WIDTH SPACE)"),
+    ],
+)
+def test_raw_html_is_refused_by_name_before_it_is_parsed(
+    testimony: str, reason: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HTML can hide or restyle text. It is found before parsing, so it is
+    refused wherever it is written, formulas included."""
+
+    def unparsed(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the Markdown renderer ran on raw HTML")
+
+    monkeypatch.setattr("autoform_cli.readback.markdown_renderer.Markdown", unparsed)
+
+    assert any(reason in error for error in _testimony_errors(testimony))
 
 
 def test_a_card_over_a_limit_is_invalid_without_being_parsed(

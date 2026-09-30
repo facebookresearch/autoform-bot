@@ -393,21 +393,24 @@ contains the exact packet, both hashes, a model label, and nonempty testimony.
 The loader rejects missing or unknown fields, altered packets, identity
 mismatches, and malformed or empty testimony. Testimony must show a reader
 everything it says: invisible and reordering characters (zero-width spaces,
-bidirectional overrides), whether typed or written as HTML entities, and TeX
-comments are rejected. TeX may use only an allowlist of the notation
-statements need, kept in `readback.py` against the site's pinned MathJax
-3.2.2: letters, symbols, relations, operators, arrows, delimiters, fractions,
-roots, accents, fonts, `\text`, thin to double-quad spaces, and the `cases`,
-`aligned`, and matrix environments. Any other command or environment, such as
-`\phantom`, `\rlap`, `\kern`, `\color`, `\tag`, or a macro definition, is
-refused by name, as are listed commands given arguments that show nothing
-(`\mathrm{}`), two negative spaces or more than four spaces in a row, and row
-spacing after `\\`. Testimony must also show at least one letter or digit.
-Before any card is parsed its
-testimony must fit limits several times what real read-backs use: 32 KiB, 500
-lines, 1,024 math delimiters, 512 backticks in runs of at most 16, 256 opening
-brackets, and 64 columns of nesting. The Markdown parser is superlinear in each
-of these, so a byte limit alone would not bound it, and every card in a pull
+bidirectional overrides), TeX comments, and raw HTML are rejected. HTML tags,
+comments, declarations, and character references are refused by name before
+parsing, wherever they are written, so in a formula put a space after `<`. TeX
+may use only an allowlist of the notation statements need, kept in
+`readback.py` against the site's pinned MathJax 3.2.2: letters, symbols,
+relations, operators, arrows, delimiters, fractions, roots, accents, fonts,
+`\text`, thin to double-quad spaces, and the `cases`, `aligned`, and matrix
+environments. Any other command or environment, such as `\phantom`, `\rlap`,
+`\kern`, `\color`, `\tag`, or a macro definition, is refused by name, as are
+listed commands given arguments that show nothing (`\mathrm{}`), two negative
+spaces or more than four spaces in a row, and row spacing after `\\`. Testimony
+must also show at least one letter or digit. Before any card is parsed its
+testimony must fit limits well above what real read-backs use: 32 KiB, 500
+lines, 1,024 math delimiters, 512 backticks in runs of at most 16, 64 opening
+brackets, 64 columns of nesting, 256 tag openers (`<` before a letter, `/`,
+`!`, or `?`), 256 underscores that start a word, and 2,048 backslashes. The
+Markdown parser is superlinear in each of these, so a byte limit alone would
+not bound it, and every card in a pull
 request is read before its validity is known. Cards are read through no-follow
 descriptors, so a card or directory swapped for a link is skipped. A write
 walks to the card's directory without following links, takes that directory's

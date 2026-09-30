@@ -55,10 +55,13 @@ packet. Completeness beats elegance: this is fine print. Introduce every
 variable and symbol before using it, put the main assertion in display math,
 and use a short list when the statement has several clauses.
 
-Use inert Markdown only. Raw HTML, Markdown links, images, autolinks, link
-definitions, visibility-changing attributes, and Mermaid blocks are rejected when the coordinator records
-the testimony. They add no mathematical content and would let generated prose
-run code or fetch remote resources in the published review site.
+Use inert Markdown only. Raw HTML (tags, comments, and character references
+such as `&amp;`), Markdown links, images, autolinks, link definitions,
+visibility-changing attributes, and Mermaid blocks are rejected when the
+coordinator records the testimony. They add no mathematical content and would
+let generated prose hide text, run code, or fetch remote resources in the
+published review site. HTML is refused even inside formulas and code, so put
+a space after `<` when a letter follows it: `$a < b$`, not `$a<b>c$`.
 
 Everything you write must be visible as written. Do not use invisible
 characters such as zero-width spaces. In formulas use standard notation only:
