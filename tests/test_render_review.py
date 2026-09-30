@@ -258,13 +258,73 @@ def test_writer_rejects_testimony_that_hides_what_it_says(testimony: str, reason
         r"Integrate with a thin negative space, $\int\! f$, once.",
         r"At least $50\%$ of cases, or 50\% in prose.",
         "Code such as `a % b` is shown as written.",
-        r"Height is kept with $\mathstrut x$ and a smash-free formula.",
+        r"For $0<x<1$, $\frac12 < \sqrt[3]{x}$ and $\lfloor x \rfloor = 0$ in $\mathbb R$.",
+        r"Here $\operatorname*{arg\,max}_x f(x)$ and $\langle u, v \rangle \le \|u\|\,\|v\|$ hold.",
+        r"$$f(x) = \begin{cases} x^2 & \text{if } x \ge 0, \\ -x & \text{otherwise} \end{cases}$$",
+        r"$$A = \begin{pmatrix} a & b \\ c & d \end{pmatrix}, \quad \begin{aligned} x &= y \\ &\le z \end{aligned}$$",
     ],
 )
 def test_writer_accepts_ordinary_mathematical_testimony(testimony: str, tmp_path: Path) -> None:
     _file(tmp_path, testimony)
 
     assert all(card.valid for card in load_readbacks(tmp_path).values())
+
+
+@pytest.mark.parametrize(
+    ("testimony", "command"),
+    [
+        (r"$P \Rule{3em}{1em}{0em} Q$", r"\Rule"),
+        (r"$P \rule{3em}{1em} Q$", r"\rule"),
+        (r"$P \Space{3em}{1em}{1em} Q$", r"\Space"),
+        (r"$\mathchoice{P}{P \land Q}{P}{P}$", r"\mathchoice"),
+        (r"$\toggle{P}{P \land Q}\endtoggle$", r"\endtoggle, \toggle"),
+        (r"$\raisebox{2em}{Q}$", r"\raisebox"),
+        (r"$P \hbox{and Q}$", r"\hbox"),
+        (r"$\unicode{x200B} P$", r"\unicode"),
+        (r"$\enclose{box}{Q}$", r"\enclose"),
+        (r"$$P \tag{Q}$$", r"\tag"),
+        (r"$\color{white}{Q}$", r"\color"),
+        (r"$P \cancel{\land Q}$", r"\cancel"),
+        (r"$P \Tiny{\land Q}$", r"\Tiny"),
+        (r"$P {\tiny \land Q}$", r"\tiny"),
+        (r"$P {\scriptscriptstyle \land Q}$", r"\scriptscriptstyle"),
+        (r"$\vphantom{Q} P$", r"\vphantom"),
+        (r"$P \hphantom{\land Q}$", r"\hphantom"),
+        (r"$P\phantom{\land Q}$", r"\phantom"),
+        (r"Height is kept with $\mathstrut x$.", r"\mathstrut"),
+        (r"$P \negthickspace\negthickspace Q$", r"\negthickspace"),
+        (r"$\begin{array}{c} P \end{array}$", r"\begin{array}, \end{array}"),
+    ],
+)
+def test_writer_refuses_tex_outside_the_allowlist_by_name(testimony: str, command: str, tmp_path: Path) -> None:
+    """Only the notation statements need is allowed; anything else is named."""
+
+    with pytest.raises(ValueError, match="unsafe read-back testimony") as refused:
+        _file(tmp_path, testimony)
+
+    assert "TeX outside the read-back allowlist is not allowed: " + command in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ("testimony", "reason"),
+    [
+        (r"$\overset{}{P}$", r"TeX arguments that show nothing are not allowed: \overset"),
+        (r"$\operatorname{} P$", r"TeX arguments that show nothing are not allowed: \operatorname"),
+        (r"$\mathrm{} P$", r"TeX arguments that show nothing are not allowed: \mathrm"),
+        (r"$P \text{ } Q$", r"TeX arguments that show nothing are not allowed: \text"),
+        (r"$\mathbb{\,} P$", r"TeX arguments that show nothing are not allowed: \mathbb"),
+        (r"$\frac{}{2} P$", r"TeX arguments that show nothing are not allowed: \frac"),
+        (r"$P\!{}\!Q$", "repeated negative TeX spacing"),
+        (r"$P \,\,\,\,\, Q$", "a run of 5 TeX spaces is not allowed"),
+        (r"$P ~~~~~~ Q$", "a run of 6 TeX spaces is not allowed"),
+        (r"$\begin{aligned} P \\[-2em] Q \end{aligned}$", "TeX row spacing after"),
+    ],
+)
+def test_writer_refuses_tex_that_shows_nothing_or_overlaps(testimony: str, reason: str, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unsafe read-back testimony") as refused:
+        _file(tmp_path, testimony)
+
+    assert reason in str(refused.value)
 
 
 @pytest.mark.parametrize(

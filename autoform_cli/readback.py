@@ -69,27 +69,6 @@ _ALTERED_PACKET = "the displayed skeleton does not match the recorded packet has
 _WORK_PREFIX = ".autoform-readback-"
 #: How long a publication waits for another one in the same card directory.
 _LOCK_TIMEOUT = 10.0
-_UNSAFE_TEX_COMMAND = re.compile(
-    r"\\(?:require|href|style|class|cssId|htmlId|htmlClass|htmlStyle|url|csname|"
-    r"color|definecolor|textcolor|colorbox|fcolorbox)\b"
-)
-
-#: TeX that keeps part of a formula from being seen as written: it hides
-#: content (``\phantom``), draws symbols over one another or moves them
-#: (``\llap``, ``\kern``), shows one of several alternatives (``\toggle``),
-#: sets glyphs or colours through attributes (``\bbox``, ``\unicode``), or
-#: defines macros whose bodies can drop their arguments (``\newcommand``).
-_HIDING_TEX_COMMAND = re.compile(
-    r"\\(?:phantom|hphantom|vphantom|smash|llap|rlap|clap|mathllap|mathrlap|mathclap|"
-    r"kern|mkern|hskip|mskip|hspace|mspace|moveleft|moveright|raise|lower|"
-    r"toggle|mathtip|texttip|actiontype|bbox|enclose|mmlToken|unicode|data|"
-    r"def|gdef|edef|xdef|let|futurelet|newcommand|renewcommand|providecommand|"
-    r"newenvironment|renewenvironment|DeclareMathOperator)(?![A-Za-z])"
-)
-#: Negative spaces in a row slide a symbol back over the one before it.
-_STACKED_NEGATIVE_SPACE = re.compile(
-    r"(?:\\(?:!|negthinspace|negmedspace|negthickspace)(?![A-Za-z])\s*){2,}"
-)
 #: A ``%`` after an even number of backslashes starts a TeX comment, which
 #: silently drops the rest of its line from the typeset formula.
 _TEX_COMMENT = re.compile(r"(?<!\\)(?:\\\\)*%")
@@ -785,6 +764,132 @@ def _safe_model_label(value: str) -> bool:
     )
 
 
+#: Commands that set a letter, so testimony showing only these still shows one.
+_TEX_LETTERS = frozenset(
+    r"""
+    \alpha \beta \gamma \delta \epsilon \varepsilon \zeta \eta \theta \vartheta \iota \kappa
+    \lambda \mu \nu \xi \omicron \pi \varpi \rho \varrho \sigma \varsigma \tau \upsilon \phi
+    \varphi \chi \psi \omega \Gamma \Delta \Theta \Lambda \Xi \Pi \Sigma \Upsilon \Phi \Psi
+    \Omega \aleph \ell \hbar \imath \jmath \wp \Re \Im
+    """.split()
+)
+#: Spaces no wider than two quads. A single negative thin space (``\!``) is
+#: listed too, since it tightens ``\int\! f``, but two in a row slide one
+#: symbol over another, and more than :data:`_TEX_MAX_SPACE_RUN` spaces in a
+#: row push the rest of a formula aside, so both are refused.
+_TEX_SPACES = frozenset({r"\,", r"\:", r"\;", "\\ ", "\\\n", "\\\t", r"\quad", r"\qquad", "~"})
+_TEX_MAX_SPACE_RUN = 4
+#: The TeX testimony may use: the notation statements need, out of what the
+#: site's pinned MathJax 3.2.2 defines in the base and ams packages, the only
+#: ones javascripts/mathjax.js loads. Nothing listed sizes, moves, hides,
+#: overlaps, colours, boxes, or labels content, and nothing defines a macro.
+#: Each command maps to how many arguments must be given that show something.
+#: Any other command or environment is refused by name, so extending this is a
+#: deliberate edit, to be checked against that MathJax version.
+_TESTIMONY_TEX: dict[str, int] = {
+    **dict.fromkeys(_TEX_LETTERS, 0),
+    # Symbols and logic.
+    **dict.fromkeys(
+        r"""
+        \infty \partial \nabla \emptyset \varnothing \prime \forall \exists \nexists \neg \lnot
+        \top \bot \angle \triangle \backslash \complement \therefore \because \colon \not
+        \ldots \cdots \vdots \ddots \dots \dotsc \dotsb
+        """.split(),
+        0,
+    ),
+    # Relations.
+    **dict.fromkeys(
+        r"""
+        \lt \gt \le \leq \ge \geq \ne \neq \ll \gg \leqslant \geqslant \nleq \ngeq \lneq \gneq
+        \lesssim \gtrsim \equiv \approx \cong \ncong \sim \simeq \asymp \propto \doteq \triangleq
+        \prec \preceq \succ \succeq \in \ni \notin \owns \subset \subseteq \supset \supseteq
+        \subsetneq \supsetneq \nsubseteq \nsupseteq \sqsubseteq \sqsupseteq \mid \nmid
+        \parallel \nparallel \perp \vdash \dashv \models \vDash \nvdash \nvDash \triangleleft
+        \trianglelefteq \triangleright \trianglerighteq
+        """.split(),
+        0,
+    ),
+    # Binary operators.
+    **dict.fromkeys(
+        r"""
+        \pm \mp \times \div \cdot \ast \star \circ \bullet \cap \cup \setminus \smallsetminus
+        \wedge \vee \land \lor \oplus \ominus \otimes \oslash \odot \sqcap \sqcup \uplus \amalg
+        \dagger \ddagger \diamond \ltimes \rtimes \boxplus \boxtimes \bmod \pmod \mod
+        """.split(),
+        0,
+    ),
+    # Arrows.
+    **dict.fromkeys(
+        r"""
+        \to \gets \mapsto \longmapsto \rightarrow \leftarrow \leftrightarrow \Rightarrow
+        \Leftarrow \Leftrightarrow \longrightarrow \longleftarrow \longleftrightarrow
+        \Longrightarrow \Longleftarrow \Longleftrightarrow \iff \implies \impliedby
+        \hookrightarrow \hookleftarrow \twoheadrightarrow \uparrow \downarrow \updownarrow
+        \Uparrow \Downarrow \Updownarrow \nearrow \searrow \swarrow \nwarrow \restriction
+        \xrightarrow \xleftarrow
+        """.split(),
+        0,
+    ),
+    # Big operators and named operators.
+    **dict.fromkeys(
+        r"""
+        \sum \prod \coprod \int \iint \iiint \oint \bigcup \bigcap \bigoplus \bigotimes \bigvee
+        \bigwedge \bigsqcup \biguplus \bigodot \limits \nolimits \lim \liminf \limsup \sup \inf
+        \max \min \sin \cos \tan \sec \csc \cot \sinh \cosh \tanh \coth \arcsin \arccos \arctan
+        \log \ln \lg \exp \det \dim \ker \deg \gcd \hom \arg \Pr
+        """.split(),
+        0,
+    ),
+    **dict.fromkeys(r"\substack".split(), 1),
+    # Delimiters and their sizes.
+    **dict.fromkeys(
+        r"""
+        \{ \} \| \langle \rangle \lfloor \rfloor \lceil \rceil \vert \Vert \lvert \rvert \lVert
+        \rVert \lbrace \rbrace \left \right \middle \big \Big \bigg \Bigg \bigl \bigr \Bigl \Bigr
+        \biggl \biggr \Biggl \Biggr \bigm \Bigm \biggm \Biggm
+        """.split(),
+        0,
+    ),
+    # Fractions, roots, accents, and stacking. A root's optional index is not counted.
+    **dict.fromkeys(r"\frac \dfrac \tfrac \binom \dbinom \tbinom \overset \underset \stackrel".split(), 2),
+    r"\sqrt": 0,
+    **dict.fromkeys(
+        r"""
+        \hat \bar \tilde \vec \dot \ddot \check \breve \acute \grave \mathring \widehat
+        \widetilde \overline \underline \overrightarrow \overleftarrow \overbrace \underbrace
+        """.split(),
+        1,
+    ),
+    # Fonts and text.
+    **dict.fromkeys(
+        r"""
+        \mathbb \mathcal \mathfrak \mathscr \mathrm \mathbf \mathsf \mathit \mathtt \operatorname
+        \text \textrm \textbf \textit
+        """.split(),
+        1,
+    ),
+    **dict.fromkeys(r"\displaystyle \textstyle".split(), 0),
+    # Spaces, escaped characters, rows and columns, and math delimiters.
+    **dict.fromkeys(_TEX_SPACES - {"~"}, 0),
+    r"\!": 0,
+    **dict.fromkeys(r"\# \$ \% \& \_ \\ \( \) \[ \]".split(), 0),
+    **dict.fromkeys(
+        r"""
+        \begin{cases} \begin{matrix} \begin{pmatrix} \begin{bmatrix} \begin{Bmatrix}
+        \begin{vmatrix} \begin{Vmatrix} \begin{aligned} \begin{gathered}
+        """.split(),
+        0,
+    ),
+}
+_TEX_TOKEN = re.compile(r"\\(?:[A-Za-z]+|.)?|[{}~$]|[^\\{}~$\s]+|\s+", re.DOTALL)
+_TEX_FORMULA_BOUNDARIES = frozenset({"$", r"\(", r"\)", r"\[", r"\]"})
+_TEX_ENVIRONMENT = re.compile(r"\s*\{([^{}\\]{0,64})\}")
+_TEX_STAR = re.compile(r"\s*\*")
+#: ``\\[<dimension>]`` spaces rows apart, or with a negative dimension draws
+#: one over another.
+_TEX_ROW_SPACING = re.compile(r"\*?\[")
+
+
 def _testimony_errors(text: str) -> tuple[str, ...]:
     """Reject testimony that could run code, fetch remote content, or say more
     or other than a reader sees.
@@ -799,8 +904,10 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     card in a pull request is validated, so parsing must be bounded before
     anything is known about it. What is then checked is what a reader is
     shown: no invisible or reordering characters, whether typed or written as
-    HTML entities; no TeX that hides, overlaps, or redefines content in text
-    the typesetter reads; and at least one visible character.
+    HTML entities; in text the typesetter reads, only the TeX listed in
+    :data:`_TESTIMONY_TEX`, with arguments that show something and spacing
+    that neither overlaps symbols nor pushes them apart; and at least one
+    visible character.
     """
 
     if limits := _testimony_limit_errors(text):
@@ -822,17 +929,8 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
         classes = set(str(element.attrib.get("class", "")).split())
         if tag in {"a", "img"}:
             errors.append("Markdown links, images, and autolinks are not allowed")
-        if tag == "script":
-            if not element.attrib.get("type", "").startswith("math/tex"):
-                errors.append("active HTML is not allowed")
-            else:
-                tex = re.sub(r"(?<!\\)%[^\n]*(?:\n|$)", "", element.text or "")
-                if _UNSAFE_TEX_COMMAND.search(tex):
-                    errors.append("active TeX commands are not allowed")
-        if "arithmatex" in classes:
-            tex = re.sub(r"(?<!\\)%[^\n]*(?:\n|$)", "", element.text or "")
-            if _UNSAFE_TEX_COMMAND.search(tex):
-                errors.append("active TeX commands are not allowed")
+        if tag == "script" and not element.attrib.get("type", "").startswith("math/tex"):
+            errors.append("active HTML is not allowed")
         if "style" in attributes or any(name.startswith("on") for name in attributes):
             errors.append("active Markdown attributes are not allowed")
         if "hidden" in attributes or "aria-hidden" in attributes:
@@ -849,16 +947,120 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     if hidden:
         errors.append("invisible or reordering characters are not allowed: " + ", ".join(hidden))
     typeset = _typeset_text(document)
-    if commands := sorted({match.group(0) for match in _HIDING_TEX_COMMAND.finditer(typeset)}):
-        errors.append("TeX that hides, overlaps, or redefines content is not allowed: " + ", ".join(commands))
-    if _STACKED_NEGATIVE_SPACE.search(typeset):
-        errors.append("repeated negative TeX spacing is not allowed: it slides symbols over one another")
+    errors.extend(_tex_errors(typeset))
     if _TEX_COMMENT.search(typeset):
         errors.append("TeX comments are not allowed: they drop the rest of their line; write \\% for a percent sign")
     # Math delimiters are text until MathJax runs, and an empty formula shows nothing.
     if not _MATH_DELIMITER.sub("", "".join(document.itertext())).strip():
         errors.append("testimony renders no visible text")
     return tuple(dict.fromkeys(errors))
+
+
+def _tex_errors(typeset: str) -> list[str]:
+    """Check, in one pass over ``typeset``, that every TeX command and
+    environment is listed in :data:`_TESTIMONY_TEX`, that each listed
+    command's arguments show something, and that spacing neither slides
+    symbols over one another nor pushes them apart."""
+
+    unlisted: dict[str, None] = {}
+    empty: dict[str, None] = {}
+    errors: list[str] = []
+    # One entry per open brace group: whether it shows anything, and the
+    # command it is an argument of.
+    shows: list[bool] = [True]
+    owners: list[str | None] = [None]
+    # Commands still waiting for arguments: the command, how many arguments
+    # are still to come, and the group depth they must come at.
+    waiting: list[tuple[str, int, int]] = []
+    spaces = negative = longest = 0
+    stacked = row_spacing = False
+    position = 0
+    while position < len(typeset):
+        token = _TEX_TOKEN.match(typeset, position)
+        assert token is not None
+        position = token.end()
+        text = token.group()
+        if text.isspace():
+            continue
+        if text == "\\":
+            text = "\\ "
+        if text in _TEX_FORMULA_BOUNDARIES:
+            empty.update(dict.fromkeys(command for command, _, _ in waiting))
+            waiting.clear()
+            del shows[1:], owners[1:]
+            spaces = negative = 0
+            continue
+        if text == "{":
+            owner = None
+            if waiting and waiting[-1][2] == len(shows):
+                owner, remaining, depth = waiting.pop()
+                if remaining > 1:
+                    waiting.append((owner, remaining - 1, depth))
+            shows.append(False)
+            owners.append(owner)
+            continue
+        if text == "}":
+            while waiting and waiting[-1][2] == len(shows):
+                empty[waiting.pop()[0]] = None
+            if len(shows) > 1:
+                shown, owner = shows.pop(), owners.pop()
+                if owner is not None and not shown:
+                    empty[owner] = None
+                shows[-1] = shows[-1] or shown
+            continue
+        space = text in _TEX_SPACES or text == r"\!"
+        if space:
+            spaces += 1
+            negative += text == r"\!"
+            stacked = stacked or negative > 1
+            longest = max(longest, spaces)
+        else:
+            spaces = negative = 0
+            shows[-1] = True
+        if waiting and waiting[-1][2] == len(shows):
+            command, remaining, depth = waiting.pop()
+            taken = 1 if text.startswith("\\") else len(text)
+            if space:
+                empty[command] = None
+            if remaining > taken:
+                waiting.append((command, remaining - taken, depth))
+        if not text.startswith("\\"):
+            continue
+        if text in {r"\begin", r"\end"}:
+            environment = _TEX_ENVIRONMENT.match(typeset, position)
+            if environment is not None and f"\\begin{{{environment.group(1)}}}" in _TESTIMONY_TEX:
+                position = environment.end()
+            else:
+                unlisted[f"{text}{{{environment.group(1)}}}" if environment else text] = None
+            continue
+        arguments = _TESTIMONY_TEX.get(text)
+        if arguments is None:
+            unlisted[text] = None
+            continue
+        if text == r"\operatorname" and (star := _TEX_STAR.match(typeset, position)):
+            position = star.end()
+        if text == "\\\\" and _TEX_ROW_SPACING.match(typeset, position):
+            row_spacing = True
+        if arguments:
+            waiting.append((text, arguments, len(shows)))
+    empty.update(dict.fromkeys(command for command, _, _ in waiting))
+    if unlisted:
+        errors.append("TeX outside the read-back allowlist is not allowed: " + ", ".join(sorted(unlisted)))
+    if empty:
+        errors.append("TeX arguments that show nothing are not allowed: " + ", ".join(sorted(empty)))
+    if stacked:
+        errors.append("repeated negative TeX spacing is not allowed: it slides symbols over one another")
+    if longest > _TEX_MAX_SPACE_RUN:
+        errors.append(
+            f"a run of {longest} TeX spaces is not allowed: more than {_TEX_MAX_SPACE_RUN} in a row "
+            "push symbols apart or out of view"
+        )
+    if row_spacing:
+        errors.append(
+            "TeX row spacing after \\\\ is not allowed: it can draw rows over one another; "
+            "write {} before a bracket that starts a row"
+        )
+    return errors
 
 
 def _testimony_limit_errors(text: str) -> tuple[str, ...]:

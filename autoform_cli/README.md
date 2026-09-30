@@ -394,9 +394,16 @@ The loader rejects missing or unknown fields, altered packets, identity
 mismatches, and malformed or empty testimony. Testimony must show a reader
 everything it says: invisible and reordering characters (zero-width spaces,
 bidirectional overrides), whether typed or written as HTML entities, and TeX
-that hides, overlaps, or redefines content (`\phantom`, `\rlap`, `\kern`,
-`\toggle`, `\bbox`, `\unicode`, macro definitions, comments) are rejected, as
-is testimony that renders no visible text. Before any card is parsed its
+comments are rejected. TeX may use only an allowlist of the notation
+statements need, kept in `readback.py` against the site's pinned MathJax
+3.2.2: letters, symbols, relations, operators, arrows, delimiters, fractions,
+roots, accents, fonts, `\text`, thin to double-quad spaces, and the `cases`,
+`aligned`, and matrix environments. Any other command or environment, such as
+`\phantom`, `\rlap`, `\kern`, `\color`, `\tag`, or a macro definition, is
+refused by name, as are listed commands given arguments that show nothing
+(`\mathrm{}`), two negative spaces or more than four spaces in a row, and row
+spacing after `\\`. Testimony that renders no visible text is rejected too.
+Before any card is parsed its
 testimony must fit limits several times what real read-backs use: 32 KiB, 500
 lines, 1,024 math delimiters, 512 backticks in runs of at most 16, 256 opening
 brackets, and 64 columns of nesting. The Markdown parser is superlinear in each

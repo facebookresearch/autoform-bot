@@ -61,11 +61,16 @@ the testimony. They add no mathematical content and would let generated prose
 run code or fetch remote resources in the published review site.
 
 Everything you write must be visible as written. Do not use invisible
-characters such as zero-width spaces, and in formulas do not use `\phantom`,
-overlapping or spacing commands such as `\rlap` and `\kern`, macro definitions,
-or `%`; write `\%` for a percent sign. A read-back that breaks this is
-rejected, however faithful it is. Keep it to a few kilobytes: a read-back over
-32 KiB is refused unread.
+characters such as zero-width spaces. In formulas use standard notation only:
+letters, symbols, relations, operators, arrows, delimiters, `\frac`, `\sqrt`,
+accents, the fonts `\mathbb`, `\mathcal`, `\mathfrak`, `\mathscr`, `\mathrm`,
+`\mathbf`, and `\mathsf`, `\operatorname` and `\text` with visible content,
+and the `cases`, `aligned`, and matrix environments. Any other command is
+refused by name, including `\phantom`, `\rlap`, `\kern`, `\color`, `\tag`,
+size commands, and macro definitions. Space with `\,`, `\;`, or `\quad`, at
+most four in a row, and never two `\!` in a row. Do not write `%`; write `\%`
+for a percent sign. A read-back that breaks this is rejected, however faithful
+it is. Keep it to a few kilobytes: a read-back over 32 KiB is refused unread.
 
 ## Return only testimony
 
