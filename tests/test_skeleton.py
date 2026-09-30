@@ -429,14 +429,22 @@ def test_bounded_command_finds_a_descendant_that_escapes_its_process_group(
     tmp_path: Path,
 ) -> None:
     child_pid = tmp_path / "detached-child.pid"
+    staged_pid = tmp_path / "detached-child.pid.tmp"
+    # The child leaves the process group before it records its pid, and the
+    # parent exits only once that record exists, so the child has escaped by
+    # the time the command ends however slowly it starts.
     child_program = (
         "import os, pathlib, time; os.setsid(); "
-        f"pathlib.Path({str(child_pid)!r}).write_text(str(os.getpid())); time.sleep(30)"
+        f"pathlib.Path({str(staged_pid)!r}).write_text(str(os.getpid())); "
+        f"os.replace({str(staged_pid)!r}, {str(child_pid)!r}); time.sleep(30)"
     )
     parent_program = (
-        "import subprocess, sys; "
+        "import pathlib, subprocess, sys, time\n"
         f"subprocess.Popen([sys.executable, '-c', {child_program!r}], "
-        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)"
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "deadline = time.monotonic() + 5\n"
+        f"while not pathlib.Path({str(child_pid)!r}).exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.01)\n"
     )
 
     with pytest.raises(SkeletonError, match="descendant processes"):
