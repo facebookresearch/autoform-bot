@@ -174,22 +174,22 @@ def test_mermaid_attribute_form_matches_the_published_runtime(tmp_path: Path) ->
         )
 
 
-def test_shipped_mathjax_configuration_filters_active_math(tmp_path: Path) -> None:
-    configuration = (
-        Path(__file__).parents[1]
-        / "autoform_cli"
-        / "templates"
-        / "blueprint"
-        / "javascripts"
-        / "mathjax.js"
-    ).read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    "shipped",
+    [
+        "autoform_cli/templates/blueprint/javascripts/mathjax.js",
+        "skills/setup/assets/cabannes-thesis-project/blueprint/javascripts/mathjax.js",
+    ],
+)
+def test_shipped_mathjax_configuration_filters_active_math(shipped: str) -> None:
+    configuration = (Path(__file__).parents[1] / shipped).read_text(encoding="utf-8")
 
     assert 'load: ["ui/safe"]' in configuration
     assert 'URLs: "none"' in configuration
     assert 'classes: "none"' in configuration
     assert 'cssIDs: "none"' in configuration
     assert 'styles: "none"' in configuration
-    assert 'packages: {"[-]": ["require"]}' in configuration
+    assert 'packages: ["base", "ams", "noundefined"]' in configuration
 
 
 def test_writer_keeps_inert_markdown_and_mathematics(tmp_path: Path) -> None:
