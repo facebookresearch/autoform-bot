@@ -5,6 +5,10 @@ name: autoform verify
 
 on:
   pull_request:
+  # A submitted or dismissed review changes who approved a statement review,
+  # so only the lightweight authenticate job reruns on it.
+  pull_request_review:
+    types: [submitted, dismissed]
   push:
     branches: [main]
 
@@ -16,12 +20,14 @@ env:
   AUTOFORM_REF: "43097b2c07e68df899d6b8bca7849d091c294754"
 
 concurrency:
-  group: autoform-verify-${{ github.ref }}
+  # Keyed by event too: a review arriving must not cancel the Lean build.
+  group: autoform-verify-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
     name: build
+    if: github.event_name != 'pull_request_review'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -133,3 +139,51 @@ jobs:
         run: >-
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           autoform review check blueprint --lean-root .
+
+  # review_approved shows only that the review surface is unchanged, and
+  # `review check` prints the hash, so anyone can paste it. This job asks who
+  # approved each approval the pull request adds or changes: an individual
+  # @user code owner of the article, per CODEOWNERS on the base commit, who is
+  # not the pull request's author, in an APPROVED review of a commit that
+  # records the hash. It needs no Lean. It runs the pull request's own copy of
+  # this workflow, so it is early feedback; the authoritative label is the one
+  # blueprint-pages.yml computes on the default branch.
+  authenticate:
+    name: authenticate approvals
+    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out project
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # The build job validates the marker itself; this only asks whether the
+      # project opted in.
+      - name: Detect statement review
+        run: |
+          set -euo pipefail
+          marker="blueprint/.autoform-review"
+          if [[ -f "$marker" && ! -L "$marker" ]]; then
+            echo "AUTOFORM_REVIEW_ENABLED=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install uv
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+
+      - name: Authenticate changed approvals
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: >-
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          autoform review authenticate blueprint --github
+          --since "$BASE_SHA" --trusted-ref "$BASE_SHA"

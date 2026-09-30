@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   AUTOFORM_SOURCE: "https://github.com/VivienCabannes/autoform-bot.git"
@@ -35,6 +36,9 @@ jobs:
     steps:
       - name: Check out project
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Authenticating approvals finds the commit that recorded each hash.
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -98,12 +102,24 @@ jobs:
 
       # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
       # and permalinks into the Lean code at this exact commit.
+      #
+      # An approval reads "approved by @user" only when an individual code
+      # owner, per this commit's CODEOWNERS, approved a pull request at a
+      # commit recording that hash, and was not its author; otherwise it reads
+      # "self-approved". This is the authoritative label: the pull request gate
+      # in autoform-verify.yml runs the pull request's own workflow file, so a
+      # pull request can disable that gate but cannot change this label.
       - name: Render the blueprint
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           review_args=()
           if [[ "${AUTOFORM_REVIEW_ENABLED:-}" == true ]]; then
             review_args=(--review)
+            if [[ "$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_REF" == refs/heads/main ]]; then
+              review_args+=(--authenticate github)
+            fi
           fi
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
             autoform render blueprint \

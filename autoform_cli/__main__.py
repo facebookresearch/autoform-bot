@@ -14,6 +14,14 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import status
+from .approvals import (
+    ApprovalError,
+    ApprovalStatus,
+    GitHubReviewVerifier,
+    approval_statuses,
+    approvals_at,
+    current_approvals,
+)
 from .article_identity import plan_article_ids
 from .audit import audit_blueprint
 from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_key
@@ -217,8 +225,38 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="the bundle `review prepare` wrote; without it, one is derived from this run's own extraction",
     )
+    review_check.add_argument(
+        "--authenticate",
+        choices=["github"],
+        help="also say who approved each current approval, from GitHub pull request reviews "
+        "(needs GITHUB_TOKEN and GITHUB_REPOSITORY); without it every approval is self-approved",
+    )
     review_check.add_argument("--json", action="store_true", help="write stable machine-readable output")
     _add_probe_timeout_argument(review_check)
+
+    review_authenticate = review_subparsers.add_parser(
+        "authenticate",
+        help="report who approved each recorded review_approved, without Lean",
+    )
+    review_authenticate.add_argument("blueprint_dir")
+    review_method = review_authenticate.add_mutually_exclusive_group(required=True)
+    review_method.add_argument(
+        "--github",
+        action="store_true",
+        help="accept approving pull request reviews by individual code owners "
+        "(needs GITHUB_TOKEN and GITHUB_REPOSITORY)",
+    )
+    review_authenticate.add_argument(
+        "--since",
+        metavar="REF",
+        help="fail when an approval added or changed since REF is not authenticated",
+    )
+    review_authenticate.add_argument(
+        "--trusted-ref",
+        metavar="REF",
+        default="HEAD",
+        help="commit whose CODEOWNERS decides who may approve (default HEAD)",
+    )
 
     render = subparsers.add_parser("render", help="build the publishable blueprint")
     render.add_argument("blueprint_dir")
@@ -243,6 +281,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="add review disclosures from evidence derived in this run, without a prepared bundle",
     )
     _add_probe_timeout_argument(render)
+    render.add_argument(
+        "--authenticate",
+        choices=["github"],
+        help="label approvals by who approved them, from GitHub pull request reviews "
+        "(needs GITHUB_TOKEN and GITHUB_REPOSITORY); without it every approval is self-approved",
+    )
 
     args = parser.parse_args(argv)
 
@@ -565,6 +609,8 @@ def _review(args: argparse.Namespace) -> int:
         return _review_record(args)
     if args.review_command == "check":
         return _review_check(args)
+    if args.review_command == "authenticate":
+        return _review_authenticate(args)
     return 2
 
 
@@ -883,6 +929,7 @@ def _report_recorded(written: list[tuple[Path, str]], total: int) -> None:
 
 def _review_check(args: argparse.Namespace) -> int:
     try:
+        verifier = _approval_verifier(args.authenticate)
         graph, skeleton, bundle, cards = _current_review(
             args.blueprint_dir,
             lean_root=args.lean_root,
@@ -890,7 +937,8 @@ def _review_check(args: argparse.Namespace) -> int:
             timeout=args.timeout,
         )
         findings = review_findings(graph, bundle, skeleton, readbacks=cards)
-    except (GraphValidationError, ReviewError, SkeletonError) as exc:
+        approvals = approval_statuses(graph, current_approvals(graph, bundle, cards), verifier)
+    except (ApprovalError, GraphValidationError, ReviewError, SkeletonError) as exc:
         for issue in exc.issues:
             print(f"error: {issue}", file=sys.stderr)
         return 2
@@ -898,6 +946,7 @@ def _review_check(args: argparse.Namespace) -> int:
         print(
             json.dumps(
                 {
+                    "approvals": [_approval_json(item) for item in approvals.values()],
                     "bundle": bundle.hash,
                     "clean": not findings,
                     "findings": [
@@ -914,7 +963,76 @@ def _review_check(args: argparse.Namespace) -> int:
             print(f"error: {finding.node_id}: {finding.code}: {finding.reason}")
     else:
         print(f"OK: statement reviews match {bundle.hash}")
+    if not args.json:
+        for item in approvals.values():
+            print(_approval_line(item, verified=verifier is not None))
     return 1 if findings else 0
+
+
+def _review_authenticate(args: argparse.Namespace) -> int:
+    """Gate newly recorded approvals on evidence of who made them.
+
+    Whether an approval is current is ``review check``'s job and needs Lean.
+    This only asks who approved each recorded hash, so it runs in seconds.
+    """
+
+    try:
+        verifier = _approval_verifier("github", trusted_ref=args.trusted_ref)
+        graph = load_graph(args.blueprint_dir)
+        recorded = {
+            node.id: node.review_approved for node in graph.nodes.values() if node.review_approved is not None
+        }
+        previous = {} if args.since is None else approvals_at(graph, args.since, list(recorded))
+        changed = {node_id: value for node_id, value in recorded.items() if previous.get(node_id) != value}
+        statuses = approval_statuses(graph, changed, verifier)
+    except (ApprovalError, GraphValidationError) as exc:
+        for issue in exc.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        return 2
+    for node_id, review_hash in sorted(recorded.items()):
+        if node_id in statuses:
+            print(_approval_line(statuses[node_id], verified=True))
+        else:
+            print(f"{node_id}: unchanged since {args.since} · {review_hash}")
+    unauthenticated = [item for item in statuses.values() if not item.authenticated]
+    if args.since is not None and unauthenticated:
+        print(
+            f"error: {len(unauthenticated)} approval{'s' if len(unauthenticated) != 1 else ''} added or changed "
+            f"since {args.since} {'are' if len(unauthenticated) != 1 else 'is'} self-approved; "
+            "an individual code owner who is not the pull request's author must approve the pull request",
+            file=sys.stderr,
+        )
+        return 1
+    if args.since is not None:
+        print(f"OK: every approval added or changed since {args.since} is authenticated")
+    return 0
+
+
+def _approval_verifier(method: str | None, *, trusted_ref: str = "HEAD") -> GitHubReviewVerifier | None:
+    if method is None:
+        return None
+    return GitHubReviewVerifier.from_environment(trusted_ref=trusted_ref)
+
+
+def _approval_line(item: ApprovalStatus, *, verified: bool) -> str:
+    line = f"{item.node_id}: {item.label} · {item.review_hash}"
+    if item.attestation is not None:
+        return f"{line} ({item.attestation.reference})"
+    return f"{line} ({item.reason})" if verified and item.reason else line
+
+
+def _approval_json(item: ApprovalStatus) -> dict[str, object]:
+    attestation = item.attestation
+    return {
+        "authenticated": item.authenticated,
+        "label": item.label,
+        "method": None if attestation is None else attestation.method,
+        "node_id": item.node_id,
+        "reason": item.reason,
+        "reference": None if attestation is None else attestation.reference,
+        "review_hash": item.review_hash,
+        "reviewer": None if attestation is None else attestation.reviewer,
+    }
 
 
 def _current_review(
@@ -1020,6 +1138,10 @@ def _render(args: argparse.Namespace) -> int:
         skeleton = None
         bundle = None
         cards = None
+        if args.authenticate is not None and args.review_bundle is None and not args.review:
+            print("error: --authenticate requires --review or --review-bundle", file=sys.stderr)
+            return 2
+        verifier = _approval_verifier(args.authenticate)
         if args.review_bundle is not None or args.review:
             if args.lean_root is None:
                 flag = "--review" if args.review else "--review-bundle"
@@ -1040,8 +1162,9 @@ def _render(args: argparse.Namespace) -> int:
             skeleton=skeleton,
             review_bundle=bundle,
             readbacks=cards,
+            approval_verifier=verifier,
         )
-    except (GraphValidationError, PublicationError, ReviewError, SkeletonError) as exc:
+    except (ApprovalError, GraphValidationError, PublicationError, ReviewError, SkeletonError) as exc:
         for issue in exc.issues:
             print(f"error: {issue}")
         return 1

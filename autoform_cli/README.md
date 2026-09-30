@@ -83,7 +83,7 @@ An article asserts only facts a human or agent verified:
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
 | `lean: Ns.decl` | Declaration name(s) that discharge the article. |
 | `discussion: 42` | Issue number or URL where the article is being discussed. |
-| `review_approved: sha256:<64 hex>` | A person approved the complete current review surface for this article. |
+| `review_approved: sha256:<64 hex>` | The hash of the complete review surface someone approved for this article. It shows that surface is unchanged, not who approved it. |
 
 Everything a reader thinks of as progress is *derived* from the DAG on every
 run, so it cannot go stale:
@@ -376,9 +376,11 @@ approval does not record any of these hashes alone. It records one `review_appro
 hash over the complete review surface: the article's title and statement, cited source
 passage and locator, exact joint packet, each declaration's drift hash, and
 every validated read-back card.
-Changing any reviewed input invalidates the approval.
-These hashes detect drift but do not authenticate a reviewer or the evidence
-when candidate code controls the checkout.
+Changing any reviewed input invalidates the approval. The hash shows that the
+surface is unchanged since it was written down, not who wrote it; the review
+commands below label such an approval self-approved until a verifier finds
+who approved it. These hashes do not authenticate the evidence when candidate
+code controls the checkout.
 
 A read-back is an independent agent's mathematical-English account of one
 declaration packet. The coordinator gives that agent only an opaque packet and
@@ -495,6 +497,9 @@ autoform audit blueprint --lean-root . --review-bundle review.json
 autoform render blueprint --lean-root . --review-bundle review.json
 autoform review check blueprint --lean-root .
 autoform render blueprint --lean-root . --review
+autoform review check blueprint --lean-root . --authenticate github
+autoform render blueprint --lean-root . --review --authenticate github
+autoform review authenticate blueprint --github --since origin/main --trusted-ref origin/main
 ```
 
 `review prepare` extracts Lean evidence from the current built tree and writes
@@ -582,6 +587,48 @@ without it fail instead of silently disabling review. CI never trusts a
 committed bundle: after the Lean build it runs the review-only check against
 one derived in the same run, and Pages renders its review disclosures the same
 way, without turning advisory roadmap or coverage findings into merge blockers.
+
+`review_approved` records unchanged evidence, not who approved it:
+`review check` prints the expected hash, so anyone, an agent included, can
+paste it. An approval therefore has two separate properties. It is current when
+`review_approved` equals the current review hash, which `review check`
+enforces. It is authenticated when a verifier finds evidence that an allowed
+person approved that exact hash. A current approval without that evidence is
+labelled self-approved wherever it is shown. Without `--authenticate` nothing
+uses the network and every approval is self-approved; authentication is
+evidence a verifier checks, never a flag or setting.
+
+The GitHub verifier reads pull request reviews through the REST API with
+`GITHUB_TOKEN` (pull request read access), `GITHUB_REPOSITORY`, and optionally
+`GITHUB_API_URL`, and needs full Git history. An approval of hash H for an
+article is authenticated when the pull request that introduced H to the
+article's file, found from the most recent commit in history that did so, has
+an APPROVED review that is its reviewer's latest review other than a comment,
+whose reviewer is not the pull request's author but is an individual `@user`
+code owner of the article's path, and whose reviewed commit records
+`review_approved: H`. A later request for changes, or a dismissal, voids it.
+Code owners come from the first of `.github/CODEOWNERS`, `CODEOWNERS`, and
+`docs/CODEOWNERS` that exists at the trusted ref (`--trusted-ref`, default
+`HEAD`), never from the change under review, so a pull request cannot make its
+own reviewer an owner. Team (`@org/team`) and email owners never authenticate,
+because a workflow token cannot check team membership: name individual
+reviewers. Negated, bracketed, and escaped patterns are refused rather than
+guessed. Approvals are matched by path, so a moved article, or a hash first
+merged without such a review, stays self-approved until a new pull request
+records it and is approved. Signed SSH or GPG approvals (issue #49) are planned
+as a second verifier behind the same interface.
+
+`review authenticate` needs no Lean. It lists every recorded approval with its
+status and does not judge whether approvals are current. With `--since REF` it
+exits 1 when an approval added or changed relative to REF is not
+authenticated; unchanged approvals are not looked up, and removing one needs
+nothing. Generated CI runs it on each pull request of an opted-in project, and
+again when a review is submitted or dismissed, with the base commit as both
+`--since` and `--trusted-ref`. That job runs the pull request's own workflow
+file, so a pull request that edits CI can disable it; it is early feedback.
+The authoritative label is the one Pages computes on the default branch with
+`--authenticate github`, from that branch's workflow and CODEOWNERS, and no
+pull request can make it say approved.
 
 When `--output`, `--packets`, and `--passages` are combined, all three outputs
 are staged before publication and a failed commit restores the previous set.

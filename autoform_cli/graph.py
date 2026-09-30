@@ -431,6 +431,16 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
     return parsed, []
 
 
+def frontmatter_value(text: str, key: str) -> str | None:
+    """Return one canonical frontmatter value of an article's text, or None.
+
+    Frontmatter that does not parse cleanly yields None, so a caller comparing
+    another revision of an article never trusts a value the graph would reject.
+    """
+    metadata, _, issues = _parse_frontmatter("", text.splitlines())
+    return None if issues else metadata.get(key)
+
+
 def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], int, list[str]]:
     if not lines or lines[0].strip() != "---":
         return {}, 0, []
@@ -621,6 +631,7 @@ __all__ = [
     "Graph",
     "GraphValidationError",
     "Node",
+    "frontmatter_value",
     "load_graph",
     "read_node_source",
 ]

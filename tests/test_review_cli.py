@@ -1080,7 +1080,7 @@ def test_render_review_shows_the_readbacks_its_check_validated(
     assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 0
     pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
     assert "The statement Review.result asserts True." in pages
-    assert "bp-review-approved" in pages
+    assert '<span class="bp-review-self-approved">self-approved · sha256:' in pages
 
 
 def test_render_refuses_articles_edited_after_the_review_check(
@@ -1194,3 +1194,29 @@ def test_audit_refuses_articles_edited_after_the_review_check(
     out = capsys.readouterr().out
     assert "review-snapshot-changed: the blueprint changed after its review evidence was extracted" in out
     assert "OK:" not in out
+
+
+def test_a_pasted_current_hash_is_only_self_approved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The blocker: `review check` prints the hash, so an agent can paste it and
+    pass. Matching the hash proves the review is current, not who approved it."""
+
+    def no_network(*args: object, **kwargs: object) -> object:
+        raise AssertionError("an unauthenticated check or render used the network")
+
+    monkeypatch.setattr("urllib.request.urlopen", no_network)
+    # _approved_batch pastes exactly the hash the tooling computes.
+    blueprint = _approved_batch(tmp_path, monkeypatch, _Extraction())
+
+    assert _check(blueprint, tmp_path) == 0
+    output = capsys.readouterr().out
+    assert "basics/result: self-approved · sha256:" in output
+    assert "approved by" not in output
+
+    site = tmp_path / "site"
+    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 0
+    pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
+    assert pages.count('<span class="bp-review-self-approved">self-approved · sha256:') == 2
+    assert "bp-review-approved" not in pages
+    assert re.search(r"(?<!self-)approved ·", pages) is None

@@ -20,6 +20,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 from . import graph_pages, graph_views, mermaid, status
+from .approvals import ApprovalStatus, ApprovalVerifier, approval_statuses, current_approvals
 from .coverage import CoverageSummary, load_coverage
 from .graph import Graph, Node, load_graph, read_node_source
 from .lean import SourceLinker, build_linker, declaration_names
@@ -241,6 +242,7 @@ def render_site(
     skeleton: SkeletonReport | None = None,
     review_bundle: ReviewBundle | None = None,
     readbacks: dict[tuple[str, str], Readback] | None = None,
+    approval_verifier: ApprovalVerifier | None = None,
 ) -> RenderReport:
     """Write deterministic, read-only projections of the Markdown blueprint.
 
@@ -255,6 +257,9 @@ def render_site(
     here, after that check, and the review is refused unless they are the
     blueprint ``skeleton`` was extracted from. Each article's text is then read
     only as the bytes that load parsed; one written since stops the render.
+
+    A current approval is labelled self-approved unless ``approval_verifier``
+    authenticates it; without a verifier no network is used.
     """
     blueprint = Path(blueprint_dir).expanduser().resolve()
     requested_destination = Path(output_dir).expanduser()
@@ -305,6 +310,12 @@ def render_site(
         readbacks = {}
     elif readbacks is None:
         readbacks = load_readbacks(blueprint)
+    # Before anything is written, so a failed lookup leaves no partial site.
+    approvals = (
+        {}
+        if review_bundle is None
+        else approval_statuses(graph, current_approvals(graph, review_bundle, readbacks), approval_verifier)
+    )
 
     _prepare_destination(destination, clean=clean)
     _write_publication_manifest(
@@ -423,6 +434,7 @@ def render_site(
             skeleton=skeleton,
             review_bundle=review_bundle,
             readbacks=readbacks,
+            approvals=approvals,
         )
         page.write_text(chapter, encoding="utf-8")
         if narrative is None:  # a milestone with no narrative page of its own
@@ -1496,6 +1508,7 @@ def _render_chapter(
     skeleton: SkeletonReport | None = None,
     review_bundle: ReviewBundle | None = None,
     readbacks: dict[tuple[str, str], Readback] | None = None,
+    approvals: dict[str, ApprovalStatus] | None = None,
 ) -> tuple[str, int, list[str]]:
     """Render one narrative article with statements at its authored link slots."""
     links = _anchored_links(targets, page)
@@ -1522,6 +1535,7 @@ def _render_chapter(
             skeleton=skeleton,
             review_bundle=review_bundle,
             readbacks=readbacks or {},
+            approvals=approvals,
         )
         environments[node_id] = environment
         linked += node_linked
@@ -1606,6 +1620,7 @@ def _render_environment(
     skeleton: SkeletonReport | None = None,
     review_bundle: ReviewBundle | None = None,
     readbacks: dict[tuple[str, str], Readback] | None = None,
+    approvals: dict[str, ApprovalStatus] | None = None,
 ) -> tuple[str, int, list[str]]:
     node_status = statuses[node.id]
     caption, _, number = numbers[node.id].rpartition(" ")
@@ -1675,7 +1690,7 @@ def _render_environment(
     if dependencies:
         lines.append(dependencies)
     if skeleton is not None and review_bundle is not None:
-        review = _review_disclosure(node, skeleton, review_bundle, readbacks or {})
+        review = _review_disclosure(node, skeleton, review_bundle, readbacks or {}, approvals or {})
         if review:
             lines.extend(["", review, ""])
     lines.append("</div>")
@@ -1687,12 +1702,15 @@ def _review_disclosure(
     skeleton: SkeletonReport,
     bundle: ReviewBundle,
     readbacks: dict[tuple[str, str], Readback],
+    approvals: dict[str, ApprovalStatus],
 ) -> str:
     """Show what a reviewer must trust, and what a blind auditor says it means.
 
     The prepared bundle binds the statement, cited passage, exact packets, and
     declaration mapping. Read-backs add testimony about those packets. The
-    final approval hash covers both sides of that review surface.
+    final approval hash covers both sides of that review surface. A matching
+    hash says only that nothing changed; it is self-approved until a verifier
+    names the person who approved it.
     """
 
     record = skeleton.node(node.id)
@@ -1705,6 +1723,7 @@ def _review_disclosure(
         expected_approval = bundle.review_hash(article.article_id, readbacks)
     except ReviewError:
         expected_approval = None
+    evidence = None
     if node.review_approved is None:
         approval = ("bp-review-open", "not yet approved")
         if expected_approval is not None:
@@ -1712,15 +1731,25 @@ def _review_disclosure(
     elif expected_approval is None:
         approval = ("bp-review-drift", "approval cannot be verified because testimony is incomplete or invalid")
     elif node.review_approved == expected_approval:
-        approval = ("bp-review-approved", f"approved · {expected_approval}")
+        status = approvals.get(node.id)
+        attestation = status.attestation if status is not None and status.review_hash == expected_approval else None
+        if attestation is None:
+            approval = ("bp-review-self-approved", f"self-approved · {expected_approval}")
+        else:
+            approval = ("bp-review-approved", f"approved by @{attestation.reviewer} · {expected_approval}")
+            if attestation.reference.startswith("https://"):
+                evidence = attestation.reference
     else:
         approval = (
             "bp-review-drift",
             f"approval {node.review_approved} does not match the current complete review {expected_approval}",
         )
+    label = html.escape(approval[1])
+    if evidence is not None:
+        label = f'<a href="{html.escape(evidence, quote=True)}">{label}</a>'
     summary = (
         f"Review · {count} skeleton{'s' if count != 1 else ''}, {lines_to_read} lines to trust · "
-        f'<span class="{approval[0]}">{html.escape(approval[1])}</span>'
+        f'<span class="{approval[0]}">{label}</span>'
     )
     parts = ['<details class="bp-review" markdown="1">', f"<summary>{summary}</summary>", ""]
     parts.extend(
@@ -2585,6 +2614,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-review summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
 .bp-review-approved {{ color: #31A24C; font-weight: 600; }}
+.bp-review-approved a {{ color: inherit; }}
+.bp-review-self-approved {{ color: var(--bp-muted); font-style: italic; }}
 .bp-review-open {{ color: var(--bp-muted); }}
 .bp-review-drift {{ color: #B77900; font-weight: 600; }}
 .bp-skeleton {{ margin-top: 0.6rem; color: var(--bp-fg); }}

@@ -82,7 +82,8 @@ tree.
    commands re-extract current evidence and fail closed if the bundle is stale,
    incomplete, or inconsistent. Every formalized statement gains a *Review*
    disclosure showing the exact hashed packet, its read-back, the article and
-   source evidence it is bound to, and the approval state.
+   source evidence it is bound to, and the approval state. A current approval
+   reads self-approved until a verifier names the person who approved it.
 5. Walk the person through each statement: source and book text first, then the
    read-back, then the exact packet. Ask whether the read-back says what the
    book says, whether any hypothesis is missing or added, and whether the
@@ -90,9 +91,15 @@ tree.
    per-article review hash shown by the validated review view into
    `review_approved`. That hash binds the article title and statement, cited passage,
    exact packets, and current read-backs. This edit is the person's assertion,
-   not the agent's. When they do not approve, record `revise` with their reason
-   and hand the change to Roadmap or Orchestrate.
+   not the agent's, but the hash only shows that nothing changed since it was
+   written, and anyone can copy it. Commit the approval in a pull request and
+   ask an individual code owner of the article, who is not its author, to
+   approve that pull request at a commit that records the hash; only then does
+   the default branch's site name them instead of saying self-approved. When
+   the person does not approve, record `revise` with their reason and hand the
+   change to Roadmap or Orchestrate.
 6. Run the review-aware audit again before reporting. Treat missing testimony,
    unresolved extraction, an incomplete bundle, any packet or read-back
    mismatch, and any approval drift as failures. An edit to any reviewed input
-   must invalidate the approval it changed.
+   must invalidate the approval it changed. Do not report a statement as
+   approved by a person while its label says self-approved.
