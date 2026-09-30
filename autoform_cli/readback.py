@@ -30,9 +30,10 @@ import re
 import secrets
 import stat
 import unicodedata
+import warnings
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Iterator, Mapping
 from urllib.parse import unquote_to_bytes
 
 import html5lib
@@ -51,6 +52,9 @@ _QUOTED_FRONTMATTER_FIELDS = frozenset({"article_id", "declaration", "model"})
 #: The only hash form a card may record: what `autoform skeleton` prints.
 _HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _ALTERED_PACKET = "the displayed skeleton does not match the recorded packet hash"
+#: Staging and set-aside files beside a card start with this and never end in
+#: ``.md``, so the loader never takes one for a card.
+_WORK_PREFIX = ".autoform-readback-"
 _UNSAFE_TEX_COMMAND = re.compile(
     r"\\(?:require|href|style|class|cssId|htmlId|htmlClass|htmlStyle|url|csname|"
     r"color|definecolor|textcolor|colorbox|fcolorbox)\b"
@@ -254,21 +258,13 @@ def load_readbacks(blueprint: str | Path) -> dict[tuple[str, str], Readback]:
 
     root = Path(blueprint).expanduser().resolve() / READBACKS_DIR
     found: dict[tuple[str, str], Readback] = {}
-    if root.is_symlink() or not root.is_dir():
-        return found
-    for path in sorted(root.rglob("*.md")):
-        # A card is a file inside the vault; a symlink could point anywhere.
-        if path.is_symlink() or not path.is_file():
-            continue
-        if any((root / parent).is_symlink() for parent in path.relative_to(root).parents):
-            continue
+    for path, raw in _card_files(root):
         relative = path.relative_to(root)
         path_article_id = relative.parent.name if len(relative.parts) == 2 else None
         declaration = relative.stem
         try:
-            raw = path.read_bytes()
             text = raw.decode("utf-8")
-        except (OSError, UnicodeError):
+        except UnicodeError:
             continue
         metadata, body, frontmatter_errors = _split(text)
         recorded_article_id = metadata.get("article_id")
@@ -369,6 +365,80 @@ def load_readbacks(blueprint: str | Path) -> dict[tuple[str, str], Readback]:
         else:
             found[key] = readback
     return found
+
+
+def _card_files(root: Path) -> Iterator[tuple[Path, bytes]]:
+    """Every regular ``*.md`` file under ``root``, with its bytes, read without following a link.
+
+    A card is a file inside the vault; a symlink could point anywhere. The
+    candidates come from a listing, which can be out of date by the time a
+    file is opened, so a path-level check is not enough. Where the platform
+    allows, each candidate is opened through no-follow descriptors walked
+    down from ``root``, and a card or directory swapped for a symlink after
+    the listing is refused rather than followed. Elsewhere (Windows) the file
+    is opened first; then no component of its path may be a link, and the
+    open file must be the one a no-follow stat of the path names.
+    """
+
+    walk = hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW") and os.open in os.supports_dir_fd
+    root_descriptor: int | None = None
+    if walk:
+        try:
+            root_descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:
+            return
+    elif root.is_symlink() or not root.is_dir():
+        return
+    try:
+        for path in sorted(root.rglob("*.md")):
+            raw = _read_card_file(root, root_descriptor, path.relative_to(root))
+            if raw is not None:
+                yield path, raw
+    finally:
+        if root_descriptor is not None:
+            os.close(root_descriptor)
+
+
+def _read_card_file(root: Path, root_descriptor: int | None, relative: Path) -> bytes | None:
+    """The bytes of the regular file at ``root / relative``, or ``None`` if it is not one."""
+
+    file_flags = (
+        os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    )
+    opened: list[int] = []
+    try:
+        if root_descriptor is not None:
+            directory = root_descriptor
+            for part in relative.parts[:-1]:
+                directory = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                opened.append(directory)
+            descriptor = os.open(relative.name, file_flags, dir_fd=directory)
+            opened.append(descriptor)
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                return None
+        else:
+            # Checked only after the open: a link swapped in before it is
+            # still there, or else the path now names a different file.
+            path = root / relative
+            descriptor = os.open(path, file_flags)
+            opened.append(descriptor)
+            opened_file = os.fstat(descriptor)
+            if any((root / parent).is_symlink() for parent in relative.parents):
+                return None
+            named_file = os.lstat(path)
+            if not (stat.S_ISREG(opened_file.st_mode) and stat.S_ISREG(named_file.st_mode)):
+                return None
+            if (opened_file.st_dev, opened_file.st_ino) != (named_file.st_dev, named_file.st_ino):
+                return None
+        chunks: list[bytes] = []
+        while block := os.read(descriptor, 64 * 1024):
+            chunks.append(block)
+        return b"".join(chunks)
+    except OSError:
+        return None
+    finally:
+        for held in reversed(opened):
+            os.close(held)
 
 
 @dataclass(frozen=True, slots=True)
@@ -562,11 +632,16 @@ def readback_conflicts(cards: Iterable[PreparedReadback]) -> list[str]:
 
 
 def publish_readback(prepared: PreparedReadback) -> Path:
-    """Publish a prepared card under the same compare-and-swap rule."""
+    """Publish a prepared card under the same compare-and-swap rule.
+
+    The returned path is checked to name the card just published: if the card
+    directory was moved meanwhile, this raises instead of returning a path that
+    does not lead to it.
+    """
 
     parent_descriptor = _open_card_parent(prepared.blueprint, prepared.article_id)
     try:
-        _publish_card(
+        published = _publish_card(
             parent_descriptor,
             prepared.path,
             prepared.content,
@@ -574,6 +649,15 @@ def publish_readback(prepared: PreparedReadback) -> Path:
         )
     finally:
         os.close(parent_descriptor)
+    try:
+        reported = os.stat(prepared.path, follow_symlinks=False)
+    except OSError:
+        reported = None
+    if reported is None or (reported.st_dev, reported.st_ino) != published:
+        raise ValueError(
+            f"cannot confirm the published read-back: {prepared.path} no longer names it; "
+            "its directory was moved or the card replaced during publication"
+        )
     return prepared.path
 
 
@@ -993,8 +1077,12 @@ def _open_card_parent(blueprint: Path, article_id: str) -> int:
         os.open in os.supports_dir_fd,
         os.mkdir in os.supports_dir_fd,
         os.rename in os.supports_dir_fd,
+        os.link in os.supports_dir_fd,
+        os.link in os.supports_follow_symlinks,
         os.stat in os.supports_dir_fd,
+        os.stat in os.supports_follow_symlinks,
         os.unlink in os.supports_dir_fd,
+        hasattr(os, "fchmod"),
     )
     if not all(required):
         raise ValueError("this platform cannot safely publish read-back cards")
@@ -1093,29 +1181,28 @@ def _publish_card(
     content: str,
     *,
     expected_card_hash: str | None,
-) -> None:
-    """Atomically publish content through a held directory descriptor and CAS."""
+) -> tuple[int, int]:
+    """Publish a card through a held directory descriptor under compare-and-swap.
+
+    The new card is staged beside the old one. The old card, if any, is moved
+    aside under a unique name and checked there, so a write that lands after
+    the compare-and-swap check is caught instead of lost. The new card is then
+    linked into place, which never replaces an existing name. A concurrent
+    writer becomes a reported conflict, and their card is kept. No lock is
+    held, so a crash leaves only staging and set-aside files, which the loader
+    never reads as cards.
+
+    Returns the device and inode of the card now filed under ``path.name``.
+    """
 
     filename = path.name
-    lock_digest = evidence_hash_of(filename).removeprefix("sha256:")[:32]
-    lock_name = f".autoform-readback-{lock_digest}.lock"
-    lock_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    staged_name, staged_identity = _stage_card(directory, path, content)
+    set_aside: str | None = None
     try:
-        lock_descriptor = os.open(lock_name, lock_flags, 0o600, dir_fd=directory)
-    except FileExistsError as exc:
-        raise ValueError(f"another writer is filing this read-back: {path}") from exc
-    except OSError as exc:
-        raise ValueError(f"cannot lock read-back for writing: {path}") from exc
-
-    lock_stat = os.fstat(lock_descriptor)
-    lock_identity = lock_stat.st_dev, lock_stat.st_ino
-    temporary_name: str | None = None
-    try:
-        os.close(lock_descriptor)
         before = _card_hash_at(directory, filename, path)
-        replacement_hash = evidence_hash_of(content)
-        if before == replacement_hash:
-            return
+        if before == evidence_hash_of(content):
+            existing = os.stat(filename, dir_fd=directory, follow_symlinks=False)
+            return existing.st_dev, existing.st_ino
         if before is not None and expected_card_hash is None:
             raise ValueError(
                 f"read-back already exists with different content: {path}; retry with expected_card_hash={before!r}"
@@ -1124,55 +1211,129 @@ def _publish_card(
             raise ValueError(
                 f"read-back changed before replacement: expected {expected_card_hash!r}, found {before!r}"
             )
-        for _ in range(100):
-            temporary_name = f".autoform-readback-{secrets.token_hex(12)}.tmp"
+        conflict = f"read-back changed concurrently while writing: {path}"
+        if before is not None:
+            set_aside = f"{_WORK_PREFIX}{secrets.token_hex(12)}.old"
             try:
-                descriptor = os.open(
-                    temporary_name,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                    0o600,
-                    dir_fd=directory,
-                )
-            except FileExistsError:
-                continue
-            break
-        else:
-            raise ValueError(f"cannot allocate a unique staging file for read-back: {path}")
-        staged_stat = os.fstat(descriptor)
-        staged_identity = staged_stat.st_dev, staged_stat.st_ino
+                os.rename(filename, set_aside, src_dir_fd=directory, dst_dir_fd=directory)
+            except FileNotFoundError as exc:
+                set_aside = None
+                raise ValueError(conflict) from exc
+            if not _card_matches(directory, set_aside, path.with_name(set_aside), before):
+                # Another writer changed the card after the check: what was
+                # moved aside is theirs, and it goes back.
+                theirs, set_aside = set_aside, None
+                if _restore_card(directory, theirs, filename):
+                    raise ValueError(f"{conflict}; the other writer's card was kept")
+                raise ValueError(f"{conflict}; the other writer's card was preserved at {path.with_name(theirs)}")
+        staged = os.stat(staged_name, dir_fd=directory, follow_symlinks=False)
+        if (staged.st_dev, staged.st_ino) != staged_identity:
+            raise ValueError(f"read-back staging file changed before publication: {path}")
+        try:
+            os.link(staged_name, filename, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+        except FileExistsError as exc:
+            raise ValueError(f"{conflict}; another writer filed a card there, which was kept") from exc
+        except OSError as exc:
+            raise ValueError(f"cannot publish read-back: {path}: {exc}") from exc
+    except BaseException as exc:
+        if set_aside is None or _restore_card(directory, set_aside, filename):
+            raise
+        preserved = f"the previous card was preserved at {path.with_name(set_aside)}"
+        if isinstance(exc, ValueError):
+            raise ValueError(f"{exc}; {preserved}") from exc
+        warnings.warn(f"read-back publication interrupted: {preserved}", RuntimeWarning, stacklevel=3)
+        raise
+    finally:
+        _unlink_quietly(directory, staged_name)
+    try:
+        os.fsync(directory)
+    except OSError:
+        pass
+    if set_aside is not None:
+        _discard_set_aside(directory, set_aside, path.with_name(set_aside), before)
+    return staged_identity
+
+
+def _stage_card(directory: int, path: Path, content: str) -> tuple[str, tuple[int, int]]:
+    """Write ``content`` to a new, uniquely named file beside the card.
+
+    Returns the staging file's name and its device and inode.
+    """
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    for _ in range(100):
+        name = f"{_WORK_PREFIX}{secrets.token_hex(12)}.tmp"
+        try:
+            descriptor = os.open(name, flags, 0o600, dir_fd=directory)
+        except FileExistsError:
+            continue
+        break
+    else:
+        raise ValueError(f"cannot allocate a unique staging file for read-back: {path}")
+    try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(content.encode("utf-8"))
             stream.flush()
+            os.fchmod(stream.fileno(), 0o644)
             os.fsync(stream.fileno())
-        os.chmod(temporary_name, 0o644, dir_fd=directory, follow_symlinks=False)
-        staged = os.stat(temporary_name, dir_fd=directory, follow_symlinks=False)
-        if (staged.st_dev, staged.st_ino) != staged_identity or stat.S_ISLNK(staged.st_mode):
-            raise ValueError(f"read-back staging file changed before publication: {path}")
-        if _card_hash_at(directory, filename, path) != before:
-            raise ValueError(f"read-back changed concurrently while writing: {path}")
-        os.replace(
-            temporary_name,
-            filename,
-            src_dir_fd=directory,
-            dst_dir_fd=directory,
+            staged = os.fstat(stream.fileno())
+    except BaseException:
+        _unlink_quietly(directory, name)
+        raise
+    return name, (staged.st_dev, staged.st_ino)
+
+
+def _card_matches(directory: int, filename: str, display_path: Path, expected: str) -> bool:
+    """Whether ``filename`` is a regular UTF-8 card with hash ``expected``."""
+
+    try:
+        return _card_hash_at(directory, filename, display_path) == expected
+    except ValueError:
+        return False
+
+
+def _restore_card(directory: int, set_aside: str, filename: str) -> bool:
+    """Put a set-aside card back under its name, unless that name is taken again."""
+
+    try:
+        os.link(set_aside, filename, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+    except OSError:
+        return False
+    _unlink_quietly(directory, set_aside)
+    return True
+
+
+def _discard_set_aside(directory: int, set_aside: str, display_path: Path, expected: str) -> None:
+    """Remove the card a publication replaced, unless it changed after it was set aside."""
+
+    try:
+        unchanged = _card_hash_at(directory, set_aside, display_path) in {expected, None}
+    except ValueError:
+        unchanged = False
+    if not unchanged:
+        warnings.warn(
+            f"previous read-back changed before cleanup and was preserved at {display_path}",
+            RuntimeWarning,
+            stacklevel=3,
         )
-        temporary_name = None
-        try:
-            os.fsync(directory)
-        except OSError:
-            pass
-    finally:
-        if temporary_name is not None:
-            try:
-                os.unlink(temporary_name, dir_fd=directory)
-            except FileNotFoundError:
-                pass
-        try:
-            current_lock = os.stat(lock_name, dir_fd=directory, follow_symlinks=False)
-            if (current_lock.st_dev, current_lock.st_ino) == lock_identity:
-                os.unlink(lock_name, dir_fd=directory)
-        except OSError:
-            pass
+        return
+    try:
+        os.unlink(set_aside, dir_fd=directory)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        warnings.warn(
+            f"could not remove previous read-back preserved at {display_path}: {exc}",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+
+def _unlink_quietly(directory: int, filename: str) -> None:
+    try:
+        os.unlink(filename, dir_fd=directory)
+    except OSError:
+        pass
 
 
 def _longest_backtick_run(text: str) -> int:

@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import pickle
+import stat
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -10,7 +15,10 @@ import pytest
 
 from autoform_cli.readback import (
     SKELETON_HEADING,
+    _card_hash_at,
     load_readbacks,
+    prepare_readback,
+    publish_readback,
     readback_findings,
     readback_path,
     write_readback,
@@ -658,6 +666,206 @@ def test_compare_and_swap_preserves_a_concurrent_edit(tmp_path: Path) -> None:
             expected_card_hash=expected,
         )
     assert path.read_text(encoding="utf-8").endswith("Concurrent edit.\n")
+
+
+def _file_card(blueprint: Path, text: str, **options) -> Path:
+    declaration = options.pop("declaration", _declaration())
+    return write_readback(
+        blueprint,
+        article_id=options.pop("article_id", _ARTICLE_ID),
+        declaration=declaration,
+        model="m",
+        text=text,
+        packet_text=declaration.blind_text(),
+        **options,
+    )
+
+
+def _staged_names(directory: Path) -> list[str]:
+    return [name for name in os.listdir(directory) if name.startswith(".autoform-readback-")]
+
+
+def test_publication_keeps_an_edit_saved_after_the_card_was_checked(tmp_path: Path, monkeypatch) -> None:
+    blueprint = _blueprint(tmp_path)
+    path = _file_card(blueprint, "First.")
+    expected = load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].file_hash
+    edit = b"An editor's work.\n"
+    saved = False
+
+    # Once the replacement is staged and the old card checked, an editor saves the card.
+    def check_then_save(directory: int, filename: str, display_path: Path) -> str | None:
+        nonlocal saved
+        found = _card_hash_at(directory, filename, display_path)
+        staged = any(name.endswith(".tmp") for name in _staged_names(path.parent))
+        if filename == path.name and staged and not saved:
+            saved = True
+            (tmp_path / "editor-save").write_bytes(edit)
+            os.replace(tmp_path / "editor-save", path)
+        return found
+
+    monkeypatch.setattr("autoform_cli.readback._card_hash_at", check_then_save)
+
+    with pytest.raises(ValueError, match="changed concurrently"):
+        _file_card(blueprint, "Replacement.", expected_card_hash=expected)
+    assert saved
+    assert path.read_bytes() == edit
+    assert _staged_names(path.parent) == []
+
+
+def test_publication_keeps_a_card_created_while_the_old_one_was_set_aside(tmp_path: Path, monkeypatch) -> None:
+    blueprint = _blueprint(tmp_path)
+    path = _file_card(blueprint, "First.")
+    original = path.read_bytes()
+    expected = load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].file_hash
+    theirs = b"Another writer's card.\n"
+
+    def check_then_create(directory: int, filename: str, display_path: Path) -> str | None:
+        found = _card_hash_at(directory, filename, display_path)
+        if filename != path.name and not path.exists():
+            path.write_bytes(theirs)
+        return found
+
+    monkeypatch.setattr("autoform_cli.readback._card_hash_at", check_then_create)
+
+    with pytest.raises(ValueError, match="changed concurrently") as refused:
+        _file_card(blueprint, "Replacement.", expected_card_hash=expected)
+    assert path.read_bytes() == theirs
+    (backup,) = _staged_names(path.parent)
+    assert not backup.endswith(".md") and str(path.with_name(backup)) in str(refused.value)
+    assert path.with_name(backup).read_bytes() == original
+
+
+def _crash_publication(tmp_path: Path, repo_root: Path, card: object, *, at_check: int) -> None:
+    """Publish ``card`` in a child process that dies at its ``at_check``-th look at a card."""
+
+    prepared = tmp_path / "prepared.pickle"
+    prepared.write_bytes(pickle.dumps(card))
+    script = (
+        "import os, pickle, sys\n"
+        "from autoform_cli import readback\n"
+        "checks = 0\n"
+        "check = readback._card_hash_at\n"
+        "def die(*args):\n"
+        "    global checks\n"
+        "    checks += 1\n"
+        "    if checks == int(sys.argv[2]):\n"
+        "        os._exit(17)\n"
+        "    return check(*args)\n"
+        "readback._card_hash_at = die\n"
+        "with open(sys.argv[1], 'rb') as stream:\n"
+        "    readback.publish_readback(pickle.load(stream))\n"
+    )
+    crashed = subprocess.run(
+        [sys.executable, "-c", script, str(prepared), str(at_check)],
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (str(repo_root), os.environ.get("PYTHONPATH"))))},
+        check=False,
+    )
+    assert crashed.returncode == 17
+
+
+def _replacement(blueprint: Path, expected: str):
+    declaration = _declaration()
+    return prepare_readback(
+        blueprint,
+        article_id=_ARTICLE_ID,
+        declaration=declaration,
+        model="m",
+        text="Replacement.",
+        packet_text=declaration.blind_text(),
+        expected_card_hash=expected,
+    )
+
+
+def test_a_crash_mid_publication_leaves_nothing_that_blocks_a_retry(tmp_path: Path, repo_root: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    path = _file_card(blueprint, "First.")
+    card = _replacement(blueprint, load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].file_hash)
+
+    _crash_publication(tmp_path, repo_root, card, at_check=1)
+
+    assert not [name for name in os.listdir(path.parent) if name.endswith(".lock")]
+    assert all(not name.endswith(".md") for name in _staged_names(path.parent))
+    assert publish_readback(card) == path
+    assert load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].text == "Replacement."
+
+
+def test_a_crash_after_setting_the_old_card_aside_preserves_it(tmp_path: Path, repo_root: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    path = _file_card(blueprint, "First.")
+    original = path.read_bytes()
+    card = _replacement(blueprint, load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].file_hash)
+
+    _crash_publication(tmp_path, repo_root, card, at_check=2)
+
+    assert not path.exists()
+    preserved = [name for name in _staged_names(path.parent) if path.with_name(name).read_bytes() == original]
+    assert len(preserved) == 1 and not preserved[0].endswith(".md")
+    assert load_readbacks(blueprint) == {}
+
+
+def test_publication_refuses_to_report_a_path_its_directory_left(tmp_path: Path, monkeypatch) -> None:
+    blueprint = _blueprint(tmp_path)
+    parent = readback_path(blueprint, _ARTICLE_ID, "Skel.sup_unique").parent
+    moved = parent.with_name("moved")
+    fsync = os.fsync
+
+    # The card directory is renamed right after the card is installed in it.
+    def rename_on_directory_sync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode) and parent.exists():
+            parent.rename(moved)
+        fsync(descriptor)
+
+    monkeypatch.setattr("autoform_cli.readback.os.fsync", rename_on_directory_sync)
+
+    with pytest.raises(ValueError, match="no longer names"):
+        _file_card(blueprint, "First.")
+    assert moved.is_dir() and not parent.exists()
+
+
+def _swap_cards_after_listing(tmp_path: Path, monkeypatch) -> Path:
+    """A vault in which, once the tree is listed, a card and a card directory
+    become links to valid cards outside it; one other card is left alone."""
+
+    blueprint = _blueprint(tmp_path)
+    elsewhere = _blueprint(tmp_path / "elsewhere")
+    other_article = "af_fedcba9876543210fedcba98"
+    _file_card(blueprint, "Untouched.", declaration=replace(_declaration(), name="Skel.kept"))
+    card = _file_card(blueprint, "Inside.")
+    directory = _file_card(blueprint, "Inside.", article_id=other_article).parent
+    outside_card = _file_card(elsewhere, "Outside.")
+    outside_directory = _file_card(elsewhere, "Outside.", article_id=other_article).parent
+    rglob = Path.rglob
+
+    def list_then_swap(self: Path, pattern: str):
+        listed = list(rglob(self, pattern))
+        card.unlink()
+        card.symlink_to(outside_card)
+        directory.rename(directory.with_name("replaced"))
+        directory.symlink_to(outside_directory, target_is_directory=True)
+        return iter(listed)
+
+    monkeypatch.setattr(Path, "rglob", list_then_swap)
+    return blueprint
+
+
+def test_loading_never_follows_a_card_or_directory_swapped_for_a_symlink(tmp_path: Path, monkeypatch) -> None:
+    blueprint = _swap_cards_after_listing(tmp_path, monkeypatch)
+    # Every path-level check still sees what was there before the swap.
+    monkeypatch.setattr(Path, "is_symlink", lambda self: False)
+
+    loaded = {key: readback.text for key, readback in load_readbacks(blueprint).items()}
+
+    assert loaded == {(_ARTICLE_ID, "Skel.kept"): "Untouched."}
+
+
+def test_loading_without_no_follow_descriptors_still_refuses_swapped_links(tmp_path: Path, monkeypatch) -> None:
+    # As on Windows: the loader then checks each path after opening it.
+    blueprint = _swap_cards_after_listing(tmp_path, monkeypatch)
+    monkeypatch.delattr(os, "O_NOFOLLOW")
+
+    loaded = {key: readback.text for key, readback in load_readbacks(blueprint).items()}
+
+    assert loaded == {(_ARTICLE_ID, "Skel.kept"): "Untouched."}
 
 
 def test_case_distinct_declarations_have_distinct_card_paths(tmp_path: Path) -> None:

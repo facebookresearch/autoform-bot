@@ -893,21 +893,51 @@ def test_lake_configuration_snapshot_uses_content_not_file_identity(
     tmp_path: Path, monkeypatch
 ) -> None:
     project = _project(tmp_path)
-    fstat = os.fstat
-    calls = 0
+    lakefile = project / "lakefile.toml"
+    open_file = os.open
+    saved = False
 
-    def unstable_file_identity(descriptor: int) -> os.stat_result:
-        nonlocal calls
-        calls += 1
-        values = list(fstat(descriptor))
-        values[1] += calls
-        return os.stat_result(values)
+    # An editor saves identical bytes between the two reads: a new file, the same content.
+    def save_identical_copy_after_first_open(path, flags, *args):
+        nonlocal saved
+        descriptor = open_file(path, flags, *args)
+        if Path(path) == lakefile and not saved:
+            saved = True
+            (tmp_path / "lakefile.copy").write_bytes(lakefile.read_bytes())
+            os.replace(tmp_path / "lakefile.copy", lakefile)
+        return descriptor
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.fstat", unstable_file_identity)
+    monkeypatch.setattr("autoform_cli.skeleton.os.open", save_identical_copy_after_first_open)
 
     (library,) = lean_libraries(project)
 
-    assert library.name == "Skel"
+    assert saved and library.name == "Skel"
+
+
+@pytest.mark.parametrize(
+    ("swap", "expected_error"),
+    [("symlink", "not a regular file"), ("file", "changed while it was read")],
+)
+def test_lake_configuration_snapshot_rejects_an_input_swapped_after_inspection(
+    tmp_path: Path, monkeypatch, swap: str, expected_error: str
+) -> None:
+    project = _project(tmp_path)
+    lakefile = project.resolve() / "lakefile.toml"
+    inspected = tmp_path / "inspected.toml"
+    inspected.write_bytes(lakefile.read_bytes())
+    if swap == "symlink":
+        lakefile.unlink()
+        lakefile.symlink_to(inspected)
+    lstat = Path.lstat
+
+    # The inspection sees a regular file; the open then meets what replaced it.
+    def inspect_before_swap(self: Path) -> os.stat_result:
+        return lstat(inspected) if self == lakefile else lstat(self)
+
+    monkeypatch.setattr(Path, "lstat", inspect_before_swap)
+
+    with pytest.raises(SkeletonError, match=expected_error):
+        lean_libraries(project)
 
 
 def test_lake_configuration_snapshot_rejects_content_changed_between_reads(

@@ -396,10 +396,19 @@ testimony must fit limits several times what real read-backs use: 32 KiB, 500
 lines, 1,024 math delimiters, 512 backticks in runs of at most 16, 256 opening
 brackets, and 64 columns of nesting. The Markdown parser is superlinear in each
 of these, so a byte limit alone would not bound it, and every card in a pull
-request is read before its validity is known. Writes use a no-follow directory
-walk, an exclusive lock, a unique temporary file, atomic replacement, and an
-optional expected-card hash for compare-and-swap updates. `model:` remains a
-label supplied by the coordinator, not authenticated provenance.
+request is read before its validity is known. Cards are read through no-follow
+descriptors, so a card or directory swapped for a link is skipped. Writes walk
+to the card's directory without following links, stage the card in a unique
+temporary file, move any existing card aside and check that it is still the one
+compared, and install the new card by hard link, which never replaces a name. A
+card another writer changes or creates meanwhile is kept, and the write reports
+a conflict. An optional expected-card hash makes updates compare-and-swap. No
+lock is held, so a crash can leave `.autoform-readback-*` staging or set-aside
+files beside the card; the loader never reads them as cards, and after a crash
+between moving the old card aside and installing the new one, the old card
+survives only under such a name and must be renamed back by hand. The card's
+filesystem must support hard links. `model:` remains a label supplied by the
+coordinator, not authenticated provenance.
 
 `--packets DIR` writes one comment-stripped packet per skeleton, with a
 manifest mapping packets to articles and hashes. The destination must be empty

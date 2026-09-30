@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -1025,17 +1026,23 @@ def _read_snapshot_pass(
         | getattr(os, "O_BINARY", 0)
         | getattr(os, "O_NONBLOCK", 0)
         | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
     )
     try:
         descriptor = os.open(path, flags)
     except FileNotFoundError:
         return None
     except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise SkeletonError([f"skeleton input is not a regular file: {path}"]) from exc
         raise SkeletonError([f"cannot open skeleton input {path}: {exc}"]) from exc
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             raise SkeletonError([f"skeleton input is not a regular file: {path}"])
+        # The file opened must be the one inspected, not whatever replaced it.
+        if (metadata.st_dev, metadata.st_ino) != (path_metadata.st_dev, path_metadata.st_ino):
+            raise SkeletonError([f"skeleton input changed while it was read: {path}"])
         digest = hashlib.sha256()
         chunks: list[bytes] = []
         size = 0
