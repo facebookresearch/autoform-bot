@@ -55,7 +55,10 @@ tree.
 1. Confirm that the repository has opted into enforcement with the versioned
    `blueprint/.autoform-review` policy marker. Require durable `article_id`
    metadata for every Lean-mapped article, using the article-ID migration check
-   in the CLI reference. Every `origin: cited` Lean article must identify an
+   in the CLI reference. Every Lean-mapped article must also be a
+   declaration-sized leaf, naming a `declaration:` kind and containing no other
+   articles, so its evidence appears in its rendered box; review commands refuse
+   any other with `review-article-shape`. Every `origin: cited` Lean article must identify an
    exact line range in a local, non-Markdown source snapshot. Build the Lean project, then prepare a versioned review
    bundle and its blind packets. Keep the bundle and its identity manifest with
    the coordinator. A packet is the only input that crosses the blind-review

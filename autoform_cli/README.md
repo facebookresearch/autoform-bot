@@ -369,10 +369,13 @@ reviewer authentication, or an approval key.
 
 Reports and packet manifests also carry an evidence hash over the exact
 proof-free text shown to a reviewer. Semantic hashes survive presentation-only
-edits; evidence hashes identify the bytes that were actually read. Human
-approval does not record either hash alone. It records one `review_approved`
+edits; evidence hashes identify the bytes that were actually read. An
+article's review hash binds its joint packet to the cited passage, that
+passage's locator, and the article's drift hash. Human
+approval does not record any of these hashes alone. It records one `review_approved`
 hash over the complete review surface: the article's title and statement, cited source
-passage and locator, exact joint packet, and every validated read-back card.
+passage and locator, exact joint packet, each declaration's drift hash, and
+every validated read-back card.
 Changing any reviewed input invalidates the approval.
 These hashes detect drift but do not authenticate a reviewer or the evidence
 when candidate code controls the checkout.
@@ -503,10 +506,12 @@ marked `origin: cited` must link
 to an in-vault, non-Markdown source snapshot with an exact
 `#L<start>-L<end>` range; preparation refuses a citation it cannot put before
 the reviewer. `review record` rechecks the selected current article
-and the exact packet bytes before filing a card. Its extraction checks the
-whole blueprint, so an edit to any article while it runs, even one the record
-does not touch, aborts the record with nothing filed; running it again once the
-blueprint is idle completes it.
+and the exact packet bytes before filing a card. Validation is per article, so
+an unrelated article that changed since `review prepare` does not block the
+record. Any blueprint change during the extraction itself does, even in an
+article the record does not touch, and another article's empty or duplicated
+`lean:` list stops the extraction. Either way nothing is filed; running the
+record again once the blueprint is idle completes it.
 
 `--manifest` files a batch against one extraction, where one record per card
 would pay a Lake freshness check and a Lean start each. The manifest reuses
