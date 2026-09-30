@@ -29,6 +29,7 @@ import os
 import re
 import secrets
 import stat
+import time
 import unicodedata
 import warnings
 from dataclasses import dataclass, replace
@@ -39,9 +40,20 @@ from urllib.parse import unquote_to_bytes
 import html5lib
 import markdown as markdown_renderer
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows, which cannot publish cards
+    fcntl = None  # type: ignore[assignment]
+
 from .graph import ARTICLE_ID_PATTERN
 from .markdown import SITE_EXTENSION_CONFIGS, SITE_EXTENSIONS
-from .skeleton import DeclarationSkeleton, SkeletonReport, declaration_filename, evidence_hash_of
+from .skeleton import (
+    DeclarationSkeleton,
+    SkeletonReport,
+    atomic_rename,
+    declaration_filename,
+    evidence_hash_of,
+)
 
 READBACKS_DIR = "readbacks"
 READBACK_HEADING = "## Read-back"
@@ -52,9 +64,11 @@ _QUOTED_FRONTMATTER_FIELDS = frozenset({"article_id", "declaration", "model"})
 #: The only hash form a card may record: what `autoform skeleton` prints.
 _HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _ALTERED_PACKET = "the displayed skeleton does not match the recorded packet hash"
-#: Staging and set-aside files beside a card start with this and never end in
-#: ``.md``, so the loader never takes one for a card.
+#: Staging files beside a card, which can hold a card just replaced, start with
+#: this and never end in ``.md``, so the loader never takes one for a card.
 _WORK_PREFIX = ".autoform-readback-"
+#: How long a publication waits for another one in the same card directory.
+_LOCK_TIMEOUT = 10.0
 _UNSAFE_TEX_COMMAND = re.compile(
     r"\\(?:require|href|style|class|cssId|htmlId|htmlClass|htmlStyle|url|csname|"
     r"color|definecolor|textcolor|colorbox|fcolorbox)\b"
@@ -636,27 +650,27 @@ def publish_readback(prepared: PreparedReadback) -> Path:
 
     The returned path is checked to name the card just published: if the card
     directory was moved meanwhile, this raises instead of returning a path that
-    does not lead to it.
+    does not lead to it. The check walks from the blueprint without following
+    links, as the loader does, and runs before the directory's lock is
+    released, so no other publication can change the answer.
     """
 
     parent_descriptor = _open_card_parent(prepared.blueprint, prepared.article_id)
     try:
+        _lock_card_directory(parent_descriptor, prepared.path)
         published = _publish_card(
             parent_descriptor,
             prepared.path,
             prepared.content,
             expected_card_hash=prepared.expected_card_hash,
         )
+        reported = _card_identity(prepared.blueprint, prepared.article_id, prepared.path)
     finally:
         os.close(parent_descriptor)
-    try:
-        reported = os.stat(prepared.path, follow_symlinks=False)
-    except OSError:
-        reported = None
-    if reported is None or (reported.st_dev, reported.st_ino) != published:
+    if reported != published:
         raise ValueError(
             f"cannot confirm the published read-back: {prepared.path} no longer names it; "
-            "its directory was moved or the card replaced during publication"
+            "its directory was moved or replaced, or an editor replaced the card, during publication"
         )
     return prepared.path
 
@@ -1076,13 +1090,11 @@ def _open_card_parent(blueprint: Path, article_id: str) -> int:
         hasattr(os, "O_NOFOLLOW"),
         os.open in os.supports_dir_fd,
         os.mkdir in os.supports_dir_fd,
-        os.rename in os.supports_dir_fd,
-        os.link in os.supports_dir_fd,
-        os.link in os.supports_follow_symlinks,
         os.stat in os.supports_dir_fd,
         os.stat in os.supports_follow_symlinks,
         os.unlink in os.supports_dir_fd,
         hasattr(os, "fchmod"),
+        fcntl is not None,
     )
     if not all(required):
         raise ValueError("this platform cannot safely publish read-back cards")
@@ -1123,10 +1135,10 @@ def _open_card_parent(blueprint: Path, article_id: str) -> int:
         raise
 
 
-def _existing_card_hash(blueprint: Path, article_id: str, path: Path) -> str | None:
-    """Hash the card at ``path`` through no-follow descriptors, creating nothing.
+def _open_existing_card_parent(blueprint: Path, article_id: str) -> int | None:
+    """Open the card directory through no-follow descriptors, creating nothing.
 
-    A missing directory on the way means there is no card yet.
+    A missing directory on the way means there is no card yet: ``None``.
     """
 
     if not ARTICLE_ID_PATTERN.fullmatch(article_id):
@@ -1146,16 +1158,51 @@ def _existing_card_hash(blueprint: Path, article_id: str, path: Path) -> str | N
                 raise ValueError(f"refusing a symlink or unsafe component in the read-back path: {part}") from exc
             os.close(current)
             current = following
-        return _card_hash_at(current, path.name, path)
+        directory, current = current, -1
+        return directory
     finally:
-        os.close(current)
+        if current >= 0:
+            os.close(current)
+
+
+def _existing_card_hash(blueprint: Path, article_id: str, path: Path) -> str | None:
+    """Hash the card at ``path`` through no-follow descriptors, creating nothing."""
+
+    directory = _open_existing_card_parent(blueprint, article_id)
+    if directory is None:
+        return None
+    try:
+        return _card_hash_at(directory, path.name, path)
+    finally:
+        os.close(directory)
+
+
+def _card_identity(blueprint: Path, article_id: str, path: Path) -> tuple[int, int] | None:
+    """The device and inode ``path`` names, reached without following a link."""
+
+    try:
+        directory = _open_existing_card_parent(blueprint, article_id)
+    except ValueError:
+        return None
+    if directory is None:
+        return None
+    try:
+        found = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
+    except OSError:
+        return None
+    finally:
+        os.close(directory)
+    return found.st_dev, found.st_ino
 
 
 def _card_hash_at(directory: int, filename: str, display_path: Path) -> str | None:
-    """Read a card relative to a held directory without following links."""
+    """Read a card relative to a held directory without following links.
+
+    Only a regular file is read; opening never blocks, even on a FIFO.
+    """
 
     try:
-        descriptor = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+        descriptor = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
     except FileNotFoundError:
         return None
     except OSError as exc:
@@ -1175,6 +1222,28 @@ def _card_hash_at(directory: int, filename: str, display_path: Path) -> str | No
             os.close(descriptor)
 
 
+def _lock_card_directory(directory: int, path: Path) -> None:
+    """Take the card directory's exclusive lock, so its publications happen one at a time.
+
+    The lock belongs to the held descriptor: closing it, or the process
+    dying, releases it, so a crash never leaves it held.
+    """
+
+    deadline = time.monotonic() + _LOCK_TIMEOUT
+    while True:
+        try:
+            fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError as exc:
+            if time.monotonic() >= deadline:
+                raise ValueError(
+                    f"another read-back publication in {path.parent} did not finish; retry later"
+                ) from exc
+            time.sleep(0.005)
+        except OSError as exc:
+            raise ValueError(f"cannot lock read-back directory for writing: {path.parent}: {exc}") from exc
+
+
 def _publish_card(
     directory: int,
     path: Path,
@@ -1182,25 +1251,35 @@ def _publish_card(
     *,
     expected_card_hash: str | None,
 ) -> tuple[int, int]:
-    """Publish a card through a held directory descriptor under compare-and-swap.
+    """Publish a card through a held, locked directory descriptor under compare-and-swap.
 
-    The new card is staged beside the old one. The old card, if any, is moved
-    aside under a unique name and checked there, so a write that lands after
-    the compare-and-swap check is caught instead of lost. The new card is then
-    linked into place, which never replaces an existing name. A concurrent
-    writer becomes a reported conflict, and their card is kept. No lock is
-    held, so a crash leaves only staging and set-aside files, which the loader
-    never reads as cards.
+    The caller holds the directory's lock, so no other publication acts
+    between the compare and the swap. The new card is staged beside the old
+    one and exchanged with it in one step, so the card's name always holds a
+    complete card. The card swapped out must be the one compared: if an
+    editor saved over it in between, it is swapped back and the write reports
+    a conflict. A first card is renamed into place without replacing a name.
+    Writers that work by path (renaming over the card, deleting it, or
+    rewriting it through a descriptor opened with truncation) are never lost;
+    one that holds the old card open and writes to it after the swap writes to
+    the replaced file, which is deleted.
+    On any exception, a card still swapped out is swapped back; a card that
+    cannot be put back is left under the staging name and named, never
+    deleted. A crash can leave that name holding the card just replaced, or
+    the unpublished card; the loader never reads it as a card.
 
     Returns the device and inode of the card now filed under ``path.name``.
     """
 
     filename = path.name
+    content_hash = evidence_hash_of(content)
     staged_name, staged_identity = _stage_card(directory, path, content)
-    set_aside: str | None = None
+    staged_path = path.with_name(staged_name)
+    settled = False
+    preserved: str | None = None
     try:
         before = _card_hash_at(directory, filename, path)
-        if before == evidence_hash_of(content):
+        if before == content_hash:
             existing = os.stat(filename, dir_fd=directory, follow_symlinks=False)
             return existing.st_dev, existing.st_ino
         if before is not None and expected_card_hash is None:
@@ -1212,45 +1291,53 @@ def _publish_card(
                 f"read-back changed before replacement: expected {expected_card_hash!r}, found {before!r}"
             )
         conflict = f"read-back changed concurrently while writing: {path}"
-        if before is not None:
-            set_aside = f"{_WORK_PREFIX}{secrets.token_hex(12)}.old"
-            try:
-                os.rename(filename, set_aside, src_dir_fd=directory, dst_dir_fd=directory)
-            except FileNotFoundError as exc:
-                set_aside = None
-                raise ValueError(conflict) from exc
-            if not _card_matches(directory, set_aside, path.with_name(set_aside), before):
-                # Another writer changed the card after the check: what was
-                # moved aside is theirs, and it goes back.
-                theirs, set_aside = set_aside, None
-                if _restore_card(directory, theirs, filename):
-                    raise ValueError(f"{conflict}; the other writer's card was kept")
-                raise ValueError(f"{conflict}; the other writer's card was preserved at {path.with_name(theirs)}")
         staged = os.stat(staged_name, dir_fd=directory, follow_symlinks=False)
         if (staged.st_dev, staged.st_ino) != staged_identity:
             raise ValueError(f"read-back staging file changed before publication: {path}")
         try:
-            os.link(staged_name, filename, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+            atomic_rename(staged_name, filename, directory=directory, exchange=before is not None)
         except FileExistsError as exc:
             raise ValueError(f"{conflict}; another writer filed a card there, which was kept") from exc
+        except FileNotFoundError as exc:
+            raise ValueError(f"{conflict}; the card was removed, and nothing was published") from exc
+        except NotImplementedError as exc:
+            raise ValueError(f"this platform cannot safely publish read-back cards: {exc}") from exc
         except OSError as exc:
             raise ValueError(f"cannot publish read-back: {path}: {exc}") from exc
+        if before is not None:
+            # The staging name now holds the card just replaced.
+            if not _card_matches(directory, staged_name, staged_path, before):
+                preserved = _restore_card(directory, staged_name, staged_identity, content_hash, filename)
+                settled = True
+                raise ValueError(conflict if preserved else f"{conflict}; the other writer's card was kept")
+            try:
+                os.unlink(staged_name, dir_fd=directory)
+            except OSError as exc:
+                warnings.warn(
+                    f"could not remove the replaced read-back left at {staged_path}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+        settled = True
     except BaseException as exc:
-        if set_aside is None or _restore_card(directory, set_aside, filename):
+        # Decided from what the staging name holds, not from how far the code
+        # got: an interruption can land between a rename and the next line.
+        if not settled and _holds_staged_card(directory, staged_name, staged_identity, content_hash) is False:
+            preserved = _restore_card(directory, staged_name, staged_identity, content_hash, filename)
+        if preserved is None:
             raise
-        preserved = f"the previous card was preserved at {path.with_name(set_aside)}"
+        note = f"a card that could not be put back was preserved at {path.with_name(preserved)}"
         if isinstance(exc, ValueError):
-            raise ValueError(f"{exc}; {preserved}") from exc
-        warnings.warn(f"read-back publication interrupted: {preserved}", RuntimeWarning, stacklevel=3)
+            raise ValueError(f"{exc}; {note}") from exc
+        warnings.warn(f"read-back publication interrupted: {note}", RuntimeWarning, stacklevel=3)
         raise
     finally:
-        _unlink_quietly(directory, staged_name)
+        if _holds_staged_card(directory, staged_name, staged_identity, content_hash):
+            _unlink_quietly(directory, staged_name)
     try:
         os.fsync(directory)
     except OSError:
         pass
-    if set_aside is not None:
-        _discard_set_aside(directory, set_aside, path.with_name(set_aside), before)
     return staged_identity
 
 
@@ -1292,41 +1379,50 @@ def _card_matches(directory: int, filename: str, display_path: Path, expected: s
         return False
 
 
-def _restore_card(directory: int, set_aside: str, filename: str) -> bool:
-    """Put a set-aside card back under its name, unless that name is taken again."""
+def _holds_staged_card(
+    directory: int, staged_name: str, staged_identity: tuple[int, int], content_hash: str
+) -> bool | None:
+    """Whether the staging name still holds the staged card, unchanged; ``None`` if it holds nothing.
+
+    ``False`` means it holds a card swapped out of the card's name, or the
+    staged card after someone edited it while it was published.
+    """
 
     try:
-        os.link(set_aside, filename, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+        found = os.stat(staged_name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
     except OSError:
         return False
-    _unlink_quietly(directory, set_aside)
-    return True
+    if (found.st_dev, found.st_ino) != staged_identity:
+        return False
+    return _card_matches(directory, staged_name, Path(staged_name), content_hash)
 
 
-def _discard_set_aside(directory: int, set_aside: str, display_path: Path, expected: str) -> None:
-    """Remove the card a publication replaced, unless it changed after it was set aside."""
+def _restore_card(
+    directory: int, staged_name: str, staged_identity: tuple[int, int], content_hash: str, filename: str
+) -> str | None:
+    """Swap the card a publication replaced back under its name.
+
+    Returns ``None`` once it is back and the staging name again holds the
+    unpublished card, or nothing. Otherwise returns the name a card was left
+    under: the replaced card, if it could not be put back, or whatever an
+    editor saved over the new card meanwhile.
+    """
 
     try:
-        unchanged = _card_hash_at(directory, set_aside, display_path) in {expected, None}
-    except ValueError:
-        unchanged = False
-    if not unchanged:
-        warnings.warn(
-            f"previous read-back changed before cleanup and was preserved at {display_path}",
-            RuntimeWarning,
-            stacklevel=3,
-        )
-        return
-    try:
-        os.unlink(set_aside, dir_fd=directory)
+        atomic_rename(staged_name, filename, directory=directory, exchange=True)
     except FileNotFoundError:
-        pass
-    except OSError as exc:
-        warnings.warn(
-            f"could not remove previous read-back preserved at {display_path}: {exc}",
-            RuntimeWarning,
-            stacklevel=3,
-        )
+        # The new card was deleted meanwhile; restore the old one unless the
+        # name has been taken again.
+        try:
+            atomic_rename(staged_name, filename, directory=directory)
+        except (OSError, NotImplementedError):
+            return staged_name
+        return None
+    except (OSError, NotImplementedError):
+        return staged_name
+    return None if _holds_staged_card(directory, staged_name, staged_identity, content_hash) else staged_name
 
 
 def _unlink_quietly(directory: int, filename: str) -> None:

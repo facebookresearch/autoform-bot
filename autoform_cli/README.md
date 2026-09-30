@@ -402,18 +402,33 @@ lines, 1,024 math delimiters, 512 backticks in runs of at most 16, 256 opening
 brackets, and 64 columns of nesting. The Markdown parser is superlinear in each
 of these, so a byte limit alone would not bound it, and every card in a pull
 request is read before its validity is known. Cards are read through no-follow
-descriptors, so a card or directory swapped for a link is skipped. Writes walk
-to the card's directory without following links, stage the card in a unique
-temporary file, move any existing card aside and check that it is still the one
-compared, and install the new card by hard link, which never replaces a name. A
-card another writer changes or creates meanwhile is kept, and the write reports
-a conflict. An optional expected-card hash makes updates compare-and-swap. No
-lock is held, so a crash can leave `.autoform-readback-*` staging or set-aside
-files beside the card; the loader never reads them as cards, and after a crash
-between moving the old card aside and installing the new one, the old card
-survives only under such a name and must be renamed back by hand. The card's
-filesystem must support hard links. `model:` remains a label supplied by the
-coordinator, not authenticated provenance.
+descriptors, so a card or directory swapped for a link is skipped. A write
+walks to the card's directory without following links, takes that directory's
+lock, stages the card in a unique temporary file, and checks the card it would
+replace. It then exchanges the staged file with the old card in one atomic
+step, so the card's name holds a complete card at every moment, and checks that
+the card it swapped out is the one it compared; if an editor saved over the
+card in between, the editor's card is swapped back and the write reports a
+conflict. A first card is renamed into place without replacing a name. An
+optional expected-card hash makes updates compare-and-swap, and filing
+identical content succeeds without writing. Success is reported only if, with
+the lock still held, a no-follow walk from the blueprint finds the new card at
+its path. The lock orders Autoform's own writers. Other writers are safe when
+they work by path: an editor that renames a saved file over the card, deletes
+it, or rewrites it through a descriptor opened with truncation for that save
+either makes the write fail with a conflict or acts after it, and its save is
+never lost. A program that holds the card open across a write and writes to it
+afterwards is not safe: those bytes go to the replaced file, which is deleted.
+When an editor's save collides with a write, a reader can briefly see the new
+card before it is swapped back. The lock is released when the write ends or
+its process dies, and a write that cannot get it within ten seconds gives up. A
+crash can leave a `.autoform-readback-*.tmp` file beside the card, holding
+either the unpublished card or the card just replaced; the loader never reads
+it as a card. Publishing needs Linux with `renameat2` (glibc 2.28 or later, on
+a filesystem with atomic exchange such as ext4, XFS, Btrfs, or tmpfs) or macOS
+with `renameatx_np` (APFS). Elsewhere, including Windows, a write is refused
+before anything changes; cards can still be loaded. `model:` remains a label
+supplied by the coordinator, not authenticated provenance.
 
 `--packets DIR` writes one comment-stripped packet per skeleton, with a
 manifest mapping packets to articles and hashes. The destination must be empty

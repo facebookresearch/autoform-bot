@@ -3222,49 +3222,58 @@ def _remove_output(path: Path) -> None:
         path.unlink()
 
 
-def _rename_no_replace(source: Path, destination: Path) -> None:
-    """Atomically rename ``source`` only when ``destination`` is absent."""
+def atomic_rename(
+    source: str | Path,
+    destination: str | Path,
+    *,
+    directory: int | None = None,
+    exchange: bool = False,
+) -> None:
+    """Rename ``source`` to ``destination`` in one step that never removes a name.
+
+    Without ``exchange`` the rename fails with :class:`FileExistsError` when
+    ``destination`` exists. With it, both names must exist and trade places,
+    so neither is missing at any moment. With ``directory``, both names are
+    resolved relative to that descriptor. Raises :class:`NotImplementedError`
+    where the platform has no such call; a filesystem that lacks it fails
+    with :class:`OSError` and changes nothing.
+    """
 
     if os.name == "nt":  # pragma: no cover - Windows-specific path
+        if directory is not None or exchange:
+            raise NotImplementedError("atomic exchange and descriptor-relative rename are unavailable on Windows")
         os.rename(source, destination)
         return
 
-    library = ctypes.CDLL(None, use_errno=True)
-    source_bytes = os.fsencode(source)
-    destination_bytes = os.fsencode(destination)
+    # Linux renameat2 takes RENAME_NOREPLACE (1) or RENAME_EXCHANGE (2);
+    # macOS renameatx_np takes RENAME_EXCL (4) or RENAME_SWAP (2). AT_FDCWD
+    # differs between the two.
     if sys.platform.startswith("linux"):
-        try:
-            rename = library.renameat2
-        except AttributeError as exc:
-            raise SkeletonError(
-                ["atomic no-replace rename is unavailable on this Linux system"]
-            ) from exc
-        rename.argtypes = (
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        )
-        rename.restype = ctypes.c_int
-        result = rename(-100, source_bytes, -100, destination_bytes, 1)
+        system, name, current_directory, no_replace, swap = "Linux", "renameat2", -100, 1, 2
     elif sys.platform == "darwin":
-        try:
-            rename = library.renamex_np
-        except AttributeError as exc:
-            raise SkeletonError(
-                ["atomic no-replace rename is unavailable on this macOS system"]
-            ) from exc
-        rename.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
-        rename.restype = ctypes.c_int
-        result = rename(source_bytes, destination_bytes, 0x00000004)
+        system, name, current_directory, no_replace, swap = "macOS", "renameatx_np", -2, 0x4, 0x2
     else:
-        raise SkeletonError(
-            [f"atomic no-replace rename is unsupported on {sys.platform}"]
-        )
+        raise NotImplementedError(f"atomic no-replace rename is unsupported on {sys.platform}")
+    try:
+        rename = getattr(ctypes.CDLL(None, use_errno=True), name)
+    except AttributeError as exc:
+        raise NotImplementedError(f"atomic no-replace rename is unavailable on this {system} system") from exc
+    rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+    rename.restype = ctypes.c_int
+    at = current_directory if directory is None else directory
+    result = rename(at, os.fsencode(source), at, os.fsencode(destination), swap if exchange else no_replace)
     if result != 0:
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error), destination)
+
+
+def _rename_no_replace(source: Path, destination: Path) -> None:
+    """Atomically rename ``source`` only when ``destination`` is absent."""
+
+    try:
+        atomic_rename(source, destination)
+    except NotImplementedError as exc:
+        raise SkeletonError([str(exc)]) from exc
 
 
 def _install_output(stage: Path, destination: Path) -> None:
@@ -3688,6 +3697,7 @@ __all__ = [
     "SkeletonError",
     "SkeletonReport",
     "TrustedDeclaration",
+    "atomic_rename",
     "blueprint_hash",
     "declaration_filename",
     "evidence_hash_of",
