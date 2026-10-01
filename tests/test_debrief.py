@@ -306,3 +306,11 @@ def test_claude_debrief_resumes_a_timed_out_session(tmp_path: Path) -> None:
     assert calls[1][0][calls[1][0].index("--resume") + 1] == "sid-timeout"
     assert run.handle.timed_out is True
     assert run.handle.final_text == ""
+
+
+def test_statement_gate_ignores_debrief_output(tmp_path: Path) -> None:
+    from autoform_worker.executor import _capture_statement_baseline
+
+    (tmp_path / "Main.lean").write_text("theorem t : True := trivial\n")
+    debrief.write_record(debrief.debrief_dir(tmp_path), {"node_id": "a/b", "debrief": {}})
+    assert set(_capture_statement_baseline(tmp_path).files) == {"Main.lean"}

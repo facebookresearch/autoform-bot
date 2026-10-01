@@ -22,7 +22,7 @@ from .scheduler import AttemptResult, CancellationSignal, WorkItem, WorkPhase
 AdapterFactory = Callable[[], ProverAdapter]
 
 _IGNORED_PARTS = frozenset(
-    {".git", ".hg", ".lake", ".sl", ".venv", "__pycache__", "build", "lake-packages"}
+    {".autoform", ".git", ".hg", ".lake", ".sl", ".venv", "__pycache__", "build", "lake-packages"}
 )
 _DIAGNOSTIC_SUMMARY = re.compile(r"^Diagnostics: (\d+) error\(s\), (\d+) warning\(s\)(?:\n|$)")
 
