@@ -699,7 +699,7 @@ def test_publication_keeps_an_edit_saved_after_the_card_was_checked(tmp_path: Pa
     saved = False
 
     # Once the replacement is staged and the old card checked, an editor saves the card.
-    def check_then_save(directory: int, filename: str, display_path: Path) -> str | None:
+    def check_then_save(directory: int, filename: str, display_path: Path) -> tuple[str, tuple[int, int]] | None:
         nonlocal saved
         found = _card_hash_at(directory, filename, display_path)
         staged = any(name.endswith(".tmp") for name in _staged_names(path.parent))
@@ -734,7 +734,7 @@ def test_the_card_path_never_goes_empty_while_a_card_is_replaced(tmp_path: Path,
     seen: dict[str, object] = {}
 
     # Once the old card has left the card's name, a reader and a create-only writer look.
-    def check_then_look(directory: int, filename: str, display_path: Path) -> str | None:
+    def check_then_look(directory: int, filename: str, display_path: Path) -> tuple[str, tuple[int, int]] | None:
         found = _card_hash_at(directory, filename, display_path)
         if filename != path.name and not seen:
             seen["loaded"] = load_readbacks(blueprint).get((_ARTICLE_ID, "Skel.sup_unique"))
@@ -909,7 +909,7 @@ def test_publishers_of_the_same_card_both_succeed(tmp_path: Path, monkeypatch) -
 
     # The second publisher starts once the first has moved the old card out of
     # the card's name, and the first goes on once the second finishes or waits.
-    def check_then_start(directory: int, filename: str, display_path: Path) -> str | None:
+    def check_then_start(directory: int, filename: str, display_path: Path) -> tuple[str, tuple[int, int]] | None:
         found = _card_hash_at(directory, filename, display_path)
         if filename != path.name and second.ident is None:
             second.start()
@@ -920,7 +920,7 @@ def test_publishers_of_the_same_card_both_succeed(tmp_path: Path, monkeypatch) -
         return found
 
     monkeypatch.setattr("autoform_cli.readback._card_hash_at", check_then_start)
-    locking = SimpleNamespace(LOCK_EX=fcntl.LOCK_EX, LOCK_NB=fcntl.LOCK_NB, flock=flock)
+    locking = SimpleNamespace(LOCK_EX=fcntl.LOCK_EX, LOCK_NB=fcntl.LOCK_NB, LOCK_UN=fcntl.LOCK_UN, flock=flock)
     monkeypatch.setattr("autoform_cli.readback.fcntl", locking, raising=False)
 
     assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
@@ -937,7 +937,7 @@ def test_an_interrupted_swap_back_still_restores_the_editors_card(tmp_path: Path
     edit = b"An editor's work.\n"
     saved = interrupted = False
 
-    def check_then_save(directory: int, filename: str, display_path: Path) -> str | None:
+    def check_then_save(directory: int, filename: str, display_path: Path) -> tuple[str, tuple[int, int]] | None:
         nonlocal saved
         found = _card_hash_at(directory, filename, display_path)
         if filename == path.name and _staged_names(path.parent) and not saved:
@@ -994,7 +994,7 @@ def test_a_directory_put_at_the_card_path_is_left_there_and_refused(tmp_path: Pa
     placed = False
 
     # Once the card is checked, someone replaces it with a directory.
-    def check_then_replace(directory: int, filename: str, display_path: Path) -> str | None:
+    def check_then_replace(directory: int, filename: str, display_path: Path) -> tuple[str, tuple[int, int]] | None:
         nonlocal placed
         found = _card_hash_at(directory, filename, display_path)
         if filename == path.name and _staged_names(path.parent) and not placed:

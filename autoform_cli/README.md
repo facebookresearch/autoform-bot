@@ -413,32 +413,57 @@ Markdown parser is superlinear in each of these, so a byte limit alone would
 not bound it, and every card in a pull
 request is read before its validity is known. Cards are read through no-follow
 descriptors, so a card or directory swapped for a link is skipped. A write
-walks to the card's directory without following links, takes that directory's
-lock, stages the card in a unique temporary file, and checks the card it would
-replace. It then exchanges the staged file with the old card in one atomic
+walks to the card's directory without following links and takes that
+directory's lock. If the directory was moved or replaced before the lock was
+taken, a fresh walk no longer reaches it, so the write lets it go and walks
+again, three times at most before it refuses; nothing is staged until the
+directory it holds is the one the card's path reaches. The write then stages
+the card in a unique temporary file and checks the card it would replace. Just
+before the exchange it checks that the temporary file still holds, unchanged,
+the card it wrote. It exchanges the staged file with the old card in one atomic
 step, so the card's name holds a complete card at every moment, and checks that
-the card it swapped out is the one it compared; if an editor saved over the
-card in between, the editor's card is swapped back and the write reports a
-conflict. A first card is renamed into place without replacing a name. An
-optional expected-card hash makes updates compare-and-swap, and filing
+the card it swapped out is the one it compared. If an editor saved over the
+card in between, the write withdraws its card and reports a conflict: it
+exchanges the two files back, and if the editor saved again over the new card
+meanwhile, it keeps exchanging until the card's name holds the newest save; a
+card deleted meanwhile stays deleted. The error names each temporary file left
+holding a card, and why it was left. A first card is renamed into place without
+replacing a name. An optional expected-card hash makes updates
+compare-and-swap, and the conflict check a batch runs first applies the same
+rule: a card that names a hash conflicts with a missing card in both. Filing
 identical content succeeds without writing. Success is reported only if, with
-the lock still held, a no-follow walk from the blueprint finds the new card at
-its path. The lock orders Autoform's own writers. Other writers are safe when
-they work by path: an editor that renames a saved file over the card, deletes
-it, or rewrites it through a descriptor opened with truncation for that save
-either makes the write fail with a conflict or acts after it, and its save is
-never lost. A program that holds the card open across a write and writes to it
-afterwards is not safe: those bytes go to the replaced file, which is deleted.
-When an editor's save collides with a write, a reader can briefly see the new
-card before it is swapped back. The lock is released when the write ends or
-its process dies, and a write that cannot get it within ten seconds gives up. A
-crash can leave a `.autoform-readback-*.tmp` file beside the card, holding
-either the unpublished card or the card just replaced; the loader never reads
-it as a card. Publishing needs Linux with `renameat2` (glibc 2.28 or later, on
-a filesystem with atomic exchange such as ext4, XFS, Btrfs, or tmpfs) or macOS
-with `renameatx_np` (APFS). Elsewhere, including Windows, a write is refused
-before anything changes; cards can still be loaded. `model:` remains a label
-supplied by the coordinator, not authenticated provenance.
+the lock still held, a no-follow walk from the blueprint finds at the card's
+path the file the write left there, compared by device, inode, and content
+hash. The lock orders Autoform's own writers. Other writers are safe when they
+work by path: an editor that renames a saved file over the card, deletes it, or
+opens it with truncation after the write swapped the new card in either makes
+the write fail with a conflict or acts after it, and its save is never lost. A
+program that opened the card before the write swapped it, with or without
+truncation, and writes to it afterwards is not safe: those bytes go to the
+replaced file, which is deleted. A reader can briefly see a card that is then
+withdrawn: the new card, when an editor's save collides with a write or an
+interrupt or transient error stops a write after its exchange. The lock belongs
+to the open file description, which a process forked during a write shares, so
+a write unlocks before it closes; a write that cannot get the lock within ten
+seconds gives up. If a process dies holding the lock, the lock is released once
+no process shares that description: at once, unless such a child is still
+running. A crash, or a second interrupt while a write cleans up after the
+first, can leave a `.autoform-readback-*.tmp` file beside the card, holding
+either the unpublished card or a card taken from the card's name; the loader
+never reads it as a card. An interrupt while a write withdraws its card starts
+the withdrawal over; if an editor also saved during it, the older save can be
+left at the card's name and the newer in the temporary file the warning names.
+An interrupt that lands just as a write opens a file or directory can leak that
+descriptor, never a locked one, until the process exits; a temporary file
+created that way is still removed. Publishing needs Linux with `renameat2`
+(glibc 2.28 or later, on a filesystem with atomic exchange such as ext4, XFS,
+Btrfs, or tmpfs) or macOS with `renameatx_np` (APFS). Elsewhere, including
+Windows, a write and the batch conflict check are refused before anything is
+created or read; cards can still be loaded. A filesystem that rejects the
+atomic rename when it is called (`ENOSYS`, `EINVAL`, or `ENOTSUP`) is found
+only then: the write is refused with the card untouched and no temporary file
+left, but the card's directory may already have been created. `model:` remains
+a label supplied by the coordinator, not authenticated provenance.
 
 `--packets DIR` writes one comment-stripped packet per skeleton, with a
 manifest mapping packets to articles and hashes. The destination must be empty

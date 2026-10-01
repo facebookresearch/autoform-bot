@@ -3270,6 +3270,30 @@ def atomic_rename(
         os.rename(source, destination)
         return
 
+    rename, current_directory, no_replace, swap = _atomic_rename_call()
+    at = current_directory if directory is None else directory
+    result = rename(at, os.fsencode(source), at, os.fsencode(destination), swap if exchange else no_replace)
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), destination)
+
+
+def require_atomic_exchange() -> None:
+    """Raise :class:`NotImplementedError` unless :func:`atomic_rename` can exchange names here.
+
+    The platform's call is looked up but not made, so a caller can refuse
+    before it changes anything. A filesystem without exchange is found only
+    when the call is made.
+    """
+
+    if os.name == "nt":  # pragma: no cover - Windows-specific path
+        raise NotImplementedError("atomic exchange and descriptor-relative rename are unavailable on Windows")
+    _atomic_rename_call()
+
+
+def _atomic_rename_call() -> tuple[Callable[..., int], int, int, int]:
+    """The platform's atomic rename call, its ``AT_FDCWD``, and its no-replace and exchange flags."""
+
     # Linux renameat2 takes RENAME_NOREPLACE (1) or RENAME_EXCHANGE (2);
     # macOS renameatx_np takes RENAME_EXCL (4) or RENAME_SWAP (2). AT_FDCWD
     # differs between the two.
@@ -3285,11 +3309,7 @@ def atomic_rename(
         raise NotImplementedError(f"atomic no-replace rename is unavailable on this {system} system") from exc
     rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
     rename.restype = ctypes.c_int
-    at = current_directory if directory is None else directory
-    result = rename(at, os.fsencode(source), at, os.fsencode(destination), swap if exchange else no_replace)
-    if result != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error), destination)
+    return rename, current_directory, no_replace, swap
 
 
 def _rename_no_replace(source: Path, destination: Path) -> None:
@@ -3736,6 +3756,7 @@ __all__ = [
     "path_of",
     "render_probe",
     "replace_managed_outputs",
+    "require_atomic_exchange",
     "run_probe",
     "source_excerpt",
     "source_passage",
