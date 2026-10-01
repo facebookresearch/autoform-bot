@@ -303,7 +303,7 @@ def test_combining_marks_up_to_four_and_left_to_right_letters_are_accepted(testi
         (r"$P\phantom{\land Q}$", r"\phantom"),
         (r"Height is kept with $\mathstrut x$.", r"\mathstrut"),
         (r"$P \negthickspace\negthickspace Q$", r"\negthickspace"),
-        (r"$\begin{array}{c} P \end{array}$", r"\begin{array}, \end{array}"),
+        (r"$\begin{multline} P \end{multline}$", r"\begin{multline}, \end{multline}"),
     ],
 )
 def test_writer_refuses_tex_outside_the_allowlist_by_name(testimony: str, command: str, tmp_path: Path) -> None:
@@ -313,6 +313,53 @@ def test_writer_refuses_tex_outside_the_allowlist_by_name(testimony: str, comman
         _file(tmp_path, testimony)
 
     assert "TeX outside the read-back allowlist is not allowed: " + command in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        r"$a \leqq b \lessgtr c \preccurlyeq d \twoheadleftarrow e \upharpoonleft f \nleqslant g$",
+        r"$\varGamma \varOmega \circledS \clubsuit \bigcirc \dotsi \And \smallint \Arrowvert \divsymbol x$",
+        r"$\iiiint_D f$, $\intop\limits_a^b f$, $\injlim_i A_i$, $\varliminf_n x_n$, and $\idotsint$",
+        r"$\overleftrightarrow{AB}$, $\underleftarrow{x}$, $\Bbb{R}$, $\textnormal{a b}$, and $\textup{c}$",
+        r"${\rm d}x$, ${\cal F}$, ${\bf v}$, ${\it x}$, ${\sf S}$, and ${\tt t}$",
+        r"$\begin{smallmatrix} a & b \\ c & d \end{smallmatrix}$",
+        r"$\begin{array}{lc} a & b \\ c & d \end{array}$ and $\begin{array}[t]{ r } x \end{array}$",
+        r"$\begin{split} a &= b \\ &= c \end{split}$",
+        r"$\begin{align} a &= b \end{align}$ and $\begin{gather*} c \end{gather*}$",
+        r"$\begin{aligned} \begin{align*} a \end{align*} \end{aligned}$",
+    ],
+)
+def test_tex_mathjax_sets_and_the_model_follows_is_allowlisted(testimony: str) -> None:
+    """Relations, symbols, operators, fonts, and environments MathJax 3.2.2
+    sets with base and ams, and whose layout the model reads."""
+
+    assert _testimony_errors(testimony) == ()
+
+
+@pytest.mark.parametrize(
+    ("testimony", "reason"),
+    [
+        (
+            r"$\begin{align} a \end{align} \begin{gather} b \end{gather}$",
+            "more than one TeX align or gather environment in a formula is not allowed",
+        ),
+        (
+            r"$\begin{align} a \begin{align*} b \end{align*} \end{align}$",
+            "more than one TeX align or gather environment in a formula is not allowed",
+        ),
+        (r"$\begin{array}{|c|} a \end{array}$", r"TeX \begin{array} is allowed only with its columns as l, c, and r"),
+        (r"$\begin{array} a \end{array}$", r"TeX \begin{array} is allowed only with its columns as l, c, and r"),
+        (r"$\begin{array}{c@{x}c} a & b \end{array}$", r"TeX \begin{array} is allowed only with its columns"),
+        (r"$\begin{array}[x]{c} a \end{array}$", r"a bracket after TeX \begin{aligned}"),
+    ],
+)
+def test_tex_environments_mathjax_sets_differently_are_refused(testimony: str, reason: str) -> None:
+    r"""A second ``align`` or ``gather`` gets an error in place of the
+    formula; ``array`` takes its first argument as its columns, drawing ``|``
+    as a rule and dropping what else it does not know."""
+
+    assert any(reason in error for error in _testimony_errors(testimony))
 
 
 @pytest.mark.parametrize(

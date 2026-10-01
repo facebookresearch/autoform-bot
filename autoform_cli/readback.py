@@ -999,7 +999,8 @@ _TEX_LETTERS = frozenset(
     \varkappa \lambda \mu \nu \xi \omicron \pi \varpi \rho \varrho \sigma \varsigma \tau \upsilon
     \phi \varphi \chi \psi \omega \digamma \Gamma \Delta \Theta \Lambda \Xi \Pi \Sigma \Upsilon
     \Phi \Psi \Omega \aleph \beth \gimel \daleth \eth \ell \hbar \hslash \imath \jmath \wp \Re
-    \Im \Bbbk
+    \Im \Bbbk \varGamma \varDelta \varTheta \varLambda \varXi \varPi \varSigma \varUpsilon \varPhi \varPsi
+    \varOmega
     """.split()
 )
 
@@ -1052,7 +1053,15 @@ _TEX_RELATIONS = frozenset(
     \nLeftrightarrow \leftleftarrows \rightrightarrows \upuparrows \downdownarrows
     \circlearrowleft \circlearrowright \curvearrowleft \curvearrowright \Lsh \Rsh \looparrowleft
     \looparrowright \leadsto \rightsquigarrow \leftrightsquigarrow \multimap \rightleftharpoons
-    \upharpoonright \restriction
+    \upharpoonright \restriction \leqq \geqq \lll \llless \ggg \gggtr \lessgtr \gtrless \lesseqgtr
+    \gtreqless \lesseqqgtr \gtreqqless \eqslantless \eqslantgtr \nless \ngtr \nleqq \ngeqq \nleqslant
+    \ngeqslant \lnsim \gnsim \lnapprox \gnapprox \gvertneqq \curlyeqprec \curlyeqsucc \preccurlyeq
+    \succcurlyeq \precnsim \succnsim \precnapprox \succnapprox \circeq \bumpeq \Bumpeq \doteqdot \Doteq
+    \eqcirc \fallingdotseq \risingdotseq \thicksim \thickapprox \backepsilon \sqsubset \sqsupset
+    \subsetneqq \supsetneqq \varsubsetneqq \varsupsetneq \varsupsetneqq \nsubseteqq \nsupseteqq
+    \nshortparallel \Vvdash \Lleftarrow \Rrightarrow \leftrightarrows \rightleftarrows \dashleftarrow
+    \dashrightarrow \twoheadleftarrow \leftarrowtail \rightarrowtail \leftharpoonup \leftharpoondown
+    \rightharpoonup \rightharpoondown \leftrightharpoons \upharpoonleft \downharpoonleft \downharpoonright
     """.split()
 )
 #: What may follow ``\left``, ``\right``, ``\middle``, and ``\big`` and its
@@ -1083,7 +1092,9 @@ _TESTIMONY_TEX: dict[str, _Tex] = {
         \blacktriangle \bigtriangleup \bigtriangledown \backslash \complement \therefore \because
         \colon \cdotp \ldotp \ldots \cdots \vdots \ddots \dots \dotsc \dotsb \Box \square
         \blacksquare \Diamond \lozenge \bigstar \checkmark \flat \sharp \natural \surd \mho \Finv
-        \Game \S \yen \circledR \maltese
+        \Game \S \yen \circledR \maltese \circledS \bigcirc \blacklozenge \blacktriangledown
+        \blacktriangleleft \blacktriangleright \triangledown \diagup \diagdown \clubsuit \diamondsuit
+        \heartsuit \spadesuit \dotsi \dotsm \dotso \notChar \And \smallint \Arrowvert \arrowvert \bracevert
         """
     ),
     # Binary operators.
@@ -1094,7 +1105,7 @@ _TESTIMONY_TEX: dict[str, _Tex] = {
         \curlyvee \oplus \ominus \otimes \oslash \odot \circledast \circleddash \dotplus \sqcap
         \sqcup \uplus \amalg \dagger \ddagger \diamond \intercal \wr \divideontimes \ltimes \rtimes
         \leftthreetimes \rightthreetimes \lhd \rhd \unlhd \unrhd \boxplus \boxminus \boxtimes
-        \boxdot \bmod
+        \boxdot \bmod \circledcirc \divsymbol \doublecap \doublecup
         """
     ),
     **_tex(r"\mod \pmod", arguments="ge"),
@@ -1104,7 +1115,8 @@ _TESTIMONY_TEX: dict[str, _Tex] = {
         \sum \prod \coprod \int \iint \iiint \oint \bigcup \bigcap \bigoplus \bigotimes \bigvee
         \bigwedge \bigsqcup \biguplus \bigodot \lim \liminf \limsup \varinjlim \varprojlim \sup
         \inf \max \min \sin \cos \tan \sec \csc \cot \sinh \cosh \tanh \coth \arcsin \arccos
-        \arctan \log \ln \lg \exp \det \dim \ker \deg \gcd \hom \arg \Pr
+        \arctan \log \ln \lg \exp \det \dim \ker \deg \gcd \hom \arg \Pr \iiiint \idotsint \intop \injlim
+        \projlim \varliminf \varlimsup
         """,
         "operator",
     ),
@@ -1136,20 +1148,21 @@ _TESTIMONY_TEX: dict[str, _Tex] = {
     **_tex(
         r"""
         \hat \bar \tilde \vec \dot \ddot \check \breve \acute \grave \mathring \widehat
-        \widetilde \overline \underline \overrightarrow \overleftarrow \overbrace \underbrace
+        \widetilde \overline \underline \overrightarrow \overleftarrow \overleftrightarrow \underleftarrow
+        \underrightarrow \overbrace \underbrace
         """,
         arguments="m",
     ),
     # Fonts, classes, and text.
     **_tex(
         r"""
-        \mathbb \mathcal \mathfrak \mathscr \mathrm \mathbf \mathsf \mathit \mathtt \pmb \mathrel
+        \mathbb \Bbb \mathcal \mathfrak \mathscr \mathrm \mathbf \mathsf \mathit \mathtt \pmb \mathrel
         \mathbin \mathord
         """,
         arguments="m",
     ),
-    **_tex(r"\text \textrm \textbf \textit \texttt \textsf", arguments="t"),
-    **_tex(r"\displaystyle \textstyle \scriptstyle \scriptscriptstyle", "style", ""),
+    **_tex(r"\text \textrm \textbf \textit \texttt \textsf \textnormal \textup", arguments="t"),
+    **_tex(r"\displaystyle \textstyle \scriptstyle \scriptscriptstyle \rm \bf \it \sf \tt \cal", "style", ""),
     # Spaces, rows, and environments.
     **_tex(r"\, \thinspace", "space", "", 3),
     r"\:": _Tex("space", "", 4),
@@ -1166,7 +1179,8 @@ _TESTIMONY_TEX: dict[str, _Tex] = {
 }
 #: Environments testimony may use, all of them rows of cells.
 _TEX_ENVIRONMENTS = frozenset(
-    {"cases", "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix", "aligned", "gathered"}
+    {"cases", "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix", "smallmatrix", "array"}
+    | {"aligned", "gathered", "split", "align", "align*", "gather", "gather*"}
 )
 #: The environments MathJax 3.2.2 reads a bracket after, for where their rows
 #: sit: it applies ``[t]``, ``[b]``, or ``[c]`` and shows nothing else written
