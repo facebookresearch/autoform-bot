@@ -811,11 +811,13 @@ is authenticated only when all of these hold:
    merged into another branch, and several candidates are all refused.
 3. **Content only.** P changes only articles and read-back cards, judged by
    the name and, for a rename, the previous name of every file in its
-   complete file list; a list GitHub truncates is refused. Otherwise the
-   reason says to record approvals in a pull request that changes only
-   articles and read-back cards. This is what stops P from changing
-   CODEOWNERS one commit before M, moving its article, or editing the verify
-   workflow. The gate below applies it too.
+   complete file list. GitHub lists at most 3000 files, so a list that long
+   is refused as possibly cut short; a shorter one is complete, so P's
+   `changed_files` count, which the pull requests GitHub lists for a commit
+   leave out, is not compared. Otherwise the reason says to record approvals
+   in a pull request that changes only articles and read-back cards. This is
+   what stops P from changing CODEOWNERS one commit before M, moving its
+   article, or editing the verify workflow. The gate below applies it too.
 4. **Visible diff.** P's file list shows a patch for p that adds a frontmatter
    line recording H, and p records H at P's head commit. A missing or
    truncated patch is refused.
@@ -845,10 +847,14 @@ is authenticated only when all of these hold:
    fails unless H was current at P's head commit, the commit the reviewer
    approved.
 
-Pull requests from forks are refused at step 6: a fork's run lists no pull
-requests and comes from another repository, so a workflow token cannot tie it
-to P. Record approvals from a branch of the project's repository, and use a
-fresh branch name for each approval pull request.
+Pull requests from forks, and into another repository, are refused before
+anything about them is read, in the gate too: a fork's run lists no pull
+requests and comes from another repository, so step 6 cannot tie it to P.
+Record approvals from a branch of the project's repository, and use a fresh
+branch name for each approval pull request. Nothing then depends on a head
+commit only a fork holds: P's head stays readable in this repository through
+`refs/pull/N/head` after its branch is deleted, and if GitHub ever cannot
+read it, the approval reads self-approved.
 
 Anything the verifier cannot decide, including a failed request (a later page
 of a list included), a spent budget of 500 requests, or an undecidable
@@ -921,10 +927,11 @@ exits 1 when an approval added or changed relative to REF is not
 authenticated; unchanged approvals are not looked up, and removing one needs
 nothing. `--pr N` makes it the pre-merge gate: only reviews of pull request N
 count, code owners come from `--trusted-ref` alone, and steps 1, 2, and 6 are
-skipped because nothing is merged yet; the precondition and steps 3 to 5
-apply. Without `--pr`, `--since` applies the full rule, as Pages would, which
-suits the default branch after a merge, not a pull request; run inside a
-`pull_request` event without `--pr`, it prints a hint naming `--pr`.
+skipped because nothing is merged yet; the precondition except the current
+head, the refusal of forks, and steps 3 to 5 apply. Without `--pr`,
+`--since` applies the full rule, as Pages would, which suits the default
+branch after a merge, not a pull request; run inside a `pull_request` event
+without `--pr`, it prints a hint naming `--pr`.
 Generated CI runs the gate in `autoform-review-gate.yml` on each pull request
 of an opted-in project, and again when a review is submitted or dismissed,
 with `--pr` and the base commit as both `--since` and `--trusted-ref`. That

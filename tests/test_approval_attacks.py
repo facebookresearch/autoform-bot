@@ -1252,7 +1252,10 @@ def test_the_gate_refuses_a_pull_request_that_changes_anything_else(tmp_path: Pa
     assert "#7 changes .github/CODEOWNERS, not only articles and read-back cards" in (status.reason or "")
 
 
-def test_the_gate_refuses_a_file_list_shorter_than_github_counts(tmp_path: Path) -> None:
+@pytest.mark.parametrize("gate", [False, True])
+def test_a_file_list_as_long_as_github_lists_fails_closed_however_many_pages_are_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gate: bool
+) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
     _branch(root, "approve")
@@ -1260,14 +1263,19 @@ def test_the_gate_refuses_a_file_list_shorter_than_github_counts(tmp_path: Path)
     head = _commit(root, "Approve the result")
     github.open_pull(7, "bob")
     github.review(7, "alice", "APPROVED", head)
-    github.pulls[7]["changed_files"] = 2
+    if not gate:
+        _land(root, github, 7)
+    github.file_edits[7] = lambda entries: entries + [
+        {"filename": f"blueprint/roadmap/basics/n{index}.md", "status": "added"}
+        for index in range(3000 - len(entries))
+    ]
+    monkeypatch.setattr(approvals, "_MAX_PAGES", 40)
 
-    status = _verify(root, github, trusted_ref="main", pull_request=7)["basics/result"]
+    status = _verify(root, github, **({"trusted_ref": "main", "pull_request": 7} if gate else {}))["basics/result"]
     assert status.label == "self-approved"
-    assert "GitHub lists 1 of the 2 files #7 changes" in (status.reason or "")
-    github.pulls[7]["changed_files"] = 1
-    status = _verify(root, github, trusted_ref="main", pull_request=7)["basics/result"]
-    assert status.authenticated, status.reason
+    assert "#7 has 3000 files listed and GitHub lists at most 3000, so what it changes cannot be read" in (
+        status.reason or ""
+    )
 
 
 def test_the_gate_still_needs_the_diff_to_record_the_hash(tmp_path: Path) -> None:
@@ -1388,6 +1396,40 @@ def test_a_pull_request_from_a_fork_is_refused(tmp_path: Path, source: dict | No
     _refused(root, github, "record approvals from a branch of this repository")
 
 
+@pytest.mark.parametrize("source", [{"id": 2, "full_name": "mallory/project"}, None])
+def test_a_fork_is_refused_before_anything_about_it_is_read(tmp_path: Path, source: dict | None) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _approved(root, github)
+    github.pulls[7]["head"]["repo"] = source
+
+    _refused(root, github, "not a branch of owner/project")
+    requested = [path for path, _ in github.calls]
+    assert not any(path.startswith(("/contents/", "/pulls/7/")) for path in requested), requested
+
+
+@pytest.mark.parametrize(
+    ("side", "reason"),
+    [
+        ("head", "#7 comes from 'mallory/project', not a branch of owner/project"),
+        ("base", "#7 does not target owner/project"),
+    ],
+)
+def test_the_gate_refuses_a_pull_request_between_repositories(tmp_path: Path, side: str, reason: str) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _branch(root, "approve")
+    _approve(root, "result", _HASH)
+    head = _commit(root, "Approve the result")
+    github.open_pull(7, "bob")
+    github.review(7, "alice", "APPROVED", head)
+    github.pulls[7][side]["repo"] = {"id": 2, "full_name": "mallory/project"}
+
+    status = _verify(root, github, trusted_ref="main", pull_request=7)["basics/result"]
+    assert status.label == "self-approved"
+    assert reason in (status.reason or "")
+
+
 def test_a_pull_request_into_another_repository_is_refused(tmp_path: Path) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
@@ -1395,6 +1437,32 @@ def test_a_pull_request_into_another_repository_is_refused(tmp_path: Path) -> No
     github.pulls[7]["base"]["repo"] = {"id": 2, "full_name": "mallory/project"}
 
     _refused(root, github, "#7 does not target owner/project")
+
+
+@pytest.mark.parametrize("user", [None, {}, {"login": ""}, {"login": None}, {"login": "two words"}])
+def test_a_pull_request_without_an_author_authenticates_nothing(tmp_path: Path, user: object) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    head = _approved(root, github)
+    pull = github.pulls[7]
+    # GitHub still links the commits to bob, so only the missing author is in question.
+    github.commit_users.update(
+        dict.fromkeys(_git(root, "rev-list", f"{pull['base']['sha']}..{head}").split(), ("bob", "bob"))
+    )
+    pull["user"] = user
+
+    _refused(root, github, "GitHub returned #7 without its author, so no reviewer can be shown not to be them")
+
+
+def test_a_pull_request_an_app_opened_has_an_author(tmp_path: Path) -> None:
+    """Deliberate guard: a bot login is an author, not a missing one."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _approved(root, github)
+    github.pulls[7]["user"] = {"login": "github-actions[bot]"}
+
+    _authenticated(root, github)
 
 
 # F5: write permission is read from GitHub, not inferred from the association.

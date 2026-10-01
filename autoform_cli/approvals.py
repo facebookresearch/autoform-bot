@@ -42,8 +42,9 @@ _PAGE_SIZE = 100
 _MAX_PAGES = 30
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 _MAX_HISTORY = 500
-# GitHub lists at most 250 commits of a pull request.
+# GitHub lists at most 250 commits and 3000 files of a pull request.
 _MAX_PULL_COMMITS = 250
+_MAX_PULL_FILES = 3000
 # GitHub does not load a CODEOWNERS file of 3 MB or more.
 _MAX_CODEOWNERS_BYTES = 3_000_000
 _UNCOVERED_SHOWN = 10
@@ -72,6 +73,8 @@ _REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 # Underscores appear in Enterprise Managed User logins such as octocat_acme.
 _LOGIN = r"[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?"
 _REVIEWER = re.compile(rf"{_LOGIN}\Z")
+# A pull request an app opens has an author such as dependabot[bot].
+_AUTHOR = re.compile(rf"{_LOGIN}(?:\[bot\])?\Z")
 _USER_OWNER = re.compile(rf"@{_LOGIN}\Z")
 _TEAM_OWNER = re.compile(rf"@{_LOGIN}/[A-Za-z0-9_.-]+\Z")
 _EMAIL_OWNER = re.compile(r"[^@\s]+@[^@\s]+\Z")
@@ -514,7 +517,8 @@ class GitHubReviewVerifier:
 
     With ``pull_request`` N, the pre-merge gate, P is pull request N, code
     owners come from R alone (the gate's base commit), and steps 1, 2, and 6
-    are skipped: nothing is merged or finished yet.
+    are skipped: nothing is merged or finished yet. A P from a fork is
+    refused in both modes before anything about it is read.
 
     Anything that cannot be checked, including a failed request, a spent
     request budget, or undecidable ownership, leaves that one approval
@@ -646,6 +650,7 @@ class GitHubReviewVerifier:
     def _attest(
         self, node_id: str, review_hash: str, pull: dict, path: str, wanted: str, owners: frozenset[str]
     ) -> ApprovalAttestation:
+        self._check_same_repository(pull)
         self._check_content_only(pull)
         self._check_recorded(pull, path, wanted)
         reviewer, review = self._approver(pull, path, owners)
@@ -981,16 +986,41 @@ class GitHubReviewVerifier:
             )
         return _checked_pull(pull)
 
+    def _identity(self) -> tuple[int, str]:
+        repository = self._repository()
+        here, name = repository.get("id"), repository.get("full_name")
+        if not isinstance(here, int) or not isinstance(name, str) or not _REPOSITORY.match(name):
+            raise ApprovalError("GitHub API GET of the repository did not give its id and full name")
+        return here, name
+
+    def _check_same_repository(self, pull: dict) -> None:
+        """P comes from a branch of this repository and targets it.
+
+        Step 6 cannot tie a fork's run to P, so a fork is refused first, in
+        the gate too, before anything about it is read.
+        """
+
+        number = pull["number"]
+        here, name = self._identity()
+        source = pull["head"].get("repo")
+        if not isinstance(source, dict) or source.get("id") != here:
+            fork = source.get("full_name") if isinstance(source, dict) else None
+            raise _Refused(
+                f"#{number} comes from {'a deleted repository' if fork is None else repr(fork)}, not a branch of "
+                f"{name}, and a workflow token cannot tie a fork's Actions run to its pull request; record "
+                "approvals from a branch of this repository"
+            )
+        target = pull["base"].get("repo")
+        if not isinstance(target, dict) or target.get("id") != here:
+            raise _Refused(f"#{number} does not target {name}")
+
     # 3. That the pull request changed nothing a reviewer of articles does not own.
 
     def _check_content_only(self, pull: dict) -> None:
         number = pull["number"]
+        # _files refuses a list at GitHub's cap, so a shorter one is complete without comparing
+        # changed_files, which the pull requests GitHub lists for a commit leave out.
         files = self._files(number)
-        listed = pull.get("changed_files")
-        if isinstance(listed, int) and listed != len(files):
-            raise _Refused(
-                f"GitHub lists {len(files)} of the {listed} files #{number} changes, so what it changes cannot be read"
-            )
         # A rename moves a file out of where it was owned as much as into where it is.
         names = [name for item in files for name in (item.get("filename"), item.get("previous_filename", ""))]
         content = {name for name in names if isinstance(name, str) and _is_content(name, self._blueprint)}
@@ -1074,21 +1104,7 @@ class GitHubReviewVerifier:
 
         number, head = pull["number"], pull["head"]["sha"]
         workflow = self.verify_workflow
-        repository = self._repository()
-        here, name = repository.get("id"), repository.get("full_name")
-        if not isinstance(here, int) or not isinstance(name, str) or not _REPOSITORY.match(name):
-            raise ApprovalError("GitHub API GET of the repository did not give its id and full name")
-        source = pull["head"].get("repo")
-        if not isinstance(source, dict) or source.get("id") != here:
-            fork = source.get("full_name") if isinstance(source, dict) else None
-            raise _Refused(
-                f"#{number} comes from {'a deleted repository' if fork is None else repr(fork)}, not a branch of "
-                f"{name}, and a workflow token cannot tie a fork's Actions run to its pull request; record "
-                "approvals from a branch of this repository"
-            )
-        target = pull["base"].get("repo")
-        if not isinstance(target, dict) or target.get("id") != here:
-            raise _Refused(f"#{number} does not target {name}")
+        here, name = self._identity()
         branch = pull["head"].get("ref")
         if not isinstance(branch, str) or not branch:
             raise ApprovalError(f"GitHub returned #{number} without its head branch")
@@ -1124,7 +1140,16 @@ class GitHubReviewVerifier:
     # Requests.
 
     def _files(self, number: int) -> list[dict]:
-        return self._once(("files", number), lambda: self._pages(f"/pulls/{number}/files"))
+        def fetch() -> list[dict]:
+            files = self._pages(f"/pulls/{number}/files")
+            if len(files) >= _MAX_PULL_FILES:
+                raise ApprovalError(
+                    f"#{number} has {len(files)} files listed and GitHub lists at most {_MAX_PULL_FILES}, "
+                    "so what it changes cannot be read"
+                )
+            return files
+
+        return self._once(("files", number), fetch)
 
     def _permission(self, login: str) -> str | None:
         """The login's permission on the repository; None for someone who is not a collaborator."""
@@ -1229,6 +1254,8 @@ def _checked_pull(pull: dict) -> dict:
     sha = head.get("sha") if isinstance(head, dict) else None
     if not isinstance(number, int) or not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ApprovalError("GitHub returned a pull request without a number and head commit")
+    if not _AUTHOR.match(_login(pull.get("user"))):
+        raise ApprovalError(f"GitHub returned #{number} without its author, so no reviewer can be shown not to be them")
     return pull
 
 
