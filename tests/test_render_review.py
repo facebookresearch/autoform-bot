@@ -821,6 +821,43 @@ def test_a_hash_that_starts_a_line_without_a_space_is_text() -> None:
     assert render_testimony(testimony) == "<p>Open Mathlib PR\n#41755\nproves a matching bound.</p>"
 
 
+_UNEVEN = "Markdown table rows with more or fewer cells than the header are not allowed"
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        "| claim | verdict |\n|---|---|\n| $f$ is continuous | faithful | NOT faithful: it assumes $x \\ne 0$ |\n",
+        "| W0 | W1 |\n|---|---|\n| W2 |\n",
+        "W0 | W1\n---|---\nW2 | W3 | W4\n",
+        "| W0 |\n|---|\n| W1 | W2 |\n",
+        "| W0 | W1 |\n|---|---|\n| W2 | W3 |\nW4 W5 | W6 | W7\n",
+        "| W0 | W1 |\n|---|---|\n| W2 | W3 |\n# Verdict: faithful\n",
+        "> | W0 | W1 |\n> |---|---|\n> | W2 | W3 | W4 |\n",
+        "- W9\n\n    | W0 | W1 |\n    |---|---|\n    | W2 | W3 | W4 |\n",
+        "| W0 | W1 |\n|---|---|\n| $|x|$ | W4 |\n",
+    ],
+)
+def test_table_rows_with_more_or_fewer_cells_than_the_header_are_refused(testimony: str) -> None:
+    """The renderer drops the cells past the header's, so a reader would not
+    see them, and reads a line run on after a table as one of its rows."""
+
+    assert any(error.startswith(_UNEVEN) for error in _testimony_errors(testimony))
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        "| claim | verdict |\n|---|---|\n| $f$ is continuous | faithful |\n",
+        "| a \\| b | $\\lvert x \\rvert$ |\n|:---|---:|\n| c | d |\n",
+        "| only |\n|---|\n",
+        "W0 | W1\n---|---\nW2 | W3\n\nAfter the table.",
+    ],
+)
+def test_tables_whose_rows_match_the_header_are_accepted(testimony: str) -> None:
+    assert _testimony_errors(testimony) == ()
+
+
 @pytest.mark.parametrize(
     ("markup", "reason"),
     [

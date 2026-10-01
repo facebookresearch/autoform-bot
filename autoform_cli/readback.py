@@ -43,6 +43,7 @@ from urllib.parse import unquote_to_bytes
 import html5lib
 import markdown as markdown_renderer
 from markdown.blockprocessors import HashHeaderProcessor
+from markdown.extensions.tables import TableProcessor
 from markdown.treeprocessors import Treeprocessor
 from markdown.util import ETX, STX
 
@@ -920,6 +921,20 @@ class _HashHeading(HashHeaderProcessor):
     RE = re.compile(r"(?:^|\n)(?P<level>#{1,6})(?=[ \t\n]|$)(?P<header>(?:\\.|[^\\])*?)#*(?:\n|$)")
 
 
+class _CountedTable(TableProcessor):
+    """Python-Markdown's tables, noting a row with more or fewer cells than
+    the header. The renderer, like a CommonMark viewer of the vault, cuts
+    such a row to the header's width or fills it out with empty cells, so a
+    cell past the header's would not be shown, and a line run on after the
+    table would be shown as a row."""
+
+    uneven = False
+
+    def _build_row(self, row: str, parent: object, align: list[str | None]) -> None:  # type: ignore[override]
+        self.uneven = self.uneven or len(self._split_row(row)) != len(align)
+        super()._build_row(row, parent, align)  # type: ignore[arg-type]
+
+
 def _testimony_converter() -> markdown_renderer.Markdown:
     """A Markdown converter for testimony: paragraphs, emphasis, lists, block
     quotes, tables, code, and formulas, and no HTML, entities, autolinks,
@@ -937,6 +952,8 @@ def _testimony_converter() -> markdown_renderer.Markdown:
     )
     converter.preprocessors.deregister("html_block")
     converter.parser.blockprocessors.register(_HashHeading(converter.parser), "hashheader", 70)
+    table = converter.parser.blockprocessors["table"]
+    converter.parser.blockprocessors.register(_CountedTable(converter.parser, table.config), "table", 75)
     for pattern in ("html", "entity", "autolink", "automail"):
         converter.inlinePatterns.deregister(pattern)
     converter.treeprocessors.register(_LiteralText(converter), "literal_text", 5)
@@ -950,8 +967,9 @@ def render_testimony(text: str) -> str:
     return _render_testimony(text)[0]
 
 
-def _render_testimony(text: str) -> tuple[str, bool]:
-    """The HTML for ``text``, and whether it defines Markdown links.
+def _render_testimony(text: str) -> tuple[str, bool, bool]:
+    """The HTML for ``text``, whether it defines Markdown links, and whether
+    a table row in it has more or fewer cells than its header.
 
     The site places the HTML inside its own Markdown page, whose parser takes
     a block-level tag at the start of a line for the start of a block it reads
@@ -962,7 +980,9 @@ def _render_testimony(text: str) -> tuple[str, bool]:
     converter = _testimony_converter()
     rendered = converter.convert(text)
     names = "|".join(sorted(converter.block_level_elements, key=len, reverse=True))
-    return re.sub(rf"\n(?=<(?:{names})[\s/>])", "", rendered), bool(converter.references)
+    table = converter.parser.blockprocessors["table"]
+    uneven = isinstance(table, _CountedTable) and table.uneven
+    return re.sub(rf"\n(?=<(?:{names})[\s/>])", "", rendered), bool(converter.references), uneven
 
 
 #: The elements the testimony renderer emits for what a testimony may use.
@@ -1827,11 +1847,17 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
 
     if limits := _testimony_limit_errors(text):
         return limits
-    rendered, defines_links = _render_testimony(text)
+    rendered, defines_links, uneven_table = _render_testimony(text)
     document = html5lib.parseFragment(rendered, namespaceHTMLElements=False)
     errors: list[str] = []
     if defines_links:
         errors.append("Markdown link definitions are not allowed")
+    if uneven_table:
+        errors.append(
+            "Markdown table rows with more or fewer cells than the header are not allowed: the renderer drops "
+            "cells past the header's and reads a line run on after the table as a row; write \\| for a pipe in "
+            "a cell, or \\vert in a formula, and leave a blank line after the table"
+        )
     for element in document.iter():
         if element is document:
             continue
