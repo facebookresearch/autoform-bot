@@ -442,7 +442,9 @@ contains the exact packet, both hashes, a model label, and nonempty testimony.
 The loader rejects missing or unknown fields, altered packets, identity
 mismatches, and malformed or empty testimony. Testimony must show a reader
 everything it says: invisible and reordering characters (zero-width spaces,
-bidirectional overrides), TeX comments, and raw HTML are rejected. Testimony
+bidirectional overrides, Unicode's default-ignorable characters, spaces other
+than the ASCII space, right-to-left letters and digits), more than four
+combining marks on one character, TeX comments, and raw HTML are rejected. Testimony
 is rendered once, by a Markdown renderer that reads no HTML, and the site shows
 that rendering byte for byte, so what was validated is what a reviewer sees.
 Code is shown as typed. Outside code, formulas included, HTML tags, comments,
@@ -470,10 +472,9 @@ for a dollar sign, and put displayed math in a paragraph of its own.
 Testimony must also show at least one letter or digit. Before any card is parsed its
 testimony must fit limits well above what real read-backs use: 32 KiB, 500
 lines, 1,024 math delimiters, 512 backticks in runs of at most 16, 64 opening
-brackets, 64 columns of nesting, 256 tag openers (`<` before a letter, `/`,
-`!`, or `?`), 256 underscores that start a word, and 2,048 backslashes. The
-Markdown parser is superlinear in each of these, so a byte limit alone would
-not bound it, and every card in a pull
+brackets, 64 columns of nesting, 256 underscores that start a word, 1,024
+asterisks, and 2,048 backslashes. The Markdown parser is superlinear in each of
+these, so a byte limit alone would not bound it, and every card in a pull
 request is read before its validity is known. Cards are read through no-follow
 descriptors, so a card or directory swapped for a link is skipped. A write
 walks to the card's directory without following links and takes that

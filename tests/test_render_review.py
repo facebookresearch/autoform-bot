@@ -229,6 +229,14 @@ def _file(tmp_path: Path, testimony: str) -> Path:
         ("The claim holds⁠ for all x.", "U+2060 WORD JOINER"),
         ("The bound is ‮1 > x‬ for every x.", "U+202E RIGHT-TO-LEFT OVERRIDE"),
         ("The claim holds&#8203; for all x.", "U+200B ZERO WIDTH SPACE"),
+        ("The claim holds\U00016fe4 for all x.", "U+16FE4 KHITAN SMALL SCRIPT FILLER"),
+        ("P&#x16FE4;Q", "&#x16FE4; (U+16FE4 KHITAN SMALL SCRIPT FILLER)"),
+        ("For all $x" + "\u2003" * 2000 + "y$, P.", "U+2003 EM SPACE"),
+        ("P" + "\u00a0" * 400 + "and Q.", "U+00A0 NO-BREAK SPACE"),
+        ("The bound is \u05d0 > x.", "U+05D0 HEBREW LETTER ALEF"),
+        ("The bound is \u0627 > x.", "U+0627 ARABIC LETTER ALEF"),
+        ("The sum \u0661 + \u0662 is three.", "U+0661 ARABIC-INDIC DIGIT ONE"),
+        ("The claim holds for x" + "\u0301" * 5 + ".", "more than 4 combining marks on one character"),
         (r"For all $x$, $P(x) \phantom{\land Q(x)}$ holds.", r"\phantom"),
         (r"$P \rlap{\,\land Q}$", r"\rlap"),
         (r"$P \kern-2em \land Q$", r"\kern"),
@@ -270,6 +278,19 @@ def test_writer_accepts_ordinary_mathematical_testimony(testimony: str, tmp_path
     _file(tmp_path, testimony)
 
     assert all(card.valid for card in load_readbacks(tmp_path).values())
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        "The claim holds for x" + "\u0301" * 4 + ".",
+        "Vi\u1ec7t, or Vie\u0323\u0302t, names the same place.",
+        "The Tibetan stack \u0f66\u0f92\u0fb2\u0f72\u0f7e carries four marks.",
+        "The cardinal \u2135 and $\\aleph_0$ are left to right.",
+    ],
+)
+def test_combining_marks_up_to_four_and_left_to_right_letters_are_accepted(testimony: str) -> None:
+    assert _testimony_errors(testimony) == ()
 
 
 @pytest.mark.parametrize(
@@ -531,10 +552,8 @@ def test_writer_refuses_testimony_without_a_letter_or_digit(testimony: str, tmp_
         ("".join("  " * depth + "- a\n" for depth in range(512)), "columns deep"),
         ("word " * 7000, "-byte limit"),
         ("x\n" * 600, "-line limit"),
-        ("<a " * 10900, "tag openers"),
-        ("<!--" * 300, "tag openers"),
-        ("<b>" * 1000 + "x", "tag openers"),
         ("_a " * 300, "underscores that start a word"),
+        ("*a" * 1100, "asterisks"),
         ("\\" * 3000 + "x", "backslashes"),
         ("[" * 256 + "\\*" * 2000, "opening brackets"),
     ],
@@ -544,9 +563,8 @@ def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
 ) -> None:
     """Parsing is superlinear in spans and openers, cubic in a backtick run,
     and recursive in nesting: 8,000 brackets took ten seconds, 4,000 backticks
-    over two minutes, and a list 512 levels deep overflowed the stack. 10,900
-    unclosed tags took four seconds, 256 brackets before 16,000 escapes took
-    sixteen, and 1,000 nested tags overflowed the stack."""
+    over two minutes, and a list 512 levels deep overflowed the stack. 256
+    brackets before 16,000 escapes took sixteen."""
 
     def unbounded(*args: object, **kwargs: object) -> None:
         raise AssertionError("the Markdown renderer ran on testimony over a limit")
@@ -554,6 +572,39 @@ def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
     monkeypatch.setattr("autoform_cli.readback.markdown_renderer.Markdown", unbounded)
 
     assert any(limit in error for error in _testimony_errors(testimony))
+
+
+@pytest.mark.parametrize(
+    ("at_limit", "over", "reason"),
+    [
+        ("a" * 32768, "a" * 32769, "testimony is 32769 bytes, over the 32768-byte limit"),
+        ("a\n" * 499 + "a", "a\n" * 500 + "a", "testimony has 501 lines, over the 500-line limit"),
+        ("$a$ " * 512, "$a$ " * 512 + "\\$", "testimony has 1025 math delimiters, over the limit of 1024"),
+        ("`a` " * 256, "`a` " * 256 + "\\`", "testimony has 513 backticks, over the limit of 512"),
+        ("`" * 16 + "a" + "`" * 16, "`" * 17 + "a" + "`" * 17, "testimony has a run of 17 backticks, over the limit of 16"),
+        ("[a] " * 64, "[a] " * 65, "testimony has 65 opening brackets, over the limit of 64"),
+        ("> " * 32 + "a", "> " * 32 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
+        (">\t" * 16 + "a", ">\t" * 16 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
+        (" _a" * 256, " _a" * 257, "testimony has 257 underscores that start a word, over the limit of 256"),
+        ("*a* " * 512, "*a* " * 512 + "\\*", "testimony has 1025 asterisks, over the limit of 1024"),
+        ("a" + "\\." * 2048, "a" + "\\." * 2049, "testimony has 2049 backslashes, over the limit of 2048"),
+    ],
+)
+def test_testimony_at_a_limit_is_accepted_and_one_more_is_refused(at_limit: str, over: str, reason: str) -> None:
+    assert _testimony_errors(at_limit) == ()
+    assert _testimony_errors(over) == (reason,)
+
+
+def test_tags_are_text_to_the_renderer_and_need_no_limit() -> None:
+    """The renderer reads no HTML, so a thousand nested tags, which overflowed
+    the stack of a parser that did, are refused by name like one tag, and
+    openers that close nothing are text."""
+
+    assert _testimony_errors("<b>" * 1000 + "x") == ("raw HTML is not allowed: <b>; in a formula, put a space after <",)
+    assert _testimony_errors("<!--" * 300 + "x") == (
+        "HTML comments are not allowed: Markdown viewers hide the text they enclose",
+    )
+    assert _testimony_errors(("<a " * 10900)[:32000]) == ()
 
 
 @pytest.mark.parametrize(

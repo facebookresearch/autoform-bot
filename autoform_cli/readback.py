@@ -93,31 +93,49 @@ _TEX_COMMENT = re.compile(r"(?<!\\)(?:\\\\)*%")
 #: card could say more or other than a reader sees. Unicode's general
 #: categories catch most (controls, format characters such as zero-width
 #: spaces and bidirectional overrides, separators, private-use and unassigned
-#: code points); the rest are default-ignorable or blank letters and symbols.
+#: code points). Spaces other than the ASCII one are blank too, and a browser
+#: does not collapse them, so a run of them pushes text aside or off the card.
+#: Letters and digits of the right-to-left bidirectional classes reorder the
+#: characters around them. The rest are listed by code point: the
+#: Default_Ignorable_Code_Point ranges of Unicode 17.0, which renderers show as
+#: nothing and Python's unicodedata does not expose, and blank letters and
+#: symbols outside them.
 _HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cn", "Cs", "Zl", "Zp"})
+_HIDDEN_BIDI_CLASSES = frozenset({"R", "AL", "AN"})
+_DEFAULT_IGNORABLE = (
+    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F),
+    (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF),
+)
 _HIDDEN_CODE_POINTS = frozenset(
-    {0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x180B, 0x180C, 0x180D, 0x180F, 0x2800, 0x3164, 0xFFA0}
-    | set(range(0xFE00, 0xFE10))
-    | set(range(0xE0100, 0xE01F0))
+    {0x2800, 0x16FE4}  # BRAILLE PATTERN BLANK, KHITAN SMALL SCRIPT FILLER
+    | {code for first, last in _DEFAULT_IGNORABLE for code in range(first, last + 1)}
 )
 _ALLOWED_CONTROLS = frozenset("\t\n\r")
+#: How many combining marks one character may carry. The scripts written with
+#: them put at most three or four on a letter; more stack over the lines above
+#: and below.
+_MAX_COMBINING_MARKS = 4
 
 #: Limits a testimony must meet before the Markdown renderer reads it. Python-
 #: Markdown's inline processing is superlinear in the number of spans and of
 #: unmatched openers, cubic in a run of backticks, and recursive in nesting
 #: depth, so a byte limit alone does not bound the work. Four characters cost
-#: a pass over the rest of the text each: a "[", which three link patterns
-#: scan from to its closing bracket; a "<" before a letter, "/", "!" or "?",
-#: which the HTML block parser scans from for the end of a tag, even inside a
-#: formula; an underscore that starts a word, which the emphasis patterns scan
-#: from for a closing one; and a backslash, since each escape rebuilds the text
-#: and lengthens what the link patterns scan. The byte, line, delimiter,
-#: backtick, bracket, and nesting limits are several times what 120 read-backs
-#: of a real-analysis textbook use: at most 5.9 KB, 62 lines, 304 math
-#: delimiters, 72 backticks in runs of one, 2 brackets, and 3 columns of
-#: indentation. The tag, underscore, and backslash limits keep each of their
-#: passes near half a second at the byte limit, and at every limit at once
-#: validation takes under two seconds.
+#: a scan each: a "[", which three link patterns scan from to its closing
+#: bracket; an underscore that starts a word, which the emphasis patterns scan
+#: from for a closing one; an asterisk, which they scan from to the next; and
+#: a backslash, since each escape rebuilds the text and lengthens what the link
+#: patterns scan. The byte, line, delimiter, backtick, bracket, and nesting
+#: limits are several times what 120 read-backs of a real-analysis textbook
+#: use: at most 5.9 KB, 62 lines, 304 math delimiters, 72 backticks in runs of
+#: one, 2 brackets, and 3 columns of indentation; the asterisk limit is five
+#: times the most any blueprint page at hand holds. The renderer reads no HTML,
+#: and the scans for HTML a vault viewer would read are linear, so "<" needs no
+#: limit: a thousand nested tags, which once overflowed the stack, are refused
+#: in a hundredth of a second. Brackets cost most, 0.6 s at their limit alone.
+#: At every limit at once the slowest testimony found validates in 1.6 s, two
+#: thirds of the 2.3 s the slowest took on the same machine under the previous
+#: renderer and limits.
 TESTIMONY_MAX_BYTES = 32 * 1024
 TESTIMONY_MAX_LINES = 500
 TESTIMONY_MAX_MATH_DELIMITERS = 1024
@@ -125,12 +143,11 @@ TESTIMONY_MAX_BACKTICKS = 512
 TESTIMONY_MAX_BACKTICK_RUN = 16
 TESTIMONY_MAX_BRACKETS = 64
 TESTIMONY_MAX_NESTING = 64
-TESTIMONY_MAX_TAG_OPENERS = 256
 TESTIMONY_MAX_UNDERSCORE_OPENERS = 256
+TESTIMONY_MAX_ASTERISKS = 1024
 TESTIMONY_MAX_BACKSLASHES = 2048
 _MATH_DELIMITER = re.compile(r"\$|\\[()\[\]]")
 _BACKTICK_RUN = re.compile(r"`+")
-_TAG_OPENER = re.compile(r"<[A-Za-z/!?]")
 _UNDERSCORE_OPENER = re.compile(r"(?<!\w)_")
 #: Everything a line can open before its content: indentation, block quotes,
 #: and list markers, each of which nests one more block.
@@ -1603,9 +1620,16 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
         errors.append("active Mermaid blocks are not allowed")
     pieces = _testimony_pieces(document)
     errors.extend(_vault_markup_errors(text, [piece for piece, kind in pieces if kind == "code"]))
+    # The rendering is checked as well as the source, so a character the
+    # renderer produced would not pass unseen either.
     hidden = _hidden_characters(text + "".join(document.itertext()))
     if hidden:
         errors.append("invisible or reordering characters are not allowed: " + ", ".join(hidden))
+    if _longest_combining_run(text) > _MAX_COMBINING_MARKS:
+        errors.append(
+            f"more than {_MAX_COMBINING_MARKS} combining marks on one character are not allowed: "
+            "they stack over the lines around it"
+        )
     layout = _TexLayout()
     for piece, kind in pieces:
         if kind == "text":
@@ -1727,18 +1751,15 @@ def _testimony_limit_errors(text: str) -> tuple[str, ...]:
         errors.append(
             f"testimony nests blocks {nesting} columns deep, over the limit of {TESTIMONY_MAX_NESTING}"
         )
-    tags = len(_TAG_OPENER.findall(text))
-    if tags > TESTIMONY_MAX_TAG_OPENERS:
-        errors.append(
-            f"testimony has {tags} tag openers (< before a letter, /, ! or ?), "
-            f"over the limit of {TESTIMONY_MAX_TAG_OPENERS}"
-        )
     underscores = len(_UNDERSCORE_OPENER.findall(text))
     if underscores > TESTIMONY_MAX_UNDERSCORE_OPENERS:
         errors.append(
             f"testimony has {underscores} underscores that start a word, "
             f"over the limit of {TESTIMONY_MAX_UNDERSCORE_OPENERS}"
         )
+    asterisks = text.count("*")
+    if asterisks > TESTIMONY_MAX_ASTERISKS:
+        errors.append(f"testimony has {asterisks} asterisks, over the limit of {TESTIMONY_MAX_ASTERISKS}")
     backslashes = text.count("\\")
     if backslashes > TESTIMONY_MAX_BACKSLASHES:
         errors.append(f"testimony has {backslashes} backslashes, over the limit of {TESTIMONY_MAX_BACKSLASHES}")
@@ -1836,12 +1857,28 @@ def _hidden_characters(text: str) -> list[str]:
 
     found: dict[str, None] = {}
     for character in text:
-        if character in _ALLOWED_CONTROLS:
+        if character in _ALLOWED_CONTROLS or character == " ":
             continue
-        if unicodedata.category(character) in _HIDDEN_CATEGORIES or ord(character) in _HIDDEN_CODE_POINTS:
+        category = unicodedata.category(character)
+        if (
+            category in _HIDDEN_CATEGORIES
+            or category == "Zs"
+            or ord(character) in _HIDDEN_CODE_POINTS
+            or unicodedata.bidirectional(character) in _HIDDEN_BIDI_CLASSES
+        ):
             name = unicodedata.name(character, "unnamed")
             found[f"U+{ord(character):04X} {name}"] = None
     return list(found)
+
+
+def _longest_combining_run(text: str) -> int:
+    """The most combining marks in a row in ``text``."""
+
+    longest = run = 0
+    for character in text:
+        run = run + 1 if unicodedata.category(character) in {"Mn", "Me"} else 0
+        longest = max(longest, run)
+    return longest
 
 
 def _card_body(
