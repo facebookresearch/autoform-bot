@@ -2707,6 +2707,11 @@ def _run_module_probes(
     meet, cancels the pool: each running command terminates its
     process tree, every worker is joined, and only then does the error
     propagate, so no Lean process outlives the extraction.
+
+    The pool sets no deadline of its own: each probe's budget is the one
+    ``runner`` enforces, so the pool can run for one budget per round of
+    parallel probes. A budget shared across the pool would make which module
+    fails depend on scheduling, not on that module.
     """
 
     cancelled = threading.Event()

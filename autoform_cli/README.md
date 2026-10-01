@@ -394,7 +394,13 @@ command; on POSIX, Autoform also terminates its process group, for every
 probe, on every failure and on interruption. The Lake freshness check, the
 helper build, and each probe have their own 600-second budget;
 `--timeout SECONDS` sets the helper build's and each probe's, which a large
-project may need. Each probe pays a Lean start and loads its
+project may need. The budgets are per probe, not one deadline for the
+extraction: probes run in rounds of parallel probes, so a whole extraction
+can run for the freshness check, the helper build, and one probe budget per
+round, that is, the number of probed modules divided by the parallel probe
+count, rounded up. A shared deadline would make which module times out
+depend on how the pool scheduled its neighbors, so a module's result would
+no longer match extracting it alone. Each probe pays a Lean start and loads its
 module's imports; on a Mathlib project that measured about 10 CPU-seconds and
 140 MB of private memory per probe, with the `.olean` files mapped and shared.
 Probes run in parallel, one per CPU available to the process, at most eight.
