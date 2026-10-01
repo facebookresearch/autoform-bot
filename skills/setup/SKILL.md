@@ -47,7 +47,7 @@ For a new or incomplete repository:
 
 `autoform init` is the whole vault: `blueprint/` with its landing page,
 `roadmap/README.md`, `coverage/`, and `sources/`, plus `mkdocs.yml`, the theme
-override, both workflows, and ignore rules. Do not hand-build any of it and do
+override, the workflows, and ignore rules. Do not hand-build any of it and do
 not copy the bundled example: the layout is fixed, and a chapter written as a
 sibling file instead of `<chapter>/README.md` still validates while publishing
 a book with no chapters. `init` never overwrites an existing file, so it is
@@ -65,11 +65,13 @@ Never invent a ref. It must be a full 40-character commit sha: `init` refuses a
 branch, a tag, or an abbreviated sha, because CI would silently reinstall a
 different Autoform later and break a project that was passing.
 
-The two workflows it writes are `autoform-verify.yml`, which validates the
+The three workflows it writes are `autoform-verify.yml`, which validates the
 Markdown DAG, builds Lean, rejects unfinished or unsafe proofs, and audits
-theorem axioms on pull requests, and `blueprint-pages.yml`, which validates the
-DAG and its `lean:` declarations, renders the blueprint, builds MkDocs, and
-deploys GitHub Pages. Pass `--autoform-ref` to pin them at an immutable commit.
+theorem axioms on pull requests; `autoform-review-gate.yml`, which tells a pull
+request early whether a code owner has authenticated the statement approvals
+it adds; and `blueprint-pages.yml`, which validates the DAG and its `lean:`
+declarations, renders the blueprint, builds MkDocs, and deploys GitHub Pages.
+Pass `--autoform-ref` to pin them at an immutable commit.
 
 After it runs, fill in what only a human or a source can supply: the project
 description in `blueprint/README.md`, the coverage contract, and a verified

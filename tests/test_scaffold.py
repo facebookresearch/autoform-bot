@@ -23,6 +23,7 @@ from autoform_cli.scaffold import ScaffoldError, scaffold_project
 
 _EXPECTED = {
     ".github/autoform_audit.py",
+    ".github/workflows/autoform-review-gate.yml",
     ".github/workflows/autoform-verify.yml",
     ".github/workflows/blueprint-pages.yml",
     ".gitignore",
@@ -340,6 +341,34 @@ def test_generated_ci_rebuilds_opted_in_statement_review_evidence(tmp_path: Path
     assert (tmp_path / "blueprint/.autoform-review").read_text(encoding="utf-8") == (
         "autoform-review-policy/v1\n"
     )
+
+
+def test_the_approval_gate_runs_apart_from_the_lean_build(tmp_path: Path) -> None:
+    """A review event reruns only the gate, and the gate asks about its own
+    pull request; the Lean build keeps one run per ref, so a review arriving
+    cannot cancel it."""
+
+    scaffold_project(tmp_path, title="Finite Flat")
+    workflows = tmp_path / ".github/workflows"
+    verify = (workflows / "autoform-verify.yml").read_text(encoding="utf-8")
+    gate = (workflows / "autoform-review-gate.yml").read_text(encoding="utf-8")
+    pages = (workflows / "blueprint-pages.yml").read_text(encoding="utf-8")
+
+    assert "pull_request_review" not in verify
+    assert "review authenticate" not in verify
+    assert "group: autoform-verify-${{ github.ref }}\n" in verify
+    assert "github.event_name" not in verify
+    assert "pull_request_review:\n    types: [submitted, dismissed]" in gate
+    assert "group: autoform-review-gate-${{ github.event.pull_request.number }}" in gate
+    assert '--github --pr "$PR_NUMBER"' in gate
+    assert '--since "$BASE_SHA" --trusted-ref "$BASE_SHA"' in gate
+    assert "PR_NUMBER: ${{ github.event.pull_request.number }}" in gate
+    assert "pull-requests: read" in gate
+    # Pages reads the verify run and relabels when CODEOWNERS changes.
+    assert "actions: read" in pages
+    push_paths = pages.split("  pull_request:")[0]
+    for location in (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"):
+        assert f'- "{location}"' in push_paths
 
 
 def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:

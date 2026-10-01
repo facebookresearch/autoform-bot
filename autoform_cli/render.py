@@ -15,7 +15,7 @@ import json
 import re
 import shutil
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
@@ -311,10 +311,16 @@ def render_site(
     elif readbacks is None:
         readbacks = load_readbacks(blueprint)
     # Before anything is written, so a failed lookup leaves no partial site.
+    # Without a verifier every approval is self-approved, with nothing to add.
     approvals = (
         {}
-        if review_bundle is None
-        else approval_statuses(graph, current_approvals(graph, review_bundle, readbacks), approval_verifier)
+        if review_bundle is None or approval_verifier is None
+        else {
+            node_id: _linkable(status, getattr(approval_verifier, "web_url", None))
+            for node_id, status in approval_statuses(
+                graph, current_approvals(graph, review_bundle, readbacks), approval_verifier
+            ).items()
+        }
     )
 
     _prepare_destination(destination, clean=clean)
@@ -1697,6 +1703,18 @@ def _render_environment(
     return "\n".join(lines), linked, unresolved
 
 
+def _linkable(status: ApprovalStatus, web_url: object) -> ApprovalStatus:
+    """Keep a review reference only when it is a page on the verifier's own https site."""
+
+    attestation = status.attestation
+    if attestation is None:
+        return status
+    if isinstance(web_url, str) and web_url.startswith("https://"):
+        if attestation.reference.startswith(web_url.rstrip("/") + "/"):
+            return status
+    return replace(status, attestation=replace(attestation, reference=""))
+
+
 def _review_disclosure(
     node: Node,
     skeleton: SkeletonReport,
@@ -1724,6 +1742,7 @@ def _review_disclosure(
     except ReviewError:
         expected_approval = None
     evidence = None
+    reason = None
     if node.review_approved is None:
         approval = ("bp-review-open", "not yet approved")
         if expected_approval is not None:
@@ -1732,13 +1751,15 @@ def _review_disclosure(
         approval = ("bp-review-drift", "approval cannot be verified because testimony is incomplete or invalid")
     elif node.review_approved == expected_approval:
         status = approvals.get(node.id)
-        attestation = status.attestation if status is not None and status.review_hash == expected_approval else None
+        if status is not None and status.review_hash != expected_approval:
+            status = None
+        attestation = None if status is None else status.attestation
         if attestation is None:
             approval = ("bp-review-self-approved", f"self-approved · {expected_approval}")
+            reason = None if status is None else status.reason
         else:
             approval = ("bp-review-approved", f"approved by @{attestation.reviewer} · {expected_approval}")
-            if attestation.reference.startswith("https://"):
-                evidence = attestation.reference
+            evidence = attestation.reference or None
     else:
         approval = (
             "bp-review-drift",
@@ -1747,9 +1768,11 @@ def _review_disclosure(
     label = html.escape(approval[1])
     if evidence is not None:
         label = f'<a href="{html.escape(evidence, quote=True)}">{label}</a>'
+    # Why an approval stayed self-approved, for whoever hovers over it.
+    title = "" if reason is None else f' title="{html.escape(reason, quote=True)}"'
     summary = (
         f"Review · {count} skeleton{'s' if count != 1 else ''}, {lines_to_read} lines to trust · "
-        f'<span class="{approval[0]}">{label}</span>'
+        f'<span class="{approval[0]}"{title}>{label}</span>'
     )
     parts = ['<details class="bp-review" markdown="1">', f"<summary>{summary}</summary>", ""]
     parts.extend(

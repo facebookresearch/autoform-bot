@@ -92,10 +92,22 @@ tree.
    `review_approved`. That hash binds the article title and statement, cited passage,
    exact packets, and current read-backs. This edit is the person's assertion,
    not the agent's, but the hash only shows that nothing changed since it was
-   written, and anyone can copy it. Commit the approval in a pull request and
-   ask an individual code owner of the article, who is not its author, to
-   approve that pull request at a commit that records the hash; only then does
-   the default branch's site name them instead of saying self-approved. When
+   written, and anyone can copy it. Commit the approval in a pull request into
+   the default branch whose diff adds that `review_approved` line. Once
+   `review check` is green on its final head commit, ask an individual
+   `@user` code owner of the article with write access, who is not the pull
+   request's author, to approve that head; a later push needs a new approval.
+   The default branch's site names them instead of saying self-approved only
+   when that pull request, merged, is the one that recorded the hash, the
+   reviewer is a code owner both before the merge and on the default branch,
+   and `autoform-verify.yml` passed on the approved head. Anything else, a
+   moved article included, reads self-approved with the reason. To re-approve
+   such a hash, one pull request removes the line and a second adds it back
+   and is reviewed; the first fails `review check` with `review-unapproved`,
+   so where that check cannot be bypassed, record a fresh read-back instead
+   (replacing the card with `--expected-card-hash`) so one reviewed pull
+   request records a new hash. The `autoform-review-gate.yml` check on the
+   pull request is early feedback; the Pages label decides. When
    the person does not approve, record `revise` with their reason and hand the
    change to Roadmap or Orchestrate.
 6. Run the review-aware audit again before reporting. Treat missing testimony,

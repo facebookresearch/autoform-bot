@@ -549,7 +549,8 @@ autoform review check blueprint --lean-root .
 autoform render blueprint --lean-root . --review
 autoform review check blueprint --lean-root . --authenticate github
 autoform render blueprint --lean-root . --review --authenticate github
-autoform review authenticate blueprint --github --since origin/main --trusted-ref origin/main
+autoform review authenticate blueprint --github
+autoform review authenticate blueprint --github --pr 42 --since origin/main --trusted-ref origin/main
 ```
 
 `review prepare` extracts Lean evidence from the current built tree and writes
@@ -648,35 +649,94 @@ labelled self-approved wherever it is shown. Without `--authenticate` nothing
 uses the network and every approval is self-approved; authentication is
 evidence a verifier checks, never a flag or setting.
 
-The GitHub verifier reads pull request reviews through the REST API with
-`GITHUB_TOKEN` (pull request read access), `GITHUB_REPOSITORY`, and optionally
-`GITHUB_API_URL`, and needs full Git history. An approval of hash H for an
-article is authenticated when the pull request that introduced H to the
-article's file, found from the most recent commit in history that did so, has
-an APPROVED review that is its reviewer's latest review other than a comment,
-whose reviewer is not the pull request's author but is an individual `@user`
-code owner of the article's path, and whose reviewed commit records
-`review_approved: H`. A later request for changes, or a dismissal, voids it.
+The GitHub verifier needs full Git history, `GITHUB_TOKEN` with `contents`,
+`pull-requests`, and `actions` read access (the pull request gate below needs
+no `actions`), `GITHUB_REPOSITORY`, and optionally `GITHUB_API_URL`, `GITHUB_SERVER_URL` (the https host review links
+may point to), and `AUTOFORM_VERIFY_WORKFLOW` (default
+`.github/workflows/autoform-verify.yml`). Let p be an article's path, H its
+`review_approved` hash, and R the trusted ref (`--trusted-ref`, default
+`HEAD`; Pages uses the head of the default branch). The approval is
+authenticated only when all of these hold:
+
+1. **Recording commit.** In `git rev-list --first-parent R -- p`, M is the
+   oldest commit of the unbroken run ending at R in which p records H, so M's
+   first parent does not. Moving the article's file starts a new run.
+2. **Pull request.** GitHub associates M with exactly one pull request P,
+   merged into the repository's default branch. A direct push, a pull request
+   merged into another branch, and several candidates are all refused.
+3. **Visible diff.** P's file list shows a patch for p that adds a frontmatter
+   line recording H, and p records H at P's head commit. A missing or
+   truncated patch is refused.
+4. **Reviewer.** Some reviewer's latest review of P (comments and pending
+   reviews aside; ordered by submission time, then ID) is APPROVED on P's head
+   commit. The reviewer is not P's author (logins compared without case),
+   GitHub shows them as OWNER, MEMBER, or COLLABORATOR, and they are an
+   individual `@user` code owner of p both at M's first parent and at R. A
+   later request for changes or a dismissal voids the approval.
+5. **CI.** The verify workflow has a successful `pull_request` run on P's
+   head commit, and P does not change that workflow. That run's `review check`
+   fails unless H is current, so H is the surface the reviewer saw.
+
+Anything the verifier cannot decide, including a failed request, a spent
+budget of 500 requests, or an undecidable CODEOWNERS rule, leaves that one
+approval self-approved, and `review check --authenticate github` and the
+rendered label say why. A typical approval costs about five requests, and
+approvals recorded by the same pull request share them. Only missing
+credentials, a shallow checkout, or an unknown trusted ref stops the whole
+run.
+
 Code owners come from the first of `.github/CODEOWNERS`, `CODEOWNERS`, and
-`docs/CODEOWNERS` that exists at the trusted ref (`--trusted-ref`, default
-`HEAD`), never from the change under review, so a pull request cannot make its
-own reviewer an owner. Team (`@org/team`) and email owners never authenticate,
+`docs/CODEOWNERS` that exists at a commit, never from the change under
+review, so a pull request cannot make its own reviewer an owner. Because the
+reviewer must be an owner both before the merge and at R, a new owner can
+approve only pull requests merged after the addition, and removing an owner
+voids their earlier approvals. A first location that is not UTF-8 is refused
+instead of falling through to the next. Lines end at a line feed (a trailing
+carriage return is dropped) and tokens are separated by spaces and tabs. Team (`@org/team`) and email owners never authenticate,
 because a workflow token cannot check team membership: name individual
-reviewers. Negated, bracketed, and escaped patterns are refused rather than
-guessed. Approvals are matched by path, so a moved article, or a hash first
-merged without such a review, stays self-approved until a new pull request
-records it and is approved. Signed SSH or GPG approvals (issue #49) are planned
-as a second verifier behind the same interface.
+reviewers. A negated, bracketed, escaped, or malformed pattern, or an owner in
+another form, leaves undecided the articles that line might decide. A line
+holding any other control or separator character, such as U+2028 or a
+non-breaking space, might be split differently by GitHub, so it leaves
+undecided every article that no later line matches.
+
+Approve the final head. Ask a code owner to review only once `review check`
+is green on the pull request's last commit: an approval of an earlier commit
+is refused, and a push after the approval needs a new one. An approval whose
+hash was merged without such a review (a direct push, an unreviewed or
+self-reviewed pull request, a moved article) stays self-approved. To
+re-approve it, one pull request removes the `review_approved` line and a
+second adds it back and is reviewed as above. The first one's `review check`
+fails with `review-unapproved`, because complete evidence without an approval
+is an error, so it can only merge where branch protection lets that check be
+bypassed. Otherwise change the review surface so the hash itself changes, for
+example by recording a fresh read-back, and have a single pull request record
+the new hash.
+
+Residual limits. The runs API does not report a run's base branch, so a
+green verify run on the same head commit from another pull request also
+satisfies step 5. A `pull_request` run tests the head merged into the base as
+it was then, not the merge that landed. Pages decides when it builds: a review
+dismissed after the merge, or a verify run that finishes after it, shows at
+the next Pages build. Older commits are read with the current frontmatter
+parser, so a schema change refuses rather than guesses. GitHub's handling of
+oversized CODEOWNERS files is not modelled. Signed SSH or GPG approvals (issue
+#49) are planned as a second verifier behind the same interface.
 
 `review authenticate` needs no Lean. It lists every recorded approval with its
 status and does not judge whether approvals are current. With `--since REF` it
 exits 1 when an approval added or changed relative to REF is not
 authenticated; unchanged approvals are not looked up, and removing one needs
-nothing. Generated CI runs it on each pull request of an opted-in project, and
-again when a review is submitted or dismissed, with the base commit as both
-`--since` and `--trusted-ref`. That job runs the pull request's own workflow
-file, so a pull request that edits CI can disable it; it is early feedback.
-The authoritative label is the one Pages computes on the default branch with
+nothing. `--pr N` makes it the pre-merge gate: only reviews of pull request N
+count, code owners come from `--trusted-ref` alone, and steps 1, 2, and 5 are
+skipped because nothing is merged yet. Without `--pr`, `--since` applies the
+full rule, as Pages would, which suits the default branch after a merge, not a
+pull request. Generated CI runs the gate in `autoform-review-gate.yml` on each
+pull request of an opted-in project, and again when a review is submitted or
+dismissed, with `--pr` and the base commit as both `--since` and
+`--trusted-ref`. That workflow is the pull request's own copy, so a pull
+request that edits it can disable it; it is early feedback. The authoritative
+label is the one Pages computes on the default branch with
 `--authenticate github`, from that branch's workflow and CODEOWNERS, and no
 pull request can make it say approved.
 

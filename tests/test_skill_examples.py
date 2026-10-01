@@ -340,7 +340,11 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'version: "0.12.1"' in workflow
     assert "@main" not in verify
 
-    for contents in (workflow, verify):
+    gate = (example / ".github/workflows/autoform-review-gate.yml").read_text(encoding="utf-8")
+    assert "autoform review authenticate blueprint --github" in gate
+    assert "@main" not in gate
+
+    for contents in (workflow, verify, gate):
         action_refs = re.findall(r"uses:\s+[^@\s]+@([^\s]+)", contents)
         assert action_refs
         assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in action_refs)
@@ -578,7 +582,7 @@ def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None
         repo_root / "autoform_cli/templates/github/autoform_audit.py"
     ).read_bytes() == (repo_root / _EXAMPLE / ".github/autoform_audit.py").read_bytes()
 
-    for name in ("autoform-verify.yml", "blueprint-pages.yml"):
+    for name in ("autoform-review-gate.yml", "autoform-verify.yml", "blueprint-pages.yml"):
         expected = (template_dir / name).read_text(encoding="utf-8")
         for placeholder, value in substitutions.items():
             expected = expected.replace(placeholder, value)

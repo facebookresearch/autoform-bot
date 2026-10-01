@@ -257,6 +257,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="HEAD",
         help="commit whose CODEOWNERS decides who may approve (default HEAD)",
     )
+    review_authenticate.add_argument(
+        "--pr",
+        type=int,
+        metavar="N",
+        help="pre-merge gate: only reviews of pull request N count, code owners come from --trusted-ref, "
+        "and no Actions run is required yet; needs --since",
+    )
 
     render = subparsers.add_parser("render", help="build the publishable blueprint")
     render.add_argument("blueprint_dir")
@@ -976,8 +983,11 @@ def _review_authenticate(args: argparse.Namespace) -> int:
     This only asks who approved each recorded hash, so it runs in seconds.
     """
 
+    if args.pr is not None and args.since is None:
+        print("error: --pr requires --since, the pull request's base commit", file=sys.stderr)
+        return 2
     try:
-        verifier = _approval_verifier("github", trusted_ref=args.trusted_ref)
+        verifier = _approval_verifier("github", trusted_ref=args.trusted_ref, pull_request=args.pr)
         graph = load_graph(args.blueprint_dir)
         recorded = {
             node.id: node.review_approved for node in graph.nodes.values() if node.review_approved is not None
@@ -999,7 +1009,8 @@ def _review_authenticate(args: argparse.Namespace) -> int:
         print(
             f"error: {len(unauthenticated)} approval{'s' if len(unauthenticated) != 1 else ''} added or changed "
             f"since {args.since} {'are' if len(unauthenticated) != 1 else 'is'} self-approved; "
-            "an individual code owner who is not the pull request's author must approve the pull request",
+            "an individual code owner with write access who is not the pull request's author must approve "
+            "its final head commit",
             file=sys.stderr,
         )
         return 1
@@ -1008,16 +1019,18 @@ def _review_authenticate(args: argparse.Namespace) -> int:
     return 0
 
 
-def _approval_verifier(method: str | None, *, trusted_ref: str = "HEAD") -> GitHubReviewVerifier | None:
+def _approval_verifier(
+    method: str | None, *, trusted_ref: str = "HEAD", pull_request: int | None = None
+) -> GitHubReviewVerifier | None:
     if method is None:
         return None
-    return GitHubReviewVerifier.from_environment(trusted_ref=trusted_ref)
+    return GitHubReviewVerifier.from_environment(trusted_ref=trusted_ref, pull_request=pull_request)
 
 
 def _approval_line(item: ApprovalStatus, *, verified: bool) -> str:
     line = f"{item.node_id}: {item.label} · {item.review_hash}"
     if item.attestation is not None:
-        return f"{line} ({item.attestation.reference})"
+        return f"{line} ({item.attestation.reference})" if item.attestation.reference else line
     return f"{line} ({item.reason})" if verified and item.reason else line
 
 

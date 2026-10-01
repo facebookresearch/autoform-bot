@@ -18,6 +18,8 @@ Developed with [AutoformBot](https://github.com/facebookresearch/autoform-bot).
   local-context, and full-DAG Mermaid maps. The render also records a
   deterministic, path-free `publication.json` manifest.
 - `autoform-verify.yml` validates the DAG and Lean project on pull requests.
+- `autoform-review-gate.yml` checks who approved the statement reviews a pull
+  request adds.
 - `blueprint-pages.yml` renders and deploys the blueprint with GitHub Pages.
 
 The DAG deliberately shows a partial state: the Full Supervision support

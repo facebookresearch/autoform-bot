@@ -1,0 +1,68 @@
+# Early feedback on who approved the statement reviews a pull request adds or
+# changes. It needs no Lean, so it reruns cheaply whenever a review arrives.
+#
+# review_approved shows only that the review surface is unchanged, and
+# `review check` prints the hash, so anyone can paste it. This gate asks, for
+# each approval the pull request adds or changes, whether an individual @user
+# code owner of the article (per CODEOWNERS on the base commit) with write
+# access, who is not the pull request's author, approved this pull request's
+# head commit, whose diff adds that hash. It runs the pull request's own copy
+# of this file, so a pull request can disable it; the authoritative label is
+# the one blueprint-pages.yml computes on main.
+
+name: autoform review gate
+
+on:
+  pull_request:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  AUTOFORM_SOURCE: "https://github.com/VivienCabannes/autoform-bot.git"
+  AUTOFORM_REF: "43097b2c07e68df899d6b8bca7849d091c294754"
+
+concurrency:
+  group: autoform-review-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  authenticate:
+    name: authenticate approvals
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out project
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # autoform-verify.yml validates the marker itself; this only asks whether
+      # the project opted in.
+      - name: Detect statement review
+        run: |
+          set -euo pipefail
+          marker="blueprint/.autoform-review"
+          if [[ -f "$marker" && ! -L "$marker" ]]; then
+            echo "AUTOFORM_REVIEW_ENABLED=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install uv
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+
+      - name: Authenticate changed approvals
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: >-
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          autoform review authenticate blueprint --github --pr "$PR_NUMBER"
+          --since "$BASE_SHA" --trusted-ref "$BASE_SHA"

@@ -9,6 +9,11 @@ on:
       - "mkdocs.yml"
       - "theme/**"
       - ".github/workflows/blueprint-pages.yml"
+      # Who may approve an article is read from CODEOWNERS, so a change to it
+      # must relabel the site.
+      - ".github/CODEOWNERS"
+      - "CODEOWNERS"
+      - "docs/CODEOWNERS"
   pull_request:
     paths:
       - "blueprint/**"
@@ -21,6 +26,8 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  # Authenticating an approval asks for the verify run on the approved commit.
+  actions: read
 
 env:
   AUTOFORM_SOURCE: {{AUTOFORM_SOURCE_YAML}}
@@ -103,12 +110,14 @@ jobs:
       # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
       # and permalinks into the Lean code at this exact commit.
       #
-      # An approval reads "approved by @user" only when an individual code
-      # owner, per this commit's CODEOWNERS, approved a pull request at a
-      # commit recording that hash, and was not its author; otherwise it reads
-      # "self-approved". This is the authoritative label: the pull request gate
-      # in autoform-verify.yml runs the pull request's own workflow file, so a
-      # pull request can disable that gate but cannot change this label.
+      # An approval reads "approved by @user" only when the pull request that
+      # recorded its hash was merged into main, and an individual code owner
+      # of the article (per CODEOWNERS both before that merge and at this
+      # commit) with write access, who is not its author, approved its final
+      # head, on which autoform-verify.yml passed; otherwise it reads
+      # "self-approved" with the reason. This is the authoritative label: a
+      # pull request runs its own copy of autoform-review-gate.yml, so it can
+      # disable that gate but cannot change this label.
       - name: Render the blueprint
         env:
           GITHUB_TOKEN: ${{ github.token }}
