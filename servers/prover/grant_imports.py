@@ -21,7 +21,10 @@ written next to the debriefs as ``import-plan.json``.
 ``apply`` re-checks every approved entry from scratch, inserts the imports,
 compiles each touched file with ``lake env lean``, and reverts a file whose
 compile fails. Editing the plan can only choose among and correct candidates;
-it cannot skip those checks.
+it cannot skip those checks. Each file that kept a new import is then passed
+through :mod:`servers.prover.debloat_imports`, which drops imports already
+implied by another one without changing the import closure (``--no-debloat``
+skips this).
 
 Only ``Mathlib.*`` modules are granted. Project-internal imports follow the
 roadmap's dependency edges and are out of scope here.
@@ -42,7 +45,7 @@ from typing import Any
 
 from autoform_cli.runtime import load_runtime_graph
 
-from . import debrief
+from . import debloat_imports, debrief
 
 PLAN_FILENAME = "import-plan.json"
 
@@ -248,6 +251,7 @@ def apply_plan(
     *,
     dry_run: bool = False,
     compile: Compiler = lake_compile,
+    debloat: bool = True,
 ) -> int:
     approved = [g for g in plan.get("grants", []) if isinstance(g, dict) and g.get("approved")]
     if not approved:
@@ -273,6 +277,7 @@ def apply_plan(
         return 0
 
     failures = 0
+    granted: list[str] = []
     for rel, modules in sorted(per_file.items()):
         path = project / rel
         before = path.read_text(encoding="utf-8")
@@ -283,12 +288,21 @@ def apply_plan(
         if ok:
             for module in sorted(modules):
                 print(f"    kept    {module}")
+            granted.append(rel)
             continue
         path.write_text(before, encoding="utf-8")
         failures += 1
         print(f"    REVERTED all {len(modules)} (compile failed)")
         for line in [l for l in output.splitlines() if "error" in l.lower()][-3:]:
             print(f"      {line[:150]}")
+
+    if debloat and granted:
+        print("\ndebloating the files that gained imports")
+        for rel in granted:
+            try:
+                debloat_imports.debloat(project / rel, project, assume_clean=True)
+            except debloat_imports.DebloatSkipped as reason:
+                print(f"{rel}: debloat skipped (granted imports kept): {reason}")
     return 1 if failures else 0
 
 
@@ -341,6 +355,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("propose", help="harvest debriefs into a reviewable plan")
     apply_cmd = sub.add_parser("apply", help="apply the approved entries of a plan")
     apply_cmd.add_argument("--dry-run", action="store_true")
+    apply_cmd.add_argument(
+        "--no-debloat", action="store_true",
+        help="do not drop transitively redundant imports from the files that gained one",
+    )
     args = parser.parse_args(argv)
 
     project = args.project.resolve()
@@ -364,6 +382,7 @@ def main(argv: list[str] | None = None) -> int:
         project,
         json.loads(plan_path.read_text(encoding="utf-8")),
         dry_run=args.dry_run,
+        debloat=not args.no_debloat,
     )
 
 

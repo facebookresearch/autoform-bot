@@ -125,7 +125,7 @@ def test_apply_keeps_compiling_imports_reverts_failures_and_rejects_bad_entries(
         compiled.append(rel)
         return rel != "Broken.lean", "error: boom"
 
-    status = grant_imports.apply_plan(project, plan, compile=compile)
+    status = grant_imports.apply_plan(project, plan, compile=compile, debloat=False)
 
     assert status == 1
     assert compiled == ["Broken.lean", "Project.lean"]
@@ -162,3 +162,32 @@ def test_cli_propose_reads_the_debrief_ledger_and_writes_the_plan_beside_it(
         ("Mathlib.Algebra.Real", "Project.lean", "resolved")
     ]
     assert "READY TO GRANT" in capsys.readouterr().out
+
+
+def test_apply_debloats_only_files_that_kept_imports_and_tolerates_skips(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    from servers.prover import debloat_imports
+
+    project = _project(tmp_path)
+    (project / "Broken.lean").write_text("theorem b : True := trivial\n")
+    debloated: list[tuple[str, bool]] = []
+
+    def fake_debloat(path: Path, root: Path, *, assume_clean: bool = False, **kwargs) -> bool:
+        debloated.append((path.name, assume_clean))
+        raise debloat_imports.DebloatSkipped("stale build")
+
+    monkeypatch.setattr(debloat_imports, "debloat", fake_debloat)
+    plan = {"grants": [
+        {"approved": True, "module": "Mathlib.Algebra.Real", "file": "Project.lean"},
+        {"approved": True, "module": "Mathlib.Algebra.Real", "file": "Broken.lean"},
+    ]}
+
+    status = grant_imports.apply_plan(
+        project, plan, compile=lambda root, rel: (rel == "Project.lean", "error: boom")
+    )
+
+    assert status == 1  # from Broken.lean's compile failure, not the skipped debloat
+    assert debloated == [("Project.lean", True)]
+    assert "Mathlib.Algebra.Real" in grant_imports.current_imports(project, "Project.lean")
+    assert "debloat skipped (granted imports kept): stale build" in capsys.readouterr().out
