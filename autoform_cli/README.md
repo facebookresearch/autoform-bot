@@ -343,8 +343,17 @@ exits nonzero when a `lean:` name is absent from the sources or from the built
 environment, or reaches a refused declaration; that name is unresolved for its article only, other articles still extract, and it writes nothing into the vault.
 A probe that fails on its own (a nonzero exit, a timeout, or malformed or
 ambiguous records) likewise leaves only its module's targets unresolved, with
-the reason; a missing `lake`, a failed freshness check, or a blueprint or
-source tree that changes during extraction still stops the whole command.
+the reason, and an error the probe meets while reading one declaration leaves
+only that declaration unresolved. A reason quotes at most 2,000 characters of
+Lean's output, shows the probe's temporary directory as `<scratch>` and
+project paths relative to the project, and so reads the same on every run.
+The output and material limits apply to a whole probe, so a module whose
+selected declarations together pass one fails as a whole: a declaration that
+resolves when selected alone can be unresolved beside its module's other
+targets. A declaration that resolves has the same hash under any selection.
+A missing `lake`, a failed freshness check or helper build, a dependency that
+hides a toolchain library, or a blueprint or source tree that changes during
+extraction still stops the whole command.
 `--output` records the `autoform-skeleton/v5` report, which contains no
 timestamp or absolute path, for a later render or review to consume. The
 report identifies the exact blueprint, its complete target set, and whether

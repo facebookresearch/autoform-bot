@@ -108,8 +108,13 @@ structure SemanticCache where
   fragments : Nat := 0
   outputBytes : Nat := 0
   output : Option IO.FS.Handle := none
+  /-- Set once a record could not be written, which ends the probe: a later
+  record could name a fragment that never reached the file. -/
+  broken : Bool := false
 
 def probeOutputLimit : Nat := {output_limit}
+/-- Characters of an error message the probe reports for one root. -/
+def errorLimit : Nat := {error_limit}
 
 /-- Write one complete record without letting the scratch file grow past the
 CLI's output limit. The Python reader checks the limit again after exit. -/
@@ -117,11 +122,16 @@ def emitRecord (cache : IO.Ref SemanticCache) (record : Json) : IO Unit := do
   let line := s!"{marker}{{record.compress}}\n"
   let total := (← cache.get).outputBytes + line.utf8ByteSize
   if total > probeOutputLimit then
+    cache.modify fun c => {{ c with broken := true }}
     throw <| IO.userError s!"lake env lean exceeded the {{probeOutputLimit}}-byte output limit"
   cache.modify fun c => {{ c with outputBytes := total }}
-  match (← cache.get).output with
-  | some out => out.putStr line
-  | none => IO.print line
+  try
+    match (← cache.get).output with
+    | some out => out.putStr line
+    | none => IO.print line
+  catch e =>
+    cache.modify fun c => {{ c with broken := true }}
+    throw e
 
 /-- Pieces as the probe prints them: adjacent text merged into one string and
 each fragment as its number. Expanding the numbers gives `Json.compress`. -/
@@ -629,15 +639,17 @@ def emit (cache : IO.Ref SemanticCache) (request : String)
 
 /-- Emit one entry of a table shared by every root, the first time a root
 needs it. Roots name their trusted declarations, external semantic material,
-and boundary modules, so what many roots share is stated once per run. -/
+and boundary modules, so what many roots share is stated once per run. An
+entry counts as stated once it is written: when computing it fails, the next
+root that needs it tries again. -/
 def emitShared (cache : IO.Ref SemanticCache)
     (emitted : IO.Ref (Std.HashSet (String × Name))) (table : String) (name : Name)
     (value : CommandElabM Json) : CommandElabM Unit := do
   unless (← emitted.get).contains (table, name) do
-    emitted.modify (·.insert (table, name))
     let entry := Json.mkObj [
       ("table", Json.str table), ("name", Json.str (toString name)), ("value", ← value)]
     emitRecord cache entry
+    emitted.modify (·.insert (table, name))
 
 /-- The modules that belong to the running toolchain. A name root is not
 enough: a dependency may name its own module `Lake.Foo`, and that module is
@@ -843,7 +855,13 @@ def main (projectRoots : List Name) (roots : List (String × Name)) : CommandEla
   let semanticCache : IO.Ref AutoformSkeleton.SemanticCache ← IO.mkRef {{ output := direct }}
   try
     for (request, root) in roots do
-      AutoformSkeleton.skeleton projectRoots coreModules expandCache semanticCache emitted request root
+      -- An error confined to one root leaves the others to be read. A record
+      -- that could not be written, or an interrupt, ends the whole probe.
+      tryCatch (AutoformSkeleton.skeleton projectRoots coreModules expandCache semanticCache emitted request root)
+        fun e => do
+          if (← semanticCache.get).broken || e.isInterrupt then throw e
+          let message ← e.toMessageData.toString
+          emit semanticCache request [("error", Json.str (message.take errorLimit).toString)]
   finally
     if let some out := direct then out.flush
 

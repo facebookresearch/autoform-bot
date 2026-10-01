@@ -32,6 +32,7 @@ from autoform_cli.skeleton import (
     SkeletonError,
     UnresolvedTarget,
     _CommandTimedOut,
+    _ProbeEnvironmentError,
     _declaration,
     _install_output,
     _join_readers,
@@ -729,6 +730,7 @@ def test_probe_freshness_and_execution_have_separate_budgets(tmp_path: Path, mon
     # On a Mathlib project the freshness check alone can take minutes, which
     # must not come out of the probe's own budget.
     (tmp_path / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "autoform-skeleton-helper.olean").write_bytes(b"")
     calls: list[float] = []
 
     def fake_run(command, **kwargs):
@@ -747,6 +749,7 @@ def test_probe_freshness_and_execution_have_separate_budgets(tmp_path: Path, mon
 
 def test_a_probe_timeout_names_the_flag_that_raises_it(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "autoform-skeleton-helper.olean").write_bytes(b"")
     bounded = _run_bounded_command
 
     def slow_probe(command, **kwargs):
@@ -766,6 +769,7 @@ def test_a_probe_timeout_names_the_flag_that_raises_it(tmp_path: Path, monkeypat
 
 def test_probe_records_file_is_held_to_the_output_limit(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "autoform-skeleton-helper.olean").write_bytes(b"")
 
     def flooding_probe(command, *, env, **kwargs):
         Path(env[PROBE_OUTPUT_ENV]).write_text("x" * 2048, encoding="utf-8")
@@ -813,6 +817,17 @@ def test_parse_probe_output_rejects_wrong_types_duplicates_and_unrequested_roots
         parse_probe_output("\n".join([output, line]))
     with pytest.raises(SkeletonError, match="unrequested root"):
         parse_probe_output(output, expected_roots=("Skel.somewhere_else",))
+
+
+def test_parse_probe_output_keeps_an_error_the_probe_caught_on_one_root() -> None:
+    error = _record("Skel.ghost", error="unknown constant")
+    records = parse_probe_output("\n".join([_fake_probe_output(), error]))
+
+    assert records["Skel.ghost"] == {"root": "Skel.ghost", "error": "unknown constant"}
+    assert records["Skel.observation_determined"]["found"] is True
+    for bad in (_record("Skel.ghost", error=3), _record("Skel.ghost", error="x", found=False)):
+        with pytest.raises(SkeletonError, match="invalid error record for Skel.ghost"):
+            parse_probe_output(bad)
 
 
 def test_parse_probe_output_resolves_shared_entries_strictly() -> None:
@@ -1758,6 +1773,8 @@ def _fake_lake(monkeypatch, project: Path, answer) -> list[list[str]]:
         if command[1] == "--rehash" or "-o" in command:
             with lock:
                 calls.append(command)
+            if "-o" in command:
+                Path(command[command.index("-o") + 1]).write_bytes(b"")
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         modules = _probe_modules(Path(command[-1]).read_text(encoding="utf-8"))
         with lock:
@@ -1835,6 +1852,73 @@ def test_a_root_lean_declares_in_another_module_is_unresolved(tmp_path: Path) ->
 
     (issue,) = report.unresolved
     assert issue.reason == "Lean declares it in module Skel.Defs, not in Skel.Main where its source was found"
+
+
+def test_an_error_on_one_root_leaves_the_rest_of_its_module_resolved(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(
+        tmp_path, lean={"determined": "Skel.observation_determined", "supervision": "Skel.supervision_nonAmbiguous"}
+    )
+    error = f"unknown declaration in {project / 'Skel' / 'Main.lean'}"
+    output = "\n".join([_probe_lines(_fake_found_record()), _record("Skel.supervision_nonAmbiguous", error=error)])
+
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
+
+    nodes = {node.node_id: node for node in report.nodes}
+    assert nodes["basics/determined"].complete
+    assert not nodes["basics/supervision"].complete
+    (issue,) = report.unresolved
+    assert (issue.node_id, issue.declaration) == ("basics/supervision", "Skel.supervision_nonAmbiguous")
+    assert issue.reason == "the probe failed on this declaration: unknown declaration in Skel/Main.lean"
+
+
+def test_a_failed_probes_reason_reads_the_same_on_every_run(tmp_path: Path, monkeypatch) -> None:
+    project = _project(tmp_path)
+
+    def answer(modules, command, env):
+        if "Skel.Uses" not in modules:
+            return _answer_records(modules, command, env)
+        # Lean names the probe's temporary file and the project's own paths.
+        stderr = (
+            f"{command[-1]}:3:0: error: unknown module prefix\n"
+            f"{project / 'Skel' / 'Uses.lean'}:1:0: note: imported here\n" + "trace line\n" * 500
+        )
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr=stderr)
+
+    _fake_lake(monkeypatch, project, answer)
+    blueprint = _two_module_blueprint(tmp_path)
+    written = []
+    for name in ("first.json", "second.json"):
+        report = extract_skeletons(blueprint, lean_root=project)
+        written.append(write_skeleton_report(report, tmp_path / name).read_bytes())
+
+    assert written[0] == written[1]
+    (issue,) = report.unresolved
+    assert "<scratch>/AutoformSkeletonProbe.lean:3:0: error" in issue.reason
+    assert "\nSkel/Uses.lean:1:0: note" in issue.reason and str(tmp_path) not in issue.reason
+    assert len(issue.reason) <= 2000 and issue.reason.endswith(" more characters]")
+
+
+def test_a_failure_every_probe_would_share_stops_the_extraction(tmp_path: Path, monkeypatch) -> None:
+    project = _project(tmp_path)
+
+    def answer(modules, command, env):
+        if "Skel.Uses" not in modules:
+            return _answer_records(modules, command, env)
+        olean = project / ".lake" / "packages" / "dep" / "Std" / "Vendor.olean"
+        stderr = f"error: object file '{olean}' of module Std.Vendor does not exist"
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr=stderr)
+
+    _fake_lake(monkeypatch, project, answer)
+
+    with pytest.raises(SkeletonError, match="hides the toolchain's own `Std`"):
+        extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project)
+
+    # Without its compiled helpers no probe can run.
+    probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
+    (tmp_path / "helper").mkdir()
+    with pytest.raises(_ProbeEnvironmentError, match="helpers are missing"):
+        run_probe(probe, project, helper=tmp_path / "helper", check_freshness=False)
 
 
 def test_environmental_failures_still_abort_a_per_module_extraction(tmp_path: Path, monkeypatch) -> None:
@@ -2654,12 +2738,14 @@ def test_probe_records_bypass_the_command_capture_and_other_output(tmp_path: Pat
         imports=("Skel.Main",), roots=("Skel.observation_determined",), project_roots=("Skel",)
     )
     helper = _render_probe_helper()
-    loop = next(line for line in helper.splitlines() if "AutoformSkeleton.skeleton projectRoots" in line)
-    leave = "    (← IO.getStdout).flush\n    let _ : Unit ← IO.Process.exit 0"
+    # The probe leaves once every root's records are written.
+    loop_end = "  finally\n    if let some out := direct then out.flush\n"
+    assert helper.count(loop_end) == 1
+    leave = "    (← IO.getStdout).flush\n    let _ : Unit ← IO.Process.exit 0\n"
     noise = "#eval IO.println (String.mk (List.replicate 3000000 'x'))\n\n"
     command = "run_cmd AutoformSkeleton.main"
     assert command in probe
-    helper = helper.replace(loop, f"{loop}\n{leave}")
+    helper = helper.replace(loop_end, f"{leave}{loop_end}")
     probe = probe.replace(command, f"{noise}{command}")
     monkeypatch.setattr("autoform_cli.skeleton._render_probe_helper", lambda: helper)
 
@@ -2834,6 +2920,31 @@ def test_a_project_module_named_like_the_probe_helpers_stops_extraction(tmp_path
 
     with pytest.raises(SkeletonError, match="already provides a module named «autoform-skeleton-helper»"):
         extract_skeletons(blueprint, lean_root=project)
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_declaration_the_probe_cannot_print_leaves_its_module_resolved(tmp_path: Path) -> None:
+    project = _built_module(
+        tmp_path,
+        "PktRefuse",
+        "import Lean\n"
+        "open Lean PrettyPrinter Delaborator\n"
+        "namespace Skel.PktRefuse\n"
+        "def refused (n : Nat) : Nat := n\n"
+        '@[app_delab refused] def delabRefused : Delab := throwError "this delaborator refuses"\n'
+        "theorem bad : refused 1 = 1 := rfl\n"
+        "theorem good : 1 = 1 := rfl\n"
+        "end Skel.PktRefuse\n",
+    )
+    blueprint = _blueprint(tmp_path, lean={"bad": "Skel.PktRefuse.bad", "good": "Skel.PktRefuse.good"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    nodes = {node.node_id: node for node in report.nodes}
+    assert nodes["basics/good"].complete
+    (issue,) = report.unresolved
+    assert (issue.node_id, issue.declaration) == ("basics/bad", "Skel.PktRefuse.bad")
+    assert issue.reason == "the probe failed on this declaration: this delaborator refuses"
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")

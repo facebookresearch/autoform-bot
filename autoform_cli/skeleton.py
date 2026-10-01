@@ -98,6 +98,9 @@ _SHADOWED_CORE_MODULE = re.compile(
 
 #: Bounds each probe process; extraction runs one per root module.
 DEFAULT_PROBE_TIMEOUT = 600.0
+
+#: Characters of Lean output a failure reason quotes.
+_FAILURE_DETAIL_LIMIT = 2000
 #: The Lake freshness check hashes every imported input, which on a Mathlib
 #: project can take minutes on its own, so it does not share the probe's budget.
 DEFAULT_FRESHNESS_TIMEOUT = 600.0
@@ -140,6 +143,10 @@ class SkeletonError(RuntimeError):
 
 class _CommandTimedOut(SkeletonError):
     """A bounded command ran out of time; its caller knows which budget to raise."""
+
+
+class _ProbeEnvironmentError(SkeletonError):
+    """Every probe would fail alike, so the pool stops instead of isolating it."""
 
 
 #: Shown when no source can be attributed and parsed safely. The signatures
@@ -1700,6 +1707,28 @@ def path_of(module: str, libraries: tuple[LeanLibrary, ...], lean_root: Path) ->
     return None
 
 
+def _stable_detail(text: str, lean_root: Path, *scratch: Path) -> str:
+    """A failure reason that reads the same on every run, at bounded length.
+
+    Each ``scratch`` directory, which changes on every run, reads as
+    `<scratch>`, and paths inside the project read relative to it; paths
+    elsewhere, such as the toolchain's, stay as Lean printed them.
+    """
+
+    replacements = {str(path): "<scratch>" for directory in scratch for path in (directory, directory.resolve())}
+    for root in (lean_root, lean_root.resolve()):
+        replacements[str(root) + os.sep] = ""
+        replacements[str(root)] = "."
+    for old in sorted(replacements, key=len, reverse=True):
+        text = text.replace(old, replacements[old])
+    if len(text) <= _FAILURE_DETAIL_LIMIT:
+        return text
+    keep = _FAILURE_DETAIL_LIMIT - 64
+    cut = text.rfind("\n", keep // 2, keep)
+    cut = keep if cut < 0 else cut
+    return f"{text[:cut]}\n[{len(text) - cut} more characters]"
+
+
 def _relative(path: Path, root: Path) -> str:
     try:
         return path.resolve().relative_to(root.resolve()).as_posix()
@@ -1722,6 +1751,7 @@ def _render_probe_helper() -> str:
 
     return _probe_template().format(
         core_roots=", ".join(_lean_name(name) for name in _CORE_MODULE_ROOTS),
+        error_limit=_FAILURE_DETAIL_LIMIT,
         helper_module=_PROBE_HELPER_MODULE,
         marker=PROBE_MARKER,
         output_env=PROBE_OUTPUT_ENV,
@@ -1906,16 +1936,16 @@ def _build_probe_helper(lean_root: Path, directory: Path, *, timeout: float) -> 
             env=_probe_environment(),
         )
     except _CommandTimedOut as exc:
-        raise SkeletonError(
+        raise _ProbeEnvironmentError(
             [
                 f"building the skeleton probe helpers timed out after {timeout:g} seconds; "
                 "rerun with --timeout <seconds> for large projects"
             ]
         ) from exc
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()
+        detail = _stable_detail((result.stderr or result.stdout).strip(), lean_root, directory)
         _raise_if_core_module_shadowed(detail)
-        raise SkeletonError([f"cannot build the skeleton probe helpers\n{detail}"])
+        raise _ProbeEnvironmentError([f"cannot build the skeleton probe helpers\n{detail}"])
     return directory
 
 
@@ -1925,7 +1955,7 @@ def _raise_if_core_module_shadowed(detail: str) -> None:
     shadowed = _SHADOWED_CORE_MODULE.search(detail)
     if shadowed:
         root = shadowed.group(1).split(".", 1)[0]
-        raise SkeletonError(
+        raise _ProbeEnvironmentError(
             [
                 f"the skeleton probe cannot load toolchain module {shadowed.group(1)}: a dependency "
                 f"library probably provides modules under `{root}`, which hides the toolchain's own `{root}`; "
@@ -1963,6 +1993,8 @@ def run_probe(
             helper = _build_probe_helper(
                 lean_root, Path(scratch) / "helper", timeout=max(0.0, deadline - time.monotonic())
             )
+        if not (helper / f"{_PROBE_HELPER_MODULE}.olean").is_file():
+            raise _ProbeEnvironmentError([f"the skeleton probe helpers are missing from {helper}"])
         # Lake puts the project's own directories first, so the helper cannot
         # hide a project module; building it refused one with the same name.
         env["LEAN_PATH"] = os.pathsep.join(filter(None, (env.get("LEAN_PATH"), str(helper))))
@@ -1988,7 +2020,7 @@ def run_probe(
             ) from exc
         output = _read_probe_records(records) if result.returncode == 0 else ""
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()
+        detail = _stable_detail((result.stderr or result.stdout).strip(), lean_root, Path(scratch))
         _raise_if_core_module_shadowed(detail)
         raise SkeletonError([f"the skeleton probe failed; is the project built with `lake build`?\n{detail}"])
     return output or result.stdout
@@ -2078,11 +2110,16 @@ def parse_probe_output(
             raise SkeletonError([f"the skeleton probe emitted duplicate records for {root}"])
         if expected is not None and root not in expected:
             raise SkeletonError([f"the skeleton probe emitted an unrequested root: {root}"])
+        if "error" in record and (record.keys() != {"error", "root"} or not isinstance(record["error"], str)):
+            raise SkeletonError([f"the skeleton probe emitted an invalid error record for {root}"])
         records[root] = record
     expand = _expand_probe_material(tables)
     # Shared entries are validated once, however many roots name them.
     checked: set[int] = set()
     for root, record in records.items():
+        if "error" in record:
+            # The probe failed on this root alone; the caller reports why.
+            continue
         records[root] = _resolve_probe_record(record, tables, root=root, expand=expand)
         _validate_probe_record(records[root], root=root, checked=checked)
     return records
@@ -2636,8 +2673,9 @@ def _run_module_probes(
     """Run each module's probe in a bounded pool and collect its output.
 
     A ``SkeletonError`` from one probe is that module's result, so the failure
-    stays confined to its roots. Anything else, including an interrupt or a
-    termination signal, cancels the pool: each running command terminates its
+    stays confined to its roots. Anything else, including an interrupt, a
+    termination signal, or a ``_ProbeEnvironmentError`` that every probe would
+    meet, cancels the pool: each running command terminates its
     process tree, every worker is joined, and only then does the error
     propagate, so no Lean process outlives the extraction.
     """
@@ -2663,6 +2701,8 @@ def _run_module_probes(
                 for future in done:
                     try:
                         results[futures[future]] = future.result()
+                    except _ProbeEnvironmentError:
+                        raise
                     except SkeletonError as exc:
                         results[futures[future]] = exc
         except BaseException:
@@ -2864,8 +2904,10 @@ def extract_graph_skeletons(
 
     records: dict[str, dict[str, object]] = {}
     # A probe that fails on its own (exit status, timeout, malformed records)
-    # leaves only its module's roots unresolved; Lake, freshness, and snapshot
-    # failures concern every module and still abort the extraction.
+    # leaves only its module's roots unresolved, and an error the probe caught
+    # on one root leaves only that root unresolved. Lake, freshness, helper,
+    # toolchain, and snapshot failures concern every module and still abort the
+    # extraction.
     failed_modules: dict[str, str] = {}
     snapshot_started_ns: int | None = None
     if groups:
@@ -2885,7 +2927,7 @@ def extract_graph_skeletons(
                     raise output
                 records.update(parse_probe_output(output, expected_roots=tuple(groups[module])))
             except SkeletonError as exc:
-                failed_modules[module] = f"probe of module {module} failed: {exc}"
+                failed_modules[module] = _stable_detail(f"probe of module {module} failed: {exc}", lean_root)
 
     nodes: list[NodeSkeleton] = []
     module_hashes: dict[tuple[str, str], str] = {}
@@ -2901,6 +2943,10 @@ def extract_graph_skeletons(
             record = records.get(name)
             if record is None:
                 unresolved.append(UnresolvedTarget(node.id, name, "the probe returned no record"))
+                continue
+            if "error" in record:
+                reason = f"the probe failed on this declaration: {record['error']}"
+                unresolved.append(UnresolvedTarget(node.id, name, _stable_detail(reason, lean_root)))
                 continue
             if not record.get("found"):
                 unresolved.append(
