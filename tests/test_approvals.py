@@ -706,6 +706,56 @@ def test_a_failed_request_refuses_only_the_approvals_that_need_it(tmp_path: Path
     assert "HTTP 502" in (statuses["basics/other"].reason or "")
 
 
+def test_a_failed_request_in_the_gate_refuses_only_the_approval_that_needs_it(tmp_path: Path) -> None:
+    """Deliberate guard: the gate tries no candidate commits, so a failure
+    reaches the per-approval handling the test above no longer exercises."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _branch(root, "approve")
+    _approve(root, "result", _HASH)
+    _approve(root, "other", _HASH)
+    _commit(root, "Approve two articles")
+    head = github.open_pull(7, "bob")
+    github.review(7, "alice", "APPROVED", head)
+    answer = github.get
+
+    def flaky(path: str, query: dict | None = None) -> object | None:
+        if path == "/contents/blueprint/roadmap/basics/other.md":
+            raise ApprovalError(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
+        return answer(path, query)
+
+    github.get = flaky  # type: ignore[method-assign]
+    statuses = _verify(root, github, trusted_ref="main", pull_request=7)
+
+    assert statuses["basics/result"].authenticated
+    assert not statuses["basics/other"].authenticated
+    assert "HTTP 502" in (statuses["basics/other"].reason or "")
+
+
+def test_a_budget_spent_after_the_setup_refuses_only_the_approvals_left(tmp_path: Path) -> None:
+    """Deliberate guard: the budget test above now runs out during the setup."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    head = _pull_approving(root, github)
+    github.review(7, "alice", "APPROVED", head)
+    _branch(root, "other")
+    _approve(root, "other", _OTHER_HASH)
+    _commit(root, "Approve the other article")
+    other_head = github.open_pull(8, "bob")
+    github.review(8, "alice", "APPROVED", other_head)
+    _land(root, github, 8)
+
+    # The setup, then the eight requests for #8, which "basics/other" sorts first to use.
+    statuses = _verify(root, github, max_requests=12)
+
+    assert len(github.calls) == 12
+    assert statuses["basics/other"].authenticated, statuses["basics/other"].reason
+    assert not statuses["basics/result"].authenticated
+    assert "budget of 12 GitHub API requests" in (statuses["basics/result"].reason or "")
+
+
 def test_an_attestation_for_another_hash_is_discarded(tmp_path: Path) -> None:
     graph = load_graph(_project(tmp_path) / "blueprint")
 

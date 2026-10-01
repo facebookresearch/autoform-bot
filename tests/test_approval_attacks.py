@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from autoform_cli import approvals
 from autoform_cli.approvals import ApprovalError, code_owners, parse_codeowners
 from tests.test_approvals import (
     _ARTICLE,
@@ -715,7 +716,10 @@ def test_the_uncovered_files_are_named_ten_at_a_time(tmp_path: Path) -> None:
 
 
 def test_a_codeowners_file_github_would_not_load_owns_nothing(tmp_path: Path) -> None:
-    root = _project(tmp_path, _GRAB[: -len("blueprint/roadmap/ @carol\n")] + "#" * 3_000_000 + "\n")
+    rules = _GRAB[: -len("blueprint/roadmap/ @carol\n")]
+    # Exactly 3 MB, which GitHub already does not load.
+    root = _project(tmp_path, rules + "#" * (3_000_000 - len(rules.encode()) - 1) + "\n")
+    assert (root / ".github" / "CODEOWNERS").stat().st_size == 3_000_000
     github = FakeGitHub(root)
     _approved(root, github)
 
@@ -1162,6 +1166,54 @@ def test_a_failed_re_approval_leaves_the_reviewed_one_standing(tmp_path: Path) -
     assert status.attestation is not None, status.reason
     assert status.attestation.reference.endswith("/pull/7#pullrequestreview-1")
     assert _git(root, "rev-parse", "HEAD") == moved
+
+
+def test_a_later_edit_that_records_no_approval_costs_no_requests(tmp_path: Path) -> None:
+    """Deliberate guard on the request budget: only a commit whose own diff adds
+    the approval line is tried, though GitHub's diff would refuse the others."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _approved(root, github)
+    _branch(root, "edit")
+    _append(root, "More truth.\n")
+    _commit(root, "Edit the result")
+    github.open_pull(8, "dave")
+    edited = _land(root, github, 8)
+
+    _authenticated(root, github)
+    assert not any(edited in path or path.startswith(("/pulls/8/", "/issues/8/")) for path, _ in github.calls)
+
+
+def test_the_walk_reads_the_article_path_literally(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deliberate guard against a false refusal: read as a glob, ``re[s]ult.md``
+    would also match result.md, whose later edit would use up the walk's cap."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    chapter = root / "blueprint" / "roadmap" / "basics"
+    text = (chapter / "result.md").read_text(encoding="utf-8")
+    (chapter / "re[s]ult.md").write_text(
+        text.replace("af_0123456789abcdef01234567", "af_" + "c" * 24).replace("Review.result", "Review.glob"),
+        encoding="utf-8",
+    )
+    _commit(root, "Add an article whose name is a glob")
+    _branch(root, "approve-7")
+    _approve(root, "re[s]ult", _HASH)
+    _commit(root, "Approve it")
+    head = github.open_pull(7, "bob")
+    _land(root, github, 7)
+    github.review(7, "alice", "APPROVED", head)
+    _branch(root, "edit")
+    _append(root, "More truth.\n")
+    _commit(root, "Edit result")
+    github.open_pull(8, "bob")
+    _land(root, github, 8)
+    monkeypatch.setattr(approvals, "_MAX_HISTORY", 1)
+
+    status = _verify(root, github)["basics/re[s]ult"]
+    assert status.attestation is not None, status.reason
+    assert status.attestation.reviewer == "alice"
 
 
 def test_c4_a_replayed_approval_needs_someone_who_can_bypass_the_ruleset(tmp_path: Path) -> None:
