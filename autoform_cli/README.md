@@ -739,6 +739,14 @@ can make any approval say anything. So, once per run, nothing is authenticated
 unless code owner review guards all of them at R, the trusted ref
 (`--trusted-ref`, default `HEAD`; Pages uses the head of the default branch):
 
+- **Current head.** Without `--pr`, R is the head of the default branch on
+  GitHub now, as `GET /repos/{owner}/{repo}/git/ref/heads/{branch}` reports
+  it. The rulesets and permissions below are read as they are now, so a
+  build of an older commit, such as a re-run of an old Pages run, would pair
+  them with that commit's CODEOWNERS and bring back approvals a newer
+  CODEOWNERS withdrew. Only a build of the current head authenticates; one
+  the branch has moved past reads self-approved, and the build of the newer
+  head replaces it. The gate below trusts its base commit instead.
 - **Ruleset.** The active rulesets on the default branch, as
   `GET /repos/{owner}/{repo}/rules/branches/{branch}` reports them, have pull
   request rules that turn on *Require review from Code Owners*
@@ -841,9 +849,10 @@ Anything the verifier cannot decide, including a failed request (a later page
 of a list included), a spent budget of 500 requests, or an undecidable
 CODEOWNERS rule, leaves that one approval self-approved, and
 `review check --authenticate github` and the rendered label say why. The
-precondition costs one request for the repository, one per page of rules, one
-per ruleset with a pull request rule, one for GitHub's CODEOWNERS errors, and
-one permission lookup per individual owner it checks. Each approval then costs,
+precondition costs one request for the repository, one for the default
+branch's head outside the gate, one per page of rules, one per ruleset with a
+pull request rule, one for GitHub's CODEOWNERS errors, and one permission
+lookup per individual owner it checks. Each approval then costs,
 per pull request: the commit's pull requests, P's files, p at P's head, P's
 reviews, the approving reviewer's permission, P's commits, the pull requests
 of P's branch, P's events, and the runs on P's head, one request each plus one

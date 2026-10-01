@@ -769,6 +769,72 @@ def test_a_ruleset_the_token_cannot_bypass_counts_beside_one_it_can(tmp_path: Pa
     _authenticated(root, github)
 
 
+# Only a build of the default branch's current head authenticates.
+
+
+def test_a_build_of_an_older_commit_cannot_bring_back_a_withdrawn_approval(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _approved(root, github)
+    landed = _git(root, "rev-parse", "HEAD")
+    (root / ".github" / "CODEOWNERS").write_text("* @owner\nblueprint/ @carol\n", encoding="utf-8")
+    current = _commit(root, "Hand the blueprint to carol")
+    _refused(root, github, f"no individual @user is a code owner of {_ARTICLE}")
+
+    # Re-running the Pages run of the merge builds it again, with the CODEOWNERS that named alice.
+    status = _verify(root, github, trusted_ref=landed)["basics/result"]
+    assert status.label == "self-approved"
+    assert (
+        f"{landed} is {landed[:12]}, not {current[:12]}, the head of main on GitHub; "
+        "only a build of the current head authenticates"
+    ) in (status.reason or "")
+
+
+_UNNAMED_HEAD = "GitHub API GET of refs/heads/main did not name the commit it points to"
+
+
+@pytest.mark.parametrize(
+    ("edit", "reason"),
+    [
+        (lambda found: None, "GitHub finds no branch main, so HEAD cannot be shown to be its head"),
+        (lambda found: [found], _UNNAMED_HEAD),
+        (lambda found: {**found, "ref": "refs/heads/main-old"}, _UNNAMED_HEAD),
+        (lambda found: {**found, "object": {**found["object"], "type": "tag"}}, _UNNAMED_HEAD),
+        (lambda found: {**found, "object": {"type": "commit"}}, _UNNAMED_HEAD),
+    ],
+)
+def test_a_default_branch_head_github_does_not_name_authenticates_nothing(
+    tmp_path: Path, edit: object, reason: str
+) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _approved(root, github)
+    github.heads["main"] = edit(github.get("/git/ref/heads/main"))  # type: ignore[operator]
+
+    _refused(root, github, reason)
+
+
+def test_the_gate_reads_no_default_branch_head(tmp_path: Path) -> None:
+    """Deliberate guard: the gate trusts its base commit, which the default branch may have moved past."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    base = _git(root, "rev-parse", "main")
+    _branch(root, "approve")
+    _approve(root, "result", _HASH)
+    head = _commit(root, "Approve the result")
+    github.open_pull(7, "bob")
+    github.review(7, "alice", "APPROVED", head)
+    _git(root, "checkout", "--quiet", "main")
+    _append(root, "Moved on.\n", "blueprint/README.md")
+    _commit(root, "Move main past the base")
+    _git(root, "checkout", "--quiet", "approve")
+
+    status = _verify(root, github, trusted_ref=base, pull_request=7)["basics/result"]
+    assert status.authenticated, status.reason
+    assert "/git/ref/heads/main" not in [path for path, _ in github.calls]
+
+
 @pytest.mark.parametrize(
     ("codeowners", "permissions", "uncovered"),
     [

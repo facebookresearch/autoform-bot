@@ -474,7 +474,8 @@ class GitHubReviewVerifier:
     Nothing is authenticated unless code owner review guards everything an
     approval rests on. Once per run, at ``trusted_ref`` R:
 
-    0. The active rulesets on the default branch, leaving out any this
+    0. Outside the gate, R is the head of the default branch on GitHub. The
+       active rulesets on the default branch, leaving out any this
        verifier's token can bypass, have pull request rules that require code
        owner review, dismiss stale approvals on push, and require approval of
        the most recent push. GitHub reports no error in CODEOWNERS at R, and
@@ -657,6 +658,8 @@ class GitHubReviewVerifier:
         """
 
         default = self._default_branch()
+        if self.pull_request is None:
+            self._check_current(default, trusted)
         self._check_ruleset(default)
         codeowners = self._once(
             ("codeowners", trusted), lambda: load_codeowners(root, trusted, name=self.trusted_ref)
@@ -665,6 +668,29 @@ class GitHubReviewVerifier:
             raise _Refused(f"{self.trusted_ref} has no CODEOWNERS file, so no reviewer is allowed")
         self._check_codeowners_errors(trusted)
         self._check_coverage(*codeowners)
+
+    def _check_current(self, default: str, trusted: str) -> None:
+        """R is the head of the default branch on GitHub now.
+
+        The rulesets and permissions are read as they are now, so a build of
+        an older commit, such as a re-run of an old Pages run, would pair them
+        with that commit's CODEOWNERS and bring back the approvals a newer
+        CODEOWNERS withdrew.
+        """
+
+        found = self._get(f"/git/ref/heads/{urllib.parse.quote(default)}")
+        if found is None:
+            raise _Refused(f"GitHub finds no branch {default}, so {self.trusted_ref} cannot be shown to be its head")
+        target = found.get("object") if isinstance(found, dict) else None
+        head = target.get("sha") if isinstance(target, dict) and target.get("type") == "commit" else None
+        if not isinstance(found, dict) or found.get("ref") != f"refs/heads/{default}" or not isinstance(head, str):
+            raise ApprovalError(f"GitHub API GET of refs/heads/{default} did not name the commit it points to")
+        if head.lower() != trusted:
+            raise _Refused(
+                f"{self.trusted_ref} is {trusted[:12]}, not {head[:12]}, the head of {default} on GitHub; only a "
+                "build of the current head authenticates, so an older build cannot bring back an approval a "
+                "newer CODEOWNERS withdrew"
+            )
 
     def _check_codeowners_errors(self, trusted: str) -> None:
         """GitHub's own reading of CODEOWNERS at R finds nothing wrong.

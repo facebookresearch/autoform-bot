@@ -170,6 +170,8 @@ class FakeGitHub:
         }
         # What GET /codeowners/errors lists; None answers 404, as for a ref without CODEOWNERS.
         self.codeowners_errors: list[dict] | None = []
+        # branch -> what GET /git/ref/heads/{branch} answers when not the local branch's commit; None is 404.
+        self.heads: dict[str, object] = {}
         # login -> permission; None answers 404, as for someone who is not a collaborator.
         self.permissions: dict[str, str | None] = {}
         self.events: dict[int, list[dict]] = {}
@@ -341,6 +343,12 @@ class FakeGitHub:
             return self._page(self.rules, query)
         if parts[1] == "rulesets" and len(parts) == 3:
             return self.rulesets.get(int(parts[2]))
+        if parts[1:4] == ["git", "ref", "heads"]:
+            branch = urllib.parse.unquote("/".join(parts[4:]))
+            if branch in self.heads:
+                return self.heads[branch]
+            head = _git(self.root, "rev-parse", f"refs/heads/{branch}")
+            return {"ref": f"refs/heads/{branch}", "object": {"sha": head, "type": "commit"}}
         if path == "/codeowners/errors":
             found = any(
                 subprocess.run(
@@ -539,7 +547,10 @@ def test_code_owners_must_hold_before_the_merge_and_at_the_trusted_ref(tmp_path:
         f"no individual @user is a code owner of {_ARTICLE} both at {_git(root, 'rev-parse', landed + '^')[:12]} "
         f"(before {landed[:12]}) and at HEAD"
     ) in (status.reason or "")
-    assert _verify(root, github, trusted_ref=landed)["basics/result"].authenticated
+    # Nor does a build of the merge, which the default branch has moved past.
+    status = _verify(root, github, trusted_ref=landed)["basics/result"]
+    assert not status.authenticated
+    assert "the head of main on GitHub; only a build of the current head authenticates" in (status.reason or "")
 
 
 def test_an_approval_of_an_earlier_commit_does_not_count(tmp_path: Path) -> None:
@@ -967,9 +978,16 @@ def test_the_client_refuses_an_oversized_response(monkeypatch: pytest.MonkeyPatc
         GitHubClient("secret", "owner/project").get("/pulls/1/reviews")
 
 
-# What every verification reads first: the repository, its rules, the ruleset they come from, GitHub's
-# errors in CODEOWNERS, and the permission of the catch-all owner.
-_SETUP_CALLS = ["", "/rules/branches/main", "/rulesets/1", "/codeowners/errors", "/collaborators/owner/permission"]
+# What every verification on the default branch reads first: the repository, the branch's head, its
+# rules, the ruleset they come from, GitHub's errors in CODEOWNERS, and the permission of the catch-all owner.
+_SETUP_CALLS = [
+    "",
+    "/git/ref/heads/main",
+    "/rules/branches/main",
+    "/rulesets/1",
+    "/codeowners/errors",
+    "/collaborators/owner/permission",
+]
 
 
 def _gate(root: Path, base: str, *, pr: int = 7, trusted_ref: str | None = None) -> int:
@@ -1318,7 +1336,7 @@ def test_check_and_render_say_why_no_approval_counts_without_a_code_owner_rulese
     assert "basics/result: self-approved · sha256:" in output
     assert output.count(reason) == 2
     # The repository is judged once for every approval, and no pull request is read.
-    assert [path for path, _ in github.calls] == ["", "/rules/branches/main"]
+    assert [path for path, _ in github.calls] == ["", "/git/ref/heads/main", "/rules/branches/main"]
 
     code, pages = _render(tmp_path, blueprint)
     assert code == 0
