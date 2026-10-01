@@ -3486,7 +3486,9 @@ def _packet_filename(name: str) -> str:
     return declaration_filename(name)
 
 
-def _stage_output(destination: Path) -> Path:
+def _stage_output(destination: Path, stages: list[Path]) -> Path:
+    """Create a stage directory beside ``destination``, registered in ``stages`` first."""
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     existing_mode: int | None = None
     try:
@@ -3498,31 +3500,27 @@ def _stage_output(destination: Path) -> Path:
         stage = destination.with_name(
             f".{destination.name}.autoform-stage-{secrets.token_hex(8)}"
         )
+        stages.append(stage)
         try:
             stage.mkdir()
         except FileExistsError:
+            stages.remove(stage)
             continue
-        try:
-            if existing_mode is not None:
-                stage.chmod(existing_mode)
-        except OSError:
-            shutil.rmtree(stage, ignore_errors=True)
-            raise
+        if existing_mode is not None:
+            stage.chmod(existing_mode)
         return stage
     raise SkeletonError([f"cannot allocate staging directory beside {destination}"])
-
-
-def stage_managed_output(destination: Path) -> Path:
-    """Create a transaction stage beside a managed output directory."""
-
-    return _stage_output(destination)
 
 
 def _stage_report_output(
     report: SkeletonReport,
     destination: Path,
+    stages: list[Path],
 ) -> tuple[Path, tuple[int, int, str] | None]:
-    """Write a report to a same-directory stage and capture the old identity."""
+    """Write a report to a same-directory stage and capture the old identity.
+
+    The stage is registered in ``stages`` before it is created.
+    """
 
     identity = _output_identity(destination)
     existing_mode: int | None = None
@@ -3530,25 +3528,81 @@ def _stage_report_output(
         if not destination.is_file():
             raise SkeletonError([f"report output exists and is not a regular file: {destination}"])
         existing_mode = destination.stat().st_mode & 0o7777
+    text = report.to_json() + "\n"
     destination.parent.mkdir(parents=True, exist_ok=True)
     for _ in range(100):
         stage = destination.with_name(
             f".{destination.name}.autoform-stage-{secrets.token_hex(8)}"
         )
+        stages.append(stage)
         try:
-            with stage.open("x", encoding="utf-8") as stream:
-                stream.write(report.to_json() + "\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            if existing_mode is not None:
-                stage.chmod(existing_mode)
+            stream = stage.open("x", encoding="utf-8")
         except FileExistsError:
+            stages.remove(stage)
             continue
-        except BaseException:
-            stage.unlink(missing_ok=True)
-            raise
+        with stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if existing_mode is not None:
+            stage.chmod(existing_mode)
         return stage, identity
     raise SkeletonError([f"cannot allocate staging file beside {destination}"])
+
+
+class OutputTransaction:
+    """Own every stage of one managed-output publication.
+
+    Use it as a context manager. :meth:`directory` and :meth:`report` create
+    stages beside their destinations, and :meth:`commit` publishes them all
+    with :func:`_replace_outputs`. Each stage is registered before it is
+    created, so leaving the block for any reason, Ctrl-C included, removes
+    every stage that exists unless the commit succeeded. A stage left behind
+    has no manifest to mark it as Autoform output rather than project source.
+    """
+
+    def __init__(self) -> None:
+        self._stages: list[Path] = []
+        self._outputs: list[tuple[Path, Path, tuple[int, int, str] | None]] = []
+        self._committed = False
+
+    def __enter__(self) -> OutputTransaction:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        if self._committed:
+            return
+        for stage in reversed(self._stages):
+            try:
+                _remove_output(stage)
+            except OSError:
+                pass
+
+    def directory(self, destination: Path, identity: tuple[int, int, str] | None) -> Path:
+        """Stage a replacement for the managed directory ``destination``.
+
+        ``identity`` is what :func:`validate_managed_output` returned for it;
+        the commit refuses if the directory changed since.
+        """
+
+        stage = _stage_output(destination, self._stages)
+        self._outputs.append((destination, stage, identity))
+        return stage
+
+    def report(self, report: SkeletonReport, destination: Path) -> Path:
+        """Stage ``report`` as the JSON file ``destination``."""
+
+        stage, identity = _stage_report_output(report, destination, self._stages)
+        self._outputs.append((destination, stage, identity))
+        return stage
+
+    def commit(self) -> None:
+        """Publish every stage, in the order it was created, or none of them."""
+
+        if self._committed:
+            raise SkeletonError(["an output transaction can commit only once"])
+        _replace_outputs(list(self._outputs))
+        self._committed = True
 
 
 def _remove_output(path: Path) -> None:
@@ -3793,14 +3847,6 @@ def _replace_outputs(
             )
 
 
-def replace_managed_outputs(
-    outputs: list[tuple[Path, Path, tuple[int, int, str] | None]],
-) -> None:
-    """Publish staged managed outputs with the skeleton transaction protocol."""
-
-    _replace_outputs(outputs)
-
-
 def _paths_overlap(first: Path, second: Path) -> bool:
     first_resolved = first.resolve()
     second_resolved = second.resolve()
@@ -3818,19 +3864,12 @@ def write_skeleton_report(report: SkeletonReport, destination: str | Path) -> Pa
     if requested.is_symlink():
         raise SkeletonError([f"refusing symlink report output: {requested}"])
     output = Path(os.path.abspath(requested))
-    stage: Path | None = None
-    try:
-        stage, identity = _stage_report_output(report, output)
-        _replace_outputs([(output, stage, identity)])
-        stage = None
-    except OSError as exc:
-        raise SkeletonError([f"could not prepare skeleton report output: {exc}"]) from exc
-    finally:
-        if stage is not None:
-            try:
-                _remove_output(stage)
-            except OSError:
-                pass
+    with OutputTransaction() as transaction:
+        try:
+            transaction.report(report, output)
+            transaction.commit()
+        except OSError as exc:
+            raise SkeletonError([f"could not prepare skeleton report output: {exc}"]) from exc
     return output
 
 
@@ -3891,103 +3930,89 @@ def write_packets(
         if passages_root is not None
         else None
     )
-    packet_stage: Path | None = None
-    passages_stage: Path | None = None
-    report_stage: Path | None = None
-    report_identity: tuple[int, int, str] | None = None
     written: list[Path] = []
     manifest: list[dict[str, str]] = []
     passage_manifest: list[dict[str, str]] = []
-    try:
-        packet_stage = _stage_output(root)
-        passages_stage = _stage_output(passages_root) if passages_root is not None else None
-        if report_destination is not None:
-            report_stage, report_identity = _stage_report_output(report, report_destination)
-        for node in report.nodes:
-            node_path = _safe_node_path(node.node_id)
-            passage_path: str | None = None
-            if passages_stage is not None and node.passage is not None:
-                passage_relative = node_path / "passage.txt"
-                target = passages_stage / passage_relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                passage_bytes = (node.passage + "\n").encode("utf-8")
-                target.write_bytes(passage_bytes)
-                passage_path = passage_relative.as_posix()
-                passage_manifest.append(
-                    {
-                        "hash": _sha256_id(passage_bytes),
+    with OutputTransaction() as transaction:
+        try:
+            packet_stage = transaction.directory(root, root_identity)
+            passages_stage = (
+                transaction.directory(passages_root, passages_identity)
+                if passages_root is not None
+                else None
+            )
+            if report_destination is not None:
+                transaction.report(report, report_destination)
+            for node in report.nodes:
+                node_path = _safe_node_path(node.node_id)
+                passage_path: str | None = None
+                if passages_stage is not None and node.passage is not None:
+                    passage_relative = node_path / "passage.txt"
+                    target = passages_stage / passage_relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    passage_bytes = (node.passage + "\n").encode("utf-8")
+                    target.write_bytes(passage_bytes)
+                    passage_path = passage_relative.as_posix()
+                    passage_manifest.append(
+                        {
+                            "hash": _sha256_id(passage_bytes),
+                            "node_id": node.node_id,
+                            "passage": passage_path,
+                            "review_hash": node.review_hash,
+                        }
+                    )
+                if node.declarations:
+                    article_relative = node_path / ARTICLE_PACKET
+                    article = packet_stage / article_relative
+                    article.parent.mkdir(parents=True, exist_ok=True)
+                    article.write_text(node.blind_text(), encoding="utf-8")
+                    written.append(root / article_relative)
+                for declaration in node.declarations:
+                    relative = node_path / _packet_filename(declaration.name)
+                    path = packet_stage / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(declaration.blind_text(), encoding="utf-8")
+                    written.append(root / relative)
+                    entry = {
+                        "article_packet": (node_path / ARTICLE_PACKET).as_posix(),
+                        "article_packet_hash": node.evidence_hash,
+                        "declaration": declaration.name,
+                        "hash": declaration.hash,
                         "node_id": node.node_id,
-                        "passage": passage_path,
+                        "packet": relative.as_posix(),
+                        "packet_hash": declaration.evidence_hash,
                         "review_hash": node.review_hash,
                     }
-                )
-            if node.declarations:
-                article_relative = node_path / ARTICLE_PACKET
-                article = packet_stage / article_relative
-                article.parent.mkdir(parents=True, exist_ok=True)
-                article.write_text(node.blind_text(), encoding="utf-8")
-                written.append(root / article_relative)
-            for declaration in node.declarations:
-                relative = node_path / _packet_filename(declaration.name)
-                path = packet_stage / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(declaration.blind_text(), encoding="utf-8")
-                written.append(root / relative)
-                entry = {
-                    "article_packet": (node_path / ARTICLE_PACKET).as_posix(),
-                    "article_packet_hash": node.evidence_hash,
-                    "declaration": declaration.name,
-                    "hash": declaration.hash,
-                    "node_id": node.node_id,
-                    "packet": relative.as_posix(),
-                    "packet_hash": declaration.evidence_hash,
-                    "review_hash": node.review_hash,
-                }
-                if passage_path is not None:
-                    entry["passage"] = passage_path
-                    entry["passage_locator"] = node.passage_locator or ""
-                manifest.append(entry)
-        (packet_stage / PACKET_MANIFEST).write_text(
-            json.dumps(
-                {"kind": "packets", "packets": manifest, "schema": PACKET_SCHEMA},
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        if passages_stage is not None:
-            (passages_stage / PACKET_MANIFEST).write_text(
+                    if passage_path is not None:
+                        entry["passage"] = passage_path
+                        entry["passage_locator"] = node.passage_locator or ""
+                    manifest.append(entry)
+            (packet_stage / PACKET_MANIFEST).write_text(
                 json.dumps(
-                    {
-                        "kind": "passages",
-                        "passages": passage_manifest,
-                        "schema": PASSAGE_SCHEMA,
-                    },
+                    {"kind": "packets", "packets": manifest, "schema": PACKET_SCHEMA},
                     indent=2,
                     sort_keys=True,
                 )
                 + "\n",
                 encoding="utf-8",
             )
-        outputs = [(root, packet_stage, root_identity)]
-        if passages_root is not None and passages_stage is not None:
-            outputs.append((passages_root, passages_stage, passages_identity))
-        if report_destination is not None and report_stage is not None:
-            outputs.append((report_destination, report_stage, report_identity))
-        _replace_outputs(outputs)
-        packet_stage = None
-        passages_stage = None
-        report_stage = None
-    except OSError as exc:
-        raise SkeletonError([f"could not prepare skeleton output: {exc}"]) from exc
-    finally:
-        for stage in (packet_stage, passages_stage, report_stage):
-            if stage is not None:
-                try:
-                    _remove_output(stage)
-                except OSError:
-                    pass
+            if passages_stage is not None:
+                (passages_stage / PACKET_MANIFEST).write_text(
+                    json.dumps(
+                        {
+                            "kind": "passages",
+                            "passages": passage_manifest,
+                            "schema": PASSAGE_SCHEMA,
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+            transaction.commit()
+        except OSError as exc:
+            raise SkeletonError([f"could not prepare skeleton output: {exc}"]) from exc
     return written
 
 
@@ -4022,6 +4047,7 @@ __all__ = [
     "DeclarationSkeleton",
     "LeanLibrary",
     "NodeSkeleton",
+    "OutputTransaction",
     "PACKET_MANIFEST",
     "ProbeRunner",
     "SkeletonError",
@@ -4040,11 +4066,9 @@ __all__ = [
     "parse_probe_output",
     "path_of",
     "render_probe",
-    "replace_managed_outputs",
     "run_probe",
     "source_excerpt",
     "source_passage",
-    "stage_managed_output",
     "validate_managed_output",
     "write_packets",
     "write_skeleton_report",

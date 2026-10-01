@@ -14,7 +14,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -29,11 +28,10 @@ from .skeleton import (
     SEMANTIC_SCHEMA,
     SKELETON_SCHEMA,
     DeclarationSkeleton,
+    OutputTransaction,
     SkeletonReport,
     blueprint_hash,
-    replace_managed_outputs,
     source_passage,
-    stage_managed_output,
     validate_managed_output,
 )
 
@@ -664,22 +662,22 @@ def write_review_packets(bundle: ReviewBundle, directory: str | Path) -> list[Pa
             [ReviewFinding("", "review-packets-unsafe", f"refusing symlink packet output: {requested}")]
         )
     root = Path(os.path.abspath(requested))
-    try:
-        identity = validate_managed_output(
-            root,
-            kind="packets",
-            schema=REVIEW_PACKET_SCHEMA,
-        )
-        stage = stage_managed_output(root)
-    except Exception as exc:
-        issues = getattr(exc, "issues", (str(exc),))
-        raise ReviewError(
-            [ReviewFinding("", "review-packets-unsafe", str(issue)) for issue in issues]
-        ) from exc
-
     entries: list[dict[str, str]] = []
     packet_bytes: dict[str, bytes] = {}
-    try:
+    with OutputTransaction() as transaction:
+        try:
+            identity = validate_managed_output(
+                root,
+                kind="packets",
+                schema=REVIEW_PACKET_SCHEMA,
+            )
+            stage = transaction.directory(root, identity)
+        except Exception as exc:
+            issues = getattr(exc, "issues", (str(exc),))
+            raise ReviewError(
+                [ReviewFinding("", "review-packets-unsafe", str(issue)) for issue in issues]
+            ) from exc
+
         blind = stage / "blind"
         blind.mkdir()
         for article in bundle.articles:
@@ -721,12 +719,7 @@ def write_review_packets(bundle: ReviewBundle, directory: str | Path) -> list[Pa
             json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
-        replace_managed_outputs([(root, stage, identity)])
-    except BaseException:
-        # Ctrl-C too: a stage left behind has no manifest to mark it as
-        # Autoform output rather than project source.
-        shutil.rmtree(stage, ignore_errors=True)
-        raise
+        transaction.commit()
     return [root / relative for relative in sorted(packet_bytes)]
 
 

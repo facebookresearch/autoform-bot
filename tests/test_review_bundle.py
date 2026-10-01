@@ -541,13 +541,36 @@ def test_packet_writer_removes_its_stage_when_interrupted(
     if step == "packet":
         monkeypatch.setattr(Path, "write_bytes", interrupted)
     else:
-        monkeypatch.setattr("autoform_cli.review.replace_managed_outputs", interrupted)
+        monkeypatch.setattr("autoform_cli.skeleton._replace_outputs", interrupted)
 
     with pytest.raises(KeyboardInterrupt):
         write_review_packets(bundle, tmp_path / "packets")
 
     assert list(tmp_path.glob(".packets.autoform-stage-*")) == []
     assert not (tmp_path / "packets").exists()
+
+
+def test_packet_writer_removes_a_stage_interrupted_while_it_is_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph = load_graph(_blueprint(tmp_path))
+    bundle = build_review_bundle(graph, _extracted(graph))
+    packets = tmp_path / "packets"
+    write_review_packets(bundle, packets)
+    chmod = Path.chmod
+
+    def interrupted(self: Path, *args: object, **kwargs: object) -> None:
+        if ".autoform-stage-" in self.name:
+            raise KeyboardInterrupt
+        chmod(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "chmod", interrupted)
+
+    with pytest.raises(KeyboardInterrupt):
+        write_review_packets(bundle, packets)
+
+    assert list(tmp_path.glob(".packets.autoform-stage-*")) == []
+    assert (packets / "manifest.json").is_file()
 
 
 def test_packet_writers_do_not_overwrite_each_others_output(tmp_path: Path) -> None:

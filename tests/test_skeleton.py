@@ -2539,7 +2539,7 @@ def test_cli_does_not_publish_packets_when_report_staging_fails(
     passages = tmp_path / "passages"
     output = tmp_path / "skeleton.json"
 
-    def fail_report_stage(report: SkeletonReport, destination: Path):
+    def fail_report_stage(report: SkeletonReport, destination: Path, stages: list[Path]):
         raise OSError("simulated report staging failure")
 
     monkeypatch.setattr("autoform_cli.skeleton._stage_report_output", fail_report_stage)
@@ -4826,12 +4826,12 @@ def test_packet_publication_cleans_up_when_second_stage_fails(
     stage_output = _stage_output
     calls = 0
 
-    def fail_second_stage(destination: Path) -> Path:
+    def fail_second_stage(destination: Path, stages: list[Path]) -> Path:
         nonlocal calls
         calls += 1
         if calls == 2:
             raise OSError("simulated passage staging failure")
-        return stage_output(destination)
+        return stage_output(destination, stages)
 
     monkeypatch.setattr("autoform_cli.skeleton._stage_output", fail_second_stage)
 
@@ -4840,6 +4840,41 @@ def test_packet_publication_cleans_up_when_second_stage_fails(
 
     assert list(tmp_path.glob(".packets.autoform-stage-*")) == []
     assert not packets.exists() and not passages.exists()
+
+
+@pytest.mark.parametrize("step", ["create", "mode"])
+def test_packet_publication_removes_stages_interrupted_while_they_are_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step: str
+) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
+    packets = tmp_path / "packets"
+    passages = tmp_path / "passages"
+    write_packets(report, packets, passages=passages)
+    mkdir = Path.mkdir
+    chmod = Path.chmod
+
+    def interrupted_mkdir(self: Path, *args: object, **kwargs: object) -> None:
+        mkdir(self, *args, **kwargs)
+        if self.name.startswith(".packets.autoform-stage-"):
+            raise KeyboardInterrupt
+
+    def interrupted_chmod(self: Path, *args: object, **kwargs: object) -> None:
+        if self.name.startswith(".passages.autoform-stage-"):
+            raise KeyboardInterrupt
+        chmod(self, *args, **kwargs)
+
+    if step == "create":
+        monkeypatch.setattr(Path, "mkdir", interrupted_mkdir)
+    else:
+        monkeypatch.setattr(Path, "chmod", interrupted_chmod)
+
+    with pytest.raises(KeyboardInterrupt):
+        write_packets(report, packets, passages=passages)
+
+    assert list(tmp_path.glob(".*.autoform-stage-*")) == []
+    assert (packets / PACKET_MANIFEST).is_file() and (passages / PACKET_MANIFEST).is_file()
 
 
 def test_packet_publication_detects_a_concurrent_file_edit(tmp_path: Path, monkeypatch) -> None:
