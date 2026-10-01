@@ -137,10 +137,10 @@ _MARKS_BELOW = frozenset({202, 218, 220, 222, 233})
 #: times the most any blueprint page at hand holds. The renderer reads no HTML,
 #: and the scans for HTML a vault viewer would read are linear, so "<" needs no
 #: limit: a thousand nested tags, which once overflowed the stack, are refused
-#: in a hundredth of a second. Brackets cost most, 0.6 s at their limit alone.
-#: At every limit at once the slowest testimony found validates in 1.6 s, two
-#: thirds of the 2.3 s the slowest took on the same machine under the previous
-#: renderer and limits.
+#: in a hundredth of a second. Brackets cost most, 0.6 s at their limit alone;
+#: the CommonMark reading scans from a "[" too, and the same limit bounds it.
+#: At every limit at once the slowest testimony found validates in 1.8 s and
+#: 12 MB, 0.2 s of it in the CommonMark reading, on a machine under load.
 TESTIMONY_MAX_BYTES = 32 * 1024
 TESTIMONY_MAX_LINES = 500
 TESTIMONY_MAX_MATH_DELIMITERS = 1024
