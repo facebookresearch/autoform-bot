@@ -410,6 +410,38 @@ def test_tex_limits_hold_at_their_exact_values_and_per_formula(testimony: str, r
     assert errors == () if reason is None else any(reason in error for error in errors)
 
 
+_PROOF_ROWS = r"\begin{aligned} " + r" \\ ".join([r"a &= b \quad \text{by } h_i"] * 7) + r" \end{aligned}"
+
+
+@pytest.mark.parametrize(
+    ("testimony", "reason"),
+    [
+        ("$" + _PROOF_ROWS + "$", None),
+        (r"$\begin{matrix} a\qquad\qquad & b\qquad\qquad & c \end{matrix}$", None),
+        (r"$\begin{matrix} a\qquad\qquad & b\qquad\qquad\, & c \end{matrix}$", "TeX spacing over 8 em in one formula"),
+        (
+            r"$\begin{matrix} a\qquad\qquad\qquad & b \\ c & d\qquad\qquad \end{matrix}$",
+            "TeX spacing over 8 em in one formula",
+        ),
+        (
+            r"$\begin{matrix} \begin{matrix} a\qquad\qquad \\ b \end{matrix} \qquad\qquad\, & c \end{matrix}$",
+            "TeX spacing over 8 em in one formula",
+        ),
+        (" ".join(["$P" + r"\qquad" * 4 + " Q$"] * 8), None),
+        (" ".join(["$P" + r"\qquad" * 4 + " Q$"] * 8 + [r"$P\, Q$"]), "TeX spacing over 64 em in one testimony"),
+        (" ".join(["$P" + r"\qquad" + " Q$"] * 33), "TeX spacing over 64 em in one testimony is not allowed"),
+    ],
+)
+def test_tex_spacing_counts_once_per_column_and_adds_up_across_formulas(testimony: str, reason: str | None) -> None:
+    """Rows stack, so a column spends as much space as its widest cell, and
+    the columns of an environment add up. Formulas split a testimony's space
+    but not its budget."""
+
+    errors = _testimony_errors(testimony)
+
+    assert errors == () if reason is None else any(reason in error for error in errors)
+
+
 @pytest.mark.parametrize(
     ("testimony", "reason"),
     [

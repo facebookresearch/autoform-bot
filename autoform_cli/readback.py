@@ -1217,8 +1217,12 @@ _TEX_MAX_SCRIPT_DEPTH = 8
 #: times what statements use; the 873 formulas of the vault and ArkLib
 #: blueprints at hand use at most 3.3 em of space, one ``&`` in a row, two
 #: ``\\``, and no empty cell. Ten columns is amsmath's own limit for a matrix.
-#: An empty row shows nothing at all, so none is allowed.
+#: An empty row shows nothing at all, so none is allowed. Space in the rows of
+#: an environment counts once per column, as much as its widest cell holds,
+#: since the rows stack rather than run on. A testimony may spend eight times
+#: what one formula may, however its formulas split it.
 _TEX_MAX_SPACING = 8 * 18
+_TEX_MAX_TESTIMONY_SPACING = 64 * 18
 _TEX_MAX_COLUMNS = 9
 _TEX_MAX_ROWS = 16
 _TEX_MAX_FORMULA_ROWS = 32
@@ -1276,11 +1280,15 @@ class _TexAbort(Exception):
 @dataclass
 class _TexRows:
     """The rows of one environment or ``\\substack`` being read: how many
-    rows have ended, how many cells the current row has ended, and how many
-    symbols the formula had set when the current cell and row began."""
+    rows have ended, how many cells the current row has ended, how many
+    symbols the formula had set when the current cell and row began, its
+    spacing when the environment began, and the most any cell of each column
+    has spent."""
 
     cell: int
     row: int
+    spacing: float
+    widths: list[float]
     rows: int = 0
     columns: int = 0
 
@@ -1299,7 +1307,7 @@ class _TexLayout:
     source order across groups, arguments, cells, and commands that set
     nothing, so a run below one negative thin space slides a symbol over its
     neighbour wherever the two sit. A run never carries from one formula to
-    the next.
+    the next, but the spacing of every formula counts toward the testimony's.
     """
 
     def __init__(self) -> None:
@@ -1312,6 +1320,7 @@ class _TexLayout:
         self.unset: dict[str, None] = {}
         self.stray: dict[str, None] = {}
         self.overlap = self.double_integral = self.marks = False
+        self.total_spacing = 0.0
 
     def read(self, tex: str) -> None:
         """Read one formula, ``tex`` without its delimiters."""
@@ -1338,6 +1347,7 @@ class _TexLayout:
             self.errors[str(abort)] = None
             return
         self.overlap = self.overlap or self.run < _TEX_MIN_RUN
+        self.total_spacing += self.spacing
         if not self.glyphs:
             self.errors["TeX formulas that show nothing are not allowed"] = None
         if self.spacing > _TEX_MAX_SPACING:
@@ -1377,6 +1387,11 @@ class _TexLayout:
             errors.append(
                 "combining marks in a formula are not allowed: MathJax sets each apart from the symbol before it; "
                 "write an accent such as \\acute{x}, or the character already composed"
+            )
+        if self.total_spacing > _TEX_MAX_TESTIMONY_SPACING:
+            errors.append(
+                f"TeX spacing over {_TEX_MAX_TESTIMONY_SPACING // 18} em in one testimony is not allowed: "
+                "it pushes symbols apart or out of view"
             )
         if self.stray:
             errors.append(
@@ -1523,7 +1538,7 @@ class _TexLayout:
             self.new_atom(kind == "operator")
 
     def group(self, context: str) -> None:
-        rows = _TexRows(self.glyphs, self.glyphs) if context == "substack" else None
+        rows = _TexRows(self.glyphs, self.glyphs, self.spacing, []) if context == "substack" else None
         if self.read_list(context, rows) is None:
             self.errors[_TEX_BRACES] = None
         if rows is not None:
@@ -1687,7 +1702,7 @@ class _TexLayout:
                 self.errors[_TEX_ARRAY] = None
             else:
                 self.skip_to(match.end())
-        rows = _TexRows(self.glyphs, self.glyphs)
+        rows = _TexRows(self.glyphs, self.glyphs, self.spacing, [])
         if self.read_list("environment", rows) is None or self.environment_name(r"\end") != name:
             self.errors[_TEX_UNBALANCED_ENVIRONMENT] = None
         self.end_rows(rows)
@@ -1731,6 +1746,7 @@ class _TexLayout:
 
         self.empty_cells += self.glyphs == rows.cell
         rows.cell = self.glyphs
+        self.measure(rows)
         rows.columns += 1
         if rows.columns > _TEX_MAX_COLUMNS:
             self.errors[f"more than {_TEX_MAX_COLUMNS} TeX & in one row are not allowed"] = None
@@ -1745,6 +1761,7 @@ class _TexLayout:
         self.empty_cells += self.glyphs == rows.cell and rows.columns > 0
         self.empty_rows += self.glyphs == rows.row
         rows.cell = rows.row = self.glyphs
+        self.measure(rows)
         rows.columns = 0
         rows.rows += 1
         if rows.rows > _TEX_MAX_ROWS:
@@ -1757,6 +1774,19 @@ class _TexLayout:
         if rows.columns:
             self.empty_cells += self.glyphs == rows.cell
             self.empty_rows += self.glyphs == rows.row
+        self.measure(rows)
+        self.spacing = rows.spacing + sum(rows.widths)
+
+    def measure(self, rows: _TexRows) -> None:
+        """Count the space the cell just ended spends toward its column's,
+        which is as much as its widest cell spends."""
+
+        width = self.spacing - rows.spacing
+        if rows.columns < len(rows.widths):
+            rows.widths[rows.columns] = max(rows.widths[rows.columns], width)
+        else:
+            rows.widths.append(width)
+        self.spacing = rows.spacing
 
 
 def _testimony_errors(text: str) -> tuple[str, ...]:
