@@ -921,7 +921,14 @@ _TESTIMONY_ATTRIBUTES: dict[str, dict[str, re.Pattern[str]]] = {
     "td": {"style": re.compile("text-align: (?:left|center|right);")},
     "ol": {"start": re.compile("[0-9]{1,9}")},
 }
-_MERMAID_FENCE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})[ \t]*mermaid(?:[ \t]|$)", re.MULTILINE | re.IGNORECASE)
+#: A fence that opens a Mermaid block in a CommonMark viewer of the vault,
+#: which also reads one after blockquote and list markers on its line, where
+#: the renderer reads only text. Indentation is not weighed, so such a fence
+#: in an indented code block is refused too.
+_MERMAID_FENCE = re.compile(
+    r"^(?:[ \t>]|[-+*](?=[ \t])|\d{1,9}[.)](?=[ \t]))*(?:`{3,}|~{3,})[ \t]*mermaid(?:[ \t]|$)",
+    re.MULTILINE | re.IGNORECASE,
+)
 
 
 #: Commands that set a letter, so testimony showing only these still shows one.
