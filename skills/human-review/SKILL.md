@@ -102,7 +102,7 @@ tree.
    branch's site names them instead of saying self-approved only when the
    default branch has a ruleset requiring code owner review, dismissal of
    stale approvals, and approval of the most recent push, `CODEOWNERS` owns
-   every other file, that pull request, merged, recorded the hash, the reviewer
+   every path, that pull request, merged, recorded the hash, the reviewer
    is a code owner both before the merge and on the default branch, and
    `autoform-verify.yml` passed on the approved head. Anything else, a moved
    article or a pull request that also changes other files included, reads

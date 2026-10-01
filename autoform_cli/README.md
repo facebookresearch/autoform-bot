@@ -759,21 +759,33 @@ unless code owner review guards all of them at R, the trusted ref
   bypass actors needs admin access, so the people and apps a ruleset lets
   bypass it, repository admins included where it does, are trusted: what they
   merge is taken as reviewed.
-- **Coverage.** CODEOWNERS at R gives every tracked file except articles and
-  read-back cards an owner GitHub enforces. Articles are the Markdown files
-  under `<blueprint>/roadmap/` and cards those under `<blueprint>/readbacks/`.
-  Everything else needs an owner: CODEOWNERS itself, `.github/`, `lakefile.*`,
-  `lake-manifest.json`, `lean-toolchain`, the Lean sources, `mkdocs.yml`,
-  `theme/`, and every other Markdown file, `blueprint/README.md` included. A
-  team owner (`@org/team`) counts: GitHub enforces a team only when it has
-  write access, and a workflow token cannot read team permissions, so teams
-  are trusted. An individual `@user` counts when GitHub gives them admin,
-  maintain, or write permission. Email owners do not count, and neither does a
-  rule the parser cannot decide (see below).
+- **Coverage.** CODEOWNERS at R gives every path that could exist an owner
+  GitHub enforces, which is read from the rules, not from the files R tracks:
+  a pull request adding a file nobody owns, such as a new workflow, needs no
+  code owner review. The last matching rule decides and `*` matches every
+  path, so every path is decided by the last `*` rule or a later one, and
+  each of those must name an enforced owner; rules before the last `*`
+  decide nothing. Start CODEOWNERS with a line such as `* @owner` and narrow
+  it after, for instance with `blueprint/ @alice`. Articles and read-back
+  cards get no exception: any pattern may also match a directory, so none
+  can be shown to match only Markdown, and the site copies every other file
+  under the blueprint. An individual `@user` counts when GitHub gives them
+  admin, maintain, or write permission. A team (`@org/team`) counts only when
+  `org` is the repository's owner: GitHub enforces a team only when it has
+  write access, which a workflow token cannot read, and reports a team
+  without it as an `Unknown owner` error, which the next check refuses.
+  Email owners do not count, and neither does a rule the parser cannot
+  decide (see below).
+- **GitHub's reading.** `GET /repos/{owner}/{repo}/codeowners/errors?ref=R`
+  lists no error. GitHub skips a line it cannot parse and ignores an owner it
+  cannot use, so any error (`Invalid pattern`, `Invalid owner`, `Unknown
+  owner`, or another kind) refuses, naming the lines. The verifier's own
+  parser only ever narrows what GitHub accepts.
 
-When either fails, every approval is self-approved with one reason that names
-the uncovered files, ten at most, and `review check --authenticate github`
-prints it for each. The check is of R as it is now; the verifier does not
+When any of these fails, every approval is self-approved with one reason that
+names the missing settings, GitHub's errors, or the rules without an enforced
+owner, ten at most, and `review check --authenticate github` prints it for
+each. The check is of R as it is now; the verifier does not
 audit how R's CODEOWNERS or ruleset came to be.
 
 Then let p be an article's path and H its `review_approved` hash. The approval
@@ -830,8 +842,8 @@ of a list included), a spent budget of 500 requests, or an undecidable
 CODEOWNERS rule, leaves that one approval self-approved, and
 `review check --authenticate github` and the rendered label say why. The
 precondition costs one request for the repository, one per page of rules, one
-per ruleset with a pull request rule, and one permission lookup per individual
-owner it checks. Each approval then costs,
+per ruleset with a pull request rule, one for GitHub's CODEOWNERS errors, and
+one permission lookup per individual owner it checks. Each approval then costs,
 per pull request: the commit's pull requests, P's files, p at P's head, P's
 reviews, the approving reviewer's permission, P's commits, the pull requests
 of P's branch, P's events, and the runs on P's head, one request each plus one
@@ -851,10 +863,11 @@ and tokens are separated by spaces and tabs. Only an individual `@user` can
 approve an article: a team covers a file for the precondition, but a
 workflow token cannot check who is in it, so name individual reviewers for
 articles. A negated, bracketed, escaped, or malformed pattern, or an owner in
-another form, leaves undecided the articles that line might decide, and
-leaves its files uncovered. A line holding any other control or separator
-character, such as U+2028 or a non-breaking space, might be split differently
-by GitHub, so it leaves undecided every path that no later line matches.
+another form, leaves undecided the articles that line might decide and, at
+or after the last `*` rule, fails the coverage check. A line holding any
+other control or separator character, such as U+2028 or a non-breaking
+space, might be split differently by GitHub, so it leaves undecided every
+path that no later line matches.
 
 Approve the final head. Ask a code owner to review only once `review check`
 is green on the pull request's last commit: an approval of an earlier commit
@@ -872,17 +885,18 @@ self-approved. Removing the reviewer from CODEOWNERS or revoking their write
 access withdraws every approval they gave.
 
 Residual limits. Code owner review is checked at R as it is now, not as it
-was when each pull request merged. Teams, and ruleset bypass actors other
-than the verifier's own token, are trusted; anyone who can bypass the ruleset
-can merge a pull request that re-records a hash without review. A `pull_request` run tests the head merged
-into the base as it was then, not the merge that landed. A review's
-`author_association` can understate a writer's access, for example for a
-private organization member, which reads self-approved. Pages decides when it
-builds: a review dismissed after the merge, or a verify run that finishes
-after it, shows at the next Pages build. Older commits are read with the
-current frontmatter parser, so a schema change refuses rather than guesses.
-Signed SSH or GPG approvals (issue #49) are planned as a second verifier
-behind the same interface.
+was when each pull request merged. A team GitHub enforces is trusted as a
+whole: any member's review satisfies it. Ruleset bypass actors other than the
+verifier's own token are trusted; anyone who can bypass the ruleset can merge
+a pull request that re-records a hash without review. A `pull_request` run
+tests the head merged into the base as it was then, not the merge that
+landed. A review's `author_association` can understate a writer's access,
+for example for a private organization member, which reads self-approved.
+Pages decides when it builds: a review dismissed after the merge, or a verify
+run that finishes after it, shows at the next Pages build. Older commits are
+read with the current frontmatter parser, so a schema change refuses rather
+than guesses. Signed SSH or GPG approvals (issue #49) are planned as a second
+verifier behind the same interface.
 
 `review authenticate` needs no Lean. It lists every recorded approval with its
 status and does not judge whether approvals are current. With `--since REF` it

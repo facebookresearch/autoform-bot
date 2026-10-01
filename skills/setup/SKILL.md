@@ -79,9 +79,10 @@ an immutable commit.
 Approvals read "approved by" only when the default branch has rulesets, none
 the workflow token can bypass, requiring code owner review, dismissing stale
 approvals on push, and requiring approval of the most recent push, and
-`CODEOWNERS` gives every file except articles and read-back cards a team
-owner or an individual owner with write access; classic branch protection
-does not count. Tell the user this when statement review is on; adding the
+`CODEOWNERS`, which GitHub must read without error, gives every path an
+owner: a `*` rule and every rule after the last one name a team of the
+repository's owner or an individual owner with write access. Classic branch
+protection does not count. Tell the user this when statement review is on; adding the
 ruleset and `CODEOWNERS` is their decision. The
 [CLI reference](../../autoform_cli/README.md#commands) states the full rule.
 

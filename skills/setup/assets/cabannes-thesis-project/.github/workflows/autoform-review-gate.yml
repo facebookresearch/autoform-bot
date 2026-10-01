@@ -4,8 +4,8 @@
 # review_approved shows only that the review surface is unchanged, and
 # `review check` prints the hash, so anyone can paste it. This gate asks, for
 # each approval the pull request adds or changes, whether the default branch
-# requires code owner review over every file but articles and read-back cards,
-# the pull request changes only articles and read-back cards, and an individual
+# requires code owner review over every path, the pull request changes only
+# articles and read-back cards, and an individual
 # @user code owner of the article (per CODEOWNERS on the base commit) with
 # write access, who neither opened the pull request nor wrote any of its
 # commits, approved its head commit, whose diff adds that hash. It runs the

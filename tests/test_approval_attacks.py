@@ -11,6 +11,7 @@ from autoform_cli import approvals
 from autoform_cli.approvals import ApprovalError, code_owners, parse_codeowners
 from tests.test_approvals import (
     _ARTICLE,
+    _CODEOWNERS,
     _HASH,
     _OTHER_HASH,
     _SETUP_CALLS,
@@ -376,13 +377,13 @@ def test_a8_an_undecodable_first_codeowners_does_not_fall_through(tmp_path: Path
 # B1: characters Python splits on but GitHub may not hide an owner rule in a comment.
 @pytest.mark.parametrize("separator", ["\u2028", "\x0b", "\x1c", "\x85", "\x0c", "\u00a0"])
 def test_b1_a_hidden_separator_leaves_the_owners_undecided(tmp_path: Path, separator: str) -> None:
-    rules = f"blueprint/ @alice\n# reviewers, see docs{separator}blueprint/ @mallory\n"
+    rules = f"* @owner\nblueprint/ @alice\n# reviewers, see docs{separator}blueprint/ @mallory\n"
     root = _project(tmp_path, rules)
     github = FakeGitHub(root)
     _pull_approving(root, github, author="bob")
     github.review(7, "mallory", "APPROVED")
 
-    _refused(root, github, f".github/CODEOWNERS:2 contains U+{ord(separator):04X}")
+    _refused(root, github, f".github/CODEOWNERS:3 contains U+{ord(separator):04X}")
     # The line could hold any rule, so it leaves every path undecided.
     with pytest.raises(ApprovalError, match="cannot be decided"):
         code_owners(parse_codeowners(f"docs/ @a\n/src/ @b{separator}@c\n"), "docs/x.md")
@@ -390,12 +391,12 @@ def test_b1_a_hidden_separator_leaves_the_owners_undecided(tmp_path: Path, separ
 
 # B1b: a no-break space is not a token separator for GitHub.
 def test_b1b_a_no_break_space_does_not_split_owner_tokens(tmp_path: Path) -> None:
-    root = _project(tmp_path, "blueprint/ @alice\nblueprint/\u00a0@mallory\n")
+    root = _project(tmp_path, "* @owner\nblueprint/ @alice\nblueprint/\u00a0@mallory\n")
     github = FakeGitHub(root)
     _pull_approving(root, github)
     github.review(7, "mallory", "APPROVED")
 
-    _refused(root, github, ".github/CODEOWNERS:2 contains U+00A0")
+    _refused(root, github, ".github/CODEOWNERS:3 contains U+00A0")
 
 
 # Finding 9 and its relatives: only a pull request merged into the default
@@ -607,8 +608,8 @@ def test_c2_codeowners_that_own_no_codeowners_file_authenticate_nothing(tmp_path
     _refused(
         root,
         github,
-        ".github/CODEOWNERS at HEAD gives 1 tracked file(s) other than articles and read-back cards no code "
-        "owner with write access, so they can change without code owner review: .github/CODEOWNERS (no rule)",
+        ".github/CODEOWNERS at HEAD has no `*` rule, so a file no rule matches, such as a new workflow, can be "
+        "added without code owner review",
     )
 
 
@@ -771,39 +772,161 @@ def test_a_ruleset_the_token_cannot_bypass_counts_beside_one_it_can(tmp_path: Pa
 @pytest.mark.parametrize(
     ("codeowners", "permissions", "uncovered"),
     [
-        ("blueprint/ @alice\n", {}, ".github/CODEOWNERS (no rule)"),
-        ("* @reader\nblueprint/ @alice\n", {"reader": "read"}, ".github/CODEOWNERS (line 1: @reader cannot write)"),
-        ("* @triager\nblueprint/ @alice\n", {"triager": "triage"}, "(line 1: @triager cannot write)"),
-        ("* @gone\nblueprint/ @alice\n", {"gone": None}, "(line 1: @gone cannot write)"),
-        ("* owner@example.com\nblueprint/ @alice\n", {}, "(line 1: email owners cannot be verified)"),
-        ("*\nblueprint/ @alice\n", {}, ".github/CODEOWNERS (line 1 names no owner)"),
-        ("* @owner\n.github/ \u2028@owner\nblueprint/ @alice\n", {}, "contains U+2028"),
-        ("* @owner\n!.github/CODEOWNERS @owner\nblueprint/ @alice\n", {}, ".github/CODEOWNERS ("),
-        ("* @owner\n.github/[A-Z]* @owner\nblueprint/ @alice\n", {}, ".github/CODEOWNERS ("),
-        ("* @owner\n.github/ @owner!\nblueprint/ @alice\n", {}, "unsupported owner '@owner!'"),
+        ("* @reader\nblueprint/ @alice\n", {"reader": "read"}, ": line 1: @reader cannot write"),
+        ("* @triager\nblueprint/ @alice\n", {"triager": "triage"}, ": line 1: @triager cannot write"),
+        ("* @gone\nblueprint/ @alice\n", {"gone": None}, ": line 1: @gone cannot write"),
+        ("* owner@example.com\nblueprint/ @alice\n", {}, ": line 1: email owners cannot be verified"),
+        ("*\nblueprint/ @alice\n", {}, ": line 1 names no owner"),
+        ("* @owner\n.github/ \u2028@owner\nblueprint/ @alice\n", {}, "HEAD:.github/CODEOWNERS:2 contains U+2028"),
         (
-            "* @owner\nblueprint/ @reader\nblueprint/roadmap/ @alice\n",
+            "* @owner\n!.github/CODEOWNERS @owner\nblueprint/ @alice\n",
+            {},
+            "HEAD:.github/CODEOWNERS:2: unsupported CODEOWNERS pattern '!.github/CODEOWNERS'",
+        ),
+        (
+            "* @owner\n.github/[A-Z]* @owner\nblueprint/ @alice\n",
+            {},
+            "HEAD:.github/CODEOWNERS:2: unsupported CODEOWNERS pattern '.github/[A-Z]*'",
+        ),
+        ("* @owner\n.github/ @owner!\nblueprint/ @alice\n", {}, "unsupported owner '@owner!'"),
+        ("* @owner\nblueprint/ @reader\nblueprint/roadmap/ @alice\n", {"reader": "read"}, ": line 2: @reader cannot"),
+        ("* @owner\nblueprint/ @alice\n/blueprint/roadmap/*.html\n", {}, ": line 3 names no owner"),
+        ("* @owner\nblueprint/ @alice\n/docs/ @reader\n", {"reader": "read"}, ": line 3: @reader cannot write"),
+        (
+            "* @owner\nblueprint/ @alice\n/docs/ @reader alice@example.com @org/docs\n",
             {"reader": "read"},
-            "blueprint/README.md (line 2: @reader cannot write)",
+            ": line 3: @reader cannot write; @org/docs is not a team of owner; email owners cannot be verified",
         ),
     ],
 )
-def test_every_file_but_articles_and_cards_needs_a_code_owner_who_can_write(
+def test_every_rule_from_the_last_catch_all_on_needs_a_code_owner_who_can_write(
     tmp_path: Path, codeowners: str, permissions: dict, uncovered: str
 ) -> None:
+    """Every path is decided by the last `*` rule or a later one, tracked or not:
+    an unowned /blueprint/roadmap/*.html rule would let a pull request publish
+    HTML on the site without code owner review."""
+
     root = _project(tmp_path, codeowners)
     github = FakeGitHub(root)
     github.permissions.update(permissions)
     _approved(root, github)
 
-    _refused(root, github, "no code owner with write access, so they can change without code owner review: ")
+    _refused(
+        root,
+        github,
+        ".github/CODEOWNERS at HEAD leaves the paths of 1 rule(s) without a code owner GitHub enforces, so they can "
+        "change without code owner review",
+    )
     _refused(root, github, uncovered)
+
+
+def test_owning_every_tracked_file_by_name_leaves_new_files_unowned(tmp_path: Path) -> None:
+    """Repro: without a `*` rule, a pull request adding a workflow needs no code owner review."""
+
+    root = _project(tmp_path, "/.github/CODEOWNERS @owner\n/blueprint/README.md @owner\n/blueprint/roadmap/ @alice\n")
+    github = FakeGitHub(root)
+    _approved(root, github)
+
+    _refused(root, github, ".github/CODEOWNERS at HEAD has no `*` rule")
+    _refused(root, github, "give every path an owner with a first line like `* @owner`")
+
+
+@pytest.mark.parametrize(
+    "codeowners",
+    ["/docs/ @reader\n* @owner\nblueprint/ @alice\n", "* @reader\n* @owner\nblueprint/ @alice\n"],
+)
+def test_rules_before_the_last_catch_all_decide_nothing(tmp_path: Path, codeowners: str) -> None:
+    """Deliberate guard: the last `*` rule overrides every rule before it for every path."""
+
+    root = _project(tmp_path, codeowners)
+    github = FakeGitHub(root)
+    github.permissions["reader"] = "read"
+    _approved(root, github)
+
+    _authenticated(root, github)
+
+
+@pytest.mark.parametrize(
+    ("codeowners", "line", "error"),
+    [
+        (_CODEOWNERS, 2, "Invalid pattern"),
+        (_CODEOWNERS, 2, "Invalid owner"),
+        # actions/checkout's CODEOWNERS is `* @actions/actions-runtime`, which GitHub reports this way.
+        ("* @owner/actions-runtime\nblueprint/ @alice\n", 1, "Unknown owner"),
+    ],
+)
+def test_any_error_github_reports_in_codeowners_authenticates_nothing(
+    tmp_path: Path, codeowners: str, line: int, error: str
+) -> None:
+    """GitHub skips a line it cannot parse and ignores an owner it cannot use,
+    such as a team without write access; the local parser cannot see either."""
+
+    root = _project(tmp_path, codeowners)
+    github = FakeGitHub(root)
+    source = codeowners.split("\n")[line - 1]
+    github.codeowners_errors = [
+        {
+            "line": line,
+            "column": 1,
+            "kind": error,
+            "source": source,
+            "suggestion": None,
+            "message": f"{error} on line {line}:\n\n  {source}\n  ^",
+            "path": ".github/CODEOWNERS",
+        }
+    ]
+    _approved(root, github)
+
+    _refused(
+        root,
+        github,
+        f"GitHub reports 1 error(s) in CODEOWNERS at HEAD, so it does not enforce every line as written: "
+        f".github/CODEOWNERS:{line} {error}",
+    )
+
+
+def test_errors_github_reports_are_named_ten_at_a_time(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    github.codeowners_errors = [{"line": line, "kind": "Unknown owner", "path": "CODEOWNERS"} for line in range(1, 13)]
+    _approved(root, github)
+
+    _refused(root, github, "GitHub reports 12 error(s) in CODEOWNERS at HEAD")
+    _refused(root, github, "CODEOWNERS:10 Unknown owner; and 2 more")
+
+
+@pytest.mark.parametrize(
+    ("answer", "reason"),
+    [
+        (None, "GitHub finds no CODEOWNERS file at HEAD, so it requires no code owner review"),
+        ("not a list", "GitHub API GET /codeowners/errors did not return a list of errors"),
+    ],
+)
+def test_codeowners_github_cannot_read_authenticate_nothing(tmp_path: Path, answer: object, reason: str) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    github.codeowners_errors = answer  # type: ignore[assignment]
+    _approved(root, github)
+
+    _refused(root, github, reason)
+
+
+def test_a_team_of_another_organization_owns_nothing(tmp_path: Path) -> None:
+    """Only the repository owner's teams can have access to its files."""
+
+    root = _project(tmp_path, "* @org/maintainers\nblueprint/ @alice\n")
+    github = FakeGitHub(root)
+    _approved(root, github)
+
+    _refused(root, github, ": line 1: @org/maintainers is not a team of owner")
 
 
 @pytest.mark.parametrize(
     ("codeowners", "permissions"),
     [
-        ("* @org/maintainers\nblueprint/ @alice\n", {}),
+        ("* @owner/maintainers\nblueprint/ @alice\n", {}),
+        ("* @Owner/maintainers\nblueprint/ @alice\n", {}),
+        ("* @org/maintainers @owner/maintainers\nblueprint/ @alice\n", {}),
         ("* @owner\nblueprint/ @alice\n", {"owner": "admin"}),
         ("* @owner\nblueprint/ @alice\n", {"owner": "maintain"}),
         ("* @reader @owner\nblueprint/ @alice\n", {"reader": "read"}),
@@ -821,19 +944,17 @@ def test_a_team_or_one_owner_who_can_write_covers_a_file(tmp_path: Path, codeown
     _authenticated(root, github)
 
 
-def test_the_uncovered_files_are_named_ten_at_a_time(tmp_path: Path) -> None:
-    root = _project(tmp_path, "blueprint/ @alice\n")
-    for index in range(12):
-        (root / f"Lib{index:02d}.lean").write_text("-- empty\n", encoding="utf-8")
-    _commit(root, "Add Lean sources")
+def test_the_uncovered_rules_are_named_ten_at_a_time(tmp_path: Path) -> None:
+    root = _project(tmp_path, _CODEOWNERS + "".join(f"/Lib{index:02d}.lean @reader{index:02d}\n" for index in range(12)))
     github = FakeGitHub(root)
+    github.permissions.update({f"reader{index:02d}": "read" for index in range(12)})
     _approved(root, github)
 
     status = _verify(root, github)["basics/result"]
     assert status.label == "self-approved"
-    assert "gives 13 tracked file(s) other than articles" in (status.reason or "")
-    assert "Lib08.lean (no rule), and 3 more" in (status.reason or "")
-    assert "Lib09.lean" not in (status.reason or "")
+    assert "leaves the paths of 12 rule(s) without a code owner" in (status.reason or "")
+    assert "line 12: @reader09 cannot write; and 2 more" in (status.reason or "")
+    assert "@reader10" not in (status.reason or "")
 
 
 def test_a_codeowners_file_github_would_not_load_owns_nothing(tmp_path: Path) -> None:
@@ -1125,8 +1246,8 @@ def test_a_pull_request_into_another_repository_is_refused(tmp_path: Path) -> No
 def test_c5_an_organization_member_without_write_permission_does_not_count(
     tmp_path: Path, permission: str | None
 ) -> None:
-    # alice owns only articles, so the coverage precondition holds without her.
-    root = _project(tmp_path, "* @owner\nblueprint/roadmap/ @alice\n")
+    # owner also owns the articles, so the coverage precondition holds without alice.
+    root = _project(tmp_path, "* @owner\nblueprint/roadmap/ @alice @owner\n")
     github = FakeGitHub(root)
     head = _pull_approving(root, github)
     github.review(7, "alice", "APPROVED", head, association="MEMBER")

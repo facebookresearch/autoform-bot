@@ -477,10 +477,11 @@ class GitHubReviewVerifier:
     0. The active rulesets on the default branch, leaving out any this
        verifier's token can bypass, have pull request rules that require code
        owner review, dismiss stale approvals on push, and require approval of
-       the most recent push, and CODEOWNERS at R gives every tracked
-       file other than articles and read-back cards an owner GitHub enforces:
-       a team, or an individual ``@user`` with write access. Otherwise every
-       approval is self-approved, naming the files without one.
+       the most recent push. GitHub reports no error in CODEOWNERS at R, and
+       it gives every path that could exist an owner GitHub enforces: its
+       last ``*`` rule and every rule after it name a team of the repository's
+       owner or an individual ``@user`` with write access. Otherwise every
+       approval is self-approved, naming the rules without one.
 
     On the default branch, approval (A, H) at R, where p is A's path, is
     authenticated when the steps below hold:
@@ -647,12 +648,12 @@ class GitHubReviewVerifier:
     # 0. Whether code owner review guards everything an approval rests on.
 
     def _check_protection(self, root: Path, trusted: str) -> None:
-        """Refuse every approval unless code owner review is required and owns every non-content file.
+        """Refuse every approval unless code owner review is required and owns every path.
 
-        An approval PR changes only articles and read-back cards, so its own
-        review covers them. Everything else, from CODEOWNERS and workflows to
-        the Lean sources, theme, and mkdocs.yml the Pages build runs, must
-        have changed only under code owner review.
+        Everything an approval rests on, from CODEOWNERS and workflows to the
+        Lean sources, theme, and mkdocs.yml the Pages build runs, must have
+        changed only under code owner review, and so must any file a pull
+        request could add.
         """
 
         default = self._default_branch()
@@ -662,27 +663,59 @@ class GitHubReviewVerifier:
         )
         if codeowners is None:
             raise _Refused(f"{self.trusted_ref} has no CODEOWNERS file, so no reviewer is allowed")
-        location, owners = codeowners
-        decided: dict[int, str | None] = {}
-        uncovered: list[str] = []
-        for path in _tracked_files(root, trusted):
-            if _is_content(path, self._blueprint):
-                continue
-            rule = _deciding_rule(owners, path)
-            if rule is None:
-                uncovered.append(f"{path} (no rule)")
-                continue
-            if rule.line not in decided:
-                decided[rule.line] = self._uncovered_by(rule)
-            if decided[rule.line] is not None:
-                uncovered.append(f"{path} ({decided[rule.line]})")
-        if uncovered:
-            shown = ", ".join(uncovered[:_UNCOVERED_SHOWN])
-            more = f", and {len(uncovered) - _UNCOVERED_SHOWN} more" if len(uncovered) > _UNCOVERED_SHOWN else ""
+        self._check_codeowners_errors(trusted)
+        self._check_coverage(*codeowners)
+
+    def _check_codeowners_errors(self, trusted: str) -> None:
+        """GitHub's own reading of CODEOWNERS at R finds nothing wrong.
+
+        GitHub skips a line it cannot parse and ignores an owner it cannot
+        use, such as an unknown user or a team without write access. The
+        local parser only narrows what GitHub accepts, so any error refuses.
+        """
+
+        answer = self._get("/codeowners/errors", {"ref": trusted})
+        if answer is None:
+            raise _Refused(f"GitHub finds no CODEOWNERS file at {self.trusted_ref}, so it requires no code owner review")
+        errors = answer.get("errors") if isinstance(answer, dict) else None
+        if not isinstance(errors, list):
+            raise ApprovalError("GitHub API GET /codeowners/errors did not return a list of errors")
+        if errors:
+            shown = "; ".join(_codeowners_error(error) for error in errors[:_UNCOVERED_SHOWN])
+            more = f"; and {len(errors) - _UNCOVERED_SHOWN} more" if len(errors) > _UNCOVERED_SHOWN else ""
             raise _Refused(
-                f"{location} at {self.trusted_ref} gives {len(uncovered)} tracked file(s) other than articles and "
-                f"read-back cards no code owner with write access, so they can change without code owner review: "
-                f"{shown}{more}"
+                f"GitHub reports {len(errors)} error(s) in CODEOWNERS at {self.trusted_ref}, so it does not enforce "
+                f"every line as written: {shown}{more}"
+            )
+
+    def _check_coverage(self, location: str, rules: tuple[CodeOwnersRule, ...]) -> None:
+        """Every path that could exist has an owner GitHub enforces, which the rules alone show.
+
+        The last matching rule decides, and ``*`` matches every path, so each
+        path is decided by the last ``*`` rule or a later one; all of them must
+        name an enforced owner. Checking only the files R tracks would miss
+        one a pull request adds, such as a new workflow. Articles and cards get
+        no exception: any pattern may match a directory, so none can be shown
+        to match only Markdown, and the site copies other files under the
+        blueprint.
+        """
+
+        default = next((rule for rule in reversed(rules) if rule.pattern == "*"), None)
+        if default is None:
+            raise _Refused(
+                f"{location} at {self.trusted_ref} has no `*` rule, so a file no rule matches, such as a new "
+                "workflow, can be added without code owner review; give every path an owner with a first line "
+                "like `* @owner`"
+            )
+        uncovered = [
+            why for rule in rules if rule.line >= default.line and (why := self._uncovered_by(rule)) is not None
+        ]
+        if uncovered:
+            shown = "; ".join(uncovered[:_UNCOVERED_SHOWN])
+            more = f"; and {len(uncovered) - _UNCOVERED_SHOWN} more" if len(uncovered) > _UNCOVERED_SHOWN else ""
+            raise _Refused(
+                f"{location} at {self.trusted_ref} leaves the paths of {len(uncovered)} rule(s) without a code owner "
+                f"GitHub enforces, so they can change without code owner review: {shown}{more}"
             )
 
     def _check_ruleset(self, default: str) -> None:
@@ -748,18 +781,27 @@ class GitHubReviewVerifier:
 
         if rule.problem is not None:
             return rule.problem
-        # A team must have write access for GitHub to enforce it. A workflow
-        # token cannot read team permissions, so a team owner is trusted.
-        if any(_TEAM_OWNER.match(owner) for owner in rule.owners):
+        # GitHub enforces a team only with write access, which a workflow token
+        # cannot read; GitHub reports a team without it as an unknown owner,
+        # which _check_codeowners_errors refuses. Only the repository owner's
+        # teams can have access at all.
+        organization = self._organization()
+        teams = [owner for owner in rule.owners if _TEAM_OWNER.match(owner)]
+        if any(team[1:].split("/", 1)[0].lower() == organization for team in teams):
             return None
         logins = individual_owners(rule.owners)
         if any(self._permission(login) in _WRITE_PERMISSIONS for login in logins):
             return None
+        if not rule.owners:
+            return f"line {rule.line} names no owner"
+        reasons = []
         if logins:
-            return f"line {rule.line}: {', '.join('@' + login for login in logins)} cannot write"
-        if rule.owners:
-            return f"line {rule.line}: email owners cannot be verified"
-        return f"line {rule.line} names no owner"
+            reasons.append(f"{', '.join('@' + login for login in logins)} cannot write")
+        if teams:
+            reasons.append(f"{', '.join(teams)} {'is' if len(teams) == 1 else 'are'} not a team of {organization}")
+        if len(logins) + len(teams) < len(rule.owners):
+            reasons.append("email owners cannot be verified")
+        return f"line {rule.line}: {'; '.join(reasons)}"
 
     # 1. Which commits may have recorded the hash.
 
@@ -839,6 +881,14 @@ class GitHubReviewVerifier:
 
     def _default_branch(self) -> str:
         return self._repository()["default_branch"]
+
+    def _organization(self) -> str:
+        """The repository owner's login, without case: the only account whose teams can own its files."""
+
+        owner = _login(self._repository().get("owner"))
+        if not _REVIEWER.match(owner):
+            raise ApprovalError("GitHub API GET of the repository did not name its owner")
+        return owner.lower()
 
     def _merged_pull(self, commit: str) -> dict:
         default = self._default_branch()
@@ -1126,6 +1176,17 @@ def _turns_on(rule: dict, name: str) -> bool:
     return rule.get("type") == "pull_request" and isinstance(parameters, dict) and parameters.get(name) is True
 
 
+def _codeowners_error(error: object) -> str:
+    """One entry of GET /codeowners/errors, as path:line and its kind."""
+
+    entry = error if isinstance(error, dict) else {}
+    path, line, kind = entry.get("path"), entry.get("line"), entry.get("kind")
+    return (
+        f"{path if isinstance(path, str) else 'CODEOWNERS'}:{line if isinstance(line, int) else '?'} "
+        f"{kind if isinstance(kind, str) else 'error'}"
+    )
+
+
 def _is_content(path: str, blueprint: str) -> bool:
     """Whether a repository path is an article or a read-back card: Markdown under roadmap/ or readbacks/."""
 
@@ -1295,13 +1356,6 @@ def _parent(root: Path, commit: str) -> str | None:
 def _value_at(root: Path, ref: str, path: str) -> str | None:
     text = _show(root, ref, path)
     return None if text is None else frontmatter_value(text, "review_approved")
-
-
-def _tracked_files(root: Path, commit: str) -> list[str]:
-    result = _git(root, "ls-tree", "-r", "-z", "--full-tree", "--name-only", commit)
-    if result.returncode != 0:
-        raise ApprovalError(f"git ls-tree failed at {commit[:12]}: {result.stderr.decode('utf-8', 'replace').strip()}")
-    return [name.decode("utf-8", "surrogateescape") for name in result.stdout.split(b"\0") if name]
 
 
 def _adds_approval_between(root: Path, parent: str, commit: str, path: str, wanted: str) -> bool:

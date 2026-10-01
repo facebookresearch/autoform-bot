@@ -198,9 +198,9 @@ jobs:
       # An approval reads "approved by @user" only when rulesets on the default
       # branch that this job's token cannot bypass require code owner review,
       # dismiss stale approvals, and require approval of the last push,
-      # CODEOWNERS gives every file other than articles and read-back cards a
-      # code owner, and the pull request that recorded its hash was merged
-      # into main, changed only articles and read-back cards, ran
+      # CODEOWNERS, which GitHub reads without error, gives every path a code
+      # owner GitHub enforces, and the pull request that recorded its hash was
+      # merged into main, changed only articles and read-back cards, ran
       # autoform-verify.yml green on its final head from a branch of this
       # repository, and was approved on that head by an individual code owner
       # of the article (per CODEOWNERS both before that merge and at this

@@ -168,6 +168,8 @@ class FakeGitHub:
                 "current_user_can_bypass": "never",
             }
         }
+        # What GET /codeowners/errors lists; None answers 404, as for a ref without CODEOWNERS.
+        self.codeowners_errors: list[dict] | None = []
         # login -> permission; None answers 404, as for someone who is not a collaborator.
         self.permissions: dict[str, str | None] = {}
         self.events: dict[int, list[dict]] = {}
@@ -339,6 +341,17 @@ class FakeGitHub:
             return self._page(self.rules, query)
         if parts[1] == "rulesets" and len(parts) == 3:
             return self.rulesets.get(int(parts[2]))
+        if path == "/codeowners/errors":
+            found = any(
+                subprocess.run(
+                    ["git", "cat-file", "-e", f"{query['ref']}:{location}"], cwd=self.root, capture_output=True
+                ).returncode
+                == 0
+                for location in approvals.CODEOWNERS_LOCATIONS
+            )
+            if not found or self.codeowners_errors is None:
+                return None
+            return {"errors": self.codeowners_errors}
         if parts[1] == "collaborators" and parts[3:] == ["permission"]:
             login = urllib.parse.unquote(parts[2])
             permission = self.permissions.get(login.lower(), "write")
@@ -954,9 +967,9 @@ def test_the_client_refuses_an_oversized_response(monkeypatch: pytest.MonkeyPatc
         GitHubClient("secret", "owner/project").get("/pulls/1/reviews")
 
 
-# What every verification reads first: the repository, its rules, the ruleset they come from, and the
-# permission of the catch-all owner.
-_SETUP_CALLS = ["", "/rules/branches/main", "/rulesets/1", "/collaborators/owner/permission"]
+# What every verification reads first: the repository, its rules, the ruleset they come from, GitHub's
+# errors in CODEOWNERS, and the permission of the catch-all owner.
+_SETUP_CALLS = ["", "/rules/branches/main", "/rulesets/1", "/codeowners/errors", "/collaborators/owner/permission"]
 
 
 def _gate(root: Path, base: str, *, pr: int = 7, trusted_ref: str | None = None) -> int:
