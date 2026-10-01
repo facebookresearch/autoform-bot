@@ -889,6 +889,89 @@ def test_tables_whose_rows_match_the_header_are_accepted(testimony: str) -> None
     assert _testimony_errors(testimony) == ()
 
 
+_VIEWER = "testimony a CommonMark viewer such as GitHub shows differently is not allowed"
+_LINKS = "Markdown links, images, and autolinks are not allowed"
+_DEFINITIONS = "Markdown link definitions are not allowed"
+_FOOTNOTES = "footnote definitions are not allowed"
+_LANGUAGES = "code fences naming anything but lean, lean4, or text are not allowed"
+
+
+@pytest.mark.parametrize(
+    ("testimony", "reason"),
+    [
+        (
+            "The lemma states that $f$ is continuous; see [the faithful verdict][v]. ![Approved][b]\n\n"
+            "[v]: /approved 'The statement drops the hypothesis\nx > 0, so it is not faithful'\n"
+            "[b]: https://attacker.example/badge.svg 'x\ny'\n",
+            _DEFINITIONS,
+        ),
+        ("W0 [a][v] W1\n\n[v]: /u 'W2\nW3'\n", _LINKS),
+        ("W0\r[v]: /u\rW1 [a][v]\n", _DEFINITIONS),
+        ("W0 [a\\]][a\\]]\n\n[a\\]]: /u\n", _DEFINITIONS),
+        ("W0\n\n> [v]: /u\n", _DEFINITIONS),
+        ("- W0\n\n  [v]: /u\n", _DEFINITIONS),
+        ("W0\n\n   [v]: /u\n", _DEFINITIONS),
+        ("The verdict is $\\text{[faithful](https://attacker.example/approved)}$ for this card.", _LINKS),
+        ("Badge: $\\text{![Approved](https://attacker.example/badge.svg)}$ shown.", _LINKS),
+        ("The map $f[x](y)$ is continuous.", _LINKS),
+        ("W0 the lemma holds for all $x$.\n\n[^1]: W1 not faithful W2\n", _FOOTNOTES),
+        ("W0\n[^a]: W1\nW2", _FOOTNOTES),
+        ("W0 [^a] W1\n\n[^a]: W2 W3\n\nW4", _FOOTNOTES),
+        ("- W0\n\n  [^a]: W1\n", _FOOTNOTES),
+        ("> W0\n>\n> [^a]: W1\n", _FOOTNOTES),
+        ("W0\n\n```text W1 but the Lean statement assumes x positive W2\ncode\n```\n", _LANGUAGES),
+        ("W0\n\n~~~text W1 not faithful W2\ncode\n~~~\n", _LANGUAGES),
+        ("W0\n\n```{.lean The Lean statement drops the hypothesis}\ncontinuous f\n```\n", _LANGUAGES),
+        ("W0\n\n```{.text W1 W2 W3}\nx\n```\n", _LANGUAGES),
+        ("W0\n\n```the.statement.drops.the.hypothesis.so.it.is.NOT.faithful\ncontinuous f\n```\n", _LANGUAGES),
+        ("W0\n\n```python\nx = 1\n```\n", _LANGUAGES),
+        ("The read-back is\nfaithful and approved\n---\n\nW0", "Markdown headings are not allowed"),
+        ("Verdict: the statement is\nfaithful\n===\n", "Markdown headings are not allowed"),
+        ("1) # Verdict: faithful\n", "Markdown headings are not allowed"),
+        ("> [!IMPORTANT]\n> W1\n", "GitHub alerts are not allowed"),
+        ("W0\n\n>  [!note]  \n> W1\n", "GitHub alerts are not allowed"),
+        ("| W0 | W1 |\n|---|---|\n| `W2 | W3` | W4 |\n", _VIEWER),
+        ("3. W0\n4. W1\n", _VIEWER),
+        ("1. W0\n   1. W1\n", _VIEWER),
+    ],
+)
+def test_markdown_a_commonmark_viewer_reads_differently_is_refused(testimony: str, reason: str) -> None:
+    """GitHub shows the card files, and it reads Markdown the CommonMark way:
+    a link definition, footnote, heading, alert, fence info word, or table
+    cell the site shows as text, or hides, it hides, shows, or numbers
+    differently, so a reader of either would miss what the other sees."""
+
+    assert any(error.startswith(reason) for error in _testimony_errors(testimony))
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        "The statement:\n```lean\ntheorem x : True\n```",
+        "The statement:\n\n```lean\ntheorem x : True\n```\n\nholds.",
+        "```Lean4\ntheorem x : True\n```\n\nThe statement holds.",
+        "```text\nx > 0\n```\n\nThe statement holds.",
+        "1. W0\n    1. W1\n",
+        "- W0\n  - W1\n",
+        "Steps:\n1. W0\n2. W1",
+        "The interval $[0, 1]$ and the set [x] are fine.",
+        "~~~\nplain code\n~~~\n\nThe statement holds.",
+    ],
+)
+def test_markdown_both_readings_show_alike_is_accepted(testimony: str) -> None:
+    assert _testimony_errors(testimony) == ()
+
+
+def test_a_commonmark_reading_that_differs_names_where() -> None:
+    errors = _testimony_errors("3. W0\n4. W1\n")
+
+    assert errors == (
+        f'{_VIEWER}: the site shows "1 W0 2 W1" where it shows "3 W0 4 W1"; put a blank line before lists, tables, '
+        "and code, indent nested lists four spaces, number lists from 1, and write \\| for a pipe in a table cell, "
+        "in code too",
+    )
+
+
 @pytest.mark.parametrize(
     ("markup", "reason"),
     [

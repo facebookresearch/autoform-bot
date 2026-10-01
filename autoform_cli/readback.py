@@ -46,6 +46,7 @@ from markdown.blockprocessors import HashHeaderProcessor
 from markdown.extensions.tables import TableProcessor
 from markdown.treeprocessors import Treeprocessor
 from markdown.util import ETX, STX
+from markdown_it import MarkdownIt
 
 try:
     import fcntl
@@ -1022,6 +1023,29 @@ _MERMAID_FENCE = re.compile(
     r"^(?:[ \t>]|[-+*](?=[ \t])|\d{1,9}[.)](?=[ \t]))*(?:`{3,}|~{3,})[ \t]*mermaid(?:[ \t]|$)",
     re.MULTILINE | re.IGNORECASE,
 )
+#: The languages a code fence may name. Every viewer shows a fence's first
+#: word as the language at most, and GitHub hides the rest of the line, while
+#: the site makes classes of a header in braces and drops what it does not
+#: use, so a fence names one of these or nothing.
+_TESTIMONY_LANGUAGES = frozenset({"lean", "lean4", "text"})
+_LANGUAGE_ERROR = (
+    "code fences naming anything but lean, lean4, or text are not allowed: a Markdown viewer hides the other "
+    "words after a fence; leave the fence bare otherwise"
+)
+#: How a CommonMark viewer of the vault reads a testimony: GitHub's, with its
+#: tables, reading HTML, and nesting as deep as a testimony may. Character
+#: references and escapes are left as tokens of their own, to be counted as
+#: written, as the site shows them.
+_COMMONMARK = MarkdownIt("commonmark", {"html": True, "maxNesting": 128}).enable("table").disable("text_join")
+#: A line GitHub reads as a footnote's definition, which it hides or moves to
+#: the end of the card, and the first line of a block quote it shows as one of
+#: its own alerts in place of the line.
+_FOOTNOTE_DEFINITION = re.compile(r"^[ \t]*\[\^[^\]\n]*\]:", re.MULTILINE)
+_ALERT = re.compile(r"[ \t]*\[!(?:note|tip|important|warning|caution)\][ \t]*", re.IGNORECASE)
+_FOOTNOTE_ERROR = (
+    "footnote definitions are not allowed: GitHub hides them or moves them to the end of the card; write the note "
+    "in the text"
+)
 
 
 #: Commands that set a letter, so testimony showing only these still shows one.
@@ -1850,7 +1874,9 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     :func:`render_testimony` makes of it, which is exactly what the site
     shows: only the elements and attributes the renderer emits for prose,
     code, and formulas; no HTML a Markdown viewer of the vault would read
-    outside code; no invisible or reordering characters; no math delimiters
+    outside code, and nothing a CommonMark viewer such as GitHub reads as a
+    link, heading, footnote, or alert, or shows otherwise than the site does;
+    no invisible or reordering characters; no math delimiters
     outside the formulas the renderer marked; in those, only the TeX listed in
     :data:`_TESTIMONY_TEX`, well formed, read by :class:`_TexLayout` for
     arguments that show something, spacing that does not overlap symbols, and
@@ -1888,12 +1914,16 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
             for name, value in element.attrib.items()
         ):
             errors.append("user-supplied Markdown attributes are not allowed")
-        if tag == "code" and element.attrib.get("class", "").lower() == "language-mermaid":
+        language = element.attrib.get("class", "").lower().removeprefix("language-") if tag == "code" else ""
+        if language == "mermaid":
             errors.append("active Mermaid blocks are not allowed")
+        elif language and language not in _TESTIMONY_LANGUAGES:
+            errors.append(_LANGUAGE_ERROR)
     if _MERMAID_FENCE.search(text):
         errors.append("active Mermaid blocks are not allowed")
     pieces = _testimony_pieces(document)
     errors.extend(_vault_markup_errors(text, [piece for piece, kind in pieces if kind == "code"]))
+    errors.extend(_commonmark_errors(text, document, compare=not errors))
     # The rendering is checked as well as the source, so a character the
     # renderer produced would not pass unseen either.
     hidden = _hidden_characters(text + "".join(document.itertext()))
@@ -1982,6 +2012,124 @@ def _vault_markup_errors(text: str, code: list[str]) -> list[str]:
             "HTML character references are not allowed: " + ", ".join(entities) + "; type the character itself"
         )
     return errors
+
+
+def _commonmark_errors(text: str, document: object, *, compare: bool) -> list[str]:
+    """What a CommonMark viewer of the vault reads in ``text`` that the site,
+    whose rendering is ``document``, does not show.
+
+    Python-Markdown and CommonMark read some Markdown differently: link
+    definitions, headings, lists, tables, and code that one takes for its
+    own and the other shows as text, or reads to a different end. So the
+    testimony is read a second time the way GitHub reads it, and is refused
+    if that reading holds a link, link definition, heading, footnote, alert,
+    or code fence the site would not show, or if its letters and digits, the
+    numbers of ordered lists included, differ from what the site shows.
+    Formulas are text to it, as they are to GitHub when one holds Markdown.
+    The letters are compared only if ``compare``, when nothing more specific
+    has been found.
+    """
+
+    env: dict[str, dict[str, object]] = {}
+    tokens = _COMMONMARK.parse(text, env)
+    errors: list[str] = []
+    # CommonMark reads a footnote's definition alone on its line, in a list
+    # or a block quote, as a link's.
+    for label in env.get("references", {}):
+        message = _FOOTNOTE_ERROR if label.startswith("^") else "Markdown link definitions are not allowed"
+        if message not in errors:
+            errors.append(message)
+    shown: list[str] = []
+    numbers: list[int | None] = []
+    for index, token in enumerate(tokens):
+        if token.type == "heading_open":
+            errors.append("Markdown headings are not allowed: they read as the page's own; use **bold** text")
+        elif token.type == "fence":
+            language = token.info.strip().lower()
+            if language.split()[:1] == ["mermaid"]:
+                errors.append("active Mermaid blocks are not allowed")
+            elif language and language not in _TESTIMONY_LANGUAGES:
+                errors.append(_LANGUAGE_ERROR)
+            shown.append(f" {token.content} ")
+        elif token.type in {"code_block", "html_block"}:
+            shown.append(f" {token.content} ")
+        elif token.type in {"bullet_list_open", "ordered_list_open"}:
+            numbers.append(int(token.attrs.get("start", 1)) if token.type == "ordered_list_open" else None)
+        elif token.type in {"bullet_list_close", "ordered_list_close"}:
+            numbers.pop()
+        elif token.type == "list_item_open" and numbers[-1] is not None:
+            shown.append(f" {numbers[-1]} ")
+            numbers[-1] += 1
+        elif token.type == "inline":
+            if tokens[index - 1].type == "paragraph_open" and _FOOTNOTE_DEFINITION.search(token.content):
+                errors.append(_FOOTNOTE_ERROR)
+            if index > 1 and tokens[index - 2].type == "blockquote_open" and _ALERT.fullmatch(
+                token.content.split("\n")[0]
+            ):
+                errors.append(
+                    "GitHub alerts are not allowed: GitHub shows a block quote that opens with [!NOTE] or the like "
+                    "as its own notice; write the label as text"
+                )
+            for child in token.children or ():
+                if child.type in {"link_open", "image"}:
+                    errors.append("Markdown links, images, and autolinks are not allowed")
+                if child.type == "text_special":
+                    shown.append(child.markup)
+                elif child.type in {"text", "code_inline", "html_inline", "image"}:
+                    shown.append(child.content)
+                elif child.type in {"softbreak", "hardbreak"}:
+                    shown.append(" ")
+            shown.append(" ")
+    if errors or not compare:
+        return errors
+    site, viewer = _site_reading(document), "".join(shown)
+    site_letters = [(at, character) for at, character in enumerate(site) if character.isalnum()]
+    viewer_letters = [(at, character) for at, character in enumerate(viewer) if character.isalnum()]
+    if [character for _, character in site_letters] != [character for _, character in viewer_letters]:
+        differ = next(
+            (count for count, (one, other) in enumerate(zip(site_letters, viewer_letters)) if one[1] != other[1]),
+            min(len(site_letters), len(viewer_letters)),
+        )
+
+        def around(reading: str, letters: list[tuple[int, str]]) -> str:
+            at = letters[differ][0] if differ < len(letters) else len(reading)
+            words = reading[max(0, at - 24) : at + 24].split()
+            return " ".join(words[1:] if at > 24 and len(words) > 1 else words)
+
+        errors.append(
+            "testimony a CommonMark viewer such as GitHub shows differently is not allowed: the site shows "
+            f'"{around(site, site_letters)}" where it shows "{around(viewer, viewer_letters)}"; put a blank line '
+            "before lists, tables, and code, indent nested lists four spaces, number lists from 1, and write \\| "
+            "for a pipe in a table cell, in code too"
+        )
+    return errors
+
+
+_SPACED_TAGS = frozenset({"blockquote", "br", "li", "p", "pre", "td", "th", "tr"})
+
+
+def _site_reading(document: object) -> str:
+    """The text the site shows for ``document``, with the number of each
+    item of an ordered list."""
+
+    parts: list[str] = []
+
+    def walk(node: object) -> None:
+        if node.text:  # type: ignore[attr-defined]
+            parts.append(node.text)  # type: ignore[attr-defined]
+        number = int(node.attrib.get("start", 1)) if node.tag == "ol" else None  # type: ignore[attr-defined]
+        for child in node:  # type: ignore[attr-defined]
+            if number is not None and child.tag == "li":
+                parts.append(f" {number} ")
+                number += 1
+            if isinstance(child.tag, str):
+                walk(child)
+                parts.append(" " if child.tag in _SPACED_TAGS else "")
+            if child.tail:
+                parts.append(child.tail)
+
+    walk(document)
+    return "".join(parts)
 
 
 def _shows_letter_or_digit(text: str) -> bool:
