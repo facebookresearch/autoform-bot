@@ -545,7 +545,7 @@ def test_code_owners_must_hold_before_the_merge_and_at_the_trusted_ref(tmp_path:
     assert not status.authenticated
     assert (
         f"no individual @user is a code owner of {_ARTICLE} both at {_git(root, 'rev-parse', landed + '^')[:12]} "
-        f"(before {landed[:12]}) and at HEAD"
+        "(before #7) and at HEAD"
     ) in (status.reason or "")
     # Nor does a build of the merge, which the default branch has moved past.
     status = _verify(root, github, trusted_ref=landed)["basics/result"]
@@ -704,6 +704,7 @@ def test_lookups_are_cached_and_the_request_budget_fails_closed(tmp_path: Path) 
     # Once for both approvals' pull request, whose approver's permission is already known.
     assert requested[len(setup) :] == [
         f"/commits/{landed}/pulls",
+        f"/commits/{_git(root, 'rev-parse', landed + '^')}/pulls",
         "/pulls/7/files",
         "/contents/blueprint/roadmap/basics/other.md",
         "/pulls/7/reviews",
@@ -788,8 +789,8 @@ def test_a_budget_spent_after_the_setup_refuses_only_the_approvals_left(tmp_path
     github.review(8, "alice", "APPROVED", other_head)
     _land(root, github, 8)
 
-    # The setup with alice's permission, then the eight requests for #8, which "basics/other" sorts first to use.
-    budget = len(_SETUP_CALLS) + 1 + 8
+    # The setup with alice's permission, then the nine requests for #8, which "basics/other" sorts first to use.
+    budget = len(_SETUP_CALLS) + 1 + 9
     statuses = _verify(root, github, max_requests=budget)
 
     assert len(github.calls) == budget

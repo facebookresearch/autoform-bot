@@ -501,7 +501,10 @@ class GitHubReviewVerifier:
     5. A reviewer whose latest verdict on P is an approval of P's head commit
        is not P's author, authored or committed none of P's commits, has
        write, maintain, or admin permission, and is an individual ``@user``
-       code owner of p in CODEOWNERS both at M's first parent and at R.
+       code owner of p in CODEOWNERS both at P's base B and at R. B is the
+       first of M's first-parent ancestors that GitHub does not associate
+       with P: M's first parent unless P was rebased onto the branch, when
+       P's own earlier commits come between.
     6. P comes from a branch of this repository that headed no other pull
        request, P never changed its base branch, and ``verify_workflow``
        succeeded in a pull_request run on P's head commit from that branch.
@@ -629,9 +632,13 @@ class GitHubReviewVerifier:
                         f"{path} has recorded this hash since the first commit {commit[:12]}, "
                         "which no pull request can have reviewed"
                     )
-                before = (parent, f"{parent[:12]} (before {commit[:12]})")
-                owners = self._owners(root, path, before, (trusted, self.trusted_ref))
-                return self._attest(node_id, review_hash, self._merged_pull(commit), path, wanted, owners)
+                # Owners at R first: they cost no request.
+                self._owners_at(root, trusted, self.trusted_ref, path)
+                pull = self._merged_pull(commit)
+                number = pull["number"]
+                base = self._base_before(root, commit, parent, number)
+                owners = self._owners(root, path, (base, f"{base[:12]} (before #{number})"), (trusted, self.trusted_ref))
+                return self._attest(node_id, review_hash, pull, path, wanted, owners)
             except (_Refused, ApprovalError) as exc:
                 reasons.append(str(exc) if len(candidates) == 1 else f"{commit[:12]}: {exc}")
         raise _Refused("; ".join(dict.fromkeys(reasons)))
@@ -916,9 +923,39 @@ class GitHubReviewVerifier:
             raise ApprovalError("GitHub API GET of the repository did not name its owner")
         return owner.lower()
 
+    def _commit_pulls(self, commit: str) -> list[dict]:
+        return self._once(("pulls", commit), lambda: self._pages(f"/commits/{commit}/pulls"))
+
+    def _base_before(self, root: Path, commit: str, parent: str, number: int) -> str:
+        """P's base B: the first of M's first-parent ancestors GitHub does not associate with P.
+
+        A rebase merge puts each of P's commits on the default branch, every
+        one associated with P, so M's first parent may be a commit P wrote,
+        with a CODEOWNERS P chose. P's ``base.sha`` does not help: GitHub
+        keeps the base P was opened against there, not the one it landed on.
+        """
+
+        base: str | None = parent
+        for _ in range(_MAX_PULL_COMMITS):
+            if base is None:
+                raise _Refused(
+                    f"#{number} introduced every first-parent ancestor of {commit[:12]}, "
+                    "so nothing shows the code owners before it"
+                )
+            numbers = [pull.get("number") for pull in self._commit_pulls(base)]
+            if not all(isinstance(listed, int) for listed in numbers):
+                raise ApprovalError(f"GitHub listed a pull request without a number for commit {base[:12]}")
+            if number not in numbers:
+                return base
+            base = _parent(root, base)
+        raise _Refused(
+            f"#{number} landed more than {_MAX_PULL_COMMITS} commits before {commit[:12]}, "
+            "so its base cannot be found"
+        )
+
     def _merged_pull(self, commit: str) -> dict:
         default = self._default_branch()
-        pulls = self._once(("pulls", commit), lambda: self._pages(f"/commits/{commit}/pulls"))
+        pulls = self._commit_pulls(commit)
         merged = [pull for pull in pulls if pull.get("merged_at") and _base_ref(pull) == default]
         if not merged:
             raise _Refused(

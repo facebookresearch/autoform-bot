@@ -103,7 +103,7 @@ tree.
    default branch has a ruleset requiring code owner review, dismissal of
    stale approvals, and approval of the most recent push, `CODEOWNERS` owns
    every path, that pull request, merged, recorded the hash, the reviewer
-   is a code owner both before the merge and on the default branch, and
+   is a code owner both before the pull request and on the default branch, and
    `autoform-verify.yml` passed on the approved head. Anything else, a moved
    article or a pull request that also changes other files included, reads
    self-approved with the reason. To re-approve such a hash, a later pull

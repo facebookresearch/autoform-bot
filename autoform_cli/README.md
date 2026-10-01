@@ -828,7 +828,12 @@ is authenticated only when all of these hold:
    shown not to have written it. The review shows the reviewer as OWNER,
    MEMBER, or COLLABORATOR, `GET /repos/{owner}/{repo}/collaborators/{login}/permission`
    gives them admin, maintain, or write, and they are an individual `@user`
-   code owner of p both at M's first parent and at R.
+   code owner of p both at P's base B and at R. B is the first of M's
+   first-parent ancestors that GitHub does not associate with P
+   (`GET /repos/{owner}/{repo}/commits/{sha}/pulls`): M's first parent,
+   unless P was rebased onto the default branch, when P's own earlier
+   commits, which could set CODEOWNERS, come between. P's `base.sha` is not
+   used, because GitHub keeps there the base P was opened against.
 6. **CI on P.** The verify workflow has a successful `pull_request` run on P's
    head commit, and that run belongs to P. GitHub lists a run's pull requests
    only while they are open, so after the merge the run is tied to P through
@@ -853,28 +858,31 @@ precondition costs one request for the repository, one for the default
 branch's head outside the gate, one per page of rules, one per ruleset with a
 pull request rule, one for GitHub's CODEOWNERS errors, and one permission
 lookup per individual owner it checks. Each approval then costs,
-per pull request: the commit's pull requests, P's files, p at P's head, P's
-reviews, the approving reviewer's permission, P's commits, the pull requests
-of P's branch, P's events, and the runs on P's head, one request each plus one
-per extra page. Approvals recorded by the same pull request share them, and a
-permission is looked up once per login. Only missing credentials, a shallow
-checkout, or an unknown trusted ref stops the whole run.
+per pull request: the commit's pull requests, those of each commit the walk
+to B passes (M's first parent, and each earlier commit of a rebased P), P's
+files, p at P's head, P's reviews, the approving reviewer's permission, P's
+commits, the pull requests of P's branch, P's events, and the runs on P's
+head, one request each plus one per extra page. Approvals recorded by the
+same pull request share them, and a permission is looked up once per login.
+Only missing credentials, a shallow checkout, or an unknown trusted ref stops
+the whole run.
 
 Code owners come from the first of `.github/CODEOWNERS`, `CODEOWNERS`, and
 `docs/CODEOWNERS` that exists at a commit. P cannot name its own reviewer:
 step 3 refuses a P that touches CODEOWNERS, and the reviewer must be an owner
-both at M's first parent and at R. Because of that, a new owner can approve
-only pull requests merged after the addition, and removing an owner voids
-their earlier approvals. A first location that is not UTF-8, or of 3 MB or
-more, which GitHub does not load, is refused instead of falling through to
-the next. Lines end at a line feed (a trailing carriage return is dropped)
-and tokens are separated by spaces and tabs. Only an individual `@user` can
-approve an article: a team covers a file for the precondition, but a
-workflow token cannot check who is in it, so name individual reviewers for
-articles. A negated, bracketed, escaped, or malformed pattern, or an owner in
-another form, leaves undecided the articles that line might decide and, at
-or after the last `*` rule, fails the coverage check. A line holding any
-other control or separator character, such as U+2028 or a non-breaking
+both at P's base and at R, so neither can a P whose commits change CODEOWNERS
+and change it back, which step 3 does not see. Because of that, a new owner
+can approve only pull requests merged after the addition, and removing an
+owner voids their earlier approvals. A first location that is not UTF-8, or
+of 3 MB or more, which GitHub does not load, is refused instead of falling
+through to the next. Lines end at a line feed (a trailing carriage return is
+dropped) and tokens are separated by spaces and tabs. Only an individual
+`@user` can approve an article: a team covers a file for the precondition,
+but a workflow token cannot check who is in it, so name individual reviewers
+for articles. A negated, bracketed, escaped, or malformed pattern, or an
+owner in another form, leaves undecided the articles that line might decide
+and, at or after the last `*` rule, fails the coverage check. A line holding
+any other control or separator character, such as U+2028 or a non-breaking
 space, might be split differently by GitHub, so it leaves undecided every
 path that no later line matches.
 

@@ -190,19 +190,20 @@ def test_a3_a_pull_request_cannot_name_its_own_code_owner(tmp_path: Path) -> Non
     _refused(
         root,
         github,
-        f"no individual @user is a code owner of {_ARTICLE} both at {parent[:12]} (before {landed[:12]}) and at HEAD",
+        f"no individual @user is a code owner of {_ARTICLE} both at {parent[:12]} (before #4) and at HEAD",
     )
 
 
 @pytest.mark.parametrize("strategy", ["rebase", "merge", "squash"])
 def test_a3_a_pull_request_cannot_name_its_own_code_owner_one_commit_earlier(tmp_path: Path, strategy: str) -> None:
     """Rebased, the commit recording the hash has the CODEOWNERS change as its
-    parent, so carol owned the article just before it; only that the pull
-    request changed CODEOWNERS refuses it. The merge and squash cases are
-    deliberate guards: the owners before the landing commit already refuse them."""
+    first parent, so carol owned the article just before it, but not at #4's
+    base, before both. The merge and squash cases are deliberate guards: the
+    landing commit's first parent is that base."""
 
     root = _project(tmp_path)
     github = FakeGitHub(root)
+    base = _git(root, "rev-parse", "main")
     _branch(root, "grab")
     (root / ".github" / "CODEOWNERS").write_text(_GRAB, encoding="utf-8")
     _commit(root, "Tidy CODEOWNERS")
@@ -210,12 +211,103 @@ def test_a3_a_pull_request_cannot_name_its_own_code_owner_one_commit_earlier(tmp
     _commit(root, "Approve the result")
     github.open_pull(4, "mallory")
     github.review(4, "carol", "APPROVED")
-    landed = _land(root, github, 4, strategy)
+    _land(root, github, 4, strategy)
 
-    if strategy == "rebase":
-        _refused(root, github, "#4 changes .github/CODEOWNERS, not only articles and read-back cards; record approvals")
-    else:
-        _refused(root, github, f"code owner of {_ARTICLE} both at {_git(root, 'rev-parse', landed + '^')[:12]}")
+    _refused(root, github, f"code owner of {_ARTICLE} both at {base[:12]}")
+
+
+@pytest.mark.parametrize("strategy", ["rebase", "merge", "squash"])
+def test_a3_a_pull_request_cannot_name_its_own_code_owner_and_take_it_back(tmp_path: Path, strategy: str) -> None:
+    """#4 makes carol an owner, records the hash, and restores CODEOWNERS, so
+    its file list shows only the article. Rebased, the recording commit's
+    first parent is #4's own CODEOWNERS change; only #4's base, before all
+    three, shows carol owned nothing. The merge and squash cases are
+    deliberate guards: the landing commit's first parent is that base."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    base = _git(root, "rev-parse", "main")
+    codeowners = root / ".github" / "CODEOWNERS"
+    _branch(root, "grab")
+    codeowners.write_text(_GRAB, encoding="utf-8")
+    _commit(root, "Tidy CODEOWNERS")
+    _approve(root, "result", _HASH)
+    _commit(root, "Approve the result")
+    codeowners.write_text(_CODEOWNERS, encoding="utf-8")
+    _commit(root, "Restore CODEOWNERS")
+    github.open_pull(4, "mallory")
+    github.review(4, "carol", "APPROVED")
+    _land(root, github, 4, strategy)
+    # Later, under review, carol is given the roadmap.
+    codeowners.write_text(_GRAB, encoding="utf-8")
+    _commit(root, "Hand the roadmap to carol")
+
+    _refused(root, github, f"no individual @user is a code owner of {_ARTICLE} both at {base[:12]} (before #4)")
+
+
+def test_a_rebased_pull_request_is_judged_by_the_owners_at_its_base(tmp_path: Path) -> None:
+    """Deliberate guard: the walk passes the pull request's own commits and stops at its base."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    base = _git(root, "rev-parse", "main")
+    other = "blueprint/roadmap/basics/other.md"
+    _branch(root, "approve")
+    _append(root, "\nA remark.\n", other)
+    _commit(root, "Remark on the other article")
+    _approve(root, "result", _HASH)
+    _commit(root, "Approve the result")
+    _append(root, "\nAnother remark.\n", other)
+    _commit(root, "Remark again")
+    github.open_pull(7, "bob")
+    github.review(7, "alice", "APPROVED")
+    _land(root, github, 7, "rebase")
+    first, recording = _git(root, "rev-list", "--reverse", f"{base}..main").split()[:2]
+
+    _authenticated(root, github)
+    requested = [path for path, _ in github.calls]
+    assert requested[requested.index(f"/commits/{recording}/pulls") :][:3] == [
+        f"/commits/{recording}/pulls",
+        f"/commits/{first}/pulls",
+        f"/commits/{base}/pulls",
+    ]
+
+
+def test_a_pull_request_that_introduced_every_earlier_commit_shows_no_owners_before_it(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _approved(root, github)
+    github.associate(7, *_git(root, "rev-list", "main").split())
+
+    _refused(root, github, "#7 introduced every first-parent ancestor of")
+
+
+def test_a_base_further_back_than_a_pull_request_has_commits_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _approved(root, github)
+    landed = _git(root, "rev-parse", "main")
+    github.associate(7, _git(root, "rev-parse", "main^"))
+    monkeypatch.setattr(approvals, "_MAX_PULL_COMMITS", 1)
+
+    _refused(root, github, f"#7 landed more than 1 commits before {landed[:12]}, so its base cannot be found")
+
+
+def test_a_pull_request_listed_without_a_number_leaves_the_base_unknown(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _approved(root, github)
+    parent = _git(root, "rev-parse", "main^")
+    answer = github.get
+
+    def unnumbered(path: str, query: dict | None = None) -> object | None:
+        return [{"number": "7"}] if path == f"/commits/{parent}/pulls" else answer(path, query)
+
+    github.get = unnumbered  # type: ignore[method-assign]
+
+    _refused(root, github, f"GitHub listed a pull request without a number for commit {parent[:12]}")
 
 
 # A4: a review by an account GitHub shows without write access.

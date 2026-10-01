@@ -204,7 +204,7 @@ jobs:
       # articles and read-back cards, ran autoform-verify.yml green on its
       # final head from a branch of this repository, and was approved on that
       # head by an individual code owner of the article (per CODEOWNERS both
-      # before that merge and at this commit) with write permission, who
+      # before that pull request and at this commit) with write permission, who
       # neither opened it nor wrote any of its commits; otherwise it reads
       # "self-approved" with the reason. This is the authoritative label: a
       # pull request runs its own copy of autoform-review-gate.yml, so it can
