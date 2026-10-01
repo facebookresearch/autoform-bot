@@ -502,7 +502,55 @@ class SkeletonReport:
         return () if node is None else node.declarations
 
     def __post_init__(self) -> None:
+        issue = self._incoherence()
+        if issue is not None:
+            raise SkeletonError([f"skeleton report {issue}"])
         self._shared_tables()
+
+    def _incoherence(self) -> str | None:
+        """Why the selection, articles, and unresolved targets disagree, if they do.
+
+        Every report, however built, names its complete target set, selects
+        articles from it, holds exactly those articles, and lists as
+        unresolved exactly the selected targets it holds no skeleton for.
+        """
+
+        if self.selection not in {"all", "filtered"}:
+            return "has an invalid selection mode"
+        target_ids = tuple(node_id for node_id, _ in self.targets)
+        if tuple(sorted(set(target_ids))) != target_ids or not all(
+            declarations and len(set(declarations)) == len(declarations) for _, declarations in self.targets
+        ):
+            return "contains an invalid target set"
+        if tuple(sorted(self.selected_nodes)) != self.selected_nodes or not set(self.selected_nodes) <= set(
+            target_ids
+        ):
+            return "contains an invalid skeleton article selection"
+        if self.selection == "all" and self.selected_nodes != target_ids:
+            return "contains an incomplete all-article selection"
+        if self.selection == "filtered" and not self.selected_nodes:
+            return "contains an empty filtered article selection"
+        node_ids = tuple(node.node_id for node in self.nodes)
+        if len(set(node_ids)) != len(node_ids):
+            return "contains duplicate skeleton article ids"
+        if node_ids != self.selected_nodes:
+            return "does not contain exactly its selected articles"
+        declarations_by_node = dict(self.targets)
+        actual: set[tuple[str, str]] = set()
+        for node in self.nodes:
+            names = {declaration.name for declaration in node.declarations}
+            if not names <= set(declarations_by_node[node.node_id]):
+                return f"contains an untargeted declaration for {node.node_id}"
+            actual.update((node.node_id, name) for name in names)
+        expected = {
+            (node_id, declaration)
+            for node_id in self.selected_nodes
+            for declaration in declarations_by_node[node_id]
+        }
+        unresolved = [(issue.node_id, issue.declaration) for issue in self.unresolved]
+        if len(set(unresolved)) != len(unresolved) or set(unresolved) != expected - actual:
+            return "contains mismatched unresolved declarations"
+        return None
 
     def _shared_tables(
         self,
@@ -630,13 +678,6 @@ def load_skeleton_report(path: str | Path) -> SkeletonReport:
         selected_nodes
     ):
         raise SkeletonError([f"{path} contains an invalid selected article count"])
-    target_ids = tuple(node_id for node_id, _ in targets)
-    if tuple(sorted(selected_nodes)) != selected_nodes or not set(selected_nodes) <= set(target_ids):
-        raise SkeletonError([f"{path} contains an invalid skeleton article selection"])
-    if mode == "all" and selected_nodes != target_ids:
-        raise SkeletonError([f"{path} contains an incomplete all-article selection"])
-    if mode == "filtered" and not selected_nodes:
-        raise SkeletonError([f"{path} contains an empty filtered article selection"])
     raw_nodes = data["nodes"]
     unresolved = _report_unresolved(data["unresolved"])
     if not isinstance(raw_nodes, list):
@@ -649,35 +690,17 @@ def load_skeleton_report(path: str | Path) -> SkeletonReport:
     )
     if any(used[table] != tables[table].keys() for table in tables):
         raise SkeletonError([f"{path} contains unreferenced shared entries"])
-    if len({node.node_id for node in nodes}) != len(nodes):
-        raise SkeletonError([f"{path} contains duplicate skeleton article ids"])
-    if tuple(node.node_id for node in nodes) != selected_nodes:
-        raise SkeletonError([f"{path} does not contain exactly its selected articles"])
-    actual_targets: set[tuple[str, str]] = set()
-    for node in nodes:
-        expected = declarations_by_node[node.node_id]
-        actual = tuple(declaration.name for declaration in node.declarations)
-        if not set(actual) <= set(expected):
-            raise SkeletonError([f"{path} contains an untargeted declaration for {node.node_id}"])
-        actual_targets.update((node.node_id, declaration) for declaration in actual)
-    expected_targets = {
-        (node_id, declaration)
-        for node_id, declarations in targets
-        if node_id in selected_nodes
-        for declaration in declarations
-    }
-    unresolved_targets = {(issue.node_id, issue.declaration) for issue in unresolved}
-    if unresolved_targets != expected_targets - actual_targets:
-        raise SkeletonError([f"{path} contains mismatched unresolved declarations"])
-    report = SkeletonReport(
-        blueprint_hash=blueprint_hash,
-        targets=targets,
-        selection=mode,
-        selected_nodes=selected_nodes,
-        nodes=nodes,
-        unresolved=unresolved,
-    )
-    return report
+    try:
+        return SkeletonReport(
+            blueprint_hash=blueprint_hash,
+            targets=targets,
+            selection=mode,
+            selected_nodes=selected_nodes,
+            nodes=nodes,
+            unresolved=unresolved,
+        )
+    except SkeletonError as exc:
+        raise SkeletonError([f"{path}: {issue}" for issue in exc.issues]) from exc
 
 
 def _report_targets(value: object) -> tuple[tuple[str, tuple[str, ...]], ...]:

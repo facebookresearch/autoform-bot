@@ -220,12 +220,15 @@ def test_fenced_fake_source_section_cannot_replace_review_evidence(tmp_path: Pat
 @pytest.mark.parametrize(
     "report",
     [
-        replace(_report(), nodes=()),
-        _report(
-            unresolved=(UnresolvedTarget("basics/result", "Skel.sup_unique", "probe failed"),)
+        replace(
+            _report(),
+            nodes=(replace(_report().nodes[0], declarations=(), complete=False),),
+            unresolved=(UnresolvedTarget("basics/result", "Skel.sup_unique", "probe failed"),),
         ),
         replace(
             _report(),
+            targets=(("basics/other", ("Skel.sup_unique",)),),
+            selected_nodes=("basics/other",),
             nodes=(
                 NodeSkeleton(
                     node_id="basics/other",
@@ -511,6 +514,54 @@ def test_approval_rejects_a_hand_constructed_card_with_invented_hashes(tmp_path:
 
     with pytest.raises(ReviewError, match="active TeX|whole-file hash"):
         bundle.review_hash(_ARTICLE_ID, {(_ARTICLE_ID, declaration.name): fake})
+
+
+def _codes(findings: object) -> list[str]:
+    return [finding.code for finding in findings]  # type: ignore[attr-defined]
+
+
+def test_bundle_requires_a_report_of_every_article(tmp_path: Path) -> None:
+    graph = load_graph(_blueprint(tmp_path))
+    filtered = replace(_extracted(graph), selection="filtered")
+
+    with pytest.raises(ReviewError) as refused:
+        build_review_bundle(graph, filtered)
+
+    assert _codes(refused.value.findings) == ["review-report-scope"]
+
+
+def test_bundle_requires_the_graphs_target_set(tmp_path: Path) -> None:
+    graph = load_graph(_blueprint(tmp_path))
+    report = _extracted(graph)
+    with pytest.raises(SkeletonError, match="does not contain exactly its selected articles"):
+        replace(report, targets=(), selected_nodes=())
+    # A report built around the constructor's checks is still refused.
+    forged = replace(report)
+    object.__setattr__(forged, "targets", (("basics/result", ("Skel.sup_unique", "Skel.extra")),))
+
+    with pytest.raises(ReviewError) as refused:
+        build_review_bundle(graph, forged)
+
+    assert _codes(refused.value.findings) == ["review-report-targets"]
+
+
+def test_article_validation_requires_a_report_scoped_to_that_article(tmp_path: Path) -> None:
+    graph = load_graph(_blueprint(tmp_path))
+    report = _extracted(graph)
+    bundle = build_review_bundle(graph, report)
+    assert validate_review_article(graph, bundle, replace(report, selection="filtered"), _ARTICLE_ID) == ()
+
+    assert _codes(validate_review_article(graph, bundle, report, _ARTICLE_ID)) == ["review-report-scope"]
+
+
+def test_article_validation_requires_the_articles_targets(tmp_path: Path) -> None:
+    graph = load_graph(_blueprint(tmp_path))
+    report = _extracted(graph)
+    bundle = build_review_bundle(graph, report)
+    forged = replace(report, selection="filtered")
+    object.__setattr__(forged, "targets", (("basics/result", ("Skel.sup_unique", "Skel.extra")),))
+
+    assert _codes(validate_review_article(graph, bundle, forged, _ARTICLE_ID)) == ["review-report-targets"]
 
 
 def test_packet_writer_revalidates_hand_constructed_bundle(tmp_path: Path) -> None:

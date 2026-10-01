@@ -429,12 +429,17 @@ def validate_review_article(
             )
             for issue in current_skeleton.unresolved
         )
-    if len(current_skeleton.nodes) != 1 or current_skeleton.nodes[0].node_id != node.id:
+    if (
+        current_skeleton.selection != "filtered"
+        or current_skeleton.selected_nodes != (node.id,)
+        or len(current_skeleton.nodes) != 1
+        or current_skeleton.nodes[0].node_id != node.id
+    ):
         return (
             ReviewFinding(
                 node.id,
                 "review-report-scope",
-                "scoped skeleton report must contain exactly the selected current article",
+                "scoped skeleton report must select and contain exactly the selected current article",
             ),
         )
     report_node = current_skeleton.nodes[0]
@@ -454,6 +459,14 @@ def validate_review_article(
                 node.id,
                 "review-mapping-drift",
                 f"skeleton declarations {actual_names!r} do not match current lean metadata {expected_names!r}",
+            ),
+        )
+    if dict(current_skeleton.targets).get(node.id) != expected_names:
+        return (
+            ReviewFinding(
+                node.id,
+                "review-report-targets",
+                "scoped skeleton report's targets for this article do not match its current lean metadata",
             ),
         )
     expected_path = _article_path(node, graph)
@@ -773,6 +786,22 @@ def _report_findings(graph: Graph, skeleton: SkeletonReport) -> list[ReviewFindi
                 "",
                 "review-report-schema",
                 "skeleton report uses an unsupported report or semantic schema",
+            )
+        )
+    if skeleton.selection != "all":
+        findings.append(
+            ReviewFinding(
+                "",
+                "review-report-scope",
+                "review evidence needs a skeleton report that selects every article, not a filtered one",
+            )
+        )
+    if dict(skeleton.targets) != _declaration_mapping(graph):
+        findings.append(
+            ReviewFinding(
+                "",
+                "review-report-targets",
+                "skeleton report's target set does not match the graph's lean metadata",
             )
         )
     report_ids = [node.node_id for node in skeleton.nodes]

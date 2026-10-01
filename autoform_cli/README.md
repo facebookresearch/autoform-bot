@@ -360,7 +360,11 @@ extraction still stops the whole command.
 `--output` records the `autoform-skeleton/v5` report, which contains no
 timestamp or absolute path, for a later render or review to consume. The
 report identifies the exact blueprint, its complete target set, and whether
-the extraction covered all targets or an explicit `--node` selection. It
+the extraction covered all targets or an explicit `--node` selection; a
+report whose selection, articles, and unresolved declarations disagree can be
+neither built nor loaded. Review evidence is prepared only from a report that
+selects every article and whose targets are the blueprint's `lean:` names, and
+a record validates each article against a report scoped to that article. It
 quotes each trusted definition's source and records theorem
 dependencies by elaborated signature, so it stands on its own without ever
 copying a theorem proof. Declarations in one project share most of what they

@@ -2341,6 +2341,45 @@ def test_report_loader_rejects_scope_tampering(tmp_path: Path) -> None:
         load_skeleton_report(path)
 
 
+_INCOHERENT_REPORTS = {
+    "has an invalid selection mode": lambda report: replace(report, selection="partial"),
+    "contains an invalid target set": lambda report: replace(report, targets=report.targets[::-1]),
+    "contains an invalid skeleton article selection": lambda report: replace(
+        report, selected_nodes=report.selected_nodes[::-1], nodes=report.nodes[::-1]
+    ),
+    "contains an incomplete all-article selection": lambda report: replace(
+        report, selected_nodes=report.selected_nodes[:1], nodes=report.nodes[:1]
+    ),
+    "contains an empty filtered article selection": lambda report: replace(
+        report, selection="filtered", selected_nodes=(), nodes=()
+    ),
+    "contains duplicate skeleton article ids": lambda report: replace(
+        report, nodes=(report.nodes[0], report.nodes[0])
+    ),
+    "does not contain exactly its selected articles": lambda report: replace(
+        report, targets=(), selected_nodes=()
+    ),
+    "contains an untargeted declaration for basics/determined": lambda report: replace(
+        report, targets=(("basics/determined", ("Skel.other",)), *report.targets[1:])
+    ),
+    "contains mismatched unresolved declarations": lambda report: replace(
+        report,
+        unresolved=(UnresolvedTarget("basics/determined", "Skel.observation_determined", "missing"),),
+    ),
+}
+
+
+@pytest.mark.parametrize("issue", sorted(_INCOHERENT_REPORTS))
+def test_an_incoherent_report_cannot_be_constructed(tmp_path: Path, issue: str) -> None:
+    project = _project(tmp_path)
+    report = extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project, runner=_fake_module_probe)
+    assert report.clean and [node.node_id for node in report.nodes] == ["basics/determined", "basics/notation"]
+
+    # dataclasses.replace runs the same checks as the loader, so no copy escapes them.
+    with pytest.raises(SkeletonError, match=f"skeleton report {re.escape(issue)}"):
+        _INCOHERENT_REPORTS[issue](report)
+
+
 def test_report_loader_rejects_mismatched_hashes_and_trust_identities(tmp_path: Path) -> None:
     project = _project(tmp_path)
     blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
@@ -4459,6 +4498,7 @@ def test_packet_publication_refuses_an_incomplete_report(tmp_path: Path) -> None
     )
     incomplete = replace(
         report,
+        nodes=(replace(report.nodes[0], declarations=(), complete=False),),
         unresolved=(
             UnresolvedTarget("basics/determined", "Skel.observation_determined", "missing"),
         ),
