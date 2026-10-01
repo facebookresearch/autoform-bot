@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+import autoform_cli.render as render_module
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.graph import Graph, load_graph
 from autoform_cli.readback import Readback, load_readbacks, write_readback
-from autoform_cli.render import _review_disclosure
+from autoform_cli.render import (
+    PUBLICATION_MANIFEST,
+    PublicationError,
+    _review_disclosure,
+    render_site,
+)
 from autoform_cli.review import (
     ReviewError,
     build_review_bundle,
@@ -176,9 +183,10 @@ def test_canonical_statement_keeps_headings_inside_a_fenced_block(tmp_path: Path
         encoding="utf-8",
     )
 
-    node = load_graph(blueprint).nodes["basics/result"]
-    assert canonical_statement(node).endswith("```\n\nAfter the fence.")
-    assert "## still inside the fence" in canonical_statement(node)
+    graph = load_graph(blueprint)
+    node = graph.nodes["basics/result"]
+    assert canonical_statement(graph, node).endswith("```\n\nAfter the fence.")
+    assert "## still inside the fence" in canonical_statement(graph, node)
 
 
 def test_canonical_statement_preserves_visible_comments_inside_fences(tmp_path: Path) -> None:
@@ -192,7 +200,8 @@ def test_canonical_statement_preserves_visible_comments_inside_fences(tmp_path: 
         encoding="utf-8",
     )
 
-    statement = canonical_statement(load_graph(blueprint).nodes["basics/result"])
+    graph = load_graph(blueprint)
+    statement = canonical_statement(graph, graph.nodes["basics/result"])
     assert "hidden note" not in statement
     assert "<!-- visible code -->" in statement
 
@@ -382,10 +391,9 @@ def test_validation_detects_article_source_and_lean_packet_drift(tmp_path: Path)
     assert "review-source-drift" in codes
 
     source.write_text("Heading\nSource theorem.\n", encoding="utf-8")
+    graph = load_graph(blueprint)
     changed = _extracted(graph, _report(_declaration(signature="Skel.sup_unique (a b : Nat) : a = b")))
-    assert {item.code for item in validate_review_bundle(load_graph(blueprint), bundle, changed)} == {
-        "review-bundle-drift"
-    }
+    assert {item.code for item in validate_review_bundle(graph, bundle, changed)} == {"review-bundle-drift"}
 
 
 def test_validation_binds_the_visible_article_title(tmp_path: Path) -> None:
@@ -761,3 +769,152 @@ def test_scoped_validation_ignores_unrelated_drift_but_rejects_target_drift(
         finding.code
         for finding in validate_review_article(graph, bundle, _extracted(graph, scoped), _ARTICLE_ID)
     ] == ["review-bundle-drift"]
+
+
+def test_blueprint_hash_binds_the_bytes_of_each_cited_source(tmp_path: Path) -> None:
+    """A report's passage is cut from its cited source, so a report extracted
+    before that source changed describes a blueprint that no longer exists."""
+
+    blueprint = _blueprint(tmp_path)
+    report = _extracted(load_graph(blueprint))
+    (blueprint / "roadmap" / "basics" / "sources" / "book.txt").write_text(
+        "Heading\nChanged source.\n", encoding="utf-8"
+    )
+    graph = load_graph(blueprint)
+
+    assert blueprint_hash(graph) != report.blueprint_hash
+    with pytest.raises(ReviewError, match="the blueprint changed after its review evidence was extracted"):
+        build_review_bundle(graph, report)
+
+
+def test_review_evidence_cuts_the_passage_from_the_source_its_graph_captured(tmp_path: Path) -> None:
+    """The passage beside a statement comes from the bytes the graph loaded,
+    not from whatever the file holds when the evidence is built."""
+
+    blueprint = _blueprint(tmp_path)
+    graph = load_graph(blueprint)
+    (blueprint / "roadmap" / "basics" / "sources" / "book.txt").write_text(
+        "Heading\nChanged source.\n", encoding="utf-8"
+    )
+
+    bundle = build_review_bundle(graph, _extracted(graph))
+    assert bundle.articles[0].passage == "Source theorem."
+    assert validate_review_bundle(graph, bundle, _extracted(graph)) == ()
+
+
+def _ordered_blueprint(root: Path) -> Path:
+    """The review blueprint, with an Intro chapter its roadmap lists first."""
+
+    blueprint = _blueprint(root)
+    (blueprint / "roadmap" / "intro").mkdir()
+    (blueprint / "roadmap" / "intro" / "README.md").write_text("# Intro\n\nNarrative.\n", encoding="utf-8")
+    (blueprint / "roadmap" / "README.md").write_text(
+        "# Roadmap\n\n- [Intro](intro/README.md)\n- [Basics](basics/README.md)\n", encoding="utf-8"
+    )
+    (blueprint / "README.md").write_text("# Landing\n\n[Roadmap](roadmap/README.md)\n", encoding="utf-8")
+    return blueprint
+
+
+def _manifest(site: Path) -> dict[str, object]:
+    return json.loads((site / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+
+
+def test_render_publishes_the_cited_source_it_validated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cited source rewritten after the review is validated is not copied in
+    place of the passage the review showed, and the revision hash describes the
+    bytes published."""
+
+    blueprint = _ordered_blueprint(tmp_path)
+    graph = load_graph(blueprint)
+    report = _extracted(graph)
+    bundle = build_review_bundle(graph, report)
+    idle = tmp_path / "idle"
+    render_site(blueprint, idle, skeleton=report, review_bundle=bundle)
+
+    source = blueprint / "roadmap" / "basics" / "sources" / "book.txt"
+    validate = validate_review_bundle
+
+    def validate_then_rewrite(*args: object, **kwargs: object) -> object:
+        findings = validate(*args, **kwargs)
+        source.write_text("Heading\nPLANTED: every supremum is two.\n", encoding="utf-8")
+        return findings
+
+    monkeypatch.setattr(render_module, "validate_review_bundle", validate_then_rewrite)
+    site = tmp_path / "site"
+    render_site(blueprint, site, skeleton=report, review_bundle=bundle)
+
+    assert (site / "roadmap" / "basics" / "sources" / "book.txt").read_text(encoding="utf-8") == (
+        "Heading\nSource theorem.\n"
+    )
+    assert not [path for path in site.rglob("*") if path.is_file() and b"PLANTED" in path.read_bytes()]
+    assert _manifest(site)["source_revision"] == _manifest(idle)["source_revision"]
+
+
+def test_render_orders_the_book_by_the_roadmap_it_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The book's page order follows the roadmap page the site publishes, even
+    when the file is rewritten after it was copied."""
+
+    blueprint = _ordered_blueprint(tmp_path)
+    graph = load_graph(blueprint)
+    report = _extracted(graph)
+    bundle = build_review_bundle(graph, report)
+    readme = blueprint / "roadmap" / "README.md"
+    order = render_module._book_page_order
+
+    def rewrite_then_order(*args: object, **kwargs: object) -> object:
+        readme.write_text("# Roadmap\n\n- [Basics](basics/README.md)\n- [Intro](intro/README.md)\n", encoding="utf-8")
+        return order(*args, **kwargs)
+
+    monkeypatch.setattr(render_module, "_book_page_order", rewrite_then_order)
+    site = tmp_path / "site"
+    render_site(blueprint, site, skeleton=report, review_bundle=bundle)
+
+    published = (site / "roadmap" / "README.md").read_text(encoding="utf-8")
+    assert published.index("[Intro]") < published.index("[Basics]")
+    summary = (site / "SUMMARY.md").read_text(encoding="utf-8")
+    assert summary.index("intro/README.md") < summary.index("basics/README.md")
+
+
+def test_render_refuses_a_roadmap_page_that_appeared_after_the_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A page the graph never parsed is not published beside the graph."""
+
+    blueprint = _blueprint(tmp_path)
+    load = load_graph
+
+    def load_then_add(*args: object, **kwargs: object) -> Graph:
+        graph = load(*args, **kwargs)
+        (blueprint / "roadmap" / "basics" / "late.md").write_text("# Late\n\nUnparsed.\n", encoding="utf-8")
+        return graph
+
+    monkeypatch.setattr(render_module, "load_graph", load_then_add)
+    site = tmp_path / "site"
+    with pytest.raises(PublicationError, match="roadmap page appeared after the blueprint was loaded"):
+        render_site(blueprint, site)
+    assert not site.exists()
+
+
+def test_render_publishes_the_coverage_contract_it_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = _blueprint(tmp_path)
+    contract = blueprint / "coverage" / "README.md"
+    validated = contract.read_bytes()
+    load = render_module.load_coverage
+
+    def load_then_rewrite(*args: object, **kwargs: object) -> object:
+        loaded = load(*args, **kwargs)
+        contract.write_text("# Coverage\n\nPLANTED: nothing is covered.\n", encoding="utf-8")
+        return loaded
+
+    monkeypatch.setattr(render_module, "load_coverage", load_then_rewrite)
+    site = tmp_path / "site"
+    render_site(blueprint, site)
+
+    published = (site / "coverage" / "README.md").read_text(encoding="utf-8")
+    assert "PLANTED" not in published
+    assert "| All | OUT | scratch |" in published
+    assert _manifest(site)["coverage"]["source_sha256"] == hashlib.sha256(validated).hexdigest()

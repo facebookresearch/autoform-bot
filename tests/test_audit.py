@@ -531,7 +531,8 @@ def test_audit_reads_article_text_only_as_its_graph_parsed_it(tmp_path: Path, mo
     Before the write the article has no '## Depends on' section; the write adds
     one but marks the proof formalized without the statement. Each state has a
     finding, but the old metadata beside the new text has none, so auditing that
-    blend would report a clean roadmap that no file ever held.
+    blend would report a clean roadmap that no file ever held. The audit judges
+    the state the graph loaded.
     """
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
@@ -552,6 +553,6 @@ def test_audit_reads_article_text_only_as_its_graph_parsed_it(tmp_path: Path, mo
     monkeypatch.undo()
 
     assert {path: [code for code, _reason in items] for path, items in findings.items()} == {
-        "roadmap/result.md": ["article-changed"]
+        "roadmap/result.md": ["missing-depends-section"]
     }
     assert {code for code, _reason in _finding_map(blueprint)["roadmap/result.md"]} == {"proof-without-statement"}

@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
-import errno
 import hashlib
 import json
 import os
@@ -51,11 +50,11 @@ from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
 import psutil
 
-from .graph import Graph, GraphValidationError, Node, load_graph
+from .graph import Graph, GraphValidationError, Node, load_graph, source_passage
+from .snapshot import SnapshotError, read_regular_file
 from .lean import (
     MANAGED_OUTPUT_SCHEMAS,
     PACKET_SCHEMA,
@@ -117,7 +116,6 @@ _PROCESS_TERMINATION_GRACE = 2.0
 #: Lake's exit status when ``--no-build`` finds a target that needs rebuilding.
 _LAKE_NO_BUILD_EXIT = 3
 _PROCESS_TOKEN_ENV = "_AUTOFORM_PROCESS_TOKEN"
-_SNAPSHOT_FILE_LIMIT = 64 * 1024 * 1024
 _PROJECT_CONTROL_FILES = (
     "lakefile.toml",
     "lakefile.lean",
@@ -1106,73 +1104,16 @@ def _comment_ranges(value: object, text: str | None, *, context: str) -> tuple[t
     return tuple(ranges)
 
 
-def _read_snapshot_pass(
-    path: Path, *, keep_content: bool
-) -> tuple[bytes, tuple[int, str]] | None:
-    """Read one bounded regular-file pass."""
-
-    try:
-        path_metadata = path.lstat()
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        raise SkeletonError([f"cannot inspect skeleton input {path}: {exc}"]) from exc
-    if not stat.S_ISREG(path_metadata.st_mode):
-        raise SkeletonError([f"skeleton input is not a regular file: {path}"])
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_BINARY", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
-    try:
-        descriptor = os.open(path, flags)
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        if exc.errno == errno.ELOOP:
-            raise SkeletonError([f"skeleton input is not a regular file: {path}"]) from exc
-        raise SkeletonError([f"cannot open skeleton input {path}: {exc}"]) from exc
-    try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise SkeletonError([f"skeleton input is not a regular file: {path}"])
-        # The file opened must be the one inspected, not whatever replaced it.
-        if (metadata.st_dev, metadata.st_ino) != (path_metadata.st_dev, path_metadata.st_ino):
-            raise SkeletonError([f"skeleton input changed while it was read: {path}"])
-        digest = hashlib.sha256()
-        chunks: list[bytes] = []
-        size = 0
-        while True:
-            block = os.read(descriptor, 64 * 1024)
-            if not block:
-                break
-            size += len(block)
-            if size > _SNAPSHOT_FILE_LIMIT:
-                raise SkeletonError(
-                    [f"skeleton input exceeds the {_SNAPSHOT_FILE_LIMIT}-byte limit: {path}"]
-                )
-            digest.update(block)
-            if keep_content:
-                chunks.append(block)
-    except OSError as exc:
-        raise SkeletonError([f"cannot read skeleton input {path}: {exc}"]) from exc
-    finally:
-        os.close(descriptor)
-    return b"".join(chunks), (size, digest.hexdigest())
-
-
 def _read_snapshot_file(path: Path) -> tuple[bytes, tuple[int, str]] | None:
     """Read a bounded regular file twice to reject concurrent content changes."""
 
-    captured = _read_snapshot_pass(path, keep_content=True)
-    verified = _read_snapshot_pass(path, keep_content=False)
-    captured_fingerprint = None if captured is None else captured[1]
-    verified_fingerprint = None if verified is None else verified[1]
-    if captured_fingerprint != verified_fingerprint:
-        raise SkeletonError([f"skeleton input changed while it was read: {path}"])
-    return captured
+    try:
+        content = read_regular_file(path, label="skeleton input")
+    except SnapshotError as exc:
+        raise SkeletonError(exc.issues) from exc
+    if content is None:
+        return None
+    return content, (len(content), hashlib.sha256(content).hexdigest())
 
 
 def _snapshot_regular_file(path: Path) -> tuple[int, str] | None:
@@ -1188,17 +1129,28 @@ def _project_control_snapshot(root: Path) -> tuple[tuple[str, tuple[int, str] | 
     )
 
 
-def _graph_snapshot(graph: Graph) -> tuple[tuple[str, str, str], ...]:
-    """Fingerprint the exact Markdown articles used to choose declarations."""
+def _graph_snapshot(graph: Graph) -> tuple[tuple[str, str, str, str, str], ...]:
+    """Fingerprint the exact articles used to choose declarations, and the
+    exact source each cites, whose bytes its passage is cut from."""
 
     return tuple(
         (
             node.id,
             _article_path(node, graph),
             node.source_sha256 or "",
+            *_cited_fingerprint(node, graph),
         )
         for node in sorted(graph.nodes.values(), key=lambda item: item.id)
     )
+
+
+def _cited_fingerprint(node: Node, graph: Graph) -> tuple[str, str]:
+    cited = node.cited_source
+    if cited is None:
+        return "", ""
+    if cited.file is None or cited.locator is None:
+        return cited.target, f"unavailable: {cited.problem}"
+    return cited.locator, _sha256_id(graph.snapshot.files[cited.file])
 
 
 def blueprint_hash(graph: Graph) -> str:
@@ -2878,15 +2830,6 @@ def extract_skeletons(
         raise SkeletonError(
             ["the blueprint changed while skeletons were being extracted; retry after the project is idle"]
         )
-    for node in report.nodes:
-        current = current_graph.nodes.get(node.node_id)
-        if current is None or source_passage(current, current_graph.blueprint_dir) != (
-            node.passage,
-            node.passage_locator,
-        ):
-            raise SkeletonError(
-                [f"{node.node_id}: source passage changed while skeletons were being extracted; retry after the project is idle"]
-            )
     return report
 
 
@@ -2950,7 +2893,7 @@ def extract_graph_skeletons(
     broken_passages: dict[str, str] = {}
     for node, _ in selected:
         passage_issues: list[str] = []
-        passages[node.id] = source_passage(node, graph.blueprint_dir, issues=passage_issues)
+        passages[node.id] = source_passage(graph, node, issues=passage_issues)
         if passage_issues:
             broken_passages[node.id] = "; ".join(passage_issues)
 
@@ -3096,7 +3039,6 @@ def extract_graph_skeletons(
 
 
 _TRAILING_VALUE = re.compile(r"(?::=\s*(?:by)?|\bwhere)\s*\Z")
-_LINE_LOCATOR = re.compile(r"\AL(\d+)(?:-L(\d+))?\Z")
 
 
 def _statement(value: object) -> str | None:
@@ -3105,65 +3047,6 @@ def _statement(value: object) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return _TRAILING_VALUE.sub("", value).rstrip()
-
-
-def source_passage(node: Node, blueprint: Path, *, issues: list[str] | None = None) -> tuple[str | None, str | None]:
-    """Return the passage an article cites through a line locator, and the locator.
-
-    A ``## Sources`` link to a non-Markdown file inside the blueprint with a
-    ``#L<start>-L<end>`` fragment names the exact source text the statement
-    came from. The first such link wins. Markdown targets are notes, not
-    passages, and are ignored here. When the first locator names no text there
-    is no passage, and the reason is appended to ``issues`` if given.
-    """
-
-    def broken(target: str, why: str) -> tuple[None, None]:
-        if issues is not None:
-            issues.append(f"source locator {target} {why}")
-        return None, None
-
-    for target in node.sources:
-        parsed = urlsplit(target)
-        path = unquote(parsed.path)
-        fragment = unquote(parsed.fragment)
-        match = _LINE_LOCATOR.fullmatch(fragment or "")
-        if (
-            parsed.scheme
-            or parsed.netloc
-            or match is None
-            or not path
-            or Path(path).suffix.casefold() == ".md"
-        ):
-            continue
-        if "\x00" in path:
-            return broken(target, "contains an invalid path")
-        try:
-            candidate = (node.path.parent / path).resolve()
-            candidate.relative_to(blueprint.resolve())
-        except ValueError:
-            return broken(target, "points outside the blueprint")
-        if os.path.lexists(candidate) and not candidate.is_file():
-            return broken(target, "names something other than a regular file")
-        try:
-            captured = _read_snapshot_file(candidate)
-            if captured is None:
-                return broken(target, "names a missing file")
-            # Lines are what an editor or `sed` counts: newline-separated. Python's
-            # `splitlines` also breaks on form feeds, which `pdftotext` writes
-            # between pages, and every locator into such a file would then drift
-            # by one line per page.
-            lines = captured[0].decode("utf-8").split("\n")
-            if lines and lines[-1] == "":
-                lines.pop()
-        except (ValueError, UnicodeError):
-            return broken(target, "names a file that is not readable UTF-8 text")
-        start = int(match.group(1))
-        end = int(match.group(2) or start)
-        if start < 1 or end < start or end > len(lines):
-            return broken(target, "names no lines of its file")
-        relative = candidate.relative_to(blueprint.resolve()).as_posix()
-        return "\n".join(lines[start - 1 : end]), f"{relative}#L{start}-L{end}"
-    return None, None
 
 
 def _article_path(node: Node, graph: Graph) -> str:
@@ -4123,7 +4006,6 @@ __all__ = [
     "render_probe",
     "run_probe",
     "source_excerpt",
-    "source_passage",
     "validate_managed_output",
     "write_packets",
     "write_skeleton_report",

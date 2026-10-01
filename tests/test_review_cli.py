@@ -1100,7 +1100,8 @@ def test_check_judges_the_statement_its_snapshot_parsed(
     """The statement is judged as the snapshot parsed it, beside that snapshot's
     approval. Here the tree fails the check before the edit and after it, but a
     check reading the statement again would pair the restored statement with the
-    old approval, a state that was never on disk, and print OK."""
+    old approval, a state that was never on disk, and print OK. The check
+    judges the state it loaded and fails as it did before the edit."""
 
     blueprint = _approved_batch(tmp_path, monkeypatch, _Extraction())
     article = blueprint / "roadmap" / "basics" / "result.md"
@@ -1121,9 +1122,9 @@ def test_check_judges_the_statement_its_snapshot_parsed(
         )
 
     _once_the_cards_are_rechecked(monkeypatch, restore_the_statement_and_approve_something_else)
-    assert main(check) == 2
+    assert main(check) == stale_exit
     captured = capsys.readouterr()
-    assert "an article changed after its blueprint was loaded for review" in captured.err
+    assert stale_reason in captured.out + captured.err
     assert "OK:" not in captured.out
 
     # The tree the edit left holds an approval of nothing, which an idle check names.
@@ -1201,7 +1202,8 @@ def test_render_shows_the_statement_its_review_validated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A statement written after render validated the review must not appear in
-    that review's box as the approved statement; rendering stops instead."""
+    that review's box as the approved statement; the render publishes the
+    statement it validated."""
 
     blueprint = _approved_batch(tmp_path, monkeypatch, _Extraction())
     article = blueprint / "roadmap" / "basics" / "result.md"
@@ -1215,10 +1217,10 @@ def test_render_shows_the_statement_its_review_validated(
     site = tmp_path / "site"
     capsys.readouterr()
 
-    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 1
-    assert "basics/result: article changed after the blueprint was loaded" in capsys.readouterr().out
+    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 0
     pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
     assert "different from itself" not in pages
+    assert "Every object is equal to itself." in pages
 
 
 def _audit(blueprint: Path, root: Path) -> int:

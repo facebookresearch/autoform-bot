@@ -22,7 +22,7 @@ from urllib.parse import quote, unquote, urlsplit
 from . import graph_pages, graph_views, mermaid, status
 from .approvals import ApprovalStatus, ApprovalVerifier, approval_statuses, current_approvals
 from .coverage import CoverageSummary, load_coverage
-from .graph import Graph, Node, load_graph, read_node_source
+from .graph import Graph, Node, load_graph
 from .lean import SourceLinker, build_linker, declaration_names
 from .markdown import content_lines as _content_lines
 from .markdown import FENCE as _FENCE
@@ -31,6 +31,7 @@ from .mathjax import MATHJAX_SCRIPT, mathjax_script
 from .readback import READBACKS_DIR, Readback, load_readbacks, publishable_article, readback_for, render_testimony
 from .review import ReviewBundle, ReviewError, ReviewDeclaration, validate_review_bundle
 from .skeleton import DeclarationSkeleton, SkeletonReport
+from .snapshot import BlueprintSnapshot, SnapshotError, read_regular_file
 from .status import is_definition
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
@@ -232,11 +233,11 @@ class PublicationError(ValueError):
         super().__init__("; ".join(self.issues))
 
 
-def _article_text(node: Node) -> str:
+def _article_text(graph: Graph, node: Node) -> str:
     """The text of ``node`` as published: the bytes the graph parsed, without
     their HTML comments, and refused if any raw HTML is left."""
 
-    text, issues = publishable_article(read_node_source(node))
+    text, issues = publishable_article(graph.article_text(node))
     if issues:
         raise PublicationError([f"{node.id}: {issue}" for issue in issues])
     return text
@@ -265,9 +266,14 @@ def render_site(
     ``readbacks`` are the cards a caller validated ``review_bundle`` with. When
     given, they are shown instead of reading the vault again, so the review
     disclosures describe the state that was checked. The articles are loaded
-    here, after that check, and the review is refused unless they are the
-    blueprint ``skeleton`` was extracted from. Each article's text is then read
-    only as the bytes that load parsed; one written since stops the render.
+    here, after that check, and the review is refused unless they and the
+    sources they cite are the blueprint ``skeleton`` was extracted from.
+
+    Every input is read once. The load captures the articles and cited
+    sources it parsed, the remaining publication inputs are read once beside
+    them, and pages, copied files, page order, and the revision hash are all
+    computed from those bytes, so a file written during the render never puts
+    a second state of the blueprint on the site.
 
     A current approval is labelled self-approved unless ``approval_verifier``
     authenticates it; without a verifier no network is used.
@@ -281,9 +287,8 @@ def render_site(
         raise PublicationError(
             ["blueprint and output directories must be disjoint; refusing destructive render"]
         )
-    _validate_publication_tree(blueprint)
-
     graph = load_graph(blueprint)
+    snapshot = _capture_publication(blueprint, graph)
     if review_bundle is not None:
         if skeleton is None:
             raise PublicationError(["a review bundle requires a freshly extracted skeleton report"])
@@ -296,7 +301,7 @@ def render_site(
         raise PublicationError(
             ["a skeleton report alone is not review evidence; pass a validated review bundle"]
         )
-    coverage, coverage_issues = load_coverage(blueprint)
+    coverage, coverage_issues = load_coverage(blueprint, snapshot=snapshot)
     if coverage_issues:
         raise PublicationError(
             [
@@ -312,7 +317,7 @@ def render_site(
     article_issues = [
         f"{node.id}: {issue}"
         for node in graph.nodes.values()
-        for issue in publishable_article(read_node_source(node))[1]
+        for issue in publishable_article(graph.article_text(node))[1]
     ]
     if article_issues:
         raise PublicationError(article_issues)
@@ -350,6 +355,7 @@ def render_site(
     _write_publication_manifest(
         destination,
         blueprint,
+        snapshot,
         graph,
         linker,
         coverage=coverage,
@@ -384,12 +390,8 @@ def render_site(
         node.path.resolve(): node_id for node_id, node in graph.nodes.items()
     }
 
-    for source in sorted(blueprint.rglob("*")):
+    for source in sorted(snapshot.files):
         relative = source.relative_to(blueprint)
-        if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
-            continue
-        if relative.name in _GENERATED_FILES:
-            continue
         # Source notes leave the site entirely once readers can reach them in
         # the repository, so the book has one reference surface rather than two.
         if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
@@ -401,8 +403,6 @@ def render_site(
         target = destination / relative
         # Directories are created on demand below, so a directory holding
         # nothing but absorbed nodes leaves no empty shell behind.
-        if source.is_dir():
-            continue
         # Narrative articles remain book pages. Only formalizable leaves are
         # consolidated into their containing article with stable anchors.
         article = node_paths.get(source.resolve())
@@ -411,7 +411,7 @@ def render_site(
         target.parent.mkdir(parents=True, exist_ok=True)
         if source.suffix.lower() == ".md":
             rewritten = _rewrite_links(
-                source.read_text(encoding="utf-8") if article is None else _article_text(article),
+                snapshot.text(source) if article is None else _article_text(graph, article),
                 source_dir=source.parent,
                 page=target,
                 blueprint=blueprint,
@@ -422,7 +422,7 @@ def render_site(
             )
             target.write_text(rewritten, encoding="utf-8")
         else:
-            shutil.copy2(source, target)
+            target.write_bytes(snapshot.files[source])
         report.pages += 1
 
     overview = destination / "README.md"
@@ -476,6 +476,7 @@ def render_site(
         blueprint,
         destination,
         graph,
+        snapshot,
     )
     # The landing page is a dashboard, not chapter one. Previous/next belongs
     # to the book, so the strip starts at the contents page.
@@ -484,6 +485,7 @@ def render_site(
     structure.write_text(
         _render_structure_page(
             blueprint,
+            snapshot,
             graph,
             statuses,
             page=structure,
@@ -518,6 +520,7 @@ def render_site(
     _write_publication_manifest(
         destination,
         blueprint,
+        snapshot,
         graph,
         linker,
         coverage=coverage,
@@ -559,11 +562,17 @@ def _prepare_destination(destination: Path, *, clean: bool) -> None:
         destination.mkdir(parents=True)
 
 
-def _validate_publication_tree(blueprint: Path) -> None:
-    """Reject inputs that could leak local state through a public artifact."""
+def _capture_publication(blueprint: Path, graph: Graph) -> BlueprintSnapshot:
+    """Read every publication input once, refusing any that could leak local state.
+
+    Articles and cited sources are the bytes ``graph`` parsed and cut passages
+    from, published as parsed even if they have changed or gone since; every
+    other input is read here. A roadmap page the graph never parsed appeared
+    after the load, and is refused rather than published beside a graph that
+    does not describe it. The render reads nothing else from the tree.
+    """
     issues: list[str] = []
-    if not blueprint.is_dir():
-        return
+    files: dict[Path, bytes] = {}
     for source in sorted(blueprint.rglob("*")):
         relative = source.relative_to(blueprint)
         folded_parts = {part.casefold() for part in relative.parts}
@@ -580,8 +589,37 @@ def _validate_publication_tree(blueprint: Path) -> None:
             continue
         if source.is_symlink():
             issues.append(f"refusing symlink in blueprint publication: {relative.as_posix()}")
+            continue
+        if not _is_published(relative) or source in graph.snapshot.files or source.is_dir():
+            continue
+        if relative.parts[:1] == ("roadmap",) and source.suffix == ".md":
+            issues.append(
+                f"{relative.as_posix()}: roadmap page appeared after the blueprint was loaded; "
+                "rerun once the blueprint is idle"
+            )
+            continue
+        try:
+            content = read_regular_file(source, label="publication input")
+        except SnapshotError as exc:
+            issues.extend(exc.issues)
+            continue
+        if content is not None:
+            files[source] = content
     if issues:
         raise PublicationError(issues)
+    for source, content in graph.snapshot.files.items():
+        if _is_within(source, blueprint) and _is_published(source.relative_to(blueprint)):
+            files[source] = content
+    return BlueprintSnapshot(files)
+
+
+def _is_published(relative: Path) -> bool:
+    """Whether a blueprint file is an input of the static site."""
+    return not (
+        _SKIPPED_DIRECTORIES.intersection(relative.parts)
+        or _is_hidden(relative)
+        or relative.name in _GENERATED_FILES
+    )
 
 
 def _is_hidden(relative: Path) -> bool:
@@ -638,28 +676,18 @@ def _source_href(sources_base: _SourceBase, tail: tuple[str, ...]) -> str:
     return sources_base.href(tail)
 
 
-def _published_source_files(blueprint: Path):
-    """Yield the regular authored inputs that contribute to the static site."""
-    for source in sorted(blueprint.rglob("*")):
-        relative = source.relative_to(blueprint)
-        if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
-            continue
-        if relative.name in _GENERATED_FILES or not source.is_file():
-            continue
-        yield source, relative
-
-
-def _source_revision(blueprint: Path) -> str:
+def _source_revision(blueprint: Path, snapshot: BlueprintSnapshot) -> str:
     digest = hashlib.sha256(b"autoform-markdown-publication/v1\0")
-    for source, relative in _published_source_files(blueprint):
-        digest.update(relative.as_posix().encode("utf-8") + b"\0")
-        digest.update(source.read_bytes() + b"\0")
+    for source in sorted(snapshot.files):
+        digest.update(source.relative_to(blueprint).as_posix().encode("utf-8") + b"\0")
+        digest.update(snapshot.files[source] + b"\0")
     return digest.hexdigest()
 
 
 def _write_publication_manifest(
     destination: Path,
     blueprint: Path,
+    snapshot: BlueprintSnapshot,
     graph: Graph,
     linker: SourceLinker,
     *,
@@ -677,7 +705,7 @@ def _write_publication_manifest(
         },
         "schema": "autoform-publication/v1",
         "source": "blueprint/roadmap Markdown",
-        "source_revision": _source_revision(blueprint),
+        "source_revision": _source_revision(blueprint, snapshot),
         "git_ref": linker.ref,
         "nodes": len(graph.nodes),
         "dependencies": graph.edge_count,
@@ -715,8 +743,10 @@ def _group_page(group: str) -> Path:
     )
 
 
-def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
-    """Follow authored container links to recover the book's page order."""
+def _book_page_order(
+    blueprint: Path, destination: Path, graph: Graph, snapshot: BlueprintSnapshot
+) -> list[Path]:
+    """Follow authored container links, as captured, to recover the book's page order."""
     ordered: list[Path] = []
     seen_outputs: set[Path] = set()
     visited_sources: set[Path] = set()
@@ -736,7 +766,7 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
         if output.is_file() and output not in seen_outputs:
             seen_outputs.add(output)
             ordered.append(output)
-        if source in visited_sources or not source.is_file():
+        if source in visited_sources or source not in snapshot.files:
             return
         visited_sources.add(source)
 
@@ -763,7 +793,7 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
                 visit(candidate)
             return line
 
-        _outside_fences(source.read_text(encoding="utf-8"), collect)
+        _outside_fences(snapshot.text(source), collect)
 
     visit(blueprint / "README.md")
     return ordered
@@ -940,6 +970,7 @@ STRUCTURE_PAGE = "structure.md"
 
 def _render_structure_page(
     blueprint: Path,
+    snapshot: BlueprintSnapshot,
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     *,
@@ -969,7 +1000,7 @@ def _render_structure_page(
             return False
         return not (sources_base is not None and relative.parts[:1] == (SOURCES_DIR,))
 
-    files = [p for p in sorted(blueprint.rglob("*.md")) if keep(p.relative_to(blueprint))]
+    files = [p for p in sorted(snapshot.files) if p.suffix == ".md" and keep(p.relative_to(blueprint))]
     directories = {p.relative_to(blueprint).parent for p in files}
     directories.discard(Path("."))
     for directory in list(directories):
@@ -1656,7 +1687,7 @@ def _render_environment(
     caption, _, number = numbers[node.id].rpartition(" ")
     # The text the graph parsed, so the box shows the statement its status and
     # any review disclosure describe, or rendering stops.
-    statement, remainder = _split_body(_article_text(node))
+    statement, remainder = _split_body(_article_text(graph, node))
     # The body is leaving its own directory for the chapter page, so its
     # relative links have to be recomputed from the chapter's location.
     statement, remainder = (

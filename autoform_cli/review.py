@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Mapping
 
-from .graph import ARTICLE_ID_PATTERN, ArticleChangedError, Graph, Node, read_node_source
+from .graph import ARTICLE_ID_PATTERN, Graph, Node, source_passage
 from .lean import REVIEW_PACKET_SCHEMA, declaration_names
 from .markdown import FENCE, FENCE_CLOSE, HEADING, frontmatter_end, strip_line_comments
 from .readback import Readback, load_readbacks, readback_for, readback_keys
@@ -31,7 +31,6 @@ from .skeleton import (
     OutputTransaction,
     SkeletonReport,
     blueprint_hash,
-    source_passage,
     validate_managed_output,
 )
 
@@ -206,33 +205,17 @@ class ReviewBundle:
         return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def canonical_statement(node: Node) -> str:
+def canonical_statement(graph: Graph, node: Node) -> str:
     """Return visible Markdown after the H1 and before the first H2.
 
     Frontmatter and the title identify the article and are bound separately.
     Outer blank lines are formatting, while all Markdown inside the statement
     is preserved exactly after newline normalization. The text is the one
-    ``node`` was parsed from: a statement written since would be judged against
-    that parse's approval, a pairing that never existed on disk.
+    ``graph`` parsed ``node`` from: a statement written since would be judged
+    against that parse's approval, a pairing that never existed on disk.
     """
 
-    try:
-        text = read_node_source(node)
-    except ArticleChangedError as exc:
-        raise ReviewError(
-            [
-                ReviewFinding(
-                    node.id,
-                    "review-snapshot-changed",
-                    "an article changed after its blueprint was loaded for review; rerun once the blueprint is idle",
-                )
-            ]
-        ) from exc
-    except (OSError, UnicodeError) as exc:
-        raise ReviewError(
-            [ReviewFinding(node.id, "review-statement-unreadable", f"cannot read article statement: {exc}")]
-        ) from exc
-    lines = text.splitlines()
+    lines = graph.article_text(node).splitlines()
     statement: list[str] = []
     seen_h1 = False
     fence: tuple[str, int] | None = None
@@ -291,7 +274,7 @@ def build_review_bundle(graph: Graph, skeleton: SkeletonReport) -> ReviewBundle:
         record = skeleton.node(node_id)
         assert record is not None
         assert node.article_id is not None
-        statement = canonical_statement(node)
+        statement = canonical_statement(graph, node)
         if not statement.strip():
             raise ReviewError(
                 [
@@ -384,8 +367,8 @@ def validate_review_article(
     blueprint change during the extraction itself, up to the reload that
     produced ``graph``, refuses with ``review-snapshot-changed``. The
     extraction also stops on another article's empty or duplicated ``lean:``
-    list. The statement compared is the text ``graph`` parsed; a file that no
-    longer holds it refuses rather than being judged.
+    list. The statement and passage compared are the bytes ``graph``
+    captured, whatever the files hold by the time they are compared.
     """
 
     snapshot = _snapshot_findings(graph, current_skeleton)
@@ -478,7 +461,7 @@ def validate_review_article(
                 f"skeleton article path {report_node.article_path!r} does not match {expected_path!r}",
             ),
         )
-    current_passage, current_locator = source_passage(node, graph.blueprint_dir)
+    current_passage, current_locator = source_passage(graph, node)
     if node.origin == "cited" and (current_passage is None or not current_passage.strip()):
         return (
             ReviewFinding(
@@ -495,10 +478,7 @@ def validate_review_article(
                 "skeleton source passage does not match the article's current source locator",
             ),
         )
-    try:
-        statement = canonical_statement(node)
-    except ReviewError as exc:
-        return exc.findings
+    statement = canonical_statement(graph, node)
     if not statement.strip():
         return (
             ReviewFinding(
@@ -856,7 +836,7 @@ def _report_findings(graph: Graph, skeleton: SkeletonReport) -> list[ReviewFindi
                     f"skeleton article path {record.article_path!r} does not match {expected_path!r}",
                 )
             )
-        current_passage, current_locator = source_passage(node, graph.blueprint_dir)
+        current_passage, current_locator = source_passage(graph, node)
         if node.origin == "cited" and (current_passage is None or not current_passage.strip()):
             findings.append(
                 ReviewFinding(

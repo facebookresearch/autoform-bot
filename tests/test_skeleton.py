@@ -1556,7 +1556,7 @@ def test_extraction_rejects_a_passage_changed_during_probe(tmp_path: Path, monke
 
     _fake_default_probe(monkeypatch, changing_probe)
 
-    with pytest.raises(SkeletonError, match="source passage changed"):
+    with pytest.raises(SkeletonError, match="blueprint changed while skeletons were being extracted"):
         extract_skeletons(blueprint, lean_root=project)
 
 

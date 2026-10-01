@@ -359,7 +359,8 @@ hides a toolchain library, or a blueprint or source tree that changes during
 extraction still stops the whole command.
 `--output` records the `autoform-skeleton/v5` report, which contains no
 timestamp or absolute path, for a later render or review to consume. The
-report identifies the exact blueprint, its complete target set, and whether
+report identifies the exact blueprint, by a hash of every article's bytes and
+of each cited source file a passage is cut from, its complete target set, and whether
 the extraction covered all targets or an explicit `--node` selection; a
 report whose selection, articles, and unresolved declarations disagree can be
 neither built nor loaded. Review evidence is prepared only from a report that
@@ -683,10 +684,11 @@ is a no-op, running the same batch again completes it.
 current Lean evidence and reject unresolved, partial, foreign, or stale
 bundles. `review check` also requires complete current cards and matching human
 approvals, and judges them as one state of the blueprint: it loads the
-articles and cards before Lean runs, the extraction must have seen those same
-articles, and the cards must be unchanged when it ends. Article text read
-after that load, such as a statement compared with its prepared evidence, must
-be the bytes the load parsed, and the verdict judges only that state, its
+articles, the sources they cite, and the cards before Lean runs, the
+extraction must have seen those same articles and sources, and the cards must
+be unchanged when it ends. The load reads each article and cited source once,
+and every statement and passage compared afterward is cut from those bytes,
+never read from the files again, so the verdict judges only that state, its
 extraction, and those cards. An edit that breaks any of these comparisons fails the
 check with `review-snapshot-changed` rather than mixing old and new evidence;
 run it again once the blueprint is idle. These are comparisons, not a lock: an
@@ -695,13 +697,13 @@ and the restored state is what gets judged; an edit after the last comparison
 does not affect a verdict already reached. `audit --review-bundle`, `render --review`, and
 `render --review-bundle` make the same check, then judge or show the cards it
 validated rather than reading them again. They load the articles again to audit
-or render them, and an edit to any article since the check fails them with
-`review-snapshot-changed` too: every skeleton report records a hash of the
-blueprint it was extracted from, and review evidence is never built from a
-report and articles that hash differently. The article text they then audit or
-render must be the bytes that second load parsed, as it must for a plain
-`audit` or `render`; otherwise the audit reports `article-changed` and the
-render stops. The rendered review disclosure uses the same packet bytes that were
+or render them, and an edit to any article or cited source since the check
+fails them with `review-snapshot-changed` too: every skeleton report records a
+hash of the blueprint it was extracted from, covering each article's bytes and
+the bytes of each source file a passage is cut from, and review evidence is
+never built from a report and a blueprint that hash differently. What they then
+audit or render is the bytes that second load read, as for a plain `audit` or
+`render`, whatever the files hold afterward. The rendered review disclosure uses the same packet bytes that were
 hashed, never a reconstructed or comment-bearing approximation. Read-back
 cards are absorbed into their article and are not published as standalone
 pages. Without `--bundle`, `review check` derives the bundle from its own
@@ -1219,6 +1221,14 @@ project, chapter, nested-scope, local, and full-graph scales. It never reads a
 credentials, logs, provider state, and agent/task state inside the blueprint
 cause the render to fail rather than silently leak them. Source and output
 directories must be disjoint.
+
+A render reads each published file once. Loading the blueprint captures every
+article and every source file a passage cites; the render then captures the
+other files it publishes and refuses a roadmap page that appeared after the
+load. Pages, copied files, page order, and the source-content hash are all
+computed from those bytes, so a file edited mid-render cannot be published
+beside a hash or page order that describes different bytes. A published file
+must be a regular file of at most 64 MiB.
 
 Every render writes `publication.json` with the source-content hash, Git ref,
 article and dependency counts, and available views. It contains no timestamp or

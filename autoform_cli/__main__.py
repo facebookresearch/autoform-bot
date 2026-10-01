@@ -26,7 +26,7 @@ from .article_identity import plan_article_ids
 from .audit import audit_blueprint
 from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_key
 from .doctor import diagnose_project
-from .graph import Graph, GraphValidationError, load_graph, read_node_source
+from .graph import Graph, GraphValidationError, load_graph
 from .lean import build_linker, declaration_names
 from .mathjax import mathjax_script
 from .readback import (
@@ -406,7 +406,7 @@ def _check(args: argparse.Namespace) -> int:
         markup = [
             f"{node.id}: {issue}"
             for node in graph.nodes.values()
-            for issue in publishable_article(read_node_source(node))[1]
+            for issue in publishable_article(graph.article_text(node))[1]
         ]
         # The renderer writes the site's MathJax configuration from the vault's macros.
         markup += mathjax_script(args.blueprint_dir)[1]
@@ -1107,11 +1107,12 @@ def _current_review(
     here, which covers the time before it took its own snapshot. Cards are not
     articles, so they are read again afterwards and must be unchanged. Callers
     judge the cards returned here rather than reading the vault again. Article
-    text read later, such as a statement compared or rendered, comes through
-    ``read_node_source`` and must be the bytes the graph parsed. A caller
-    that loads the articles again, as render and audit do, is held to the same
-    state by ``build_review_bundle``, which refuses a skeleton report paired
-    with a blueprint other than the one it was extracted from.
+    text and source passages used later, such as a statement compared or
+    rendered, are the bytes the graph captured. A caller that loads the
+    articles again, as render and audit do, is held to the same state by
+    ``build_review_bundle``, which refuses a skeleton report paired with a
+    blueprint, cited sources included, other than the one it was extracted
+    from.
     """
 
     graph = load_graph(blueprint_dir)
