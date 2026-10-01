@@ -87,6 +87,8 @@ DEFAULT_AUTONOMY_ARGS = [
         "Bash(rg *),Bash(git status *),Bash(git diff *),Bash(mkdir *)"
     ),
 ]
+DEBRIEF_READ_ONLY_TOOLS = "Read,Grep,Glob"
+DEBRIEF_EMPTY_MCP_CONFIG = '{"mcpServers":{}}'
 SESSION_ISOLATION_ARGS = [
     # Keep subscription/keychain authentication (unlike --bare) while excluding
     # repository-controlled settings, hooks, and skill expansion.
@@ -374,6 +376,38 @@ class ClaudeAdapter(ProverAdapter):
         state.pending_steer = message
         logger.info("claude adapter: queued steer for next turn: %s", message[:120])
 
+    def debrief(self, run: Run, question: str, *, budget_seconds: float) -> str | None:
+        """Resume the finished session once, read-only, on a fresh time budget."""
+        if not math.isfinite(budget_seconds) or budget_seconds <= 0:
+            raise ValueError("debrief budget_seconds must be positive")
+        state: _ClaudeRun = run.handle
+        if (
+            not state.session_id
+            or (self._cancel_event is not None and self._cancel_event.is_set())
+            or state.terminal_error == "prover run cancelled"
+        ):
+            return None
+
+        counters = ("input_tokens", "output_tokens", "cache_read_tokens",
+                    "cache_creation_tokens", "cost_usd", "turns")
+        before = {name: getattr(state, name) for name in counters}
+        original_text, original_deadline = state.final_text, state.deadline
+        answer = ""
+        try:
+            state.deadline = time.monotonic() + budget_seconds
+            for event in self._run_turn(
+                state, question, resume=True, tools_override=DEBRIEF_READ_ONLY_TOOLS
+            ):
+                if event.kind is EventKind.RESULT:
+                    answer = event.content
+            return answer
+        finally:
+            # The debrief turn must not leak into the already-recorded verdict.
+            state.final_text, state.deadline = original_text, original_deadline
+            usage = {name: getattr(state, name) - before[name] for name in counters}
+            usage["cost_usd"] = round(usage["cost_usd"], 6)
+            run.meta["debrief_usage"] = usage
+
     def result(self, run: Run) -> ProofResult:
         state: _ClaudeRun = run.handle
         text = (state.final_text or "").strip()
@@ -419,16 +453,33 @@ class ClaudeAdapter(ProverAdapter):
     # Internals
     # ------------------------------------------------------------------
 
-    def _run_turn(self, state: _ClaudeRun, prompt: str, *, resume: bool) -> Iterator[Event]:
+    def _run_turn(
+        self,
+        state: _ClaudeRun,
+        prompt: str,
+        *,
+        resume: bool,
+        tools_override: str | None = None,
+    ) -> Iterator[Event]:
         args = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--model", state.model]
         if resume and state.session_id:
             args += ["--resume", state.session_id]
         elif not resume:
             args += ["--append-system-prompt", self._system_prompt]
-        args += SESSION_ISOLATION_ARGS + self._autonomy_args
-        if self._mcp_config:
-            args += ["--strict-mcp-config", "--mcp-config", self._mcp_config]
-        args += state.extra_args
+        if tools_override is None:
+            args += SESSION_ISOLATION_ARGS + self._autonomy_args
+            if self._mcp_config:
+                args += ["--strict-mcp-config", "--mcp-config", self._mcp_config]
+            args += state.extra_args
+        else:
+            # extra_args may carry permission flags, and a resumed session could
+            # rediscover mutating MCP tools; neither may reach a read-only turn.
+            args += SESSION_ISOLATION_ARGS + [
+                "--permission-mode", "dontAsk",
+                "--tools", tools_override,
+                "--allowedTools", tools_override,
+                "--strict-mcp-config", "--mcp-config", DEBRIEF_EMPTY_MCP_CONFIG,
+            ]
 
         env = _scrubbed_env()
         plugin_root = str(Path(__file__).resolve().parents[2])

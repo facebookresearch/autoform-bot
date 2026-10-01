@@ -53,14 +53,17 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event as CancellationEvent
 from typing import Any
 
 from autoform_cli.runtime import RuntimeNode
 
-from .base import ProofResult, ProverAdapter, SteeringCapability
+from . import debrief
+from .base import ProofResult, ProverAdapter, Run, SteeringCapability
 from .steerer import Steerer
 from .triggers import TriggerEngine
 from .verify import (
@@ -81,6 +84,53 @@ logger = logging.getLogger(__name__)
 _FOLD_CAPABLE = frozenset(
     {SteeringCapability.BETWEEN_TURNS, SteeringCapability.AT_TOOL_CALLS}
 )
+
+
+def _debrief_outcome(result: ProofResult) -> str:
+    if result.proved:
+        return "proved"
+    reason = result.reason or "no reason reported"
+    if (result.meta or {}).get("claimed_proved"):
+        return f"gate rejected: {reason.removeprefix('verification gate: ')}"
+    return f"FAILED: {reason}"
+
+
+def _debrief(
+    adapter: ProverAdapter,
+    run: Run,
+    result: ProofResult,
+    node: RuntimeNode,
+    project_dir: str,
+) -> None:
+    """Best-effort post-verdict feedback; failures are recorded, never raised."""
+    meta = result.meta if isinstance(result.meta, dict) else {}
+    if meta.get("sub_status") == "cancelled" or meta.get("session_id") == "":
+        return
+    outcome = _debrief_outcome(result)
+    try:
+        question = debrief.build_question(node.id, outcome)
+        text = adapter.debrief(run, question, budget_seconds=debrief.budget_seconds())
+        if text is None:
+            return
+        answer = debrief.parse_debrief_text(text)
+    except Exception as error:
+        logger.warning("driver: post-verdict debrief failed for %s", node.id, exc_info=True)
+        answer = {"error": f"{type(error).__name__}: {error}"}
+    usage = run.meta.pop("debrief_usage", None)
+    if isinstance(usage, dict):
+        answer["usage"] = usage
+    record = {
+        "node_id": node.id,
+        "outcome": outcome,
+        "backend": adapter.name,
+        "run_id": uuid.uuid4().hex[:12],
+        "recorded_at": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        "debrief": answer,
+    }
+    try:
+        debrief.write_record(debrief.debrief_dir(project_dir), record)
+    except OSError:
+        logger.exception("driver: could not write debrief for %s", node.id)
 
 
 def _live_judge_enabled(capability: SteeringCapability, judge_policy: str) -> bool:
@@ -206,7 +256,44 @@ def prove(
     Returns:
         The adapter's terminal :class:`ProofResult` (``proved`` or ``failed``) —
         with a claimed ``proved`` only allowed to stand once the gate confirms it.
+        If ``AUTOFORM_DEBRIEF`` is set, a resumable backend is then debriefed
+        (:mod:`servers.prover.debrief`); that never changes the result.
     """
+    run_box: list[Run] = []
+    result = _prove_session(
+        adapter,
+        node,
+        spec,
+        project_dir,
+        max_steers=max_steers,
+        steerer=steerer,
+        verifier=verifier,
+        judge_policy=judge_policy,
+        max_gate_folds=max_gate_folds,
+        triggers=triggers,
+        cancel_event=cancel_event,
+        run_box=run_box,
+    )
+    if run_box and debrief.enabled():
+        _debrief(adapter, run_box[0], result, node, project_dir)
+    return result
+
+
+def _prove_session(
+    adapter: ProverAdapter,
+    node: RuntimeNode,
+    spec: str,
+    project_dir: str,
+    *,
+    max_steers: int,
+    steerer: Steerer | None,
+    verifier: Callable[..., VerifyResult] | None,
+    judge_policy: str,
+    max_gate_folds: int,
+    triggers: TriggerEngine | None,
+    cancel_event: CancellationEvent | None,
+    run_box: list[Run],
+) -> ProofResult:
     if max_steers < 0:
         raise ValueError("max_steers must be nonnegative")
     if max_gate_folds < 0:
@@ -237,6 +324,7 @@ def prove(
     adapter.bind_cancel_event(cancel_event)
     started_at = time.monotonic()
     run = adapter.start(node.id, spec, project_dir)
+    run_box.append(run)
     goal = run.goal or spec
 
     target_hint = " ".join(

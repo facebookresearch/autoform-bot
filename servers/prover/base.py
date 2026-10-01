@@ -175,7 +175,8 @@ class ProverAdapter(abc.ABC):
     * :class:`servers.prover.codex_adapter.CodexAdapter`
     * :class:`servers.prover.muse_adapter.MuseAdapter`
 
-    The four methods are the *entire* per-backend surface. Adapters expose these
+    The four methods, plus the optional :meth:`debrief`, are the *entire*
+    per-backend surface. Adapters expose these
     synchronous signatures so the driver is a plain loop with no event-loop
     assumptions.
     """
@@ -223,6 +224,14 @@ class ProverAdapter(abc.ABC):
         off-course. Best-effort: a steer that cannot be delivered (run already
         finished, transient API error) must not raise — it logs and is dropped.
         """
+
+    def debrief(self, run: Run, question: str, *, budget_seconds: float) -> str | None:
+        """Ask ``question`` in one read-only turn resumed after the verdict is fixed.
+
+        Optional (see :mod:`servers.prover.debrief`). The default returns ``None``,
+        meaning "unsupported"; only resumable backends override it.
+        """
+        return None
 
     def bind_cancel_event(self, cancel_event: Any) -> None:
         """Bind an optional cancellation event before :meth:`start`.
