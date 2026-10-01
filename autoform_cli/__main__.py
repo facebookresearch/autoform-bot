@@ -9,7 +9,7 @@ import os
 import socket
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -60,7 +60,6 @@ from .skeleton import (
     blueprint_hash,
     extract_skeletons,
     format_report,
-    run_probe,
     write_packets,
     write_skeleton_report,
 )
@@ -333,8 +332,8 @@ def _add_probe_timeout_argument(parser: argparse.ArgumentParser) -> None:
         "--timeout",
         type=_positive_seconds,
         metavar="SECONDS",
-        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g}); "
-        "the Lake freshness check before it has its own budget",
+        help=f"seconds each Lean probe may run; one runs per root module (default {DEFAULT_PROBE_TIMEOUT:g}); "
+        "the Lake freshness check before them has its own budget",
     )
 
 
@@ -531,12 +530,6 @@ def _positive_seconds(value: str) -> float:
     return seconds
 
 
-def _probe_runner(timeout: float | None) -> Callable[[str, Path], str] | None:
-    if timeout is None:
-        return None
-    return lambda probe, root: run_probe(probe, root, timeout=timeout)
-
-
 def _skeleton(args: argparse.Namespace) -> int:
     if args.passages is not None and args.packets is None:
         print("error: --passages requires --packets", file=sys.stderr)
@@ -556,7 +549,7 @@ def _skeleton(args: argparse.Namespace) -> int:
         report = extract_skeletons(
             args.blueprint_dir,
             lean_root=args.lean_root,
-            runner=_probe_runner(args.timeout),
+            timeout=args.timeout,
             node_ids=tuple(args.nodes) if args.nodes else None,
         )
     except SkeletonError as exc:
@@ -633,7 +626,7 @@ def _review_prepare(args: argparse.Namespace) -> int:
         skeleton = extract_skeletons(
             args.blueprint_dir,
             lean_root=args.lean_root,
-            runner=_probe_runner(args.timeout),
+            timeout=args.timeout,
         )
         bundle = build_review_bundle(graph, skeleton)
         if args.packets is not None:
@@ -698,7 +691,7 @@ def _review_record(args: argparse.Namespace) -> int:
         skeleton = extract_skeletons(
             args.blueprint_dir,
             lean_root=args.lean_root,
-            runner=_probe_runner(args.timeout),
+            timeout=args.timeout,
             node_ids=tuple(sorted({node_id for _, node_id, _, _ in before})),
         )
         # The extraction must describe the blueprint the cards are filed
@@ -1081,7 +1074,7 @@ def _current_review(
     skeleton = extract_skeletons(
         blueprint_dir,
         lean_root=lean_root,
-        runner=_probe_runner(timeout),
+        timeout=timeout,
     )
     changed: list[ReviewFinding] = []
     if skeleton.blueprint_hash != blueprint_hash(graph):

@@ -298,13 +298,20 @@ name so a reader can see that a statement uses the library's notion of a limit
 rather than a homemade one.
 
 The closure is computed from elaborated terms, which is why this is the one
-command that runs Lean: it writes a small probe and runs it with
-`lake env lean` against the built project. Before the probe, Lake must confirm
-without rebuilding that every imported module matches its exact source inputs;
-a missing `lake-manifest.json`, stale artifacts, or a source tree that changes
-during extraction makes the command fail. That check rehashes every input and
-rewrites Lake's `.hash` files, so the project's `.lake` directory must be
-writable. A lexical closure would miss what
+command that runs Lean: for each module that declares a selected `lean:`
+target it writes a small probe whose only import is that module, and runs it
+with `lake env lean` against the built project. A declaration's packet reads
+as it does to a file that imports its module, whichever other articles are
+extracted with it. That environment has the module's global notation,
+instances, and attributes, including any the module declares after the
+declaration; it lacks the module's `local notation` and local instances, and
+the `open` and `set_option` commands in effect at the declaration. Before any
+probe, Lake must confirm once, without rebuilding, that every probed module
+matches its exact source inputs; a missing `lake-manifest.json`, stale
+artifacts, or a source tree that changes during extraction makes the command
+fail. Only the probed modules need to be built and fresh. That check rehashes
+every input and rewrites Lake's `.hash` files, so the project's `.lake`
+directory must be writable. A lexical closure would miss what
 `open`, notation, implicit instances, and auto-bound variables bring in, and
 every miss silently shrinks the surface a reader is told to trust. Constructors,
 projections, recursors, `noConfusion` helpers, and matchers are folded onto the
@@ -321,8 +328,12 @@ anywhere in a declaration's trusted closure is refused, as recorded by the Lean
 environment rather than by the source text: its kernel face is an opaque
 constant, so the body a reader would see is not what Lean checks. The command
 exits nonzero when a `lean:` name is absent from the sources or from the built
-environment, or reaches a refused declaration; that name is unresolved for its article only, other articles still extract, and it writes nothing into the vault;
-`--output` records the `autoform-skeleton/v4` report, which contains no
+environment, or reaches a refused declaration; that name is unresolved for its article only, other articles still extract, and it writes nothing into the vault.
+A probe that fails on its own (a nonzero exit, a timeout, or malformed or
+ambiguous records) likewise leaves only its module's targets unresolved, with
+the reason; a missing `lake`, a failed freshness check, or a blueprint or
+source tree that changes during extraction still stops the whole command.
+`--output` records the `autoform-skeleton/v5` report, which contains no
 timestamp or absolute path, for a later render or review to consume. The
 report identifies the exact blueprint, its complete target set, and whether
 the extraction covered all targets or an explicit `--node` selection. It
@@ -333,7 +344,10 @@ trust, so the report states each trusted declaration, each external
 constant's semantic material, and each boundary module's identity once, in the
 top-level `trusted`, `semantics`, and `boundary_modules` tables, and each
 declaration names the entries it uses; the probe's own output is shared the
-same way. The probe also states each elaborated subterm of 256 bytes or more
+same way. A trusted declaration is printed in its root's module environment
+and can read differently under two root modules, so `trusted` is keyed by root
+module and then by name, and a declaration may name only the entries under its
+own module. The probe also states each elaborated subterm of 256 bytes or more
 once, since proof terms repeat large subterms heavily; the report keeps each
 material's full text.
 
@@ -341,9 +355,13 @@ Run skeleton extraction only in a trusted checkout or an operating-system
 sandbox. Lake evaluates `lakefile.lean`, and the generated probe imports project
 code whose initializers, macros, and metaprograms may perform arbitrary IO and
 can forge probe output. The timeout and output cap bound the direct batch
-command; on POSIX, Autoform also terminates its process group. The Lake
-freshness check and the probe each have their own 600-second budget;
-`--timeout SECONDS` sets the probe's, which a large project may need. They are resource
+command; on POSIX, Autoform also terminates its process group, for every
+probe, on every failure and on interruption. The Lake freshness check and each
+probe have their own 600-second budget; `--timeout SECONDS` sets each probe's,
+which a large project may need. Each probe pays a Lean start and loads its
+module's imports; on a Mathlib project that measured about 10 CPU-seconds and
+140 MB of private memory per probe, with the `.olean` files mapped and shared.
+Probes run in parallel on half the CPU cores, at most eight. They are resource
 controls, not a security or authenticity boundary.
 
 Every skeleton carries a full SHA-256 **drift hash**. It is derived from
@@ -487,8 +505,9 @@ the statement as written, and the source of every project definition it rests
 on, with every comment and docstring the probe can identify removed, so that a
 reader who is asked what the Lean literally asserts cannot read the author's
 intent into it. Lean's parser, not a separate lexer, locates those comments.
-The probe parses each source in its own environment, which has the notation of
-every module the run imports but not the file's `local` notation.
+The probe parses each source in the environment of its root's module, which
+has that module's global notation and the notation of everything it imports,
+but not the file's `local` notation.
 A source it cannot parse there (a body that uses `local notation`) is withheld
 if it may hold a comment. Source containing a known non-builtin token with
 `--` or `/-` is also withheld unless that token was globally active through an
@@ -567,7 +586,10 @@ an unrelated article that changed since `review prepare` does not block the
 record. Any blueprint change during the extraction itself does, even in an
 article the record does not touch, and another article's empty or duplicated
 `lean:` list stops the extraction. Either way nothing is filed; running the
-record again once the blueprint is idle completes it.
+record again once the blueprint is idle completes it. A record probes only the
+modules of the articles it files, so only those modules need to be built and
+fresh, and its packets match the ones `review prepare` wrote from a full
+extraction.
 
 `--manifest` files a batch against one extraction, where one record per card
 would pay a Lake freshness check and a Lean start each. The manifest reuses

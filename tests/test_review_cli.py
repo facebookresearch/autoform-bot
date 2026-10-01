@@ -111,20 +111,13 @@ def test_review_cli_prepares_records_and_checks_exact_evidence(
     blueprint = _blueprint(tmp_path)
     skeleton = _skeleton()
     extraction_scopes: list[object] = []
-    probe_timeouts: list[float] = []
-
-    def run_probe(probe: str, root: Path, *, timeout: float) -> str:
-        probe_timeouts.append(timeout)
-        return ""
+    probe_timeouts: list[object] = []
 
     def extract(*args: object, **kwargs: object) -> SkeletonReport:
         extraction_scopes.append(kwargs.get("node_ids"))
-        runner = kwargs.get("runner")
-        assert callable(runner)
-        runner("", tmp_path)
+        probe_timeouts.append(kwargs.get("timeout"))
         return _as_extracted(skeleton, args[0])
 
-    monkeypatch.setattr("autoform_cli.__main__.run_probe", run_probe)
     monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", extract)
     bundle_path = tmp_path / "review.json"
     packets = tmp_path / "packets"

@@ -479,10 +479,11 @@ def importedGlobalTokens (env : Environment) (mod : Name) : Std.HashSet String :
   return tokens
 
 /-- Whether `text` holds a non-builtin token containing `--` or a block-comment
-opener that was not globally active through an import. The probe's combined
-imports, a later declaration, or a reconstructed scoped `open` may activate it
-here even when the source did not, so the probe then cannot safely distinguish
-that token from a comment. -/
+opener that was not globally active through an import. The root module the
+probe imports, which may import more than this declaration's own file, a later
+declaration, or a reconstructed scoped `open` may activate it here even when
+the source did not, so the probe then cannot safely distinguish that token from
+a comment. -/
 def commentLikeToken (penv : Environment) (mod : Name) (text : String) : IO Bool := do
   let builtin ← Parser.builtinTokenTable.get
   let holds (s t : String) := Nat.blt 1 (s.splitOn t).length

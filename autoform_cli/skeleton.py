@@ -48,6 +48,7 @@ import threading
 import time
 import warnings
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -69,7 +70,7 @@ try:  # Python 3.11+
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
 
-SKELETON_SCHEMA = "autoform-skeleton/v4"
+SKELETON_SCHEMA = "autoform-skeleton/v5"
 SEMANTIC_SCHEMA = "autoform-lean-expr/v4"
 
 #: Every line the probe wants read back starts with this marker, so Lean's own
@@ -91,10 +92,16 @@ _SHADOWED_CORE_MODULE = re.compile(
     r"object file '[^']*' of module ((?:" + "|".join(_CORE_MODULE_ROOTS) + r")(?:\.\S+)?) does not exist"
 )
 
+#: Bounds each probe process; extraction runs one per root module.
 DEFAULT_PROBE_TIMEOUT = 600.0
 #: The Lake freshness check hashes every imported input, which on a Mathlib
 #: project can take minutes on its own, so it does not share the probe's budget.
 DEFAULT_FRESHNESS_TIMEOUT = 600.0
+#: Probes run in parallel, one Lean process per root module. On a Mathlib
+#: project each needs about 10 CPU-seconds and 140 MB of private memory (the
+#: imported `.olean` files are mapped and shared), so extraction uses half the
+#: cores, at most eight, and never more workers than modules.
+_MAX_PROBE_WORKERS = 8
 DEFAULT_PROBE_OUTPUT_LIMIT = 64 * 1024 * 1024
 #: The probe states shared subterms once; this bounds the characters of
 #: semantic material they may expand to in one run.
@@ -486,13 +493,22 @@ class SkeletonReport:
     def as_dict(self) -> dict[str, object]:
         # Roots in one project share most of what they trust; each shared
         # item is stated once here and named by every declaration that uses it.
-        trusted: dict[str, object] = {}
+        # A trusted declaration is printed in its root's module environment, so
+        # it may read differently under two root modules: that table is keyed
+        # by root module first. Semantic material and module identities do not
+        # depend on the environment and are keyed by name alone.
+        trusted: dict[str, dict[str, object]] = {}
         semantics: dict[str, object] = {}
         modules: dict[str, object] = {}
         for node in self.nodes:
             for declaration in node.declarations:
                 for item in declaration.trusted:
-                    _share(trusted, item.name, item.as_dict(), table_name="trusted declaration")
+                    _share(
+                        trusted.setdefault(declaration.module, {}),
+                        item.name,
+                        item.as_dict(),
+                        table_name=f"trusted declaration under root module {declaration.module}",
+                    )
                 for name, semantic in (*declaration.assumed_semantics, *declaration.axiom_semantics):
                     _share(semantics, name, semantic, table_name="semantic material")
                 files: dict[str, list[list[str]]] = {}
@@ -537,6 +553,11 @@ def load_skeleton_report(path: str | Path) -> SkeletonReport:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise SkeletonError([f"cannot read skeleton report {path}: {exc}"]) from exc
+    schema = data.get("schema") if isinstance(data, dict) else None
+    if isinstance(schema, str) and schema.startswith("autoform-skeleton/") and schema != SKELETON_SCHEMA:
+        raise SkeletonError(
+            [f"{path} is an {schema} report; this version reads only {SKELETON_SCHEMA} reports, so extract it again"]
+        )
     if (
         not isinstance(data, dict)
         or data.get("schema") != SKELETON_SCHEMA
@@ -589,7 +610,7 @@ def load_skeleton_report(path: str | Path) -> SkeletonReport:
         raise SkeletonError([f"{path} contains malformed skeleton report data"])
     declarations_by_node = dict(targets)
     tables = _report_tables(data)
-    used: dict[str, set[str]] = {table: set() for table in tables}
+    used: dict[str, set[object]] = {table: set() for table in tables}
     nodes = tuple(
         _node_from_dict(node, targets=declarations_by_node, tables=tables, used=used) for node in raw_nodes
     )
@@ -725,21 +746,29 @@ _TRUSTED_REPORT_FIELDS = frozenset(
 )
 
 
-def _report_tables(data: dict[str, object]) -> dict[str, dict[str, object]]:
-    """Read the shared tables that report declarations refer to by name."""
+def _report_tables(data: dict[str, object]) -> dict[str, dict[object, object]]:
+    """Read the shared tables that report declarations refer to by name.
 
-    tables: dict[str, dict[str, object]] = {}
+    Trusted entries are nested under the root module they were printed for and
+    come back keyed by ``(root module, name)``.
+    """
+
+    tables: dict[str, dict[object, object]] = {}
     for table in ("boundary_modules", "semantics", "trusted"):
         value = data[table]
         if not isinstance(value, dict):
             raise SkeletonError([f"malformed shared {table} table in skeleton report"])
         tables[table] = value
-    tables["trusted"] = {
-        name: _trusted_from_dict(item, root=name) for name, item in tables["trusted"].items()
-    }
-    for name, trusted in tables["trusted"].items():
-        if not isinstance(trusted, TrustedDeclaration) or trusted.name != name:
-            raise SkeletonError([f"mismatched shared trusted declaration {name} in skeleton report"])
+    trusted: dict[object, object] = {}
+    for module, entries in tables["trusted"].items():
+        if not isinstance(entries, dict) or not entries:
+            raise SkeletonError([f"malformed shared trusted table for root module {module} in skeleton report"])
+        for name, item in entries.items():
+            entry = _trusted_from_dict(item, root=name)
+            if entry.name != name:
+                raise SkeletonError([f"mismatched shared trusted declaration {name} in skeleton report"])
+            trusted[(module, name)] = entry
+    tables["trusted"] = trusted
     for name, semantic in tables["semantics"].items():
         _validate_semantic_material(_report_string(semantic, f"semantic material for {name}"), context=name)
     tables["boundary_modules"] = {
@@ -760,8 +789,8 @@ def _node_from_dict(
     item: object,
     *,
     targets: dict[str, tuple[str, ...]],
-    tables: dict[str, dict[str, object]],
-    used: dict[str, set[str]],
+    tables: dict[str, dict[object, object]],
+    used: dict[str, set[object]],
 ) -> NodeSkeleton:
     if not isinstance(item, dict) or item.keys() != _NODE_REPORT_FIELDS:
         raise SkeletonError(["malformed article in skeleton report"])
@@ -795,7 +824,7 @@ def _node_from_dict(
 
 
 def _declaration_from_dict(
-    item: object, *, tables: dict[str, dict[str, object]], used: dict[str, set[str]]
+    item: object, *, tables: dict[str, dict[object, object]], used: dict[str, set[object]]
 ) -> DeclarationSkeleton:
     if not isinstance(item, dict) or item.keys() != _DECLARATION_REPORT_FIELDS:
         raise SkeletonError(["malformed declaration in skeleton report"])
@@ -803,13 +832,16 @@ def _declaration_from_dict(
     kind = _report_kind(item.get("kind"), name)
     semantic = _report_string(item.get("semantic"), f"semantic material for {name}")
     _validate_semantic_material(semantic, context=name, kind=kind)
+    module = _report_string(item.get("module"), f"module for {name}")
 
     def shared(field: str, table: str, what: str) -> list[tuple[str, object]]:
         names = _report_string_tuple(item.get(field), f"{field} for {name}")
-        if not set(names) <= tables[table].keys():
+        # A declaration may only name trusted entries printed for its own module.
+        keys: list[object] = [(module, key) for key in names] if table == "trusted" else list(names)
+        if not set(keys) <= tables[table].keys():
             raise SkeletonError([f"mismatched {what} for {name}"])
-        used[table].update(names)
-        return [(key, tables[table][key]) for key in names]
+        used[table].update(keys)
+        return [(entry, tables[table][key]) for entry, key in zip(names, keys, strict=True)]
 
     assumed_semantics = tuple((key, str(value)) for key, value in shared("assumed", "semantics", "assumption semantics"))
     assumed = tuple(key for key, _ in assumed_semantics)
@@ -843,7 +875,7 @@ def _declaration_from_dict(
     declaration = DeclarationSkeleton(
         name=name,
         kind=kind,
-        module=_report_string(item.get("module"), f"module for {name}"),
+        module=module,
         path=_report_optional_string(item.get("path"), f"path for {name}"),
         start_line=start_line,
         end_line=_report_optional_int(item.get("end_line"), f"end line for {name}"),
@@ -1261,6 +1293,10 @@ class _CommandSignalled(BaseException):
     """A termination signal arrived while a bounded command was running."""
 
 
+#: Per-thread state of a probe pool's workers; see _run_module_probes.
+_PROBE_POOL = threading.local()
+
+
 _GUARDED_SIGNALS = ("SIGINT", "SIGTERM", "SIGHUP")
 _ACTIVE_SIGNAL_GUARD: _SignalGuard | None = None
 
@@ -1413,6 +1449,9 @@ def _run_registered_command(
             except OSError:
                 pass
 
+    # Set when this command runs as one of a pool's probes and the pool is
+    # being torn down; the command then ends like one that timed out.
+    cancelled: threading.Event | None = getattr(_PROBE_POOL, "cancelled", None)
     descendants: dict[tuple[int, float], psutil.Process] = {}
     token = secrets.token_hex(16)
     process_env = os.environ.copy() if env is None else env.copy()
@@ -1422,6 +1461,8 @@ def _run_registered_command(
     failure: SkeletonError | None = None
     terminated = False
     try:
+        if cancelled is not None and cancelled.is_set():
+            raise SkeletonError([f"{context} was cancelled"])
         try:
             process = subprocess.Popen(
                 command,
@@ -1452,6 +1493,9 @@ def _run_registered_command(
                 failure = SkeletonError(
                     [f"{context} exceeded the {output_limit}-byte output limit"]
                 )
+                break
+            if cancelled is not None and cancelled.is_set():
+                failure = SkeletonError([f"{context} was cancelled"])
                 break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -1790,18 +1834,8 @@ def _check_artifacts_fresh(
         )
 
 
-def run_probe(
-    probe: str,
-    lean_root: Path,
-    *,
-    timeout: float = DEFAULT_PROBE_TIMEOUT,
-    freshness_timeout: float = DEFAULT_FRESHNESS_TIMEOUT,
-) -> str:
-    """Run ``probe`` with ``lake env lean`` inside the built project.
-
-    ``freshness_timeout`` bounds the Lake freshness check that runs first and
-    ``timeout`` the probe itself; neither spends the other's budget.
-    """
+def _lake_executable(lean_root: Path) -> str:
+    """Find Lake, and refuse a project Lake has never resolved."""
 
     lake = shutil.which("lake")
     if lake is None:
@@ -1810,8 +1844,36 @@ def run_probe(
         raise SkeletonError(
             ["lake-manifest.json is missing; run `lake build` before extracting skeletons"]
         )
+    return lake
+
+
+def _check_build_freshness(
+    lean_root: Path, modules: tuple[str, ...], *, timeout: float = DEFAULT_FRESHNESS_TIMEOUT
+) -> None:
+    """Run the Lake freshness check once over every module about to be probed."""
+
+    _check_artifacts_fresh(_lake_executable(lean_root), lean_root, modules, timeout=timeout)
+
+
+def run_probe(
+    probe: str,
+    lean_root: Path,
+    *,
+    timeout: float = DEFAULT_PROBE_TIMEOUT,
+    freshness_timeout: float = DEFAULT_FRESHNESS_TIMEOUT,
+    check_freshness: bool = True,
+) -> str:
+    """Run ``probe`` with ``lake env lean`` inside the built project.
+
+    ``freshness_timeout`` bounds the Lake freshness check that runs first and
+    ``timeout`` the probe itself; neither spends the other's budget. Extraction
+    checks freshness once for all its probes and passes ``check_freshness=False``.
+    """
+
+    lake = _lake_executable(lean_root)
     modules = _probe_modules(probe)
-    _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout)
+    if check_freshness:
+        _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout)
     deadline = time.monotonic() + timeout
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
@@ -2483,6 +2545,56 @@ def _hash_module_files(
     return tuple(identities)
 
 
+def _probe_workers(jobs: int) -> int:
+    """How many probe processes run at once; see ``_MAX_PROBE_WORKERS``."""
+
+    return max(1, min(jobs, _MAX_PROBE_WORKERS, (os.cpu_count() or 2) // 2))
+
+
+def _run_module_probes(
+    jobs: list[tuple[str, str]], runner: ProbeRunner, lean_root: Path
+) -> dict[str, str | SkeletonError]:
+    """Run each module's probe in a bounded pool and collect its output.
+
+    A ``SkeletonError`` from one probe is that module's result, so the failure
+    stays confined to its roots. Anything else, including an interrupt or a
+    termination signal, cancels the pool: each running command terminates its
+    process tree, every worker is joined, and only then does the error
+    propagate, so no Lean process outlives the extraction.
+    """
+
+    cancelled = threading.Event()
+
+    def probe(program: str) -> str:
+        _PROBE_POOL.cancelled = cancelled
+        try:
+            return runner(program, lean_root)
+        finally:
+            _PROBE_POOL.cancelled = None
+
+    results: dict[str, str | SkeletonError] = {}
+    pool = ThreadPoolExecutor(max_workers=_probe_workers(len(jobs)), thread_name_prefix="autoform-probe")
+    with _signal_guard() as guard:
+        try:
+            futures = {pool.submit(probe, program): module for module, program in jobs}
+            guard.arm()
+            pending = set(futures)
+            while pending:
+                done, pending = wait(pending, timeout=0.05, return_when=FIRST_COMPLETED)
+                for future in done:
+                    try:
+                        results[futures[future]] = future.result()
+                    except SkeletonError as exc:
+                        results[futures[future]] = exc
+        except BaseException:
+            cancelled.set()
+            raise
+        finally:
+            guard.disarm()
+            pool.shutdown(wait=True, cancel_futures=True)
+    return results
+
+
 # --------------------------------------------------------------------------- #
 # Extraction
 # --------------------------------------------------------------------------- #
@@ -2494,14 +2606,19 @@ def extract_skeletons(
     lean_root: str | Path,
     runner: ProbeRunner | None = None,
     node_ids: tuple[str, ...] | None = None,
+    timeout: float | None = None,
 ) -> SkeletonReport:
     """Extract the skeleton of every ``lean:`` declaration the blueprint names.
 
-    ``runner`` executes the rendered probe and returns Lean's standard output.
-    A declaration the lexical index cannot place is reported as unresolved
-    without running Lean, exactly as ``autoform check --lean-root`` reports it.
-    ``node_ids`` narrows the report to those articles; each of their
-    declarations has the same evidence as in a full extraction.
+    A declaration's packet reads as it does to a file that imports its module:
+    each root module gets its own probe, whose only import is that module, so
+    ``node_ids``, which narrows the report to those articles, never changes a
+    declaration's evidence. ``runner`` executes one rendered probe and returns
+    Lean's standard output; by default each runs with ``lake env lean`` after
+    one Lake freshness check over every probed module, and ``timeout`` bounds
+    each probe process. A declaration the lexical index cannot place is
+    reported as unresolved without running Lean, exactly as ``autoform check
+    --lean-root`` reports it.
     """
 
     try:
@@ -2517,13 +2634,24 @@ def extract_skeletons(
             ["Lean project configuration changed while skeletons were being extracted; retry after the project is idle"]
         )
     index = index_project(root)
+    freshness: Callable[[tuple[str, ...]], None] | None = None
+    if runner is None:
+        probe_timeout = DEFAULT_PROBE_TIMEOUT if timeout is None else timeout
+
+        def freshness(modules: tuple[str, ...]) -> None:
+            _check_build_freshness(root, modules)
+
+        def runner(probe: str, lean_root: Path) -> str:
+            return run_probe(probe, lean_root, timeout=probe_timeout, check_freshness=False)
+
     report = extract_graph_skeletons(
         graph,
         lean_root=root,
         libraries=libraries,
         index=index,
-        runner=runner or run_probe,
+        runner=runner,
         node_ids=node_ids,
+        freshness=freshness,
     )
     if index_project(root).source_digest != index.source_digest:
         raise SkeletonError(["Lean sources changed during skeleton extraction; retry after the build is idle"])
@@ -2561,8 +2689,13 @@ def extract_graph_skeletons(
     index: SourceIndex,
     runner: ProbeRunner,
     node_ids: tuple[str, ...] | None = None,
+    freshness: Callable[[tuple[str, ...]], None] | None = None,
 ) -> SkeletonReport:
-    """Extract skeletons for an already loaded graph."""
+    """Extract skeletons for an already loaded graph.
+
+    ``freshness``, when given, is called once with every module about to be
+    probed, before any probe runs.
+    """
 
     targets: list[tuple[Node, tuple[str, ...]]] = []
     target_issues: list[str] = []
@@ -2611,31 +2744,21 @@ def extract_graph_skeletons(
         if passage_issues:
             broken_passages[node.id] = "; ".join(passage_issues)
 
-    # The probe imports the module of every target the blueprint names, not
-    # only the selected ones. Lean prints signatures, and parses sources, with
-    # the notation and tokens its imports bring into scope, so a declaration's
-    # packet must not depend on which other articles were extracted with it.
-    located: dict[str, tuple[Path | None, str | None]] = {}
-    for _, names in targets:
-        for name in names:
-            if name not in located:
-                location = index.find(name)
-                located[name] = (
-                    (None, None)
-                    if location is None
-                    else (location.path, module_of(lean_root / location.path, libraries))
-                )
-    imports = {module for _, module in located.values() if module is not None}
-
+    # A declaration's packet reads as it does to a file that imports its
+    # module. Lean prints signatures, and parses sources, with the notation,
+    # tokens, and attributes its imports bring into scope, so each root module
+    # gets its own probe whose only import is that module, and the selection
+    # decides only which modules are probed.
     unresolved: list[UnresolvedTarget] = []
-    roots: list[str] = []
+    roots: dict[str, str] = {}
     for node, names in selected:
         for name in names:
             if node.id in broken_passages:
                 unresolved.append(UnresolvedTarget(node.id, name, broken_passages[node.id]))
                 continue
-            path, module = located[name]
-            if path is None:
+            location = index.find(name)
+            module = None if location is None else module_of(lean_root / location.path, libraries)
+            if location is None:
                 unresolved.append(
                     UnresolvedTarget(node.id, name, "declaration not found in the Lean sources")
                 )
@@ -2645,23 +2768,39 @@ def extract_graph_skeletons(
                     UnresolvedTarget(
                         node.id,
                         name,
-                        f"source {path.as_posix()} is not built by any library target",
+                        f"source {location.path.as_posix()} is not built by any library target",
                     )
                 )
                 continue
-            if name not in roots:
-                roots.append(name)
+            roots.setdefault(name, module)
+    groups: dict[str, list[str]] = {}
+    for name, module in roots.items():
+        groups.setdefault(module, []).append(name)
 
     records: dict[str, dict[str, object]] = {}
+    # A probe that fails on its own (exit status, timeout, malformed records)
+    # leaves only its module's roots unresolved; Lake, freshness, and snapshot
+    # failures concern every module and still abort the extraction.
+    failed_modules: dict[str, str] = {}
     snapshot_started_ns: int | None = None
-    if roots:
-        program = render_probe(
-            imports=tuple(sorted(imports)),
-            roots=tuple(roots),
-            project_roots=tuple(root for library in libraries for root in library.roots),
-        )
+    if groups:
+        project_roots = tuple(root for library in libraries for root in library.roots)
+        jobs = [
+            (module, render_probe(imports=(module,), roots=tuple(groups[module]), project_roots=project_roots))
+            for module in sorted(groups)
+        ]
         snapshot_started_ns = time.time_ns()
-        records = parse_probe_output(runner(program, lean_root), expected_roots=tuple(roots))
+        if freshness is not None:
+            freshness(tuple(sorted(groups)))
+        outputs = _run_module_probes(jobs, runner, lean_root)
+        for module in sorted(groups):
+            output = outputs[module]
+            try:
+                if isinstance(output, SkeletonError):
+                    raise output
+                records.update(parse_probe_output(output, expected_roots=tuple(groups[module])))
+            except SkeletonError as exc:
+                failed_modules[module] = f"probe of module {module} failed: {exc}"
 
     nodes: list[NodeSkeleton] = []
     module_hashes: dict[tuple[str, str], str] = {}
@@ -2669,6 +2808,10 @@ def extract_graph_skeletons(
         declarations: list[DeclarationSkeleton] = []
         for name in names:
             if name not in roots or node.id in broken_passages:
+                continue
+            module = roots[name]
+            if module in failed_modules:
+                unresolved.append(UnresolvedTarget(node.id, name, failed_modules[module]))
                 continue
             record = records.get(name)
             if record is None:
@@ -2680,6 +2823,17 @@ def extract_graph_skeletons(
                         node.id,
                         name,
                         "not in the built environment; run `lake build`",
+                    )
+                )
+                continue
+            if record.get("module") != module:
+                # The packet was printed in the environment of the module its
+                # source was found in, which is not the one Lean declares it in.
+                unresolved.append(
+                    UnresolvedTarget(
+                        node.id,
+                        name,
+                        f"Lean declares it in module {record.get('module')}, not in {module} where its source was found",
                     )
                 )
                 continue
