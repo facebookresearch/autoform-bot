@@ -1,20 +1,16 @@
-{imports}
--- Autoform skeleton probe. This file is a Python-format template: `{{`/`}}` are
--- literal braces and single-brace fields are filled by autoform_cli.skeleton.
--- It is written to a temporary file and run with `lake env lean` inside the
--- built project; it never modifies the project.
+-- Autoform skeleton probe helpers. This file is a Python-format template: `{{`/`}}`
+-- are literal braces and single-brace fields are filled by autoform_cli.skeleton.
+-- Each extraction compiles it once, with `lake env lean -o` inside the built
+-- project, into a module in a temporary directory; it never modifies the
+-- project. Each probe imports one root module and this module, and only calls
+-- `AutoformSkeleton.main`, so no project name, notation, or option is in scope
+-- while these helpers elaborate.
 import Lean.Util.CollectAxioms
 import Lean.Util.Path
 import Lean.Elab.Command
 import Lean.Data.Json
 
 open Lean Elab Command Meta Term
-
--- A reader must see what is quantified over: `∃ n : ℕ, …`, not `∃ n, …`.
-set_option pp.funBinderTypes true
--- and where a cast lands: `(↑n : ℚ)`, not `↑n`, since `1 / ↑n` means something
--- else in `ℕ`.
-set_option pp.coercions.types true
 
 namespace AutoformSkeleton
 
@@ -336,15 +332,23 @@ def kindOf (env : Environment) (c : Name) : String :=
 def moduleOf (env : Environment) (c : Name) : Option Name :=
   (env.getModuleIdxFor? c).map fun idx => env.header.moduleNames[idx.toNat]!
 
+/-- The options signatures print under, on top of the probe's defaults. -/
+def packetOptions (opts : Options) : Options :=
+  -- A reader must see what is quantified over: `∃ n : ℕ, …`, not `∃ n, …`,
+  -- and where a cast lands: `(↑n : ℚ)`, not `↑n`, since `1 / ↑n` means
+  -- something else in `ℕ`.
+  (opts.setBool `pp.funBinderTypes true).setBool `pp.coercions.types true
+
 def signatureOf (c : Name) : CommandElabM String := do
-  let sig ← liftTermElabM (PrettyPrinter.ppSignature c)
+  let sig ← liftTermElabM <| withOptions packetOptions (PrettyPrinter.ppSignature c)
   return sig.fmt.pretty 100
 
 /-- The raw signature, bypassing project notation, unexpanders, and custom
 delaborators. Project syntax can print `HMul.hMul a b` as `a + b`; this form
 cannot. -/
 def rawSignatureOf (c : Name) : CommandElabM String := do
-  let sig ← liftTermElabM <| withOptions (·.setBool `pp.raw true) (PrettyPrinter.ppSignature c)
+  let sig ← liftTermElabM <|
+    withOptions (fun opts => (packetOptions opts).setBool `pp.raw true) (PrettyPrinter.ppSignature c)
   return sig.fmt.pretty 100
 
 /-- First node of syntax kind `k` inside `stx`, depth-first. -/
@@ -398,8 +402,8 @@ def sourceSlice (text : String) (r : DeclarationRange) : String :=
 
 /-! Comment ranges. Lean's parser, not a lexer guess, decides what is a comment:
 a project token such as `=--` or `+/-` is code, and `/--/ … -/` is a docstring.
-Arithmetic below is spelled `Nat.succ`/`Nat.add` because project notation that
-redefines `+` is imported above this file and would apply here too. -/
+Arithmetic below is spelled `Nat.succ`/`Nat.add`, which no notation can
+reinterpret. -/
 
 /-- End of a line comment starting at `i`: the next newline, kept as layout. -/
 partial def lineCommentEnd (bytes : ByteArray) (i stop : Nat) : Nat :=
@@ -822,11 +826,12 @@ def skeleton
     ("boundary_modules", Json.arr boundaryModuleNames),
     ("axioms", Json.arr (sortedAxioms.map fun d => Json.str (toString d)))]
 
-end AutoformSkeleton
-
-set_option maxHeartbeats 0 in
-run_cmd do
-  let projectRoots : List Name := [{project_roots}]
+/-- The probe's entry point: the skeleton of each requested root, keyed by the
+name as the CLI spelled it. It runs in the probe's command scope, which has no
+`open` and no option set, so signatures print with only `packetOptions` added. -/
+def main (projectRoots : List Name) (roots : List (String × Name)) : CommandElabM Unit :=
+  -- Elaborated proofs can be large; reading them has no heartbeat budget.
+  withScope (fun scope => {{ scope with opts := maxHeartbeats.set scope.opts 0 }}) do
   let expandCache : IO.Ref (Std.HashMap Name (Array Name)) ← IO.mkRef {{}}
   let emitted : IO.Ref (Std.HashSet (String × Name)) ← IO.mkRef {{}}
   let coreModules ← AutoformSkeleton.toolchainModules (← getEnv)
@@ -837,7 +842,17 @@ run_cmd do
   let direct ← (← IO.getEnv "{output_env}").mapM fun path => IO.FS.Handle.mk path .write
   let semanticCache : IO.Ref AutoformSkeleton.SemanticCache ← IO.mkRef {{ output := direct }}
   try
-    for (request, root) in [{roots}] do
+    for (request, root) in roots do
       AutoformSkeleton.skeleton projectRoots coreModules expandCache semanticCache emitted request root
   finally
     if let some out := direct then out.flush
+
+end AutoformSkeleton
+
+-- Each probe finds this module after the project's own search path, so a
+-- project or dependency module of the same name would be imported instead.
+run_cmd do
+  let helper := Name.mkSimple "{helper_module}"
+  if let some path ← (← searchPathRef.get).findWithExt "olean" helper then
+    throwError "the project's search path already provides a module named {{helper}}, at {{path}}; \
+      the skeleton probe needs that module name for its own helpers"

@@ -78,6 +78,10 @@ SEMANTIC_SCHEMA = "autoform-lean-expr/v4"
 PROBE_MARKER = "AUTOFORM_SKELETON "
 # Names the file the probe writes its records to; see run_probe.
 PROBE_OUTPUT_ENV = "AUTOFORM_SKELETON_OUTPUT"
+#: The module the probe's helpers are compiled into. A hyphen cannot appear in
+#: an unquoted Lean module name, so no ordinary project module is called this;
+#: building the helper fails if one is.
+_PROBE_HELPER_MODULE = "autoform-skeleton-helper"
 
 #: Module roots whose declarations are never listed as assumptions: they are
 #: the language itself, not mathematics a reader might want to double-check.
@@ -1708,9 +1712,21 @@ def _relative(path: Path, root: Path) -> str:
 # --------------------------------------------------------------------------- #
 
 def _probe_template() -> str:
-    """The Lean probe, kept beside the other generated-file sources under templates/."""
+    """The probe's Lean helpers, kept beside the other generated-file sources."""
 
     return (Path(__file__).parent / "probes" / "skeleton_probe.lean").read_text(encoding="utf-8")
+
+
+def _render_probe_helper() -> str:
+    """Render the helper module every probe imports; see ``_build_probe_helper``."""
+
+    return _probe_template().format(
+        core_roots=", ".join(_lean_name(name) for name in _CORE_MODULE_ROOTS),
+        helper_module=_PROBE_HELPER_MODULE,
+        marker=PROBE_MARKER,
+        output_env=PROBE_OUTPUT_ENV,
+        output_limit=DEFAULT_PROBE_OUTPUT_LIMIT,
+    )
 
 
 def render_probe(
@@ -1719,32 +1735,38 @@ def render_probe(
     roots: tuple[str, ...],
     project_roots: tuple[str, ...],
 ) -> str:
-    """Render the Lean program that extracts the skeleton of every root."""
+    """Render the Lean program that extracts the skeleton of every root.
+
+    The program imports ``imports`` and the compiled helper module and makes one
+    fully qualified call, with no ``open`` or ``set_option``: the helpers were
+    elaborated without the project in scope, and signatures print as they do
+    to a file with only those imports.
+    """
 
     if not roots:
         raise SkeletonError(["refusing to render a probe with no declarations"])
     if not imports:
         raise SkeletonError(["refusing to render a probe with no imports"])
-    return _probe_template().format(
-        core_roots=", ".join(_lean_name(name) for name in _CORE_MODULE_ROOTS),
-        imports="\n".join(f"import {module}" for module in sorted(set(imports))),
-        marker=PROBE_MARKER,
-        output_env=PROBE_OUTPUT_ENV,
-        output_limit=DEFAULT_PROBE_OUTPUT_LIMIT,
-        project_roots=", ".join(_lean_name(name) for name in sorted(set(project_roots))),
-        roots=", ".join(f"({json.dumps(name, ensure_ascii=False)}, {_lean_name(name)})" for name in roots),
-    )
+    lines = [f"import {module}" for module in sorted(set(imports))]
+    lines.append(f"import «{_PROBE_HELPER_MODULE}»")
+    project = ", ".join(_lean_name(name) for name in sorted(set(project_roots)))
+    requests = ", ".join(f"({json.dumps(name, ensure_ascii=False)}, {_lean_name(name)})" for name in roots)
+    lines.append(f"run_cmd AutoformSkeleton.main [{project}] [{requests}]")
+    return "\n".join(lines) + "\n"
 
 
 def _lean_name(name: str) -> str:
-    """Spell a Lean name as a term without trusting Lean to parse it."""
+    """Spell a Lean name as a term without trusting Lean to parse it.
 
-    result = "Name.anonymous"
+    The spelling is fully qualified: the probe opens no namespace.
+    """
+
+    result = "Lean.Name.anonymous"
     for part, quoted in _lean_name_parts(name):
         if not quoted and part.isascii() and part.isdigit():
-            result = f"Name.num ({result}) {int(part)}"
+            result = f"Lean.Name.num ({result}) {int(part)}"
         else:
-            result = f"Name.str ({result}) {json.dumps(part, ensure_ascii=False)}"
+            result = f"Lean.Name.str ({result}) {json.dumps(part, ensure_ascii=False)}"
     return result
 
 
@@ -1786,7 +1808,7 @@ def _lean_name_parts(name: str) -> tuple[tuple[str, bool], ...]:
 
 
 def _probe_modules(probe: str) -> tuple[str, ...]:
-    """Read the generated probe's leading project imports."""
+    """Read the generated probe's leading project imports, without its helper."""
 
     modules: list[str] = []
     for line in probe.splitlines():
@@ -1798,7 +1820,8 @@ def _probe_modules(probe: str) -> tuple[str, ...]:
         module = stripped.removeprefix("import ").strip()
         if not module or any(character.isspace() for character in module):
             raise SkeletonError(["the generated skeleton probe contains an invalid import"])
-        modules.append(module)
+        if module != f"«{_PROBE_HELPER_MODULE}»":
+            modules.append(module)
     if not modules:
         raise SkeletonError(["the generated skeleton probe contains no project imports"])
     return tuple(dict.fromkeys(modules))
@@ -1855,6 +1878,62 @@ def _check_build_freshness(
     _check_artifacts_fresh(_lake_executable(lean_root), lean_root, modules, timeout=timeout)
 
 
+def _probe_environment() -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    return env
+
+
+def _build_probe_helper(lean_root: Path, directory: Path, *, timeout: float) -> Path:
+    """Compile the probe's helpers into ``directory`` and return it.
+
+    The helpers are elaborated once, with the project's toolchain and no project
+    module imported, so no project name, notation, or option reaches them. Each
+    probe then finds the module through ``LEAN_PATH``. A failure here concerns
+    every probe, so it stops the extraction.
+    """
+
+    lake = _lake_executable(lean_root)
+    directory.mkdir(parents=True, exist_ok=True)
+    source = directory / f"{_PROBE_HELPER_MODULE}.lean"
+    source.write_text(_render_probe_helper(), encoding="utf-8")
+    try:
+        result = _run_bounded_command(
+            [lake, "env", "lean", f"--root={directory}", "-o", str(source.with_suffix(".olean")), str(source)],
+            cwd=lean_root,
+            timeout=timeout,
+            context="building the skeleton probe helpers",
+            env=_probe_environment(),
+        )
+    except _CommandTimedOut as exc:
+        raise SkeletonError(
+            [
+                f"building the skeleton probe helpers timed out after {timeout:g} seconds; "
+                "rerun with --timeout <seconds> for large projects"
+            ]
+        ) from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        _raise_if_core_module_shadowed(detail)
+        raise SkeletonError([f"cannot build the skeleton probe helpers\n{detail}"])
+    return directory
+
+
+def _raise_if_core_module_shadowed(detail: str) -> None:
+    """Name the dependency library at fault when Lean could not load a toolchain module."""
+
+    shadowed = _SHADOWED_CORE_MODULE.search(detail)
+    if shadowed:
+        root = shadowed.group(1).split(".", 1)[0]
+        raise SkeletonError(
+            [
+                f"the skeleton probe cannot load toolchain module {shadowed.group(1)}: a dependency "
+                f"library probably provides modules under `{root}`, which hides the toolchain's own `{root}`; "
+                f"rename that library's modules\n{detail}"
+            ]
+        )
+
+
 def run_probe(
     probe: str,
     lean_root: Path,
@@ -1862,12 +1941,15 @@ def run_probe(
     timeout: float = DEFAULT_PROBE_TIMEOUT,
     freshness_timeout: float = DEFAULT_FRESHNESS_TIMEOUT,
     check_freshness: bool = True,
+    helper: Path | None = None,
 ) -> str:
     """Run ``probe`` with ``lake env lean`` inside the built project.
 
     ``freshness_timeout`` bounds the Lake freshness check that runs first and
     ``timeout`` the probe itself; neither spends the other's budget. Extraction
     checks freshness once for all its probes and passes ``check_freshness=False``.
+    ``helper`` is the directory ``_build_probe_helper`` compiled the helpers
+    into; without one, the probe builds its own within ``timeout``.
     """
 
     lake = _lake_executable(lean_root)
@@ -1875,9 +1957,15 @@ def run_probe(
     if check_freshness:
         _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout)
     deadline = time.monotonic() + timeout
-    env = os.environ.copy()
-    env.pop("PYTHONPATH", None)
+    env = _probe_environment()
     with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
+        if helper is None:
+            helper = _build_probe_helper(
+                lean_root, Path(scratch) / "helper", timeout=max(0.0, deadline - time.monotonic())
+            )
+        # Lake puts the project's own directories first, so the helper cannot
+        # hide a project module; building it refused one with the same name.
+        env["LEAN_PATH"] = os.pathsep.join(filter(None, (env.get("LEAN_PATH"), str(helper))))
         source = Path(scratch) / "AutoformSkeletonProbe.lean"
         source.write_text(probe, encoding="utf-8")
         # Records go to their own file: on stdout any other write could split one.
@@ -1901,16 +1989,7 @@ def run_probe(
         output = _read_probe_records(records) if result.returncode == 0 else ""
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
-        shadowed = _SHADOWED_CORE_MODULE.search(detail)
-        if shadowed:
-            root = shadowed.group(1).split(".", 1)[0]
-            raise SkeletonError(
-                [
-                    f"the skeleton probe cannot load toolchain module {shadowed.group(1)}: a dependency "
-                    f"library probably provides modules under `{root}`, which hides the toolchain's own `{root}`; "
-                    f"rename that library's modules\n{detail}"
-                ]
-            )
+        _raise_if_core_module_shadowed(detail)
         raise SkeletonError([f"the skeleton probe failed; is the project built with `lake build`?\n{detail}"])
     return output or result.stdout
 
@@ -2611,14 +2690,15 @@ def extract_skeletons(
     """Extract the skeleton of every ``lean:`` declaration the blueprint names.
 
     A declaration's packet reads as it does to a file that imports its module:
-    each root module gets its own probe, whose only import is that module, so
-    ``node_ids``, which narrows the report to those articles, never changes a
-    declaration's evidence. ``runner`` executes one rendered probe and returns
-    Lean's standard output; by default each runs with ``lake env lean`` after
-    one Lake freshness check over every probed module, and ``timeout`` bounds
-    each probe process. A declaration the lexical index cannot place is
-    reported as unresolved without running Lean, exactly as ``autoform check
-    --lean-root`` reports it.
+    each root module gets its own probe, whose only project import is that
+    module, so ``node_ids``, which narrows the report to those articles, never
+    changes a declaration's evidence. ``runner`` executes one rendered probe and
+    returns Lean's standard output; by default each runs with ``lake env lean``
+    after one Lake freshness check over every probed module and one build of the
+    probe's helpers, and ``timeout`` bounds the helper build and each probe
+    process. A declaration the lexical index cannot place is reported as
+    unresolved without running Lean, exactly as ``autoform check --lean-root``
+    reports it.
     """
 
     try:
@@ -2634,25 +2714,29 @@ def extract_skeletons(
             ["Lean project configuration changed while skeletons were being extracted; retry after the project is idle"]
         )
     index = index_project(root)
-    freshness: Callable[[tuple[str, ...]], None] | None = None
-    if runner is None:
-        probe_timeout = DEFAULT_PROBE_TIMEOUT if timeout is None else timeout
+    prepare: Callable[[tuple[str, ...]], None] | None = None
+    with tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
+        if runner is None:
+            probe_timeout = DEFAULT_PROBE_TIMEOUT if timeout is None else timeout
+            helper: Path | None = None
 
-        def freshness(modules: tuple[str, ...]) -> None:
-            _check_build_freshness(root, modules)
+            def prepare(modules: tuple[str, ...]) -> None:
+                nonlocal helper
+                _check_build_freshness(root, modules)
+                helper = _build_probe_helper(root, Path(scratch), timeout=probe_timeout)
 
-        def runner(probe: str, lean_root: Path) -> str:
-            return run_probe(probe, lean_root, timeout=probe_timeout, check_freshness=False)
+            def runner(probe: str, lean_root: Path) -> str:
+                return run_probe(probe, lean_root, timeout=probe_timeout, check_freshness=False, helper=helper)
 
-    report = extract_graph_skeletons(
-        graph,
-        lean_root=root,
-        libraries=libraries,
-        index=index,
-        runner=runner,
-        node_ids=node_ids,
-        freshness=freshness,
-    )
+        report = extract_graph_skeletons(
+            graph,
+            lean_root=root,
+            libraries=libraries,
+            index=index,
+            runner=runner,
+            node_ids=node_ids,
+            prepare=prepare,
+        )
     if index_project(root).source_digest != index.source_digest:
         raise SkeletonError(["Lean sources changed during skeleton extraction; retry after the build is idle"])
     if _project_control_snapshot(root) != control_snapshot:
@@ -2689,12 +2773,13 @@ def extract_graph_skeletons(
     index: SourceIndex,
     runner: ProbeRunner,
     node_ids: tuple[str, ...] | None = None,
-    freshness: Callable[[tuple[str, ...]], None] | None = None,
+    prepare: Callable[[tuple[str, ...]], None] | None = None,
 ) -> SkeletonReport:
     """Extract skeletons for an already loaded graph.
 
-    ``freshness``, when given, is called once with every module about to be
-    probed, before any probe runs.
+    ``prepare``, when given, is called once with every module about to be
+    probed, before any probe runs; the default runner's freshness check and
+    helper build happen there.
     """
 
     targets: list[tuple[Node, tuple[str, ...]]] = []
@@ -2747,8 +2832,8 @@ def extract_graph_skeletons(
     # A declaration's packet reads as it does to a file that imports its
     # module. Lean prints signatures, and parses sources, with the notation,
     # tokens, and attributes its imports bring into scope, so each root module
-    # gets its own probe whose only import is that module, and the selection
-    # decides only which modules are probed.
+    # gets its own probe whose only project import is that module, and the
+    # selection decides only which modules are probed.
     unresolved: list[UnresolvedTarget] = []
     roots: dict[str, str] = {}
     for node, names in selected:
@@ -2790,8 +2875,8 @@ def extract_graph_skeletons(
             for module in sorted(groups)
         ]
         snapshot_started_ns = time.time_ns()
-        if freshness is not None:
-            freshness(tuple(sorted(groups)))
+        if prepare is not None:
+            prepare(tuple(sorted(groups)))
         outputs = _run_module_probes(jobs, runner, lean_root)
         for module in sorted(groups):
             output = outputs[module]

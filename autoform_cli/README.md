@@ -299,19 +299,31 @@ rather than a homemade one.
 
 The closure is computed from elaborated terms, which is why this is the one
 command that runs Lean: for each module that declares a selected `lean:`
-target it writes a small probe whose only import is that module, and runs it
-with `lake env lean` against the built project. A declaration's packet reads
-as it does to a file that imports its module, whichever other articles are
-extracted with it. That environment has the module's global notation,
-instances, and attributes, including any the module declares after the
-declaration; it lacks the module's `local notation` and local instances, and
-the `open` and `set_option` commands in effect at the declaration. Before any
-probe, Lake must confirm once, without rebuilding, that every probed module
-matches its exact source inputs; a missing `lake-manifest.json`, stale
-artifacts, or a source tree that changes during extraction makes the command
-fail. Only the probed modules need to be built and fresh. That check rehashes
-every input and rewrites Lake's `.hash` files, so the project's `.lake`
-directory must be writable. A lexical closure would miss what
+target it writes a small probe that imports that module and the probe's
+helper module and makes one fully qualified call, with no `open` or
+`set_option`, and runs it with `lake env lean` against the built project. The
+helpers are compiled once per extraction, with the project's toolchain and no
+project module in scope, into a temporary module named
+`autoform-skeleton-helper`; a project, dependency, or `LEAN_PATH` module of
+that name stops the extraction. A declaration's packet reads as it does to a
+file that imports its module, whichever other articles are extracted with it.
+That environment has the module's global notation, instances, and
+attributes, including any the module declares after the declaration; it lacks
+the module's `local notation` and local instances, and the `open` and
+`set_option` commands in effect at the declaration. The probe adds exactly two
+printing options, `pp.funBinderTypes` and `pp.coercions.types`, so a reader
+sees what each binder ranges over and where each cast lands; signatures
+otherwise print as `#check` prints them in a file whose only import is the
+module. The helper module's own imports (`Lean.Elab.Command`,
+`Lean.Util.CollectAxioms`, `Lean.Util.Path`, and `Lean.Data.Json`) are in
+that environment too, with whatever global notation and instances they
+declare. Before any probe, Lake must confirm once, without rebuilding, that
+every probed module matches its exact source inputs; a missing
+`lake-manifest.json`, stale artifacts, or a source tree that changes during
+extraction makes the command fail. Only the probed modules need to be built
+and fresh. That check rehashes every input and rewrites Lake's `.hash` files,
+so the project's `.lake` directory must be writable. A lexical closure would
+miss what
 `open`, notation, implicit instances, and auto-bound variables bring in, and
 every miss silently shrinks the surface a reader is told to trust. Constructors,
 projections, recursors, `noConfusion` helpers, and matchers are folded onto the
@@ -356,9 +368,10 @@ sandbox. Lake evaluates `lakefile.lean`, and the generated probe imports project
 code whose initializers, macros, and metaprograms may perform arbitrary IO and
 can forge probe output. The timeout and output cap bound the direct batch
 command; on POSIX, Autoform also terminates its process group, for every
-probe, on every failure and on interruption. The Lake freshness check and each
-probe have their own 600-second budget; `--timeout SECONDS` sets each probe's,
-which a large project may need. Each probe pays a Lean start and loads its
+probe, on every failure and on interruption. The Lake freshness check, the
+helper build, and each probe have their own 600-second budget;
+`--timeout SECONDS` sets the helper build's and each probe's, which a large
+project may need. Each probe pays a Lean start and loads its
 module's imports; on a Mathlib project that measured about 10 CPU-seconds and
 140 MB of private memory per probe, with the `.olean` files mapped and shared.
 Probes run in parallel on half the CPU cores, at most eight. They are resource

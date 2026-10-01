@@ -46,6 +46,7 @@ from autoform_cli.skeleton import (
     _without_comments,
     _probe_modules,
     _probe_record_issue,
+    _render_probe_helper,
     extract_skeletons,
     format_report,
     lean_libraries,
@@ -257,6 +258,9 @@ def _fake_default_probe(monkeypatch, probe) -> list[tuple[str, ...]]:
     monkeypatch.setattr(
         "autoform_cli.skeleton._check_build_freshness", lambda root, modules, **kwargs: checks.append(modules)
     )
+    monkeypatch.setattr(
+        "autoform_cli.skeleton._build_probe_helper", lambda root, directory, **kwargs: directory
+    )
     monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda program, root, **kwargs: probe(program, root))
     return checks
 
@@ -272,14 +276,28 @@ def test_probe_spells_names_without_trusting_lean_to_parse_them() -> None:
         roots=("Skel.observation_determined",),
         project_roots=("Skel",),
     )
+    helper = _render_probe_helper()
 
-    assert probe.startswith("import Skel.Defs\nimport Skel.Main\n")
-    assert 'Name.str (Name.str (Name.anonymous) "Skel") "observation_determined"' in probe
-    assert f'"{PROBE_MARKER}' in probe
-    assert "def probeOutputLimit : Nat := 67108864" in probe
-    assert 'Name.str (Name.anonymous) "Init"' in probe
-    assert "info.fromClass" in probe
-    assert "privateToUserName c" in probe
+    assert probe.startswith("import Skel.Defs\nimport Skel.Main\nimport «autoform-skeleton-helper»\n")
+    assert 'Lean.Name.str (Lean.Name.str (Lean.Name.anonymous) "Skel") "observation_determined"' in probe
+    assert f'"{PROBE_MARKER}' in helper
+    assert "def probeOutputLimit : Nat := 67108864" in helper
+    assert 'Lean.Name.str (Lean.Name.anonymous) "Init"' in helper
+    assert "info.fromClass" in helper
+    assert "privateToUserName c" in helper
+
+
+def test_probe_elaborates_no_helper_under_the_project_imports() -> None:
+    probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
+
+    # Only this call elaborates with the project in scope, and it opens nothing.
+    assert probe.splitlines() == [
+        "import Skel.Main",
+        "import «autoform-skeleton-helper»",
+        'run_cmd AutoformSkeleton.main [Lean.Name.str (Lean.Name.anonymous) "Skel"] '
+        '[("Skel.x", Lean.Name.str (Lean.Name.str (Lean.Name.anonymous) "Skel") "x")]',
+    ]
+    assert "set_option" not in _render_probe_helper()
 
 
 def test_probe_transports_quoted_and_numeric_name_components_structurally() -> None:
@@ -290,8 +308,8 @@ def test_probe_transports_quoted_and_numeric_name_components_structurally() -> N
     )
 
     assert '"Skel.«quoted.name with space».2"' in probe
-    assert 'Name.str (Name.str (Name.anonymous) "Skel") "quoted.name with space"' in probe
-    assert "Name.num (Name.str" in probe
+    assert 'Lean.Name.str (Lean.Name.str (Lean.Name.anonymous) "Skel") "quoted.name with space"' in probe
+    assert "Lean.Name.num (Lean.Name.str" in probe
 
 
 def test_probe_refuses_to_render_nothing() -> None:
@@ -341,9 +359,9 @@ def test_probe_reports_a_failed_freshness_check_apart_from_stale_artifacts(
 
 
 def test_probe_semantic_schema_matches_the_python_reader() -> None:
-    probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
+    helper = _render_probe_helper()
 
-    assert re.findall(r'^def semanticSchema := "([^"]*)"$', probe, re.MULTILINE) == [SEMANTIC_SCHEMA]
+    assert re.findall(r'^def semanticSchema := "([^"]*)"$', helper, re.MULTILINE) == [SEMANTIC_SCHEMA]
 
 
 def test_bounded_command_rejects_excess_output(tmp_path: Path) -> None:
@@ -723,7 +741,7 @@ def test_probe_freshness_and_execution_have_separate_budgets(tmp_path: Path, mon
     monkeypatch.setattr("autoform_cli.skeleton.time.monotonic", lambda: next(times))
     probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
 
-    assert run_probe(probe, tmp_path, timeout=10, freshness_timeout=20) == "probe output"
+    assert run_probe(probe, tmp_path, timeout=10, freshness_timeout=20, helper=tmp_path) == "probe output"
     assert calls == [20, 9.0]
 
 
@@ -740,7 +758,7 @@ def test_a_probe_timeout_names_the_flag_that_raises_it(tmp_path: Path, monkeypat
     probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
 
     with pytest.raises(SkeletonError) as caught:
-        run_probe(probe, tmp_path, timeout=1)
+        run_probe(probe, tmp_path, timeout=1, helper=tmp_path)
     assert caught.value.issues == (
         "lake env lean timed out after 1 seconds; rerun with --timeout <seconds> for large projects",
     )
@@ -760,7 +778,7 @@ def test_probe_records_file_is_held_to_the_output_limit(tmp_path: Path, monkeypa
     probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
 
     with pytest.raises(SkeletonError, match="1024-byte output limit"):
-        run_probe(probe, tmp_path)
+        run_probe(probe, tmp_path, helper=tmp_path)
 
 
 def test_probe_requires_an_existing_lake_manifest(tmp_path: Path, monkeypatch) -> None:
@@ -1737,7 +1755,7 @@ def _fake_lake(monkeypatch, project: Path, answer) -> list[list[str]]:
     lock = threading.Lock()
 
     def fake_run(command, *, env=None, **kwargs):
-        if command[1] == "--rehash":
+        if command[1] == "--rehash" or "-o" in command:
             with lock:
                 calls.append(command)
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
@@ -1765,8 +1783,11 @@ def test_lake_freshness_is_checked_once_before_one_probe_per_module(tmp_path: Pa
 
     assert report.clean
     assert calls[0] == ["/bin/lake", "--rehash", "--no-build", "build", "Skel.Main", "Skel.Uses"]
-    assert all(command[1:3] == ["env", "lean"] for command in calls[1:])
-    assert sorted(command[4:] for command in calls[1:]) == [["Skel.Main"], ["Skel.Uses"]]
+    # The helpers are built once, after the freshness check and before any probe.
+    assert calls[1][1:4] == ["env", "lean", f"--root={Path(calls[1][-1]).parent}"]
+    assert calls[1][-1].endswith("/autoform-skeleton-helper.lean")
+    assert all(command[1:3] == ["env", "lean"] and "-o" not in command for command in calls[2:])
+    assert sorted(command[4:] for command in calls[2:]) == [["Skel.Main"], ["Skel.Uses"]]
 
 
 @pytest.mark.parametrize("failure", ["exit", "timeout", "malformed"])
@@ -2109,12 +2130,20 @@ def test_cli_sets_the_probe_timeout(tmp_path: Path, capsys, monkeypatch) -> None
         calls.append(kwargs)
         return _fake_probe_output()
 
+    def fake_build_helper(root: Path, directory: Path, **kwargs: object) -> Path:
+        calls.append(kwargs)
+        return directory
+
     monkeypatch.setattr("autoform_cli.skeleton._check_build_freshness", lambda root, modules, **kwargs: None)
+    monkeypatch.setattr("autoform_cli.skeleton._build_probe_helper", fake_build_helper)
     monkeypatch.setattr("autoform_cli.skeleton.run_probe", fake_run_probe)
     command = ["skeleton", str(blueprint), "--lean-root", str(project), "--json"]
     assert main([*command, "--timeout", "1800"]) == 0
-    # The timeout bounds the probe; Lake's freshness check already ran for all of them.
-    assert calls == [{"timeout": 1800.0, "check_freshness": False}]
+    # The timeout bounds the helper build and the probe; Lake's freshness check
+    # already ran for all of them.
+    helper = calls[1].pop("helper")
+    assert calls == [{"timeout": 1800.0}, {"timeout": 1800.0, "check_freshness": False}]
+    assert isinstance(helper, Path) and helper.name.startswith("autoform-skeleton-")
     for bad in ("0", "-5", "inf", "nan", "soon"):
         with pytest.raises(SystemExit):
             main([*command, "--timeout", bad])
@@ -2611,7 +2640,7 @@ def test_the_probe_reads_a_built_project(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_probe_records_bypass_the_command_capture_and_other_output(tmp_path: Path) -> None:
+def test_probe_records_bypass_the_command_capture_and_other_output(tmp_path: Path, monkeypatch) -> None:
     # Lean holds a command's `IO.println` output until the command ends, then
     # prints it at a cost quadratic in its size. A probe that leaves before its
     # command ends shows whether its records went past that capture, and a large
@@ -2624,12 +2653,15 @@ def test_probe_records_bypass_the_command_capture_and_other_output(tmp_path: Pat
     probe = render_probe(
         imports=("Skel.Main",), roots=("Skel.observation_determined",), project_roots=("Skel",)
     )
-    loop = next(line for line in probe.splitlines() if "AutoformSkeleton.skeleton projectRoots" in line)
+    helper = _render_probe_helper()
+    loop = next(line for line in helper.splitlines() if "AutoformSkeleton.skeleton projectRoots" in line)
     leave = "    (← IO.getStdout).flush\n    let _ : Unit ← IO.Process.exit 0"
     noise = "#eval IO.println (String.mk (List.replicate 3000000 'x'))\n\n"
-    command = "set_option maxHeartbeats 0 in\nrun_cmd"
+    command = "run_cmd AutoformSkeleton.main"
     assert command in probe
-    probe = probe.replace(loop, f"{loop}\n{leave}").replace(command, f"{noise}{command}")
+    helper = helper.replace(loop, f"{loop}\n{leave}")
+    probe = probe.replace(command, f"{noise}{command}")
+    monkeypatch.setattr("autoform_cli.skeleton._render_probe_helper", lambda: helper)
 
     records = parse_probe_output(run_probe(probe, project), expected_roots=("Skel.observation_determined",))
 
@@ -2715,6 +2747,93 @@ def test_project_notation_cannot_disguise_the_statement(tmp_path: Path) -> None:
     assert "a + b" in (trusted.source or "")
     assert '"HMul"' in trusted.semantic and '"hMul"' in trusted.semantic
     assert f"-- canonical kernel material: {trusted.semantic}" in uses_disguised.blind_text()
+
+
+_PRINTING_MODULES = {
+    # Root-level names the probe's own helpers use.
+    "PktCollide": (
+        "inductive Expr where\n  | lit : Nat → Expr\n"
+        "def Name : Type := Nat\n"
+        "def Syntax : Type := Nat\n"
+        "def Json : Type := Nat\n"
+        "def Environment : Type := Nat\n"
+        "def Piece : Type := Nat\n"
+        "namespace Skel.PktCollide\n"
+        "def size : Expr → Nat := fun _ => 0\n"
+        "theorem size_lit : size (Expr.lit 1) = 0 := rfl\n"
+        "def zero : Name := (0 : Nat)\n"
+        "theorem zero_eq : zero = zero := rfl\n"
+        "end Skel.PktCollide\n"
+    ),
+    # Root-level names inside namespaces the helpers open.
+    "PktPrint": (
+        "inductive Term where\n  | var : Nat → Term\n"
+        "namespace Meta\ndef weight (n : Nat) : Nat := n + 1\nend Meta\n"
+        "namespace Skel.PktPrint\n"
+        "def ident (t : Term) : Term := t\n"
+        "theorem ident_var : ident (Term.var 1) = Term.var 1 := rfl\n"
+        "theorem weight_zero : Meta.weight 0 = 1 := rfl\n"
+        "end Skel.PktPrint\n"
+    ),
+}
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_signatures_print_as_in_a_file_that_imports_the_module(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    for module, source in _PRINTING_MODULES.items():
+        (project / "Skel" / f"{module}.lean").write_text(source, encoding="utf-8")
+    _build(project, *(f"Skel.{module}" for module in _PRINTING_MODULES))
+    blueprint = _blueprint(
+        tmp_path,
+        lean={
+            "sizes": "Skel.PktCollide.size_lit",
+            "zeros": "Skel.PktCollide.zero_eq",
+            "idents": "Skel.PktPrint.ident_var",
+            "weights": "Skel.PktPrint.weight_zero",
+        },
+    )
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean, report.unresolved
+    printed: dict[str, dict[str, str]] = {}
+    for node in report.nodes:
+        for declaration in node.declarations:
+            shown = printed.setdefault(declaration.module, {})
+            shown[declaration.name] = declaration.signature
+            shown.update((item.name, item.signature) for item in declaration.trusted)
+    assert set(printed) == {"Skel.PktCollide", "Skel.PktPrint"}
+    assert {"Expr", "Name", "Skel.PktCollide.size"} <= set(printed["Skel.PktCollide"])
+    assert {"Term", "Meta.weight", "Skel.PktPrint.ident"} <= set(printed["Skel.PktPrint"])
+    for module, signatures in printed.items():
+        check = tmp_path / f"check-{module}.lean"
+        check.write_text(
+            f"import {module}\n"
+            "set_option pp.funBinderTypes true\n"
+            "set_option pp.coercions.types true\n"
+            + "".join(f"#check {name}\n" for name in signatures),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["lake", "env", "lean", str(check)], cwd=project, capture_output=True, text=True, timeout=600, check=False
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stdout.splitlines() == list(signatures.values())
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_project_module_named_like_the_probe_helpers_stops_extraction(tmp_path: Path, monkeypatch) -> None:
+    project = _project(tmp_path)
+    _build(project, "Skel.Main")
+    shadow = tmp_path / "shadow"
+    shadow.mkdir()
+    (shadow / "autoform-skeleton-helper.olean").write_bytes(b"")
+    monkeypatch.setenv("LEAN_PATH", str(shadow))
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+
+    with pytest.raises(SkeletonError, match="already provides a module named «autoform-skeleton-helper»"):
+        extract_skeletons(blueprint, lean_root=project)
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
