@@ -383,8 +383,14 @@ helper build, and each probe have their own 600-second budget;
 project may need. Each probe pays a Lean start and loads its
 module's imports; on a Mathlib project that measured about 10 CPU-seconds and
 140 MB of private memory per probe, with the `.olean` files mapped and shared.
-Probes run in parallel on half the CPU cores, at most eight. They are resource
-controls, not a security or authenticity boundary.
+Probes run in parallel, one per CPU available to the process, at most eight.
+The worker that ran a probe parses its records as soon as it ends and drops
+the raw output, so at most eight probes' raw output, 64 MiB each at most, is
+held at once. The parsed records of every probed module stay in memory until
+the report is built; one probe's semantic material expands to at most 512 Mi
+characters, so the parsed material totals at most that much per probed
+module. These limits are resource controls, not a security or authenticity
+boundary.
 
 Every skeleton carries a full SHA-256 **drift hash**. It is derived from
 canonical elaborated expressions for the root, every trusted declaration, each

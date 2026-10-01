@@ -106,8 +106,8 @@ _FAILURE_DETAIL_LIMIT = 2000
 DEFAULT_FRESHNESS_TIMEOUT = 600.0
 #: Probes run in parallel, one Lean process per root module. On a Mathlib
 #: project each needs about 10 CPU-seconds and 140 MB of private memory (the
-#: imported `.olean` files are mapped and shared), so extraction uses half the
-#: cores, at most eight, and never more workers than modules.
+#: imported `.olean` files are mapped and shared), so extraction uses one
+#: worker per CPU available to it, at most eight, and never more than modules.
 _MAX_PROBE_WORKERS = 8
 DEFAULT_PROBE_OUTPUT_LIMIT = 64 * 1024 * 1024
 #: The probe states shared subterms once; this bounds the characters of
@@ -1183,10 +1183,11 @@ def _remember_tagged_processes(
     for candidate in psutil.process_iter():
         if candidate.pid in {os.getpid(), root_pid}:
             continue
+        # Reading another user's process can fail with SystemError on macOS.
         try:
             if candidate.environ().get(_PROCESS_TOKEN_ENV) == token:
                 descendants[(candidate.pid, candidate.create_time())] = candidate
-        except (psutil.Error, OSError):
+        except (psutil.Error, OSError, SystemError):
             continue
 
 
@@ -2034,9 +2035,14 @@ def _read_probe_records(records: Path) -> str:
             data = handle.read(DEFAULT_PROBE_OUTPUT_LIMIT + 1)
     except FileNotFoundError:
         return ""
+    except OSError as exc:
+        raise SkeletonError([f"the skeleton probe's records could not be read: {exc.strerror or exc}"]) from exc
     if len(data) > DEFAULT_PROBE_OUTPUT_LIMIT:
         raise SkeletonError([f"lake env lean exceeded the {DEFAULT_PROBE_OUTPUT_LIMIT}-byte output limit"])
-    return data.decode("utf-8")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SkeletonError(["the skeleton probe's records are not valid UTF-8"]) from exc
 
 
 _FOUND_RECORD_FIELDS = frozenset(
@@ -2661,17 +2667,33 @@ def _hash_module_files(
     return tuple(identities)
 
 
+def _available_cpus() -> int:
+    """The CPUs this process may run on, where the platform can say."""
+
+    if hasattr(os, "process_cpu_count"):
+        return os.process_cpu_count() or 1
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
 def _probe_workers(jobs: int) -> int:
     """How many probe processes run at once; see ``_MAX_PROBE_WORKERS``."""
 
-    return max(1, min(jobs, _MAX_PROBE_WORKERS, (os.cpu_count() or 2) // 2))
+    return max(1, min(jobs, _MAX_PROBE_WORKERS, _available_cpus()))
 
 
 def _run_module_probes(
-    jobs: list[tuple[str, str]], runner: ProbeRunner, lean_root: Path
-) -> dict[str, str | SkeletonError]:
-    """Run each module's probe in a bounded pool and collect its output.
+    jobs: list[tuple[str, str]],
+    runner: ProbeRunner,
+    lean_root: Path,
+    read: Callable[[str, str], object] | None = None,
+) -> dict[str, object]:
+    """Run each module's probe in a bounded pool and collect its result.
 
+    ``read(module, output)`` turns a probe's output into its result in the
+    worker that ran it, as soon as the probe ends, so a probe's raw output is
+    held only until it is read; without ``read`` the result is the output.
     A ``SkeletonError`` from one probe is that module's result, so the failure
     stays confined to its roots. Anything else, including an interrupt, a
     termination signal, or a ``_ProbeEnvironmentError`` that every probe would
@@ -2682,18 +2704,19 @@ def _run_module_probes(
 
     cancelled = threading.Event()
 
-    def probe(program: str) -> str:
+    def probe(module: str, program: str) -> object:
         _PROBE_POOL.cancelled = cancelled
         try:
-            return runner(program, lean_root)
+            output = runner(program, lean_root)
         finally:
             _PROBE_POOL.cancelled = None
+        return output if read is None else read(module, output)
 
-    results: dict[str, str | SkeletonError] = {}
+    results: dict[str, object] = {}
     pool = ThreadPoolExecutor(max_workers=_probe_workers(len(jobs)), thread_name_prefix="autoform-probe")
     with _signal_guard() as guard:
         try:
-            futures = {pool.submit(probe, program): module for module, program in jobs}
+            futures = {pool.submit(probe, module, program): module for module, program in jobs}
             guard.arm()
             pending = set(futures)
             while pending:
@@ -2706,10 +2729,14 @@ def _run_module_probes(
                     except SkeletonError as exc:
                         results[futures[future]] = exc
         except BaseException:
-            cancelled.set()
+            # Disarmed before anything else, so that a signal arriving now
+            # cannot skip the cancel and join below; it is delivered once they
+            # are done.
+            guard.disarm()
             raise
         finally:
             guard.disarm()
+            cancelled.set()
             pool.shutdown(wait=True, cancel_futures=True)
     return results
 
@@ -2736,11 +2763,14 @@ def extract_skeletons(
     returns Lean's standard output; by default each runs with ``lake env lean``
     after one Lake freshness check over every probed module and one build of the
     probe's helpers, and ``timeout`` bounds the helper build and each probe
-    process. A declaration the lexical index cannot place is reported as
-    unresolved without running Lean, exactly as ``autoform check --lean-root``
-    reports it.
+    process. A custom ``runner`` owns its probes' freshness and time limits, so
+    it cannot be combined with ``timeout``. A declaration the lexical index
+    cannot place is reported as unresolved without running Lean, exactly as
+    ``autoform check --lean-root`` reports it.
     """
 
+    if runner is not None and timeout is not None:
+        raise ValueError("timeout bounds the default runner's probes; a custom runner bounds its own")
     try:
         graph = load_graph(blueprint_dir)
     except GraphValidationError as exc:
@@ -2919,15 +2949,17 @@ def extract_graph_skeletons(
         snapshot_started_ns = time.time_ns()
         if prepare is not None:
             prepare(tuple(sorted(groups)))
-        outputs = _run_module_probes(jobs, runner, lean_root)
+
+        def read(module: str, output: str) -> dict[str, dict[str, object]]:
+            return parse_probe_output(output, expected_roots=tuple(groups[module]))
+
+        results = _run_module_probes(jobs, runner, lean_root, read)
         for module in sorted(groups):
-            output = outputs[module]
-            try:
-                if isinstance(output, SkeletonError):
-                    raise output
-                records.update(parse_probe_output(output, expected_roots=tuple(groups[module])))
-            except SkeletonError as exc:
-                failed_modules[module] = _stable_detail(f"probe of module {module} failed: {exc}", lean_root)
+            result = results[module]
+            if isinstance(result, SkeletonError):
+                failed_modules[module] = _stable_detail(f"probe of module {module} failed: {result}", lean_root)
+            else:
+                records.update(result)  # type: ignore[arg-type]
 
     nodes: list[NodeSkeleton] = []
     module_hashes: dict[tuple[str, str], str] = {}

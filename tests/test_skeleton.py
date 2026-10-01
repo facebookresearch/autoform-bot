@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -32,7 +33,10 @@ from autoform_cli.skeleton import (
     SkeletonError,
     UnresolvedTarget,
     _CommandTimedOut,
+    _PROBE_POOL,
+    _PROCESS_TOKEN_ENV,
     _ProbeEnvironmentError,
+    _SignalGuard,
     _declaration,
     _install_output,
     _join_readers,
@@ -47,6 +51,9 @@ from autoform_cli.skeleton import (
     _without_comments,
     _probe_modules,
     _probe_record_issue,
+    _probe_workers,
+    _read_probe_records,
+    _remember_tagged_processes,
     _render_probe_helper,
     extract_skeletons,
     format_report,
@@ -691,6 +698,118 @@ def test_probe_pool_termination_signal_kills_every_workers_process_group(tmp_pat
         if cli.poll() is None:
             cli.kill()
     _assert_no_survivors(pid_files)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
+def test_a_signal_as_the_probe_pool_starts_its_cleanup_does_not_skip_it(tmp_path: Path, monkeypatch) -> None:
+    # A worker fails with an error that is not a probe failure, and a SIGTERM
+    # lands as the pool first disarms its guard; the pool must still cancel
+    # and join every worker before the signal ends anything.
+    pid_file = tmp_path / "a.pids"
+    disarm = _SignalGuard.disarm
+    received: list[int] = []
+    joined: list[bool] = []
+
+    class Pool(ThreadPoolExecutor):
+        def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+            super().shutdown(wait=wait, cancel_futures=cancel_futures)
+            joined.append(wait)
+
+    def signal_on_first_disarm(self: _SignalGuard) -> None:
+        if self.armed and threading.current_thread() is threading.main_thread():
+            self._handle(signal.SIGTERM, None)
+        disarm(self)
+
+    def run(program: str, root: Path) -> str:
+        if program == "broken":
+            deadline = time.monotonic() + 20
+            while not (pid_file.exists() and len(pid_file.read_text(encoding="utf-8").split()) == 2):
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            raise RuntimeError("worker broke")
+        return _run_bounded_command([sys.executable, "-c", program], cwd=root, timeout=60, context="test probe").stdout
+
+    monkeypatch.setattr("autoform_cli.skeleton._probe_workers", lambda jobs: jobs)
+    monkeypatch.setattr("autoform_cli.skeleton._SignalGuard.disarm", signal_on_first_disarm)
+    monkeypatch.setattr("autoform_cli.skeleton.ThreadPoolExecutor", Pool)
+    before = set(threading.enumerate())
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: received.append(signum))
+    try:
+        with pytest.raises(SkeletonError, match="interrupted by SIGTERM"):
+            _run_module_probes([("A", _sleeping_probe(pid_file)), ("B", "broken")], run, tmp_path)
+        workers = [thread for thread in threading.enumerate() if thread not in before and thread.is_alive()]
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+    assert received == [signal.SIGTERM]
+    assert joined == [True]
+    assert workers == []
+    _assert_no_survivors([pid_file])
+
+
+def test_a_probe_cancelled_before_its_process_starts_never_starts_it(tmp_path: Path, monkeypatch) -> None:
+    # The pool is cancelled after a worker takes the probe and before it
+    # starts the process.
+    def run(program: str, root: Path) -> str:
+        _PROBE_POOL.cancelled.set()
+        return _run_bounded_command([sys.executable, "-c", program], cwd=root, timeout=60, context="test probe").stdout
+
+    def popen(*args, **kwargs):
+        raise AssertionError("a process started after the pool was cancelled")
+
+    monkeypatch.setattr("autoform_cli.skeleton.subprocess.Popen", popen)
+
+    (result,) = _run_module_probes([("A", "pass")], run, tmp_path).values()
+
+    assert isinstance(result, SkeletonError) and result.issues == ("test probe was cancelled",)
+
+
+def test_tagged_process_scan_skips_a_process_it_cannot_read(monkeypatch) -> None:
+    class Unreadable:
+        pid = 10**9 + 1
+
+        def environ(self) -> dict[str, str]:
+            raise SystemError("<built-in function proc_environ> returned a result with an exception set")
+
+    class Tagged:
+        pid = 10**9 + 2
+
+        def environ(self) -> dict[str, str]:
+            return {_PROCESS_TOKEN_ENV: "token"}
+
+        def create_time(self) -> float:
+            return 1.0
+
+    tagged = Tagged()
+    monkeypatch.setattr("autoform_cli.skeleton.psutil.process_iter", lambda: iter([Unreadable(), tagged]))
+    descendants: dict[tuple[int, float], object] = {}
+
+    _remember_tagged_processes("token", descendants, root_pid=1)  # type: ignore[arg-type]
+
+    assert descendants == {(tagged.pid, 1.0): tagged}
+
+
+def test_unreadable_probe_records_fail_only_that_probe(tmp_path: Path) -> None:
+    records = tmp_path / "records.out"
+    records.write_bytes(PROBE_MARKER.encode() + b"\xff\n")
+    with pytest.raises(SkeletonError, match="records are not valid UTF-8"):
+        _read_probe_records(records)
+    records.unlink()
+    records.mkdir()
+    with pytest.raises(SkeletonError, match="records could not be read"):
+        _read_probe_records(records)
+
+
+def test_probe_workers_follow_the_cpus_available_to_the_process(monkeypatch) -> None:
+    monkeypatch.setattr(os, "process_cpu_count", lambda: 3, raising=False)
+    assert _probe_workers(10) == 3
+    monkeypatch.delattr(os, "process_cpu_count")
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1}, raising=False)
+    assert _probe_workers(10) == 2
+    monkeypatch.delattr(os, "sched_getaffinity")
+    monkeypatch.setattr(os, "cpu_count", lambda: 64)
+    assert _probe_workers(10) == 8
+    assert _probe_workers(2) == 2
 
 
 def _pid_is_live(pid: int) -> bool:
@@ -1790,6 +1909,14 @@ def _answer_records(modules: tuple[str, ...], command: list[str], env: dict[str,
     probe = Path(command[-1]).read_text(encoding="utf-8")
     Path(env[PROBE_OUTPUT_ENV]).write_text(_fake_module_probe(probe, Path.cwd()), encoding="utf-8")
     return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+
+def test_a_custom_runner_cannot_be_given_a_timeout_it_would_ignore(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+
+    with pytest.raises(ValueError, match="a custom runner bounds its own"):
+        extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: "", timeout=5)
 
 
 def test_lake_freshness_is_checked_once_before_one_probe_per_module(tmp_path: Path, monkeypatch) -> None:
