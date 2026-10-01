@@ -36,7 +36,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from html.entities import html5 as _NAMED_REFERENCES
 from pathlib import Path
-from typing import Iterable, Iterator, Mapping
+from typing import Iterable, Iterator, Mapping, NamedTuple
 from urllib.parse import unquote_to_bytes
 
 import html5lib
@@ -911,128 +911,647 @@ _MERMAID_FENCE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})[ \t]*mermaid(?:[ \t]|$)", r
 _TEX_LETTERS = frozenset(
     r"""
     \alpha \beta \gamma \delta \epsilon \varepsilon \zeta \eta \theta \vartheta \iota \kappa
-    \lambda \mu \nu \xi \omicron \pi \varpi \rho \varrho \sigma \varsigma \tau \upsilon \phi
-    \varphi \chi \psi \omega \Gamma \Delta \Theta \Lambda \Xi \Pi \Sigma \Upsilon \Phi \Psi
-    \Omega \aleph \ell \hbar \imath \jmath \wp \Re \Im
+    \varkappa \lambda \mu \nu \xi \omicron \pi \varpi \rho \varrho \sigma \varsigma \tau \upsilon
+    \phi \varphi \chi \psi \omega \digamma \Gamma \Delta \Theta \Lambda \Xi \Pi \Sigma \Upsilon
+    \Phi \Psi \Omega \aleph \beth \gimel \daleth \eth \ell \hbar \hslash \imath \jmath \wp \Re
+    \Im \Bbbk
     """.split()
 )
-#: Spaces no wider than two quads. A single negative thin space (``\!``) is
-#: listed too, since it tightens ``\int\! f``, but two in a row slide one
-#: symbol over another, and more than :data:`_TEX_MAX_SPACE_RUN` spaces in a
-#: row push the rest of a formula aside, so both are refused.
-_TEX_SPACES = frozenset({r"\,", r"\:", r"\;", "\\ ", "\\\n", "\\\t", r"\quad", r"\qquad", "~"})
-_TEX_MAX_SPACE_RUN = 4
+
+
+class _Tex(NamedTuple):
+    """How MathJax sets one TeX command.
+
+    ``kind`` is ``"glyph"`` for a command that sets a symbol, ``"operator"``
+    for a large or named operator, which ``\\limits`` may follow, ``"space"``
+    for horizontal space ``width`` mu wide (an eighteenth of an em; negative
+    space pulls the next symbol back), ``"style"`` for a command that changes
+    the size of what follows but sets nothing itself, ``"size"`` for one that
+    sizes a delimiter, or the name of a command the layout model reads itself.
+    ``arguments`` spells what follows the command, in order: ``g`` where it
+    sets its own symbol, ``m`` an argument that must show something, ``e`` one
+    that may be empty, ``t`` an argument set as text that must show
+    something, ``o`` an optional argument in brackets, ``*`` an optional star,
+    and ``d`` a delimiter.
+    """
+
+    kind: str
+    arguments: str = "g"
+    width: float = 0.0
+
+
+def _tex(names: str, kind: str = "glyph", arguments: str = "g", width: float = 0.0) -> dict[str, _Tex]:
+    return dict.fromkeys(names.split(), _Tex(kind, arguments, width))
+
+
+#: Relations, which alone may follow ``\not``, which strikes through the next
+#: symbol whatever it is.
+_TEX_RELATIONS = frozenset(
+    r"""
+    = < > \lt \gt \le \leq \ge \geq \ne \neq \ll \gg \leqslant \geqslant \nleq \ngeq \lneq \gneq
+    \lneqq \gneqq \lvertneqq \lesssim \gtrsim \lessapprox \gtrapprox \lessdot \gtrdot \equiv
+    \approx \approxeq \cong \ncong \sim \nsim \simeq \backsim \backsimeq \eqsim \asymp \propto
+    \varpropto \doteq \triangleq \prec \preceq \succ \succeq \precsim \succsim \precapprox
+    \succapprox \precneqq \succneqq \nprec \nsucc \npreceq \nsucceq \in \ni \notin \owns \subset
+    \subseteq \supset \supseteq \subseteqq \supseteqq \subsetneq \supsetneq \varsubsetneq
+    \nsubseteq \nsupseteq \Subset \Supset \sqsubseteq \sqsupseteq \mid \nmid \shortmid \nshortmid
+    \parallel \nparallel \shortparallel \perp \between \pitchfork \smile \frown \smallsmile
+    \smallfrown \bowtie \Join \vdash \dashv \models \vDash \Vdash \nvdash \nvDash \nVdash \nVDash
+    \triangleleft \trianglelefteq \triangleright \trianglerighteq \vartriangleleft
+    \vartriangleright \ntriangleleft \ntriangleright \ntrianglelefteq \ntrianglerighteq
+    \to \gets \mapsto \longmapsto \rightarrow \leftarrow \leftrightarrow \Rightarrow \Leftarrow
+    \Leftrightarrow \longrightarrow \longleftarrow \longleftrightarrow \Longrightarrow
+    \Longleftarrow \Longleftrightarrow \iff \implies \impliedby \hookrightarrow \hookleftarrow
+    \twoheadrightarrow \uparrow \downarrow \updownarrow \Uparrow \Downarrow \Updownarrow \nearrow
+    \searrow \swarrow \nwarrow \nleftarrow \nrightarrow \nLeftarrow \nRightarrow \nleftrightarrow
+    \nLeftrightarrow \leftleftarrows \rightrightarrows \upuparrows \downdownarrows
+    \circlearrowleft \circlearrowright \curvearrowleft \curvearrowright \Lsh \Rsh \looparrowleft
+    \looparrowright \leadsto \rightsquigarrow \leftrightsquigarrow \multimap \rightleftharpoons
+    \upharpoonright \restriction
+    """.split()
+)
+#: What may follow ``\left``, ``\right``, ``\middle``, and ``\big`` and its
+#: kin; ``.`` is the empty delimiter, which sets nothing.
+_TEX_DELIMITERS = frozenset(
+    r"""
+    ( ) [ ] | / < > . \{ \} \| \langle \rangle \lfloor \rfloor \lceil \rceil \vert \Vert \lvert
+    \rvert \lVert \rVert \lbrace \rbrace \lbrack \rbrack \lgroup \rgroup \lmoustache \rmoustache
+    \uparrow \downarrow \updownarrow \Uparrow \Downarrow \Updownarrow \backslash
+    """.split()
+)
 #: The TeX testimony may use: the notation statements need, out of what the
 #: site's pinned MathJax 3.2.2 defines in the base and ams packages, the only
-#: ones javascripts/mathjax.js loads. Nothing listed sizes, moves, hides,
-#: overlaps, colours, boxes, or labels content, and nothing defines a macro.
-#: Each command maps to how many arguments must be given that show something.
-#: Any other command or environment is refused by name, so extending this is a
-#: deliberate edit, to be checked against that MathJax version.
-_TESTIMONY_TEX: dict[str, int] = {
-    **dict.fromkeys(_TEX_LETTERS, 0),
-    # Symbols and logic.
-    **dict.fromkeys(
+#: ones javascripts/mathjax.js loads. Nothing listed moves, hides, colours,
+#: boxes, labels, or numbers content, and nothing defines a macro; what sizes
+#: or spaces it is measured by :class:`_TexLayout`. Any other command or
+#: environment is refused by name, so extending this is a deliberate edit, to
+#: be checked against that MathJax version.
+_TESTIMONY_TEX: dict[str, _Tex] = {
+    **_tex(" ".join(_TEX_LETTERS)),
+    **_tex(" ".join(name for name in _TEX_RELATIONS if name.startswith("\\"))),
+    **_tex(r"\{ \} \| \# \$ \% \& \_"),
+    # Symbols.
+    **_tex(
         r"""
-        \infty \partial \nabla \emptyset \varnothing \prime \forall \exists \nexists \neg \lnot
-        \top \bot \angle \triangle \backslash \complement \therefore \because \colon \not
-        \ldots \cdots \vdots \ddots \dots \dotsc \dotsb
-        """.split(),
-        0,
-    ),
-    # Relations.
-    **dict.fromkeys(
-        r"""
-        \lt \gt \le \leq \ge \geq \ne \neq \ll \gg \leqslant \geqslant \nleq \ngeq \lneq \gneq
-        \lesssim \gtrsim \equiv \approx \cong \ncong \sim \simeq \asymp \propto \doteq \triangleq
-        \prec \preceq \succ \succeq \in \ni \notin \owns \subset \subseteq \supset \supseteq
-        \subsetneq \supsetneq \nsubseteq \nsupseteq \sqsubseteq \sqsupseteq \mid \nmid
-        \parallel \nparallel \perp \vdash \dashv \models \vDash \nvdash \nvDash \triangleleft
-        \trianglelefteq \triangleright \trianglerighteq
-        """.split(),
-        0,
+        \infty \partial \nabla \emptyset \varnothing \prime \backprime \forall \exists \nexists
+        \neg \lnot \top \bot \angle \measuredangle \sphericalangle \triangle \vartriangle
+        \blacktriangle \bigtriangleup \bigtriangledown \backslash \complement \therefore \because
+        \colon \cdotp \ldotp \ldots \cdots \vdots \ddots \dots \dotsc \dotsb \Box \square
+        \blacksquare \Diamond \lozenge \bigstar \checkmark \flat \sharp \natural \surd \mho \Finv
+        \Game \S \yen \circledR \maltese
+        """
     ),
     # Binary operators.
-    **dict.fromkeys(
+    **_tex(
         r"""
-        \pm \mp \times \div \cdot \ast \star \circ \bullet \cap \cup \setminus \smallsetminus
-        \wedge \vee \land \lor \oplus \ominus \otimes \oslash \odot \sqcap \sqcup \uplus \amalg
-        \dagger \ddagger \diamond \ltimes \rtimes \boxplus \boxtimes \bmod \pmod \mod
-        """.split(),
-        0,
+        \pm \mp \times \div \cdot \centerdot \ast \star \circ \bullet \cap \cup \Cap \Cup \setminus
+        \smallsetminus \wedge \vee \land \lor \barwedge \veebar \doublebarwedge \curlywedge
+        \curlyvee \oplus \ominus \otimes \oslash \odot \circledast \circleddash \dotplus \sqcap
+        \sqcup \uplus \amalg \dagger \ddagger \diamond \intercal \wr \divideontimes \ltimes \rtimes
+        \leftthreetimes \rightthreetimes \lhd \rhd \unlhd \unrhd \boxplus \boxminus \boxtimes
+        \boxdot \bmod
+        """
     ),
-    # Arrows.
-    **dict.fromkeys(
-        r"""
-        \to \gets \mapsto \longmapsto \rightarrow \leftarrow \leftrightarrow \Rightarrow
-        \Leftarrow \Leftrightarrow \longrightarrow \longleftarrow \longleftrightarrow
-        \Longrightarrow \Longleftarrow \Longleftrightarrow \iff \implies \impliedby
-        \hookrightarrow \hookleftarrow \twoheadrightarrow \uparrow \downarrow \updownarrow
-        \Uparrow \Downarrow \Updownarrow \nearrow \searrow \swarrow \nwarrow \restriction
-        \xrightarrow \xleftarrow
-        """.split(),
-        0,
-    ),
-    # Big operators and named operators.
-    **dict.fromkeys(
+    **_tex(r"\mod \pmod", arguments="ge"),
+    # Large and named operators.
+    **_tex(
         r"""
         \sum \prod \coprod \int \iint \iiint \oint \bigcup \bigcap \bigoplus \bigotimes \bigvee
-        \bigwedge \bigsqcup \biguplus \bigodot \limits \nolimits \lim \liminf \limsup \sup \inf
-        \max \min \sin \cos \tan \sec \csc \cot \sinh \cosh \tanh \coth \arcsin \arccos \arctan
-        \log \ln \lg \exp \det \dim \ker \deg \gcd \hom \arg \Pr
-        """.split(),
-        0,
+        \bigwedge \bigsqcup \biguplus \bigodot \lim \liminf \limsup \varinjlim \varprojlim \sup
+        \inf \max \min \sin \cos \tan \sec \csc \cot \sinh \cosh \tanh \coth \arcsin \arccos
+        \arctan \log \ln \lg \exp \det \dim \ker \deg \gcd \hom \arg \Pr
+        """,
+        "operator",
     ),
-    **dict.fromkeys(r"\substack".split(), 1),
+    r"\operatorname": _Tex("operator", "*m"),
+    r"\mathop": _Tex("operator", "m"),
+    **_tex(r"\limits \nolimits", "limits", ""),
     # Delimiters and their sizes.
-    **dict.fromkeys(
+    **_tex(
         r"""
-        \{ \} \| \langle \rangle \lfloor \rfloor \lceil \rceil \vert \Vert \lvert \rvert \lVert
-        \rVert \lbrace \rbrace \left \right \middle \big \Big \bigg \Bigg \bigl \bigr \Bigl \Bigr
-        \biggl \biggr \Biggl \Biggr \bigm \Bigm \biggm \Biggm
-        """.split(),
-        0,
+        \langle \rangle \lfloor \rfloor \lceil \rceil \vert \Vert \lvert \rvert \lVert \rVert
+        \lbrace \rbrace \lbrack \rbrack \lgroup \rgroup \lmoustache \rmoustache \ulcorner \urcorner
+        \llcorner \lrcorner
+        """
     ),
-    # Fractions, roots, accents, and stacking. A root's optional index is not counted.
-    **dict.fromkeys(r"\frac \dfrac \tfrac \binom \dbinom \tbinom \overset \underset \stackrel".split(), 2),
-    r"\sqrt": 0,
-    **dict.fromkeys(
+    **_tex(r"\left", "left", "d"),
+    **_tex(r"\right", "right", "d"),
+    **_tex(r"\middle", "middle", "d"),
+    **_tex(
+        r"\big \Big \bigg \Bigg \bigl \bigr \Bigl \Bigr \biggl \biggr \Biggl \Biggr \bigm \Bigm \biggm \Biggm",
+        "size",
+        "d",
+    ),
+    r"\not": _Tex("not", ""),
+    # Fractions, roots, arrows with labels, accents, and stacking.
+    **_tex(r"\frac \dfrac \tfrac \binom \dbinom \tbinom \overset \underset \stackrel", arguments="mm"),
+    r"\sqrt": _Tex("glyph", "oge"),
+    **_tex(r"\xrightarrow \xleftarrow", arguments="oeg"),
+    **_tex(r"\substack", arguments="m"),
+    **_tex(
         r"""
         \hat \bar \tilde \vec \dot \ddot \check \breve \acute \grave \mathring \widehat
         \widetilde \overline \underline \overrightarrow \overleftarrow \overbrace \underbrace
-        """.split(),
-        1,
+        """,
+        arguments="m",
     ),
-    # Fonts and text.
-    **dict.fromkeys(
+    # Fonts, classes, and text.
+    **_tex(
         r"""
-        \mathbb \mathcal \mathfrak \mathscr \mathrm \mathbf \mathsf \mathit \mathtt \operatorname
-        \text \textrm \textbf \textit
-        """.split(),
-        1,
+        \mathbb \mathcal \mathfrak \mathscr \mathrm \mathbf \mathsf \mathit \mathtt \pmb \mathrel
+        \mathbin \mathord
+        """,
+        arguments="m",
     ),
-    **dict.fromkeys(r"\displaystyle \textstyle".split(), 0),
-    # Spaces, escaped characters, rows and columns, and math delimiters.
-    **dict.fromkeys(_TEX_SPACES - {"~"}, 0),
-    r"\!": 0,
-    **dict.fromkeys(r"\# \$ \% \& \_ \\ \( \) \[ \]".split(), 0),
-    **dict.fromkeys(
-        r"""
-        \begin{cases} \begin{matrix} \begin{pmatrix} \begin{bmatrix} \begin{Bmatrix}
-        \begin{vmatrix} \begin{Vmatrix} \begin{aligned} \begin{gathered}
-        """.split(),
-        0,
-    ),
+    **_tex(r"\text \textrm \textbf \textit \texttt \textsf", arguments="t"),
+    **_tex(r"\displaystyle \textstyle \scriptstyle \scriptscriptstyle", "style", ""),
+    # Spaces, rows, and environments.
+    **_tex(r"\, \thinspace", "space", "", 3),
+    r"\:": _Tex("space", "", 4),
+    r"\;": _Tex("space", "", 5),
+    "\\ ": _Tex("space", "", 4.5),
+    "\\\n": _Tex("space", "", 4.5),
+    r"\enspace": _Tex("space", "", 9),
+    r"\quad": _Tex("space", "", 18),
+    r"\qquad": _Tex("space", "", 36),
+    **_tex(r"\! \negthinspace", "space", "", -3),
+    "\\\\": _Tex("rows", ""),
+    r"\begin": _Tex("begin", ""),
+    r"\end": _Tex("end", ""),
 }
-_TEX_TOKEN = re.compile(r"\\(?:[A-Za-z]+|.)?|[{}~$]|[^\\{}~$\s]+|\s+", re.DOTALL)
-_TEX_FORMULA_BOUNDARIES = frozenset({"$", r"\(", r"\)", r"\[", r"\]"})
+#: Environments testimony may use, all of them rows of cells.
+_TEX_ENVIRONMENTS = frozenset(
+    {"cases", "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix", "aligned", "gathered"}
+)
+#: How deep one formula may nest groups, arguments, delimiters, and
+#: environments, and scripts on scripts: more than twice what statements use
+#: (6 and 3 deep), and far below the depth near 200 at which MathJax 3.2.2
+#: overflows its stack.
+_TEX_MAX_DEPTH = 16
+_TEX_MAX_SCRIPT_DEPTH = 8
+#: What one formula may spend on content that pushes the rest aside or down:
+#: positive horizontal space, in mu (an eighteenth of an em), ``&`` per row,
+#: ``\\`` per environment and per formula, and empty cells. Each is several
+#: times what statements use; the 873 formulas of the vault and ArkLib
+#: blueprints at hand use at most 3.3 em of space, one ``&`` in a row, two
+#: ``\\``, and no empty cell. Ten columns is amsmath's own limit for a matrix.
+#: An empty row shows nothing at all, so none is allowed.
+_TEX_MAX_SPACING = 8 * 18
+_TEX_MAX_COLUMNS = 9
+_TEX_MAX_ROWS = 16
+_TEX_MAX_FORMULA_ROWS = 32
+_TEX_MAX_EMPTY_CELLS = 16
+#: One negative thin space between two symbols tightens ``\int\! f``; any
+#: more, net of the space beside it, slides one symbol over the other.
+_TEX_MIN_RUN = -3
+_TEX_TOKEN = re.compile(r"\\(?:[A-Za-z]+|.)?|\s+|.", re.DOTALL)
+#: Which token closes each kind of list :class:`_TexLayout` reads.
+_TEX_CLOSERS = {"group": "}", "substack": "}", "left": r"\right", "environment": r"\end"}
+#: What cannot start a script, and the commands MathJax will not take as one.
+_TEX_NOT_SCRIPTS = frozenset({"}", "&", "^", "_", "'"})
+_TEX_UNSCRIPTED = frozenset({"style", "not", "begin", "limits", "middle", "right", "end", "rows"})
 _TEX_ENVIRONMENT = re.compile(r"\s*\{([^{}\\]{0,64})\}")
-_TEX_STAR = re.compile(r"\s*\*")
 #: ``\\[<dimension>]`` spaces rows apart, or with a negative dimension draws
-#: one over another.
+#: one over another; MathJax reads the bracket only right after the ``\\``.
 _TEX_ROW_SPACING = re.compile(r"\*?\[")
+#: The escapes ``\text`` and its kin read, rather than show as typed.
+_TEX_TEXT_ESCAPE = re.compile(r"\\[${}\\]")
+_TEX_DOUBLE_INTEGRAL = re.compile(r"\\int\s*(?:\\!\s*){2,}\\int")
+#: What MathJax, which reads the escapes ``\\`` and ``\$`` first, takes for
+#: either end of a formula in text: the delimiters javascripts/mathjax.js
+#: configures, environments, and references. In a formula they are typeset as
+#: one, or end it early.
+_TEX_TEXT_DELIMITER = re.compile(r"\\\\|\\\$|(\$|\\[()\[\]]|\\begin\s*\{|\\(?:eq)?ref\s*\{)")
+_TEX_FORMULA_DELIMITERS = frozenset({"$", r"\(", r"\)", r"\[", r"\]"})
 _TEX_ENVIRONMENT_NAME = re.compile(r"\\(?:begin|end)\s*\{[^{}]*\}")
 _TEX_CONTROL_SEQUENCE = re.compile(r"\\(?:[A-Za-z]+|.)", re.DOTALL)
+
+_TEX_BRACES = "unbalanced TeX braces are not allowed"
+_TEX_LEFT_RIGHT = "unbalanced \\left and \\right are not allowed"
+_TEX_MIDDLE = "\\middle is allowed only between \\left and \\right"
+_TEX_LIMITS = "\\limits and \\nolimits are allowed only after a large or named operator"
+_TEX_NOT = "\\not is allowed only before a relation such as =, \\in, or \\le"
+_TEX_SCRIPTS = "a second TeX superscript or subscript on one symbol is not allowed: use braces"
+_TEX_MISPLACED = "TeX & and \\\\ are allowed only between the cells and rows of an environment"
+_TEX_UNBALANCED_ENVIRONMENT = "TeX \\begin and \\end that do not match are not allowed"
+_TEX_TEXT = (
+    "TeX commands and formulas inside \\text are not allowed: they are shown as typed or typeset apart; "
+    "write \\$, \\{, \\}, or \\\\ for the character"
+)
+
+
+class _TexAbort(Exception):
+    """Stops reading a formula nested deeper than the layout model follows."""
+
+
+@dataclass
+class _TexRows:
+    """The rows of one environment or ``\\substack`` being read: how many
+    rows have ended, how many cells the current row has ended, and how many
+    symbols the formula had set when the current cell and row began."""
+
+    cell: int
+    row: int
+    rows: int = 0
+    columns: int = 0
+
+
+class _TexLayout:
+    """Formulas read the way MathJax 3.2.2 lays them out, and what in them it
+    would refuse to set, is not on the allowlist, or hides, overlaps, or
+    spreads content.
+
+    It follows TeX's grammar as far as the allowlist needs: groups,
+    arguments, scripts, delimiters, and the rows and cells of environments.
+    Every token is a symbol, a space of signed width, a command that sets
+    nothing (a style, an empty delimiter, an empty group or script), or
+    structure. An argument shows something only if a symbol is set inside it.
+    Spacing is a signed run, in mu, from one symbol to the next, read in
+    source order across groups, arguments, cells, and commands that set
+    nothing, so a run below one negative thin space slides a symbol over its
+    neighbour wherever the two sit. A run never carries from one formula to
+    the next.
+    """
+
+    def __init__(self) -> None:
+        self.errors: dict[str, None] = {}
+        self.unlisted: dict[str, None] = {}
+        self.empty: dict[str, None] = {}
+        self.missing: dict[str, None] = {}
+        self.delimiters: dict[str, None] = {}
+        self.stray: dict[str, None] = {}
+        self.overlap = self.double_integral = False
+
+    def read(self, tex: str) -> None:
+        """Read one formula, ``tex`` without its delimiters."""
+
+        self.tex = tex
+        self.tokens = [(match.start(), match.group()) for match in _TEX_TOKEN.finditer(tex)]
+        self.tokens = [(start, token) for start, token in self.tokens if not token.isspace()]
+        self.index = 0
+        self.limit = len(self.tokens)
+        self.glyphs = self.script_depth = 0
+        self.depth = -1  # the formula itself is not nested
+        self.rows = self.empty_cells = self.empty_rows = 0
+        self.run = self.spacing = 0.0
+        self.new_atom()
+        self.primed = False
+        try:
+            self.read_list("formula", None)
+        except _TexAbort as abort:
+            self.errors[str(abort)] = None
+            return
+        self.overlap = self.overlap or self.run < _TEX_MIN_RUN
+        if self.spacing > _TEX_MAX_SPACING:
+            self.errors[
+                f"TeX spacing over {_TEX_MAX_SPACING // 18} em in one formula is not allowed: "
+                "it pushes symbols apart or out of view"
+            ] = None
+        if self.rows > _TEX_MAX_FORMULA_ROWS:
+            self.errors[f"more than {_TEX_MAX_FORMULA_ROWS} TeX \\\\ in one formula are not allowed"] = None
+        if self.empty_cells > _TEX_MAX_EMPTY_CELLS:
+            self.errors[f"more than {_TEX_MAX_EMPTY_CELLS} empty TeX cells in one formula are not allowed"] = None
+        if self.empty_rows:
+            self.errors["empty TeX rows are not allowed: they push what follows down without showing anything"] = None
+        self.double_integral = self.double_integral or bool(_TEX_DOUBLE_INTEGRAL.search(tex))
+
+    def messages(self) -> list[str]:
+        """What every formula read so far holds that is not allowed."""
+
+        named = [
+            ("TeX outside the read-back allowlist is not allowed: ", self.unlisted),
+            ("TeX arguments that show nothing are not allowed: ", self.empty),
+            ("TeX commands missing an argument are not allowed: ", self.missing),
+            ("TeX delimiters MathJax does not accept are not allowed after: ", self.delimiters),
+        ]
+        errors = [message + ", ".join(sorted(names)) for message, names in named if names]
+        if self.stray:
+            errors.append(
+                "math delimiters the renderer did not read as a formula are not allowed: "
+                + ", ".join(sorted(self.stray))
+                + "; write \\$ for a dollar sign, and put displayed math in a paragraph of its own"
+            )
+        if self.overlap:
+            errors.append(
+                "repeated negative TeX spacing is not allowed: it slides symbols over one another"
+                + ("; write \\iint for a double integral" if self.double_integral else "")
+            )
+        return errors + list(self.errors)
+
+    def peek(self) -> str | None:
+        return self.tokens[self.index][1] if self.index < self.limit else None
+
+    def skip_to(self, position: int) -> None:
+        while self.index < self.limit and self.tokens[self.index][0] < position:
+            self.index += 1
+
+    def new_atom(self, operator: bool = False) -> None:
+        """Start a new symbol for scripts and ``\\limits`` to attach to."""
+
+        self.operator = operator
+        self.superscript = 0  # 1 after primes alone, 2 after ^
+        self.subscript = False
+
+    def glyph(self) -> None:
+        self.overlap = self.overlap or self.run < _TEX_MIN_RUN
+        self.run = 0.0
+        self.glyphs += 1
+
+    def space(self, width: float) -> None:
+        self.run += width
+        self.spacing += max(width, 0)
+
+    def read_list(self, context: str, rows: _TexRows | None) -> str | None:
+        """Read items up to the token that closes ``context`` and return it,
+        or return ``None`` at the end of the formula or optional argument."""
+
+        self.depth += 1
+        if self.depth > _TEX_MAX_DEPTH:
+            raise _TexAbort(f"TeX nested more than {_TEX_MAX_DEPTH} deep is not allowed")
+        closer = _TEX_CLOSERS.get(context)
+        while (token := self.peek()) is not None:
+            self.index += 1
+            if token == closer:
+                self.depth -= 1
+                return token
+            self.item(token, context, rows)
+        self.depth -= 1
+        return None
+
+    def item(self, token: str, context: str, rows: _TexRows | None, alone: bool = False) -> None:
+        """Read the item ``token`` starts. ``alone`` marks an argument given
+        without braces, which MathJax reads by itself."""
+
+        primed, self.primed = self.primed, False
+        if token == "{":
+            self.group("group")
+        elif token == "}":
+            self.errors[_TEX_BRACES] = None
+        elif token in {"^", "_"}:
+            self.script(token)
+        elif token == "'":
+            if self.superscript and not primed:
+                self.errors[_TEX_SCRIPTS] = None
+            self.superscript = self.superscript or 1
+            self.operator, self.primed = False, True
+            self.glyph()
+        elif token == "&":
+            if context == "environment" and rows is not None:
+                self.cell(rows)
+            else:
+                self.errors[_TEX_MISPLACED] = None
+        elif token == "~":
+            self.new_atom()
+            self.space(4.5)
+        elif token in _TEX_FORMULA_DELIMITERS:
+            self.stray[token] = None
+        elif token.startswith("\\"):
+            self.command(token, context, rows, alone)
+        else:
+            if token == "#":
+                self.unlisted[token] = None
+            self.new_atom()
+            self.glyph()
+
+    def command(self, token: str, context: str, rows: _TexRows | None, alone: bool) -> None:
+        entry = _TESTIMONY_TEX.get(token)
+        if entry is None:
+            shown = token[1:2].isprintable() and not token[1:2].isspace()
+            self.unlisted[token if shown else f"\\U+{ord(token[1]):04X}"] = None
+            self.new_atom()
+            self.glyph()
+            return
+        kind = entry.kind
+        if alone and (entry.arguments.strip("g") or kind in {"left", "right", "middle", "begin", "end", "rows"}):
+            self.missing[token] = None
+        elif kind == "limits":
+            if alone or not self.operator:
+                self.errors[_TEX_LIMITS] = None
+        elif kind == "not":
+            if alone or self.peek() not in _TEX_RELATIONS:
+                self.errors[_TEX_NOT] = None
+        elif kind == "rows":
+            if _TEX_ROW_SPACING.match(self.tex, self.tokens[self.index - 1][0] + 2):
+                self.errors[
+                    "TeX row spacing after \\\\ is not allowed: it can draw rows over one another; "
+                    "write {} before a bracket that starts a row"
+                ] = None
+            if context in {"formula", "environment", "substack"}:
+                self.row(rows)
+            else:
+                self.errors[_TEX_MISPLACED] = None
+        elif kind == "right":
+            self.errors[_TEX_LEFT_RIGHT] = None
+            self.delimiter(token)
+        elif kind == "middle":
+            if context != "left":
+                self.errors[_TEX_MIDDLE] = None
+            self.new_atom()
+            self.delimiter(token)
+        elif kind == "end":
+            self.errors[_TEX_UNBALANCED_ENVIRONMENT] = None
+            self.environment_name(r"\end")
+        else:
+            self.new_atom(kind == "operator")
+            if kind == "space":
+                self.space(entry.width)
+            elif kind == "left":
+                self.left()
+            elif kind == "begin":
+                self.environment()
+            else:
+                self.arguments(token, entry.arguments)
+            self.new_atom(kind == "operator")
+
+    def group(self, context: str) -> None:
+        rows = _TexRows(self.glyphs, self.glyphs) if context == "substack" else None
+        if self.read_list(context, rows) is None:
+            self.errors[_TEX_BRACES] = None
+        if rows is not None:
+            self.end_rows(rows)
+        self.new_atom()
+
+    def script(self, token: str) -> None:
+        if token == "^":
+            if self.superscript == 2:
+                self.errors[_TEX_SCRIPTS] = None
+            self.superscript = 2
+        else:
+            if self.subscript:
+                self.errors[_TEX_SCRIPTS] = None
+            self.subscript = True
+        atom = self.operator, self.superscript, self.subscript
+        following = self.peek()
+        entry = _TESTIMONY_TEX.get(following or "")
+        if (
+            following is None
+            or following in _TEX_NOT_SCRIPTS
+            or (entry is not None and (entry.kind in _TEX_UNSCRIPTED or following == r"\substack"))
+        ):
+            self.missing[token] = None
+        else:
+            self.script_depth += 1
+            if self.script_depth > _TEX_MAX_SCRIPT_DEPTH:
+                raise _TexAbort(f"TeX scripts nested more than {_TEX_MAX_SCRIPT_DEPTH} deep are not allowed")
+            self.index += 1
+            self.item(following, "script", None)
+            self.script_depth -= 1
+        self.operator, self.superscript, self.subscript = atom
+
+    def arguments(self, command: str, spec: str) -> None:
+        for kind in spec:
+            if kind == "g":
+                self.glyph()
+            elif kind == "*":
+                if self.peek() == "*":
+                    self.index += 1
+            elif kind == "o":
+                self.optional(command)
+            elif kind == "d":
+                self.delimiter(command)
+            elif kind == "t":
+                self.text(command)
+            else:
+                self.argument(command, shows=kind == "m")
+
+    def argument(self, command: str, shows: bool) -> None:
+        token = self.peek()
+        if token is None or token in {"}", "&", "^", "_"}:
+            self.missing[command] = None
+            return
+        glyphs = self.glyphs
+        self.index += 1
+        if token == "{":
+            self.group("substack" if command == r"\substack" else "group")
+        else:
+            self.item(token, "argument", None, alone=True)
+        if shows and self.glyphs == glyphs:
+            self.empty[command] = None
+
+    def optional(self, command: str) -> None:
+        """Read an argument in brackets, which MathJax ends at the first ``]``
+        outside braces."""
+
+        if self.peek() != "[":
+            return
+        depth = 0
+        for index in range(self.index + 1, self.limit):
+            token = self.tokens[index][1]
+            if token == "]" and not depth:
+                limit, self.limit, self.index = self.limit, index, self.index + 1
+                self.read_list("optional", None)
+                self.index, self.limit = index + 1, limit
+                return
+            depth += {"{": 1, "}": -1}.get(token, 0)
+            if depth < 0:
+                break
+        self.missing[command] = None
+
+    def delimiter(self, command: str) -> None:
+        token = self.peek()
+        if token not in _TEX_DELIMITERS:
+            self.delimiters[command] = None
+            return
+        self.index += 1
+        if token != ".":
+            self.glyph()
+
+    def left(self) -> None:
+        self.delimiter(r"\left")
+        if self.read_list("left", None) is None:
+            self.errors[_TEX_LEFT_RIGHT] = None
+        else:
+            self.delimiter(r"\right")
+
+    def text(self, command: str) -> None:
+        """Read an argument set as text: shown as typed, but for a few escapes
+        and for formulas inside it, with each space in it as wide as ``\\ ``."""
+
+        token = self.peek()
+        if token is None or token in {"}", "&", "^", "_"}:
+            self.missing[command] = None
+            return
+        self.index += 1
+        content = token
+        if token == "{":
+            start = position = self.tokens[self.index - 1][0] + 1
+            depth = 1
+            while depth and position < len(self.tex):
+                character = self.tex[position]
+                position += 2 if character == "\\" else 1
+                depth += {"{": 1, "}": -1}.get(character, 0)
+            if depth:
+                self.errors[_TEX_BRACES] = None
+                self.index = self.limit
+                return
+            content = self.tex[start : position - 1]
+            self.skip_to(position)
+        if re.search(r"[\\$]", _TEX_TEXT_ESCAPE.sub("", content)):
+            self.errors[_TEX_TEXT] = None
+        shown = content.strip()
+        if content[:1].isspace():
+            self.space(4.5)
+        if not shown:
+            self.empty[command] = None
+            return
+        self.glyph()
+        self.spacing += 4.5 * sum(len(gap) - 1 for gap in re.findall(r"\s+", shown))
+        if content[-1:].isspace():
+            self.space(4.5)
+
+    def environment(self) -> None:
+        name = self.environment_name(r"\begin")
+        if name is None:
+            return
+        rows = _TexRows(self.glyphs, self.glyphs)
+        if self.read_list("environment", rows) is None or self.environment_name(r"\end") != name:
+            self.errors[_TEX_UNBALANCED_ENVIRONMENT] = None
+        self.end_rows(rows)
+
+    def environment_name(self, command: str) -> str | None:
+        """Read the name after ``command``, ``\\begin`` or ``\\end``, which
+        has just been read."""
+
+        match = _TEX_ENVIRONMENT.match(self.tex, self.tokens[self.index - 1][0] + len(command))
+        if match is None:
+            self.missing[command] = None
+            return None
+        self.skip_to(match.end())
+        if match.group(1) not in _TEX_ENVIRONMENTS:
+            self.unlisted[f"{command}{{{match.group(1)}}}"] = None
+        return match.group(1)
+
+    def cell(self, rows: _TexRows) -> None:
+        """End a cell at ``&``."""
+
+        self.empty_cells += self.glyphs == rows.cell
+        rows.cell = self.glyphs
+        rows.columns += 1
+        if rows.columns > _TEX_MAX_COLUMNS:
+            self.errors[f"more than {_TEX_MAX_COLUMNS} TeX & in one row are not allowed"] = None
+
+    def row(self, rows: _TexRows | None) -> None:
+        """End a row at ``\\\\``. At the top of a formula MathJax 3.2.2 sets
+        nothing for one, but it counts toward the formula's rows."""
+
+        self.rows += 1
+        if rows is None:
+            return
+        self.empty_cells += self.glyphs == rows.cell and rows.columns > 0
+        self.empty_rows += self.glyphs == rows.row
+        rows.cell = rows.row = self.glyphs
+        rows.columns = 0
+        rows.rows += 1
+        if rows.rows > _TEX_MAX_ROWS:
+            self.errors[f"more than {_TEX_MAX_ROWS} TeX \\\\ in one environment are not allowed"] = None
+
+    def end_rows(self, rows: _TexRows) -> None:
+        """End the last row of ``rows``, which, empty and after a ``\\\\``,
+        MathJax does not set."""
+
+        if rows.columns:
+            self.empty_cells += self.glyphs == rows.cell
+            self.empty_rows += self.glyphs == rows.row
 
 
 def _testimony_errors(text: str) -> tuple[str, ...]:
@@ -1049,10 +1568,11 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     :func:`render_testimony` makes of it, which is exactly what the site
     shows: only the elements and attributes the renderer emits for prose,
     code, and formulas; no HTML a Markdown viewer of the vault would read
-    outside code; no invisible or reordering characters; in text the
-    typesetter reads, only the TeX listed in :data:`_TESTIMONY_TEX`, with
-    arguments that show something and spacing that neither overlaps symbols
-    nor pushes them apart; and at least one visible letter or digit.
+    outside code; no invisible or reordering characters; no math delimiters
+    outside the formulas the renderer marked; in those, only the TeX listed in
+    :data:`_TESTIMONY_TEX`, well formed, read by :class:`_TexLayout` for
+    arguments that show something, spacing that does not overlap symbols, and
+    bounded spacing, rows, and cells; and at least one visible letter or digit.
     """
 
     if limits := _testimony_limit_errors(text):
@@ -1086,9 +1606,15 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     hidden = _hidden_characters(text + "".join(document.itertext()))
     if hidden:
         errors.append("invisible or reordering characters are not allowed: " + ", ".join(hidden))
-    typeset = "".join(piece for piece, kind in pieces if kind != "code")
-    errors.extend(_tex_errors(typeset))
-    if _TEX_COMMENT.search(typeset):
+    layout = _TexLayout()
+    for piece, kind in pieces:
+        if kind == "text":
+            matches = _TEX_TEXT_DELIMITER.finditer(piece)
+            layout.stray.update(dict.fromkeys(re.sub(r"\s", "", match[1]) for match in matches if match[1]))
+        elif kind == "math":
+            layout.read(piece.strip()[2:-2])
+    errors.extend(layout.messages())
+    if any(_TEX_COMMENT.search(piece) for piece, kind in pieces if kind == "math"):
         errors.append("TeX comments are not allowed: they drop the rest of their line; write \\% for a percent sign")
     if not _shows_letter_or_digit("".join(document.itertext())):
         errors.append("testimony renders no visible text: it must show at least one letter or digit")
@@ -1156,113 +1682,6 @@ def _vault_markup_errors(text: str, code: list[str]) -> list[str]:
     if entities:
         errors.append(
             "HTML character references are not allowed: " + ", ".join(entities) + "; type the character itself"
-        )
-    return errors
-
-
-def _tex_errors(typeset: str) -> list[str]:
-    """Check, in one pass over ``typeset``, that every TeX command and
-    environment is listed in :data:`_TESTIMONY_TEX`, that each listed
-    command's arguments show something, and that spacing neither slides
-    symbols over one another nor pushes them apart."""
-
-    unlisted: dict[str, None] = {}
-    empty: dict[str, None] = {}
-    errors: list[str] = []
-    # One entry per open brace group: whether it shows anything, and the
-    # command it is an argument of.
-    shows: list[bool] = [True]
-    owners: list[str | None] = [None]
-    # Commands still waiting for arguments: the command, how many arguments
-    # are still to come, and the group depth they must come at.
-    waiting: list[tuple[str, int, int]] = []
-    spaces = negative = longest = 0
-    stacked = row_spacing = False
-    position = 0
-    while position < len(typeset):
-        token = _TEX_TOKEN.match(typeset, position)
-        assert token is not None
-        position = token.end()
-        text = token.group()
-        if text.isspace():
-            continue
-        if text == "\\":
-            text = "\\ "
-        if text in _TEX_FORMULA_BOUNDARIES:
-            empty.update(dict.fromkeys(command for command, _, _ in waiting))
-            waiting.clear()
-            del shows[1:], owners[1:]
-            spaces = negative = 0
-            continue
-        if text == "{":
-            owner = None
-            if waiting and waiting[-1][2] == len(shows):
-                owner, remaining, depth = waiting.pop()
-                if remaining > 1:
-                    waiting.append((owner, remaining - 1, depth))
-            shows.append(False)
-            owners.append(owner)
-            continue
-        if text == "}":
-            while waiting and waiting[-1][2] == len(shows):
-                empty[waiting.pop()[0]] = None
-            if len(shows) > 1:
-                shown, owner = shows.pop(), owners.pop()
-                if owner is not None and not shown:
-                    empty[owner] = None
-                shows[-1] = shows[-1] or shown
-            continue
-        space = text in _TEX_SPACES or text == r"\!"
-        if space:
-            spaces += 1
-            negative += text == r"\!"
-            stacked = stacked or negative > 1
-            longest = max(longest, spaces)
-        else:
-            spaces = negative = 0
-            shows[-1] = True
-        if waiting and waiting[-1][2] == len(shows):
-            command, remaining, depth = waiting.pop()
-            taken = 1 if text.startswith("\\") else len(text)
-            if space:
-                empty[command] = None
-            if remaining > taken:
-                waiting.append((command, remaining - taken, depth))
-        if not text.startswith("\\"):
-            continue
-        if text in {r"\begin", r"\end"}:
-            environment = _TEX_ENVIRONMENT.match(typeset, position)
-            if environment is not None and f"\\begin{{{environment.group(1)}}}" in _TESTIMONY_TEX:
-                position = environment.end()
-            else:
-                unlisted[f"{text}{{{environment.group(1)}}}" if environment else text] = None
-            continue
-        arguments = _TESTIMONY_TEX.get(text)
-        if arguments is None:
-            unlisted[text] = None
-            continue
-        if text == r"\operatorname" and (star := _TEX_STAR.match(typeset, position)):
-            position = star.end()
-        if text == "\\\\" and _TEX_ROW_SPACING.match(typeset, position):
-            row_spacing = True
-        if arguments:
-            waiting.append((text, arguments, len(shows)))
-    empty.update(dict.fromkeys(command for command, _, _ in waiting))
-    if unlisted:
-        errors.append("TeX outside the read-back allowlist is not allowed: " + ", ".join(sorted(unlisted)))
-    if empty:
-        errors.append("TeX arguments that show nothing are not allowed: " + ", ".join(sorted(empty)))
-    if stacked:
-        errors.append("repeated negative TeX spacing is not allowed: it slides symbols over one another")
-    if longest > _TEX_MAX_SPACE_RUN:
-        errors.append(
-            f"a run of {longest} TeX spaces is not allowed: more than {_TEX_MAX_SPACE_RUN} in a row "
-            "push symbols apart or out of view"
-        )
-    if row_spacing:
-        errors.append(
-            "TeX row spacing after \\\\ is not allowed: it can draw rows over one another; "
-            "write {} before a bracket that starts a row"
         )
     return errors
 

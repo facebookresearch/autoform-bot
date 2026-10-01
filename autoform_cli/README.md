@@ -453,12 +453,21 @@ attribute lists are shown as typed. TeX
 may use only an allowlist of the notation statements need, kept in
 `readback.py` against the site's pinned MathJax 3.2.2: letters, symbols,
 relations, operators, arrows, delimiters, fractions, roots, accents, fonts,
-`\text`, thin to double-quad spaces, and the `cases`, `aligned`, and matrix
-environments. Any other command or environment, such as `\phantom`, `\rlap`,
-`\kern`, `\color`, `\tag`, or a macro definition, is refused by name, as are
-listed commands given arguments that show nothing (`\mathrm{}`), two negative
-spaces or more than four spaces in a row, and row spacing after `\\`. Testimony
-must also show at least one letter or digit. Before any card is parsed its
+styles, `\text`, spaces from `\!` to `\qquad`, and the `cases`, `aligned`,
+and matrix environments. Any other command or environment, such as
+`\phantom`, `\rlap`, `\kern`, `\color`, `\tag`, or a macro definition, is
+refused by name. Each formula is read the way MathJax lays it out. TeX it
+would not set is refused: unbalanced braces, `\left` without `\right`, a
+missing argument, `x^a^b`, or `\not` before anything but a relation. So are
+arguments that show nothing (`\mathrm{}`, `\hat{\displaystyle}`), space
+between two symbols that adds up to less than one negative thin space, and
+row spacing after `\\`. A formula may hold at most 8 em of space, 9 `&` in a
+row, 16 `\\` in an environment and 32 in all, 16 empty cells, and no empty
+row, nested at most 16 deep with scripts 8 deep. Outside code, `$`, `\(`,
+`\)`, `\[`, `\]`, `\begin{`, and `\ref{` that the renderer did not read as a
+formula are refused, since MathJax reads the whole page for them: write `\$`
+for a dollar sign, and put displayed math in a paragraph of its own.
+Testimony must also show at least one letter or digit. Before any card is parsed its
 testimony must fit limits well above what real read-backs use: 32 KiB, 500
 lines, 1,024 math delimiters, 512 backticks in runs of at most 16, 64 opening
 brackets, 64 columns of nesting, 256 tag openers (`<` before a letter, `/`,

@@ -7,6 +7,7 @@ import markdown as markdown_renderer
 import pytest
 
 from autoform_cli.readback import (
+    _TESTIMONY_TEX,
     TESTIMONY_MAX_BRACKETS,
     Readback,
     _testimony_errors,
@@ -236,7 +237,7 @@ def _file(tmp_path: Path, testimony: str) -> Path:
         (r"$\unicode{x200B}$", r"\unicode"),
         (r"$\newcommand{\h}[1]{} P \h{\land Q}$", r"\newcommand"),
         (r"$\def\h#1{} P \h{\land Q}$", r"\def"),
-        ("$P(x) % \\land Q(x)\n$", "TeX comments are not allowed"),
+        ("$P(x) % \\land Q(x)\nR$", "TeX comments are not allowed"),
         (r"$P\!\!\!\!\!\!Q$", "repeated negative TeX spacing"),
         ("$ $", "renders no visible text"),
     ],
@@ -288,7 +289,6 @@ def test_writer_accepts_ordinary_mathematical_testimony(testimony: str, tmp_path
         (r"$P \cancel{\land Q}$", r"\cancel"),
         (r"$P \Tiny{\land Q}$", r"\Tiny"),
         (r"$P {\tiny \land Q}$", r"\tiny"),
-        (r"$P {\scriptscriptstyle \land Q}$", r"\scriptscriptstyle"),
         (r"$\vphantom{Q} P$", r"\vphantom"),
         (r"$P \hphantom{\land Q}$", r"\hphantom"),
         (r"$P\phantom{\land Q}$", r"\phantom"),
@@ -316,8 +316,7 @@ def test_writer_refuses_tex_outside_the_allowlist_by_name(testimony: str, comman
         (r"$\mathbb{\,} P$", r"TeX arguments that show nothing are not allowed: \mathbb"),
         (r"$\frac{}{2} P$", r"TeX arguments that show nothing are not allowed: \frac"),
         (r"$P\!{}\!Q$", "repeated negative TeX spacing"),
-        (r"$P \,\,\,\,\, Q$", "a run of 5 TeX spaces is not allowed"),
-        (r"$P ~~~~~~ Q$", "a run of 6 TeX spaces is not allowed"),
+        ("$P" + r"\qquad" * 4 + r"\, Q$", "TeX spacing over 8 em in one formula is not allowed"),
         (r"$\begin{aligned} P \\[-2em] Q \end{aligned}$", "TeX row spacing after"),
     ],
 )
@@ -326,6 +325,180 @@ def test_writer_refuses_tex_that_shows_nothing_or_overlaps(testimony: str, reaso
         _file(tmp_path, testimony)
 
     assert reason in str(refused.value)
+
+
+def _matrix(rows: int, columns: int) -> str:
+    """A matrix of ``a`` with ``rows`` row breaks and ``columns`` ``&`` in each row."""
+
+    return r"\begin{matrix} " + r" \\ ".join(" & ".join(["a"] * (columns + 1)) for _ in range(rows + 1)) + r" \end{matrix}"
+
+
+@pytest.mark.parametrize(
+    ("testimony", "reason"),
+    [
+        (r"$\mathrm{\displaystyle} P$", r"TeX arguments that show nothing are not allowed: \mathrm"),
+        (r"$\hat{\left.\right.} P$", r"TeX arguments that show nothing are not allowed: \hat"),
+        (r"$\mathbb{^{}} P$", r"TeX arguments that show nothing are not allowed: \mathbb"),
+        (r"$\mathrm{{{}}} P$", r"TeX arguments that show nothing are not allowed: \mathrm"),
+        (r"$\frac\, b$", r"TeX arguments that show nothing are not allowed: \frac"),
+        (r"$\operatorname*{} x$", r"TeX arguments that show nothing are not allowed: \operatorname"),
+        (r"$P\!\displaystyle\!Q$", "repeated negative TeX spacing"),
+        (r"$P\!\left.\right.\!Q$", "repeated negative TeX spacing"),
+        (r"$P\!^{}\!Q$", "repeated negative TeX spacing"),
+        (r"${P\!}\!Q$", "repeated negative TeX spacing"),
+        ("$P" + r"\qquad{}" * 5 + "Q$", "TeX spacing over 8 em in one formula is not allowed"),
+        ("$P" + r"\qquad\displaystyle" * 5 + "Q$", "TeX spacing over 8 em in one formula is not allowed"),
+        ("$" + _matrix(0, 400) + "$", "more than 9 TeX & in one row are not allowed"),
+        ("$" + _matrix(300, 0) + "$", r"more than 16 TeX \\ in one environment are not allowed"),
+        ("$P" + r" \\" * 300 + " Q$", r"more than 32 TeX \\ in one formula are not allowed"),
+    ],
+)
+def test_tex_that_sets_nothing_hides_nothing_and_ends_no_spacing(testimony: str, reason: str) -> None:
+    """Styles, empty delimiters, and empty groups and scripts set nothing: an
+    argument made of them shows nothing, and space on either side of them
+    adds up. Space, columns, and rows that push the rest out of view are
+    bounded per formula."""
+
+    assert any(reason in error for error in _testimony_errors(testimony))
+
+
+@pytest.mark.parametrize(
+    ("testimony", "reason"),
+    [
+        ("$P" + r"\qquad" * 4 + " Q$", None),
+        ("$P" + r"\qquad" * 4 + r"\, Q$", "TeX spacing over 8 em in one formula is not allowed"),
+        (r"$P\!Q$ and $P\!\!\,Q$", None),
+        (r"$P\!\!Q$", "repeated negative TeX spacing"),
+        ("$" + _matrix(0, 9) + "$", None),
+        ("$" + _matrix(0, 10) + "$", "more than 9 TeX & in one row are not allowed"),
+        ("$" + _matrix(16, 0) + "$", None),
+        ("$" + _matrix(17, 0) + "$", r"more than 16 TeX \\ in one environment are not allowed"),
+        ("$" + _matrix(16, 0) + _matrix(15, 0) + r" \\ a$", None),
+        ("$" + _matrix(16, 0) + _matrix(16, 0) + r" \\ a$", r"more than 32 TeX \\ in one formula are not allowed"),
+        (r"$\begin{aligned} " + r" \\ ".join(["& a"] * 16) + r" \end{aligned}$", None),
+        (r"$\begin{aligned} " + r" \\ ".join(["& a"] * 17) + r" \end{aligned}$", "more than 16 empty TeX cells"),
+        (r"$\begin{matrix} a \\ b \\ \end{matrix}$", None),
+        (r"$\begin{matrix} a \\ \\ b \end{matrix}$", "empty TeX rows are not allowed"),
+        ("$" + "{" * 16 + "a" + "}" * 16 + "$", None),
+        ("$" + "{" * 17 + "a" + "}" * 17 + "$", "TeX nested more than 16 deep is not allowed"),
+        ("$" + "{" * 300 + "a" + "}" * 300 + "$", "TeX nested more than 16 deep is not allowed"),
+        ("$" + "x^{" * 8 + "x" + "}" * 8 + "$", None),
+        ("$" + "x^{" * 9 + "x" + "}" * 9 + "$", "TeX scripts nested more than 8 deep are not allowed"),
+        ("$" + "x^{" * 300 + "x" + "}" * 300 + "$", "TeX scripts nested more than 8 deep are not allowed"),
+        ("$P" + r"\qquad" * 4 + " Q$ and $P" + r"\qquad" * 4 + " Q$", None),
+        (r"$P\!$ and $\!Q$", None),
+        (r"$\frac{a}$ $b$", r"TeX commands missing an argument are not allowed: \frac"),
+    ],
+)
+def test_tex_limits_hold_at_their_exact_values_and_per_formula(testimony: str, reason: str | None) -> None:
+    """Every limit admits its value and refuses one more, and none carries
+    from one formula to the next. Nesting is capped far below the depth at
+    which MathJax overflows its stack, about two hundred."""
+
+    errors = _testimony_errors(testimony)
+
+    assert errors == () if reason is None else any(reason in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("testimony", "reason"),
+    [
+        ("${a$", "unbalanced TeX braces are not allowed"),
+        ("$a}$", "unbalanced TeX braces are not allowed"),
+        (r"$\left( x$", r"unbalanced \left and \right are not allowed"),
+        (r"$x \right)$", r"unbalanced \left and \right are not allowed"),
+        (r"$a \middle| b$", r"\middle is allowed only between \left and \right"),
+        (r"$x\limits_a$", r"\limits and \nolimits are allowed only after a large or named operator"),
+        (r"$\sum'\limits_a$", r"\limits and \nolimits are allowed only after a large or named operator"),
+        (r"$a\mod$", r"TeX commands missing an argument are not allowed: \mod"),
+        (r"$\frac{a}$", r"TeX commands missing an argument are not allowed: \frac"),
+        (r"$\overset{a}$", r"TeX commands missing an argument are not allowed: \overset"),
+        (r"$\sqrt{&}$", r"TeX & and \\ are allowed only between the cells and rows of an environment"),
+        (r"$a & b$", r"TeX & and \\ are allowed only between the cells and rows of an environment"),
+        (r"$\not 0$", r"\not is allowed only before a relation"),
+        (r"$x^a^b$", "a second TeX superscript or subscript on one symbol is not allowed"),
+        (r"$x^a'$", "a second TeX superscript or subscript on one symbol is not allowed"),
+        (r"$\begin{matrix} a$", r"TeX \begin and \end that do not match are not allowed"),
+        (r"$\begin{matrix} a \end{pmatrix}$", r"TeX \begin and \end that do not match are not allowed"),
+        (r"$\left x \right)$", r"TeX delimiters MathJax does not accept are not allowed after: \left"),
+        (r"$\text{\alpha}$", r"TeX commands and formulas inside \text are not allowed"),
+    ],
+)
+def test_tex_mathjax_would_not_set_is_refused(testimony: str, reason: str) -> None:
+    r"""MathJax 3.2.2 shows an error in place of each of these formulas,
+    except ``\not 0``, which it sets as a struck-out zero that reads as a
+    different symbol, and ``\text{\alpha}``, which it shows as typed."""
+
+    assert any(reason in error for error in _testimony_errors(testimony))
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        r"$\left( a \middle| b \right)$ and $\sum\limits_{i} a_i$",
+        r"$a \mod n$, $a \not= b \not\in c$, and $x'^a + x_a'$",
+        r"$\mathrm{{{x}}}$ and $\text{a \$ b}$",
+        r"$a \mathrel{R} b \mathbin{\star} c$ and $P {\scriptscriptstyle \land Q}$",
+        r"$\lvert x \rvert$, $\varinjlim_i$, $\textsf{x}$, $\Bbbk$, $\nleftarrow$, and $\circledast$",
+        r"$\iint_D f$",
+    ],
+)
+def test_tex_mathjax_sets_cleanly_is_accepted(testimony: str) -> None:
+    assert _testimony_errors(testimony) == ()
+
+
+def test_a_double_integral_spelled_with_negative_space_is_refused_with_a_hint() -> None:
+    assert (
+        "repeated negative TeX spacing is not allowed: it slides symbols over one another; "
+        "write \\iint for a double integral"
+    ) in _testimony_errors(r"$\int\!\!\int_D f$")
+
+
+@pytest.mark.parametrize(
+    ("testimony", "delimiter"),
+    [
+        ("It costs $5 and $x$ more.", "$"),
+        ("Both $$b$$ inline.", "$"),
+        (r"So a \\( b holds.", "\\("),
+        (r"See \begin{equation} a = b \end{equation} here.", "\\begin{"),
+        (r"See \ref{x} here.", "\\ref{"),
+        (r"$a \( b$", "\\("),
+        (r"$a \] b$", "\\]"),
+    ],
+)
+def test_math_delimiters_outside_a_formula_are_refused(testimony: str, delimiter: str) -> None:
+    r"""MathJax reads the page's text for ``$``, ``\(``, ``\[``, and
+    environments, so TeX the renderer did not mark as a formula would be
+    typeset unchecked. Inside a formula they are not TeX at all."""
+
+    assert any(
+        error.startswith("math delimiters the renderer did not read as a formula are not allowed: " + delimiter)
+        for error in _testimony_errors(testimony)
+    )
+
+
+def test_a_dollar_sign_is_written_with_a_backslash() -> None:
+    r"""The renderer keeps ``\$``, which MathJax shows as a dollar sign."""
+
+    testimony = r"It costs \$5 and $x$ more."
+
+    assert _testimony_errors(testimony) == ()
+    assert render_testimony(testimony) == r'<p>It costs \$5 and <span class="arithmatex">\(x\)</span> more.</p>'
+
+
+def test_formula_delimiters_and_a_tab_are_not_allowlisted_tex() -> None:
+    r"""In a formula ``\(`` and the rest show in red, and the renderer turns a
+    tab into spaces, so ``\<tab>`` reaches MathJax as a control space."""
+
+    assert not {"\\(", "\\)", "\\[", "\\]", "\\\t"} & set(_TESTIMONY_TEX)
+    assert "\t" not in render_testimony("$a\\\tb$")
+    assert _testimony_errors("$a\\\tb$") == ()
+
+
+def test_a_link_definition_is_refused_even_when_no_link_uses_it() -> None:
+    assert "Markdown link definitions are not allowed" in _testimony_errors(
+        "The claim holds.\n\n[x]: https://example.test"
+    )
 
 
 @pytest.mark.parametrize(
