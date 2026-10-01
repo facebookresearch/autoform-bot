@@ -476,57 +476,46 @@ brackets, 64 columns of nesting, 256 underscores that start a word, 1,024
 asterisks, and 2,048 backslashes. The Markdown parser is superlinear in each of
 these, so a byte limit alone would not bound it, and every card in a pull
 request is read before its validity is known. Cards are read through no-follow
-descriptors, so a card or directory swapped for a link is skipped. A write
-walks to the card's directory without following links and takes that
-directory's lock. If the directory was moved or replaced before the lock was
-taken, a fresh walk no longer reaches it, so the write lets it go and walks
-again, three times at most before it refuses; nothing is staged until the
-directory it holds is the one the card's path reaches. The write then stages
-the card in a unique temporary file and checks the card it would replace. Just
-before the exchange it checks that the temporary file still holds, unchanged,
-the card it wrote. It exchanges the staged file with the old card in one atomic
-step, so the card's name holds a complete card at every moment, and checks that
-the card it swapped out is the one it compared. If an editor saved over the
-card in between, the write withdraws its card and reports a conflict: it
-exchanges the two files back, and if the editor saved again over the new card
-meanwhile, it keeps exchanging until the card's name holds the newest save; a
-card deleted meanwhile stays deleted. The error names each temporary file left
-holding a card, and why it was left. A first card is renamed into place without
-replacing a name. An optional expected-card hash makes updates
-compare-and-swap, and the conflict check a batch runs first applies the same
-rule: a card that names a hash conflicts with a missing card in both. Filing
-identical content succeeds without writing. Success is reported only if, with
-the lock still held, a no-follow walk from the blueprint finds at the card's
-path the file the write left there, compared by device, inode, and content
-hash. The lock orders Autoform's own writers. Other writers are safe when they
-work by path: an editor that renames a saved file over the card, deletes it, or
-opens it with truncation after the write swapped the new card in either makes
-the write fail with a conflict or acts after it, and its save is never lost. A
-program that opened the card before the write swapped it, with or without
-truncation, and writes to it afterwards is not safe: those bytes go to the
-replaced file, which is deleted. A reader can briefly see a card that is then
-withdrawn: the new card, when an editor's save collides with a write or an
-interrupt or transient error stops a write after its exchange. The lock belongs
-to the open file description, which a process forked during a write shares, so
-a write unlocks before it closes; a write that cannot get the lock within ten
-seconds gives up. If a process dies holding the lock, the lock is released once
-no process shares that description: at once, unless such a child is still
-running. A crash, or a second interrupt while a write cleans up after the
-first, can leave a `.autoform-readback-*.tmp` file beside the card, holding
-either the unpublished card or a card taken from the card's name; the loader
-never reads it as a card. An interrupt while a write withdraws its card starts
-the withdrawal over; if an editor also saved during it, the older save can be
-left at the card's name and the newer in the temporary file the warning names.
-An interrupt that lands just as a write opens a file or directory can leak that
-descriptor, never a locked one, until the process exits; a temporary file
-created that way is still removed. Publishing needs Linux with `renameat2`
-(glibc 2.28 or later, on a filesystem with atomic exchange such as ext4, XFS,
-Btrfs, or tmpfs) or macOS with `renameatx_np` (APFS). Elsewhere, including
-Windows, a write and the batch conflict check are refused before anything is
-created or read; cards can still be loaded. A filesystem that rejects the
-atomic rename when it is called (`ENOSYS`, `EINVAL`, or `ENOTSUP`) is found
-only then: the write is refused with the card untouched and no temporary file
-left, but the card's directory may already have been created. `model:` remains
+descriptors, so a card or directory swapped for a link is skipped. A card file
+holds at most 4 MiB, and no file is read past that. A file at a card path that
+is larger, is not UTF-8, or cannot be read is reported as an invalid card, not
+skipped. Writes name a card by the hash of its bytes, so a card that is not
+UTF-8 is replaced like any other; one over the limit must be removed by hand.
+
+A write walks to the card's directory without following links and takes that
+directory's lock, so Autoform's writes to one directory happen one at a time.
+If the directory was moved or replaced before the lock was taken, a fresh walk
+no longer reaches it, so the write lets it go and walks again, three times at
+most before it refuses; nothing is staged until the directory it holds is the
+one the card's path reaches. Holding the lock, the write reads the current card
+through that directory. An optional expected-card hash makes updates
+compare-and-swap: different content replaces a card only when it names that
+card's hash, and a card that names a hash conflicts with a missing card. The
+conflict check a batch runs first applies the same rule. Filing content
+identical to the current card writes nothing, so it succeeds even in a
+read-only directory. Otherwise the write stages the card in a new temporary
+file, flushes it to disk, renames it over the card's name in one step, and
+flushes the directory. At every moment the card's name holds either the old
+complete card (nothing, for a first card) or the new one. A failure before the
+rename removes the temporary file and leaves the card as it was; a crash can
+leave a `.autoform-readback-*.tmp` file beside the card, which the loader never
+reads as a card. If only the final flush of the directory fails, the card is
+published and the write warns. The contract covers Autoform's writers only:
+while a write runs, any other change in `readbacks/<article>/` is out of
+contract. An editor's save that lands during a write can be replaced without a
+conflict, so edit cards while no write is running.
+
+The lock belongs to the open file description, which a process forked during
+a write shares, so a write unlocks before it closes; a write that cannot get
+the lock within ten seconds gives up. If a process dies holding the lock, the
+lock is released once no process shares that description: at once, unless such
+a child is still running. An interrupt that lands just as a write opens a file
+or directory can leak that descriptor, never a locked one, until the process
+exits; a temporary file created that way is still removed. Publishing needs
+descriptor-relative `open`, `mkdir`, `rename`, and `unlink`, `O_DIRECTORY`,
+`O_NOFOLLOW`, `fchmod`, and `flock`, which Linux and macOS provide. Elsewhere,
+including Windows, a write and the batch conflict check are refused before
+anything is created or read; cards can still be loaded. `model:` remains
 a label supplied by the coordinator, not authenticated provenance.
 
 `--packets DIR` writes one comment-stripped packet per skeleton, with a

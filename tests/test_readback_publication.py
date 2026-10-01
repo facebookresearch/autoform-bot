@@ -1,4 +1,4 @@
-"""Publishing read-back cards: compare-and-swap, withdrawal, locking, and platform refusal."""
+"""Publishing read-back cards: the lock, compare-and-swap, faults, unreadable cards, and platform refusal."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import stat
 import subprocess
 import sys
 import textwrap
-import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -19,15 +19,19 @@ import pytest
 from autoform_cli import readback
 from autoform_cli.readback import (
     PreparedReadback,
-    _card_hash_at,
     load_readbacks,
+    planned_readback,
     prepare_readback,
     publish_readback,
     readback_conflicts,
+    readback_findings,
+    readback_path,
 )
-from tests.test_readback import _ARTICLE_ID, _blueprint, _declaration, _file_card, _staged_names
+from autoform_cli.skeleton import evidence_hash_of
+from tests.test_readback import _ARTICLE_ID, _blueprint, _declaration, _file_card, _report, _staged_names
 
 _DECLARATION = "Skel.sup_unique"
+_CARD_LIMIT = 4 * 1024 * 1024
 
 
 def _filed(tmp_path: Path) -> tuple[Path, Path, str]:
@@ -51,12 +55,8 @@ def _prepared(blueprint: Path, text: str, expected: str | None = None) -> Prepar
     )
 
 
-def _save(tmp_path: Path, path: Path, data: bytes) -> None:
-    """Save ``data`` at ``path`` the way an editor does: write it elsewhere, then rename it over."""
-
-    scratch = tmp_path / "editor-save"
-    scratch.write_bytes(data)
-    os.replace(scratch, path)
+def _byte_hash(data: bytes) -> str:
+    return f"sha256:{hashlib.sha256(data).hexdigest()}"
 
 
 def _child_env(repo_root: Path) -> dict[str, str]:
@@ -64,8 +64,58 @@ def _child_env(repo_root: Path) -> dict[str, str]:
     return {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, paths))}
 
 
+def _unlocked(directory: Path) -> bool:
+    """Whether another descriptor can take the card directory's lock right now."""
+
+    fcntl = pytest.importorskip("fcntl")
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    finally:
+        os.close(descriptor)
+    return True
+
+
+class _Os:
+    """The ``os`` module as publication sees it, with one call replaced."""
+
+    def __getattr__(self, name: str):
+        return getattr(os, name)
+
+
+def _fail(monkeypatch, call: str, when=lambda *args, **kwargs: True) -> list[tuple]:
+    """Make publication's ``os.<call>`` fail with EIO whenever ``when`` accepts its arguments.
+
+    Only the readback module sees the failing call. Returns the arguments of
+    each call that failed.
+    """
+
+    real = getattr(os, call)
+    failed: list[tuple] = []
+
+    def failing(*args, **kwargs):
+        if when(*args, **kwargs):
+            failed.append(args)
+            raise OSError(errno.EIO, "injected input/output error")
+        return real(*args, **kwargs)
+
+    patched = _Os()
+    setattr(patched, call, failing)
+    patched.supports_dir_fd = os.supports_dir_fd | {failing}
+    monkeypatch.setattr(readback, "os", patched)
+    return failed
+
+
+def _read_only(directory: Path) -> None:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("permissions do not bind root")
+    directory.chmod(0o555)
+
+
 # --------------------------------------------------------------------------- #
-# Exchange and lock
+# The lock and the rename
 # --------------------------------------------------------------------------- #
 
 _WATCHER = textwrap.dedent(
@@ -142,12 +192,13 @@ def test_a_rival_process_publishing_other_content_waits_for_the_lock(
     rival_card.write_bytes(pickle.dumps(_prepared(blueprint, "Rival.", expected)))
     waiting = tmp_path / "waiting"
     rival: subprocess.Popen[str] | None = None
+    check = readback._card_hash_at
 
     # Once this publisher has compared the card, another process publishes
     # different content over the same card, expecting the same hash.
     def check_then_start_rival(directory: int, filename: str, display_path: Path):
         nonlocal rival
-        found = _card_hash_at(directory, filename, display_path)
+        found = check(directory, filename, display_path)
         if filename == path.name and rival is None:
             rival = subprocess.Popen(
                 [sys.executable, "-c", _RIVAL, str(rival_card), str(waiting)],
@@ -171,29 +222,21 @@ def test_a_rival_process_publishing_other_content_waits_for_the_lock(
     assert _staged_names(path.parent) == []
 
 
-def test_the_published_card_is_confirmed_before_the_lock_is_released(tmp_path: Path, monkeypatch) -> None:
-    fcntl = pytest.importorskip("fcntl")
+def test_the_card_is_renamed_into_place_while_the_lock_is_held(tmp_path: Path, monkeypatch) -> None:
     blueprint, path, expected = _filed(tmp_path)
-    identity = readback._card_identity
+    replace_file = os.replace
     held: list[bool] = []
 
-    # As the publication confirms its card, another descriptor tries the lock.
-    def try_the_lock_then_confirm(*args):
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            held.append(True)
-        else:
-            held.append(False)
-        finally:
-            os.close(directory)
-        return identity(*args)
+    # As the publication renames its card into place, another descriptor tries the lock.
+    def try_the_lock_then_rename(*args, **kwargs) -> None:
+        held.append(not _unlocked(path.parent))
+        replace_file(*args, **kwargs)
 
-    monkeypatch.setattr("autoform_cli.readback._card_identity", try_the_lock_then_confirm)
+    monkeypatch.setattr(os, "replace", try_the_lock_then_rename)
 
     assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
     assert held == [True]
+    assert _unlocked(path.parent)
 
 
 def test_a_child_process_started_during_publication_does_not_keep_the_lock(tmp_path: Path, monkeypatch) -> None:
@@ -229,30 +272,38 @@ def test_a_child_process_started_during_publication_does_not_keep_the_lock(tmp_p
             child.communicate(timeout=30)
 
 
-def test_a_card_directory_replaced_before_it_is_locked_is_left_alone(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("how", ["replaced", "removed", "linked"])
+def test_a_card_directory_replaced_before_it_is_locked_is_left_alone(tmp_path: Path, monkeypatch, how: str) -> None:
     blueprint, path, expected = _filed(tmp_path)
     original = path.read_bytes()
     moved = path.parent.with_name("moved")
     lock = readback._lock_card_directory
     replaced = False
 
-    # Between the walk and the lock, the card directory moves away and an
-    # empty directory takes its name.
+    # Between the walk and the lock, the card directory moves away, and an
+    # empty directory, nothing, or a link to the moved directory takes its name.
     def replace_then_lock(directory: int, display_path: Path) -> None:
         nonlocal replaced
         if not replaced:
             replaced = True
             path.parent.rename(moved)
-            path.parent.mkdir()
+            if how == "replaced":
+                path.parent.mkdir()
+            elif how == "linked":
+                path.parent.symlink_to(moved, target_is_directory=True)
         lock(directory, display_path)
 
     monkeypatch.setattr("autoform_cli.readback._lock_card_directory", replace_then_lock)
 
-    with pytest.raises(ValueError, match="changed before replacement"):
+    # The publication starts over from the blueprint: the card it expects is
+    # not in a new directory, and a link is never followed.
+    refusal = "refusing a symlink" if how == "linked" else "changed before replacement"
+    with pytest.raises(ValueError, match=refusal):
         _file_card(blueprint, "Replacement.", expected_card_hash=expected)
     assert (moved / path.name).read_bytes() == original
     assert _staged_names(moved) == []
-    assert os.listdir(path.parent) == []
+    if how != "linked":
+        assert os.listdir(path.parent) == []
 
 
 def test_a_card_directory_that_keeps_being_replaced_is_refused_before_staging(tmp_path: Path, monkeypatch) -> None:
@@ -277,205 +328,387 @@ def test_a_card_directory_that_keeps_being_replaced_is_refused_before_staging(tm
     assert os.listdir(path.parent) == []
 
 
-# --------------------------------------------------------------------------- #
-# What is compared and confirmed
-# --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize("how", ["replaced", "rewritten"])
-def test_a_staging_file_changed_before_the_exchange_is_not_published(tmp_path: Path, monkeypatch, how: str) -> None:
+@pytest.mark.parametrize("failing", ["lock", "unlock"])
+def test_a_lock_call_that_fails_is_handled(tmp_path: Path, monkeypatch, failing: str) -> None:
+    fcntl = pytest.importorskip("fcntl")
     blueprint, path, expected = _filed(tmp_path)
     original = path.read_bytes()
-    planted = b"Planted.\n"
-    changed = False
+    operation = fcntl.LOCK_EX | fcntl.LOCK_NB if failing == "lock" else fcntl.LOCK_UN
 
-    # Once the card is compared, someone renames another file over the staged
-    # card, or rewrites the staged card in place.
-    def check_then_change(directory: int, filename: str, display_path: Path):
-        nonlocal changed
-        found = _card_hash_at(directory, filename, display_path)
-        if filename == path.name and not changed:
-            changed = True
-            (staged,) = _staged_names(path.parent)
-            if how == "replaced":
-                _save(tmp_path, path.with_name(staged), planted)
-            else:
-                with open(path.with_name(staged), "r+b") as stream:
-                    stream.truncate()
-                    stream.write(planted)
-        return found
+    def flock(descriptor: int, requested: int) -> None:
+        if requested == operation:
+            raise OSError(errno.ENOLCK, "no locks available")
+        fcntl.flock(descriptor, requested)
 
-    monkeypatch.setattr("autoform_cli.readback._card_hash_at", check_then_change)
+    locking = types.SimpleNamespace(LOCK_EX=fcntl.LOCK_EX, LOCK_NB=fcntl.LOCK_NB, LOCK_UN=fcntl.LOCK_UN, flock=flock)
+    monkeypatch.setattr("autoform_cli.readback.fcntl", locking)
+
+    if failing == "lock":
+        # A lock that cannot be taken stops the write before anything is staged.
+        with pytest.raises(ValueError, match="cannot lock read-back directory for writing"):
+            _file_card(blueprint, "Replacement.", expected_card_hash=expected)
+        assert path.read_bytes() == original
+    else:
+        # Closing the descriptor still releases a lock that would not unlock.
+        assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
+        assert load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)].text == "Replacement."
+    assert _staged_names(path.parent) == []
+    assert _unlocked(path.parent)
+
+
+# --------------------------------------------------------------------------- #
+# Compare-and-swap by the bytes of the card
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("naming", ["nothing", "another card"])
+def test_different_content_replaces_a_card_only_by_naming_its_hash(tmp_path: Path, naming: str) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    named = None if naming == "nothing" else "sha256:" + "1" * 64
+    card = _prepared(blueprint, "Replacement.", named)
+    if named is None:
+        refusal = f"read-back already exists with different content: {path}; retry with expected_card_hash={expected!r}"
+    else:
+        refusal = f"read-back changed before replacement: expected {named!r}, found {expected!r}"
+
+    # The conflict check and the write refuse alike, and name the hash of the card's bytes.
+    assert readback_conflicts([card]) == [f"{_DECLARATION}: {refusal}"]
+    with pytest.raises(ValueError) as refused:
+        publish_readback(card)
+    assert str(refused.value) == refusal
+    assert expected == _byte_hash(original)
+    assert path.read_bytes() == original
+    assert _staged_names(path.parent) == []
+
+
+def test_an_identical_card_is_refiled_without_writing_even_in_a_read_only_directory(tmp_path: Path) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    same, other = _prepared(blueprint, "First."), _prepared(blueprint, "Replacement.", expected)
+    _read_only(path.parent)
+    try:
+        # Filing the same card again needs no write, and the conflict check agrees.
+        assert readback_conflicts([same]) == []
+        assert publish_readback(same) == path
+        # A real replacement passes the compare-and-swap, then cannot write.
+        assert readback_conflicts([other]) == []
+        with pytest.raises(ValueError, match=f"cannot publish read-back: {path}: .*Permission denied"):
+            publish_readback(other)
+    finally:
+        path.parent.chmod(0o755)
+    assert path.read_bytes() == original
+    assert _staged_names(path.parent) == []
+
+
+def test_a_card_that_is_not_utf8_is_reported_and_replaced_by_the_hash_of_its_bytes(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    path = readback_path(blueprint, _ARTICLE_ID, _DECLARATION)
+    path.parent.mkdir(parents=True)
+    garbled = b"\xff\xfe not utf-8\n"
+    path.write_bytes(garbled)
+
+    # The loader reports the card as invalid, under its own name, rather than missing.
+    loaded = load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)]
+    assert not loaded.valid and loaded.path == path
+    assert "card is not UTF-8 text" in loaded.validate()
+    assert loaded.file_hash == _byte_hash(garbled)
+    (finding,) = readback_findings(_report(), load_readbacks(blueprint), article_ids={"basics/sup-unique": _ARTICLE_ID})
+    assert finding.code == "readback-invalid" and "card is not UTF-8 text" in finding.reason
+
+    # A write names it by that hash, like any card, and replaces it.
+    (conflict,) = readback_conflicts([_prepared(blueprint, "Replacement.")])
+    assert f"expected_card_hash={loaded.file_hash!r}" in conflict
+    card = _prepared(blueprint, "Replacement.", loaded.file_hash)
+    assert readback_conflicts([card]) == []
+    assert publish_readback(card) == path
+    assert load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)].text == "Replacement."
+
+
+def test_a_card_over_the_size_limit_is_reported_and_never_read_past_it(tmp_path: Path, monkeypatch) -> None:
+    blueprint = _blueprint(tmp_path)
+    path = readback_path(blueprint, _ARTICLE_ID, _DECLARATION)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"x" * (2 * _CARD_LIMIT))
+    read = os.read
+    sizes: list[int] = []
+
+    def counted(descriptor: int, size: int) -> bytes:
+        block = read(descriptor, size)
+        sizes.append(len(block))
+        return block
+
+    patched = _Os()
+    patched.read = counted
+    monkeypatch.setattr(readback, "os", patched)
+
+    loaded = load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)]
+    assert f"card is over the {_CARD_LIMIT}-byte limit for a card file" in loaded.validate()
+    assert loaded.text == "" and loaded.file_hash is None
+    assert sum(sizes) == _CARD_LIMIT + 1
+    sizes.clear()
+
+    card = _prepared(blueprint, "Replacement.", "sha256:" + "1" * 64)
+    for attempt in (lambda: readback_conflicts([card]), lambda: publish_readback(card)):
+        with pytest.raises(ValueError, match="over the .*-byte limit .*; remove it to file a new card"):
+            attempt()
+        assert sum(sizes) == _CARD_LIMIT + 1
+        sizes.clear()
+    assert path.stat().st_size == 2 * _CARD_LIMIT
+    assert _staged_names(path.parent) == []
+
+
+def test_a_card_too_large_for_a_card_file_is_refused_before_it_is_written(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    packet = "x" * _CARD_LIMIT + "\n"
+
+    with pytest.raises(ValueError, match=f"over the {_CARD_LIMIT}-byte limit"):
+        planned_readback(
+            blueprint,
+            article_id=_ARTICLE_ID,
+            declaration=_DECLARATION,
+            skeleton_hash="sha256:" + "0" * 64,
+            packet_hash=evidence_hash_of(packet),
+            model="m",
+            text="Fine.",
+            packet_text=packet,
+        )
+    assert not (blueprint / "readbacks").exists()
+
+
+@pytest.mark.parametrize("failing", ["open", "read"])
+def test_a_card_that_cannot_be_read_is_reported(tmp_path: Path, monkeypatch, failing: str) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    if failing == "open":
+        _read_only(path.parent)
+        path.chmod(0o000)
+        reason = "card cannot be read: Permission denied"
+    else:
+        _fail(monkeypatch, "read")
+        reason = "card cannot be read: injected input/output error"
+    try:
+        loaded = load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)]
+        if failing == "open":
+            # Nor can a write compare it.
+            with pytest.raises(ValueError, match=f"cannot safely inspect existing read-back: {path}"):
+                _file_card(blueprint, "Replacement.", expected_card_hash=expected)
+    finally:
+        path.chmod(0o644)
+        path.parent.chmod(0o755)
+    assert reason in loaded.validate()
+    assert loaded.file_hash is None
+    assert _staged_names(path.parent) == []
+
+
+# --------------------------------------------------------------------------- #
+# Links and missing directories on the way to a card
+# --------------------------------------------------------------------------- #
+
+
+def test_a_card_that_is_a_symlink_is_neither_followed_nor_replaced(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    outside = _file_card(_blueprint(tmp_path / "elsewhere"), "Outside.")
+    original = outside.read_bytes()
+    path = readback_path(blueprint, _ARTICLE_ID, _DECLARATION)
+    path.parent.mkdir(parents=True)
+    path.symlink_to(outside)
+    card = _prepared(blueprint, "Replacement.", _byte_hash(original))
+
+    assert load_readbacks(blueprint) == {}
+    for attempt in (lambda: readback_conflicts([card]), lambda: publish_readback(card)):
+        with pytest.raises(ValueError, match=f"cannot safely inspect existing read-back: {path}"):
+            attempt()
+    assert path.is_symlink() and outside.read_bytes() == original
+    assert _staged_names(path.parent) == []
+
+
+@pytest.mark.parametrize("linked", ["readbacks", "article"])
+def test_a_card_directory_reached_through_a_symlink_is_refused(tmp_path: Path, linked: str) -> None:
+    blueprint = _blueprint(tmp_path)
+    outside = _file_card(_blueprint(tmp_path / "elsewhere"), "Outside.")
+    original = outside.read_bytes()
+    target = outside.parent if linked == "article" else outside.parent.parent
+    link = readback_path(blueprint, _ARTICLE_ID, _DECLARATION).parent
+    if linked == "readbacks":
+        link = link.parent
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(target, target_is_directory=True)
+    card = _prepared(blueprint, "Replacement.", _byte_hash(original))
+
+    for attempt in (lambda: readback_conflicts([card]), lambda: publish_readback(card)):
+        with pytest.raises(ValueError, match="refusing a symlink or unsafe component in the read-back path"):
+            attempt()
+    assert outside.read_bytes() == original
+    assert sorted(os.listdir(outside.parent)) == [outside.name]
+
+
+def test_a_link_put_where_a_card_directory_is_being_made_is_refused(tmp_path: Path, monkeypatch) -> None:
+    blueprint = _blueprint(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    mkdir = os.mkdir
+
+    # Just as the walk makes the card directory, a link to another directory takes its name.
+    def link_then_mkdir(name: str, mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+        if name == _ARTICLE_ID:
+            os.symlink(outside, name, dir_fd=dir_fd)
+        mkdir(name, mode, dir_fd=dir_fd)
+
+    patched = _Os()
+    patched.mkdir = link_then_mkdir
+    patched.supports_dir_fd = os.supports_dir_fd | {link_then_mkdir}
+    monkeypatch.setattr(readback, "os", patched)
+
+    with pytest.raises(
+        ValueError, match=f"refusing a symlink or unsafe component in the read-back path: {_ARTICLE_ID}"
+    ):
+        _file_card(blueprint, "First.")
+    assert list(outside.iterdir()) == []
+
+
+def test_a_card_directory_that_cannot_be_made_is_refused(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    card = _prepared(blueprint, "First.")
+    _read_only(blueprint)
+    try:
+        # With no card directory there is nothing to conflict with, and nothing is made.
+        assert readback_conflicts([card]) == []
+        with pytest.raises(ValueError, match="cannot create read-back directory component: readbacks"):
+            publish_readback(card)
+    finally:
+        blueprint.chmod(0o755)
+    assert not (blueprint / "readbacks").exists()
+
+
+def test_a_card_whose_article_id_would_leave_the_readbacks_directory_is_refused(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    escape = blueprint / "readbacks" / ".." / "escape" / "Skel.sup_unique.md"
+    card = PreparedReadback(blueprint, "../escape", _DECLARATION, escape, "First.\n", None)
+
+    for attempt in (lambda: readback_conflicts([card]), lambda: publish_readback(card)):
+        with pytest.raises(ValueError, match="invalid article_id for a read-back: '../escape'"):
+            attempt()
+    assert not (blueprint / "readbacks").exists() and not (blueprint / "escape").exists()
+
+
+def test_a_blueprint_removed_before_publication_is_refused(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    card = _prepared(blueprint, "First.")
+    blueprint.rename(tmp_path / "moved")
+
+    for attempt in (lambda: readback_conflicts([card]), lambda: publish_readback(card)):
+        with pytest.raises(ValueError, match="cannot safely open blueprint directory"):
+            attempt()
+    assert not blueprint.exists()
+
+
+# --------------------------------------------------------------------------- #
+# A failing call at each step of a write
+# --------------------------------------------------------------------------- #
+
+
+def _is_staging_file(*args, **kwargs) -> bool:
+    return bool(args[1] & os.O_CREAT)
+
+
+def _is_a_file(descriptor: int, *args) -> bool:
+    return not stat.S_ISDIR(os.fstat(descriptor).st_mode)
+
+
+@pytest.mark.parametrize(
+    ("call", "when"),
+    [
+        ("open", _is_staging_file),
+        ("write", lambda *args: True),
+        ("fchmod", lambda *args: True),
+        ("fsync", _is_a_file),
+        ("replace", lambda *args, **kwargs: True),
+    ],
+)
+def test_a_call_that_fails_before_the_rename_leaves_the_card_and_no_staging_file(
+    tmp_path: Path, monkeypatch, call: str, when
+) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    failed = _fail(monkeypatch, call, when)
 
     with pytest.raises(ValueError) as refused:
         _file_card(blueprint, "Replacement.", expected_card_hash=expected)
-    # Nothing was exchanged, so nothing was withdrawn.
-    assert str(refused.value) == f"read-back staging file changed before publication: {path}"
+    assert str(refused.value) == f"cannot publish read-back: {path}: [Errno {errno.EIO}] injected input/output error"
+    assert len(failed) == 1
     assert path.read_bytes() == original
-    (left,) = _staged_names(path.parent)
-    assert path.with_name(left).read_bytes() == planted
+    assert _staged_names(path.parent) == []
+    assert _unlocked(path.parent)
 
 
-def test_a_card_rewritten_in_place_before_it_is_confirmed_is_not_reported(tmp_path: Path, monkeypatch) -> None:
+def test_a_staging_file_that_cannot_be_removed_is_left_once_the_rename_fails(tmp_path: Path, monkeypatch) -> None:
     blueprint, path, expected = _filed(tmp_path)
-    identity = readback._card_identity
-    rewrite = b"Rewritten in place.\n"
+    original = path.read_bytes()
+    replace_file, unlink = os.replace, os.unlink
+    removals: list[str] = []
 
-    # After the exchange, before the publication is confirmed, someone
-    # rewrites the new card through its own inode.
-    def rewrite_then_confirm(*args):
-        with open(path, "r+b") as stream:
-            stream.truncate()
-            stream.write(rewrite)
-        return identity(*args)
+    def fail_replace(*args, **kwargs) -> None:
+        raise OSError(errno.EIO, "injected input/output error")
 
-    monkeypatch.setattr("autoform_cli.readback._card_identity", rewrite_then_confirm)
+    def fail_unlink(name: str, *, dir_fd: int | None = None) -> None:
+        removals.append(name)
+        raise OSError(errno.EIO, "injected input/output error")
 
-    with pytest.raises(ValueError, match="cannot confirm the published read-back"):
+    patched = _Os()
+    patched.replace, patched.unlink = fail_replace, fail_unlink
+    patched.supports_dir_fd = os.supports_dir_fd | {fail_unlink}
+    monkeypatch.setattr(readback, "os", patched)
+
+    # The error is the rename's; the one removal is tried once and its failure ignored.
+    with pytest.raises(ValueError, match=f"cannot publish read-back: {path}: .*injected"):
         _file_card(blueprint, "Replacement.", expected_card_hash=expected)
-    assert path.read_bytes() == rewrite
+    assert len(removals) == 1 and _staged_names(path.parent) == removals
+    assert path.read_bytes() == original
+    assert load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)].text == "First."
+    assert replace_file is os.replace and unlink is os.unlink
 
 
-@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
-def test_a_fifo_put_at_the_card_path_before_confirmation_is_refused_without_blocking(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_a_directory_that_cannot_be_flushed_after_the_rename_is_a_warning(tmp_path: Path, monkeypatch) -> None:
     blueprint, path, expected = _filed(tmp_path)
-    identity = readback._card_identity
-    refusals: list[str] = []
+    _fail(monkeypatch, "fsync", lambda descriptor: stat.S_ISDIR(os.fstat(descriptor).st_mode))
 
-    # After the exchange, before the publication is confirmed, a FIFO takes the card's name.
-    def fifo_then_confirm(*args):
-        path.unlink()
-        os.mkfifo(path)
-        return identity(*args)
-
-    monkeypatch.setattr("autoform_cli.readback._card_identity", fifo_then_confirm)
-
-    def file() -> None:
-        try:
-            _file_card(blueprint, "Replacement.", expected_card_hash=expected)
-        except ValueError as exc:
-            refusals.append(str(exc))
-
-    publisher = threading.Thread(target=file)
-    publisher.start()
-    publisher.join(5)
-    blocked = publisher.is_alive()
-    if blocked:
-        os.close(os.open(path, os.O_WRONLY))
-        publisher.join()
-    assert not blocked
-    assert len(refusals) == 1 and "cannot confirm the published read-back" in refusals[0]
-    assert stat.S_ISFIFO(os.lstat(path).st_mode)
-
-
-@pytest.mark.parametrize("saved_bytes", ["other", "same"])
-def test_refiling_identical_content_does_not_confirm_a_card_saved_over_it(
-    tmp_path: Path, monkeypatch, saved_bytes: str
-) -> None:
-    blueprint, path, _ = _filed(tmp_path)
-    edit = b"An editor's work.\n" if saved_bytes == "other" else path.read_bytes()
-    saved = False
-
-    # Right after the card is found to hold the same content, an editor saves over it.
-    def check_then_save(directory: int, filename: str, display_path: Path):
-        nonlocal saved
-        found = _card_hash_at(directory, filename, display_path)
-        if filename == path.name and not saved:
-            saved = True
-            _save(tmp_path, path, edit)
-        return found
-
-    monkeypatch.setattr("autoform_cli.readback._card_hash_at", check_then_save)
-
-    with pytest.raises(ValueError, match="cannot confirm the published read-back"):
-        _file_card(blueprint, "First.")
-    assert path.read_bytes() == edit
-
-
-# --------------------------------------------------------------------------- #
-# Withdrawing a card after a collision
-# --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize("then", ["saves", "deletes"])
-def test_the_newest_editor_state_stays_at_the_card_path_when_a_card_is_withdrawn(
-    tmp_path: Path, monkeypatch, then: str
-) -> None:
-    blueprint, path, expected = _filed(tmp_path)
-    first, second = b"An editor's first save.\n", b"The editor's second save.\n"
-    steps = 0
-
-    # An editor saves once after the card is compared, then saves again, or
-    # deletes the card, right after the exchange.
-    def check_then_edit(directory: int, filename: str, display_path: Path):
-        nonlocal steps
-        found = _card_hash_at(directory, filename, display_path)
-        if steps == 0 and filename == path.name:
-            steps = 1
-            _save(tmp_path, path, first)
-        elif steps == 1 and filename != path.name:
-            steps = 2
-            if then == "saves":
-                _save(tmp_path, path, second)
-            else:
-                path.unlink()
-        return found
-
-    monkeypatch.setattr("autoform_cli.readback._card_hash_at", check_then_edit)
-
-    with pytest.raises(ValueError, match="changed concurrently") as refused:
-        _file_card(blueprint, "Replacement.", expected_card_hash=expected)
-    assert steps == 2
-    (kept,) = _staged_names(path.parent)
-    assert path.with_name(kept).read_bytes() == first
-    message = str(refused.value)
-    if then == "saves":
-        assert path.read_bytes() == second
-        assert f"that later save was kept at {path}" in message
-    else:
-        assert not path.exists()
-        assert f"{path} was deleted while this write withdrew its card: the deletion stands" in message
-    assert f"preserved at {path.with_name(kept)}" in message
-
-
-def test_a_card_that_cannot_be_put_back_is_preserved_and_named(tmp_path: Path, monkeypatch) -> None:
-    blueprint, path, expected = _filed(tmp_path)
-    edit = b"An editor's work.\n"
-    rename = readback.atomic_rename
-    saved = False
-    renames = 0
-
-    def check_then_save(directory: int, filename: str, display_path: Path):
-        nonlocal saved
-        found = _card_hash_at(directory, filename, display_path)
-        if filename == path.name and not saved:
-            saved = True
-            _save(tmp_path, path, edit)
-        return found
-
-    # The exchange goes through; the one that would put the editor's card back fails.
-    def fail_after_the_exchange(*args, **kwargs):
-        nonlocal renames
-        renames += 1
-        if renames > 1:
-            raise OSError(errno.EIO, "input/output error")
-        return rename(*args, **kwargs)
-
-    monkeypatch.setattr("autoform_cli.readback._card_hash_at", check_then_save)
-    monkeypatch.setattr("autoform_cli.readback.atomic_rename", fail_after_the_exchange)
-
-    with pytest.raises(ValueError, match="changed concurrently") as refused:
-        _file_card(blueprint, "Replacement.", expected_card_hash=expected)
-    (kept,) = _staged_names(path.parent)
-    assert path.with_name(kept).read_bytes() == edit
+    with pytest.warns(RuntimeWarning, match=f"read-back {path} was published, but its directory could not be flushed"):
+        assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
     assert load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)].text == "Replacement."
-    message = str(refused.value)
-    assert (
-        f"the card this write replaced could not be put back ([Errno {errno.EIO}] input/output error) "
-        f"and was preserved at {path.with_name(kept)}; {path} holds the new card"
-    ) in message
+    assert _staged_names(path.parent) == []
+
+
+def test_short_writes_still_stage_the_whole_card(tmp_path: Path, monkeypatch) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    write = os.write
+    calls = 0
+
+    def write_a_little(descriptor: int, data: bytes) -> int:
+        nonlocal calls
+        calls += 1
+        return write(descriptor, bytes(data[:7]))
+
+    patched = _Os()
+    patched.write = write_a_little
+    monkeypatch.setattr(readback, "os", patched)
+
+    assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
+    loaded = load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)]
+    assert loaded.valid and loaded.text == "Replacement."
+    assert calls == -(-path.stat().st_size // 7)
+
+
+def test_a_staging_name_already_taken_is_neither_used_nor_removed(tmp_path: Path, monkeypatch) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    taken = path.with_name(".autoform-readback-" + "0" * 24 + ".tmp")
+    taken.write_bytes(b"Someone else's file.\n")
+    monkeypatch.setattr("autoform_cli.readback.secrets.token_hex", lambda size: "0" * (2 * size))
+
+    with pytest.raises(ValueError, match=f"cannot publish read-back: {path}: .*File exists"):
+        _file_card(blueprint, "Replacement.", expected_card_hash=expected)
+    assert taken.read_bytes() == b"Someone else's file.\n"
+    assert path.read_bytes() == original
 
 
 # --------------------------------------------------------------------------- #
@@ -560,29 +793,6 @@ def test_an_interruption_as_the_staging_file_is_created_leaves_no_file(tmp_path:
     assert path.read_bytes() == original
 
 
-def test_an_interruption_as_the_staging_file_is_removed_still_removes_it(tmp_path: Path, monkeypatch) -> None:
-    blueprint, path, _ = _filed(tmp_path)
-    original = path.read_bytes()
-    unlink = readback._unlink_quietly
-    interrupted = False
-
-    # The interrupt lands as a refused write is about to remove its staging file.
-    def interrupt_first_unlink(directory: int, filename: str) -> None:
-        nonlocal interrupted
-        if not interrupted:
-            interrupted = True
-            raise KeyboardInterrupt
-        unlink(directory, filename)
-
-    monkeypatch.setattr("autoform_cli.readback._unlink_quietly", interrupt_first_unlink)
-
-    with pytest.raises(KeyboardInterrupt):
-        _file_card(blueprint, "Replacement.", expected_card_hash="sha256:" + "1" * 64)
-    assert interrupted
-    assert _staged_names(path.parent) == []
-    assert path.read_bytes() == original
-
-
 def test_an_interruption_as_any_step_of_a_write_returns_leaves_no_lock_or_staging_file(tmp_path: Path) -> None:
     fcntl = pytest.importorskip("fcntl")
     module = readback.__file__
@@ -658,19 +868,36 @@ def test_the_conflict_check_is_refused_cleanly_where_publishing_is(tmp_path: Pat
     assert path.read_bytes() == original
 
 
-@pytest.mark.parametrize("lacking", ["platform", "call"])
-def test_an_unsupported_platform_is_refused_before_anything_is_created(
-    tmp_path: Path, monkeypatch, lacking: str
+@pytest.mark.parametrize(
+    "missing", ["O_DIRECTORY", "O_NOFOLLOW", "open", "mkdir", "rename", "unlink", "fchmod", "fcntl"]
+)
+def test_a_platform_missing_a_call_publication_uses_is_refused_before_anything_is_created(
+    tmp_path: Path, monkeypatch, missing: str
 ) -> None:
     blueprint = _blueprint(tmp_path)
     card = _prepared(blueprint, "First.")
-    if lacking == "platform":
-        monkeypatch.setattr("autoform_cli.skeleton.sys.platform", "freebsd14")
+    if missing.startswith("O_") or missing == "fchmod":
+        monkeypatch.delattr(os, missing)
+    elif missing == "fcntl":
+        monkeypatch.setattr("autoform_cli.readback.fcntl", None)
     else:
-        monkeypatch.setattr("autoform_cli.skeleton.ctypes.CDLL", lambda *args, **kwargs: object())
+        monkeypatch.setattr(os, "supports_dir_fd", os.supports_dir_fd - {getattr(os, missing)})
 
-    with pytest.raises(ValueError, match="cannot safely publish"):
-        readback_conflicts([card])
-    with pytest.raises(ValueError, match="cannot safely publish"):
-        publish_readback(card)
+    for attempt in (lambda: readback_conflicts([card]), lambda: publish_readback(card)):
+        with pytest.raises(ValueError) as refused:
+            attempt()
+        assert str(refused.value) == "this platform cannot safely publish read-back cards"
     assert not (blueprint / "readbacks").exists()
+
+
+def test_publication_needs_no_atomic_exchange_or_platform_specific_rename(tmp_path: Path, monkeypatch) -> None:
+    blueprint = _blueprint(tmp_path)
+    # Neither Linux nor macOS, and no renameat2 or renameatx_np to call.
+    monkeypatch.setattr("autoform_cli.skeleton.sys.platform", "freebsd14")
+    monkeypatch.setattr("autoform_cli.skeleton.ctypes.CDLL", lambda *args, **kwargs: object())
+
+    path = _file_card(blueprint, "First.")
+    expected = load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)].file_hash
+    assert readback_conflicts([_prepared(blueprint, "Replacement.", expected)]) == []
+    assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
+    assert load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)].text == "Replacement."

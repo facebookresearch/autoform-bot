@@ -3564,60 +3564,25 @@ def _remove_output(path: Path) -> None:
         path.unlink()
 
 
-def atomic_rename(
-    source: str | Path,
-    destination: str | Path,
-    *,
-    directory: int | None = None,
-    exchange: bool = False,
-) -> None:
+def atomic_rename(source: str | Path, destination: str | Path) -> None:
     """Rename ``source`` to ``destination`` in one step that never removes a name.
 
-    Without ``exchange`` the rename fails with :class:`FileExistsError` when
-    ``destination`` exists. With it, both names must exist and trade places,
-    so neither is missing at any moment. With ``directory``, both names are
-    resolved relative to that descriptor. Raises :class:`NotImplementedError`
-    where the platform has no such call; a filesystem that lacks it fails
-    with :class:`OSError` and changes nothing.
+    The rename fails with :class:`FileExistsError` when ``destination``
+    exists. Raises :class:`NotImplementedError` where the platform has no
+    such call; a filesystem that lacks it fails with :class:`OSError` and
+    changes nothing.
     """
 
     if os.name == "nt":  # pragma: no cover - Windows-specific path
-        if directory is not None or exchange:
-            raise NotImplementedError("atomic exchange and descriptor-relative rename are unavailable on Windows")
         os.rename(source, destination)
         return
 
-    rename, current_directory, no_replace, swap = _atomic_rename_call()
-    at = current_directory if directory is None else directory
-    result = rename(at, os.fsencode(source), at, os.fsencode(destination), swap if exchange else no_replace)
-    if result != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error), destination)
-
-
-def require_atomic_exchange() -> None:
-    """Raise :class:`NotImplementedError` unless :func:`atomic_rename` can exchange names here.
-
-    The platform's call is looked up but not made, so a caller can refuse
-    before it changes anything. A filesystem without exchange is found only
-    when the call is made.
-    """
-
-    if os.name == "nt":  # pragma: no cover - Windows-specific path
-        raise NotImplementedError("atomic exchange and descriptor-relative rename are unavailable on Windows")
-    _atomic_rename_call()
-
-
-def _atomic_rename_call() -> tuple[Callable[..., int], int, int, int]:
-    """The platform's atomic rename call, its ``AT_FDCWD``, and its no-replace and exchange flags."""
-
-    # Linux renameat2 takes RENAME_NOREPLACE (1) or RENAME_EXCHANGE (2);
-    # macOS renameatx_np takes RENAME_EXCL (4) or RENAME_SWAP (2). AT_FDCWD
-    # differs between the two.
+    # Linux renameat2 takes RENAME_NOREPLACE (1); macOS renameatx_np takes
+    # RENAME_EXCL (4). AT_FDCWD differs between the two.
     if sys.platform.startswith("linux"):
-        system, name, current_directory, no_replace, swap = "Linux", "renameat2", -100, 1, 2
+        system, name, current_directory, no_replace = "Linux", "renameat2", -100, 1
     elif sys.platform == "darwin":
-        system, name, current_directory, no_replace, swap = "macOS", "renameatx_np", -2, 0x4, 0x2
+        system, name, current_directory, no_replace = "macOS", "renameatx_np", -2, 0x4
     else:
         raise NotImplementedError(f"atomic no-replace rename is unsupported on {sys.platform}")
     try:
@@ -3626,7 +3591,10 @@ def _atomic_rename_call() -> tuple[Callable[..., int], int, int, int]:
         raise NotImplementedError(f"atomic no-replace rename is unavailable on this {system} system") from exc
     rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
     rename.restype = ctypes.c_int
-    return rename, current_directory, no_replace, swap
+    result = rename(current_directory, os.fsencode(source), current_directory, os.fsencode(destination), no_replace)
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), destination)
 
 
 def _rename_no_replace(source: Path, destination: Path) -> None:
@@ -4073,7 +4041,6 @@ __all__ = [
     "path_of",
     "render_probe",
     "replace_managed_outputs",
-    "require_atomic_exchange",
     "run_probe",
     "source_excerpt",
     "source_passage",
