@@ -56,24 +56,35 @@ variable and symbol before using it, put the main assertion in display math,
 and use a short list when the statement has several clauses.
 
 Use inert Markdown only. Raw HTML (tags, comments, and character references
-such as `&amp;`), Markdown links, images, autolinks, link definitions,
-visibility-changing attributes, and Mermaid blocks are rejected when the
-coordinator records the testimony. They add no mathematical content and would
-let generated prose hide text, run code, or fetch remote resources in the
-published review site. HTML is refused even inside formulas and code, so put
-a space after `<` when a letter follows it: `$a < b$`, not `$a<b>c$`.
+such as `&amp;`), headings, footnotes, Markdown links, images, autolinks, link
+definitions, visibility-changing attributes, and Mermaid blocks are rejected
+when the coordinator records the testimony. They add no mathematical content
+and would let generated prose hide text, run code, or fetch remote resources
+in the published review site. HTML is refused even inside formulas, so put a
+space after `<` when a letter follows it: `$a < b > c$`, not `$a<b>c$`. Code
+shows `<` as typed. Label a fenced code block `lean`, `lean4`, or `text`, or
+leave it bare.
+
+The testimony must also read the same on GitHub, which shows the vault's
+cards with a different Markdown reader. Put a blank line before every list,
+table, and code block, indent a nested list four spaces, number every list
+from 1, give every table row as many cells as the header, and write `\|` for
+a pipe in a table cell, in code too. Do not open a block quote with `[!NOTE]`
+or the like.
 
 Everything you write must be visible as written. Do not use invisible
-characters such as zero-width spaces. In formulas use standard notation only:
-letters, symbols, relations, operators, arrows, delimiters, `\frac`, `\sqrt`,
-accents, the fonts `\mathbb`, `\mathcal`, `\mathfrak`, `\mathscr`, `\mathrm`,
-`\mathbf`, and `\mathsf`, `\operatorname` and `\text` with visible content,
-and the `cases`, `aligned`, and matrix environments. Any other command is
+characters such as zero-width spaces, or stack more than two accents above or
+below one letter. In formulas use standard notation only: letters, symbols,
+relations, operators, arrows, delimiters, `\frac`, `\sqrt`, accents, the fonts
+`\mathbb`, `\mathcal`, `\mathfrak`, `\mathscr`, `\mathrm`, `\mathbf`, and
+`\mathsf`, `\operatorname` and `\text` with visible content, and the `cases`,
+`aligned`, `gathered`, `array`, and matrix environments. Any other command is
 refused by name, including `\phantom`, `\rlap`, `\kern`, `\color`, `\tag`,
-size commands, and macro definitions. Space with `\,`, `\;`, or `\quad`, at
-most four in a row, and never two `\!` in a row. Do not write `%`; write `\%`
-for a percent sign. A read-back that breaks this is rejected, however faithful
-it is. Keep it to a few kilobytes: a read-back over 32 KiB is refused unread.
+`\large`, and macro definitions. Space with `\,`, `\;`, `\quad`, or `~`: one
+formula may space 8 em in all, as much as 8 `\quad`, and a read-back 64 em.
+Never write two `\!` in a row. Do not write `%`; write `\%` for a percent
+sign. A read-back that breaks this is rejected, however faithful it is. Keep
+it to a few kilobytes: a read-back over 32 KiB is refused unread.
 
 ## Return only testimony
 

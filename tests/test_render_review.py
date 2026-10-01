@@ -7,8 +7,13 @@ import markdown as markdown_renderer
 import pytest
 
 from autoform_cli.readback import (
+    _MAX_STACKED_MARKS,
+    _TESTIMONY_LANGUAGES,
     _TESTIMONY_TEX,
+    _TEX_MAX_SPACING,
+    _TEX_MAX_TESTIMONY_SPACING,
     TESTIMONY_MAX_BRACKETS,
+    TESTIMONY_MAX_BYTES,
     TESTIMONY_MAX_RENDERED_BYTES,
     Readback,
     _testimony_errors,
@@ -889,6 +894,40 @@ def test_a_message_names_at_most_eight_things_and_cuts_long_names(testimony: str
     """A message stays short whatever the testimony holds."""
 
     assert message in _testimony_errors(testimony)
+
+
+def test_the_read_back_guide_states_the_rules_the_validator_applies() -> None:
+    """The guide's rewrites pass and show what they rewrite, its limits are the validator's, and the commands it
+    names are refused, so the guide and the validator cannot drift apart."""
+
+    guide = " ".join(
+        (Path(__file__).resolve().parent.parent / "skills/human-review/references/readback.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    rewrites = re.findall(r"`([^`]+)`, not `([^`]+)`", guide)
+    assert rewrites
+    for good, bad in rewrites:
+        assert not _testimony_errors(good) and _testimony_errors(bad), (good, bad)
+        assert re.sub(r"\W", "", good) == re.sub(r"\W", "", bad), (good, bad)
+    *languages, last = sorted(_TESTIMONY_LANGUAGES)
+    for limit in (
+        f"over {TESTIMONY_MAX_BYTES // 1024} KiB",
+        f"one formula may space {_TEX_MAX_SPACING // 18} em",
+        f"a read-back {_TEX_MAX_TESTIMONY_SPACING // 18} em",
+        f"more than {('no', 'one', 'two', 'three', 'four')[_MAX_STACKED_MARKS]} accents above or below",
+        ", ".join(f"`{language}`" for language in languages) + f", or `{last}`",
+    ):
+        assert limit in guide, limit
+    quads = int(re.search(r"as much as (\d+) `\\quad`", guide).group(1))
+    assert not _testimony_errors("$a" + r"\quad" * quads + " b$")
+    assert _testimony_errors("$a" + r"\quad" * (quads + 1) + " b$")
+    named = re.findall(r"`(\\[A-Za-z]+)`", re.search(r"refused by name, including (.*?) and macro", guide).group(1))
+    assert named
+    for command in named:
+        assert f"TeX outside the read-back allowlist is not allowed: {command}" in _testimony_errors(
+            f"$a {command} b$"
+        )
 
 
 @pytest.mark.parametrize(
