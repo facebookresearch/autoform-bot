@@ -170,6 +170,9 @@ _AUTOLINK = re.compile(
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*>"
 )
 _HTML_ENTITY = re.compile(r"&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{0,31});")
+#: Character references as the site's Markdown converter reads them, which
+#: takes a number without its semicolon and any name with one.
+_LOOSE_HTML_ENTITY = re.compile(r"&(?:#[0-9]+;?|#[xX][0-9A-Fa-f]+;?|[A-Za-z][A-Za-z0-9]*;)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1775,10 +1778,12 @@ def _testimony_limit_errors(text: str) -> tuple[str, ...]:
 
 def _raw_html_errors(text: str) -> tuple[str, ...]:
     """Name the raw HTML in ``text``: tags, comments, declarations, processing
-    instructions, and character references. Read-backs are Markdown and TeX;
-    HTML can hide text, restyle it, or stand for characters a reader cannot
-    see. It is found before parsing, so it is refused wherever it is written,
-    formulas and code included; a space after "<" keeps a formula clear."""
+    instructions, and character references, wherever they are written,
+    formulas and code included; a space after "<" keeps a formula clear.
+
+    This is the check for Markdown the site's own converter renders, which
+    reads HTML. Testimony is checked by :func:`_testimony_errors` instead,
+    since its renderer reads none."""
 
     errors: list[str] = []
     if "<!--" in text:
@@ -1789,7 +1794,7 @@ def _raw_html_errors(text: str) -> tuple[str, ...]:
         tags[name if name.startswith(("<!", "<?")) else name + ">"] = None
     if tags:
         errors.append("raw HTML is not allowed: " + ", ".join(tags) + "; in a formula, put a space after <")
-    entities = dict.fromkeys(_entity_name(entity) for entity in _HTML_ENTITY.findall(text))
+    entities = dict.fromkeys(_entity_name(entity) for entity in _LOOSE_HTML_ENTITY.findall(text))
     if entities:
         errors.append(
             "HTML character references are not allowed: " + ", ".join(entities) + "; type the character itself"

@@ -10,6 +10,7 @@ from autoform_cli.readback import (
     _TESTIMONY_TEX,
     TESTIMONY_MAX_BRACKETS,
     Readback,
+    _raw_html_errors,
     _testimony_errors,
     load_readbacks,
     render_testimony,
@@ -680,6 +681,27 @@ def test_a_hash_that_starts_a_line_without_a_space_is_text() -> None:
 
     assert _testimony_errors(testimony) == ()
     assert render_testimony(testimony) == "<p>Open Mathlib PR\n#41755\nproves a matching bound.</p>"
+
+
+@pytest.mark.parametrize(
+    ("markup", "reason"),
+    [
+        ("Some <span style='display:none'>hidden</span> text.", "raw HTML is not allowed: <span>, </span>;"),
+        ("Code `<b>` is no shelter.", "raw HTML is not allowed: <b>;"),
+        ("Fish &amp; chips.", "HTML character references are not allowed: &amp; (U+0026 AMPERSAND);"),
+        ("A zero width&#8203 space.", "HTML character references are not allowed: &#8203 (U+200B ZERO WIDTH SPACE);"),
+        ("<!-- a note that never ends", "HTML comments are not allowed"),
+        ("For $a < b$ and $b > c$, AT&T.", None),
+    ],
+)
+def test_markdown_the_site_converter_renders_is_checked_for_raw_html(markup: str, reason: str | None) -> None:
+    """Markdown the site's own converter renders, which reads HTML, is refused
+    for any HTML in it, code included, and for a character reference without
+    its semicolon, which that converter completes."""
+
+    errors = _raw_html_errors(markup)
+
+    assert errors == () if reason is None else any(error.startswith(reason) for error in errors)
 
 
 def test_a_card_over_a_limit_is_invalid_without_being_parsed(
