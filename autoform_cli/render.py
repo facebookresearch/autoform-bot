@@ -27,7 +27,7 @@ from .lean import SourceLinker, build_linker, declaration_names
 from .markdown import content_lines as _content_lines
 from .markdown import FENCE as _FENCE
 from .markdown import FENCE_CLOSE as _FENCE_CLOSE
-from .readback import READBACKS_DIR, Readback, load_readbacks
+from .readback import READBACKS_DIR, Readback, load_readbacks, publishable_article
 from .review import ReviewBundle, ReviewError, ReviewDeclaration, validate_review_bundle
 from .skeleton import DeclarationSkeleton, SkeletonReport
 from .status import is_definition
@@ -231,6 +231,16 @@ class PublicationError(ValueError):
         super().__init__("; ".join(self.issues))
 
 
+def _article_text(node: Node) -> str:
+    """The text of ``node`` as published: the bytes the graph parsed, without
+    their HTML comments, and refused if any raw HTML is left."""
+
+    text, issues = publishable_article(read_node_source(node))
+    if issues:
+        raise PublicationError([f"{node.id}: {issue}" for issue in issues])
+    return text
+
+
 def render_site(
     blueprint_dir: str | Path,
     output_dir: str | Path,
@@ -297,6 +307,14 @@ def render_site(
         )
     if coverage is None:
         raise PublicationError(["coverage contract could not be loaded"])
+    # Articles are published as Markdown, so raw HTML in one would be markup on the site.
+    article_issues = [
+        f"{node.id}: {issue}"
+        for node in graph.nodes.values()
+        for issue in publishable_article(read_node_source(node))[1]
+    ]
+    if article_issues:
+        raise PublicationError(article_issues)
     statuses = status.derive(graph)
     # The repository root, not the vault's parent. A blueprint nested at
     # <repo>/docs/blueprint would otherwise be described as <repo>/blueprint,
@@ -388,7 +406,7 @@ def render_site(
         target.parent.mkdir(parents=True, exist_ok=True)
         if source.suffix.lower() == ".md":
             rewritten = _rewrite_links(
-                source.read_text(encoding="utf-8") if article is None else read_node_source(article),
+                source.read_text(encoding="utf-8") if article is None else _article_text(article),
                 source_dir=source.parent,
                 page=target,
                 blueprint=blueprint,
@@ -1632,7 +1650,7 @@ def _render_environment(
     caption, _, number = numbers[node.id].rpartition(" ")
     # The text the graph parsed, so the box shows the statement its status and
     # any review disclosure describe, or rendering stops.
-    statement, remainder = _split_body(read_node_source(node))
+    statement, remainder = _split_body(_article_text(node))
     # The body is leaving its own directory for the chapter page, so its
     # relative links have to be recomputed from the chapter's location.
     statement, remainder = (

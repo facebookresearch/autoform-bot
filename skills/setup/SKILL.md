@@ -71,7 +71,17 @@ theorem axioms on pull requests; `autoform-review-gate.yml`, which tells a pull
 request early whether a code owner has authenticated the statement approvals
 it adds; and `blueprint-pages.yml`, which validates the DAG and its `lean:`
 declarations, renders the blueprint, builds MkDocs, and deploys GitHub Pages.
-Pass `--autoform-ref` to pin them at an immutable commit.
+Pages builds Lean and extracts the statement skeletons in one job, then labels
+approvals and builds the site in a second job that never runs Lake and takes
+only the skeleton report from the first. Pass `--autoform-ref` to pin them at
+an immutable commit.
+
+Approvals read "approved by" only when the default branch has a ruleset
+requiring code owner review and `CODEOWNERS` gives every file except articles
+and read-back cards a team owner or an individual owner with write access;
+classic branch protection does not count. Tell the user this when statement
+review is on; adding the ruleset and `CODEOWNERS` is their decision. The
+[CLI reference](../../autoform_cli/README.md#commands) states the full rule.
 
 After it runs, fill in what only a human or a source can supply: the project
 description in `blueprint/README.md`, the coverage contract, and a verified

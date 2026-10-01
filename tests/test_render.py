@@ -1047,3 +1047,36 @@ def test_a_directory_link_uses_tree_even_when_the_repo_url_says_blob() -> None:
         "https://git.example/blob/x/repo/blob/abc/blueprint/sources/paper.md"
     )
     assert base.href(()) == "https://git.example/blob/x/repo/tree/abc/blueprint/sources"
+
+
+@pytest.mark.parametrize(
+    "markup",
+    ["<script>alert(1)</script>", "<img/src=x onerror=alert(1)>", "<div markdown>x</div>", "&lt;"],
+)
+def test_render_refuses_an_article_with_raw_html(tmp_path: Path, markup: str) -> None:
+    project = _project(tmp_path)
+    top = project / "blueprint" / "roadmap" / "top.md"
+    top.write_text(top.read_text(encoding="utf-8").replace("The main result.", f"The main result. {markup}"),
+                   encoding="utf-8")
+
+    with pytest.raises(PublicationError) as refused:
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    assert any(issue.startswith("top: ") for issue in refused.value.issues), refused.value.issues
+    assert not (tmp_path / "out").exists()
+
+
+def test_render_leaves_html_comments_out_of_the_site(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    top = project / "blueprint" / "roadmap" / "top.md"
+    top.write_text(
+        top.read_text(encoding="utf-8").replace(
+            "The main result.", "The main result.<!-- secret note --> Shown.<!-->gone-->"
+        ),
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    pages = "\n".join(path.read_text(encoding="utf-8") for path in (tmp_path / "out").rglob("*.md"))
+    assert "The main result. Shown." in pages
+    assert "secret note" not in pages
+    assert "gone" not in pages

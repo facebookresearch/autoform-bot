@@ -1179,6 +1179,58 @@ def _raw_html_errors(text: str) -> tuple[str, ...]:
     return tuple(errors)
 
 
+#: An HTML comment with its end: the text a site leaves out of an article.
+_COMPLETE_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def publishable_article(text: str) -> tuple[str, tuple[str, ...]]:
+    """The text of an article a site may publish, and what refuses it.
+
+    Articles are Markdown and TeX, as read-backs are. Raw HTML in one would
+    reach the published page as markup that can restyle it, show an approval
+    nobody gave, or run script, and the reviewers who approve articles do not
+    own the site's templates. Complete HTML comments are a common way to leave
+    a note, so they are dropped rather than refused; the text returned is the
+    article without them, so a comment a browser would end sooner than the
+    pattern does exposes nothing. What remains is refused when
+    :func:`_raw_html_errors` finds HTML in it, or when the site's Markdown
+    renderer would pass any of it through as raw HTML: the two parse markup
+    differently, and the renderer's reading is what gets published.
+    """
+
+    visible = _COMPLETE_HTML_COMMENT.sub("", text)
+    errors = list(_raw_html_errors(visible))
+    passed = _passed_through(visible)
+    if passed and not errors:
+        shown = ", ".join(repr(block[:40]) for block in dict.fromkeys(passed))
+        errors.append(f"raw HTML is not allowed: the site would publish {shown} as HTML")
+    return visible, tuple(errors)
+
+
+def _passed_through(text: str) -> list[str]:
+    """What the site's renderer passes through from ``text`` as raw HTML.
+
+    The renderer stashes raw HTML, character references, and highlighted code
+    blocks alike. Code blocks are stashed while fences are read, before any
+    raw HTML is, so whatever is stashed after that came from the text itself.
+    """
+
+    parser = markdown_renderer.Markdown(extensions=list(SITE_EXTENSIONS), extension_configs=SITE_EXTENSION_CONFIGS)
+    fences = parser.preprocessors["fenced_code_block"]
+    read_fences = fences.run
+    highlighted = 0
+
+    def counted(lines: list[str]) -> list[str]:
+        nonlocal highlighted
+        lines = read_fences(lines)
+        highlighted = len(parser.htmlStash.rawHtmlBlocks)
+        return lines
+
+    fences.run = counted  # type: ignore[method-assign]
+    parser.convert(text)
+    return [block if isinstance(block, str) else "<element>" for block in parser.htmlStash.rawHtmlBlocks[highlighted:]]
+
+
 def _entity_name(entity: str) -> str:
     """``entity`` and, when it stands for one character, that character's code
     point and name."""
@@ -1950,6 +2002,7 @@ __all__ = [
     "planned_readback",
     "prepare_readback",
     "publish_readback",
+    "publishable_article",
     "readback_conflicts",
     "readback_findings",
     "readback_path",

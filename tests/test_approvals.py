@@ -69,7 +69,11 @@ def _commit(root: Path, message: str) -> str:
     return _git(root, "rev-parse", "HEAD")
 
 
-def _project(tmp_path: Path, codeowners: str | None = "blueprint/ @alice\n") -> Path:
+# Code owner review protects only what has an owner, so the fixture owns everything.
+_CODEOWNERS = "* @owner\nblueprint/ @alice\n"
+
+
+def _project(tmp_path: Path, codeowners: str | None = _CODEOWNERS) -> Path:
     root = tmp_path / "project"
     chapter = root / "blueprint" / "roadmap" / "basics"
     chapter.mkdir(parents=True)
@@ -118,10 +122,13 @@ class FakeGitHub:
     """Answers GitHub's REST API for the test repository.
 
     Pull requests, the commits GitHub associates with them, reviews, and
-    Actions runs live in memory; diffs and file contents come from Git.
+    Actions runs live in memory; diffs and file contents come from Git. By
+    default the repository is set up as the README asks: a ruleset requires
+    code owner review on main, and everyone named has write permission.
     """
 
     api_url = "https://api.github.com"
+    repository = {"id": 1, "full_name": "owner/project", "owner": {"login": "owner"}}
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -132,6 +139,26 @@ class FakeGitHub:
         self.runs: list[dict] = []
         self.calls: list[tuple[str, dict]] = []
         self.file_edits: dict[int, object] = {}
+        self.rules: list[dict] = [
+            {
+                "type": "pull_request",
+                "ruleset_source_type": "Repository",
+                "ruleset_source": "owner/project",
+                "ruleset_id": 1,
+                "parameters": {
+                    "dismiss_stale_reviews_on_push": False,
+                    "require_code_owner_review": True,
+                    "require_last_push_approval": False,
+                    "required_approving_review_count": 1,
+                    "required_review_thread_resolution": False,
+                },
+            }
+        ]
+        # login -> permission; None answers 404, as for someone who is not a collaborator.
+        self.permissions: dict[str, str | None] = {}
+        self.events: dict[int, list[dict]] = {}
+        # commit -> (author login, committer login); by default the pull request's author.
+        self.commit_users: dict[str, tuple[str | None, str | None]] = {}
 
     def open_pull(
         self,
@@ -142,23 +169,27 @@ class FakeGitHub:
         base: str | None = None,
         base_ref: str = "main",
         ci: str | None = "success",
+        ref: str | None = None,
     ) -> str:
-        """Open pull request ``number`` from ``head`` (default HEAD); return its head."""
+        """Open pull request ``number`` from ``head`` (default HEAD) on branch ``ref``
+        (default the current branch); return its head."""
 
         head = head or _git(self.root, "rev-parse", "HEAD")
         base = base or _git(self.root, "merge-base", self.default_branch, head)
+        ref = ref or _git(self.root, "rev-parse", "--abbrev-ref", "HEAD")
+        repository = {"id": self.repository["id"], "full_name": self.repository["full_name"]}
         self.pulls[number] = {
             "number": number,
             "state": "open",
             "user": {"login": author},
             "html_url": f"https://github.com/owner/project/pull/{number}",
-            "head": {"sha": head},
-            "base": {"ref": base_ref, "sha": base},
+            "head": {"sha": head, "ref": ref, "label": f"owner:{ref}", "repo": dict(repository)},
+            "base": {"ref": base_ref, "sha": base, "repo": dict(repository)},
             "merged_at": None,
         }
         self.associate(number, *_git(self.root, "rev-list", f"{base}..{head}").split())
         if ci is not None:
-            self.run(head, conclusion=ci)
+            self.run(head, conclusion=ci, branch=ref)
         return head
 
     def push(self, number: int, *, ci: str | None = "success") -> str:
@@ -169,7 +200,7 @@ class FakeGitHub:
         pull["head"]["sha"] = head
         self.associate(number, *_git(self.root, "rev-list", f"{pull['base']['sha']}..{head}").split())
         if ci is not None:
-            self.run(head, conclusion=ci)
+            self.run(head, conclusion=ci, branch=pull["head"]["ref"])
         return head
 
     def associate(self, number: int, *commits: str) -> None:
@@ -190,13 +221,28 @@ class FakeGitHub:
         path: str = _VERIFY,
         event: str = "pull_request",
         status: str = "completed",
+        branch: str | None = None,
     ) -> None:
+        """Record an Actions run; ``branch`` defaults to that of the pull request with this head.
+
+        GitHub lists a run's pull requests only while they are open, so the
+        runs of merged pull requests list none.
+        """
+
+        if branch is None:
+            branch = next(
+                (pull["head"]["ref"] for pull in self.pulls.values() if pull["head"]["sha"] == head),
+                _git(self.root, "rev-parse", "--abbrev-ref", "HEAD"),
+            )
         self.runs.append(
             {
                 "id": len(self.runs) + 1,
                 "path": path,
                 "event": event,
                 "head_sha": head,
+                "head_branch": branch,
+                "head_repository": {"id": self.repository["id"], "full_name": self.repository["full_name"]},
+                "pull_requests": [],
                 "status": status,
                 "conclusion": conclusion,
             }
@@ -251,14 +297,42 @@ class FakeGitHub:
         edit = self.file_edits.get(number)
         return edit(entries) if callable(edit) else entries
 
+    def commits(self, number: int) -> list[dict]:
+        """The pull request's commits as GitHub lists them, oldest first, with the accounts GitHub links."""
+
+        pull = self.pulls[number]
+        listed = []
+        for sha in _git(self.root, "rev-list", "--reverse", f"{pull['base']['sha']}..{pull['head']['sha']}").split():
+            author, committer = self.commit_users.get(sha, (pull["user"]["login"], pull["user"]["login"]))
+            listed.append(
+                {
+                    "sha": sha,
+                    "author": None if author is None else {"login": author},
+                    "committer": None if committer is None else {"login": committer},
+                }
+            )
+        return listed
+
     def get(self, path: str, query: dict | None = None) -> object | None:
         query = dict(query or {})
         self.calls.append((path, query))
         if path == "":
-            return {"full_name": "owner/project", "default_branch": self.default_branch}
+            return {**self.repository, "default_branch": self.default_branch}
         parts = path.split("/")
         if parts[1] == "commits" and parts[3:] == ["pulls"]:
             return self._page([self.pulls[number] for number in self.associated.get(parts[2], [])], query)
+        if parts[1:3] == ["rules", "branches"]:
+            return self._page(self.rules, query)
+        if parts[1] == "collaborators" and parts[3:] == ["permission"]:
+            login = urllib.parse.unquote(parts[2])
+            permission = self.permissions.get(login.lower(), "write")
+            return None if permission is None else {"permission": permission, "role_name": permission}
+        if parts[1] == "issues" and parts[3:] == ["events"]:
+            return self._page(self.events.get(int(parts[2]), []), query)
+        if path == "/pulls":
+            assert query.get("state") == "all"
+            heads = [pull for pull in self.pulls.values() if pull["head"]["label"] == query["head"]]
+            return self._page(heads, query)
         if parts[1] == "pulls":
             number = int(parts[2])
             if number not in self.pulls:
@@ -269,6 +343,8 @@ class FakeGitHub:
                 return self._page(self.reviews.get(number, []), query)
             if parts[3] == "files":
                 return self._page(self.files(number), query)
+            if parts[3] == "commits":
+                return self._page(self.commits(number), query)
         if parts[1] == "contents":
             name = urllib.parse.unquote(path[len("/contents/"):])
             blob = subprocess.run(
@@ -406,7 +482,7 @@ def test_code_owners_must_hold_before_the_merge_and_at_the_trusted_ref(tmp_path:
     github = FakeGitHub(root)
     # The pull request adds its own reviewer to CODEOWNERS.
     _branch(root, "grab")
-    (root / ".github" / "CODEOWNERS").write_text("blueprint/ @alice @carol\n", encoding="utf-8")
+    (root / ".github" / "CODEOWNERS").write_text("* @owner\nblueprint/ @alice @carol\n", encoding="utf-8")
     _approve(root, "result", _HASH)
     _commit(root, "Approve the result")
     head = github.open_pull(7, "bob")
@@ -415,12 +491,18 @@ def test_code_owners_must_hold_before_the_merge_and_at_the_trusted_ref(tmp_path:
 
     status = _verify(root, github)["basics/result"]
     assert not status.authenticated
+    assert "#7 changes .github/CODEOWNERS, not only articles and read-back cards" in (status.reason or "")
+
+    # Even were GitHub to list only the article, carol owned nothing before the merge.
+    github.file_edits[7] = lambda entries: [entry for entry in entries if entry["filename"] == _ARTICLE]
+    status = _verify(root, github)["basics/result"]
+    assert not status.authenticated
     assert "@carol approved #7 but is not an individual code owner" in (status.reason or "")
 
     # A code owner then, who is no longer one at the trusted ref, does not count either.
     github.review(7, "alice", "APPROVED", head)
     assert _verify(root, github)["basics/result"].authenticated
-    (root / ".github" / "CODEOWNERS").write_text("blueprint/ @carol\n", encoding="utf-8")
+    (root / ".github" / "CODEOWNERS").write_text("* @owner\nblueprint/ @carol\n", encoding="utf-8")
     _commit(root, "Hand the blueprint to carol")
     status = _verify(root, github)["basics/result"]
     assert not status.authenticated
@@ -491,7 +573,7 @@ def test_a_dismissed_approval_does_not_authenticate(tmp_path: Path) -> None:
 
 
 def test_team_and_email_owners_never_authenticate(tmp_path: Path) -> None:
-    root = _project(tmp_path, "blueprint/ @owner/reviewers alice@example.com\n")
+    root = _project(tmp_path, "* @owner\nblueprint/ @owner/reviewers alice@example.com\n")
     github = FakeGitHub(root)
     head = _pull_approving(root, github)
     github.review(7, "alice", "APPROVED", head)
@@ -501,7 +583,8 @@ def test_team_and_email_owners_never_authenticate(tmp_path: Path) -> None:
     assert not status.authenticated
     assert "teams and email owners cannot be verified" in (status.reason or "")
     assert "name an individual @user" in (status.reason or "")
-    assert github.calls == []
+    # Only the repository's setup was read; nothing about the approval.
+    assert [path for path, _ in github.calls] == _SETUP_CALLS
 
 
 def test_no_codeowners_file_allows_nobody(tmp_path: Path) -> None:
@@ -517,7 +600,7 @@ def test_no_codeowners_file_allows_nobody(tmp_path: Path) -> None:
 
 
 def test_code_owner_logins_match_without_case(tmp_path: Path) -> None:
-    root = _project(tmp_path, "blueprint/ @Alice\n")
+    root = _project(tmp_path, "* @owner\nblueprint/ @Alice\n")
     github = FakeGitHub(root)
     head = _pull_approving(root, github)
     github.review(7, "aLICE", "APPROVED", head)
@@ -575,12 +658,20 @@ def test_lookups_are_cached_and_the_request_budget_fails_closed(tmp_path: Path) 
     statuses = _verify(root, github)
     assert all(status.authenticated for status in statuses.values())
     requested = [path for path, _ in github.calls]
-    assert requested.count("") == 1
-    assert requested.count(f"/commits/{landed}/pulls") == 1
-    assert requested.count("/pulls/7/files") == 1
-    assert requested.count("/pulls/7/reviews") == 1
-    assert requested.count("/actions/runs") == 1
-    assert len(requested) == 7  # and the two articles' contents at the head
+    # Once for the repository: its default branch, rules, and the permission of each code owner.
+    assert requested[:4] == [*_SETUP_CALLS, "/collaborators/alice/permission"]
+    # Once for both approvals' pull request, whose approver's permission is already known.
+    assert requested[4:] == [
+        f"/commits/{landed}/pulls",
+        "/pulls/7/files",
+        "/contents/blueprint/roadmap/basics/other.md",
+        "/pulls/7/reviews",
+        "/pulls/7/commits",
+        "/pulls",
+        "/issues/7/events",
+        "/actions/runs",
+        f"/contents/{_ARTICLE}",
+    ]
 
     github.calls.clear()
     statuses = _verify(root, github, max_requests=2)
@@ -795,6 +886,10 @@ def test_the_client_refuses_an_oversized_response(monkeypatch: pytest.MonkeyPatc
         GitHubClient("secret", "owner/project").get("/pulls/1/reviews")
 
 
+# What every verification reads first: the repository, its rules, and the permission of the catch-all owner.
+_SETUP_CALLS = ["", "/rules/branches/main", "/collaborators/owner/permission"]
+
+
 def _gate(root: Path, base: str, *, pr: int = 7, trusted_ref: str | None = None) -> int:
     return main(
         [
@@ -879,8 +974,9 @@ def test_the_gate_reads_code_owners_at_the_trusted_ref(
     base = _git(root, "rev-parse", "HEAD")
     github = FakeGitHub(root)
     _use_fake_github(monkeypatch, github)
-    _branch(root, "grab")
-    (root / ".github" / "CODEOWNERS").write_text("blueprint/ @alice @carol\n", encoding="utf-8")
+    (root / ".github" / "CODEOWNERS").write_text("* @owner\nblueprint/ @alice @carol\n", encoding="utf-8")
+    _commit(root, "Make carol a code owner")
+    _branch(root, "approve")
     _approve(root, "result", _HASH)
     _commit(root, "Approve the result")
     head = github.open_pull(7, "bob")
@@ -888,7 +984,7 @@ def test_the_gate_reads_code_owners_at_the_trusted_ref(
 
     assert _gate(root, base) == 1
     assert "@carol approved #7 but is not an individual code owner" in capsys.readouterr().out
-    # Trusting the candidate would have let its new owner approve.
+    # Trusting a later ref would have let its new owner approve.
     assert _gate(root, base, trusted_ref="HEAD") == 0
 
 
@@ -939,7 +1035,7 @@ def _authenticated_review_project(
 
     blueprint = _approved_batch(tmp_path, monkeypatch, _Extraction())
     (tmp_path / ".github").mkdir()
-    (tmp_path / ".github" / "CODEOWNERS").write_text("blueprint/ @alice\n", encoding="utf-8")
+    (tmp_path / ".github" / "CODEOWNERS").write_text(_CODEOWNERS, encoding="utf-8")
     approved = {
         path: path.read_text(encoding="utf-8")
         for path in sorted((blueprint / "roadmap").rglob("*.md"))
@@ -1125,3 +1221,44 @@ def test_render_authenticate_needs_review_evidence(
     assert main(["render", str(blueprint), "--authenticate", "github", "--output", str(tmp_path / "site")]) == 2
     assert "--authenticate requires --review or --review-bundle" in capsys.readouterr().err
     assert github.calls == []
+
+
+def test_check_and_render_say_why_no_approval_counts_without_a_code_owner_ruleset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blueprint, github = _authenticated_review_project(tmp_path, monkeypatch)
+    github.rules = []
+    github.calls.clear()
+
+    assert main(["review", "check", str(blueprint), "--lean-root", str(tmp_path), "--authenticate", "github"]) == 0
+    output = capsys.readouterr().out
+    reason = "(no active ruleset on main has a pull request rule requiring code owner review"
+    assert "basics/result: self-approved · sha256:" in output
+    assert output.count(reason) == 2
+    # The repository is judged once for every approval, and no pull request is read.
+    assert [path for path, _ in github.calls] == ["", "/rules/branches/main"]
+
+    code, pages = _render(tmp_path, blueprint)
+    assert code == 0
+    assert pages.count('class="bp-review-self-approved" title="no active ruleset on main has a pull request') == 2
+
+
+@pytest.mark.parametrize(("event", "hinted"), [("pull_request", True), ("pull_request_target", True), ("push", False)])
+def test_authenticate_without_pr_in_a_pull_request_run_names_pr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], event: str, hinted: bool
+) -> None:
+    """The push case is a deliberate guard: only a pull request run gets the hint."""
+
+    root = _project(tmp_path)
+    base = _git(root, "rev-parse", "HEAD")
+    github = FakeGitHub(root)
+    _use_fake_github(monkeypatch, github)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", event)
+    _branch(root, "change")
+    _approve(root, "result", _HASH)
+    _commit(root, "Approve the result")
+    github.open_pull(7, "bob")
+
+    assert main(["review", "authenticate", str(root / "blueprint"), "--github", "--since", base]) == 1
+    err = capsys.readouterr().err
+    assert ("hint: this is a pull request run; pass --pr with its number" in err) is hinted

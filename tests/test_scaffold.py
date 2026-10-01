@@ -331,10 +331,14 @@ def test_generated_ci_rebuilds_opted_in_statement_review_evidence(tmp_path: Path
         assert "review cards or approvals exist without $marker" in workflow
         assert "review_approved[[:space:]]*:' -- blueprint/roadmap" in workflow
         assert "AUTOFORM_REVIEW_ENABLED=true" in workflow
-        # One extraction per command: the check derives its own bundle.
-        assert "autoform review check blueprint --lean-root .\n" in workflow
         assert "review prepare" not in workflow and "autoform-review.json" not in workflow
-    assert "review_args=(--review)" in pages and "--review-bundle" not in pages
+    # One extraction per command: the check derives its own bundle.
+    assert "autoform review check blueprint --lean-root .\n" in verify
+    # Pages extracts once, in the job that builds Lean, and checks the report.
+    report = '"$RUNNER_TEMP/autoform-skeleton/skeleton-report.json"'
+    assert f"autoform review check blueprint\n          --skeleton-report {report}\n" in pages
+    assert f"review_args=(--review --skeleton-report {report})" in pages
+    assert "--review-bundle" not in pages
     assert "Build Lean for statement review" in pages
     assert "--with markdown==3.10.3" in pages
     assert "--with pymdown-extensions==11.0.1" in pages
@@ -369,6 +373,31 @@ def test_the_approval_gate_runs_apart_from_the_lean_build(tmp_path: Path) -> Non
     push_paths = pages.split("  pull_request:")[0]
     for location in (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"):
         assert f'- "{location}"' in push_paths
+
+
+def test_pages_authenticates_approvals_in_a_job_that_never_builds_the_project(
+    tmp_path: Path,
+) -> None:
+    """Building Lean runs the project's own build code, so the job that reads
+    the token, labels approvals, and uploads the site takes only the skeleton
+    report from the Lean job, and restores no cache that job could write."""
+
+    scaffold_project(tmp_path, title="Finite Flat")
+    pages = (tmp_path / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8")
+    jobs = pages.split("\njobs:\n")[1]
+    lean = jobs.split("\n  lean:\n")[1].split("\n  build:\n")[0]
+    build = jobs.split("\n  build:\n")[1].split("\n  deploy:\n")[0]
+
+    assert "lake build" in lean and "autoform skeleton blueprint --lean-root ." in lean
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in lean
+    assert "GITHUB_TOKEN" not in lean and "--authenticate" not in lean
+    assert "    needs: lean\n" in build
+    assert "lake" not in build and "elan" not in build
+    assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in build
+    assert "--authenticate github" in build and "fetch-depth: 0" in build
+    for permission in ("pull-requests: read", "actions: read", "issues: read"):
+        assert permission in build and permission not in lean
+    assert pages.count("enable-cache: false") == 2
 
 
 def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:

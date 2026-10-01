@@ -308,9 +308,10 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "autoform check blueprint --lean-root ." in workflow
     assert "autoform render blueprint" in workflow
     assert "--require-declarations" in workflow
-    assert "autoform review check blueprint --lean-root .\n" in workflow
+    report = '"$RUNNER_TEMP/autoform-skeleton/skeleton-report.json"'
+    assert f"autoform review check blueprint\n          --skeleton-report {report}\n" in workflow
     assert "review prepare" not in workflow
-    assert "review_args=(--review)" in workflow
+    assert f"review_args=(--review --skeleton-report {report})" in workflow
     assert "--with markdown==3.10.3" in workflow
     assert "--with pymdown-extensions==11.0.1" in workflow
     assert "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128" in workflow

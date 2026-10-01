@@ -24,11 +24,11 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Protocol, TypeVar
 
 from .graph import Graph, frontmatter_value
-from .readback import Readback
+from .readback import READBACKS_DIR, Readback
 from .review import ReviewBundle, ReviewError
 
 
@@ -42,8 +42,17 @@ _PAGE_SIZE = 100
 _MAX_PAGES = 30
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 _MAX_HISTORY = 500
-# GitHub ignores a code owner without write access; these associations have it.
+# GitHub lists at most 250 commits of a pull request.
+_MAX_PULL_COMMITS = 250
+# GitHub does not load a CODEOWNERS file of 3 MB or more.
+_MAX_CODEOWNERS_BYTES = 3_000_000
+_UNCOVERED_SHOWN = 10
+# Associations that can hold write access. Only a prefilter: the collaborator
+# permission endpoint decides, because MEMBER is any member of the owning
+# organization.
 _WRITE_ACCESS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+# GitHub ignores a code owner without write access; these permissions have it.
+_WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 _REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 # Underscores appear in Enterprise Managed User logins such as octocat_acme.
 _LOGIN = r"[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?"
@@ -265,12 +274,16 @@ def code_owners(rules: tuple[CodeOwnersRule, ...], path: str) -> tuple[str, ...]
     Raises ``ApprovalError`` when the deciding rule could be an undecidable one.
     """
 
-    for rule in reversed(rules):
-        if rule.matches(path):
-            if rule.problem is not None:
-                raise ApprovalError(f"{rule.problem}, so the code owners of {path} cannot be decided")
-            return rule.owners
-    return ()
+    rule = _deciding_rule(rules, path)
+    if rule is None:
+        return ()
+    if rule.problem is not None:
+        raise ApprovalError(f"{rule.problem}, so the code owners of {path} cannot be decided")
+    return rule.owners
+
+
+def _deciding_rule(rules: tuple[CodeOwnersRule, ...], path: str) -> CodeOwnersRule | None:
+    return next((rule for rule in reversed(rules) if rule.matches(path)), None)
 
 
 def individual_owners(owners: tuple[str, ...]) -> tuple[str, ...]:
@@ -347,8 +360,9 @@ def _glob_expression(pattern: str, *, widen: bool) -> str | None:
 def load_codeowners(root: Path, ref: str, *, name: str | None = None) -> tuple[str, tuple[CodeOwnersRule, ...]] | None:
     """Read the CODEOWNERS file GitHub would use at ``ref``, or None when there is none.
 
-    GitHub uses the first location that exists, so one that is not UTF-8 is
-    an error rather than a reason to read the next.
+    GitHub uses the first location that exists, so one that is not UTF-8, or
+    too large for GitHub to load, is an error rather than a reason to read the
+    next.
     """
 
     _require_commit(root, ref)
@@ -357,6 +371,11 @@ def load_codeowners(root: Path, ref: str, *, name: str | None = None) -> tuple[s
         data = _blob(root, ref, location)
         if data is None:
             continue
+        if len(data) >= _MAX_CODEOWNERS_BYTES:
+            raise ApprovalError(
+                f"{label}:{location} has {len(data)} bytes, and GitHub does not load a CODEOWNERS file of 3 MB "
+                "or more, so it names no code owner"
+            )
         try:
             text = data.decode("utf-8")
         except UnicodeError:
@@ -437,26 +456,42 @@ class _Refused(Exception):
 class GitHubReviewVerifier:
     """Authenticate approvals from the pull request that recorded them.
 
-    On the default branch, approval (A, H) at ``trusted_ref`` R, where p is
-    A's path, is authenticated when all of these hold:
+    Nothing is authenticated unless code owner review guards everything an
+    approval rests on. Once per run, at ``trusted_ref`` R:
 
-    1. Walking R's first-parent history of p, M is the oldest commit of the
-       unbroken run ending at R in which p records H, so M's first parent
-       does not. Moving the article starts a new run.
+    0. An active ruleset on the default branch has a pull request rule that
+       requires code owner review, and CODEOWNERS at R gives every tracked
+       file other than articles and read-back cards an owner GitHub enforces:
+       a team, or an individual ``@user`` with write access. Otherwise every
+       approval is self-approved, naming the files without one.
+
+    On the default branch, approval (A, H) at R, where p is A's path, is
+    authenticated when the steps below hold:
+
+    1. M is a commit in the unbroken run of R's first-parent history of p
+       that records H: the oldest commit of the run, whose first parent does
+       not record H, or a newer one whose own diff adds a
+       ``review_approved: H`` line. Candidates are tried newest first.
+       Moving the article starts a new run.
     2. Exactly one pull request P merged into the default branch is
        associated with M; a direct push has none.
-    3. P's diff adds a frontmatter line to p recording ``review_approved: H``
+    3. P changes only articles and read-back cards, by file name and by
+       previous name.
+    4. P's diff adds a frontmatter line to p recording ``review_approved: H``
        where a reviewer sees it, and p records H at P's head commit.
-    4. A reviewer whose latest verdict on P is an approval of P's head commit
-       is not P's author, has write access (OWNER, MEMBER, or COLLABORATOR),
-       and is an individual ``@user`` code owner of p in CODEOWNERS both at
-       M's first parent and at R.
-    5. ``verify_workflow`` succeeded in a pull_request run on P's head commit
-       and P does not change that workflow. Its build runs ``review check``,
-       which fails unless H is current, so H described what the reviewer saw.
+    5. A reviewer whose latest verdict on P is an approval of P's head commit
+       is not P's author, authored or committed none of P's commits, has
+       write, maintain, or admin permission, and is an individual ``@user``
+       code owner of p in CODEOWNERS both at M's first parent and at R.
+    6. P comes from a branch of this repository that headed no other pull
+       request, P never changed its base branch, and ``verify_workflow``
+       succeeded in a pull_request run on P's head commit from that branch.
+       P cannot change that workflow (step 3). Its build runs ``review
+       check``, which fails unless H is current, so H described what the
+       reviewer saw.
 
     With ``pull_request`` N, the pre-merge gate, P is pull request N, code
-    owners come from R alone (the gate's base commit), and steps 1, 2, and 5
+    owners come from R alone (the gate's base commit), and steps 1, 2, and 6
     are skipped: nothing is merged or finished yet.
 
     Anything that cannot be checked, including a failed request, a spent
@@ -485,6 +520,7 @@ class GitHubReviewVerifier:
         self.requests = 0
         self.reasons: dict[str, str] = {}
         self._cache: dict[tuple[object, ...], object] = {}
+        self._blueprint = ""
 
     @classmethod
     def from_environment(
@@ -530,6 +566,18 @@ class GitHubReviewVerifier:
         if _git(root, "rev-parse", "--is-shallow-repository").stdout.strip() == b"true":
             raise ApprovalError("GitHub review authentication needs full Git history; check out with fetch-depth: 0")
         trusted = _commit_id(root, self.trusted_ref)
+        blueprint = _relative_path(graph.blueprint_dir, root)
+        self._blueprint = "" if blueprint == "." else blueprint
+        try:
+            self._check_protection(root, trusted)
+        except (_Refused, ApprovalError) as exc:
+            self.reasons = dict.fromkeys(sorted(approvals), str(exc))
+            return {}
+        except _BudgetSpent:
+            self.reasons = dict.fromkeys(
+                sorted(approvals), f"not checked: the budget of {self.max_requests} GitHub API requests was spent"
+            )
+            return {}
         attestations: dict[str, ApprovalAttestation] = {}
         for node_id, review_hash in sorted(approvals.items()):
             node = graph.nodes.get(node_id)
@@ -550,23 +598,113 @@ class GitHubReviewVerifier:
     ) -> ApprovalAttestation:
         path = _relative_path(article, root)
         wanted = review_hash.lower()
-        if self.pull_request is None:
-            commit, parent = self._introduction(root, trusted, path, wanted)
-            before = (parent, f"{parent[:12]} (before {commit[:12]})")
-            owners = self._owners(root, path, before, (trusted, self.trusted_ref))
-            pull = self._merged_pull(commit)
-        else:
+        if self.pull_request is not None:
             owners = self._owners(root, path, (trusted, self.trusted_ref))
-            pull = self._gate_pull()
+            return self._attest(node_id, review_hash, self._gate_pull(), path, wanted, owners)
+        candidates = self._introductions(root, trusted, path, wanted)
+        reasons: list[str] = []
+        for commit, parent in candidates:
+            try:
+                if parent is None:
+                    raise _Refused(
+                        f"{path} has recorded this hash since the first commit {commit[:12]}, "
+                        "which no pull request can have reviewed"
+                    )
+                before = (parent, f"{parent[:12]} (before {commit[:12]})")
+                owners = self._owners(root, path, before, (trusted, self.trusted_ref))
+                return self._attest(node_id, review_hash, self._merged_pull(commit), path, wanted, owners)
+            except (_Refused, ApprovalError) as exc:
+                reasons.append(str(exc) if len(candidates) == 1 else f"{commit[:12]}: {exc}")
+        raise _Refused("; ".join(dict.fromkeys(reasons)))
+
+    def _attest(
+        self, node_id: str, review_hash: str, pull: dict, path: str, wanted: str, owners: frozenset[str]
+    ) -> ApprovalAttestation:
+        self._check_content_only(pull)
         self._check_recorded(pull, path, wanted)
         reviewer, review = self._approver(pull, path, owners)
         if self.pull_request is None:
             self._check_verified(pull)
         return ApprovalAttestation(node_id, review_hash, reviewer, self.method, self._review_url(pull, review))
 
-    # 1. Which commit recorded the hash.
+    # 0. Whether code owner review guards everything an approval rests on.
 
-    def _introduction(self, root: Path, trusted: str, path: str, wanted: str) -> tuple[str, str]:
+    def _check_protection(self, root: Path, trusted: str) -> None:
+        """Refuse every approval unless code owner review is required and owns every non-content file.
+
+        An approval PR changes only articles and read-back cards, so its own
+        review covers them. Everything else, from CODEOWNERS and workflows to
+        the Lean sources, theme, and mkdocs.yml the Pages build runs, must
+        have changed only under code owner review.
+        """
+
+        default = self._default_branch()
+        rules = self._once(
+            ("rules", default), lambda: self._pages(f"/rules/branches/{urllib.parse.quote(default, safe='')}")
+        )
+        if not any(_requires_code_owner_review(rule) for rule in rules):
+            raise _Refused(
+                f"no active ruleset on {default} has a pull request rule requiring code owner review, so a pull "
+                "request can merge without its code owners; classic branch protection cannot be read with a "
+                "workflow token and does not count"
+            )
+        codeowners = self._once(
+            ("codeowners", trusted), lambda: load_codeowners(root, trusted, name=self.trusted_ref)
+        )
+        if codeowners is None:
+            raise _Refused(f"{self.trusted_ref} has no CODEOWNERS file, so no reviewer is allowed")
+        location, owners = codeowners
+        decided: dict[int, str | None] = {}
+        uncovered: list[str] = []
+        for path in _tracked_files(root, trusted):
+            if _is_content(path, self._blueprint):
+                continue
+            rule = _deciding_rule(owners, path)
+            if rule is None:
+                uncovered.append(f"{path} (no rule)")
+                continue
+            if rule.line not in decided:
+                decided[rule.line] = self._uncovered_by(rule)
+            if decided[rule.line] is not None:
+                uncovered.append(f"{path} ({decided[rule.line]})")
+        if uncovered:
+            shown = ", ".join(uncovered[:_UNCOVERED_SHOWN])
+            more = f", and {len(uncovered) - _UNCOVERED_SHOWN} more" if len(uncovered) > _UNCOVERED_SHOWN else ""
+            raise _Refused(
+                f"{location} at {self.trusted_ref} gives {len(uncovered)} tracked file(s) other than articles and "
+                f"read-back cards no code owner with write access, so they can change without code owner review: "
+                f"{shown}{more}"
+            )
+
+    def _uncovered_by(self, rule: CodeOwnersRule) -> str | None:
+        """Why the deciding rule leaves its paths without an enforced owner, or None."""
+
+        if rule.problem is not None:
+            return rule.problem
+        # A team must have write access for GitHub to enforce it. A workflow
+        # token cannot read team permissions, so a team owner is trusted.
+        if any(_TEAM_OWNER.match(owner) for owner in rule.owners):
+            return None
+        logins = individual_owners(rule.owners)
+        if any(self._permission(login) in _WRITE_PERMISSIONS for login in logins):
+            return None
+        if logins:
+            return f"line {rule.line}: {', '.join('@' + login for login in logins)} cannot write"
+        if rule.owners:
+            return f"line {rule.line}: email owners cannot be verified"
+        return f"line {rule.line} names no owner"
+
+    # 1. Which commits may have recorded the hash.
+
+    def _introductions(self, root: Path, trusted: str, path: str, wanted: str) -> list[tuple[str, str | None]]:
+        """Candidate commits, newest first, each with its first parent.
+
+        The run is the unbroken stretch of first-parent commits ending at R in
+        which p records H. Its oldest commit, whose first parent does not
+        record H, is always a candidate; a newer one is a candidate when its
+        own diff adds a ``review_approved`` line with H, as re-approving does.
+        """
+
         if _value_at(root, trusted, path) != wanted:
             raise _Refused(f"{path} does not record this hash at {self.trusted_ref}")
         # First parents only: a merge counts as its own change of the file,
@@ -575,23 +713,21 @@ class GitHubReviewVerifier:
         if log.returncode != 0:
             raise ApprovalError(f"git rev-list failed for {path}: {log.stderr.decode('utf-8', 'replace').strip()}")
         commits = log.stdout.decode("ascii", "replace").split()
+        candidates: list[tuple[str, str | None]] = []
         for commit in commits[:_MAX_HISTORY]:
-            parent = _parent(root, commit)
-            if parent is None:
-                raise _Refused(
-                    f"{path} has recorded this hash since the first commit {commit[:12]}, "
-                    "which no pull request can have reviewed"
-                )
-            if _value_at(root, parent, path) == wanted:
-                continue
             if _value_at(root, commit, path) != wanted:
                 raise _Refused(f"the first-parent history of {path} is inconsistent at {commit[:12]}")
-            return commit, parent
+            parent = _parent(root, commit)
+            if parent is None or _value_at(root, parent, path) != wanted:
+                candidates.append((commit, parent))
+                return candidates
+            if _adds_approval_between(root, parent, commit, path, wanted):
+                candidates.append((commit, parent))
         if len(commits) > _MAX_HISTORY:
             raise _Refused(f"more than {_MAX_HISTORY} first-parent commits changed {path} while it recorded this hash")
         raise _Refused(f"no first-parent commit of {self.trusted_ref} records this hash in {path}")
 
-    # 4, first half. Who may approve, from Git alone.
+    # 5, first half. Who may approve, from CODEOWNERS.
 
     def _owners(self, root: Path, path: str, *refs: tuple[str, str]) -> frozenset[str]:
         allowed: frozenset[str] | None = None
@@ -624,15 +760,18 @@ class GitHubReviewVerifier:
 
     # 2. Which pull request that commit belongs to.
 
-    def _default_branch(self) -> str:
-        def fetch() -> str:
+    def _repository(self) -> dict:
+        def fetch() -> dict:
             repository = self._get("")
             branch = repository.get("default_branch") if isinstance(repository, dict) else None
-            if not isinstance(branch, str) or not branch:
+            if not isinstance(repository, dict) or not isinstance(branch, str) or not branch:
                 raise ApprovalError("GitHub API GET of the repository did not name its default branch")
-            return branch
+            return repository
 
-        return self._once(("default-branch",), fetch)
+        return self._once(("repository",), fetch)
+
+    def _default_branch(self) -> str:
+        return self._repository()["default_branch"]
 
     def _merged_pull(self, commit: str) -> dict:
         default = self._default_branch()
@@ -662,7 +801,28 @@ class GitHubReviewVerifier:
             )
         return _checked_pull(pull)
 
-    # 3. That the pull request visibly recorded the hash.
+    # 3. That the pull request changed nothing a reviewer of articles does not own.
+
+    def _check_content_only(self, pull: dict) -> None:
+        number = pull["number"]
+        files = self._files(number)
+        listed = pull.get("changed_files")
+        if isinstance(listed, int) and listed != len(files):
+            raise _Refused(
+                f"GitHub lists {len(files)} of the {listed} files #{number} changes, so what it changes cannot be read"
+            )
+        # A rename moves a file out of where it was owned as much as into where it is.
+        names = [name for item in files for name in (item.get("filename"), item.get("previous_filename", ""))]
+        content = {name for name in names if isinstance(name, str) and _is_content(name, self._blueprint)}
+        other = sorted({str(name) for name in names if name != "" and name not in content})
+        if other:
+            shown = ", ".join(other[:5]) + (f", and {len(other) - 5} more" if len(other) > 5 else "")
+            raise _Refused(
+                f"#{number} changes {shown}, not only articles and read-back cards; record approvals in a pull "
+                "request that changes only articles and read-back cards"
+            )
+
+    # 4. That the pull request visibly recorded the hash.
 
     def _check_recorded(self, pull: dict, path: str, wanted: str) -> None:
         number, head = pull["number"], pull["head"]["sha"]
@@ -679,7 +839,7 @@ class GitHubReviewVerifier:
         if not _adds_approval(added, text, wanted):
             raise _Refused(f"the diff of #{number} does not add a review_approved line with this hash to {path}")
 
-    # 4, second half. Who approved it.
+    # 5, second half. Who approved it.
 
     def _approver(self, pull: dict, path: str, owners: frozenset[str]) -> tuple[str, dict]:
         number, head = pull["number"], pull["head"]["sha"]
@@ -708,33 +868,122 @@ class GitHubReviewVerifier:
                 )
             elif review.get("commit_id") != head:
                 notes.append(f"@{login} approved an earlier commit of #{number}, not its head {head[:12]}")
+            elif (permission := self._permission(login)) not in _WRITE_PERMISSIONS:
+                notes.append(
+                    f"@{login} approved #{number} but GitHub gives them {permission or 'no'} permission on the "
+                    "repository, not write"
+                )
+            elif key in self._writers(number):
+                notes.append(f"@{login} approved #{number} but authored or committed one of its commits")
             else:
                 return login, review
         if not latest:
             notes.append(f"#{number} has no review")
         raise _Refused("; ".join(notes) or f"#{number} has no approving review by a code owner of {path}")
 
-    # 5. That the hash was current where it was approved.
+    # 6. That the hash was current where it was approved.
 
     def _check_verified(self, pull: dict) -> None:
+        """A successful verify run that GitHub ties to P, and to P alone.
+
+        GitHub lists a run's pull requests only while they are open and only
+        for branches of this repository, so after the merge a run is tied to
+        P by its head branch: P's branch, in this repository, which no other
+        pull request ever used, while P never changed its base branch.
+        """
+
         number, head = pull["number"], pull["head"]["sha"]
         workflow = self.verify_workflow
-        if any(workflow in (item.get("filename"), item.get("previous_filename")) for item in self._files(number)):
-            raise _Refused(f"#{number} changes {workflow}, so its own run of it is no evidence")
+        repository = self._repository()
+        here, name = repository.get("id"), repository.get("full_name")
+        if not isinstance(here, int) or not isinstance(name, str) or not _REPOSITORY.match(name):
+            raise ApprovalError("GitHub API GET of the repository did not give its id and full name")
+        source = pull["head"].get("repo")
+        if not isinstance(source, dict) or source.get("id") != here:
+            fork = source.get("full_name") if isinstance(source, dict) else None
+            raise _Refused(
+                f"#{number} comes from {'a deleted repository' if fork is None else repr(fork)}, not a branch of "
+                f"{name}, and a workflow token cannot tie a fork's Actions run to its pull request; record "
+                "approvals from a branch of this repository"
+            )
+        target = pull["base"].get("repo")
+        if not isinstance(target, dict) or target.get("id") != here:
+            raise _Refused(f"#{number} does not target {name}")
+        branch = pull["head"].get("ref")
+        if not isinstance(branch, str) or not branch:
+            raise ApprovalError(f"GitHub returned #{number} without its head branch")
+        owner = name.split("/", 1)[0]
+        heads = self._once(
+            ("heads", branch), lambda: self._pages("/pulls", {"state": "all", "head": f"{owner}:{branch}"})
+        )
+        numbers = sorted({_number(item.get("number")) for item in heads})
+        if numbers != [number]:
+            others = ", ".join(f"#{other}" for other in numbers if other != number) or "none listed"
+            raise _Refused(
+                f"the branch {branch!r} of #{number} also headed other pull requests ({others}), so a run on it "
+                f"cannot be tied to #{number}; record approvals from a branch no other pull request used"
+            )
+        events = self._once(("events", number), lambda: self._pages(f"/issues/{number}/events"))
+        if any(event.get("event") == "base_ref_changed" for event in events):
+            raise _Refused(
+                f"#{number} changed its base branch, so its verify run may have checked it against another branch"
+            )
         runs = self._once(
             ("runs", head),
             lambda: self._pages("/actions/runs", {"head_sha": head, "event": "pull_request"}, key="workflow_runs"),
         )
-        if not any(_succeeded(run, workflow, head) for run in runs):
+        default = self._default_branch()
+        if not any(
+            _succeeded(run, workflow, head) and _ran_for(run, number, branch, here, default) for run in runs
+        ):
             raise _Refused(
-                f"{workflow} has no successful pull_request run on the head {head[:12]} of #{number}, "
-                "so nothing shows this hash was current there"
+                f"{workflow} has no successful pull_request run on the head {head[:12]} of #{number} from its "
+                f"branch {branch!r}, so nothing shows this hash was current there"
             )
 
     # Requests.
 
     def _files(self, number: int) -> list[dict]:
         return self._once(("files", number), lambda: self._pages(f"/pulls/{number}/files"))
+
+    def _permission(self, login: str) -> str | None:
+        """The login's permission on the repository; None for someone who is not a collaborator."""
+
+        def fetch() -> str | None:
+            answer = self._get(f"/collaborators/{urllib.parse.quote(login, safe='')}/permission")
+            if answer is None:
+                return None
+            permission = answer.get("permission") if isinstance(answer, dict) else None
+            if not isinstance(permission, str):
+                raise ApprovalError(f"GitHub API GET of @{login}'s permission did not name one")
+            return permission
+
+        return self._once(("permission", login.lower()), fetch)
+
+    def _writers(self, number: int) -> frozenset[str]:
+        """Everyone GitHub names as the author or committer of one of the pull request's commits."""
+
+        def fetch() -> frozenset[str]:
+            commits = self._pages(f"/pulls/{number}/commits")
+            if len(commits) >= _MAX_PULL_COMMITS:
+                raise ApprovalError(
+                    f"#{number} has {len(commits)} commits listed and GitHub lists at most {_MAX_PULL_COMMITS}, "
+                    "so who wrote them cannot be checked"
+                )
+            writers: set[str] = set()
+            for commit in commits:
+                for role in ("author", "committer"):
+                    login = _login(commit.get(role))
+                    if not login:
+                        sha = commit.get("sha")
+                        raise ApprovalError(
+                            f"commit {sha[:12] if isinstance(sha, str) else '?'} of #{number} has a {role} GitHub "
+                            "links to no account, so no reviewer can be shown not to have written it"
+                        )
+                    writers.add(login.lower())
+            return frozenset(writers)
+
+        return self._once(("writers", number), fetch)
 
     def _once(self, key: tuple[object, ...], fetch: Callable[[], _T]) -> _T:
         """Fetch once per verifier; a failure is remembered and raised again."""
@@ -759,8 +1008,10 @@ class GitHubReviewVerifier:
         items: list[dict] = []
         for page in range(1, _MAX_PAGES + 1):
             batch = self._get(path, {**(query or {}), "per_page": _PAGE_SIZE, "page": page})
-            if batch is None:
+            if batch is None and page == 1:
                 return items
+            if batch is None:
+                raise ApprovalError(f"GitHub API GET {path} found no page {page}, so the list is incomplete")
             if key is not None:
                 batch = batch.get(key) if isinstance(batch, dict) else None
             if not isinstance(batch, list):
@@ -799,6 +1050,50 @@ def _checked_pull(pull: dict) -> dict:
     if not isinstance(number, int) or not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ApprovalError("GitHub returned a pull request without a number and head commit")
     return pull
+
+
+def _requires_code_owner_review(rule: dict) -> bool:
+    parameters = rule.get("parameters")
+    return (
+        rule.get("type") == "pull_request"
+        and isinstance(parameters, dict)
+        and parameters.get("require_code_owner_review") is True
+    )
+
+
+def _is_content(path: str, blueprint: str) -> bool:
+    """Whether a repository path is an article or a read-back card: Markdown under roadmap/ or readbacks/."""
+
+    parts = PurePosixPath(path).parts
+    prefix = PurePosixPath(blueprint).parts if blueprint else ()
+    return (
+        PurePosixPath(path).suffix == ".md"
+        and len(parts) > len(prefix) + 1
+        and parts[: len(prefix)] == prefix
+        and parts[len(prefix)] in {"roadmap", READBACKS_DIR}
+    )
+
+
+def _ran_for(run: dict, number: int, branch: str, repository: int, default: str) -> bool:
+    """Whether a run is on ``branch`` of this repository and names no pull request but ``number`` into ``default``."""
+
+    source = run.get("head_repository")
+    if run.get("head_branch") != branch or not isinstance(source, dict) or source.get("id") != repository:
+        return False
+    listed = run.get("pull_requests")
+    if not isinstance(listed, list):
+        return False
+    for entry in listed:
+        base = entry.get("base") if isinstance(entry, dict) else None
+        target = base.get("repo") if isinstance(base, dict) else None
+        if (
+            not isinstance(target, dict)
+            or entry.get("number") != number
+            or base.get("ref") != default
+            or target.get("id") != repository
+        ):
+            return False
+    return True
 
 
 def _base_ref(pull: dict) -> str:
@@ -935,6 +1230,34 @@ def _parent(root: Path, commit: str) -> str | None:
 def _value_at(root: Path, ref: str, path: str) -> str | None:
     text = _show(root, ref, path)
     return None if text is None else frontmatter_value(text, "review_approved")
+
+
+def _tracked_files(root: Path, commit: str) -> list[str]:
+    result = _git(root, "ls-tree", "-r", "-z", "--full-tree", "--name-only", commit)
+    if result.returncode != 0:
+        raise ApprovalError(f"git ls-tree failed at {commit[:12]}: {result.stderr.decode('utf-8', 'replace').strip()}")
+    return [name.decode("utf-8", "surrogateescape") for name in result.stdout.split(b"\0") if name]
+
+
+def _adds_approval_between(root: Path, parent: str, commit: str, path: str, wanted: str) -> bool:
+    """Whether ``commit``'s own diff of ``path`` adds a frontmatter line recording ``wanted``."""
+
+    diff = _git(
+        root, "--literal-pathspecs", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames",
+        "-U0", parent, commit, "--", path,
+    )
+    text = _show(root, commit, path)
+    if diff.returncode != 0 or text is None:
+        return False
+    rows = diff.stdout.decode("utf-8", "replace").split("\n")
+    start = next((index for index, row in enumerate(rows) if row.startswith("@@")), len(rows))
+    hunks = [row for row in rows[start:] if row]
+    counts = {
+        "additions": sum(row.startswith("+") for row in hunks),
+        "deletions": sum(row.startswith("-") for row in hunks),
+    }
+    added = _added_lines("\n".join(hunks), counts)
+    return added is not None and _adds_approval(added, text, wanted)
 
 
 def _blob(root: Path, ref: str, path: str) -> bytes | None:

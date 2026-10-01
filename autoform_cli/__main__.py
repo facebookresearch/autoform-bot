@@ -26,7 +26,7 @@ from .article_identity import plan_article_ids
 from .audit import audit_blueprint
 from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_key
 from .doctor import diagnose_project
-from .graph import Graph, GraphValidationError, load_graph
+from .graph import Graph, GraphValidationError, load_graph, read_node_source
 from .lean import build_linker, declaration_names
 from .readback import (
     PreparedReadback,
@@ -34,6 +34,7 @@ from .readback import (
     planned_readback,
     prepare_readback,
     publish_readback,
+    publishable_article,
     readback_conflicts,
 )
 from .render import PublicationError, render_site
@@ -60,6 +61,7 @@ from .skeleton import (
     blueprint_hash,
     extract_skeletons,
     format_report,
+    load_skeleton_report,
     write_packets,
     write_skeleton_report,
 )
@@ -218,7 +220,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="check evidence freshness, read-backs, and human approvals",
     )
     review_check.add_argument("blueprint_dir")
-    review_check.add_argument("--lean-root", type=Path, required=True)
+    review_evidence = review_check.add_mutually_exclusive_group(required=True)
+    review_evidence.add_argument("--lean-root", type=Path, help="built Lean project to extract the skeletons from")
+    review_evidence.add_argument(
+        "--skeleton-report",
+        type=Path,
+        metavar="FILE",
+        help="use the report `autoform skeleton --output` wrote for every article of this same blueprint, "
+        "instead of running Lean; it is refused unless its blueprint hash is this checkout's",
+    )
     review_check.add_argument(
         "--bundle",
         type=Path,
@@ -285,6 +295,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--review",
         action="store_true",
         help="add review disclosures from evidence derived in this run, without a prepared bundle",
+    )
+    render.add_argument(
+        "--skeleton-report",
+        type=Path,
+        metavar="FILE",
+        help="with --review or --review-bundle, take the skeletons from this report, as review check does, "
+        "instead of running Lean",
     )
     _add_probe_timeout_argument(render)
     render.add_argument(
@@ -383,9 +400,19 @@ def _init(args: argparse.Namespace) -> int:
 def _check(args: argparse.Namespace) -> int:
     try:
         graph = load_graph(args.blueprint_dir)
+        # The site publishes articles as Markdown; raw HTML in one would be markup there.
+        markup = [
+            f"{node.id}: {issue}"
+            for node in graph.nodes.values()
+            for issue in publishable_article(read_node_source(node))[1]
+        ]
     except GraphValidationError as exc:
         for issue in exc.issues:
             print(f"error: {issue}")
+        return 1
+    for issue in markup:
+        print(f"error: {issue}")
+    if markup:
         return 1
 
     statuses = status.derive(graph)
@@ -935,6 +962,7 @@ def _review_check(args: argparse.Namespace) -> int:
             lean_root=args.lean_root,
             bundle_path=args.bundle,
             timeout=args.timeout,
+            skeleton_path=args.skeleton_report,
         )
         findings = review_findings(graph, bundle, skeleton, readbacks=cards)
         approvals = approval_statuses(graph, current_approvals(graph, bundle, cards), verifier)
@@ -979,6 +1007,13 @@ def _review_authenticate(args: argparse.Namespace) -> int:
     if args.pr is not None and args.since is None:
         print("error: --pr requires --since, the pull request's base commit", file=sys.stderr)
         return 2
+    if args.pr is None and args.since is not None and os.environ.get("GITHUB_EVENT_NAME", "").startswith("pull_request"):
+        # Without --pr this waits for a merge the pull request has not had yet.
+        print(
+            "hint: this is a pull request run; pass --pr with its number to count the reviews of this pull "
+            "request before it merges",
+            file=sys.stderr,
+        )
     try:
         verifier = _approval_verifier("github", trusted_ref=args.trusted_ref, pull_request=args.pr)
         graph = load_graph(args.blueprint_dir)
@@ -1044,11 +1079,17 @@ def _approval_json(item: ApprovalStatus) -> dict[str, object]:
 def _current_review(
     blueprint_dir: str | Path,
     *,
-    lean_root: Path,
+    lean_root: Path | None,
     bundle_path: Path | None,
     timeout: float | None = None,
+    skeleton_path: Path | None = None,
 ):
     """The graph, one extraction, a review bundle validated against both, and the cards.
+
+    With ``skeleton_path`` the extraction is the report found there, written by
+    ``autoform skeleton --output`` in a job that built the Lean project, and
+    no Lean runs here. It must cover every article and name this checkout's
+    blueprint hash; a report of other articles is refused, not reconciled.
 
     With ``bundle_path`` the bundle is the one ``review prepare`` wrote, and it
     must still describe the current tree. Without it, the bundle is derived
@@ -1071,11 +1112,25 @@ def _current_review(
 
     graph = load_graph(blueprint_dir)
     cards = load_readbacks(graph.blueprint_dir)
-    skeleton = extract_skeletons(
-        blueprint_dir,
-        lean_root=lean_root,
-        timeout=timeout,
-    )
+    if skeleton_path is not None:
+        skeleton = load_skeleton_report(skeleton_path)
+        if skeleton.selection != "all":
+            raise SkeletonError([f"{skeleton_path} covers selected articles only; review needs every article"])
+        if skeleton.blueprint_hash != blueprint_hash(graph):
+            raise SkeletonError(
+                [
+                    f"{skeleton_path} was extracted from blueprint {skeleton.blueprint_hash}, "
+                    f"not from this checkout's {blueprint_hash(graph)}"
+                ]
+            )
+    elif lean_root is None:
+        raise SkeletonError(["review evidence needs --lean-root or --skeleton-report"])
+    else:
+        skeleton = extract_skeletons(
+            blueprint_dir,
+            lean_root=lean_root,
+            timeout=timeout,
+        )
     changed: list[ReviewFinding] = []
     if skeleton.blueprint_hash != blueprint_hash(graph):
         changed.append(
@@ -1148,16 +1203,20 @@ def _render(args: argparse.Namespace) -> int:
             print("error: --authenticate requires --review or --review-bundle", file=sys.stderr)
             return 2
         verifier = _approval_verifier(args.authenticate)
+        if args.skeleton_report is not None and args.review_bundle is None and not args.review:
+            print("error: --skeleton-report requires --review or --review-bundle", file=sys.stderr)
+            return 2
         if args.review_bundle is not None or args.review:
-            if args.lean_root is None:
+            if args.lean_root is None and args.skeleton_report is None:
                 flag = "--review" if args.review else "--review-bundle"
-                print(f"error: {flag} requires --lean-root", file=sys.stderr)
+                print(f"error: {flag} requires --lean-root or --skeleton-report", file=sys.stderr)
                 return 2
             _, skeleton, bundle, cards = _current_review(
                 args.blueprint_dir,
                 lean_root=args.lean_root,
                 bundle_path=args.review_bundle,
                 timeout=args.timeout,
+                skeleton_path=args.skeleton_report,
             )
         report = render_site(
             args.blueprint_dir,

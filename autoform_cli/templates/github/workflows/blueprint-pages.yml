@@ -25,9 +25,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
-  # Authenticating an approval asks for the verify run on the approved commit.
-  actions: read
 
 env:
   AUTOFORM_SOURCE: {{AUTOFORM_SOURCE_YAML}}
@@ -38,26 +35,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  # Builds the Lean project, which runs the project's own build code, and
+  # extracts the statement skeletons from it. The build job takes nothing from
+  # here but the skeleton report, and only after checking that the report
+  # names its own checkout's blueprint.
+  lean:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Check out project
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # Authenticating approvals finds the commit that recorded each hash.
-          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.12.1"
-
-      # Rejects cycles and dangling links, and fails when a node names a Lean
-      # declaration that is not in the sources.
-      - name: Validate the theorem DAG and its declarations
-        run: >-
-          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          autoform check blueprint --lean-root .
+          # The build runs project code, which could poison a cache the build job restores.
+          enable-cache: false
 
       - name: Detect statement review
         run: |
@@ -100,24 +95,118 @@ jobs:
           lake exe cache get || echo "no cache available; building from source"
           lake build
 
-      # Without --bundle the check derives the bundle from its own extraction.
+      # Exit status 1 means some declaration did not resolve; the report says
+      # which, and the build job's review check fails on it.
+      - name: Extract statement skeletons
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/autoform-skeleton"
+          status=0
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            autoform skeleton blueprint --lean-root . \
+            --output "$RUNNER_TEMP/autoform-skeleton/skeleton-report.json" || status=$?
+          if (( status > 1 )); then
+            exit "$status"
+          fi
+
+      - name: Upload the skeleton report
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: autoform-skeleton-report
+          path: ${{ runner.temp }}/autoform-skeleton/skeleton-report.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # Checks reviews, labels approvals, and builds the site from a fresh
+  # checkout, without building or running the Lean project. MkDocs still runs
+  # mkdocs.yml and theme/, which CODEOWNERS must give a code owner.
+  build:
+    needs: lean
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      # Authenticating an approval asks for the verify run on the approved commit.
+      actions: read
+      # ... and whether its pull request ever changed its base branch.
+      issues: read
+    steps:
+      - name: Check out project
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Authenticating approvals finds the commit that recorded each hash.
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          # Never restore what the lean job could have written.
+          enable-cache: false
+
+      # Rejects cycles, dangling links, and raw HTML in articles, and fails
+      # when a node names a Lean declaration that is not in the sources.
+      - name: Validate the theorem DAG and its declarations
+        run: >-
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          autoform check blueprint --lean-root .
+
+      # Decided again from this checkout, not taken from the lean job.
+      - name: Detect statement review
+        run: |
+          set -euo pipefail
+          marker="blueprint/.autoform-review"
+          has_review_artifacts=false
+          if [[ -d blueprint/readbacks ]] || \
+            git grep -q '^[[:space:]]*review_approved[[:space:]]*:' -- blueprint/roadmap; then
+            has_review_artifacts=true
+          fi
+          if [[ -e "$marker" || -L "$marker" ]]; then
+            if [[ ! -f "$marker" || -L "$marker" ]] || \
+              ! echo "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620  $marker" \
+                | sha256sum --check --strict; then
+              echo "invalid Autoform review policy marker: $marker" >&2
+              exit 1
+            fi
+            echo "AUTOFORM_REVIEW_ENABLED=true" >> "$GITHUB_ENV"
+          elif [[ "$has_review_artifacts" == true ]]; then
+            echo "review cards or approvals exist without $marker" >&2
+            exit 1
+          fi
+
+      - name: Download the skeleton report
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: autoform-skeleton-report
+          path: ${{ runner.temp }}/autoform-skeleton
+
+      # Without --bundle the check derives the bundle from the report, which it
+      # refuses unless the report names this checkout's blueprint hash.
       - name: Verify statement reviews
         if: env.AUTOFORM_REVIEW_ENABLED == 'true'
         run: >-
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          autoform review check blueprint --lean-root .
+          autoform review check blueprint
+          --skeleton-report "$RUNNER_TEMP/autoform-skeleton/skeleton-report.json"
 
       # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
       # and permalinks into the Lean code at this exact commit.
       #
-      # An approval reads "approved by @user" only when the pull request that
-      # recorded its hash was merged into main, and an individual code owner
-      # of the article (per CODEOWNERS both before that merge and at this
-      # commit) with write access, who is not its author, approved its final
-      # head, on which autoform-verify.yml passed; otherwise it reads
-      # "self-approved" with the reason. This is the authoritative label: a
-      # pull request runs its own copy of autoform-review-gate.yml, so it can
-      # disable that gate but cannot change this label.
+      # An approval reads "approved by @user" only when the default branch's
+      # rules require code owner review, CODEOWNERS gives every file other
+      # than articles and read-back cards a code owner, and the pull request
+      # that recorded its hash was merged into main, changed only articles and
+      # read-back cards, ran autoform-verify.yml green on its final head from a
+      # branch of this repository, and was approved on that head by an
+      # individual code owner of the article (per CODEOWNERS both before that
+      # merge and at this commit) with write permission, who neither opened
+      # it nor wrote any of its commits; otherwise it reads "self-approved"
+      # with the reason. This is the authoritative label: a pull request runs
+      # its own copy of autoform-review-gate.yml, so it can disable that gate
+      # but cannot change this label.
       - name: Render the blueprint
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -125,7 +214,7 @@ jobs:
           set -euo pipefail
           review_args=()
           if [[ "${AUTOFORM_REVIEW_ENABLED:-}" == true ]]; then
-            review_args=(--review)
+            review_args=(--review --skeleton-report "$RUNNER_TEMP/autoform-skeleton/skeleton-report.json")
             if [[ "$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_REF" == refs/heads/main ]]; then
               review_args+=(--authenticate github)
             fi
