@@ -859,6 +859,39 @@ def test_html_in_code_and_lookalikes_are_shown_as_typed(testimony: str, shown: s
 
 
 @pytest.mark.parametrize(
+    ("testimony", "message"),
+    [
+        (
+            "$" + " ".join(f"\\cmd{c}" for c in "abcdefghij") + "$ holds.",
+            r"TeX outside the read-back allowlist is not allowed: \cmda, \cmdb, \cmdc, \cmdd, \cmde, \cmdf, \cmdg, "
+            r"\cmdh, and 2 more",
+        ),
+        ("$\\" + "a" * 100 + "$ holds.", "TeX outside the read-back allowlist is not allowed: \\" + "a" * 60 + "..."),
+        (
+            "Tags " + " ".join(f"<t{i}>" for i in range(10)) + " here.",
+            "raw HTML is not allowed: <t0>, <t1>, <t2>, <t3>, <t4>, <t5>, <t6>, <t7>, and 2 more; "
+            "in a formula, put a space after <",
+        ),
+        (
+            "A tag <" + "a" * 100 + "> here.",
+            "raw HTML is not allowed: <" + "a" * 60 + "...; in a formula, put a space after <",
+        ),
+        (
+            "Hidden " + "".join(chr(code) for code in [*range(0x200B, 0x2010), *range(0x2060, 0x2065)]) + " here.",
+            "invisible or reordering characters are not allowed: U+200B ZERO WIDTH SPACE, "
+            "U+200C ZERO WIDTH NON-JOINER, U+200D ZERO WIDTH JOINER, U+200E LEFT-TO-RIGHT MARK, "
+            "U+200F RIGHT-TO-LEFT MARK, U+2060 WORD JOINER, "
+            "U+2061 FUNCTION APPLICATION, U+2062 INVISIBLE TIMES, and 2 more",
+        ),
+    ],
+)
+def test_a_message_names_at_most_eight_things_and_cuts_long_names(testimony: str, message: str) -> None:
+    """A message stays short whatever the testimony holds."""
+
+    assert message in _testimony_errors(testimony)
+
+
+@pytest.mark.parametrize(
     "testimony",
     [
         "Compare [the source](https://example.test) with the statement.",

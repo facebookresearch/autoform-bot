@@ -1458,7 +1458,7 @@ class _TexLayout:
                 "; write them in \\text{...} or outside the formula",
             ),
         ]
-        errors = [prefix + ", ".join(sorted(names)) + suffix for prefix, names, suffix in named if names]
+        errors = [prefix + _named(sorted(names)) + suffix for prefix, names, suffix in named if names]
         if self.marks:
             errors.append(
                 "combining marks in a formula are not allowed: MathJax sets each apart from the symbol before it; "
@@ -1472,7 +1472,7 @@ class _TexLayout:
         if self.stray:
             errors.append(
                 "math delimiters the renderer did not read as a formula are not allowed: "
-                + ", ".join(sorted(self.stray))
+                + _named(sorted(self.stray))
                 + "; write \\$ for a dollar sign, and put displayed math in a paragraph of its own"
             )
         if self.overlap:
@@ -1933,7 +1933,7 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     # renderer produced would not pass unseen either.
     hidden = _hidden_characters(text + "".join(document.itertext()))
     if hidden:
-        errors.append("invisible or reordering characters are not allowed: " + ", ".join(hidden))
+        errors.append("invisible or reordering characters are not allowed: " + _named(hidden))
     # Inline elements end where the marks after them begin, so the marks of
     # adjacent ones fall on one character.
     if _overstacked(text + "\n" + "".join(document.itertext())):
@@ -2011,12 +2011,12 @@ def _vault_markup_errors(text: str, code: list[str]) -> list[str]:
         errors.append("HTML comments are not allowed: Markdown viewers hide the text they enclose")
     if tags:
         names = (name if name.startswith(("<!", "<?")) else name + ">" for name in tags)
-        errors.append("raw HTML is not allowed: " + ", ".join(names) + "; in a formula, put a space after <")
+        errors.append("raw HTML is not allowed: " + _named(names) + "; in a formula, put a space after <")
     if outside_code(_AUTOLINK):
         errors.append("Markdown links, images, and autolinks are not allowed")
     if entities:
         errors.append(
-            "HTML character references are not allowed: " + ", ".join(entities) + "; type the character itself"
+            "HTML character references are not allowed: " + _named(entities) + "; type the character itself"
         )
     return errors
 
@@ -2419,6 +2419,22 @@ def _entity_name(entity: str) -> str:
     if len(character) != 1:
         return shown
     return f"{shown} (U+{ord(character):04X} {unicodedata.name(character, 'unnamed')})"
+
+
+#: How many of the things a message names it lists, and how much of each it
+#: shows, so that it stays short whatever the testimony holds.
+_MAX_NAMED = 8
+_MAX_NAME_LENGTH = 64
+
+
+def _named(names: Iterable[str]) -> str:
+    """``names`` joined by commas: the first :data:`_MAX_NAMED`, each cut to
+    :data:`_MAX_NAME_LENGTH` characters, and a count of the rest."""
+
+    names = list(names)
+    shown = [name if len(name) <= _MAX_NAME_LENGTH else name[: _MAX_NAME_LENGTH - 3] + "..." for name in names]
+    rest = len(names) - _MAX_NAMED
+    return ", ".join(shown[:_MAX_NAMED]) + (f", and {rest} more" if rest > 0 else "")
 
 
 def _hidden_characters(text: str) -> list[str]:
