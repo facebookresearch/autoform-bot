@@ -1168,6 +1168,43 @@ _TESTIMONY_TEX: dict[str, _Tex] = {
 _TEX_ENVIRONMENTS = frozenset(
     {"cases", "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix", "aligned", "gathered"}
 )
+#: The environments MathJax 3.2.2 reads a bracket after, for where their rows
+#: sit: it applies ``[t]``, ``[b]``, or ``[c]`` and shows nothing else written
+#: there.
+_TEX_ALIGNABLE = frozenset({"aligned", "gathered", "array"})
+#: The environments MathJax 3.2.2 sets once in a formula: a second, even one
+#: nested in the first, gets an error in place of the formula.
+_TEX_EQUATIONS = frozenset({"align", "align*", "gather", "gather*"})
+#: The columns ``\begin{array}`` may take. MathJax draws ``|`` and ``:`` as
+#: rules between columns and drops any other character without showing it.
+_TEX_ARRAY_COLUMNS = re.compile(r"\s*\{ *[lcr][lcr ]{0,31}\}")
+#: Commands MathJax 3.2.2 reads as a function name waiting for what follows,
+#: or expands into several items. A superscript or subscript that is one of
+#: them alone gets an error in place of the formula, or takes only the first
+#: item, so it must be braced, as ``x^{\sin}`` is.
+_TEX_BRACED_SCRIPTS = frozenset(
+    r"""
+    \arcsin \arccos \arctan \arg \cos \cosh \cot \coth \csc \deg \dim \exp \hom \ker \lg \ln \log \sec
+    \sin \sinh \tan \tanh \mathop \dots \varinjlim \varprojlim \varliminf \varlimsup \idotsint \iff
+    \implies \impliedby \pmb \mod \pmod
+    """.split()
+)
+#: The characters past ASCII MathJax 3.2.2 sets in a formula, outside
+#: ``\text``: those in the ranges of its operator dictionary
+#: (OperatorDictionary.RANGES), merged here. Any other gets an error in place
+#: of the formula.
+_TEX_CHARACTER_RANGES = (
+    (0x00A0, 0x024F), (0x02B0, 0x1A20), (0x1AB0, 0x209F), (0x2100, 0x23FF), (0x2460, 0x2DE0), (0x2E00, 0x2FDF),
+    (0x2FF0, 0xA49F), (0xA4D0, 0xD7FF), (0xF900, 0x1D25F), (0x1D360, 0x1D37F), (0x1D400, 0x1D7FF),
+    (0x1DF00, 0x1F9FF), (0x20000, 0x2FA1F),
+)
+#: How long a formula may be, in UTF-16 code units, so a character past the
+#: Basic Multilingual Plane counts twice. MathJax 3.2.2 refuses a formula once
+#: expanding a command makes what is left to read longer than 5120 (its
+#: ``maxBuffer``); ``\pmb``, which draws its argument twice, expands the most,
+#: so 2048 keeps every formula under it with room to spare. ``\pmb`` inside
+#: ``\pmb`` would double again at every level, and is refused.
+_TEX_MAX_LENGTH = 2048
 #: How deep one formula may nest groups, arguments, delimiters, and
 #: environments, and scripts on scripts: more than twice what statements use
 #: (6 and 3 deep), and far below the depth near 200 at which MathJax 3.2.2
@@ -1193,7 +1230,9 @@ _TEX_TOKEN = re.compile(r"\\(?:[A-Za-z]+|.)?|\s+|.", re.DOTALL)
 #: Which token closes each kind of list :class:`_TexLayout` reads.
 _TEX_CLOSERS = {"group": "}", "substack": "}", "left": r"\right", "environment": r"\end"}
 #: What cannot start a script, and the commands MathJax will not take as one.
-_TEX_NOT_SCRIPTS = frozenset({"}", "&", "^", "_", "'"})
+_TEX_NOT_SCRIPTS = frozenset({"}", "&", "^", "_", "'", "’"})
+#: The two characters MathJax sets as a prime.
+_TEX_PRIMES = frozenset({"'", "’"})
 _TEX_UNSCRIPTED = frozenset({"style", "not", "begin", "limits", "middle", "right", "end", "rows"})
 _TEX_ENVIRONMENT = re.compile(r"\s*\{([^{}\\]{0,64})\}")
 #: ``\\[<dimension>]`` spaces rows apart, or with a negative dimension draws
@@ -1219,6 +1258,11 @@ _TEX_NOT = "\\not is allowed only before a relation such as =, \\in, or \\le"
 _TEX_SCRIPTS = "a second TeX superscript or subscript on one symbol is not allowed: use braces"
 _TEX_MISPLACED = "TeX & and \\\\ are allowed only between the cells and rows of an environment"
 _TEX_UNBALANCED_ENVIRONMENT = "TeX \\begin and \\end that do not match are not allowed"
+_TEX_ARRAY = "TeX \\begin{array} is allowed only with its columns as l, c, and r in braces, such as {lcr}"
+_TEX_ALIGNMENT = (
+    "a bracket after TeX \\begin{aligned}, \\begin{gathered}, or \\begin{array} other than [t], [b], or [c] "
+    "is not allowed: MathJax does not show what it holds; write {} before a bracket that starts the first row"
+)
 _TEX_TEXT = (
     "TeX commands and formulas inside \\text are not allowed: they are shown as typed or typeset apart; "
     "write \\$, \\{, \\}, or \\\\ for the character"
@@ -1264,12 +1308,19 @@ class _TexLayout:
         self.empty: dict[str, None] = {}
         self.missing: dict[str, None] = {}
         self.delimiters: dict[str, None] = {}
+        self.braced: dict[str, None] = {}
+        self.unset: dict[str, None] = {}
         self.stray: dict[str, None] = {}
-        self.overlap = self.double_integral = False
+        self.overlap = self.double_integral = self.marks = False
 
     def read(self, tex: str) -> None:
         """Read one formula, ``tex`` without its delimiters."""
 
+        if len(tex.encode("utf-16-le")) // 2 > _TEX_MAX_LENGTH:
+            self.errors[
+                f"TeX formulas over {_TEX_MAX_LENGTH} characters are not allowed: MathJax may refuse to set them"
+            ] = None
+            return
         self.tex = tex
         self.tokens = [(match.start(), match.group()) for match in _TEX_TOKEN.finditer(tex)]
         self.tokens = [(start, token) for start, token in self.tokens if not token.isspace()]
@@ -1280,13 +1331,15 @@ class _TexLayout:
         self.rows = self.empty_cells = self.empty_rows = 0
         self.run = self.spacing = 0.0
         self.new_atom()
-        self.primed = False
+        self.primed = self.doubled = self.equation = False
         try:
             self.read_list("formula", None)
         except _TexAbort as abort:
             self.errors[str(abort)] = None
             return
         self.overlap = self.overlap or self.run < _TEX_MIN_RUN
+        if not self.glyphs:
+            self.errors["TeX formulas that show nothing are not allowed"] = None
         if self.spacing > _TEX_MAX_SPACING:
             self.errors[
                 f"TeX spacing over {_TEX_MAX_SPACING // 18} em in one formula is not allowed: "
@@ -1304,12 +1357,27 @@ class _TexLayout:
         """What every formula read so far holds that is not allowed."""
 
         named = [
-            ("TeX outside the read-back allowlist is not allowed: ", self.unlisted),
-            ("TeX arguments that show nothing are not allowed: ", self.empty),
-            ("TeX commands missing an argument are not allowed: ", self.missing),
-            ("TeX delimiters MathJax does not accept are not allowed after: ", self.delimiters),
+            ("TeX outside the read-back allowlist is not allowed: ", self.unlisted, ""),
+            ("TeX arguments that show nothing are not allowed: ", self.empty, ""),
+            ("TeX commands missing an argument are not allowed: ", self.missing, ""),
+            ("TeX delimiters MathJax does not accept are not allowed after: ", self.delimiters, ""),
+            (
+                "TeX superscripts and subscripts that are one of these alone are not allowed: ",
+                self.braced,
+                "; MathJax refuses them or sets only part, so brace them, as in x^{\\sin}",
+            ),
+            (
+                "characters MathJax cannot set in a formula are not allowed: ",
+                self.unset,
+                "; write them in \\text{...} or outside the formula",
+            ),
         ]
-        errors = [message + ", ".join(sorted(names)) for message, names in named if names]
+        errors = [prefix + ", ".join(sorted(names)) + suffix for prefix, names, suffix in named if names]
+        if self.marks:
+            errors.append(
+                "combining marks in a formula are not allowed: MathJax sets each apart from the symbol before it; "
+                "write an accent such as \\acute{x}, or the character already composed"
+            )
         if self.stray:
             errors.append(
                 "math delimiters the renderer did not read as a formula are not allowed: "
@@ -1374,7 +1442,7 @@ class _TexLayout:
             self.errors[_TEX_BRACES] = None
         elif token in {"^", "_"}:
             self.script(token)
-        elif token == "'":
+        elif token in _TEX_PRIMES:
             if self.superscript and not primed:
                 self.errors[_TEX_SCRIPTS] = None
             self.superscript = self.superscript or 1
@@ -1385,6 +1453,7 @@ class _TexLayout:
                 self.cell(rows)
             else:
                 self.errors[_TEX_MISPLACED] = None
+            self.new_atom()
         elif token == "~":
             self.new_atom()
             self.space(4.5)
@@ -1395,6 +1464,10 @@ class _TexLayout:
         else:
             if token == "#":
                 self.unlisted[token] = None
+            elif unicodedata.category(token) in {"Mn", "Me"}:
+                self.marks = True
+            elif ord(token) > 0x7F and not any(low <= ord(token) <= high for low, high in _TEX_CHARACTER_RANGES):
+                self.unset[f"U+{ord(token):04X} {unicodedata.name(token, '')}".strip()] = None
             self.new_atom()
             self.glyph()
 
@@ -1425,6 +1498,7 @@ class _TexLayout:
                 self.row(rows)
             else:
                 self.errors[_TEX_MISPLACED] = None
+            self.new_atom()
         elif kind == "right":
             self.errors[_TEX_LEFT_RIGHT] = None
             self.delimiter(token)
@@ -1474,6 +1548,8 @@ class _TexLayout:
             or (entry is not None and (entry.kind in _TEX_UNSCRIPTED or following == r"\substack"))
         ):
             self.missing[token] = None
+        elif following in _TEX_BRACED_SCRIPTS:
+            self.braced[following] = None
         else:
             self.script_depth += 1
             if self.script_depth > _TEX_MAX_SCRIPT_DEPTH:
@@ -1484,6 +1560,13 @@ class _TexLayout:
         self.operator, self.superscript, self.subscript = atom
 
     def arguments(self, command: str, spec: str) -> None:
+        doubled = self.doubled
+        if command == r"\pmb":
+            if doubled:
+                self.errors[
+                    "TeX \\pmb inside \\pmb is not allowed: MathJax draws its argument again at every level"
+                ] = None
+            self.doubled = True
         for kind in spec:
             if kind == "g":
                 self.glyph()
@@ -1498,6 +1581,7 @@ class _TexLayout:
                 self.text(command)
             else:
                 self.argument(command, shows=kind == "m")
+        self.doubled = doubled
 
     def argument(self, command: str, shows: bool) -> None:
         token = self.peek()
@@ -1588,10 +1672,46 @@ class _TexLayout:
         name = self.environment_name(r"\begin")
         if name is None:
             return
+        if name in _TEX_EQUATIONS:
+            if self.equation:
+                self.errors[
+                    "more than one TeX align or gather environment in a formula is not allowed: MathJax refuses "
+                    "the formula; write aligned or gathered"
+                ] = None
+            self.equation = True
+        if name in _TEX_ALIGNABLE:
+            self.alignment(name)
+        if name == "array":
+            match = _TEX_ARRAY_COLUMNS.match(self.tex, self.tokens[self.index][0]) if self.index < self.limit else None
+            if match is None:
+                self.errors[_TEX_ARRAY] = None
+            else:
+                self.skip_to(match.end())
         rows = _TexRows(self.glyphs, self.glyphs)
         if self.read_list("environment", rows) is None or self.environment_name(r"\end") != name:
             self.errors[_TEX_UNBALANCED_ENVIRONMENT] = None
         self.end_rows(rows)
+
+    def alignment(self, name: str) -> None:
+        """Read the bracket after ``\\begin{name}``, which MathJax 3.2.2 ends
+        at the first ``]`` outside braces and applies only as ``t``, ``b``, or
+        ``c``, spaces aside."""
+
+        if self.peek() != "[":
+            return
+        depth = 0
+        for index in range(self.index + 1, self.limit):
+            token = self.tokens[index][1]
+            if token == "]" and not depth:
+                held = self.tex[self.tokens[self.index][0] + 1 : self.tokens[index][0]]
+                if held.strip(" \t\n\r") not in {"", "t", "b", "c"}:
+                    self.errors[_TEX_ALIGNMENT] = None
+                self.index = index + 1
+                return
+            depth += {"{": 1, "}": -1}.get(token, 0)
+            if depth < 0:
+                break
+        self.missing[rf"\begin{{{name}}}"] = None
 
     def environment_name(self, command: str) -> str | None:
         """Read the name after ``command``, ``\\begin`` or ``\\end``, which

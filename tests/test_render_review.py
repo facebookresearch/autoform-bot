@@ -457,6 +457,65 @@ def test_tex_mathjax_sets_cleanly_is_accepted(testimony: str) -> None:
     assert _testimony_errors(testimony) == ()
 
 
+_BRACED = "TeX superscripts and subscripts that are one of these alone are not allowed: "
+_UNSET = "characters MathJax cannot set in a formula are not allowed: "
+
+
+@pytest.mark.parametrize(
+    ("testimony", "reason"),
+    [
+        (r"$\begin{aligned}[\text{the claim is false}] x &= x \end{aligned}$", r"a bracket after TeX \begin{aligned}"),
+        (r"$\begin{gathered}[P] x \end{gathered}$", r"a bracket after TeX \begin{aligned}"),
+        (r"$\begin{aligned}[t x &= x \end{aligned}$", r"missing an argument are not allowed: \begin{aligned}"),
+        (r"$x^\sin y$", _BRACED + r"\sin"),
+        (r"$x_\dots$", _BRACED + r"\dots"),
+        (r"$\lim_\mathop{x} y$", _BRACED + r"\mathop"),
+        (r"$P^\iff Q$", _BRACED + r"\iff"),
+        (r"$x^\pmb{a}$", _BRACED + r"\pmb"),
+        (r"$a^\pmod{n}$", _BRACED + r"\pmod"),
+        ("$x^’$", "TeX commands missing an argument are not allowed: ^"),
+        ("$f’^a'$", "a second TeX superscript or subscript on one symbol is not allowed"),
+        (r"$\begin{aligned} \sum & \limits_i a \end{aligned}$", r"\limits and \nolimits are allowed only after"),
+        (r"$\sum \\ \limits_i a$", r"\limits and \nolimits are allowed only after"),
+        (r"$\mathrm{€} x$", _UNSET + "U+20AC EURO SIGN"),
+        ("$\\operatorname{ɑ}$", _UNSET + "U+0251 LATIN SMALL LETTER ALPHA"),
+        ("$x́$", "combining marks in a formula are not allowed"),
+        ("$a⃗$", "combining marks in a formula are not allowed"),
+        (r"$\pmb{a + \pmb{x}}$", r"TeX \pmb inside \pmb is not allowed"),
+        ("$" + "x" * 2049 + "$", "TeX formulas over 2048 characters are not allowed"),
+        ("$" + "\U0001d465" * 1025 + "$", "TeX formulas over 2048 characters are not allowed"),
+        (r"$\,$ and $x$", "TeX formulas that show nothing are not allowed"),
+        (r"${}$ and $x$", "TeX formulas that show nothing are not allowed"),
+    ],
+)
+def test_tex_mathjax_would_set_differently_is_refused(testimony: str, reason: str) -> None:
+    r"""MathJax 3.2.2 shows an error in place of each of these formulas, or
+    sets it with part of what is written hidden, out of place, or drawn over
+    and over: a bracket after ``\begin{aligned}`` is read as where the rows
+    sit, a bare ``^\iff`` raises only the space before the arrow, nested
+    ``\pmb`` draws its argument once per level, and a formula longer than its
+    buffer allows is refused once ``\pmb`` doubles it."""
+
+    assert any(reason in error for error in _testimony_errors(testimony))
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        r"$\begin{aligned}[t] x &= y \end{aligned}$ and $\begin{gathered}[ b ] x \end{gathered}$",
+        r"$\begin{aligned}{}[x] &= y \end{aligned}$",
+        r"$x^{\sin} + y_{\dots} + a^{\pmb{b}} + P^{\iff}$, $\frac\sin x$, and $x^\operatorname{f}$",
+        "$f’(x) = f'(x)$ and $x’^a$",
+        r"$\begin{aligned} \sum_i & a \end{aligned}$",
+        "$\\text{5€ and ɑ}$, $é + α + ∀$, and $\U0001d465$",
+        "$" + "x" * 2048 + "$",
+        "$" + r"\pmb{" + "x" * 2042 + "}$",
+    ],
+)
+def test_tex_mathjax_sets_as_written_is_accepted(testimony: str) -> None:
+    assert _testimony_errors(testimony) == ()
+
+
 def test_a_double_integral_spelled_with_negative_space_is_refused_with_a_hint() -> None:
     assert (
         "repeated negative TeX spacing is not allowed: it slides symbols over one another; "
