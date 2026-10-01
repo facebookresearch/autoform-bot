@@ -28,7 +28,7 @@ from .markdown import content_lines as _content_lines
 from .markdown import FENCE as _FENCE
 from .markdown import FENCE_CLOSE as _FENCE_CLOSE
 from .mathjax import MATHJAX_SCRIPT, mathjax_script
-from .readback import READBACKS_DIR, Readback, load_readbacks, publishable_article, render_testimony
+from .readback import READBACKS_DIR, Readback, load_readbacks, publishable_article, readback_for, render_testimony
 from .review import ReviewBundle, ReviewError, ReviewDeclaration, validate_review_bundle
 from .skeleton import DeclarationSkeleton, SkeletonReport
 from .status import is_definition
@@ -1825,7 +1825,7 @@ def _review_disclosure(
         prepared = article.declaration(declaration.name)
         assert prepared is not None
         parts.extend(_skeleton_block(declaration, prepared))
-        readback = readbacks.get((article.article_id, declaration.name))
+        readback = readback_for(readbacks, article.article_id, declaration.name)
         parts.extend(_readback_block(declaration, readback))
     parts.append("</details>")
     return "\n".join(parts)

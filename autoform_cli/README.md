@@ -477,10 +477,14 @@ asterisks, and 2,048 backslashes. The Markdown parser is superlinear in each of
 these, so a byte limit alone would not bound it, and every card in a pull
 request is read before its validity is known. Cards are read through no-follow
 descriptors, so a card or directory swapped for a link is skipped. A card file
-holds at most 4 MiB, and no file is read past that. A file at a card path that
-is larger, is not UTF-8, or cannot be read is reported as an invalid card, not
-skipped. Writes name a card by the hash of its bytes, so a card that is not
-UTF-8 is replaced like any other; one over the limit must be removed by hand.
+holds at most 4 MiB, and no file is read more than one byte past that, the byte
+that shows it is larger. A file at a card path that is larger, is not UTF-8, or
+cannot be read, and a directory or FIFO there, is reported as an invalid card,
+not skipped, even when the declaration's name is too long for the filename to
+spell. A directory under `readbacks/` that cannot be listed stops loading with
+an error naming it, rather than reading as though it held no card. Writes name
+a card by the hash of its bytes, so a card that is not UTF-8 is replaced like
+any other; one over the limit must be removed by hand.
 
 A write walks to the card's directory without following links and takes that
 directory's lock, so Autoform's writes to one directory happen one at a time.
@@ -495,14 +499,20 @@ conflict check a batch runs first applies the same rule. Filing content
 identical to the current card writes nothing, so it succeeds even in a
 read-only directory. Otherwise the write stages the card in a new temporary
 file, flushes it to disk, renames it over the card's name in one step, and
-flushes the directory. At every moment the card's name holds either the old
-complete card (nothing, for a first card) or the new one. A failure before the
-rename removes the temporary file and leaves the card as it was; a crash can
-leave a `.autoform-readback-*.tmp` file beside the card, which the loader never
-reads as a card. If only the final flush of the directory fails, the card is
-published and the write warns. The contract covers Autoform's writers only:
-while a write runs, any other change in `readbacks/<article>/` is out of
-contract. An editor's save that lands during a write can be replaced without a
+flushes the directory. On macOS, where a plain `fsync` can leave data in the
+drive's cache, each flush is `F_FULLFSYNC`, falling back to `fsync` on a file
+system that refuses it. Each directory a first card's write makes on the way is
+flushed into its parent as it is made. At every moment the card's name holds
+either the old complete card (nothing, for a first card) or the new one. A
+failure or interrupt before the rename removes the temporary file and leaves
+the card as it was. If removing it also fails, which the error then names, or a
+second interrupt lands while it is removed, the file is left; a crash, SIGTERM,
+or SIGKILL can leave it too. It is a `.autoform-readback-*.tmp` file beside the
+card, which the loader never reads as a card and the blueprint `.gitignore`
+that `autoform init` writes ignores. If only a flush of a directory fails, the
+card is still published and the write warns. The contract covers Autoform's
+writers only: while a write runs, any other change in `readbacks/<article>/` is
+out of contract. An editor's save that lands during a write can be replaced without a
 conflict, so edit cards while no write is running.
 
 The lock belongs to the open file description, which a process forked during

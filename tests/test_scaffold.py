@@ -271,6 +271,8 @@ def test_scaffolded_blueprint_tracks_authored_structure(tmp_path: Path) -> None:
 
     assert "dependencies.md" in ignored
     assert "structure.md" not in ignored
+    # A read-back write killed by SIGTERM or SIGKILL leaves its staging file.
+    assert ".autoform-readback-*.tmp" in ignored
 
 
 def test_scaffolded_theme_defers_navigation_to_the_book(tmp_path: Path) -> None:

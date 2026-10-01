@@ -22,6 +22,7 @@ skeleton, rather than silently presenting stale evidence as current.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import html
 import json
@@ -83,8 +84,13 @@ _LOCK_TIMEOUT = 10.0
 #: The most bytes a card file may hold. Testimony is limited to 32 KiB, and the
 #: packet a card shows has no limit of its own, so this leaves it room for
 #: large kernel material. No card larger than this is built, and no file is
-#: read past it: a larger one is an invalid card, whose bytes are never kept.
+#: read more than one byte past it: that byte marks a larger one as an invalid
+#: card, whose bytes are never kept.
 _CARD_MAX_BYTES = 4 * 1024 * 1024
+#: The only errors opening a card that mean there is no card there to read:
+#: a link, nothing, or a file where a directory should be. Any other error
+#: leaves a card unread, so it is reported rather than skipped.
+_NO_CARD_ERRNOS = frozenset({errno.ELOOP, errno.ENOENT, errno.ENOTDIR})
 #: A ``%`` after an even number of backslashes starts a TeX comment, which
 #: silently drops the rest of its line from the typeset formula.
 _TEX_COMMENT = re.compile(r"(?<!\\)(?:\\\\)*%")
@@ -332,8 +338,40 @@ def readback_path(blueprint: Path, article_id: str, declaration: str) -> Path:
     return blueprint / READBACKS_DIR / article_id / filename
 
 
+def readback_keys(article_id: str, declaration: str) -> tuple[tuple[str, str], ...]:
+    """The keys :func:`load_readbacks` may file a declaration's card under.
+
+    A card is keyed by its Lean name, but a card whose filename is too long
+    to hold the name, and whose bytes cannot be read, records no name either;
+    it is keyed by its filename's stem.
+    """
+
+    try:
+        filename = declaration_filename(declaration, suffix=".md")
+    except ValueError:
+        return ((article_id, declaration),)
+    return (article_id, declaration), (article_id, filename[: -len(".md")])
+
+
+def readback_for(
+    readbacks: Mapping[tuple[str, str], Readback], article_id: str, declaration: str
+) -> Readback | None:
+    """The card :func:`load_readbacks` filed for a declaration, wherever its name left it keyed."""
+
+    found: dict[tuple[str, str], Readback] = {}
+    for key in readback_keys(article_id, declaration):
+        if (card := readbacks.get(key)) is not None:
+            _add_card(found, replace(card, declaration=declaration))
+    return found.get((article_id, declaration))
+
+
 def load_readbacks(blueprint: str | Path) -> dict[tuple[str, str], Readback]:
-    """Read every read-back in the vault, keyed by article id and Lean name."""
+    """Read every read-back in the vault, keyed by article id and Lean name.
+
+    A directory under ``readbacks/`` that cannot be listed would hide every
+    card in it, so loading refuses with a :class:`ValueError` naming it
+    rather than reading as though no card were filed there.
+    """
 
     root = Path(blueprint).expanduser().resolve() / READBACKS_DIR
     found: dict[tuple[str, str], Readback] = {}
@@ -473,7 +511,7 @@ def _add_card(found: dict[tuple[str, str], Readback], readback: Readback) -> Non
 
 
 def _card_files(root: Path) -> Iterator[tuple[Path, bytes | None, str | None]]:
-    """Every regular ``*.md`` file under ``root``, with its bytes, read without following a link.
+    """Every ``*.md`` entry under ``root``, with its bytes, read without following a link.
 
     A card is a file inside the vault; a symlink could point anywhere. The
     candidates come from a listing, which can be out of date by the time a
@@ -482,22 +520,35 @@ def _card_files(root: Path) -> Iterator[tuple[Path, bytes | None, str | None]]:
     down from ``root``, and a card or directory swapped for a symlink after
     the listing is refused rather than followed. Elsewhere (Windows) the file
     is opened first; then no component of its path may be a link, and the
-    open file must be the one a no-follow stat of the path names. A file that
-    cannot be read, or holds more than a card may, comes with no bytes and
-    the reason instead.
+    open file must be the one a no-follow stat of the path names. Anything
+    else that is not a regular file, cannot be read, or holds more than a
+    card may comes with no bytes and the reason instead. A directory that
+    cannot be listed is refused with a :class:`ValueError`.
     """
+
+    def unlistable(exc: OSError) -> None:
+        if exc.errno not in _NO_CARD_ERRNOS:
+            raise ValueError(f"cannot list read-back directory {exc.filename}: {exc.strerror}") from exc
 
     walk = hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW") and os.open in os.supports_dir_fd
     root_descriptor: int | None = None
     if walk:
         try:
             root_descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        except OSError:
+        except OSError as exc:
+            unlistable(exc)
             return
     elif root.is_symlink() or not root.is_dir():
         return
     try:
-        for path in sorted(root.rglob("*.md")):
+        # Unlike a glob, a walk reports each directory it cannot list.
+        listed = (
+            Path(directory, name)
+            for directory, subdirectories, files in os.walk(root, onerror=unlistable)
+            for name in (*subdirectories, *files)
+            if name.endswith(".md")
+        )
+        for path in sorted(listed):
             read = _read_card_file(root, root_descriptor, path.relative_to(root))
             if read is not None:
                 yield path, *read
@@ -509,7 +560,8 @@ def _card_files(root: Path) -> Iterator[tuple[Path, bytes | None, str | None]]:
 def _read_card_file(root: Path, root_descriptor: int | None, relative: Path) -> tuple[bytes | None, str | None] | None:
     """The bytes of the regular file at ``root / relative``, or why they could not be read.
 
-    ``None`` if the path does not lead, without a link, to a regular file.
+    ``None`` if there is nothing there to read: the path leads through or to
+    a link, or no longer leads anywhere.
     """
 
     file_flags = (
@@ -525,7 +577,7 @@ def _read_card_file(root: Path, root_descriptor: int | None, relative: Path) -> 
             descriptor = os.open(relative.name, file_flags, dir_fd=directory)
             opened.append(descriptor)
             if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                return None
+                return None, "card path is not a regular file"
         else:
             # Checked only after the open: a link swapped in before it is
             # still there, or else the path now names a different file.
@@ -536,18 +588,18 @@ def _read_card_file(root: Path, root_descriptor: int | None, relative: Path) -> 
             if any((root / parent).is_symlink() for parent in relative.parents):
                 return None
             named_file = os.lstat(path)
-            if not (stat.S_ISREG(opened_file.st_mode) and stat.S_ISREG(named_file.st_mode)):
-                return None
             if (opened_file.st_dev, opened_file.st_ino) != (named_file.st_dev, named_file.st_ino):
                 return None
+            if not stat.S_ISREG(opened_file.st_mode):
+                return None, "card path is not a regular file"
         try:
             raw = _read_card_bytes(descriptor)
         except OSError as exc:
             return None, f"card cannot be read: {exc.strerror}"
-    except PermissionError as exc:
+    except OSError as exc:
+        if exc.errno in _NO_CARD_ERRNOS:
+            return None
         return None, f"card cannot be read: {exc.strerror}"
-    except OSError:
-        return None
     finally:
         for held in reversed(opened):
             os.close(held)
@@ -818,7 +870,7 @@ def readback_findings(
     for node in report.nodes:
         article_id = identities.get(node.node_id, node.node_id)
         for declaration in node.declarations:
-            readback = readbacks.get((article_id, declaration.name))
+            readback = readback_for(readbacks, article_id, declaration.name)
             if readback is None:
                 findings.append(
                     ReadbackFinding(
@@ -869,9 +921,10 @@ def readback_findings(
     # Testimony about a declaration the blueprint no longer names is evidence
     # for nothing, and would otherwise sit in the vault unmentioned forever.
     named = {
-        (identities.get(node.node_id, node.node_id), declaration.name)
+        key
         for node in report.nodes
         for declaration in node.declarations
+        for key in readback_keys(identities.get(node.node_id, node.node_id), declaration.name)
     }
     for article_id, name in sorted(set(readbacks) - named):
         findings.append(
@@ -2623,9 +2676,9 @@ def _require_publication_support() -> None:
 def _open_card_directory(blueprint: Path, article_id: str, *, create: bool) -> int | None:
     """Open the card directory through held, no-follow directory descriptors.
 
-    With ``create``, missing directories on the way are made. Without it,
-    nothing is created, and a missing directory means there is no card yet:
-    ``None``.
+    With ``create``, missing directories on the way are made, and each new
+    directory's name is flushed into its parent. Without it, nothing is
+    created, and a missing directory means there is no card yet: ``None``.
     """
 
     if not ARTICLE_ID_PATTERN.fullmatch(article_id):
@@ -2634,9 +2687,11 @@ def _open_card_directory(blueprint: Path, article_id: str, *, create: bool) -> i
     try:
         current = os.open(blueprint, flags)
     except OSError as exc:
-        raise ValueError(f"cannot safely open blueprint directory: {blueprint}") from exc
+        raise ValueError(f"cannot safely open blueprint directory: {blueprint}: {exc.strerror}") from exc
+    reached = blueprint
     try:
         for part in Path(READBACKS_DIR, article_id).parts:
+            reached = reached / part
             try:
                 following = os.open(part, flags, dir_fd=current)
             except FileNotFoundError:
@@ -2647,13 +2702,15 @@ def _open_card_directory(blueprint: Path, article_id: str, *, create: bool) -> i
                 except FileExistsError:
                     pass
                 except OSError as exc:
-                    raise ValueError(f"cannot create read-back directory component: {part}") from exc
+                    raise ValueError(f"cannot create read-back directory component: {reached}: {exc.strerror}") from exc
+                else:
+                    _flush_new_directory(current, reached)
                 try:
                     following = os.open(part, flags, dir_fd=current)
                 except OSError as exc:
-                    raise ValueError(f"refusing a symlink or unsafe component in the read-back path: {part}") from exc
+                    raise _unsafe_component(reached, exc) from exc
             except OSError as exc:
-                raise ValueError(f"refusing a symlink or unsafe component in the read-back path: {part}") from exc
+                raise _unsafe_component(reached, exc) from exc
             # Move on before closing, so an interruption never leaves
             # ``current`` naming a closed descriptor.
             current, previous = following, current
@@ -2663,6 +2720,29 @@ def _open_card_directory(blueprint: Path, article_id: str, *, create: bool) -> i
     finally:
         if current >= 0:
             os.close(current)
+
+
+def _unsafe_component(reached: Path, exc: OSError) -> ValueError:
+    """Why a directory on the way to a card could not be opened: a link only when it is one."""
+
+    if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+        return ValueError(f"refusing a symlink or unsafe component in the read-back path: {reached}: {exc.strerror}")
+    return ValueError(f"cannot open read-back directory component: {reached}: {exc.strerror}")
+
+
+def _flush_new_directory(parent: int, made: Path) -> None:
+    """Flush a directory just made into ``parent``, so its name survives a crash with the card in it."""
+
+    try:
+        _flush(parent)
+    except OSError as exc:
+        # As with the card's own directory, the directory is in place; only
+        # its surviving a crash of the whole system is in doubt.
+        warnings.warn(
+            f"read-back directory {made} was made, but its parent directory could not be flushed to disk: {exc}",
+            RuntimeWarning,
+            stacklevel=4,
+        )
 
 
 def _existing_card_hash(blueprint: Path, article_id: str, path: Path) -> str | None:
@@ -2696,10 +2776,10 @@ def _card_directory_identity(blueprint: Path, article_id: str) -> tuple[int, int
 def _card_hash_at(directory: int, filename: str, display_path: Path) -> str | None:
     """The hash of a card's bytes, read relative to a held directory without following links.
 
-    ``None`` if there is no card. Only a regular file is read, and never past
-    the card limit; opening never blocks, even on a FIFO. The bytes are hashed
-    whatever they hold, so a card that is not UTF-8 can still be named, and
-    replaced, by its hash.
+    ``None`` if there is no card. Only a regular file is read, and at most one
+    byte past the card limit, which marks a card over it; opening never
+    blocks, even on a FIFO. The bytes are hashed whatever they hold, so a
+    card that is not UTF-8 can still be named, and replaced, by its hash.
     """
 
     try:
@@ -2707,11 +2787,15 @@ def _card_hash_at(directory: int, filename: str, display_path: Path) -> str | No
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise ValueError(f"cannot safely inspect existing read-back: {display_path}") from exc
+        raise ValueError(f"cannot safely inspect existing read-back: {display_path}: {exc.strerror}") from exc
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        try:
+            regular = stat.S_ISREG(os.fstat(descriptor).st_mode)
+            raw = _read_card_bytes(descriptor) if regular else None
+        except OSError as exc:
+            raise ValueError(f"cannot read existing read-back: {display_path}: {exc.strerror}") from exc
+        if not regular:
             raise ValueError(f"read-back destination is not a regular file: {display_path}")
-        raw = _read_card_bytes(descriptor)
     finally:
         os.close(descriptor)
     if raw is None:
@@ -2786,9 +2870,13 @@ def _publish_card(directory: int, path: Path, content: str, *, expected_card_has
     between the compare and the replacement. Content identical to the card's
     is not written again. Otherwise the new card is staged beside the old
     one, flushed to disk, and renamed over it in one step, so the card's name
-    holds the old complete card until it holds the new one. A failure or
-    interruption before the rename removes the staging file; a crash can
-    leave it, and the loader never reads it as a card.
+    holds the old complete card until it holds the new one. Each flush uses
+    ``F_FULLFSYNC`` where the platform has it (macOS), whose plain ``fsync``
+    can leave the data in the drive's cache. A failure or interruption before
+    the rename removes the staging file. If removing it also fails, or a
+    second interruption lands while it is removed, the file is left, and so
+    it is after a crash, SIGTERM, or SIGKILL; the loader never reads it as a
+    card.
     """
 
     data = content.encode("utf-8")
@@ -2800,32 +2888,35 @@ def _publish_card(directory: int, path: Path, content: str, *, expected_card_has
     # Named before it exists, so the cleanup below sees the staging file from
     # the moment it is created. The name is too random to be anyone else's.
     staged_name: str | None = f"{_WORK_PREFIX}{secrets.token_hex(12)}.tmp"
+    left: str | None = None
     try:
         try:
-            descriptor = os.open(
-                staged_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory
-            )
-        except FileExistsError:
-            # Not this write's file, so not this write's to remove.
+            try:
+                descriptor = os.open(
+                    staged_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory
+                )
+            except FileExistsError:
+                # Not this write's file, so not this write's to remove.
+                staged_name = None
+                raise
+            try:
+                written = 0
+                while written < len(data):
+                    written += os.write(descriptor, data[written:])
+                os.fchmod(descriptor, 0o644)
+                _flush(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(staged_name, path.name, src_dir_fd=directory, dst_dir_fd=directory)
             staged_name = None
-            raise
-        try:
-            written = 0
-            while written < len(data):
-                written += os.write(descriptor, data[written:])
-            os.fchmod(descriptor, 0o644)
-            os.fsync(descriptor)
         finally:
-            os.close(descriptor)
-        os.replace(staged_name, path.name, src_dir_fd=directory, dst_dir_fd=directory)
-        staged_name = None
+            if staged_name is not None and not _unlink_quietly(directory, staged_name):
+                left = staged_name
     except OSError as exc:
-        raise ValueError(f"cannot publish read-back: {path}: {exc}") from exc
-    finally:
-        if staged_name is not None:
-            _unlink_quietly(directory, staged_name)
+        leftover = "" if left is None else f"; its temporary file {path.with_name(left)} could not be removed"
+        raise ValueError(f"cannot publish read-back: {path}: {exc}{leftover}") from exc
     try:
-        os.fsync(directory)
+        _flush(directory)
     except OSError as exc:
         # The card is in place and readable; only its surviving a crash of the
         # whole system is in doubt, so this is no reason to report a failure.
@@ -2836,11 +2927,30 @@ def _publish_card(directory: int, path: Path, content: str, *, expected_card_has
         )
 
 
-def _unlink_quietly(directory: int, filename: str) -> None:
+def _unlink_quietly(directory: int, filename: str) -> bool:
+    """Remove ``filename`` from ``directory``; whether it is gone."""
+
     try:
         os.unlink(filename, dir_fd=directory)
+    except FileNotFoundError:
+        return True
     except OSError:
-        pass
+        return False
+    return True
+
+
+def _flush(descriptor: int) -> None:
+    """Flush a file or directory to stable storage: ``F_FULLFSYNC`` where the platform has it, else ``fsync``."""
+
+    full_fsync = getattr(fcntl, "F_FULLFSYNC", None)
+    if full_fsync is not None:
+        try:
+            fcntl.fcntl(descriptor, full_fsync)
+            return
+        except OSError:
+            # Not every file system takes it; a plain fsync is the next best.
+            pass
+    os.fsync(descriptor)
 
 
 def _longest_backtick_run(text: str) -> int:
@@ -2912,6 +3022,8 @@ __all__ = [
     "publishable_article",
     "readback_conflicts",
     "readback_findings",
+    "readback_for",
+    "readback_keys",
     "readback_path",
     "write_readback",
 ]

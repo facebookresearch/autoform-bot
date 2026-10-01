@@ -31,6 +31,7 @@ from .lean import build_linker, declaration_names
 from .mathjax import mathjax_script
 from .readback import (
     PreparedReadback,
+    Readback,
     load_readbacks,
     planned_readback,
     prepare_readback,
@@ -1114,7 +1115,7 @@ def _current_review(
     """
 
     graph = load_graph(blueprint_dir)
-    cards = load_readbacks(graph.blueprint_dir)
+    cards = _review_cards(graph.blueprint_dir)
     if skeleton_path is not None:
         skeleton = load_skeleton_report(skeleton_path)
         if skeleton.selection != "all":
@@ -1143,7 +1144,7 @@ def _current_review(
                 "an article changed while the review evidence was being extracted; rerun once the blueprint is idle",
             )
         )
-    if load_readbacks(graph.blueprint_dir) != cards:
+    if _review_cards(graph.blueprint_dir) != cards:
         changed.append(
             ReviewFinding(
                 "review",
@@ -1158,6 +1159,15 @@ def _current_review(
     if findings:
         raise ReviewError(findings)
     return graph, skeleton, bundle, cards
+
+
+def _review_cards(blueprint_dir: Path) -> dict[tuple[str, str], Readback]:
+    """The vault's read-back cards; a card directory that cannot be listed is a review error, not missing cards."""
+
+    try:
+        return load_readbacks(blueprint_dir)
+    except ValueError as exc:
+        raise ReviewError([ReviewFinding("review", "readback-unlistable", str(exc))]) from exc
 
 
 def _review_selection_finding(article_id: str, declaration: str) -> ReviewFinding:

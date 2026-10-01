@@ -10,8 +10,10 @@ import stat
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 import types
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -108,10 +110,47 @@ def _fail(monkeypatch, call: str, when=lambda *args, **kwargs: True) -> list[tup
     return failed
 
 
-def _read_only(directory: Path) -> None:
+def _restrict(path: Path, mode: int) -> None:
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("permissions do not bind root")
-    directory.chmod(0o555)
+    path.chmod(mode)
+
+
+def _read_only(directory: Path) -> None:
+    _restrict(directory, 0o555)
+
+
+def _without_full_fsync(monkeypatch) -> None:
+    """Flush with plain ``os.fsync``, as on Linux, so a test can watch or fail each flush."""
+
+    fcntl = pytest.importorskip("fcntl")
+    locking = types.SimpleNamespace(LOCK_EX=fcntl.LOCK_EX, LOCK_NB=fcntl.LOCK_NB, LOCK_UN=fcntl.LOCK_UN, flock=fcntl.flock)
+    monkeypatch.setattr("autoform_cli.readback.fcntl", locking)
+
+
+def _with_full_fsync(monkeypatch, full_fsync) -> None:
+    """Give publication an ``fcntl`` with ``F_FULLFSYNC``, as on macOS, that runs ``full_fsync(descriptor)``."""
+
+    fcntl = pytest.importorskip("fcntl")
+    command = getattr(fcntl, "F_FULLFSYNC", 51)
+
+    def call(descriptor: int, requested: int, *args) -> int:
+        assert requested == command
+        return full_fsync(descriptor)
+
+    locking = types.SimpleNamespace(
+        LOCK_EX=fcntl.LOCK_EX,
+        LOCK_NB=fcntl.LOCK_NB,
+        LOCK_UN=fcntl.LOCK_UN,
+        flock=fcntl.flock,
+        F_FULLFSYNC=command,
+        fcntl=call,
+    )
+    monkeypatch.setattr("autoform_cli.readback.fcntl", locking)
+
+
+def _kind(descriptor: int) -> str:
+    return "directory" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "card"
 
 
 # --------------------------------------------------------------------------- #
@@ -382,6 +421,46 @@ def test_different_content_replaces_a_card_only_by_naming_its_hash(tmp_path: Pat
     assert _staged_names(path.parent) == []
 
 
+def test_a_write_naming_the_wrong_hash_is_refused_before_anything_is_staged(tmp_path: Path, monkeypatch) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    open_ = os.open
+    created: list[str] = []
+
+    def counted(name, flags, *args, **kwargs):
+        if flags & os.O_CREAT:
+            created.append(name)
+        return open_(name, flags, *args, **kwargs)
+
+    patched = _Os()
+    patched.open = counted
+    patched.supports_dir_fd = os.supports_dir_fd | {counted}
+    monkeypatch.setattr(readback, "os", patched)
+
+    # The compare comes first, so a refused write never creates a staging file.
+    with pytest.raises(ValueError, match="changed before replacement"):
+        _file_card(blueprint, "Replacement.", expected_card_hash="sha256:" + "1" * 64)
+    assert created == []
+    assert _byte_hash(path.read_bytes()) == expected
+
+
+@pytest.mark.parametrize("call", ["fstat", "read"])
+def test_a_card_that_fails_to_read_during_the_compare_is_refused_with_its_path_and_reason(
+    tmp_path: Path, monkeypatch, call: str
+) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    card = _prepared(blueprint, "Replacement.", expected)
+    _fail(monkeypatch, call, lambda descriptor, *args: stat.S_ISREG(os.fstat(descriptor).st_mode))
+
+    for attempt in (lambda: readback_conflicts([card]), lambda: publish_readback(card)):
+        with pytest.raises(ValueError) as refused:
+            attempt()
+        assert str(refused.value) == f"cannot read existing read-back: {path}: injected input/output error"
+    assert path.read_bytes() == original
+    assert _staged_names(path.parent) == []
+    assert _unlocked(path.parent)
+
+
 def test_an_identical_card_is_refiled_without_writing_even_in_a_read_only_directory(tmp_path: Path) -> None:
     blueprint, path, expected = _filed(tmp_path)
     original = path.read_bytes()
@@ -476,6 +555,34 @@ def test_a_card_too_large_for_a_card_file_is_refused_before_it_is_written(tmp_pa
     assert not (blueprint / "readbacks").exists()
 
 
+def test_a_card_of_exactly_the_size_limit_is_filed_loaded_and_replaced_and_one_byte_more_is_not(
+    tmp_path: Path,
+) -> None:
+    blueprint = _blueprint(tmp_path)
+    path = readback_path(blueprint, _ARTICLE_ID, _DECLARATION)
+    largest = b"x" * _CARD_LIMIT
+
+    # One byte over the limit is refused as the card is built.
+    with pytest.raises(ValueError, match=f"over the {_CARD_LIMIT}-byte limit"):
+        PreparedReadback(blueprint, _ARTICLE_ID, _DECLARATION, path, "x" * (_CARD_LIMIT + 1), None)
+
+    # A card of exactly the limit is published, loaded whole, and replaced by naming its hash.
+    card = PreparedReadback(blueprint, _ARTICLE_ID, _DECLARATION, path, largest.decode(), None)
+    assert publish_readback(card) == path
+    loaded = load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)]
+    assert loaded.file_hash == _byte_hash(largest)
+    assert not any("byte limit" in error for error in loaded.validate())
+    assert publish_readback(_prepared(blueprint, "Replacement.", loaded.file_hash)) == path
+
+    # A file one byte over it is reported, and a write cannot replace it.
+    path.write_bytes(largest + b"x")
+    loaded = load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)]
+    assert f"card is over the {_CARD_LIMIT}-byte limit for a card file" in loaded.validate()
+    assert loaded.file_hash is None
+    with pytest.raises(ValueError, match="remove it to file a new card"):
+        publish_readback(_prepared(blueprint, "Replacement.", _byte_hash(largest + b"x")))
+
+
 @pytest.mark.parametrize("failing", ["open", "read"])
 def test_a_card_that_cannot_be_read_is_reported(tmp_path: Path, monkeypatch, failing: str) -> None:
     blueprint, path, expected = _filed(tmp_path)
@@ -490,7 +597,7 @@ def test_a_card_that_cannot_be_read_is_reported(tmp_path: Path, monkeypatch, fai
         loaded = load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)]
         if failing == "open":
             # Nor can a write compare it.
-            with pytest.raises(ValueError, match=f"cannot safely inspect existing read-back: {path}"):
+            with pytest.raises(ValueError, match=f"cannot safely inspect existing read-back: {path}: Permission denied"):
                 _file_card(blueprint, "Replacement.", expected_card_hash=expected)
     finally:
         path.chmod(0o644)
@@ -498,6 +605,109 @@ def test_a_card_that_cannot_be_read_is_reported(tmp_path: Path, monkeypatch, fai
     assert reason in loaded.validate()
     assert loaded.file_hash is None
     assert _staged_names(path.parent) == []
+
+
+@pytest.mark.parametrize(
+    ("error", "reported"), [(errno.EIO, True), (errno.EMFILE, True), (errno.ENOENT, False), (errno.ELOOP, False)]
+)
+def test_a_card_whose_open_fails_is_reported_unless_nothing_or_a_link_is_there(
+    tmp_path: Path, monkeypatch, error: int, reported: bool
+) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    open_ = os.open
+
+    def failing(name, flags, *args, **kwargs):
+        if name == path.name:
+            raise OSError(error, os.strerror(error))
+        return open_(name, flags, *args, **kwargs)
+
+    patched = _Os()
+    patched.open = failing
+    patched.supports_dir_fd = os.supports_dir_fd | {failing}
+    monkeypatch.setattr(readback, "os", patched)
+
+    loaded = load_readbacks(blueprint)
+    findings = readback_findings(_report(), loaded, article_ids={"basics/sup-unique": _ARTICLE_ID})
+    if reported:
+        assert f"card cannot be read: {os.strerror(error)}" in loaded[(_ARTICLE_ID, _DECLARATION)].validate()
+        assert [finding.code for finding in findings] == ["readback-invalid"]
+    else:
+        # A card removed since the listing, or a link, is not there to read.
+        assert loaded == {}
+        assert [finding.code for finding in findings] == ["readback-missing"]
+
+
+@pytest.mark.parametrize("kind", ["fifo", "directory"])
+def test_a_fifo_or_directory_at_a_card_path_is_reported_without_blocking_the_loader(tmp_path: Path, kind: str) -> None:
+    if kind == "fifo" and not hasattr(os, "mkfifo"):
+        pytest.skip("needs FIFOs")
+    blueprint = _blueprint(tmp_path)
+    path = readback_path(blueprint, _ARTICLE_ID, _DECLARATION)
+    path.parent.mkdir(parents=True)
+    if kind == "fifo":
+        os.mkfifo(path)
+    else:
+        path.mkdir()
+    loaded: list[dict] = []
+
+    loader = threading.Thread(target=lambda: loaded.append(load_readbacks(blueprint)), daemon=True)
+    loader.start()
+    loader.join(5)
+    blocked = loader.is_alive()
+    if blocked:
+        # A loader stuck opening the FIFO is let go, so the test fails rather than hangs.
+        os.close(os.open(path, os.O_WRONLY))
+        loader.join()
+    assert not blocked
+
+    # Reported as an invalid card, as the writer refuses it, rather than as a missing one.
+    assert "card path is not a regular file" in loaded[0][(_ARTICLE_ID, _DECLARATION)].validate()
+    (finding,) = readback_findings(_report(), loaded[0], article_ids={"basics/sup-unique": _ARTICLE_ID})
+    assert finding.code == "readback-invalid" and "card path is not a regular file" in finding.reason
+    with pytest.raises(ValueError, match="read-back destination is not a regular file"):
+        publish_readback(_prepared(blueprint, "First."))
+
+
+@pytest.mark.parametrize("mode", [0o000, 0o311])
+@pytest.mark.parametrize("unlistable", ["readbacks", "article"])
+def test_a_card_directory_that_cannot_be_listed_stops_loading_rather_than_hiding_its_cards(
+    tmp_path: Path, unlistable: str, mode: int
+) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    directory = path.parent if unlistable == "article" else path.parent.parent
+    _restrict(directory, mode)
+    try:
+        with pytest.raises(ValueError) as refused:
+            load_readbacks(blueprint)
+    finally:
+        directory.chmod(0o755)
+    assert str(refused.value) == f"cannot list read-back directory {directory}: Permission denied"
+
+
+@pytest.mark.parametrize("damage", ["not UTF-8", "over the limit", "unreadable"])
+def test_a_long_named_card_that_cannot_be_read_is_reported_once_for_its_declaration(
+    tmp_path: Path, monkeypatch, damage: str
+) -> None:
+    blueprint = _blueprint(tmp_path)
+    declaration = replace(_declaration(), name="Skel." + "α" * 40)
+    path = _file_card(blueprint, "First.", declaration=declaration)
+    # Too long to spell in a filename, so only the card's frontmatter names it.
+    assert path.name.startswith("declaration--")
+    if damage == "not UTF-8":
+        path.write_bytes(path.read_bytes() + b"\xff\xfe")
+        reason = "card is not UTF-8 text"
+    elif damage == "over the limit":
+        path.write_bytes(b"x" * (_CARD_LIMIT + 1))
+        reason = f"card is over the {_CARD_LIMIT}-byte limit for a card file"
+    else:
+        _fail(monkeypatch, "read")
+        reason = "card cannot be read: injected input/output error"
+
+    findings = readback_findings(
+        _report(declaration), load_readbacks(blueprint), article_ids={"basics/sup-unique": _ARTICLE_ID}
+    )
+    assert [(finding.declaration, finding.code) for finding in findings] == [(declaration.name, "readback-invalid")]
+    assert reason in findings[0].reason
 
 
 # --------------------------------------------------------------------------- #
@@ -560,7 +770,7 @@ def test_a_link_put_where_a_card_directory_is_being_made_is_refused(tmp_path: Pa
     monkeypatch.setattr(readback, "os", patched)
 
     with pytest.raises(
-        ValueError, match=f"refusing a symlink or unsafe component in the read-back path: {_ARTICLE_ID}"
+        ValueError, match=f"refusing a symlink or unsafe component in the read-back path: .*/readbacks/{_ARTICLE_ID}: "
     ):
         _file_card(blueprint, "First.")
     assert list(outside.iterdir()) == []
@@ -573,11 +783,33 @@ def test_a_card_directory_that_cannot_be_made_is_refused(tmp_path: Path) -> None
     try:
         # With no card directory there is nothing to conflict with, and nothing is made.
         assert readback_conflicts([card]) == []
-        with pytest.raises(ValueError, match="cannot create read-back directory component: readbacks"):
+        with pytest.raises(ValueError) as refused:
             publish_readback(card)
     finally:
         blueprint.chmod(0o755)
+    assert str(refused.value) == (
+        f"cannot create read-back directory component: {card.blueprint / 'readbacks'}: Permission denied"
+    )
     assert not (blueprint / "readbacks").exists()
+
+
+@pytest.mark.parametrize("unreadable", ["readbacks", "article"])
+def test_a_card_directory_that_cannot_be_opened_is_refused_with_the_reason_not_as_a_symlink(
+    tmp_path: Path, unreadable: str
+) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    directory = path.parent if unreadable == "article" else path.parent.parent
+    card = _prepared(blueprint, "Replacement.", expected)
+    _restrict(directory, 0o311)
+    try:
+        for attempt in (lambda: readback_conflicts([card]), lambda: publish_readback(card)):
+            with pytest.raises(ValueError) as refused:
+                attempt()
+            assert str(refused.value) == f"cannot open read-back directory component: {directory}: Permission denied"
+    finally:
+        directory.chmod(0o755)
+    assert path.read_bytes() == original
 
 
 def test_a_card_whose_article_id_would_leave_the_readbacks_directory_is_refused(tmp_path: Path) -> None:
@@ -630,6 +862,8 @@ def test_a_call_that_fails_before_the_rename_leaves_the_card_and_no_staging_file
 ) -> None:
     blueprint, path, expected = _filed(tmp_path)
     original = path.read_bytes()
+    if call == "fsync":
+        _without_full_fsync(monkeypatch)
     failed = _fail(monkeypatch, call, when)
 
     with pytest.raises(ValueError) as refused:
@@ -659,10 +893,14 @@ def test_a_staging_file_that_cannot_be_removed_is_left_once_the_rename_fails(tmp
     patched.supports_dir_fd = os.supports_dir_fd | {fail_unlink}
     monkeypatch.setattr(readback, "os", patched)
 
-    # The error is the rename's; the one removal is tried once and its failure ignored.
-    with pytest.raises(ValueError, match=f"cannot publish read-back: {path}: .*injected"):
+    # The error is the rename's, and names the file the one failed removal left.
+    with pytest.raises(ValueError) as refused:
         _file_card(blueprint, "Replacement.", expected_card_hash=expected)
     assert len(removals) == 1 and _staged_names(path.parent) == removals
+    assert str(refused.value) == (
+        f"cannot publish read-back: {path}: [Errno {errno.EIO}] injected input/output error; "
+        f"its temporary file {path.with_name(removals[0])} could not be removed"
+    )
     assert path.read_bytes() == original
     assert load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)].text == "First."
     assert replace_file is os.replace and unlink is os.unlink
@@ -670,11 +908,122 @@ def test_a_staging_file_that_cannot_be_removed_is_left_once_the_rename_fails(tmp
 
 def test_a_directory_that_cannot_be_flushed_after_the_rename_is_a_warning(tmp_path: Path, monkeypatch) -> None:
     blueprint, path, expected = _filed(tmp_path)
+    _without_full_fsync(monkeypatch)
     _fail(monkeypatch, "fsync", lambda descriptor: stat.S_ISDIR(os.fstat(descriptor).st_mode))
 
     with pytest.warns(RuntimeWarning, match=f"read-back {path} was published, but its directory could not be flushed"):
         assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
     assert load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)].text == "Replacement."
+    assert _staged_names(path.parent) == []
+
+
+def test_the_card_is_flushed_once_written_and_its_mode_set_and_its_directory_once_it_is_renamed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    _without_full_fsync(monkeypatch)
+    steps: list[str] = []
+    patched = _Os()
+
+    def record(call: str, step):
+        real = getattr(os, call)
+
+        def recorded(*args, **kwargs):
+            result = real(*args, **kwargs)
+            if (name := step(*args, **kwargs)) and steps[-1:] != [name]:
+                steps.append(name)
+            return result
+
+        setattr(patched, call, recorded)
+        return recorded
+
+    patched.supports_dir_fd = os.supports_dir_fd | {
+        record("open", lambda name, flags, *args, **kwargs: "stage" if flags & os.O_CREAT else None)
+    }
+    record("write", lambda *args: "write")
+    record("fchmod", lambda *args: "fchmod")
+    record("fsync", lambda descriptor: f"flush {_kind(descriptor)}")
+    record("replace", lambda *args, **kwargs: "rename")
+    monkeypatch.setattr(readback, "os", patched)
+
+    assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
+    assert steps == ["stage", "write", "fchmod", "flush card", "rename", "flush directory"]
+
+
+def test_every_card_is_left_readable_by_all_and_writable_by_its_owner_whatever_the_umask(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    previous = os.umask(0o077)
+    try:
+        path = _file_card(blueprint, "First.")
+        first = stat.S_IMODE(path.stat().st_mode)
+        path.chmod(0o600)
+        _file_card(blueprint, "Replacement.", expected_card_hash=_byte_hash(path.read_bytes()))
+    finally:
+        os.umask(previous)
+    assert first == stat.S_IMODE(path.stat().st_mode) == 0o644
+
+
+@pytest.mark.parametrize("full_fsync", ["works", "is refused"])
+def test_each_flush_uses_full_fsync_where_the_platform_has_it_and_fsync_where_it_fails(
+    tmp_path: Path, monkeypatch, full_fsync: str
+) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    fsync = os.fsync
+    flushed: list[tuple[str, str]] = []
+
+    def full(descriptor: int) -> int:
+        if full_fsync == "is refused":
+            raise OSError(errno.ENOTSUP, os.strerror(errno.ENOTSUP))
+        flushed.append(("F_FULLFSYNC", _kind(descriptor)))
+        return 0
+
+    def plain(descriptor: int) -> None:
+        flushed.append(("fsync", _kind(descriptor)))
+        fsync(descriptor)
+
+    _with_full_fsync(monkeypatch, full)
+    patched = _Os()
+    patched.fsync = plain
+    monkeypatch.setattr(readback, "os", patched)
+
+    # On macOS a plain fsync can leave the data in the drive's cache, so it is only the fallback.
+    assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
+    call = "F_FULLFSYNC" if full_fsync == "works" else "fsync"
+    assert flushed == [(call, "card"), (call, "directory")]
+
+
+def test_a_first_card_flushes_each_directory_it_makes_into_its_parent(tmp_path: Path, monkeypatch) -> None:
+    blueprint = _blueprint(tmp_path)
+    _without_full_fsync(monkeypatch)
+    fsync = os.fsync
+    flushed: list[tuple[int, int]] = []
+
+    def recorded(descriptor: int) -> None:
+        fsync(descriptor)
+        found = os.fstat(descriptor)
+        flushed.append((found.st_dev, found.st_ino))
+
+    patched = _Os()
+    patched.fsync = recorded
+    monkeypatch.setattr(readback, "os", patched)
+
+    path = _file_card(blueprint, "First.")
+    identities = [(found.st_dev, found.st_ino) for found in map(os.stat, (blueprint, path.parent.parent, path))]
+    # Each new directory's name, then the card, then the card's name.
+    assert flushed == [*identities, (os.stat(path.parent).st_dev, os.stat(path.parent).st_ino)]
+
+
+def test_a_directory_made_for_a_first_card_that_cannot_be_flushed_into_its_parent_is_a_warning(
+    tmp_path: Path, monkeypatch
+) -> None:
+    blueprint = _blueprint(tmp_path)
+    _without_full_fsync(monkeypatch)
+    parent = os.stat(blueprint).st_ino
+    _fail(monkeypatch, "fsync", lambda descriptor: os.fstat(descriptor).st_ino == parent)
+
+    with pytest.warns(RuntimeWarning, match="read-back directory .*/readbacks was made, but its parent directory"):
+        path = _file_card(blueprint, "First.")
+    assert load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)].text == "First."
     assert _staged_names(path.parent) == []
 
 

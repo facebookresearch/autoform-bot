@@ -9,6 +9,7 @@ import pytest
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.graph import Graph, load_graph
 from autoform_cli.readback import Readback, load_readbacks, write_readback
+from autoform_cli.render import _review_disclosure
 from autoform_cli.review import (
     ReviewError,
     build_review_bundle,
@@ -456,6 +457,39 @@ def test_approval_is_unavailable_until_every_card_is_strict_and_current(tmp_path
         encoding="utf-8",
     )
     assert [item.code for item in review_findings(graph, bundle, report)] == ["readback-invalid"]
+
+
+def test_a_long_named_card_that_is_not_utf8_is_one_invalid_card_not_a_missing_card_and_an_orphan(
+    tmp_path: Path,
+) -> None:
+    name = "Skel." + "α" * 40
+    blueprint = _blueprint(tmp_path)
+    article = blueprint / "roadmap" / "basics" / "result.md"
+    article.write_text(
+        article.read_text(encoding="utf-8").replace("lean: Skel.sup_unique", f"lean: {name}"), encoding="utf-8"
+    )
+    graph = load_graph(blueprint)
+    report = _extracted(graph, _report(_declaration(name)))
+    bundle = build_review_bundle(graph, report)
+    declaration = report.nodes[0].declarations[0]
+    path = write_readback(
+        blueprint,
+        article_id=_ARTICLE_ID,
+        declaration=declaration,
+        model="test-model",
+        text="Equality is symmetric.",
+        packet_text=declaration.blind_text(),
+    )
+    # Too long to spell in a filename, so only the card's frontmatter names it.
+    assert path.name.startswith("declaration--")
+    path.write_bytes(path.read_bytes() + b"\xff\xfe")
+
+    findings = [item for item in review_findings(graph, bundle, report) if item.code.startswith("readback-")]
+    assert [(item.node_id, item.code) for item in findings] == [("basics/result", "readback-invalid")]
+    assert "card is not UTF-8 text" in findings[0].reason
+    disclosure = _review_disclosure(graph.nodes["basics/result"], report, bundle, load_readbacks(blueprint), {})
+    assert "bp-readback-invalid" in disclosure and "card is not UTF-8 text" in disclosure
+    assert "No read-back filed" not in disclosure
 
 
 def test_approval_rejects_a_hand_constructed_card_with_invented_hashes(tmp_path: Path) -> None:

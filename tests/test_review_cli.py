@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Callable
 from dataclasses import replace
@@ -1346,6 +1347,24 @@ def test_check_and_render_take_the_skeleton_report_of_a_job_that_built_lean(
     pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
     assert "The statement Review.result asserts True." in pages
     assert "bp-readback-current" in pages
+
+
+def test_a_card_directory_that_cannot_be_listed_is_an_error_not_missing_cards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("permissions do not bind root")
+    blueprint, report = _reported(tmp_path, monkeypatch)
+    cards = (blueprint / "readbacks" / "af_0123456789abcdef01234567").resolve()
+    cards.chmod(0o000)
+    try:
+        assert main(["review", "check", str(blueprint), "--skeleton-report", str(report)]) == 2
+    finally:
+        cards.chmod(0o755)
+    captured = capsys.readouterr()
+    assert f"error: cannot list read-back directory {cards}: Permission denied" in captured.err
+    assert "no read-back filed" not in captured.err
+    assert "OK:" not in captured.out
 
 
 def test_a_skeleton_report_of_another_blueprint_is_refused(

@@ -918,17 +918,17 @@ def _swap_cards_after_listing(tmp_path: Path, monkeypatch) -> Path:
     directory = _file_card(blueprint, "Inside.", article_id=other_article).parent
     outside_card = _file_card(elsewhere, "Outside.")
     outside_directory = _file_card(elsewhere, "Outside.", article_id=other_article).parent
-    rglob = Path.rglob
+    walk = os.walk
 
-    def list_then_swap(self: Path, pattern: str):
-        listed = list(rglob(self, pattern))
+    def list_then_swap(top, *args, **kwargs):
+        listed = list(walk(top, *args, **kwargs))
         card.unlink()
         card.symlink_to(outside_card)
         directory.rename(directory.with_name("replaced"))
         directory.symlink_to(outside_directory, target_is_directory=True)
         return iter(listed)
 
-    monkeypatch.setattr(Path, "rglob", list_then_swap)
+    monkeypatch.setattr(os, "walk", list_then_swap)
     return blueprint
 
 

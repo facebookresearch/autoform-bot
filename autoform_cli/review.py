@@ -23,7 +23,7 @@ from typing import Mapping
 from .graph import ARTICLE_ID_PATTERN, ArticleChangedError, Graph, Node, read_node_source
 from .lean import REVIEW_PACKET_SCHEMA, declaration_names
 from .markdown import FENCE, FENCE_CLOSE, HEADING, frontmatter_end, strip_line_comments
-from .readback import Readback, load_readbacks
+from .readback import Readback, load_readbacks, readback_for, readback_keys
 from .skeleton import (
     PACKET_MANIFEST,
     SEMANTIC_SCHEMA,
@@ -544,7 +544,9 @@ def review_findings(
     expected_cards: set[tuple[str, str]] = set()
     invalid_articles: set[str] = set()
     for article in bundle.articles:
-        expected_cards.update((article.article_id, item.name) for item in article.declarations)
+        expected_cards.update(
+            key for item in article.declarations for key in readback_keys(article.article_id, item.name)
+        )
         card_findings = _article_readback_findings(article, cards)
         findings.extend(card_findings)
         if card_findings:
@@ -875,7 +877,7 @@ def _article_readback_findings(
 ) -> list[ReviewFinding]:
     findings: list[ReviewFinding] = []
     for declaration in article.declarations:
-        card = readbacks.get((article.article_id, declaration.name))
+        card = readback_for(readbacks, article.article_id, declaration.name)
         if card is None:
             findings.append(
                 ReviewFinding(
