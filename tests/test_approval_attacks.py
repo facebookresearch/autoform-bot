@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli import approvals
-from autoform_cli.approvals import ApprovalError, code_owners, parse_codeowners
+from autoform_cli.approvals import ApprovalError, SupersededBuildError, code_owners, parse_codeowners
 from tests.test_approvals import (
     _ARTICLE,
     _CODEOWNERS,
@@ -700,8 +700,8 @@ def test_c2_codeowners_that_own_no_codeowners_file_authenticate_nothing(tmp_path
     _refused(
         root,
         github,
-        ".github/CODEOWNERS at HEAD has no `*` rule, so a file no rule matches, such as a new workflow, can be "
-        "added without code owner review",
+        ".github/CODEOWNERS at HEAD has no `*` rule, the only pattern the verifier reads as matching every path, "
+        "so it cannot show that a file no rule matches, such as a new workflow, needs code owner review",
     )
 
 
@@ -849,6 +849,19 @@ def test_a_pull_request_rule_that_names_no_ruleset_does_not_count(tmp_path: Path
     _refused(root, github, "a pull request rule names no ruleset, so who can bypass it cannot be read")
 
 
+def test_a_pull_request_rule_whose_ruleset_id_is_a_boolean_does_not_count(tmp_path: Path) -> None:
+    """True == 1, so read as a number it would reuse ruleset 1's answer and count as held."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    held = github.rules[0]
+    only_owners = {**held["parameters"], "dismiss_stale_reviews_on_push": False, "require_last_push_approval": False}
+    github.rules = [{**held, "parameters": only_owners}, {**held, "ruleset_id": True}]
+    _approved(root, github)
+
+    _refused(root, github, "a pull request rule names no ruleset, so who can bypass it cannot be read")
+
+
 def test_a_ruleset_the_token_cannot_bypass_counts_beside_one_it_can(tmp_path: Path) -> None:
     """Deliberate guard: a bypassable ruleset is left out, not held against the others."""
 
@@ -874,12 +887,14 @@ def test_a_build_of_an_older_commit_cannot_bring_back_a_withdrawn_approval(tmp_p
     _refused(root, github, f"no individual @user is a code owner of {_ARTICLE}")
 
     # Re-running the Pages run of the merge builds it again, with the CODEOWNERS that named alice.
-    status = _verify(root, github, trusted_ref=landed)["basics/result"]
-    assert status.label == "self-approved"
-    assert (
-        f"{landed} is {landed[:12]}, not {current[:12]}, the head of main on GitHub; "
-        "only a build of the current head authenticates"
-    ) in (status.reason or "")
+    # It fails rather than publish a site where every approval reads self-approved.
+    with pytest.raises(SupersededBuildError) as raised:
+        _verify(root, github, trusted_ref=landed)
+    assert str(raised.value) == (
+        f"superseded build: {landed} is {landed[:12]}, not {current[:12]}, the head of main on GitHub; only a "
+        "build of the current head authenticates, so this one stops instead of publishing every approval as "
+        "self-approved, and the build of the newer head publishes"
+    )
 
 
 _UNNAMED_HEAD = "GitHub API GET of refs/heads/main did not name the commit it points to"
@@ -904,6 +919,33 @@ def test_a_default_branch_head_github_does_not_name_authenticates_nothing(
     github.heads["main"] = edit(github.get("/git/ref/heads/main"))  # type: ignore[operator]
 
     _refused(root, github, reason)
+
+
+@pytest.mark.parametrize("broken", ["base", "main"])
+def test_the_gate_reads_codeowners_errors_at_its_base(tmp_path: Path, broken: str) -> None:
+    """GitHub reads each commit's own CODEOWNERS, so the gate asks about its base, not main's head."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    base = _git(root, "rev-parse", "main")
+    _branch(root, "approve")
+    _approve(root, "result", _HASH)
+    head = _commit(root, "Approve the result")
+    github.open_pull(7, "bob")
+    github.review(7, "alice", "APPROVED", head)
+    _git(root, "checkout", "--quiet", "main")
+    _append(root, "Moved on.\n", "blueprint/README.md")
+    moved = _commit(root, "Move main past the base")
+    _git(root, "checkout", "--quiet", "approve")
+    error = {"line": 2, "kind": "Unknown owner", "path": ".github/CODEOWNERS"}
+    github.codeowners_errors_at[base if broken == "base" else moved] = [error]
+
+    status = _verify(root, github, trusted_ref=base, pull_request=7)["basics/result"]
+    if broken == "base":
+        assert not status.authenticated
+        assert f"GitHub reports 1 error(s) in CODEOWNERS at {base}" in (status.reason or "")
+    else:
+        assert status.authenticated, status.reason
 
 
 def test_the_gate_reads_no_default_branch_head(tmp_path: Path) -> None:
@@ -987,6 +1029,24 @@ def test_owning_every_tracked_file_by_name_leaves_new_files_unowned(tmp_path: Pa
 
     _refused(root, github, ".github/CODEOWNERS at HEAD has no `*` rule")
     _refused(root, github, "give every path an owner with a first line like `* @owner`")
+
+
+@pytest.mark.parametrize("catch_all", ["**", "/**"])
+def test_a_catch_all_other_than_a_star_is_refused_for_what_it_is(tmp_path: Path, catch_all: str) -> None:
+    """Deliberate guard: only `*` is read as matching every path. The reason says so,
+    rather than claim that a file no rule matches can be added unreviewed."""
+
+    root = _project(tmp_path, f"{catch_all} @owner\nblueprint/ @alice\n")
+    github = FakeGitHub(root)
+    _approved(root, github)
+
+    _refused(
+        root,
+        github,
+        ".github/CODEOWNERS at HEAD has no `*` rule, the only pattern the verifier reads as matching every path, "
+        "so it cannot show that a file no rule matches",
+    )
+    assert "can be added without code owner review" not in (_verify(root, github)["basics/result"].reason or "")
 
 
 @pytest.mark.parametrize(
@@ -1100,6 +1160,27 @@ def test_a_team_or_one_owner_who_can_write_covers_a_file(tmp_path: Path, codeown
     _approved(root, github)
 
     _authenticated(root, github)
+
+
+@pytest.mark.parametrize("codeowners", ["* @owner/maintainers\nblueprint/ @alice\n", "* @Owner/maintainers\nblueprint/ @alice\n"])
+def test_a_team_of_an_owner_whose_login_has_capitals_covers_a_file(tmp_path: Path, codeowners: str) -> None:
+    """GitHub compares logins without case, and owners such as GoogleCloudPlatform are mixed case."""
+
+    root = _project(tmp_path, codeowners)
+    github = FakeGitHub(root)
+    github.repository = {**FakeGitHub.repository, "owner": {"login": "Owner"}}
+    _approved(root, github)
+
+    _authenticated(root, github)
+
+
+def test_a_repository_github_names_no_owner_of_authenticates_nothing(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    github.repository = {key: value for key, value in FakeGitHub.repository.items() if key != "owner"}
+    _approved(root, github)
+
+    _refused(root, github, "GitHub API GET of the repository did not name its owner")
 
 
 def test_the_uncovered_rules_are_named_ten_at_a_time(tmp_path: Path) -> None:
@@ -1234,7 +1315,7 @@ def test_a_file_list_longer_than_github_lists_fails_closed(tmp_path: Path) -> No
         for index in range(3000 - len(entries))
     ]
 
-    _refused(root, github, "/pulls/7/files has more than 3000 entries")
+    _refused(root, github, "#7 has 3000 files listed and GitHub lists at most 3000, so what it changes cannot be read")
 
 
 def test_the_gate_refuses_a_pull_request_that_changes_anything_else(tmp_path: Path) -> None:
@@ -1316,15 +1397,22 @@ def test_c3_a_run_for_a_pull_request_into_another_branch_does_not_count(tmp_path
     _refused(root, github, f"{_VERIFY} has no successful pull_request run on the head {head[:12]} of #7")
 
 
+_FOREIGN = {"ref": "main", "repo": {"id": 2, "full_name": "mallory/project"}}
+
+
 @pytest.mark.parametrize(
     "listed",
     [
         [{"number": 7, "base": {"ref": "main", "repo": {"id": 1}}}],
         [],
+        [{"number": 7, "base": _FOREIGN}],
+        [{"number": 1, "base": _FOREIGN}, {"number": 7, "base": {"ref": "main", "repo": {"id": 1}}}],
     ],
 )
 def test_a_run_that_lists_only_its_own_pull_request_counts(tmp_path: Path, listed: list) -> None:
-    """Deliberate guard: an open pull request's run lists it, a merged one's lists none."""
+    """Deliberate guard: an open pull request's run lists it, a merged one's lists none. Anyone can
+    open a pull request in their fork from the branch, which GitHub lists too, but a run here
+    belongs to a pull request into this repository, so that one is not the run's."""
 
     root = _project(tmp_path)
     github = FakeGitHub(root)
@@ -1342,7 +1430,6 @@ def test_a_run_that_lists_only_its_own_pull_request_counts(tmp_path: Path, liste
         {"head_repository": None},
         {"pull_requests": None},
         {"pull_requests": [{"number": 8, "base": {"ref": "main", "repo": {"id": 1}}}]},
-        {"pull_requests": [{"number": 7, "base": {"ref": "main", "repo": {"id": 2}}}]},
         {"pull_requests": [{"number": 7, "base": {"ref": "main"}}]},
         {"pull_requests": [{"number": 7, "base": {"ref": "main", "repo": {"id": 1}}}, {"number": 8}]},
     ],
@@ -1406,6 +1493,10 @@ def test_a_fork_is_refused_before_anything_about_it_is_read(tmp_path: Path, sour
     _refused(root, github, "not a branch of owner/project")
     requested = [path for path, _ in github.calls]
     assert not any(path.startswith(("/contents/", "/pulls/7/")) for path in requested), requested
+    # Only the commit that recorded the hash is looked up, not the walk to the fork's base.
+    assert [path for path in requested if path.startswith("/commits/")] == [
+        f"/commits/{_git(root, 'rev-parse', 'HEAD')}/pulls"
+    ], requested
 
 
 @pytest.mark.parametrize(
@@ -1436,7 +1527,33 @@ def test_a_pull_request_into_another_repository_is_refused(tmp_path: Path) -> No
     _approved(root, github)
     github.pulls[7]["base"]["repo"] = {"id": 2, "full_name": "mallory/project"}
 
-    _refused(root, github, "#7 does not target owner/project")
+    _refused(root, github, "which recorded this hash, came from no pull request merged into main")
+
+
+@pytest.mark.parametrize("strategy", ["squash", "rebase"])
+def test_a_pull_request_into_another_repository_beside_the_approving_one_is_left_out(
+    tmp_path: Path, strategy: str
+) -> None:
+    """In a project that is a fork, GitHub also lists the upstream pull request that took its main,
+    which may share a number with one of the project's own."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _approved(root, github, strategy=strategy)
+    upstream = {"id": 2, "full_name": "upstream/project"}
+    for number in (5, 7):
+        github.pulls[-number] = {
+            **github.pulls[7],
+            "number": number,
+            "head": {**github.pulls[7]["head"], "ref": "main", "label": "owner:main"},
+            "base": {**github.pulls[7]["base"], "repo": upstream},
+            "merged_at": "2026-01-03T00:00:00Z",
+        }
+    for commit in _git(root, "rev-list", "main").split():
+        github.associate(-5, commit)
+        github.associate(-7, commit)
+
+    _authenticated(root, github)
 
 
 @pytest.mark.parametrize("user", [None, {}, {"login": ""}, {"login": None}, {"login": "two words"}])
@@ -1566,6 +1683,25 @@ def test_a_missing_later_page_fails_closed(tmp_path: Path) -> None:
     _refused(root, github, "GitHub API GET /pulls/7/reviews found no page 2, so the list is incomplete")
 
 
+@pytest.mark.parametrize("listing", ["/pulls/7/commits", "/issues/7/events"])
+def test_a_listing_github_finds_nothing_for_fails_closed(tmp_path: Path, listing: str) -> None:
+    """A 404 for a list about a pull request GitHub just returned is no answer, not an empty
+    list: no commits would clear every reviewer of writing one, and no events would show the
+    base branch never changed."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _approved(root, github)
+    listed = github.get
+
+    def missing(path: str, query: dict | None = None) -> object | None:
+        return None if path == listing else listed(path, query)
+
+    github.get = missing  # type: ignore[method-assign]
+
+    _refused(root, github, f"GitHub API GET {listing} found nothing (HTTP 404), so the list cannot be read")
+
+
 # Deviation 1: a later reviewed pull request can re-approve a hash.
 
 
@@ -1601,6 +1737,27 @@ def test_a_later_reviewed_pull_request_re_approves_a_hash_first_pushed_unreviewe
     assert status.attestation is not None, status.reason
     assert status.attestation.reviewer == "alice"
     assert status.attestation.reference == "https://github.com/owner/project/pull/8#pullrequestreview-1"
+
+
+def test_a_budget_spent_on_an_older_candidate_keeps_the_newer_ones_reason(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _pull_approving(root, github)
+    landed = _git(root, "rev-parse", "HEAD")
+    _move_approval_line(root)
+    pushed = _commit(root, "Re-approve the result directly")
+    _verify(root, github)
+    # Everything up to the older candidate's first request.
+    budget = [path for path, _ in github.calls].index(f"/commits/{landed}/pulls")
+    github.calls.clear()
+
+    status = _verify(root, github, max_requests=budget)["basics/result"]
+
+    assert status.label == "self-approved"
+    reason = status.reason or ""
+    assert reason.startswith(f"{pushed[:12]}: commit {pushed[:12]}, which recorded this hash, came from no "), reason
+    assert f"; not checked: the budget of {budget} GitHub API requests was spent" in reason
+    assert "GitHub's limit of 1000 requests an hour for a workflow's GITHUB_TOKEN" in reason
 
 
 def test_the_newest_authenticated_re_approval_is_the_one_shown(tmp_path: Path) -> None:

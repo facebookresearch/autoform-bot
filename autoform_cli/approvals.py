@@ -48,6 +48,16 @@ _MAX_PULL_FILES = 3000
 # GitHub does not load a CODEOWNERS file of 3 MB or more.
 _MAX_CODEOWNERS_BYTES = 3_000_000
 _UNCOVERED_SHOWN = 10
+# GitHub allows a workflow's GITHUB_TOKEN 1000 API requests an hour in one
+# repository. A run may make _BASE_REQUESTS, enough for one rebase merge of
+# _MAX_PULL_COMMITS commits, and _REQUESTS_PER_APPROVAL more for each
+# approval, about what an approval recorded in its own pull request needs,
+# but never more than _MAX_REQUESTS, which leaves the rest of the hour's
+# allowance to other steps and runs.
+_GITHUB_TOKEN_HOURLY_LIMIT = 1000
+_BASE_REQUESTS = 500
+_REQUESTS_PER_APPROVAL = 10
+_MAX_REQUESTS = 900
 # What the default branch's pull request rules must turn on: the parameter, the
 # name GitHub's ruleset settings show, and what goes wrong without it.
 _REVIEW_SETTINGS = (
@@ -90,6 +100,15 @@ class ApprovalError(ValueError):
     def __init__(self, message: str) -> None:
         self.issues = (message,)
         super().__init__(message)
+
+
+class SupersededBuildError(ApprovalError):
+    """The build is of a commit the default branch has moved past, so nothing it renders may be published.
+
+    Unlike every other refusal, this one stops the whole run instead of
+    labelling each approval self-approved: a Pages build that deployed would
+    replace a correct site with one where every approval reads self-approved.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -477,15 +496,17 @@ class GitHubReviewVerifier:
     Nothing is authenticated unless code owner review guards everything an
     approval rests on. Once per run, at ``trusted_ref`` R:
 
-    0. Outside the gate, R is the head of the default branch on GitHub. The
-       active rulesets on the default branch, leaving out any this
-       verifier's token can bypass, have pull request rules that require code
-       owner review, dismiss stale approvals on push, and require approval of
-       the most recent push. GitHub reports no error in CODEOWNERS at R, and
-       it gives every path that could exist an owner GitHub enforces: its
-       last ``*`` rule and every rule after it name a team of the repository's
-       owner or an individual ``@user`` with write access. Otherwise every
-       approval is self-approved, naming the rules without one.
+    0. Outside the gate, R is the head of the default branch on GitHub;
+       otherwise SupersededBuildError stops the run, so a build the branch has
+       moved past is not published. The active rulesets on the default
+       branch, leaving out any this verifier's token can bypass, have pull
+       request rules that require code owner review, dismiss stale approvals
+       on push, and require approval of the most recent push. GitHub reports
+       no error in CODEOWNERS at R, and it gives every path that could exist
+       an owner GitHub enforces: its last ``*`` rule and every rule after it
+       name a team of the repository's owner or an individual ``@user`` with
+       write access. Otherwise every approval is self-approved, naming the
+       rules without one.
 
     On the default branch, approval (A, H) at R, where p is A's path, is
     authenticated when the steps below hold:
@@ -535,7 +556,7 @@ class GitHubReviewVerifier:
         pull_request: int | None = None,
         verify_workflow: str = DEFAULT_VERIFY_WORKFLOW,
         web_url: str | None = None,
-        max_requests: int = 500,
+        max_requests: int | None = None,
     ) -> None:
         self.client = client
         self.trusted_ref = trusted_ref
@@ -543,6 +564,7 @@ class GitHubReviewVerifier:
         self.verify_workflow = verify_workflow
         self.web_url = (web_url or _web_url(getattr(client, "api_url", DEFAULT_GITHUB_API_URL))).rstrip("/")
         self.max_requests = max_requests
+        self.budget = 0
         self.requests = 0
         self.reasons: dict[str, str] = {}
         self._cache: dict[tuple[object, ...], object] = {}
@@ -594,15 +616,20 @@ class GitHubReviewVerifier:
         trusted = _commit_id(root, self.trusted_ref)
         blueprint = _relative_path(graph.blueprint_dir, root)
         self._blueprint = "" if blueprint == "." else blueprint
+        self.budget = (
+            min(_MAX_REQUESTS, _BASE_REQUESTS + _REQUESTS_PER_APPROVAL * len(approvals))
+            if self.max_requests is None
+            else self.max_requests
+        )
         try:
             self._check_protection(root, trusted)
+        except SupersededBuildError:
+            raise
         except (_Refused, ApprovalError) as exc:
             self.reasons = dict.fromkeys(sorted(approvals), str(exc))
             return {}
         except _BudgetSpent:
-            self.reasons = dict.fromkeys(
-                sorted(approvals), f"not checked: the budget of {self.max_requests} GitHub API requests was spent"
-            )
+            self.reasons = dict.fromkeys(sorted(approvals), self._not_checked())
             return {}
         attestations: dict[str, ApprovalAttestation] = {}
         for node_id, review_hash in sorted(approvals.items()):
@@ -616,8 +643,16 @@ class GitHubReviewVerifier:
             except ApprovalError as exc:
                 self.reasons[node_id] = str(exc)
             except _BudgetSpent:
-                self.reasons[node_id] = f"not checked: the budget of {self.max_requests} GitHub API requests was spent"
+                self.reasons[node_id] = self._not_checked()
         return attestations
+
+    def _not_checked(self) -> str:
+        return (
+            f"not checked: the budget of {self.budget} GitHub API requests was spent; a run's budget grows with "
+            f"its approvals up to {_MAX_REQUESTS}, under GitHub's limit of {_GITHUB_TOKEN_HOURLY_LIMIT} requests "
+            "an hour for a workflow's GITHUB_TOKEN, and approvals recorded in one pull request share most of "
+            "their requests"
+        )
 
     def _verify_one(
         self, root: Path, trusted: str, node_id: str, article: Path, review_hash: str
@@ -639,12 +674,18 @@ class GitHubReviewVerifier:
                 # Owners at R first: they cost no request.
                 self._owners_at(root, trusted, self.trusted_ref, path)
                 pull = self._merged_pull(commit)
+                # Before the walk to B, so nothing more about a fork is read.
+                self._check_same_repository(pull)
                 number = pull["number"]
                 base = self._base_before(root, commit, parent, number)
                 owners = self._owners(root, path, (base, f"{base[:12]} (before #{number})"), (trusted, self.trusted_ref))
                 return self._attest(node_id, review_hash, pull, path, wanted, owners)
             except (_Refused, ApprovalError) as exc:
                 reasons.append(str(exc) if len(candidates) == 1 else f"{commit[:12]}: {exc}")
+            except _BudgetSpent:
+                # Keep what the earlier candidates were refused for.
+                reasons.append(self._not_checked())
+                break
         raise _Refused("; ".join(dict.fromkeys(reasons)))
 
     def _attest(
@@ -687,7 +728,8 @@ class GitHubReviewVerifier:
         The rulesets and permissions are read as they are now, so a build of
         an older commit, such as a re-run of an old Pages run, would pair them
         with that commit's CODEOWNERS and bring back the approvals a newer
-        CODEOWNERS withdrew.
+        CODEOWNERS withdrew. Such a build raises SupersededBuildError, which
+        fails it before it deploys.
         """
 
         found = self._get(f"/git/ref/heads/{urllib.parse.quote(default)}")
@@ -698,10 +740,10 @@ class GitHubReviewVerifier:
         if not isinstance(found, dict) or found.get("ref") != f"refs/heads/{default}" or not isinstance(head, str):
             raise ApprovalError(f"GitHub API GET of refs/heads/{default} did not name the commit it points to")
         if head.lower() != trusted:
-            raise _Refused(
-                f"{self.trusted_ref} is {trusted[:12]}, not {head[:12]}, the head of {default} on GitHub; only a "
-                "build of the current head authenticates, so an older build cannot bring back an approval a "
-                "newer CODEOWNERS withdrew"
+            raise SupersededBuildError(
+                f"superseded build: {self.trusted_ref} is {trusted[:12]}, not {head[:12]}, the head of {default} "
+                "on GitHub; only a build of the current head authenticates, so this one stops instead of "
+                "publishing every approval as self-approved, and the build of the newer head publishes"
             )
 
     def _check_codeowners_errors(self, trusted: str) -> None:
@@ -741,9 +783,9 @@ class GitHubReviewVerifier:
         default = next((rule for rule in reversed(rules) if rule.pattern == "*"), None)
         if default is None:
             raise _Refused(
-                f"{location} at {self.trusted_ref} has no `*` rule, so a file no rule matches, such as a new "
-                "workflow, can be added without code owner review; give every path an owner with a first line "
-                "like `* @owner`"
+                f"{location} at {self.trusted_ref} has no `*` rule, the only pattern the verifier reads as "
+                "matching every path, so it cannot show that a file no rule matches, such as a new workflow, "
+                "needs code owner review; give every path an owner with a first line like `* @owner`"
             )
         uncovered = [
             why for rule in rules if rule.line >= default.line and (why := self._uncovered_by(rule)) is not None
@@ -766,8 +808,10 @@ class GitHubReviewVerifier:
         be read with a workflow token.
         """
 
+        # A 404 means no rule applies to the branch, which refuses below.
         rules = self._once(
-            ("rules", default), lambda: self._pages(f"/rules/branches/{urllib.parse.quote(default, safe='')}")
+            ("rules", default),
+            lambda: self._pages(f"/rules/branches/{urllib.parse.quote(default, safe='')}", missing_ok=True),
         )
         reviews = [rule for rule in rules if rule.get("type") == "pull_request"]
         if not any(_turns_on(rule, "require_code_owner_review") for rule in reviews):
@@ -937,9 +981,11 @@ class GitHubReviewVerifier:
         A rebase merge puts each of P's commits on the default branch, every
         one associated with P, so M's first parent may be a commit P wrote,
         with a CODEOWNERS P chose. P's ``base.sha`` does not help: GitHub
-        keeps the base P was opened against there, not the one it landed on.
+        sets it to the base branch as of P's last update, which need not be
+        the commit P landed on.
         """
 
+        here, _ = self._identity()
         base: str | None = parent
         for _ in range(_MAX_PULL_COMMITS):
             if base is None:
@@ -947,7 +993,7 @@ class GitHubReviewVerifier:
                     f"#{number} introduced every first-parent ancestor of {commit[:12]}, "
                     "so nothing shows the code owners before it"
                 )
-            numbers = [pull.get("number") for pull in self._commit_pulls(base)]
+            numbers = [pull.get("number") for pull in self._commit_pulls(base) if not _other_repository(pull, here)]
             if not all(isinstance(listed, int) for listed in numbers):
                 raise ApprovalError(f"GitHub listed a pull request without a number for commit {base[:12]}")
             if number not in numbers:
@@ -960,7 +1006,10 @@ class GitHubReviewVerifier:
 
     def _merged_pull(self, commit: str) -> dict:
         default = self._default_branch()
-        pulls = self._commit_pulls(commit)
+        here, _ = self._identity()
+        # GitHub also lists pull requests into other repositories that contain
+        # the commit, such as the upstream one of a fork; none landed it here.
+        pulls = [pull for pull in self._commit_pulls(commit) if not _other_repository(pull, here)]
         merged = [pull for pull in pulls if pull.get("merged_at") and _base_ref(pull) == default]
         if not merged:
             raise _Refused(
@@ -1096,10 +1145,12 @@ class GitHubReviewVerifier:
     def _check_verified(self, pull: dict) -> None:
         """A successful verify run that GitHub ties to P, and to P alone.
 
-        GitHub lists a run's pull requests only while they are open and only
-        for branches of this repository, so after the merge a run is tied to
-        P by its head branch: P's branch, in this repository, which no other
-        pull request ever used, while P never changed its base branch.
+        GitHub lists a run's pull requests only while they are open, so after
+        the merge a run is tied to P by its head branch: P's branch, in this
+        repository, which no other pull request ever used, while P never
+        changed its base branch. The list also names pull requests into other
+        repositories from that branch, such as a fork's, which anyone can
+        open; none of them can be the pull request a run here belongs to.
         """
 
         number, head = pull["number"], pull["head"]["sha"]
@@ -1141,7 +1192,7 @@ class GitHubReviewVerifier:
 
     def _files(self, number: int) -> list[dict]:
         def fetch() -> list[dict]:
-            files = self._pages(f"/pulls/{number}/files")
+            files = self._pages(f"/pulls/{number}/files", limit=_MAX_PULL_FILES)
             if len(files) >= _MAX_PULL_FILES:
                 raise ApprovalError(
                     f"#{number} has {len(files)} files listed and GitHub lists at most {_MAX_PULL_FILES}, "
@@ -1204,17 +1255,34 @@ class GitHubReviewVerifier:
         return value  # type: ignore[return-value]
 
     def _get(self, path: str, query: Mapping[str, str | int] | None = None) -> object | None:
-        if self.requests >= self.max_requests:
+        if self.requests >= self.budget:
             raise _BudgetSpent
         self.requests += 1
         return self.client.get(path, query)
 
-    def _pages(self, path: str, query: Mapping[str, str | int] | None = None, *, key: str | None = None) -> list[dict]:
+    def _pages(
+        self,
+        path: str,
+        query: Mapping[str, str | int] | None = None,
+        *,
+        key: str | None = None,
+        missing_ok: bool = False,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """Every entry of a listing, or its first ``limit`` entries or more when it has that many.
+
+        A 404 on the first page is an empty list only with ``missing_ok``,
+        for a listing where it means nothing exists in the whole repository;
+        anywhere else it is an answer GitHub should not give, and fails.
+        """
+
         items: list[dict] = []
         for page in range(1, _MAX_PAGES + 1):
             batch = self._get(path, {**(query or {}), "per_page": _PAGE_SIZE, "page": page})
-            if batch is None and page == 1:
+            if batch is None and page == 1 and missing_ok:
                 return items
+            if batch is None and page == 1:
+                raise ApprovalError(f"GitHub API GET {path} found nothing (HTTP 404), so the list cannot be read")
             if batch is None:
                 raise ApprovalError(f"GitHub API GET {path} found no page {page}, so the list is incomplete")
             if key is not None:
@@ -1222,7 +1290,7 @@ class GitHubReviewVerifier:
             if not isinstance(batch, list):
                 raise ApprovalError(f"GitHub API GET {path} did not return a list")
             items.extend(item for item in batch if isinstance(item, dict))
-            if len(batch) < _PAGE_SIZE:
+            if len(batch) < _PAGE_SIZE or (limit is not None and len(items) >= limit):
                 return items
         raise ApprovalError(f"GitHub API GET {path} has more than {_MAX_PAGES * _PAGE_SIZE} entries")
 
@@ -1300,6 +1368,11 @@ def _ran_for(run: dict, number: int, branch: str, repository: int, default: str)
     if not isinstance(listed, list):
         return False
     for entry in listed:
+        # A pull_request run belongs to a pull request into the repository it
+        # runs in, so one into another repository, such as a fork's pull
+        # request from this branch, cannot be the run's and is skipped.
+        if isinstance(entry, dict) and _other_repository(entry, repository):
+            continue
         base = entry.get("base") if isinstance(entry, dict) else None
         target = base.get("repo") if isinstance(base, dict) else None
         if (
@@ -1310,6 +1383,15 @@ def _ran_for(run: dict, number: int, branch: str, repository: int, default: str)
         ):
             return False
     return True
+
+
+def _other_repository(pull: dict, repository: int) -> bool:
+    """Whether GitHub names a base repository for the pull request, and it is not ``repository``."""
+
+    base = pull.get("base")
+    target = base.get("repo") if isinstance(base, dict) else None
+    here = target.get("id") if isinstance(target, dict) else None
+    return isinstance(here, int) and here != repository
 
 
 def _base_ref(pull: dict) -> str:
@@ -1505,6 +1587,7 @@ __all__ = [
     "ApprovalVerifier",
     "GitHubClient",
     "GitHubReviewVerifier",
+    "SupersededBuildError",
     "approval_statuses",
     "approvals_at",
     "code_owners",

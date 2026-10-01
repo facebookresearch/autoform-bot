@@ -3,12 +3,16 @@
 #
 # review_approved shows only that the review surface is unchanged, and
 # `review check` prints the hash, so anyone can paste it. This gate asks, for
-# each approval the pull request adds or changes, whether the default branch
-# requires code owner review over every path, the pull request changes only
-# articles and read-back cards, and an individual
-# @user code owner of the article (per CODEOWNERS on the base commit) with
-# write access, who neither opened the pull request nor wrote any of its
-# commits, approved its head commit, whose diff adds that hash. It runs the
+# each approval the pull request adds or changes, whether rulesets on the
+# default branch that this job's token cannot bypass require code owner
+# review, dismiss stale approvals, and require approval of the last push,
+# CODEOWNERS, which GitHub reads without error, gives every path a code owner
+# GitHub enforces, the pull request changes only articles and read-back cards,
+# and an individual @user code owner of the article (per CODEOWNERS on the
+# base commit) with write access, who neither opened the pull request nor
+# wrote any of its commits, approved its head commit, whose diff adds that
+# hash. The base commit is the first parent of the merge commit GitHub builds
+# for the pull request, which is what this job checks out. It runs the
 # pull request's own copy of this file, so a pull request can disable it; the
 # authoritative label is the one blueprint-pages.yml computes on main.
 
@@ -58,13 +62,22 @@ jobs:
         with:
           version: "0.12.1"
 
+      # The checkout is refs/pull/N/merge, the pull request merged onto the
+      # default branch as GitHub last computed it, so its first parent is the
+      # base. The event's base.sha can lag behind it, and approvals other pull
+      # requests landed since would then count as added here.
       - name: Authenticate changed approvals
         if: env.AUTOFORM_REVIEW_ENABLED == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: >-
-          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          autoform review authenticate blueprint --github --pr "$PR_NUMBER"
-          --since "$BASE_SHA" --trusted-ref "$BASE_SHA"
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify --quiet 'HEAD^2' > /dev/null; then
+            echo "error: the checkout is not the merge commit of #$PR_NUMBER, so its base is unknown" >&2
+            exit 2
+          fi
+          base="$(git rev-parse 'HEAD^1')"
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            autoform review authenticate blueprint --github --pr "$PR_NUMBER" \
+            --since "$base" --trusted-ref "$base"

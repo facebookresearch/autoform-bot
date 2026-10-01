@@ -1238,6 +1238,9 @@ def _render(args: argparse.Namespace) -> int:
         return 1
 
     print(f"{report.output_dir}: {report.pages} pages, {report.nodes} nodes, {report.linked} code links")
+    # The site shows why only on hover, so the build log says it too.
+    for node_id, reason in sorted(verifier.reasons.items() if verifier is not None else ()):
+        print(f"warning: {node_id} is self-approved: {reason}")
     for issue in report.unresolved:
         print(f"warning: declaration not found in the Lean sources: {issue}")
     if report.unresolved and args.require_declarations:

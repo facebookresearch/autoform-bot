@@ -364,14 +364,17 @@ def test_the_approval_gate_runs_apart_from_the_lean_build(tmp_path: Path) -> Non
     assert "pull_request_review:\n    types: [submitted, dismissed]" in gate
     assert "group: autoform-review-gate-${{ github.event.pull_request.number }}" in gate
     assert '--github --pr "$PR_NUMBER"' in gate
-    assert '--since "$BASE_SHA" --trusted-ref "$BASE_SHA"' in gate
+    # The base is the first parent of the merge commit checked out, not the event's base.sha, which can lag.
+    assert 'base="$(git rev-parse \'HEAD^1\')"' in gate
+    assert '--since "$base" --trusted-ref "$base"' in gate
+    assert "base.sha }}" not in gate and "BASE_SHA" not in gate
     assert "PR_NUMBER: ${{ github.event.pull_request.number }}" in gate
     assert "pull-requests: read" in gate
-    # Pages reads the verify run and relabels when CODEOWNERS changes.
+    # Pages reads the verify run and builds every push to main, so a change to CODEOWNERS relabels the site.
     assert "actions: read" in pages
-    push_paths = pages.split("  pull_request:")[0]
-    for location in (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"):
-        assert f'- "{location}"' in push_paths
+    assert "  push:\n    branches: [main]\n  pull_request:\n" in pages
+    # A pull request's runs never cancel a pending main build.
+    assert "  group: blueprint-pages-${{ github.ref }}\n  cancel-in-progress: false\n" in pages
 
 
 def test_pages_authenticates_approvals_in_a_job_that_never_builds_the_project(

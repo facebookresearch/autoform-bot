@@ -21,6 +21,7 @@ from autoform_cli.approvals import (
     ApprovalError,
     GitHubClient,
     GitHubReviewVerifier,
+    SupersededBuildError,
     approval_statuses,
     code_owners,
     parse_codeowners,
@@ -170,6 +171,8 @@ class FakeGitHub:
         }
         # What GET /codeowners/errors lists; None answers 404, as for a ref without CODEOWNERS.
         self.codeowners_errors: list[dict] | None = []
+        # commit -> what it lists for that commit instead, since GitHub reads each ref's own CODEOWNERS.
+        self.codeowners_errors_at: dict[str, list[dict] | None] = {}
         # branch -> what GET /git/ref/heads/{branch} answers when not the local branch's commit; None is 404.
         self.heads: dict[str, object] = {}
         # login -> permission; None answers 404, as for someone who is not a collaborator.
@@ -357,9 +360,10 @@ class FakeGitHub:
                 == 0
                 for location in approvals.CODEOWNERS_LOCATIONS
             )
-            if not found or self.codeowners_errors is None:
+            if not found:
                 return None
-            return {"errors": self.codeowners_errors}
+            errors = self.codeowners_errors_at.get(_git(self.root, "rev-parse", query["ref"]), self.codeowners_errors)
+            return None if errors is None else {"errors": errors}
         if parts[1] == "collaborators" and parts[3:] == ["permission"]:
             login = urllib.parse.unquote(parts[2])
             permission = self.permissions.get(login.lower(), "write")
@@ -547,10 +551,9 @@ def test_code_owners_must_hold_before_the_merge_and_at_the_trusted_ref(tmp_path:
         f"no individual @user is a code owner of {_ARTICLE} both at {_git(root, 'rev-parse', landed + '^')[:12]} "
         "(before #7) and at HEAD"
     ) in (status.reason or "")
-    # Nor does a build of the merge, which the default branch has moved past.
-    status = _verify(root, github, trusted_ref=landed)["basics/result"]
-    assert not status.authenticated
-    assert "the head of main on GitHub; only a build of the current head authenticates" in (status.reason or "")
+    # Nor does a build of the merge, which the default branch has moved past: it stops.
+    with pytest.raises(SupersededBuildError, match="the head of main on GitHub; only a build of the current head"):
+        _verify(root, github, trusted_ref=landed)
 
 
 def test_an_approval_of_an_earlier_commit_does_not_count(tmp_path: Path) -> None:
@@ -797,6 +800,21 @@ def test_a_budget_spent_after_the_setup_refuses_only_the_approvals_left(tmp_path
     assert statuses["basics/other"].authenticated, statuses["basics/other"].reason
     assert not statuses["basics/result"].authenticated
     assert f"budget of {budget} GitHub API requests" in (statuses["basics/result"].reason or "")
+
+
+@pytest.mark.parametrize(("count", "budget"), [(1, 510), (2, 520), (40, 900), (1000, 900)])
+def test_the_request_budget_grows_with_the_approvals_and_stays_under_the_hourly_limit(
+    tmp_path: Path, count: int, budget: int
+) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    github.rules = []
+    verifier = GitHubReviewVerifier(github, trusted_ref="HEAD")  # type: ignore[arg-type]
+
+    verifier.verify(load_graph(root / "blueprint"), {f"node{index}": _HASH for index in range(count)})
+
+    # GitHub allows a workflow's GITHUB_TOKEN 1000 requests an hour in one repository.
+    assert verifier.budget == budget < 1000
 
 
 def test_an_attestation_for_another_hash_is_discarded(tmp_path: Path) -> None:
@@ -1089,6 +1107,38 @@ def test_the_gate_reads_code_owners_at_the_trusted_ref(
     assert _gate(root, base, trusted_ref="HEAD") == 0
 
 
+def test_the_gate_takes_its_base_from_the_merge_commit_it_checks_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The gate checks out refs/pull/N/merge, built on main as it is now; the event's base.sha can lag behind."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _use_fake_github(monkeypatch, github)
+    _branch(root, "notes")
+    _append(root, "A note.\n", "blueprint/README.md")
+    head = _commit(root, "Add a note")
+    github.open_pull(8, "bob")
+    recorded = github.pulls[8]["base"]["sha"]
+    # Meanwhile #7 records an approval and lands on main.
+    _git(root, "checkout", "--quiet", "main")
+    approving = _pull_approving(root, github)
+    github.review(7, "alice", "APPROVED", approving)
+    # GitHub's merge commit for #8, whose first parent is main now, ahead of #8's recorded base.
+    _git(root, "checkout", "--quiet", "--detach", "main")
+    _git(root, "merge", "--quiet", "--no-ff", "-m", "Merge #8", head)
+    base = _git(root, "rev-parse", "HEAD^1")
+    assert base != recorded
+
+    # Diffing against the recorded base blames #8 for the approval #7 landed.
+    assert _gate(root, recorded, pr=8) == 1
+    assert f"basics/result: self-approved · {_HASH} (#8 changes blueprint/README.md" in capsys.readouterr().out
+    assert _gate(root, base, pr=8) == 0
+    output = capsys.readouterr().out
+    assert f"basics/result: unchanged since {base} · {_HASH}" in output
+    assert "OK: every approval added or changed since" in output
+
+
 def test_the_gate_refuses_a_pull_request_into_another_branch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1212,6 +1262,10 @@ def test_check_and_render_say_why_an_approval_stayed_self_approved(
     code, pages = _render(tmp_path, blueprint)
     assert code == 0
     assert '<span class="bp-review-self-approved" title="#3 has no review">self-approved · sha256:' in pages
+    # The build log says why as well, since the page shows it only on hover.
+    output = capsys.readouterr().out
+    assert "warning: basics/other is self-approved: #3 has no review" in output
+    assert "warning: basics/result is self-approved: #3 has no review" in output
 
 
 def test_a_failed_request_still_renders_the_site(
@@ -1228,6 +1282,28 @@ def test_a_failed_request_still_renders_the_site(
     assert code == 0
     assert pages.count('class="bp-review-self-approved" title="GitHub API GET  failed with HTTP 502: Bad &lt;Gateway&gt;"') == 2
     assert "bp-review-approved" not in pages
+    assert "warning: basics/result is self-approved: GitHub API GET  failed with HTTP 502" in capsys.readouterr().out
+
+
+def test_a_build_the_default_branch_has_moved_past_fails_before_writing_the_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Deploying it would replace the live site with one where every approval reads self-approved."""
+
+    blueprint, github = _authenticated_review_project(tmp_path, monkeypatch)
+    newer = "f" * 40
+    github.heads["main"] = {"ref": "refs/heads/main", "object": {"sha": newer, "type": "commit"}}
+
+    code, pages = _render(tmp_path, blueprint)
+
+    assert code == 1
+    assert not (tmp_path / "site").exists() and pages == ""
+    output = capsys.readouterr().out
+    assert f"error: superseded build: HEAD is {_git(tmp_path, 'rev-parse', 'HEAD')[:12]}, not {newer[:12]}" in output
+    assert "self-approved:" not in output
+    check = ["review", "check", str(blueprint), "--lean-root", str(tmp_path), "--authenticate", "github"]
+    assert main(check) == 2
+    assert "error: superseded build:" in capsys.readouterr().err
 
 
 def _render_with_statuses(
@@ -1360,6 +1436,8 @@ def test_authenticate_without_pr_in_a_pull_request_run_names_pr(
     _commit(root, "Approve the result")
     github.open_pull(7, "bob")
 
-    assert main(["review", "authenticate", str(root / "blueprint"), "--github", "--since", base]) == 1
+    # The branch is not main's head, so the run stops as superseded, after the hint.
+    assert main(["review", "authenticate", str(root / "blueprint"), "--github", "--since", base]) == 2
     err = capsys.readouterr().err
     assert ("hint: this is a pull request run; pass --pr with its number" in err) is hinted
+    assert "error: superseded build: HEAD is" in err

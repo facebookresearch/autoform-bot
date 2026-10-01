@@ -734,8 +734,11 @@ unless code owner review guards all of them at R, the trusted ref
   build of an older commit, such as a re-run of an old Pages run, would pair
   them with that commit's CODEOWNERS and bring back approvals a newer
   CODEOWNERS withdrew. Only a build of the current head authenticates; one
-  the branch has moved past reads self-approved, and the build of the newer
-  head replaces it. The gate below trusts its base commit instead.
+  the branch has moved past stops with a `superseded build` error instead of
+  labelling anything, so the generated Pages workflow deploys nothing from
+  it. That workflow builds every push to the default branch, and a pull
+  request's runs cannot cancel a pending one, so the build of the newer head
+  publishes the site. The gate below trusts its base commit instead.
 - **Ruleset.** The active rulesets on the default branch, as
   `GET /repos/{owner}/{repo}/rules/branches/{branch}` reports them, have pull
   request rules that turn on *Require review from Code Owners*
@@ -762,8 +765,10 @@ unless code owner review guards all of them at R, the trusted ref
   code owner review. The last matching rule decides and `*` matches every
   path, so every path is decided by the last `*` rule or a later one, and
   each of those must name an enforced owner; rules before the last `*`
-  decide nothing. Start CODEOWNERS with a line such as `* @owner` and narrow
-  it after, for instance with `blueprint/ @alice`. Articles and read-back
+  decide nothing. Only a literal `*` is read as matching every path: a file
+  whose catch-all is `**` or `/**` is refused as having no `*` rule. Start
+  CODEOWNERS with a line such as `* @owner` and narrow it after, for instance
+  with `blueprint/ @alice`. Articles and read-back
   cards get no exception: any pattern may also match a directory, so none
   can be shown to match only Markdown, and the site copies every other file
   under the blueprint. An individual `@user` counts when GitHub gives them
@@ -797,7 +802,9 @@ is authenticated only when all of these hold:
    refused each. Moving the article's file starts a new run.
 2. **Pull request.** GitHub associates M with exactly one pull request P,
    merged into the repository's default branch. A direct push, a pull request
-   merged into another branch, and several candidates are all refused.
+   merged into another branch, and several candidates are all refused. Pull
+   requests into other repositories that GitHub also lists for M, such as the
+   upstream pull request of a project that is a fork, are left out.
 3. **Content only.** P changes only articles and read-back cards, judged by
    the name and, for a rename, the previous name of every file in its
    complete file list. GitHub lists at most 3000 files, so a list that long
@@ -824,15 +831,19 @@ is authenticated only when all of these hold:
    (`GET /repos/{owner}/{repo}/commits/{sha}/pulls`): M's first parent,
    unless P was rebased onto the default branch, when P's own earlier
    commits, which could set CODEOWNERS, come between. P's `base.sha` is not
-   used, because GitHub keeps there the base P was opened against.
+   used, because GitHub sets it to the base branch as of P's last update,
+   which need not be the commit P landed on.
 6. **CI on P.** The verify workflow has a successful `pull_request` run on P's
    head commit, and that run belongs to P. GitHub lists a run's pull requests
    only while they are open, so after the merge the run is tied to P through
    its branch: P comes from a branch of this repository that headed no other
    pull request (`GET /pulls?state=all&head=owner:branch` lists P alone), the
-   run came from that branch of this repository, any pull request GitHub
-   still lists on the run is P into the default branch, and P never changed
-   its base branch (no `base_ref_changed` event). That run's `review check`
+   run came from that branch of this repository, any pull request into this
+   repository GitHub still lists on the run is P into the default branch, and
+   P never changed its base branch (no `base_ref_changed` event). GitHub also
+   lists pull requests into other repositories from the branch, which anyone
+   can open in a fork; those are left out, because a run here belongs to a
+   pull request into this repository. That run's `review check`
    fails unless H was current at P's head commit, the commit the reviewer
    approved.
 
@@ -846,9 +857,13 @@ commit only a fork holds: P's head stays readable in this repository through
 read it, the approval reads self-approved.
 
 Anything the verifier cannot decide, including a failed request (a later page
-of a list included), a spent budget of 500 requests, or an undecidable
-CODEOWNERS rule, leaves that one approval self-approved, and
-`review check --authenticate github` and the rendered label say why. The
+of a list included, and a 404 for any list but the branch's rules), a spent
+request budget, or an undecidable CODEOWNERS rule, leaves that one approval
+self-approved, and `review check --authenticate github`, `render
+--authenticate github`, and the rendered label say why. A run may make 500
+requests plus 10 per approval, at most 900, which stays under GitHub's limit
+of 1000 requests an hour for a workflow's `GITHUB_TOKEN` in one repository;
+the reason for an approval left unchecked names both. The
 precondition costs one request for the repository, one for the default
 branch's head outside the gate, one per page of rules, one per ruleset with a
 pull request rule, one for GitHub's CODEOWNERS errors, and one permission
@@ -859,8 +874,11 @@ files, p at P's head, P's reviews, the approving reviewer's permission, P's
 commits, the pull requests of P's branch, P's events, and the runs on P's
 head, one request each plus one per extra page. Approvals recorded by the
 same pull request share them, and a permission is looked up once per login.
-Only missing credentials, a shallow checkout, or an unknown trusted ref stops
-the whole run.
+In the gate, steps 1, 2, and 6 cost nothing, and P itself costs one request
+(`GET /repos/{owner}/{repo}/pulls/{number}`). Only a misconfigured
+environment (missing or malformed GitHub variables, or a blueprint outside
+the Git checkout), a checkout without full history, an unknown trusted ref,
+or a superseded build stops the whole run.
 
 Code owners come from the first of `.github/CODEOWNERS`, `CODEOWNERS`, and
 `docs/CODEOWNERS` that exists at a commit. P cannot name its own reviewer:
@@ -894,7 +912,10 @@ commit first.
 To withdraw an approval, dismiss the reviewer's review on P: their latest
 verdict is then no longer an approval, and the next Pages build reads
 self-approved. Removing the reviewer from CODEOWNERS or revoking their write
-access withdraws every approval they gave.
+access withdraws every approval they gave. A CODEOWNERS change is a push, so
+its own build relabels the site; a dismissal, or a change of access, team, or
+ruleset, starts no build, so run the Pages workflow by hand
+(`workflow_dispatch`) after one.
 
 Residual limits. Code owner review is checked at R as it is now, not as it
 was when each pull request merged. A team GitHub enforces is trusted as a
@@ -923,7 +944,11 @@ branch after a merge, not a pull request; run inside a `pull_request` event
 without `--pr`, it prints a hint naming `--pr`.
 Generated CI runs the gate in `autoform-review-gate.yml` on each pull request
 of an opted-in project, and again when a review is submitted or dismissed,
-with `--pr` and the base commit as both `--since` and `--trusted-ref`. That
+with `--pr` and the base commit as both `--since` and `--trusted-ref`. The
+base is the first parent of the merge commit GitHub builds for the pull
+request, which is what the gate checks out (`git rev-parse HEAD^1`), not the
+event's `base.sha`, which can lag behind it and would blame the pull request
+for approvals others merged since. That
 workflow is the pull request's own copy, so a pull request that edits it can
 disable it; it is early feedback. The authoritative label is the one Pages
 computes on the default branch with `--authenticate github`, from that
