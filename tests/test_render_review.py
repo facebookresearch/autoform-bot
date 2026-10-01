@@ -9,6 +9,7 @@ import pytest
 from autoform_cli.readback import (
     _TESTIMONY_TEX,
     TESTIMONY_MAX_BRACKETS,
+    TESTIMONY_MAX_RENDERED_BYTES,
     Readback,
     _testimony_errors,
     load_readbacks,
@@ -684,6 +685,9 @@ def test_writer_refuses_testimony_without_a_letter_or_digit(testimony: str, tmp_
         ("*a" * 1100, "asterisks"),
         ("\\" * 3000 + "x", "backslashes"),
         ("[" * 256 + "\\*" * 2000, "opening brackets"),
+        ("Read back.\n\n" + "|" * 10501 + "\n|" + "-|" * 10500 + "\n" + "a\n" * 490, "cells"),
+        ("Read back.\n\n" + "|" * 7901 + "\n|" + ":-|" * 7900 + "\n" + "a\n" * 490, "cells"),
+        ("> " + "|" * 2101 + "\n> |" + "-|" * 2100 + "\n" + "> a\n" * 400, "cells"),
     ],
 )
 def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
@@ -692,7 +696,9 @@ def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
     """Parsing is superlinear in spans and openers, cubic in a backtick run,
     and recursive in nesting: 8,000 brackets took ten seconds, 4,000 backticks
     over two minutes, and a list 512 levels deep overflowed the stack. 256
-    brackets before 16,000 escapes took sixteen."""
+    brackets before 16,000 escapes took sixteen. A table's rows are filled
+    out to its header's width, so a 32 KiB table of 10,500 columns and 490
+    lines rendered 46 MB of HTML, and took a minute and 3 GB to check."""
 
     def unbounded(*args: object, **kwargs: object) -> None:
         raise AssertionError("the Markdown renderer ran on testimony over a limit")
@@ -716,11 +722,36 @@ def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
         (" _a" * 256, " _a" * 257, "testimony has 257 underscores that start a word, over the limit of 256"),
         ("*a* " * 512, "*a* " * 512 + "\\*", "testimony has 1025 asterisks, over the limit of 1024"),
         ("a" + "\\." * 2048, "a" + "\\." * 2049, "testimony has 2049 backslashes, over the limit of 2048"),
+        (
+            "|a" * 2048 + "|\n" + "|-" * 2048 + "|",
+            "|a" * 2049 + "|\n" + "|-" * 2049 + "|",
+            "testimony has tables of up to 2049 cells, over the limit of 2048",
+        ),
+        (
+            "| a " * 8 + "|\n" + "|:-:" * 8 + "|\n" + ("| a " * 8 + "|\n") * 255,
+            "| a " * 8 + "|\n" + "|:-:" * 8 + "|\n" + ("| a " * 8 + "|\n") * 256,
+            "testimony has tables of up to 2056 cells, over the limit of 2048",
+        ),
     ],
 )
 def test_testimony_at_a_limit_is_accepted_and_one_more_is_refused(at_limit: str, over: str, reason: str) -> None:
     assert _testimony_errors(at_limit) == ()
     assert _testimony_errors(over) == (reason,)
+
+
+def test_html_over_the_rendered_limit_is_refused_before_it_is_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A backstop for any construct the renderer expands. Escaping takes the
+    largest testimony to at most five times its size, well under the limit."""
+
+    assert len(render_testimony("&" * 32767).encode()) < TESTIMONY_MAX_RENDERED_BYTES
+
+    def unbounded(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the rendered HTML was parsed over the limit")
+
+    monkeypatch.setattr("autoform_cli.readback.TESTIMONY_MAX_RENDERED_BYTES", 64)
+    monkeypatch.setattr("autoform_cli.readback.html5lib.parseFragment", unbounded)
+
+    assert _testimony_errors("a" * 58) == ("testimony renders to 65 bytes of HTML, over the limit of 64",)
 
 
 def test_tags_are_text_to_the_renderer_and_need_no_limit() -> None:

@@ -145,9 +145,21 @@ TESTIMONY_MAX_NESTING = 64
 TESTIMONY_MAX_UNDERSCORE_OPENERS = 256
 TESTIMONY_MAX_ASTERISKS = 1024
 TESTIMONY_MAX_BACKSLASHES = 2048
+#: The table cells a testimony may hold. Both Markdown readings fill every row
+#: out to the header's width, so a wide header over many short lines renders
+#: millions of cells from a few kilobytes; counted before parsing.
+TESTIMONY_MAX_TABLE_CELLS = 2048
+#: The HTML a testimony may render to, a backstop for any other construct the
+#: renderer expands, checked before the HTML is parsed. Escaping alone takes
+#: a testimony at the byte limit to at most five times its size.
+TESTIMONY_MAX_RENDERED_BYTES = 256 * 1024
 _MATH_DELIMITER = re.compile(r"\$|\\[()\[\]]")
 _BACKTICK_RUN = re.compile(r"`+")
 _UNDERSCORE_OPENER = re.compile(r"(?<!\w)_")
+#: A line that could be a table's delimiter row, in a block quote or a list or
+#: not, and one that ends a table.
+_TABLE_DELIMITER_ROW = re.compile(r"(?=[^|]*\|)(?=[^-]*-)[\s>|:-]+")
+_BLANK_LINE = re.compile(r"[\s>]*")
 #: Everything a line can open before its content: indentation, block quotes,
 #: and list markers, each of which nests one more block.
 _NESTING_PREFIX = re.compile(r"(?:[ >]|[-+*](?= )|\d{1,9}[.)](?= ))*")
@@ -1848,6 +1860,9 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     if limits := _testimony_limit_errors(text):
         return limits
     rendered, defines_links, uneven_table = _render_testimony(text)
+    size = len(rendered.encode("utf-8"))
+    if size > TESTIMONY_MAX_RENDERED_BYTES:
+        return (f"testimony renders to {size} bytes of HTML, over the limit of {TESTIMONY_MAX_RENDERED_BYTES}",)
     document = html5lib.parseFragment(rendered, namespaceHTMLElements=False)
     errors: list[str] = []
     if defines_links:
@@ -2022,6 +2037,18 @@ def _testimony_limit_errors(text: str) -> tuple[str, ...]:
     backslashes = text.count("\\")
     if backslashes > TESTIMONY_MAX_BACKSLASHES:
         errors.append(f"testimony has {backslashes} backslashes, over the limit of {TESTIMONY_MAX_BACKSLASHES}")
+    # Every line that could be a delimiter row is taken for one, with its
+    # columns spanning its header and the lines up to the next blank one,
+    # which is as far as a table can run.
+    cells = following = 0
+    for line in reversed(lines):
+        if _TABLE_DELIMITER_ROW.fullmatch(line):
+            row = line.lstrip(" \t>").rstrip()
+            columns = row.count("|") + 1 - row.startswith("|") - (len(row) > 1 and row.endswith("|"))
+            cells += columns * (following + 1)
+        following = 0 if _BLANK_LINE.fullmatch(line) else following + 1
+    if cells > TESTIMONY_MAX_TABLE_CELLS:
+        errors.append(f"testimony has tables of up to {cells} cells, over the limit of {TESTIMONY_MAX_TABLE_CELLS}")
     return tuple(errors)
 
 
