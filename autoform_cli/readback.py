@@ -32,13 +32,18 @@ import stat
 import time
 import unicodedata
 import warnings
+from collections import Counter
 from dataclasses import dataclass, replace
+from html.entities import html5 as _NAMED_REFERENCES
 from pathlib import Path
 from typing import Iterable, Iterator, Mapping
 from urllib.parse import unquote_to_bytes
 
 import html5lib
 import markdown as markdown_renderer
+from markdown.blockprocessors import HashHeaderProcessor
+from markdown.treeprocessors import Treeprocessor
+from markdown.util import ETX, STX
 
 try:
     import fcntl
@@ -130,19 +135,24 @@ _UNDERSCORE_OPENER = re.compile(r"(?<!\w)_")
 #: Everything a line can open before its content: indentation, block quotes,
 #: and list markers, each of which nests one more block.
 _NESTING_PREFIX = re.compile(r"(?:[ >]|[-+*](?= )|\d{1,9}[.)](?= ))*")
-#: Raw HTML, found before the Markdown renderer runs: open and closing tags in
-#: CommonMark's grammar, the openers of declarations and processing
-#: instructions, closed or not, and character references in the forms HTML
-#: parsers decode. Anything else the renderer reads as HTML is refused after
-#: parsing. Autolinks are not tags here; they are refused after parsing, as
-#: links.
+#: What a CommonMark viewer of the vault, GitHub's or Obsidian's, reads as HTML
+#: outside code: open and closing tags in CommonMark's grammar, the openers of
+#: comments, declarations, and processing instructions, closed or not,
+#: autolinks, and character references by number or by a name HTML defines.
+#: The testimony renderer reads none of it and shows it as typed, but a
+#: reviewer reading the card in the vault would be shown something else.
 _HTML_TAG = re.compile(
-    r"<\?|<![A-Za-z\[]"
+    r"<\?[^>\n]*>?|<![A-Za-z\[][^>\n]*>?"
     r"|</?[A-Za-z][A-Za-z0-9-]*"
     r"(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s\"'=<>`]+|'[^']*'|\"[^\"]*\"))?)*\s*/?>"
 )
 _HTML_NAME = re.compile(r"<[!?](?:\[CDATA\[|[A-Za-z]*)|</?[A-Za-z][A-Za-z0-9-]*")
-_HTML_ENTITY = re.compile(r"&(?:#[0-9]+;?|#[xX][0-9A-Fa-f]+;?|[A-Za-z][A-Za-z0-9]*;)")
+_AUTOLINK = re.compile(
+    r"<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>"
+    r"|<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*>"
+)
+_HTML_ENTITY = re.compile(r"&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{0,31});")
 
 
 @dataclass(frozen=True, slots=True)
@@ -794,6 +804,109 @@ def _safe_model_label(value: str) -> bool:
     )
 
 
+#: Python-Markdown's placeholder for a backslash-escaped dollar sign.
+_ESCAPED_DOLLAR = STX + str(ord("$")) + ETX
+
+
+class _LiteralText(Treeprocessor):
+    """Show every ``&`` as typed, and keep an escaped dollar sign escaped.
+
+    The testimony renderer reads no HTML, so each ``<``, ``>``, and ``&`` in a
+    testimony is text. The serializer escapes ``<`` and ``>`` but leaves an
+    ``&`` that starts something shaped like a character reference, so ``&``
+    is escaped here first, outside code, whose text the renderer escaped
+    already. ``\\$`` would otherwise come out as a bare ``$``, which MathJax
+    pairs with the next one into a formula; it is kept as ``\\$``, which
+    MathJax shows as a dollar sign.
+    """
+
+    def run(self, root: object) -> None:
+        for element in root.iter():  # type: ignore[attr-defined]
+            if element.tag != "code" and element.text:
+                element.text = self._literal(element.text)
+            if element.tail:
+                element.tail = self._literal(element.tail)
+
+    @staticmethod
+    def _literal(text: str) -> str:
+        literal = text.replace("&", "&amp;").replace(_ESCAPED_DOLLAR, "\\" + _ESCAPED_DOLLAR)
+        # Formulas are atomic strings, which the renderer must not read again.
+        return type(text)(literal) if literal != text else text
+
+
+class _HashHeading(HashHeaderProcessor):
+    """A ``#`` heading only where CommonMark reads one, with a space or the
+    line's end after the hashes, so ``#41755`` starting a line stays text, as
+    a viewer of the vault shows it."""
+
+    RE = re.compile(r"(?:^|\n)(?P<level>#{1,6})(?=[ \t\n]|$)(?P<header>(?:\\.|[^\\])*?)#*(?:\n|$)")
+
+
+def _testimony_converter() -> markdown_renderer.Markdown:
+    """A Markdown converter for testimony: paragraphs, emphasis, lists, block
+    quotes, tables, code, and formulas, and no HTML, entities, autolinks,
+    attribute lists, heading IDs, or diagrams. Code blocks get no syntax
+    highlighting and display formulas a ``<p>``, so the output holds no
+    ``<div>``, the one element the site's page could take for its own."""
+
+    converter = markdown_renderer.Markdown(
+        extensions=["tables", "pymdownx.arithmatex", "pymdownx.highlight", "pymdownx.superfences"],
+        extension_configs={
+            "pymdownx.arithmatex": {"generic": True, "block_tag": "p"},
+            "pymdownx.highlight": {"use_pygments": False},
+            "pymdownx.superfences": {"custom_fences": []},
+        },
+    )
+    converter.preprocessors.deregister("html_block")
+    converter.parser.blockprocessors.register(_HashHeading(converter.parser), "hashheader", 70)
+    for pattern in ("html", "entity", "autolink", "automail"):
+        converter.inlinePatterns.deregister(pattern)
+    converter.treeprocessors.register(_LiteralText(converter), "literal_text", 5)
+    return converter
+
+
+def render_testimony(text: str) -> str:
+    """The HTML a testimony is shown as: what the validator inspects and what
+    the site embeds, byte for byte."""
+
+    return _render_testimony(text)[0]
+
+
+def _render_testimony(text: str) -> tuple[str, bool]:
+    """The HTML for ``text``, and whether it defines Markdown links.
+
+    The site places the HTML inside its own Markdown page, whose parser takes
+    a block-level tag at the start of a line for the start of a block it reads
+    again. Each such tag is put on the line before it, where it is left as
+    written; the newlines between blocks are not shown.
+    """
+
+    converter = _testimony_converter()
+    rendered = converter.convert(text)
+    names = "|".join(sorted(converter.block_level_elements, key=len, reverse=True))
+    return re.sub(rf"\n(?=<(?:{names})[\s/>])", "", rendered), bool(converter.references)
+
+
+#: The elements the testimony renderer emits for what a testimony may use.
+_TESTIMONY_ELEMENTS = frozenset(
+    {"p", "br", "hr", "em", "strong", "code", "pre", "span", "blockquote", "ul", "ol", "li"}
+    | {"table", "thead", "tbody", "tr", "th", "td"}
+)
+#: The attributes the renderer sets, by element: its classes for code blocks
+#: and formulas, table alignment, and where an ordered list starts. Any other,
+#: an ``id`` from a fenced block's header say, was written by the testimony.
+_TESTIMONY_ATTRIBUTES: dict[str, dict[str, re.Pattern[str]]] = {
+    "pre": {"class": re.compile("highlight")},
+    "code": {"class": re.compile(r"language-[\w#.+-]+")},
+    "span": {"class": re.compile("arithmatex")},
+    "p": {"class": re.compile("arithmatex")},
+    "th": {"style": re.compile("text-align: (?:left|center|right);")},
+    "td": {"style": re.compile("text-align: (?:left|center|right);")},
+    "ol": {"start": re.compile("[0-9]{1,9}")},
+}
+_MERMAID_FENCE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})[ \t]*mermaid(?:[ \t]|$)", re.MULTILINE | re.IGNORECASE)
+
+
 #: Commands that set a letter, so testimony showing only these still shows one.
 _TEX_LETTERS = frozenset(
     r"""
@@ -927,66 +1040,124 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     or other than a reader sees.
 
     Read-backs need prose, lists, emphasis, code, and mathematical notation.
-    They do not need links or embedded content. Parsing with the same relevant
-    Markdown extensions catches reference links and attribute-list handlers
-    that lexical URL filtering misses.
+    They do not need links, headings, or embedded content.
 
     A testimony is measured against :data:`TESTIMONY_MAX_BYTES` and the other
     limits first, and one that exceeds any of them is refused unparsed: every
     card in a pull request is validated, so parsing must be bounded before
-    anything is known about it. Raw HTML is refused unparsed too. What is
-    then checked is what a reader is shown: no invisible or reordering
-    characters; in text the typesetter reads, only the TeX listed in
-    :data:`_TESTIMONY_TEX`, with arguments that show something and spacing
-    that neither overlaps symbols nor pushes them apart; and at least one
-    visible letter or digit.
+    anything is known about it. What is then checked is the HTML
+    :func:`render_testimony` makes of it, which is exactly what the site
+    shows: only the elements and attributes the renderer emits for prose,
+    code, and formulas; no HTML a Markdown viewer of the vault would read
+    outside code; no invisible or reordering characters; in text the
+    typesetter reads, only the TeX listed in :data:`_TESTIMONY_TEX`, with
+    arguments that show something and spacing that neither overlaps symbols
+    nor pushes them apart; and at least one visible letter or digit.
     """
 
     if limits := _testimony_limit_errors(text):
         return limits
-    if markup := _raw_html_errors(text):
-        return markup
-    parser = markdown_renderer.Markdown(
-        extensions=list(SITE_EXTENSIONS),
-        extension_configs=SITE_EXTENSION_CONFIGS,
-    )
-    rendered = parser.convert(text)
-    errors: list[str] = []
-    if parser.htmlStash.rawHtmlBlocks:
-        errors.append("raw HTML is not allowed")
-    if parser.references:
-        errors.append("Markdown link definitions are not allowed")
+    rendered, defines_links = _render_testimony(text)
     document = html5lib.parseFragment(rendered, namespaceHTMLElements=False)
+    errors: list[str] = []
+    if defines_links:
+        errors.append("Markdown link definitions are not allowed")
     for element in document.iter():
-        tag = str(element.tag).lower()
-        attributes = {str(name).lower() for name in element.attrib}
-        classes = set(str(element.attrib.get("class", "")).split())
+        if element is document:
+            continue
+        tag = element.tag.lower() if isinstance(element.tag, str) else ""
         if tag in {"a", "img"}:
             errors.append("Markdown links, images, and autolinks are not allowed")
-        if tag == "script" and not element.attrib.get("type", "").startswith("math/tex"):
-            errors.append("active HTML is not allowed")
-        if "style" in attributes or any(name.startswith("on") for name in attributes):
-            errors.append("active Markdown attributes are not allowed")
-        if "hidden" in attributes or "aria-hidden" in attributes:
-            errors.append("visibility-changing Markdown attributes are not allowed")
-        if "mermaid" in classes:
-            errors.append("active Mermaid blocks are not allowed")
-        if attributes and not _renderer_owned_attributes(tag, element.attrib):
+        elif re.fullmatch("h[1-6]", tag):
+            errors.append("Markdown headings are not allowed: they read as the page's own; use **bold** text")
+        elif tag not in _TESTIMONY_ELEMENTS:
+            errors.append(f"HTML the testimony renderer does not emit is not allowed: <{tag or 'comment'}>")
+        elif any(
+            name not in _TESTIMONY_ATTRIBUTES.get(tag, {}) or _TESTIMONY_ATTRIBUTES[tag][name].fullmatch(value) is None
+            for name, value in element.attrib.items()
+        ):
             errors.append("user-supplied Markdown attributes are not allowed")
-    if re.search(r"^ {0,3}(?:`{3,}|~{3,})[ \t]*mermaid(?:[ \t]|$)", text, re.MULTILINE | re.IGNORECASE):
+        if tag == "code" and element.attrib.get("class", "").lower() == "language-mermaid":
+            errors.append("active Mermaid blocks are not allowed")
+    if _MERMAID_FENCE.search(text):
         errors.append("active Mermaid blocks are not allowed")
-    # Entities are decoded in the parsed document, so `&#8203;` is caught here
-    # as surely as a typed zero-width space.
+    pieces = _testimony_pieces(document)
+    errors.extend(_vault_markup_errors(text, [piece for piece, kind in pieces if kind == "code"]))
     hidden = _hidden_characters(text + "".join(document.itertext()))
     if hidden:
         errors.append("invisible or reordering characters are not allowed: " + ", ".join(hidden))
-    typeset = _typeset_text(document)
+    typeset = "".join(piece for piece, kind in pieces if kind != "code")
     errors.extend(_tex_errors(typeset))
     if _TEX_COMMENT.search(typeset):
         errors.append("TeX comments are not allowed: they drop the rest of their line; write \\% for a percent sign")
     if not _shows_letter_or_digit("".join(document.itertext())):
         errors.append("testimony renders no visible text: it must show at least one letter or digit")
     return tuple(dict.fromkeys(errors))
+
+
+def _testimony_pieces(document: object) -> list[tuple[str, str]]:
+    """The text nodes of ``document`` in order, each marked ``"code"``,
+    ``"math"`` for a formula the renderer marked, or ``"text"``. MathJax reads
+    each text node apart from the others."""
+
+    pieces: list[tuple[str, str]] = []
+
+    def walk(node: object, kind: str) -> None:
+        tag = getattr(node, "tag", None)
+        if not isinstance(tag, str):
+            return
+        if tag.lower() in {"code", "pre"}:
+            kind = "code"
+        elif kind == "text" and "arithmatex" in node.attrib.get("class", "").split():  # type: ignore[attr-defined]
+            kind = "math"
+        if node.text:  # type: ignore[attr-defined]
+            pieces.append((node.text, kind))  # type: ignore[attr-defined]
+        for child in node:  # type: ignore[attr-defined]
+            walk(child, kind)
+            if child.tail:
+                pieces.append((child.tail, kind))
+
+    walk(document, "text")
+    return pieces
+
+
+def _vault_markup_errors(text: str, code: list[str]) -> list[str]:
+    """Name the HTML, autolinks, and character references ``text`` holds
+    outside the pieces of ``code`` the renderer shows as code.
+
+    The site shows them as typed; a CommonMark viewer of the vault reads them,
+    and could hide text, restyle it, link it, or stand for a character a
+    reader cannot see. They are found in the source, since the renderer
+    consumes Markdown a viewer could read as part of a tag, such as the
+    ``>`` that starts a line, and each found is excused only by as many
+    occurrences of it in code. Formulas are not code there.
+    """
+
+    def outside_code(pattern: re.Pattern[str]) -> list[str]:
+        found = Counter(match.group() for match in pattern.finditer(text))
+        for piece in code:
+            found.subtract(match.group() for match in pattern.finditer(piece))
+        return [markup for markup, count in found.items() if count > 0]
+
+    tags = dict.fromkeys(_HTML_NAME.match(markup).group() for markup in outside_code(_HTML_TAG))
+    entities = [
+        _entity_name(entity)
+        for entity in outside_code(_HTML_ENTITY)
+        if entity[1] == "#" or entity[1:] in _NAMED_REFERENCES
+    ]
+    errors: list[str] = []
+    if outside_code(re.compile("<!--")):
+        errors.append("HTML comments are not allowed: Markdown viewers hide the text they enclose")
+    if tags:
+        names = (name if name.startswith(("<!", "<?")) else name + ">" for name in tags)
+        errors.append("raw HTML is not allowed: " + ", ".join(names) + "; in a formula, put a space after <")
+    if outside_code(_AUTOLINK):
+        errors.append("Markdown links, images, and autolinks are not allowed")
+    if entities:
+        errors.append(
+            "HTML character references are not allowed: " + ", ".join(entities) + "; type the character itself"
+        )
+    return errors
 
 
 def _tex_errors(typeset: str) -> list[str]:
@@ -1252,57 +1423,6 @@ def _hidden_characters(text: str) -> list[str]:
             name = unicodedata.name(character, "unnamed")
             found[f"U+{ord(character):04X} {name}"] = None
     return list(found)
-
-
-def _typeset_text(document: object) -> str:
-    """The text MathJax may typeset: everything outside code and preformatted
-    blocks, which it skips. Where the Markdown renderer recognized no formula,
-    MathJax can still find one, so the checks read all of this text rather
-    than only the spans the renderer marked as math."""
-
-    parts: list[str] = []
-
-    def walk(node: object, skipped: bool) -> None:
-        tag = getattr(node, "tag", None)
-        if not isinstance(tag, str):
-            return
-        skipped = skipped or tag.lower() in {"code", "pre"}
-        if not skipped and getattr(node, "text", None):
-            parts.append(node.text)  # type: ignore[attr-defined]
-        for child in node:  # type: ignore[attr-defined]
-            walk(child, skipped)
-            if not skipped and getattr(child, "tail", None):
-                parts.append(child.tail)
-
-    walk(document, False)
-    return "".join(parts)
-
-
-
-
-def _renderer_owned_attributes(tag: str, attributes: Mapping[str, str]) -> bool:
-    """Allow only attributes emitted by the configured Markdown renderer."""
-
-    normalized = {str(name).lower(): str(value) for name, value in attributes.items()}
-    if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
-        return set(normalized) == {"id"}
-    if tag == "script":
-        return set(normalized) == {"type"} and normalized["type"].startswith("math/tex")
-    classes = set(normalized.get("class", "").split())
-    if set(normalized) != {"class"}:
-        return False
-    if tag in {"span", "div"} and classes in ({"arithmatex"}, {"MathJax_Preview"}):
-        return True
-    if tag == "div" and classes in ({"highlight"}, {"linenodiv"}):
-        return True
-    if tag == "table" and classes == {"highlighttable"}:
-        return True
-    if tag == "td" and classes in ({"linenos"}, {"code"}):
-        return True
-    if tag == "span" and len(classes) == 1:
-        token = next(iter(classes))
-        return token in {"hll", "normal"} or re.fullmatch(r"[a-z][a-z0-9]{0,3}", token) is not None
-    return False
 
 
 def _card_body(

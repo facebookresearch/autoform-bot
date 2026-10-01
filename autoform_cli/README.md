@@ -442,9 +442,14 @@ contains the exact packet, both hashes, a model label, and nonempty testimony.
 The loader rejects missing or unknown fields, altered packets, identity
 mismatches, and malformed or empty testimony. Testimony must show a reader
 everything it says: invisible and reordering characters (zero-width spaces,
-bidirectional overrides), TeX comments, and raw HTML are rejected. HTML tags,
-comments, declarations, and character references are refused by name before
-parsing, wherever they are written, so in a formula put a space after `<`. TeX
+bidirectional overrides), TeX comments, and raw HTML are rejected. Testimony
+is rendered once, by a Markdown renderer that reads no HTML, and the site shows
+that rendering byte for byte, so what was validated is what a reviewer sees.
+Code is shown as typed. Outside code, formulas included, HTML tags, comments,
+declarations, autolinks, and character references are refused by name, since a
+Markdown viewer of the vault would read them, so in a formula put a space after
+`<`. Links, link definitions, images, headings, and Mermaid blocks are refused;
+attribute lists are shown as typed. TeX
 may use only an allowlist of the notation statements need, kept in
 `readback.py` against the site's pinned MathJax 3.2.2: letters, symbols,
 relations, operators, arrows, delimiters, fractions, roots, accents, fonts,

@@ -10,7 +10,8 @@ import pytest
 
 from autoform_cli.__main__ import _current_review, main
 from autoform_cli.graph import Graph, load_graph
-from autoform_cli.readback import load_readbacks
+from autoform_cli.markdown import site_converter
+from autoform_cli.readback import load_readbacks, render_testimony
 from autoform_cli.render import PublicationError, render_site
 from autoform_cli.review import REVIEW_PACKET_SCHEMA, load_review_bundle, validate_review_bundle
 from autoform_cli.skeleton import (
@@ -277,6 +278,107 @@ def test_check_and_render_derive_the_bundle_from_their_own_extraction(
     pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
     assert "For the unique proposition, the proposition is true." in pages
     assert "bp-readback-current" in pages
+
+
+def _published_card(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    testimony: str,
+    *,
+    article_extra: str = "",
+) -> tuple[str, str]:
+    """File ``testimony`` through the CLI, render the review site, and convert
+    the chapter page as the published site does. Return the page's HTML and
+    the card's testimony within it."""
+
+    blueprint = _blueprint(tmp_path)
+    if article_extra:
+        article = blueprint / "roadmap/basics/result.md"
+        article.write_text(
+            article.read_text(encoding="utf-8").replace("itself.\n", f"itself.\n\n{article_extra}\n"),
+            encoding="utf-8",
+        )
+    skeleton = _skeleton()
+    monkeypatch.setattr(
+        "autoform_cli.__main__.extract_skeletons", lambda *args, **kwargs: _as_extracted(skeleton, args[0])
+    )
+    bundle_path = tmp_path / "review.json"
+    packets = tmp_path / "packets"
+    assert main(
+        ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle_path),
+         "--packets", str(packets)]
+    ) == 0
+    packet = packets / json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"][0]["packet"]
+    (tmp_path / "testimony.md").write_text(testimony, encoding="utf-8")
+    assert main(
+        ["review", "record", str(blueprint), "--lean-root", str(tmp_path), "--bundle", str(bundle_path),
+         "--article-id", "af_0123456789abcdef01234567", "--declaration", "Review.result",
+         "--packet", str(packet), "--testimony", str(tmp_path / "testimony.md"), "--model", "test-model"]
+    ) == 0, capsys.readouterr().err
+    site = tmp_path / "site"
+    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 0
+    capsys.readouterr()
+    page = (site / "roadmap/basics/README.md").read_text(encoding="utf-8")
+    published = site_converter().convert(page)
+    title = '<span class="bp-readback-status">current</span></div>'
+    start = published.index(title) + len(title)
+    return published, published[start : published.index("\n</div>\n</details>", start)]
+
+
+@pytest.mark.parametrize(
+    ("testimony", "shown"),
+    [
+        # A block quote around indented code: code, so never typeset.
+        (
+            "The statement says $P$ holds.\n\n>     $\\phantom{not}$ x\n",
+            '<blockquote><pre class="highlight"><code>$\\phantom{not}$ x</code></pre>',
+        ),
+        # Code and prose escaped once, not twice.
+        (
+            "Here `a < b && c` holds, and AT&T.\n\n```lean\ntheorem t : 1 < 2 := by decide\n```\n",
+            '<p>Here <code>a &lt; b &amp;&amp; c</code> holds, and AT&amp;T.</p>'
+            '<pre class="highlight"><code class="language-lean">theorem t : 1 &lt; 2 := by decide</code></pre>',
+        ),
+        (
+            "- For $a<b$, `c`\n- and\n\n    1. nested\n\n| a | b |\n|:--|--:|\n| $x$ | y |\n\n"
+            "$$\nx \\le y\n$$\n\nIt costs \\$5.\n",
+            '<span class="arithmatex">\\(a&lt;b\\)</span>',
+        ),
+    ],
+)
+def test_the_site_shows_the_testimony_exactly_as_it_was_validated(
+    testimony: str,
+    shown: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The card validates what render_testimony makes of the testimony, so
+    the published page must show those bytes and nothing the page's own
+    Markdown makes of them."""
+
+    _, card = _published_card(tmp_path, monkeypatch, capsys, testimony)
+
+    assert card == render_testimony(testimony)
+    assert shown in card
+
+
+def test_testimony_cannot_link_through_the_page_s_link_definitions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    published, card = _published_card(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        "I checked [the Lean statement][src] and [src] against the text.\n",
+        article_extra="See the source.\n\n[src]: https://example.test/elsewhere",
+    )
+
+    assert "https://example.test/elsewhere" not in published
+    assert card == "<p>I checked [the Lean statement][src] and [src] against the text.</p>"
 
 
 def test_render_takes_one_source_of_review_evidence(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

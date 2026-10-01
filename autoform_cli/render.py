@@ -27,7 +27,7 @@ from .lean import SourceLinker, build_linker, declaration_names
 from .markdown import content_lines as _content_lines
 from .markdown import FENCE as _FENCE
 from .markdown import FENCE_CLOSE as _FENCE_CLOSE
-from .readback import READBACKS_DIR, Readback, load_readbacks, publishable_article
+from .readback import READBACKS_DIR, Readback, load_readbacks, publishable_article, render_testimony
 from .review import ReviewBundle, ReviewError, ReviewDeclaration, validate_review_bundle
 from .skeleton import DeclarationSkeleton, SkeletonReport
 from .status import is_definition
@@ -1879,14 +1879,15 @@ def _readback_block(declaration: DeclarationSkeleton, readback: Readback | None)
             "</div>",
             "",
         ]
+    # The testimony is shown as render_testimony made it, which is what the
+    # card was validated on. The card's <div> has no markdown attribute, so the
+    # page's parser leaves its content alone, and the rendered body starts on
+    # the title's line and puts no block-level tag at the start of a line,
+    # which that parser would take for a block of its own.
     return [
-        f'<div class="bp-readback bp-readback-{status_key}" markdown="1">',
-        f'<div class="bp-readback-title">Read-back{model} · <span class="bp-readback-status">{html.escape(label)}</span></div>',
-        "",
-        # Read-backs are model-produced Markdown. Keep Markdown and math, but
-        # neutralize raw HTML before placing it inside an md_in_html container.
-        html.escape(readback.text),
-        "",
+        f'<div class="bp-readback bp-readback-{status_key}">',
+        f'<div class="bp-readback-title">Read-back{model} · <span class="bp-readback-status">{html.escape(label)}</span></div>'
+        + render_testimony(readback.text),
         "</div>",
         "",
     ]

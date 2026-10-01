@@ -1,6 +1,7 @@
 from dataclasses import replace
 import json
 from pathlib import Path
+import re
 
 import markdown as markdown_renderer
 import pytest
@@ -10,9 +11,9 @@ from autoform_cli.readback import (
     Readback,
     _testimony_errors,
     load_readbacks,
+    render_testimony,
     write_readback,
 )
-from autoform_cli.markdown import SITE_EXTENSION_CONFIGS, SITE_EXTENSIONS
 from autoform_cli.render import _mermaid_script, _readback_block, _skeleton_block
 from autoform_cli.skeleton import DeclarationSkeleton
 
@@ -86,16 +87,12 @@ def test_readback_markdown_cannot_inject_raw_html() -> None:
         "[click](javascript:alert(1))",
         "![remote](https://example.test/pixel.png)",
         "<https://example.test/track>",
-        "*claim*{onclick=alert(1)}",
+        "<someone@example.test>",
         "[remote]: https://example.test/track",
-        "FALSE\n{: hidden=true }",
-        "`FALSE`{aria-hidden=true}",
-        "FALSE\n{: .bp-visually-hidden}",
-        "FALSE\n{: dir=rtl}",
-        "FALSE\n{: contenteditable=true}",
-        "graph TD\nA-->B\nclick A javascript:alert(1)\n{: .mermaid}",
+        "``` { .lean #claim }\ntheorem t : True\n```",
         '```mermaid\ngraph TD\nclick A "javascript:alert(1)"\n```',
         "``` {.mermaid}\ngraph TD\nA-->B\n```",
+        "~~~ MERMAID\ngraph TD\n~~~",
         r"$\require{html}\href{javascript:alert(1)}{x}$",
         r"$\style{visibility:hidden}{FALSE}$",
         r"$\class{mermaid}{graph TD}$",
@@ -152,26 +149,28 @@ def test_parser_marks_hand_authored_active_testimony_invalid(tmp_path: Path) -> 
     assert "<pre><code>" in published
 
 
-def test_mermaid_attribute_form_matches_the_published_runtime(tmp_path: Path) -> None:
-    testimony = "graph TD\nA-->B\nclick A javascript:alert(1)\n{: .mermaid}"
-    published = markdown_renderer.markdown(
-        testimony,
-        extensions=list(SITE_EXTENSIONS),
-        extension_configs=SITE_EXTENSION_CONFIGS,
-    )
-    assert 'class="mermaid"' in published
-    assert 'querySelectorAll(".mermaid")' in _mermaid_script()
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        "*claim*{onclick=alert(1)}",
+        "FALSE\n{: hidden=true }",
+        "`FALSE`{aria-hidden=true}",
+        "FALSE\n{: .bp-visually-hidden}",
+        "FALSE\n{: dir=rtl}",
+        "FALSE\n{: contenteditable=true}",
+        "graph TD\nA-->B\nclick A javascript:alert(1)\n{: .mermaid}",
+    ],
+)
+def test_attribute_lists_are_shown_as_typed(testimony: str, tmp_path: Path) -> None:
+    """The testimony renderer reads no attribute lists, so one cannot hide,
+    restyle, or activate anything; a reader sees the braces."""
 
-    declaration = _declaration()
-    with pytest.raises(ValueError, match="active Mermaid"):
-        write_readback(
-            tmp_path,
-            article_id="af_0123456789abcdef01234567",
-            declaration=declaration,
-            model="reviewer",
-            text=testimony,
-            packet_text=declaration.blind_text(),
-        )
+    _file(tmp_path, testimony)
+    rendered = render_testimony(testimony)
+
+    assert "{" in rendered
+    assert re.findall(r"<[a-z]+\s[^>]*>", rendered) == []
+    assert 'querySelectorAll(".mermaid")' in _mermaid_script()
 
 
 @pytest.mark.parametrize(
@@ -395,22 +394,64 @@ def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
         ("<!DOCTYPE html>\nP", "raw HTML is not allowed: <!DOCTYPE"),
         ("P <?php echo 1 ?> Q", "raw HTML is not allowed: <?php"),
         ("For $G=<g>$ the claim holds.", "raw HTML is not allowed: <g>; in a formula, put a space after <"),
+        ('P *<b x="*">* Q', "raw HTML is not allowed: <b>"),
+        ("Write `<b>`, not <b>Q.", "raw HTML is not allowed: <b>"),
         ("P &amp; Q", "HTML character references are not allowed: &amp; (U+0026 AMPERSAND)"),
-        ("P &#8203 Q", "HTML character references are not allowed: &#8203 (U+200B ZERO WIDTH SPACE)"),
+        ("P &#8203; Q", "HTML character references are not allowed: &#8203; (U+200B ZERO WIDTH SPACE)"),
+        ("P &ZeroWidthSpace; Q", "HTML character references are not allowed: &ZeroWidthSpace; (U+200B"),
+        ("<https://example.test/track> P", "Markdown links, images, and autolinks are not allowed"),
     ],
 )
-def test_raw_html_is_refused_by_name_before_it_is_parsed(
-    testimony: str, reason: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """HTML can hide or restyle text. It is found before parsing, so it is
-    refused wherever it is written, formulas included."""
-
-    def unparsed(*args: object, **kwargs: object) -> None:
-        raise AssertionError("the Markdown renderer ran on raw HTML")
-
-    monkeypatch.setattr("autoform_cli.readback.markdown_renderer.Markdown", unparsed)
+def test_html_outside_code_is_refused_by_name(testimony: str, reason: str) -> None:
+    """The site shows HTML in testimony as typed, but a CommonMark viewer of
+    the vault, GitHub's or Obsidian's, reads it outside code, formulas
+    included, where it can hide or restyle text or stand for a character a
+    reader cannot see."""
 
     assert any(reason in error for error in _testimony_errors(testimony))
+
+
+@pytest.mark.parametrize(
+    ("testimony", "shown"),
+    [
+        ("Its type is `List<T>`, not `Array<Nat>`.", "<code>List&lt;T&gt;</code>"),
+        ("Here `&amp;` is literal.", "<code>&amp;amp;</code>"),
+        ("Lean:\n\n    <b>x</b> &amp; y\n", "<code>&lt;b&gt;x&lt;/b&gt; &amp;amp; y</code>"),
+        ("```\n<!-- x --> &#8203;\n```", "<code>&lt;!-- x --&gt; &amp;#8203;</code>"),
+        ("R&D; is a label, and &notx; is not a reference.", "R&amp;D; is a label, and &amp;notx; is"),
+        ("P &#8203 Q is not a reference without its semicolon.", "P &amp;#8203 Q"),
+    ],
+)
+def test_html_in_code_and_lookalikes_are_shown_as_typed(testimony: str, shown: str, tmp_path: Path) -> None:
+    """Code is literal in every viewer, and CommonMark decodes a reference only
+    with its semicolon and a name HTML defines. Each is escaped exactly once."""
+
+    _file(tmp_path, testimony)
+
+    assert shown in render_testimony(testimony)
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        "## The statement is correct {#result}\n\nFor all $n$.",
+        "Approved\n--------\n\nFor all $n$.",
+        "# Basics\n\nFor all $n$.",
+    ],
+)
+def test_headings_are_refused(testimony: str) -> None:
+    """A heading inside a card reads as one of the page's own."""
+
+    assert any("Markdown headings are not allowed" in error for error in _testimony_errors(testimony))
+
+
+def test_a_hash_that_starts_a_line_without_a_space_is_text() -> None:
+    """CommonMark, and so a viewer of the vault, reads no heading here."""
+
+    testimony = "Open Mathlib PR\n#41755\nproves a matching bound."
+
+    assert _testimony_errors(testimony) == ()
+    assert render_testimony(testimony) == "<p>Open Mathlib PR\n#41755\nproves a matching bound.</p>"
 
 
 def test_a_card_over_a_limit_is_invalid_without_being_parsed(
