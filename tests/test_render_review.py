@@ -272,14 +272,41 @@ def test_writer_accepts_ordinary_mathematical_testimony(testimony: str, tmp_path
 @pytest.mark.parametrize(
     "testimony",
     [
-        "The claim holds for x" + "\u0301" * 4 + ".",
+        "The claim holds for x" + "\u0301\u0323" * 2 + ".",
         "Vi\u1ec7t, or Vie\u0323\u0302t, names the same place.",
+        "The town Ba\u0302\u0301c and the word \u03b1\u0314\u0301\u0345 carry two marks above.",
         "The Tibetan stack \u0f66\u0f92\u0fb2\u0f72\u0f7e carries four marks.",
         "The cardinal \u2135 and $\\aleph_0$ are left to right.",
     ],
 )
 def test_combining_marks_up_to_four_and_left_to_right_letters_are_accepted(testimony: str) -> None:
+    """Up to four marks on a letter, two of them above it and two below, as
+    Vietnamese, polytonic Greek, and Tibetan write them."""
+
     assert _testimony_errors(testimony) == ()
+
+
+_STACKED = "more than 4 combining marks on one character, or more than 2 above or below it, are not allowed"
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        "The claim holds for x" + "\u0301" * 3 + ".",
+        "The value x" + "\u1dd8" * 3 + ".",
+        "The value x" + "\u0323" * 3 + ".",
+        "The value x" + "\U0001e8d1" * 3 + ".",
+        "The value *a\u0301\u0323*_\u0301\u0323_*\u0301\u0323*",
+        "The value a\u0301\u0323*\u0301\u0323*\u0301\u0323",
+    ],
+)
+def test_combining_marks_stacked_over_the_lines_around_are_refused(testimony: str) -> None:
+    """Each mark above or below a letter stacks on the one before, three of
+    them reach over the line above or below; and the marks after an inline
+    element's end fall on the letter before it, so they are counted in the
+    rendered text as well as in the source."""
+
+    assert any(error.startswith(_STACKED) for error in _testimony_errors(testimony))
 
 
 @pytest.mark.parametrize(

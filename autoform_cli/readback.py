@@ -112,10 +112,15 @@ _HIDDEN_CODE_POINTS = frozenset(
     | {code for first, last in _DEFAULT_IGNORABLE for code in range(first, last + 1)}
 )
 _ALLOWED_CONTROLS = frozenset("\t\n\r")
-#: How many combining marks one character may carry. The scripts written with
-#: them put at most three or four on a letter; more stack over the lines above
-#: and below.
+#: How many combining marks one character may carry, and how many of those
+#: may stack above it or below it, by canonical combining class. The scripts
+#: written with them put at most three or four on a letter, and two above or
+#: below, as Vietnamese and polytonic Greek do; each more stacks further over
+#: the line above or below.
 _MAX_COMBINING_MARKS = 4
+_MAX_STACKED_MARKS = 2
+_MARKS_ABOVE = frozenset({214, 216, 228, 230, 232, 234})
+_MARKS_BELOW = frozenset({202, 218, 220, 222, 233})
 
 #: Limits a testimony must meet before the Markdown renderer reads it. Python-
 #: Markdown's inline processing is superlinear in the number of spans and of
@@ -1929,10 +1934,12 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     hidden = _hidden_characters(text + "".join(document.itertext()))
     if hidden:
         errors.append("invisible or reordering characters are not allowed: " + ", ".join(hidden))
-    if _longest_combining_run(text) > _MAX_COMBINING_MARKS:
+    # Inline elements end where the marks after them begin, so the marks of
+    # adjacent ones fall on one character.
+    if _overstacked(text + "\n" + "".join(document.itertext())):
         errors.append(
-            f"more than {_MAX_COMBINING_MARKS} combining marks on one character are not allowed: "
-            "they stack over the lines around it"
+            f"more than {_MAX_COMBINING_MARKS} combining marks on one character, or more than "
+            f"{_MAX_STACKED_MARKS} above or below it, are not allowed: they stack over the lines around it"
         )
     layout = _TexLayout()
     for piece, kind in pieces:
@@ -2433,14 +2440,22 @@ def _hidden_characters(text: str) -> list[str]:
     return list(found)
 
 
-def _longest_combining_run(text: str) -> int:
-    """The most combining marks in a row in ``text``."""
+def _overstacked(text: str) -> bool:
+    """Whether a character in ``text`` carries more combining marks, or more
+    above or below it, than :data:`_MAX_COMBINING_MARKS` and
+    :data:`_MAX_STACKED_MARKS` allow."""
 
-    longest = run = 0
+    total = above = below = 0
     for character in text:
-        run = run + 1 if unicodedata.category(character) in {"Mn", "Me"} else 0
-        longest = max(longest, run)
-    return longest
+        if unicodedata.category(character) not in {"Mn", "Me"}:
+            total = above = below = 0
+            continue
+        total += 1
+        above += unicodedata.combining(character) in _MARKS_ABOVE
+        below += unicodedata.combining(character) in _MARKS_BELOW
+        if total > _MAX_COMBINING_MARKS or max(above, below) > _MAX_STACKED_MARKS:
+            return True
+    return False
 
 
 def _card_body(
