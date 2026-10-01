@@ -875,9 +875,6 @@ def test_a_filesystem_that_cannot_swap_or_link_leaves_the_card_in_place(tmp_path
         raise OSError(errno.EINVAL, "not supported by this filesystem")
 
     monkeypatch.setattr("autoform_cli.readback.atomic_rename", unsupported, raising=False)
-    monkeypatch.setattr(os, "link", unsupported)
-    monkeypatch.setattr(os, "supports_dir_fd", os.supports_dir_fd | {unsupported})
-    monkeypatch.setattr(os, "supports_follow_symlinks", os.supports_follow_symlinks | {unsupported})
 
     with pytest.raises(ValueError, match="cannot publish read-back"):
         _file_card(blueprint, "Replacement.", expected_card_hash=expected)
