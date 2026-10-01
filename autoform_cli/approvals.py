@@ -47,6 +47,21 @@ _MAX_PULL_COMMITS = 250
 # GitHub does not load a CODEOWNERS file of 3 MB or more.
 _MAX_CODEOWNERS_BYTES = 3_000_000
 _UNCOVERED_SHOWN = 10
+# What the default branch's pull request rules must turn on: the parameter, the
+# name GitHub's ruleset settings show, and what goes wrong without it.
+_REVIEW_SETTINGS = (
+    ("require_code_owner_review", "Require review from Code Owners", "a pull request can merge without its code owners"),
+    (
+        "dismiss_stale_reviews_on_push",
+        "Dismiss stale pull request approvals when new commits are pushed",
+        "an approval still counts after pushes its reviewer never saw",
+    ),
+    (
+        "require_last_push_approval",
+        "Require approval of the most recent reviewable push",
+        "a code owner can push to someone else's pull request and approve their own push",
+    ),
+)
 # Associations that can hold write access. Only a prefilter: the collaborator
 # permission endpoint decides, because MEMBER is any member of the owning
 # organization.
@@ -459,8 +474,10 @@ class GitHubReviewVerifier:
     Nothing is authenticated unless code owner review guards everything an
     approval rests on. Once per run, at ``trusted_ref`` R:
 
-    0. An active ruleset on the default branch has a pull request rule that
-       requires code owner review, and CODEOWNERS at R gives every tracked
+    0. The active rulesets on the default branch, leaving out any this
+       verifier's token can bypass, have pull request rules that require code
+       owner review, dismiss stale approvals on push, and require approval of
+       the most recent push, and CODEOWNERS at R gives every tracked
        file other than articles and read-back cards an owner GitHub enforces:
        a team, or an individual ``@user`` with write access. Otherwise every
        approval is self-approved, naming the files without one.
@@ -639,15 +656,7 @@ class GitHubReviewVerifier:
         """
 
         default = self._default_branch()
-        rules = self._once(
-            ("rules", default), lambda: self._pages(f"/rules/branches/{urllib.parse.quote(default, safe='')}")
-        )
-        if not any(_requires_code_owner_review(rule) for rule in rules):
-            raise _Refused(
-                f"no active ruleset on {default} has a pull request rule requiring code owner review, so a pull "
-                "request can merge without its code owners; classic branch protection cannot be read with a "
-                "workflow token and does not count"
-            )
+        self._check_ruleset(default)
         codeowners = self._once(
             ("codeowners", trusted), lambda: load_codeowners(root, trusted, name=self.trusted_ref)
         )
@@ -675,6 +684,64 @@ class GitHubReviewVerifier:
                 f"read-back cards no code owner with write access, so they can change without code owner review: "
                 f"{shown}{more}"
             )
+
+    def _check_ruleset(self, default: str) -> None:
+        """The default branch's active pull request rules turn on every one of ``_REVIEW_SETTINGS``.
+
+        Rules from several rulesets add up, GitHub enforcing the strictest, so
+        each setting may come from any of them, but only from a ruleset this
+        verifier's token cannot bypass: a workflow whose token can bypass it
+        can push to the default branch unreviewed. Human bypass actors cannot
+        be read with a workflow token.
+        """
+
+        rules = self._once(
+            ("rules", default), lambda: self._pages(f"/rules/branches/{urllib.parse.quote(default, safe='')}")
+        )
+        reviews = [rule for rule in rules if rule.get("type") == "pull_request"]
+        if not any(_turns_on(rule, "require_code_owner_review") for rule in reviews):
+            raise _Refused(
+                f"no active ruleset on {default} has a pull request rule requiring code owner review, so a pull "
+                "request can merge without its code owners; classic branch protection cannot be read with a "
+                "workflow token and does not count"
+            )
+        held: list[dict] = []
+        bypassed: list[str] = []
+        for rule in reviews:
+            why = self._bypassed(rule)
+            if why is None:
+                held.append(rule)
+            else:
+                bypassed.append(why)
+        missing = [setting for setting in _REVIEW_SETTINGS if not any(_turns_on(rule, setting[0]) for rule in held)]
+        if missing:
+            unbypassable = " that this verifier's token cannot bypass" if bypassed else ""
+            raise _Refused(
+                f"no active ruleset on {default}{unbypassable} has a pull request rule with "
+                + " or ".join(f"{label} ({name})" for name, label, _ in missing)
+                + ", so "
+                + "; and ".join(consequence for _, _, consequence in missing)
+                + "".join(f"; {why}" for why in dict.fromkeys(bypassed))
+            )
+
+    def _bypassed(self, rule: dict) -> str | None:
+        """Why a pull request rule may not hold against this verifier's token, or None when it does."""
+
+        number = rule.get("ruleset_id")
+        if not isinstance(number, int) or isinstance(number, bool):
+            return "a pull request rule names no ruleset, so who can bypass it cannot be read"
+        ruleset = self._once(("ruleset", number), lambda: self._get(f"/rulesets/{number}"))
+        if not isinstance(ruleset, dict) or ruleset.get("id") != number:
+            return f"ruleset {number} cannot be read, so who can bypass it cannot be either"
+        if ruleset.get("enforcement") != "active":
+            return f"ruleset {number} is not active"
+        bypass = ruleset.get("current_user_can_bypass")
+        if bypass != "never":
+            return (
+                f"ruleset {number} does not count, because GitHub says this verifier's token can bypass it "
+                f"(current_user_can_bypass is {bypass!r}, not 'never')"
+            )
+        return None
 
     def _uncovered_by(self, rule: CodeOwnersRule) -> str | None:
         """Why the deciding rule leaves its paths without an enforced owner, or None."""
@@ -1052,13 +1119,11 @@ def _checked_pull(pull: dict) -> dict:
     return pull
 
 
-def _requires_code_owner_review(rule: dict) -> bool:
+def _turns_on(rule: dict, name: str) -> bool:
+    """Whether a rule is a pull request rule whose parameter ``name`` is true."""
+
     parameters = rule.get("parameters")
-    return (
-        rule.get("type") == "pull_request"
-        and isinstance(parameters, dict)
-        and parameters.get("require_code_owner_review") is True
-    )
+    return rule.get("type") == "pull_request" and isinstance(parameters, dict) and parameters.get(name) is True
 
 
 def _is_content(path: str, blueprint: str) -> bool:

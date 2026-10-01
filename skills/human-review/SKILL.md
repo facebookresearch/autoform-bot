@@ -100,7 +100,8 @@ tree.
    access, who neither opened the pull request nor wrote any of its commits,
    to approve that head; a later push needs a new approval. The default
    branch's site names them instead of saying self-approved only when the
-   default branch has a ruleset requiring code owner review, `CODEOWNERS` owns
+   default branch has a ruleset requiring code owner review, dismissal of
+   stale approvals, and approval of the most recent push, `CODEOWNERS` owns
    every other file, that pull request, merged, recorded the hash, the reviewer
    is a code owner both before the merge and on the default branch, and
    `autoform-verify.yml` passed on the approved head. Anything else, a moved

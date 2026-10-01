@@ -739,13 +739,26 @@ can make any approval say anything. So, once per run, nothing is authenticated
 unless code owner review guards all of them at R, the trusted ref
 (`--trusted-ref`, default `HEAD`; Pages uses the head of the default branch):
 
-- **Ruleset.** An active ruleset on the default branch has a pull request rule
-  with *Require review from Code Owners*, as
-  `GET /repos/{owner}/{repo}/rules/branches/{branch}` reports it. Classic
-  branch protection does not count, because a workflow token cannot read it: a
-  project protected only that way reads self-approved everywhere until it adds
-  a ruleset. The ruleset's bypass actors, and repository admins where it lets
-  them bypass, are trusted: what they merge is taken as reviewed.
+- **Ruleset.** The active rulesets on the default branch, as
+  `GET /repos/{owner}/{repo}/rules/branches/{branch}` reports them, have pull
+  request rules that turn on *Require review from Code Owners*
+  (`require_code_owner_review`), *Dismiss stale pull request approvals when
+  new commits are pushed* (`dismiss_stale_reviews_on_push`), and *Require
+  approval of the most recent reviewable push* (`require_last_push_approval`).
+  Without the second, an owner's approval of a typo fix still counts after
+  the author pushes a CODEOWNERS line naming themselves; without the third, a
+  code owner can push to someone else's pull request and approve their own
+  push. GitHub enforces the strictest rule of every ruleset that applies, so
+  each setting may come from a different ruleset, but only from one that
+  `GET /repos/{owner}/{repo}/rulesets/{id}` says the verifier's token cannot
+  bypass (`current_user_can_bypass` is `never`): a workflow whose token can
+  bypass the ruleset can push to the default branch unreviewed. The reason
+  names each missing setting. Classic branch protection does not count,
+  because a workflow token cannot read it: a project protected only that way
+  reads self-approved everywhere until it adds a ruleset. Listing the other
+  bypass actors needs admin access, so the people and apps a ruleset lets
+  bypass it, repository admins included where it does, are trusted: what they
+  merge is taken as reviewed.
 - **Coverage.** CODEOWNERS at R gives every tracked file except articles and
   read-back cards an owner GitHub enforces. Articles are the Markdown files
   under `<blueprint>/roadmap/` and cards those under `<blueprint>/readbacks/`.
@@ -816,8 +829,9 @@ Anything the verifier cannot decide, including a failed request (a later page
 of a list included), a spent budget of 500 requests, or an undecidable
 CODEOWNERS rule, leaves that one approval self-approved, and
 `review check --authenticate github` and the rendered label say why. The
-precondition costs one request for the repository, one per page of rules, and
-one permission lookup per individual owner it checks. Each approval then costs,
+precondition costs one request for the repository, one per page of rules, one
+per ruleset with a pull request rule, and one permission lookup per individual
+owner it checks. Each approval then costs,
 per pull request: the commit's pull requests, P's files, p at P's head, P's
 reviews, the approving reviewer's permission, P's commits, the pull requests
 of P's branch, P's events, and the runs on P's head, one request each plus one
@@ -858,9 +872,9 @@ self-approved. Removing the reviewer from CODEOWNERS or revoking their write
 access withdraws every approval they gave.
 
 Residual limits. Code owner review is checked at R as it is now, not as it
-was when each pull request merged. Teams, ruleset bypass actors, and admins
-are trusted; anyone who can bypass the ruleset can merge a pull request that
-re-records a hash without review. A `pull_request` run tests the head merged
+was when each pull request merged. Teams, and ruleset bypass actors other
+than the verifier's own token, are trusted; anyone who can bypass the ruleset
+can merge a pull request that re-records a hash without review. A `pull_request` run tests the head merged
 into the base as it was then, not the merge that landed. A review's
 `author_association` can understate a writer's access, for example for a
 private organization member, which reads self-approved. Pages decides when it

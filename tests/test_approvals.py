@@ -123,8 +123,10 @@ class FakeGitHub:
 
     Pull requests, the commits GitHub associates with them, reviews, and
     Actions runs live in memory; diffs and file contents come from Git. By
-    default the repository is set up as the README asks: a ruleset requires
-    code owner review on main, and everyone named has write permission.
+    default the repository is set up as the README asks: a ruleset this
+    token cannot bypass requires code owner review on main, dismisses stale
+    approvals, and requires approval of the last push, and everyone named has
+    write permission.
     """
 
     api_url = "https://api.github.com"
@@ -146,14 +148,26 @@ class FakeGitHub:
                 "ruleset_source": "owner/project",
                 "ruleset_id": 1,
                 "parameters": {
-                    "dismiss_stale_reviews_on_push": False,
+                    "dismiss_stale_reviews_on_push": True,
                     "require_code_owner_review": True,
-                    "require_last_push_approval": False,
+                    "require_last_push_approval": True,
                     "required_approving_review_count": 1,
                     "required_review_thread_resolution": False,
                 },
             }
         ]
+        # ruleset id -> GET /rulesets/{id}; a missing id answers 404.
+        self.rulesets: dict[int, dict] = {
+            1: {
+                "id": 1,
+                "name": "main",
+                "target": "branch",
+                "source_type": "Repository",
+                "source": "owner/project",
+                "enforcement": "active",
+                "current_user_can_bypass": "never",
+            }
+        }
         # login -> permission; None answers 404, as for someone who is not a collaborator.
         self.permissions: dict[str, str | None] = {}
         self.events: dict[int, list[dict]] = {}
@@ -323,6 +337,8 @@ class FakeGitHub:
             return self._page([self.pulls[number] for number in self.associated.get(parts[2], [])], query)
         if parts[1:3] == ["rules", "branches"]:
             return self._page(self.rules, query)
+        if parts[1] == "rulesets" and len(parts) == 3:
+            return self.rulesets.get(int(parts[2]))
         if parts[1] == "collaborators" and parts[3:] == ["permission"]:
             login = urllib.parse.unquote(parts[2])
             permission = self.permissions.get(login.lower(), "write")
@@ -659,9 +675,10 @@ def test_lookups_are_cached_and_the_request_budget_fails_closed(tmp_path: Path) 
     assert all(status.authenticated for status in statuses.values())
     requested = [path for path, _ in github.calls]
     # Once for the repository: its default branch, rules, and the permission of each code owner.
-    assert requested[:4] == [*_SETUP_CALLS, "/collaborators/alice/permission"]
+    setup = [*_SETUP_CALLS, "/collaborators/alice/permission"]
+    assert requested[: len(setup)] == setup
     # Once for both approvals' pull request, whose approver's permission is already known.
-    assert requested[4:] == [
+    assert requested[len(setup) :] == [
         f"/commits/{landed}/pulls",
         "/pulls/7/files",
         "/contents/blueprint/roadmap/basics/other.md",
@@ -747,13 +764,14 @@ def test_a_budget_spent_after_the_setup_refuses_only_the_approvals_left(tmp_path
     github.review(8, "alice", "APPROVED", other_head)
     _land(root, github, 8)
 
-    # The setup, then the eight requests for #8, which "basics/other" sorts first to use.
-    statuses = _verify(root, github, max_requests=12)
+    # The setup with alice's permission, then the eight requests for #8, which "basics/other" sorts first to use.
+    budget = len(_SETUP_CALLS) + 1 + 8
+    statuses = _verify(root, github, max_requests=budget)
 
-    assert len(github.calls) == 12
+    assert len(github.calls) == budget
     assert statuses["basics/other"].authenticated, statuses["basics/other"].reason
     assert not statuses["basics/result"].authenticated
-    assert "budget of 12 GitHub API requests" in (statuses["basics/result"].reason or "")
+    assert f"budget of {budget} GitHub API requests" in (statuses["basics/result"].reason or "")
 
 
 def test_an_attestation_for_another_hash_is_discarded(tmp_path: Path) -> None:
@@ -936,8 +954,9 @@ def test_the_client_refuses_an_oversized_response(monkeypatch: pytest.MonkeyPatc
         GitHubClient("secret", "owner/project").get("/pulls/1/reviews")
 
 
-# What every verification reads first: the repository, its rules, and the permission of the catch-all owner.
-_SETUP_CALLS = ["", "/rules/branches/main", "/collaborators/owner/permission"]
+# What every verification reads first: the repository, its rules, the ruleset they come from, and the
+# permission of the catch-all owner.
+_SETUP_CALLS = ["", "/rules/branches/main", "/rulesets/1", "/collaborators/owner/permission"]
 
 
 def _gate(root: Path, base: str, *, pr: int = 7, trusted_ref: str | None = None) -> int:

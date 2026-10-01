@@ -647,6 +647,127 @@ def test_a_code_owner_rule_on_a_later_page_of_rules_counts(tmp_path: Path) -> No
     _authenticated(root, github)
 
 
+_STALE = "Dismiss stale pull request approvals when new commits are pushed (dismiss_stale_reviews_on_push)"
+_LAST_PUSH = "Require approval of the most recent reviewable push (require_last_push_approval)"
+_CODE_OWNERS = "Require review from Code Owners (require_code_owner_review)"
+
+
+@pytest.mark.parametrize(
+    ("parameters", "missing", "consequences"),
+    [
+        (
+            {"dismiss_stale_reviews_on_push": False},
+            [_STALE],
+            ["an approval still counts after pushes its reviewer never saw"],
+        ),
+        (
+            {"require_last_push_approval": False},
+            [_LAST_PUSH],
+            ["a code owner can push to someone else's pull request and approve their own push"],
+        ),
+        ({"dismiss_stale_reviews_on_push": "true"}, [_STALE], []),
+        ({"require_last_push_approval": None}, [_LAST_PUSH], []),
+        (
+            {"dismiss_stale_reviews_on_push": False, "require_last_push_approval": False},
+            [f"{_STALE} or {_LAST_PUSH}"],
+            ["pushes its reviewer never saw; and a code owner can push"],
+        ),
+    ],
+)
+def test_no_approval_authenticates_unless_stale_approvals_are_dismissed_and_the_last_push_is_approved(
+    tmp_path: Path, parameters: dict, missing: list, consequences: list
+) -> None:
+    """Repro: without these settings, an owner's approval of a typo fix still
+    counts after the author pushes a CODEOWNERS line naming themselves."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    github.rules[0]["parameters"].update(parameters)
+    _approved(root, github)
+
+    _refused(root, github, "no active ruleset on main has a pull request rule with ")
+    for text in missing + consequences:
+        _refused(root, github, text)
+
+
+def test_the_review_settings_may_come_from_different_rulesets(tmp_path: Path) -> None:
+    """Deliberate guard: GitHub enforces the strictest of every ruleset's rules, so they add up."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    github.rules[0]["parameters"].update(require_last_push_approval=False)
+    github.rules.append(
+        {
+            "type": "pull_request",
+            "ruleset_source_type": "Organization",
+            "ruleset_source": "owner",
+            "ruleset_id": 2,
+            "parameters": {"require_code_owner_review": False, "require_last_push_approval": True},
+        }
+    )
+    github.rulesets[2] = {**github.rulesets[1], "id": 2, "source_type": "Organization", "source": "owner"}
+    _approved(root, github)
+
+    _authenticated(root, github)
+
+
+@pytest.mark.parametrize(
+    ("ruleset", "reason"),
+    [
+        (
+            {"current_user_can_bypass": "always"},
+            "ruleset 1 does not count, because GitHub says this verifier's token can bypass it "
+            "(current_user_can_bypass is 'always', not 'never')",
+        ),
+        ({"current_user_can_bypass": "pull_requests_only"}, "(current_user_can_bypass is 'pull_requests_only'"),
+        ({"current_user_can_bypass": "exempt"}, "(current_user_can_bypass is 'exempt'"),
+        ({"current_user_can_bypass": None}, "(current_user_can_bypass is None"),
+        ({"enforcement": "evaluate"}, "ruleset 1 is not active"),
+        ({"id": 2}, "ruleset 1 cannot be read"),
+        (None, "ruleset 1 cannot be read"),
+    ],
+)
+def test_a_ruleset_this_token_can_bypass_does_not_count(tmp_path: Path, ruleset: dict | None, reason: str) -> None:
+    """A workflow whose token can bypass the ruleset can push to main unreviewed."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    if ruleset is None:
+        del github.rulesets[1]
+    else:
+        github.rulesets[1].update(ruleset)
+    _approved(root, github)
+
+    _refused(
+        root,
+        github,
+        f"no active ruleset on main that this verifier's token cannot bypass has a pull request rule with "
+        f"{_CODE_OWNERS} or {_STALE} or {_LAST_PUSH}, so a pull request can merge without its code owners",
+    )
+    _refused(root, github, reason)
+
+
+def test_a_pull_request_rule_that_names_no_ruleset_does_not_count(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    del github.rules[0]["ruleset_id"]
+    _approved(root, github)
+
+    _refused(root, github, "a pull request rule names no ruleset, so who can bypass it cannot be read")
+
+
+def test_a_ruleset_the_token_cannot_bypass_counts_beside_one_it_can(tmp_path: Path) -> None:
+    """Deliberate guard: a bypassable ruleset is left out, not held against the others."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    github.rules.insert(0, {**github.rules[0], "ruleset_id": 2})
+    github.rulesets[2] = {**github.rulesets[1], "id": 2, "current_user_can_bypass": "always"}
+    _approved(root, github)
+
+    _authenticated(root, github)
+
+
 @pytest.mark.parametrize(
     ("codeowners", "permissions", "uncovered"),
     [
