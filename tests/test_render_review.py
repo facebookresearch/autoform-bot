@@ -236,6 +236,7 @@ def _file(tmp_path: Path, testimony: str) -> Path:
         ("The claim holds&#8203; for all x.", "U+200B ZERO WIDTH SPACE"),
         ("The claim holds\U00016fe4 for all x.", "U+16FE4 KHITAN SMALL SCRIPT FILLER"),
         ("P&#x16FE4;Q", "&#x16FE4; (U+16FE4 KHITAN SMALL SCRIPT FILLER)"),
+        ("The claim\ufff9 holds.", "U+FFF9 INTERLINEAR ANNOTATION ANCHOR"),
         ("For all $x" + "\u2003" * 2000 + "y$, P.", "U+2003 EM SPACE"),
         ("P" + "\u00a0" * 400 + "and Q.", "U+00A0 NO-BREAK SPACE"),
         ("The bound is \u05d0 > x.", "U+05D0 HEBREW LETTER ALEF"),
@@ -395,6 +396,7 @@ def test_tex_that_sets_nothing_hides_nothing_and_ends_no_spacing(testimony: str,
         ("$P" + r"\qquad" * 4 + r"\, Q$", "TeX spacing over 8 em in one formula is not allowed"),
         (r"$P\!Q$ and $P\!\!\,Q$", None),
         (r"$P\!\!Q$", "repeated negative TeX spacing"),
+        (r"$P\;\!\!\!Q$", "repeated negative TeX spacing"),
         ("$" + _matrix(0, 9) + "$", None),
         ("$" + _matrix(0, 10) + "$", "more than 9 TeX & in one row are not allowed"),
         ("$" + _matrix(16, 0) + "$", None),
@@ -658,6 +660,21 @@ def test_html_in_code_and_lookalikes_are_shown_as_typed(testimony: str, shown: s
     _file(tmp_path, testimony)
 
     assert shown in render_testimony(testimony)
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        "Compare [the source](https://example.test) with the statement.",
+        "Compare ![the source](https://example.test/a.png) with the statement.",
+    ],
+)
+def test_links_and_images_are_refused_by_name(testimony: str) -> None:
+    """A link or image is refused as one, not as HTML the renderer does not emit."""
+
+    errors = _testimony_errors(testimony)
+
+    assert errors == ("Markdown links, images, and autolinks are not allowed",)
 
 
 @pytest.mark.parametrize(
