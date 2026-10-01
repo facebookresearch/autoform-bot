@@ -492,8 +492,10 @@ def importedGlobalTokens (env : Environment) (mod : Name) : Std.HashSet String :
       work := work.push i.module
   return tokens
 
-/-- Whether `text` holds a non-builtin token containing `--` or a block-comment
-opener that was not globally active through an import. The root module the
+/-- Whether `text` holds a non-builtin token that was not globally active
+through an import and contains `--` or a block-comment opener, or could join
+a neighbouring character into one by starting with `-` or ending with `-` or
+`/`, as `+-` turns `a +-- note` into `a +- (-note)`. The root module the
 probe imports, which may import more than this declaration's own file, a later
 declaration, or a reconstructed scoped `open` may activate it here even when
 the source did not, so the probe then cannot safely distinguish that token from
@@ -502,7 +504,8 @@ def commentLikeToken (penv : Environment) (mod : Name) (text : String) : IO Bool
   let builtin ← Parser.builtinTokenTable.get
   let holds (s t : String) := Nat.blt 1 (s.splitOn t).length
   let found := ((Parser.getTokenTable penv).findPrefix "").filter fun t =>
-    (builtin.find? t).isNone && (holds t "--" || holds t "/-") && holds text t
+    (builtin.find? t).isNone && holds text t &&
+      (holds t "--" || holds t "/-" || t.startsWith "-" || t.endsWith "-" || t.endsWith "/")
   if found.isEmpty then return false
   let global := importedGlobalTokens penv mod
   return found.any fun t => !global.contains t

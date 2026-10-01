@@ -2992,13 +2992,13 @@ def extract_graph_skeletons(
             if record.get("module") != module:
                 # The packet was printed in the environment of the module its
                 # source was found in, which is not the one Lean declares it in.
-                unresolved.append(
-                    UnresolvedTarget(
-                        node.id,
-                        name,
-                        f"Lean declares it in module {record.get('module')}, not in {module} where its source was found",
-                    )
-                )
+                reason = f"Lean declares it in module {record.get('module')}, not in {module} where its source was found"
+                others = [
+                    module_of(lean_root / path, libraries) or path.as_posix() for path in index.elsewhere.get(name, ())
+                ]
+                if others:
+                    reason += f"; the sources also declare it in {', '.join(others)}"
+                unresolved.append(UnresolvedTarget(node.id, name, reason))
                 continue
             issue = _probe_record_issue(record)
             if issue is not None:

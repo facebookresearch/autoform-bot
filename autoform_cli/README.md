@@ -341,6 +341,9 @@ environment rather than by the source text: its kernel face is an opaque
 constant, so the body a reader would see is not what Lean checks. The command
 exits nonzero when a `lean:` name is absent from the sources or from the built
 environment, or reaches a refused declaration; that name is unresolved for its article only, other articles still extract, and it writes nothing into the vault.
+Each name is probed in the module whose source the lexical index finds it in,
+reading each file only up to `#exit`; a name Lean declares in another module
+is unresolved too, and when several files declare it the reason names them.
 A probe that fails on its own (a nonzero exit, a timeout, or malformed or
 ambiguous records) likewise leaves only its module's targets unresolved, with
 the reason, and an error the probe meets while reading one declaration leaves
@@ -538,12 +541,14 @@ has that module's global notation and the notation of everything it imports,
 but not the file's `local` notation.
 A source it cannot parse there (a body that uses `local notation`) is withheld
 if it may hold a comment. Source containing a known non-builtin token with
-`--` or `/-` is also withheld unless that token was globally active through an
-import, since the probe cannot reconstruct when a same-module token was declared
-or where a scoped token was active. A withheld source leaves the declaration's
-signatures and kernel material in the packet and does not make the article
-unresolved. A `local` token containing `--` is invisible to the probe: the
-packet can then show code as a comment or a comment as code.
+`--` or `/-`, or one that starts with `-` or ends with `-` or `/` and so can
+swallow part of a comment opener, is also withheld unless that token was
+globally active through an import, since the probe cannot reconstruct when a
+same-module token was declared or where a scoped token was active. A withheld
+source leaves the declaration's signatures and kernel material in the packet
+and does not make the article unresolved. A `local` token containing `--` is
+invisible to the probe: the packet can then show code as a comment or a
+comment as code.
 
 Every item's signature is also printed raw, bypassing project notation,
 unexpanders, and custom delaborators, so an `infixl " + " => HMul.hMul` cannot

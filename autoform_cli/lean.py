@@ -6,8 +6,9 @@ nothing is a validation error rather than a broken link -- the job
 ``leanblueprint checkdecls`` does for LaTeX blueprints.
 
 The scanner is a lexical pass, not an elaborator. It tracks ``namespace`` and
-comment nesting, which is enough for declarations written in the ordinary way,
-and deliberately reports nothing it cannot see rather than guessing.
+comment nesting and stops at ``#exit``, which is enough for declarations
+written in the ordinary way, and deliberately reports nothing it cannot see
+rather than guessing.
 """
 
 from __future__ import annotations
@@ -17,12 +18,13 @@ import json
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 _NAMESPACE = re.compile(r"^\s*namespace\s+(.+)$")
 _SECTION = re.compile(r"^\s*section\b\s*(\S*)")
 _END = re.compile(r"^\s*end\b\s*(\S*)")
+_EXIT = re.compile(r"^\s*#exit\b")
 _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
     r"(?:(?:private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
@@ -66,6 +68,9 @@ class SourceIndex:
     root: Path
     declarations: dict[str, Declaration]
     source_digest: str
+    #: For a name more than one file declares, the files after the one
+    #: ``find`` returns.
+    elsewhere: dict[str, tuple[Path, ...]] = field(default_factory=dict)
 
     def find(self, name: str) -> Declaration | None:
         return self.declarations.get(name)
@@ -75,6 +80,7 @@ def index_project(root: str | Path) -> SourceIndex:
     """Scan ``*.lean`` beneath *root* and index declarations by full name."""
     root_path = Path(root).expanduser().resolve()
     declarations: dict[str, Declaration] = {}
+    elsewhere: dict[str, tuple[Path, ...]] = {}
     digest = hashlib.sha256()
     if not root_path.is_dir():
         return SourceIndex(root=root_path, declarations=declarations, source_digest=digest.hexdigest())
@@ -104,8 +110,12 @@ def index_project(root: str | Path) -> SourceIndex:
         for declaration in _scan(text, relative):
             # First definition wins, so an earlier file is not masked by a later
             # one when a name is genuinely duplicated across namespaces.
-            declarations.setdefault(declaration.name, declaration)
-    return SourceIndex(root=root_path, declarations=declarations, source_digest=digest.hexdigest())
+            first = declarations.setdefault(declaration.name, declaration)
+            if first.path != relative and relative not in elsewhere.get(declaration.name, ()):
+                elsewhere[declaration.name] = (*elsewhere.get(declaration.name, ()), relative)
+    return SourceIndex(
+        root=root_path, declarations=declarations, source_digest=digest.hexdigest(), elsewhere=elsewhere
+    )
 
 
 def _is_managed_output(path: Path) -> bool:
@@ -129,6 +139,9 @@ def _scan(text: str, relative: Path) -> list[Declaration]:
     for number, line in enumerate(_without_lean_comments(text).splitlines(), start=1):
         if not line.strip():
             continue
+        if _EXIT.match(line):
+            # Lean reads nothing after `#exit`.
+            break
 
         namespace_match = _NAMESPACE.match(line)
         if namespace_match:

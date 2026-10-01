@@ -1981,6 +1981,24 @@ def test_a_root_lean_declares_in_another_module_is_unresolved(tmp_path: Path) ->
     assert issue.reason == "Lean declares it in module Skel.Defs, not in Skel.Main where its source was found"
 
 
+def test_a_root_two_sources_declare_names_both_when_lean_disagrees(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    for module in ("Adup", "Bdup"):
+        (project / "Skel" / f"{module}.lean").write_text(
+            "namespace Skel\ntheorem dup : True := trivial\nend Skel\n", encoding="utf-8"
+        )
+    blueprint = _blueprint(tmp_path, lean={"dup": "Skel.dup"})
+    output = _probe_lines({**_fake_found_record(), "root": "Skel.dup", "module": "Skel.Bdup"})
+
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
+
+    (issue,) = report.unresolved
+    assert issue.reason == (
+        "Lean declares it in module Skel.Bdup, not in Skel.Adup where its source was found; "
+        "the sources also declare it in Skel.Bdup"
+    )
+
+
 def test_an_error_on_one_root_leaves_the_rest_of_its_module_resolved(tmp_path: Path) -> None:
     project = _project(tmp_path)
     blueprint = _blueprint(
@@ -3072,6 +3090,60 @@ def test_a_declaration_the_probe_cannot_print_leaves_its_module_resolved(tmp_pat
     (issue,) = report.unresolved
     assert (issue.node_id, issue.declaration) == ("basics/bad", "Skel.PktRefuse.bad")
     assert issue.reason == "the probe failed on this declaration: this delaborator refuses"
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_dead_copy_after_exit_does_not_move_a_declaration(tmp_path: Path) -> None:
+    # PktDead sorts first and, after `#exit`, repeats PktLive's theorem, which
+    # Lean never reads.
+    project = _project(tmp_path)
+    (project / "Skel" / "PktLive.lean").write_text(
+        "namespace Skel.PktLive\ntheorem rX : 5 = 5 := rfl\nend Skel.PktLive\n", encoding="utf-8"
+    )
+    (project / "Skel" / "PktDead.lean").write_text(
+        "import Skel.PktLive\n"
+        "namespace Skel.PktDead\ntheorem real : True := trivial\nend Skel.PktDead\n"
+        "#exit\n"
+        "namespace Skel.PktLive\ntheorem rX : 5 = 5 := rfl\nend Skel.PktLive\n",
+        encoding="utf-8",
+    )
+    build = subprocess.run(
+        ["lake", "build", "Skel.PktDead"], cwd=project, capture_output=True, text=True, timeout=600, check=False
+    )
+    assert build.returncode == 0, build.stdout + build.stderr
+    blueprint = _blueprint(tmp_path, lean={"live": "Skel.PktLive.rX"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    (declaration,) = report.nodes[0].declarations
+    assert (declaration.module, declaration.path) == ("Skel.PktLive", "Skel/PktLive.lean")
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_token_that_can_swallow_a_comment_opener_withholds_the_source(tmp_path: Path) -> None:
+    # Lean compiled `a + b` with a comment, before `+-` was a token; parsed with
+    # `+-` active, the same text reads as `a +- (-the author ...)`, no comment.
+    project = _built_module(
+        tmp_path,
+        "PktTok",
+        "namespace Skel.PktTok\n"
+        "def tokDef (a b : Nat) : Nat := a +-- the author meant times here\n"
+        "  b\n"
+        "theorem tok_root (h : tokDef 1 2 = 3) : True := trivial\n"
+        'infixl:65 " +- " => Nat.sub\n'
+        "end Skel.PktTok\n",
+    )
+    blueprint = _blueprint(tmp_path, lean={"tok": "Skel.PktTok.tok_root"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    (declaration,) = report.nodes[0].declarations
+    (trusted,) = [item for item in declaration.trusted if item.name == "Skel.PktTok.tokDef"]
+    assert trusted.source_withheld
+    assert "author meant" not in declaration.blind_text()
+    assert "-- source not shown" in declaration.blind_text()
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")

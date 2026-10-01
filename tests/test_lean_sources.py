@@ -90,6 +90,13 @@ def test_commented_out_code_is_not_indexed(tmp_path: Path) -> None:
     assert index.find("Ghost.commented_out") is None
 
 
+def test_nothing_after_exit_is_indexed(tmp_path: Path) -> None:
+    index = _index(tmp_path, "def real : Nat := 1\n#exit\ndef dead : Nat := 2\n")
+
+    assert index.find("real") is not None
+    assert index.find("dead") is None
+
+
 def test_line_comments_are_ignored(tmp_path: Path) -> None:
     index = _index(tmp_path, "-- def notReal : Nat := 0\ndef real : Nat := 1\n")
 
