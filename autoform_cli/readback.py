@@ -1205,12 +1205,13 @@ _TEX_BRACED_SCRIPTS = frozenset(
 )
 #: The characters past ASCII MathJax 3.2.2 sets in a formula, outside
 #: ``\text``: those in the ranges of its operator dictionary
-#: (OperatorDictionary.RANGES), merged here. Any other gets an error in place
-#: of the formula.
+#: (OperatorDictionary.RANGES), merged here, but for U+20000 to U+2FA1F,
+#: which its CommonHTML and SVG output throw for. Any other gets an error in
+#: place of the formula.
 _TEX_CHARACTER_RANGES = (
     (0x00A0, 0x024F), (0x02B0, 0x1A20), (0x1AB0, 0x209F), (0x2100, 0x23FF), (0x2460, 0x2DE0), (0x2E00, 0x2FDF),
     (0x2FF0, 0xA49F), (0xA4D0, 0xD7FF), (0xF900, 0x1D25F), (0x1D360, 0x1D37F), (0x1D400, 0x1D7FF),
-    (0x1DF00, 0x1F9FF), (0x20000, 0x2FA1F),
+    (0x1DF00, 0x1F9FF),
 )
 #: How long a formula may be, in UTF-16 code units, so a character past the
 #: Basic Multilingual Plane counts twice. MathJax 3.2.2 refuses a formula once

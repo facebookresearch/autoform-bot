@@ -558,6 +558,7 @@ _UNSET = "characters MathJax cannot set in a formula are not allowed: "
         (r"$\sum \\ \limits_i a$", r"\limits and \nolimits are allowed only after"),
         (r"$\mathrm{€} x$", _UNSET + "U+20AC EURO SIGN"),
         ("$\\operatorname{ɑ}$", _UNSET + "U+0251 LATIN SMALL LETTER ALPHA"),
+        ("$x\U00020000$", _UNSET + "U+20000 CJK UNIFIED IDEOGRAPH-20000"),
         ("$x́$", "combining marks in a formula are not allowed"),
         ("$a⃗$", "combining marks in a formula are not allowed"),
         (r"$\pmb{a + \pmb{x}}$", r"TeX \pmb inside \pmb is not allowed"),
