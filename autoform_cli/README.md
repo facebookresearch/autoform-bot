@@ -368,10 +368,16 @@ trust, so the report states each trusted declaration, each external
 constant's semantic material, and each boundary module's identity once, in the
 top-level `trusted`, `semantics`, and `boundary_modules` tables, and each
 declaration names the entries it uses; the probe's own output is shared the
-same way. A trusted declaration is printed in its root's module environment
-and can read differently under two root modules, so `trusted` is keyed by root
-module and then by name, and a declaration may name only the entries under its
-own module. The probe also states each elaborated subterm of 256 bytes or more
+same way. A name means what the root's module environment declares under it:
+a trusted declaration is printed there and can read differently under two root
+modules, and two root modules with different imports can see two different
+external constants, or two axioms, under one name. So `trusted` and
+`semantics` are keyed by root module and then by name, and a declaration may
+name only the entries under its own module. A module identity is the digest
+of that module's compiled files, which one workspace builds once for every
+root, so `boundary_modules` is keyed by module name alone. Two probes that
+disagree about one boundary module's files stop the command with an error.
+The probe also states each elaborated subterm of 256 bytes or more
 once, since proof terms repeat large subterms heavily; the report keeps each
 material's full text.
 

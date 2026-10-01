@@ -2145,7 +2145,8 @@ def test_report_states_shared_material_once(tmp_path: Path) -> None:
     data = json.loads(first)
     assert list(data["trusted"]) == ["Skel.Main"]
     assert sorted(data["trusted"]["Skel.Main"]) == ["Skel.Eligible", "Skel.NonAmbiguous", "Skel.Observation"]
-    assert list(data["semantics"]) == ["Mathlib.Fake", "sorryAx"]
+    assert list(data["semantics"]) == ["Skel.Main"]
+    assert list(data["semantics"]["Skel.Main"]) == ["Mathlib.Fake", "sorryAx"]
     assert list(data["boundary_modules"]) == ["Mathlib.Fake"]
     for node in data["nodes"]:
         (declaration,) = node["declarations"]
@@ -2159,7 +2160,7 @@ def test_report_states_shared_material_once(tmp_path: Path) -> None:
 
     for table, name in (("trusted", "Skel.Eligible"), ("semantics", "sorryAx"), ("boundary_modules", "Mathlib.Fake")):
         payload = json.loads(first)
-        entries = payload[table]["Skel.Main"] if table == "trusted" else payload[table]
+        entries = payload[table]["Skel.Main"] if table in {"trusted", "semantics"} else payload[table]
         entries["Skel.Unused"] = entries[name]
         if table == "trusted":
             entries["Skel.Unused"] = dict(entries[name], name="Skel.Unused")
@@ -2221,6 +2222,79 @@ def test_report_keys_trusted_declarations_by_root_module(tmp_path: Path) -> None
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(SkeletonError):
         load_skeleton_report(path)
+
+
+def _divergent_module_probe(probe: str, lean_root: Path) -> str:
+    """Answer like ``_fake_module_probe``, but ``Skel.Uses`` sees other constants under the same names."""
+
+    modules = _probe_modules(probe)
+    lines: list[str] = []
+    for root, module in _FAKE_ROOT_MODULES.items():
+        if module in modules and f'"{root}"' in probe:
+            record = {**_fake_found_record(), "root": root, "module": module}
+            if module == "Skel.Uses":
+                other = _semantic({"type": {"bvar": 0}})
+                record["assumed_semantics"] = [["Mathlib.Fake", other]]
+                record["axiom_semantics"] = [["sorryAx", other]]
+            lines += _probe_lines(record).splitlines()
+    return "\n".join(dict.fromkeys(lines))
+
+
+def test_report_keys_semantic_material_by_root_module(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    report = extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project, runner=_divergent_module_probe)
+    assert report.clean
+    first = report.to_json()
+    data = json.loads(first)
+    path = tmp_path / "skeleton.json"
+
+    # Two root modules whose imports declare different constants under one name each keep their own.
+    assert list(data["semantics"]) == ["Skel.Main", "Skel.Uses"]
+    for name in ("Mathlib.Fake", "sorryAx"):
+        assert data["semantics"]["Skel.Main"][name] != data["semantics"]["Skel.Uses"][name]
+    path.write_text(first, encoding="utf-8")
+    assert load_skeleton_report(path) == report
+
+    # A declaration may name only the material read in its own root module.
+    payload = json.loads(first)
+    payload["semantics"]["Skel.Uses"] = payload["semantics"]["Skel.Main"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(SkeletonError, match="invalid declaration hash for Skel.heavy_of_notation"):
+        load_skeleton_report(path)
+
+    payload = json.loads(first)
+    del payload["semantics"]["Skel.Uses"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(SkeletonError, match="mismatched assumption semantics for Skel.heavy_of_notation"):
+        load_skeleton_report(path)
+
+    payload = json.loads(first)
+    payload["semantics"]["Skel.Other"] = {}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(SkeletonError, match="malformed shared semantics table for root module Skel.Other"):
+        load_skeleton_report(path)
+
+
+def test_cli_reports_conflicting_shared_material_as_an_error(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    project = _project(tmp_path)
+    blueprint = _two_module_blueprint(tmp_path)
+
+    def probe(program: str, lean_root: Path) -> str:
+        # The two probes disagree about the compiled files of one boundary module.
+        output = _fake_module_probe(program, lean_root)
+        if _probe_modules(program) == ("Skel.Uses",):
+            output = output.replace("Skel/Defs.lean", "Skel/Main.lean")
+        return output
+
+    _fake_default_probe(monkeypatch, probe)
+    output = tmp_path / "skeleton.json"
+
+    assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--output", str(output)]) == 2
+
+    assert "error: conflicting module identity for Mathlib.Fake in one skeleton report" in capsys.readouterr().err
+    assert not output.exists()
 
 
 def test_report_loader_rejects_a_v4_report_with_a_clear_message(tmp_path: Path) -> None:
@@ -3266,6 +3340,48 @@ def test_a_trusted_declaration_reads_as_each_root_module_prints_it(tmp_path: Pat
     assert loaded == report
     (reloaded,) = loaded.declarations("basics/u2")
     assert notated in reloaded.trusted
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_two_root_modules_may_see_different_constants_under_one_name(tmp_path: Path, capsys) -> None:
+    project = _project(tmp_path)
+    lakefile = project / "lakefile.toml"
+    lakefile.write_text(
+        lakefile.read_text(encoding="utf-8") + '\n[[require]]\nname = "dep"\npath = "dep"\n', encoding="utf-8"
+    )
+    dep = project / "dep"
+    dep.mkdir()
+    shutil.copy(_FIXTURE / "lean-toolchain", dep / "lean-toolchain")
+    (dep / "lakefile.toml").write_text(
+        'name = "dep"\n\n[[lean_lib]]\nname = "Dep"\nroots = ["DepA", "DepB"]\n', encoding="utf-8"
+    )
+    (dep / "DepA.lean").write_text("namespace Ext\ndef collision : Nat := 1\nend Ext\n", encoding="utf-8")
+    (dep / "DepB.lean").write_text("namespace Ext\ndef collision : Int := 2\nend Ext\n", encoding="utf-8")
+    # Neither root module imports the other, so each may declare its own Shared.ax.
+    for module, dependency, value in (("UA", "DepA", 1), ("UB", "DepB", 2)):
+        (project / "Skel" / f"{module}.lean").write_text(
+            f"import {dependency}\nnamespace Shared\naxiom ax : {value} = {value}\nend Shared\n"
+            f"namespace Skel.{module}\n"
+            f"theorem {module.lower()} : Ext.collision = Ext.collision := (fun _ => rfl) Shared.ax\n"
+            f"end Skel.{module}\n",
+            encoding="utf-8",
+        )
+    _build(project, "Skel.UA", "Skel.UB")
+    blueprint = _blueprint(tmp_path, lean={"ua": "Skel.UA.ua", "ub": "Skel.UB.ub"})
+    output = tmp_path / "skeleton.json"
+
+    assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--output", str(output)]) == 0
+
+    assert "error:" not in capsys.readouterr().err
+    data = json.loads(output.read_text(encoding="utf-8"))
+    for name in ("Ext.collision", "Shared.ax"):
+        assert data["semantics"]["Skel.UA"][name] != data["semantics"]["Skel.UB"][name]
+    loaded = load_skeleton_report(output)
+    (ua,) = loaded.declarations("basics/ua")
+    (ub,) = loaded.declarations("basics/ub")
+    assert ua.assumed == ub.assumed == ("Ext.collision",)
+    assert dict(ua.assumed_semantics)["Ext.collision"] != dict(ub.assumed_semantics)["Ext.collision"]
+    assert dict(ua.axiom_semantics)["Shared.ax"] != dict(ub.axiom_semantics)["Shared.ax"]
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")

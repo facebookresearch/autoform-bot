@@ -501,15 +501,28 @@ class SkeletonReport:
         node = self.node(node_id)
         return () if node is None else node.declarations
 
-    def as_dict(self) -> dict[str, object]:
-        # Roots in one project share most of what they trust; each shared
-        # item is stated once here and named by every declaration that uses it.
-        # A trusted declaration is printed in its root's module environment, so
-        # it may read differently under two root modules: that table is keyed
-        # by root module first. Semantic material and module identities do not
-        # depend on the environment and are keyed by name alone.
+    def __post_init__(self) -> None:
+        self._shared_tables()
+
+    def _shared_tables(
+        self,
+    ) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]], dict[str, object]]:
+        """The ``trusted``, ``semantics``, and ``boundary_modules`` tables.
+
+        Roots in one project share most of what they trust; each shared item
+        is stated once and named by every declaration that uses it. A name
+        means what the root's module environment declares under it: a trusted
+        declaration is printed there and may read differently under two root
+        modules, and two root modules with different imports may see two
+        different constants, or two axioms, under one external name. Those two
+        tables are therefore keyed by root module first, where one probe saw
+        one environment and a name denotes one constant. A module identity is
+        the digest of that module's compiled files, which one workspace builds
+        once for every root, so it is keyed by module name alone.
+        """
+
         trusted: dict[str, dict[str, object]] = {}
-        semantics: dict[str, object] = {}
+        semantics: dict[str, dict[str, object]] = {}
         modules: dict[str, object] = {}
         for node in self.nodes:
             for declaration in node.declarations:
@@ -521,12 +534,21 @@ class SkeletonReport:
                         table_name=f"trusted declaration under root module {declaration.module}",
                     )
                 for name, semantic in (*declaration.assumed_semantics, *declaration.axiom_semantics):
-                    _share(semantics, name, semantic, table_name="semantic material")
+                    _share(
+                        semantics.setdefault(declaration.module, {}),
+                        name,
+                        semantic,
+                        table_name=f"semantic material under root module {declaration.module}",
+                    )
                 files: dict[str, list[list[str]]] = {}
                 for module, kind, digest in declaration.boundary_modules:
                     files.setdefault(module, []).append([kind, digest])
                 for module, identity in files.items():
                     _share(modules, module, identity, table_name="module identity")
+        return trusted, semantics, modules
+
+    def as_dict(self) -> dict[str, object]:
+        trusted, semantics, modules = self._shared_tables()
         return {
             "blueprint_hash": self.blueprint_hash,
             "boundary_modules": modules,
@@ -554,7 +576,7 @@ class SkeletonReport:
 
 def _share(table: dict[str, object], name: str, value: object, *, table_name: str) -> None:
     if table.setdefault(name, value) != value:
-        raise ValueError(f"conflicting {table_name} for {name} in one skeleton report")
+        raise SkeletonError([f"conflicting {table_name} for {name} in one skeleton report"])
 
 
 def load_skeleton_report(path: str | Path) -> SkeletonReport:
@@ -760,8 +782,9 @@ _TRUSTED_REPORT_FIELDS = frozenset(
 def _report_tables(data: dict[str, object]) -> dict[str, dict[object, object]]:
     """Read the shared tables that report declarations refer to by name.
 
-    Trusted entries are nested under the root module they were printed for and
-    come back keyed by ``(root module, name)``.
+    Trusted entries and semantic material are nested under the root module
+    whose environment they were read in and come back keyed by
+    ``(root module, name)``.
     """
 
     tables: dict[str, dict[object, object]] = {}
@@ -780,8 +803,14 @@ def _report_tables(data: dict[str, object]) -> dict[str, dict[object, object]]:
                 raise SkeletonError([f"mismatched shared trusted declaration {name} in skeleton report"])
             trusted[(module, name)] = entry
     tables["trusted"] = trusted
-    for name, semantic in tables["semantics"].items():
-        _validate_semantic_material(_report_string(semantic, f"semantic material for {name}"), context=name)
+    semantics: dict[object, object] = {}
+    for module, entries in tables["semantics"].items():
+        if not isinstance(entries, dict) or not entries:
+            raise SkeletonError([f"malformed shared semantics table for root module {module} in skeleton report"])
+        for name, semantic in entries.items():
+            _validate_semantic_material(_report_string(semantic, f"semantic material for {name}"), context=name)
+            semantics[(module, name)] = semantic
+    tables["semantics"] = semantics
     tables["boundary_modules"] = {
         module: _report_module_identities(
             [[module, *file] if isinstance(file, list) else file for file in files]
@@ -847,8 +876,11 @@ def _declaration_from_dict(
 
     def shared(field: str, table: str, what: str) -> list[tuple[str, object]]:
         names = _report_string_tuple(item.get(field), f"{field} for {name}")
-        # A declaration may only name trusted entries printed for its own module.
-        keys: list[object] = [(module, key) for key in names] if table == "trusted" else list(names)
+        # A declaration may only name trusted entries and semantic material
+        # read in its own module's environment.
+        keys: list[object] = (
+            [(module, key) for key in names] if table in {"trusted", "semantics"} else list(names)
+        )
         if not set(keys) <= tables[table].keys():
             raise SkeletonError([f"mismatched {what} for {name}"])
         used[table].update(keys)
