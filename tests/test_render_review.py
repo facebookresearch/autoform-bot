@@ -98,6 +98,8 @@ def test_readback_markdown_cannot_inject_raw_html() -> None:
         "~~~ MERMAID\ngraph TD\n~~~",
         "- ```mermaid\n  graph TD\n  ```",
         "1. ```mermaid\n   graph TD\n   ```",
+        "- ~~~mermaid\n  graph TD\n  ~~~",
+        "> ~~~mermaid\n> graph TD\n> ~~~",
         "   ```mermaid\ngraph TD\n```",
         "```mermaid title\ngraph TD\n```",
         r"$\require{html}\href{javascript:alert(1)}{x}$",
@@ -226,6 +228,7 @@ def _file(tmp_path: Path, testimony: str) -> Path:
         ("The bound is \u0627 > x.", "U+0627 ARABIC LETTER ALEF"),
         ("The sum \u0661 + \u0662 is three.", "U+0661 ARABIC-INDIC DIGIT ONE"),
         ("The claim holds for x" + "\u0301" * 5 + ".", "more than 4 combining marks on one character"),
+        ("The claim holds for x" + "\u20dd" * 5 + ".", "more than 4 combining marks on one character"),
         (r"For all $x$, $P(x) \phantom{\land Q(x)}$ holds.", r"\phantom"),
         (r"$P \rlap{\,\land Q}$", r"\rlap"),
         (r"$P \kern-2em \land Q$", r"\kern"),
@@ -451,6 +454,16 @@ def test_tex_that_sets_nothing_hides_nothing_and_ends_no_spacing(testimony: str,
     [
         ("$P" + r"\qquad" * 4 + " Q$", None),
         ("$P" + r"\qquad" * 4 + r"\, Q$", "TeX spacing over 8 em in one formula is not allowed"),
+        ("$a" + "~" * 32 + "b$", None),
+        ("$a" + "~" * 33 + "b$", "TeX spacing over 8 em in one formula is not allowed"),
+        (r"$\text{a" + " " * 33 + "b}$", None),
+        (r"$\text{a" + " " * 34 + "b}$", "TeX spacing over 8 em in one formula is not allowed"),
+        ("$" + r"\text{ a}" * 32 + "$", None),
+        ("$" + r"\text{ a}" * 33 + "$", "TeX spacing over 8 em in one formula is not allowed"),
+        ("$" + r"\text{a }" * 32 + "$", None),
+        ("$" + r"\text{a }" * 33 + "$", "TeX spacing over 8 em in one formula is not allowed"),
+        ("$" + r"a\!" * 20 + "b" + r"\qquad" * 4 + " c$", None),
+        ("$" + r"a\!" * 20 + "b" + r"\qquad" * 4 + r"\, c$", "TeX spacing over 8 em in one formula is not allowed"),
         (r"$P\!Q$ and $P\!\!\,Q$", None),
         (r"$P\!\!Q$", "repeated negative TeX spacing"),
         (r"$P\;\!\!\!Q$", "repeated negative TeX spacing"),
@@ -477,7 +490,9 @@ def test_tex_that_sets_nothing_hides_nothing_and_ends_no_spacing(testimony: str,
 )
 def test_tex_limits_hold_at_their_exact_values_and_per_formula(testimony: str, reason: str | None) -> None:
     """Every limit admits its value and refuses one more, and none carries
-    from one formula to the next. Nesting is capped far below the depth at
+    from one formula to the next. Spacing counts ``~`` and the spaces of
+    ``\\text`` as well as commands, and negative space takes none of it
+    back. Nesting is capped far below the depth at
     which MathJax overflows its stack, about two hundred."""
 
     errors = _testimony_errors(testimony)
@@ -639,6 +654,8 @@ def test_a_double_integral_spelled_with_negative_space_is_refused_with_a_hint() 
         (r"So a \\( b holds.", "\\("),
         (r"See \begin{equation} a = b \end{equation} here.", "\\begin{"),
         (r"See \ref{x} here.", "\\ref{"),
+        (r"See \eqref{x} here.", "\\eqref{"),
+        ("A path C:" + "\\" * 4 + "$x and more.", "$"),
         (r"$a \( b$", "\\("),
         (r"$a \] b$", "\\]"),
     ],
@@ -854,6 +871,43 @@ def test_links_and_images_are_refused_by_name(testimony: str) -> None:
     errors = _testimony_errors(testimony)
 
     assert errors == ("Markdown links, images, and autolinks are not allowed",)
+
+
+@pytest.mark.parametrize(
+    "header", ["{.lean .mermaid}", "{.lean .x}", "{.lean .language-x}", "{.lean .bp-readback-current}"]
+)
+def test_a_fence_header_with_a_second_class_is_refused_as_an_attribute(header: str) -> None:
+    """The site's diagram script picks out every element of class mermaid, and
+    its styles others, so no class from a fence header passes as part of a
+    language."""
+
+    errors = _testimony_errors(f"Read back.\n\n```{header}\ngraph TD\nA-->B\n```\n")
+
+    assert "user-supplied Markdown attributes are not allowed" in errors
+
+
+#: The first and last code point of each Default_Ignorable_Code_Point range in
+#: Unicode 17.0's DerivedCoreProperties.txt, and blank or hidden characters of
+#: other kinds: a blank Braille pattern, private use, unassigned, and the line
+#: and paragraph separators.
+_INVISIBLE = (
+    0x00AD, 0x034F, 0x061C, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x180B, 0x180F, 0x200B, 0x200F, 0x202A, 0x202E, 0x2060,
+    0x206F, 0x3164, 0xFE00, 0xFE0F, 0xFEFF, 0xFFA0, 0xFFF0, 0xFFF8, 0x1BCA0, 0x1BCA3, 0x1D173, 0x1D17A, 0xE0000,
+    0xE0100, 0xE0FFF, 0x2800, 0xE000, 0x0378, 0x2028, 0x2029,
+)
+
+
+@pytest.mark.parametrize("code", _INVISIBLE, ids=[f"U+{code:04X}" for code in _INVISIBLE])
+def test_invisible_characters_are_refused_by_code_point(code: int) -> None:
+    """Each is refused by its code point, four in a row too: four variation
+    selectors after a letter fit under the limit on combining marks."""
+
+    errors = _testimony_errors(f"The claim x{chr(code) * 4} holds.")
+
+    assert any(
+        error.startswith("invisible or reordering characters are not allowed") and f"U+{code:04X} " in error
+        for error in errors
+    )
 
 
 @pytest.mark.parametrize(
