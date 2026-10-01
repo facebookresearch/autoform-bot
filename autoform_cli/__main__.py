@@ -28,6 +28,7 @@ from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_k
 from .doctor import diagnose_project
 from .graph import Graph, GraphValidationError, load_graph, read_node_source
 from .lean import build_linker, declaration_names
+from .mathjax import mathjax_script
 from .readback import (
     PreparedReadback,
     load_readbacks,
@@ -406,6 +407,8 @@ def _check(args: argparse.Namespace) -> int:
             for node in graph.nodes.values()
             for issue in publishable_article(read_node_source(node))[1]
         ]
+        # The renderer writes the site's MathJax configuration from the vault's macros.
+        markup += mathjax_script(args.blueprint_dir)[1]
     except GraphValidationError as exc:
         for issue in exc.issues:
             print(f"error: {issue}")

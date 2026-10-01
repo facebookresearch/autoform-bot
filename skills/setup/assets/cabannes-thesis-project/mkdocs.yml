@@ -65,7 +65,8 @@ extra_css:
   - stylesheets/blueprint.css
 
 extra_javascript:
+  # `autoform render` writes this script too. It loads the one MathJax release
+  # the site's checks were written for, and keeps each card's formulas apart.
   - javascripts/mathjax.js
-  - https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js
   - https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js
   - javascripts/blueprint-mermaid.js

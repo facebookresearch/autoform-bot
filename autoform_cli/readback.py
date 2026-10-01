@@ -35,6 +35,7 @@ import warnings
 from collections import Counter
 from dataclasses import dataclass, replace
 from html.entities import html5 as _NAMED_REFERENCES
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable, Iterator, Mapping, NamedTuple
 from urllib.parse import unquote_to_bytes
@@ -52,6 +53,7 @@ except ImportError:  # pragma: no cover - Windows, which cannot publish cards
 
 from .graph import ARTICLE_ID_PATTERN
 from .markdown import SITE_EXTENSION_CONFIGS, SITE_EXTENSIONS
+from .mathjax import TEX_MACROS, stateful_commands
 from .skeleton import (
     DeclarationSkeleton,
     SkeletonReport,
@@ -169,6 +171,8 @@ _HTML_ENTITY = re.compile(r"&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-
 #: Character references as the site's Markdown converter reads them, which
 #: takes a number without its semicolon and any name with one.
 _LOOSE_HTML_ENTITY = re.compile(r"&(?:#[0-9]+;?|#[xX][0-9A-Fa-f]+;?|[A-Za-z][A-Za-z0-9]*;)")
+#: A character reference by number, its leading zeros apart from its digits.
+_NUMERIC_REFERENCE = re.compile(r"&#(?:([xX])0*([0-9A-Fa-f]+)|0*([0-9]+))")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1830,30 +1834,69 @@ def _testimony_limit_errors(text: str) -> tuple[str, ...]:
     return tuple(errors)
 
 
-def _raw_html_errors(text: str) -> tuple[str, ...]:
-    """Name the raw HTML in ``text``: tags, comments, declarations, processing
-    instructions, and character references, wherever they are written,
-    formulas and code included; a space after "<" keeps a formula clear.
+def _raw_html_errors(text: str, code: Iterable[str] = ()) -> tuple[str, ...]:
+    """Name the raw HTML in ``text`` outside the pieces of ``code`` the site's
+    converter shows as code: tags, comments, declarations, processing
+    instructions, and character references a browser reads, formulas
+    included; a space after "<" keeps a formula clear.
+
+    Each is found in the source and excused only by as many occurrences of it
+    in code, as :func:`_vault_markup_errors` does. A reference a browser shows
+    as typed, such as ``&D;``, which names no character, is no HTML.
 
     This is the check for Markdown the site's own converter renders, which
     reads HTML. Testimony is checked by :func:`_testimony_errors` instead,
     since its renderer reads none."""
 
+    pieces = list(code)
     errors: list[str] = []
-    if "<!--" in text:
+    if text.count("<!--") > sum(piece.count("<!--") for piece in pieces):
         errors.append("HTML comments are not allowed: they hide the text they enclose")
-    tags: dict[str, None] = {}
-    for markup in _HTML_TAG.finditer(text):
-        name = _HTML_NAME.match(text, markup.start()).group()
-        tags[name if name.startswith(("<!", "<?")) else name + ">"] = None
-    if tags:
-        errors.append("raw HTML is not allowed: " + ", ".join(tags) + "; in a formula, put a space after <")
-    entities = dict.fromkeys(_entity_name(entity) for entity in _LOOSE_HTML_ENTITY.findall(text))
+    tags = Counter(_html_names(text))
+    for piece in pieces:
+        tags.subtract(_html_names(piece))
+    names = [name for name, count in tags.items() if count > 0]
+    if names:
+        errors.append("raw HTML is not allowed: " + ", ".join(names) + "; in a formula, put a space after <")
+    # References are counted as the converter read them, cut to a length
+    # Python converts, and named as they were written.
+    written: dict[str, str] = {}
+    references: Counter[str] = Counter()
+    for entity in _LOOSE_HTML_ENTITY.findall(text):
+        read = _bounded_references(entity)
+        written.setdefault(read, entity)
+        references[read] += 1
+    for piece in pieces:
+        references.subtract(_bounded_references(entity) for entity in _LOOSE_HTML_ENTITY.findall(piece))
+    entities = [
+        _entity_name(written[read]) for read, count in references.items() if count > 0 and _live_reference(read)
+    ]
     if entities:
         errors.append(
             "HTML character references are not allowed: " + ", ".join(entities) + "; type the character itself"
         )
     return tuple(errors)
+
+
+def _html_names(text: str) -> list[str]:
+    """The name of each piece of HTML :data:`_HTML_TAG` finds in ``text``.
+
+    A declaration or processing instruction runs, by the pattern, to the
+    first ``>``, which a reader of the vault and the site's converter each
+    place elsewhere; the tags written inside one are named too, so none goes
+    unmentioned."""
+
+    names: list[str] = []
+    position = 0
+    while (markup := _HTML_TAG.search(text, position)) is not None:
+        name = _HTML_NAME.match(text, markup.start()).group()
+        if name.startswith(("<!", "<?")):
+            names.append(name)
+            position = markup.start() + len(name)
+        else:
+            names.append(name + ">")
+            position = markup.end()
+    return names
 
 
 #: An HTML comment with its end: the text a site leaves out of an article.
@@ -1870,26 +1913,43 @@ def publishable_article(text: str) -> tuple[str, tuple[str, ...]]:
     a note, so they are dropped rather than refused; the text returned is the
     article without them, so a comment a browser would end sooner than the
     pattern does exposes nothing. What remains is refused when
-    :func:`_raw_html_errors` finds HTML in it, or when the site's Markdown
-    renderer would pass any of it through as raw HTML: the two parse markup
-    differently, and the renderer's reading is what gets published.
+    :func:`_raw_html_errors` finds HTML in it outside code, or when the site's
+    Markdown renderer would pass any of it through as raw HTML: the two parse
+    markup differently, and the renderer's reading is what gets published.
+
+    It is refused, too, for a TeX command that changes formulas other than
+    its own, wherever the page's MathJax would read it. The articles on a
+    page are typeset with one TeX input, so a definition in one would change
+    what the others show.
     """
 
     visible = _COMPLETE_HTML_COMMENT.sub("", text)
-    errors = list(_raw_html_errors(visible))
-    passed = _passed_through(visible)
+    rendered, passed = _rendered_article(visible)
+    reading = _RenderedText()
+    reading.feed(rendered)
+    reading.close()
+    errors = list(_raw_html_errors(visible, reading.code))
     if passed and not errors:
         shown = ", ".join(repr(block[:40]) for block in dict.fromkeys(passed))
         errors.append(f"raw HTML is not allowed: the site would publish {shown} as HTML")
+    commands = stateful_commands("".join(reading.text))
+    if commands:
+        errors.append(
+            "TeX commands that change other formulas are not allowed: " + ", ".join(commands)
+            + f"; define notation in the vault's {TEX_MACROS} instead, and put a command you only name in code"
+        )
     return visible, tuple(errors)
 
 
-def _passed_through(text: str) -> list[str]:
-    """What the site's renderer passes through from ``text`` as raw HTML.
+def _rendered_article(text: str) -> tuple[str, list[str]]:
+    """The site's rendering of ``text``, and what its renderer passes through
+    from ``text`` as raw HTML.
 
     The renderer stashes raw HTML, character references, and highlighted code
     blocks alike. Code blocks are stashed while fences are read, before any
-    raw HTML is, so whatever is stashed after that came from the text itself.
+    raw HTML is, so whatever is stashed after that came from the text itself;
+    a reference a browser shows as typed is left out. References by number
+    are cut to a length Python converts first, standing for what they did.
     """
 
     parser = markdown_renderer.Markdown(extensions=list(SITE_EXTENSIONS), extension_configs=SITE_EXTENSION_CONFIGS)
@@ -1904,18 +1964,88 @@ def _passed_through(text: str) -> list[str]:
         return lines
 
     fences.run = counted  # type: ignore[method-assign]
-    parser.convert(text)
-    return [block if isinstance(block, str) else "<element>" for block in parser.htmlStash.rawHtmlBlocks[highlighted:]]
+    rendered = parser.convert(_bounded_references(text))
+    passed = [block if isinstance(block, str) else "<element>" for block in parser.htmlStash.rawHtmlBlocks[highlighted:]]
+    return rendered, [
+        block for block in passed if not (_LOOSE_HTML_ENTITY.fullmatch(block) and not _live_reference(block))
+    ]
+
+
+class _RenderedText(HTMLParser):
+    """The text of a rendered article: each piece of code, which shows as
+    typed, and the text the page's MathJax reads, which is the rest outside
+    the elements it skips.
+
+    MathJax reads text a string at a time, and an element ends one, apart
+    from ``<wbr>`` and comments; ``<br>`` stands in it for a line break. So a
+    line break stands in :attr:`text` for every tag but ``<wbr>``, and a
+    command found in it is one MathJax would read."""
+
+    _SKIPPED = frozenset({"annotation", "annotation-xml", "code", "noscript", "pre", "script", "style", "textarea"})
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.code: list[str] = []
+        self.text: list[str] = []
+        self._open: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._end_string(tag)
+        if tag in self._SKIPPED:
+            if tag in {"code", "pre"} and not self._in_code():
+                self.code.append("")
+            self._open.append(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        self._end_string(tag)
+        if tag in self._open:
+            del self._open[len(self._open) - 1 - self._open[::-1].index(tag) :]
+
+    def handle_data(self, data: str) -> None:
+        if not self._open:
+            self.text.append(data)
+        elif self._in_code():
+            self.code[-1] += data
+
+    def _end_string(self, tag: str) -> None:
+        if tag != "wbr":
+            self.text.append("\n")
+
+    def _in_code(self) -> bool:
+        return "code" in self._open or "pre" in self._open
+
+
+def _bounded_references(text: str) -> str:
+    """``text`` with each character reference by number written in at most
+    eight digits, standing for what it did: a number past the last code point
+    stands for U+FFFD however long it is, and Python refuses to convert one
+    of more than 4300 digits."""
+
+    def bounded(reference: re.Match[str]) -> str:
+        if reference[1]:
+            return f"&#{reference[1]}{reference[2] if len(reference[2]) <= 6 else 'FFFFFFF'}"
+        return f"&#{reference[3] if len(reference[3]) <= 7 else '99999999'}"
+
+    return _NUMERIC_REFERENCE.sub(bounded, text)
+
+
+def _live_reference(entity: str) -> bool:
+    """Whether a browser shows ``entity`` as something other than its text:
+    any reference by number does, and a name does when HTML defines it or the
+    older name it starts with, as ``&notit;`` starts with ``&not``."""
+
+    return entity.startswith("&#") or html.unescape(entity) != entity
 
 
 def _entity_name(entity: str) -> str:
-    """``entity`` and, when it stands for one character, that character's code
-    point and name."""
+    """``entity``, cut short when long, and, when it stands for one character,
+    that character's code point and name."""
 
-    character = html.unescape(entity)
+    character = html.unescape(_bounded_references(entity))
+    shown = entity if len(entity) <= 40 else f"{entity[:16]}... ({len(entity)} characters)"
     if len(character) != 1:
-        return entity
-    return f"{entity} (U+{ord(character):04X} {unicodedata.name(character, 'unnamed')})"
+        return shown
+    return f"{shown} (U+{ord(character):04X} {unicodedata.name(character, 'unnamed')})"
 
 
 def _hidden_characters(text: str) -> list[str]:

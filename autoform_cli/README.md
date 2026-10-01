@@ -1006,6 +1006,26 @@ its local context. Point `mkdocs.yml` at `docs_dir: site-src` and enable
 `md_in_html` plus a `pymdownx.superfences` mermaid fence; see the [repository
 example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 
+`render` also writes `javascripts/mathjax.js`, the site's MathJax
+configuration, on every build; list it in `mkdocs.yml` and nothing else for
+MathJax. It loads MathJax 3.2.2, the release the read-back checks were written
+for, and refuses to typeset with any other. The articles on a page share one
+TeX input, with the packages base, ams, noundefined, boldsymbol, cancel, and
+mathtools, and the project's macros from `blueprint/tex-macros.json`, written
+as MathJax's `tex.macros` is: a name maps to a body, `[body, arguments]`, or
+`[body, arguments, default]`. Each read-back card is typeset with a TeX input
+of its own that knows only base, ams, and noundefined, so nothing an article,
+another card, or the project's macros define reaches it. Every formula paints
+only within its own box, so no article formula can cover a card or a status
+mark, and a card formula too wide for the page scrolls inside its card.
+
+A project scaffolded before `render` wrote that file keeps a
+`blueprint/javascripts/mathjax.js` and lists the MathJax bundle in `mkdocs.yml`
+after it. It needs no edits: `render` replaces a copy `autoform init` wrote
+with its own, and the script finds MathJax already loaded and checks its
+version instead of loading it. A copy edited since is refused, since the edits
+would be lost; move its macros to `tex-macros.json` and delete it.
+
 ## Validation
 
 `autoform check` rejects cycles, missing targets, escaping paths,
@@ -1016,9 +1036,16 @@ absent from the sources, as `leanblueprint checkdecls` does for LaTeX
 blueprints. It also refuses raw HTML in an article, as `review record` does in
 a read-back: a tag, a character reference, an unclosed comment, or anything the
 site's Markdown would pass through as HTML. A complete `<!-- ... -->` comment
-is allowed and is left out of the rendered page. `render` refuses the same
-articles, so the site never publishes markup that an article's reviewer read
-as text and the owners of its theme never saw. It validates structure and
+is allowed and is left out of the rendered page. Code is shown as typed, so
+markup written in code is allowed, and so is a reference a browser shows as
+typed, such as the `&D;` in `R&D;`. Since every article on a page is typeset
+with one TeX input, it refuses as well a TeX command that changes formulas
+other than its own wherever MathJax would read it: a definition such as
+`\newcommand`, `\def`, `\let`, or `\DeclareMathOperator`, `\require`, a tag
+form, or a `\label`. Put the project's notation in `blueprint/tex-macros.json`,
+which `check` validates too, and write a command you only mention in code.
+`render` refuses the same articles, so the site never publishes markup that an
+article's reviewer read as text and the owners of its theme never saw. It validates structure and
 leaves mathematical correctness to the agent and the Lean kernel.
 
 The Markdown files are the source of truth. Graphs and sites are derived views

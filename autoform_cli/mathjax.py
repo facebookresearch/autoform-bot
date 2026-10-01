@@ -1,0 +1,316 @@
+"""The site's MathJax: one pinned version, configured by the renderer.
+
+Two kinds of mathematics share a page. Articles are Markdown and TeX their
+authors wrote; read-back cards are testimony a validator accepted, shown beside
+the Lean a reviewer compares it with. MathJax keeps TeX state, the macros an
+input has defined, the operators it has declared, and the labels it has set,
+for every formula that input reads afterwards. So the cards are never typeset
+with the page: each pass typesets the articles with a TeX input made for that
+pass, which skips the cards, and then each card with a TeX input made for it
+alone, which knows only base, ams, and noundefined, the packages the testimony
+validator checks against.
+
+The configuration used to be a file in the vault, which a project kept from
+the day it was scaffolded, and nothing checked which MathJax the site loaded.
+``autoform render`` now writes ``javascripts/mathjax.js`` on every build, over
+the vault's copy, and that script loads the one MathJax version it was written
+for and refuses any other. A project scaffolded earlier still lists the bundle
+in ``mkdocs.yml`` after the script; the script finds it already loaded and
+checks its version instead. Macros the old file could carry are read from
+``tex-macros.json`` in the vault, and reach article formulas only.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from pathlib import Path
+
+#: The MathJax release the site loads. The testimony validator's commands were
+#: checked against it, so changing it means checking them again.
+MATHJAX_VERSION = "3.2.2"
+#: Where that release is loaded from, and the component bundle the site uses.
+MATHJAX_BASE = f"https://cdn.jsdelivr.net/npm/mathjax@{MATHJAX_VERSION}/es5"
+MATHJAX_BUNDLE = f"{MATHJAX_BASE}/tex-mml-chtml.js"
+#: The script ``autoform render`` writes into the site source.
+MATHJAX_SCRIPT = "javascripts/mathjax.js"
+#: Project macros, in the form of MathJax's ``tex.macros``, kept in the vault.
+TEX_MACROS = "tex-macros.json"
+
+#: What article formulas may use: the standard notation, unknown commands in
+#: red, the packages authors reach for most, and the project's macros.
+PAGE_PACKAGES = ("base", "ams", "noundefined", "boldsymbol", "cancel", "mathtools", "configmacros")
+#: What a card's formulas may use: exactly the packages the testimony validator
+#: checks against. The project's macros are not among them.
+CARD_PACKAGES = ("base", "ams", "noundefined")
+#: The extensions the bundle does not carry, loaded before anything is typeset,
+#: and the filter that keeps classes, IDs, styles, and links out of the output.
+_LOADED = ("ui/safe", "[tex]/boldsymbol", "[tex]/cancel", "[tex]/mathtools")
+_SAFE = {"allow": {"URLs": "none", "classes": "none", "cssIDs": "none", "styles": "none"}}
+
+#: The commands that change formulas other than their own: they define or
+#: redefine a command, an environment, an operator, a paired delimiter, or a
+#: tag form, set a package option, load a package, or set a label, which a
+#: second use anywhere later on the page turns into an error. These are the
+#: ones the macro maps of MathJax 3.2.2 define, with TeX's own definition
+#: primitives, which it does not.
+STATEFUL_TEX = frozenset(
+    r"""
+    \newcommand \renewcommand \newenvironment \renewenvironment \def \let \gdef \edef \xdef \global
+    \DeclareMathOperator \DeclarePairedDelimiter \DeclarePairedDelimiterX \DeclarePairedDelimiterXPP
+    \DeclarePairedDelimiters \DeclarePairedDelimitersX \DeclarePairedDelimitersXPP \newtagform
+    \renewtagform \usetagform \mathtoolsset \require \label
+    """.split()
+)
+
+#: The ``javascripts/mathjax.js`` files ``autoform init`` put in vaults before
+#: the renderer wrote its own, by SHA-256. An unedited one is replaced on the
+#: site without a word; an edited one is refused, since its edits would be lost.
+_SHIPPED_CONFIGURATIONS = frozenset(
+    {
+        # The delimiters only, as first scaffolded.
+        "e2fa0fa73dd367cad2f508055c6b6b45c771547aca6c3baae639ecd872112384",
+        # ui/safe, and every default package but require.
+        "3888a6568e3b187144745c60ff0dfd6701297dba9eb0e53955aa6778b6c6282e",
+        # base, ams, and noundefined.
+        "c04368a7ebd7bdafe482a4f1769de7bac4021ff8ed3e0bb311ea0e7e982e3dfb",
+    }
+)
+
+_MACRO_NAME = re.compile(r"[A-Za-z]+")
+#: A TeX control sequence as MathJax reads one: a backslash and then a run of
+#: letters, or any one character.
+_TEX_COMMAND = re.compile(r"\\(?:[A-Za-z]+|.)", re.DOTALL)
+
+
+def stateful_commands(text: str) -> list[str]:
+    """The commands in ``text``, by :data:`STATEFUL_TEX`, in order of first use."""
+
+    return list(dict.fromkeys(command for command in _TEX_COMMAND.findall(text) if command in STATEFUL_TEX))
+
+
+def mathjax_script(blueprint_dir: str | Path) -> tuple[str, list[str]]:
+    """The ``javascripts/mathjax.js`` the site gets for the vault at
+    ``blueprint_dir``, and what refuses it: an invalid ``tex-macros.json``, or
+    an edited copy of the configuration the vault used to keep."""
+
+    blueprint = Path(blueprint_dir)
+    issues: list[str] = []
+    kept = blueprint / MATHJAX_SCRIPT
+    if kept.is_file():
+        digest = hashlib.sha256(kept.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+        if digest not in _SHIPPED_CONFIGURATIONS:
+            issues.append(
+                f"{MATHJAX_SCRIPT}: autoform render writes the site's MathJax configuration, so the "
+                f"edits in this copy would be lost; move any tex.macros to {TEX_MACROS} and delete it"
+            )
+    macros, macro_issues = _tex_macros(blueprint / TEX_MACROS)
+    return _script(macros), issues + macro_issues
+
+
+def _tex_macros(path: Path) -> tuple[dict[str, object], list[str]]:
+    """The macros in ``path``, which need not exist, and what is wrong with them.
+
+    Each maps a name of letters to a body, to ``[body, arguments]``, or to
+    ``[body, arguments, default]``, as MathJax's ``tex.macros`` does. A body
+    may not use a command in :data:`STATEFUL_TEX`, since every article on
+    the site could then reach it through the macro.
+    """
+
+    if not path.is_file():
+        return {}, []
+    try:
+        macros = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_names)
+    except (UnicodeDecodeError, ValueError) as exc:
+        return {}, [f"{TEX_MACROS}: not valid JSON: {exc}"]
+    if not isinstance(macros, dict):
+        return {}, [f"{TEX_MACROS}: must be a JSON object from macro names to definitions"]
+    issues: list[str] = []
+    for name, definition in macros.items():
+        if not _MACRO_NAME.fullmatch(name):
+            issues.append(f"{TEX_MACROS}: {name!r} is not a macro name; use letters only")
+            continue
+        if isinstance(definition, str):
+            texts = [definition]
+        elif (
+            isinstance(definition, list)
+            and len(definition) in {2, 3}
+            and isinstance(definition[0], str)
+            and type(definition[1]) is int
+            and all(isinstance(default, str) for default in definition[2:])
+        ):
+            texts = [definition[0], *definition[2:]]
+            if not 0 <= definition[1] <= 9:
+                issues.append(f"{TEX_MACROS}: \\{name} takes {definition[1]} arguments; use 0 to 9")
+        else:
+            issues.append(
+                f"{TEX_MACROS}: \\{name} must be a body, [body, arguments], or [body, arguments, default]"
+            )
+            continue
+        stateful = stateful_commands(" ".join(texts))
+        if stateful:
+            issues.append(
+                f"{TEX_MACROS}: \\{name} uses {', '.join(stateful)}, which would change other formulas"
+            )
+    return (macros if not issues else {}), issues
+
+
+def _unique_names(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    found: dict[str, object] = {}
+    for name, value in pairs:
+        if name in found:
+            raise ValueError(f"{name!r} is defined twice")
+        found[name] = value
+    return found
+
+
+def _script(macros: dict[str, object]) -> str:
+    """The script itself, with everything it is configured by in one object."""
+
+    settings = {
+        "version": MATHJAX_VERSION,
+        "base": MATHJAX_BASE,
+        "bundle": MATHJAX_BUNDLE,
+        "load": list(_LOADED),
+        "safe": _SAFE,
+        "page": {
+            "packages": list(PAGE_PACKAGES),
+            "macros": dict(sorted(macros.items())),
+            "inlineMath": [["$", "$"], ["\\(", "\\)"]],
+            "displayMath": [["$$", "$$"], ["\\[", "\\]"]],
+        },
+        # Card formulas are written as the testimony renderer writes them, and
+        # nothing else in a card is read.
+        "card": {
+            "packages": list(CARD_PACKAGES),
+            "inlineMath": [["\\(", "\\)"]],
+            "displayMath": [["\\[", "\\]"]],
+            "processEnvironments": False,
+            "processRefs": False,
+        },
+        # Read-back cards, which only the card inputs read; their formulas;
+        # and a class pattern nothing matches, since a class the page's input
+        # is told to process would be read inside a card too.
+        "cards": "bp-readback",
+        "formulas": "arithmatex",
+        "nothing": "(?!)",
+    }
+    return _SCRIPT.replace("SETTINGS_JSON", json.dumps(settings, indent=2, ensure_ascii=True))
+
+
+_SCRIPT = """/* Generated by autoform render. Edits are overwritten. */
+(function () {
+  "use strict";
+  var SETTINGS = SETTINGS_JSON;
+
+  // MathJax keeps the option objects it is given, so each input gets its own.
+  function copy(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  // A MathJax listed in mkdocs.yml before this file started without this
+  // configuration and would typeset the cards with its own. It is stopped
+  // instead, and the formulas stay as typed.
+  if (window.MathJax && window.MathJax.version !== undefined) {
+    window.MathJax.config.startup.typeset = false;
+    window.MathJax.config.startup.pageReady = function () {};
+    console.error("autoform: MathJax was loaded before javascripts/mathjax.js; formulas are left as typed. " +
+      "Load MathJax only through javascripts/mathjax.js in mkdocs.yml.");
+    return;
+  }
+
+  // One pass over the page as it is now. Every TeX input is new: the
+  // articles get one, which skips the cards, and then each card gets one that
+  // has read nothing else, so no definition, declaration, or label made
+  // anywhere on the page reaches a card or outlives the pass. An input
+  // registers what it can define under names every input looks up, the
+  // newest registration winning, so each document is finished before the
+  // next input is made.
+  function typeset() {
+    var startup = MathJax.startup;
+    var root = startup.document.document;
+    var steps = [[SETTINGS.page, {ignoreHtmlClass: SETTINGS.cards, processHtmlClass: SETTINGS.nothing}, null]];
+    startup.adaptor.getElements(["." + SETTINGS.cards], root).forEach(function (card) {
+      steps.push([SETTINGS.card, {ignoreHtmlClass: SETTINGS.cards, processHtmlClass: SETTINGS.formulas}, [card]]);
+    });
+    startup.output.clearCache();
+    return steps.reduce(function (done, step) {
+      return done.then(function () {
+        return render(root, step[0], step[1], step[2]);
+      });
+    }, Promise.resolve());
+  }
+
+  // A document waits, and then starts again, while the menu loads what its
+  // saved settings ask for.
+  function render(root, tex, options, elements) {
+    var mathjax = MathJax._.mathjax.mathjax;
+    options.InputJax = new MathJax._.input.tex_ts.TeX(copy(tex));
+    options.OutputJax = MathJax.startup.output;
+    options.safeOptions = copy(SETTINGS.safe);
+    var doc = mathjax.document(root, options);
+    if (elements) doc.options.elements = elements;
+    return mathjax.handleRetriesFor(function () {
+      doc.render();
+    });
+  }
+
+  // Passes run one at a time, in the order the pages were shown.
+  var queue = Promise.resolve();
+  function pass() {
+    queue = queue.then(typeset).catch(function (error) {
+      console.error("autoform: typesetting failed", error);
+    });
+    return queue;
+  }
+
+  function ready() {
+    if (MathJax.version !== SETTINGS.version) {
+      console.error("autoform: this page loaded MathJax " + MathJax.version + ", but javascripts/mathjax.js " +
+        "was written for " + SETTINGS.version + "; formulas are left as typed. Load MathJax only through " +
+        "javascripts/mathjax.js in mkdocs.yml.");
+      return;
+    }
+    // Material's instant navigation swaps the page in place, without running
+    // this file again, and announces each page on document$, this one too.
+    var pages = window.document$;
+    if (pages && typeof pages.subscribe === "function") pages.subscribe(pass);
+    else pass();
+  }
+
+  window.MathJax = {
+    loader: {load: SETTINGS.load, paths: {mathjax: SETTINGS.base}},
+    tex: copy(SETTINGS.page),
+    options: {ignoreHtmlClass: SETTINGS.cards, processHtmlClass: SETTINGS.nothing, safeOptions: copy(SETTINGS.safe)},
+    startup: {typeset: false, pageReady: ready}
+  };
+
+  // A project scaffolded before this file was generated also lists the
+  // bundle in mkdocs.yml, after this file. That tag runs before the page is
+  // parsed, so by then MathJax is loaded and is not fetched twice; ready()
+  // checks its version either way.
+  function load() {
+    if (window.MathJax.version !== undefined) return;
+    var script = document.createElement("script");
+    script.src = SETTINGS.bundle;
+    script.async = true;
+    document.head.appendChild(script);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", load);
+  else load();
+})();
+"""
+
+
+__all__ = [
+    "CARD_PACKAGES",
+    "MATHJAX_BUNDLE",
+    "MATHJAX_SCRIPT",
+    "MATHJAX_VERSION",
+    "PAGE_PACKAGES",
+    "STATEFUL_TEX",
+    "TEX_MACROS",
+    "mathjax_script",
+    "stateful_commands",
+]

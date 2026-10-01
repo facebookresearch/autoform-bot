@@ -27,6 +27,7 @@ from .lean import SourceLinker, build_linker, declaration_names
 from .markdown import content_lines as _content_lines
 from .markdown import FENCE as _FENCE
 from .markdown import FENCE_CLOSE as _FENCE_CLOSE
+from .mathjax import MATHJAX_SCRIPT, mathjax_script
 from .readback import READBACKS_DIR, Readback, load_readbacks, publishable_article, render_testimony
 from .review import ReviewBundle, ReviewError, ReviewDeclaration, validate_review_bundle
 from .skeleton import DeclarationSkeleton, SkeletonReport
@@ -315,6 +316,10 @@ def render_site(
     ]
     if article_issues:
         raise PublicationError(article_issues)
+    # The site's MathJax configuration is written here, never kept from the vault.
+    math_script, math_issues = mathjax_script(blueprint)
+    if math_issues:
+        raise PublicationError(math_issues)
     statuses = status.derive(graph)
     # The repository root, not the vault's parent. A blueprint nested at
     # <repo>/docs/blueprint would otherwise be described as <repo>/blueprint,
@@ -504,6 +509,7 @@ def render_site(
     for relative, contents in (
         (STYLESHEET, _stylesheet()),
         (MERMAID_SCRIPT, _mermaid_script()),
+        (MATHJAX_SCRIPT, math_script),
         (LOGO, _logo()),
     ):
         asset = destination / relative
@@ -2678,6 +2684,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   padding: 0.6rem 0.8rem;
   color: var(--bp-fg);
   border-left: 3px solid #0064E0;
+  overflow-x: auto;
 }}
 .bp-readback-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
 .bp-readback-status {{ font-weight: 400; color: var(--bp-muted); }}
@@ -2686,6 +2693,24 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-readback-altered {{ border-left-color: #B77900; }}
 .bp-readback-invalid {{ border-left-color: #B42318; }}
 .bp-readback-missing {{ border-left-color: var(--bp-rule); font-style: italic; }}
+/* A formula paints only within its own box, and the slack around it its glyphs
+   need, so no formula an article writes can cover a card, a mark, or the text
+   beside it. Containment needs a box, so inline formulas become inline blocks,
+   whose baseline is still their text's. A display formula is as wide as it is
+   written, so a wide one scrolls with what holds it instead of being cut off.
+   The slack is padding a negative margin gives back, and the selectors outrank
+   MathJax's own sheet, which is added after this one. */
+.md-typeset mjx-container[jax="CHTML"] {{ contain: paint; }}
+.md-typeset mjx-container[jax="CHTML"]:not([display="true"]) {{
+  display: inline-block;
+  padding: 0.3em 0.15em;
+  margin: -0.3em -0.15em;
+}}
+.md-typeset mjx-container[jax="CHTML"][display="true"] {{
+  min-width: max-content;
+  padding-block: 0.5em;
+  margin-block: 0.5em;
+}}
 .bp-row {{ display: flex; gap: 0.75rem; }}
 .bp-key {{
   flex: 0 0 7.5rem;

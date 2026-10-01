@@ -10,9 +10,9 @@ from autoform_cli.readback import (
     _TESTIMONY_TEX,
     TESTIMONY_MAX_BRACKETS,
     Readback,
-    _raw_html_errors,
     _testimony_errors,
     load_readbacks,
+    publishable_article,
     render_testimony,
     write_readback,
 )
@@ -177,24 +177,6 @@ def test_attribute_lists_are_shown_as_typed(testimony: str, tmp_path: Path) -> N
     assert "{" in rendered
     assert re.findall(r"<[a-z]+\s[^>]*>", rendered) == []
     assert 'querySelectorAll(".mermaid")' in _mermaid_script()
-
-
-@pytest.mark.parametrize(
-    "shipped",
-    [
-        "autoform_cli/templates/blueprint/javascripts/mathjax.js",
-        "skills/setup/assets/cabannes-thesis-project/blueprint/javascripts/mathjax.js",
-    ],
-)
-def test_shipped_mathjax_configuration_filters_active_math(shipped: str) -> None:
-    configuration = (Path(__file__).parents[1] / shipped).read_text(encoding="utf-8")
-
-    assert 'load: ["ui/safe"]' in configuration
-    assert 'URLs: "none"' in configuration
-    assert 'classes: "none"' in configuration
-    assert 'cssIDs: "none"' in configuration
-    assert 'styles: "none"' in configuration
-    assert 'packages: ["base", "ams", "noundefined"]' in configuration
 
 
 def test_writer_keeps_inert_markdown_and_mathematics(tmp_path: Path) -> None:
@@ -704,19 +686,19 @@ def test_a_hash_that_starts_a_line_without_a_space_is_text() -> None:
     ("markup", "reason"),
     [
         ("Some <span style='display:none'>hidden</span> text.", "raw HTML is not allowed: <span>, </span>;"),
-        ("Code `<b>` is no shelter.", "raw HTML is not allowed: <b>;"),
         ("Fish &amp; chips.", "HTML character references are not allowed: &amp; (U+0026 AMPERSAND);"),
         ("A zero width&#8203 space.", "HTML character references are not allowed: &#8203 (U+200B ZERO WIDTH SPACE);"),
         ("<!-- a note that never ends", "HTML comments are not allowed"),
         ("For $a < b$ and $b > c$, AT&T.", None),
+        ("Code `<b>` is shown as typed.", None),
     ],
 )
 def test_markdown_the_site_converter_renders_is_checked_for_raw_html(markup: str, reason: str | None) -> None:
     """Markdown the site's own converter renders, which reads HTML, is refused
-    for any HTML in it, code included, and for a character reference without
-    its semicolon, which that converter completes."""
+    for any HTML in it outside code, which it shows as typed, and for a
+    character reference without its semicolon, which that converter completes."""
 
-    errors = _raw_html_errors(markup)
+    errors = publishable_article(markup)[1]
 
     assert errors == () if reason is None else any(error.startswith(reason) for error in errors)
 

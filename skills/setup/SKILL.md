@@ -54,6 +54,14 @@ a book with no chapters. `init` never overwrites an existing file, so it is
 also the repair path; it reports what it left alone. See the
 [CLI reference](../../autoform_cli/README.md#commands) for its flags.
 
+The site's MathJax configuration is not part of the vault: `autoform render`
+writes `javascripts/mathjax.js` on every build. Put the project's notation in
+`blueprint/tex-macros.json`, an object from macro names to MathJax `tex.macros`
+definitions, rather than defining it in an article, which `autoform check`
+refuses. See the [CLI reference](../../autoform_cli/README.md#commands) for
+what the script loads and how a project scaffolded with a copy of it is
+handled.
+
 `init` pins the generated workflows to the Autoform commit that ran it, but it
 can only do that when Autoform is running from a Git checkout. Installed as a
 plugin it is a plain directory copy, so there is nothing to read and `init`
