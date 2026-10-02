@@ -137,7 +137,10 @@ jobs:
           if [[ "$state" == success ]]; then
             since="$deployed_at"
           fi
-          failed="$(gh api "$api/actions/workflows/blueprint-pages.yml/runs?branch=$branch&head_sha=$head&status=completed&per_page=100" \
+          # This file, whatever it is called: owner/repo/.github/workflows/NAME@ref.
+          workflow="${GITHUB_WORKFLOW_REF%%@*}"
+          workflow="${workflow##*/}"
+          failed="$(gh api "$api/actions/workflows/$workflow/runs?branch=$branch&head_sha=$head&status=completed&per_page=100" \
             --jq '[.workflow_runs[] | select(.event != "pull_request")
               | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure")
               | .updated_at | fromdateiso8601 | select(. >= '"$since"')] | "\(length) \(max // 0)"')" \

@@ -671,6 +671,7 @@ def _decide(
     *,
     ref: str = "refs/heads/main",
     default_branch: str = "main",
+    workflow: str = "blueprint-pages.yml",
 ):
     scaffold_project(tmp_path / "project", title="Finite Flat")
     script = _step(tmp_path / "project/.github/workflows/blueprint-pages.yml", "decide", "Decide whether to build")
@@ -688,6 +689,7 @@ def _decide(
         GITHUB_EVENT_PATH=str(payload),
         GITHUB_REF=ref,
         GITHUB_SHA="a" * 40,
+        GITHUB_WORKFLOW_REF=f"owner/project/.github/workflows/{workflow}@{ref}",
     )
 
 
@@ -757,6 +759,19 @@ def test_a_scheduled_run_publishes_on_a_default_branch_not_called_main(tmp_path:
     assert outputs == {"publish": "true", "build": "true"}
     assert calls[1] == f"{_REPOSITORY}/git/ref/heads/trunk"
     assert calls[-1].startswith(f"{_RUNS}?branch=trunk&")
+
+
+def test_a_scheduled_run_asks_for_the_runs_of_its_own_workflow_file(tmp_path: Path) -> None:
+    """A copy of the workflow under another name would ask for runs of a file
+    that does not exist, and never build."""
+
+    answers = {path.replace("blueprint-pages.yml", "pages.yml"): answer for path, answer in _github_after().items()}
+
+    done, calls, outputs = _decide(tmp_path, answers, workflow="pages.yml")
+
+    assert done.returncode == 0, done.stderr
+    assert outputs == {"publish": "true", "build": "true"}
+    assert calls[-1].startswith(f"{_REPOSITORY}/actions/workflows/pages.yml/runs?branch=main&")
 
 
 @pytest.mark.parametrize("event", ["push", "pull_request", "workflow_dispatch"])
