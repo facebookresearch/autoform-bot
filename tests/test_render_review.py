@@ -1127,6 +1127,42 @@ def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
     assert peak < 16 * 1024 * 1024
 
 
+@pytest.mark.parametrize(
+    ("testimony", "cells"),
+    [
+        ("Read back.\n\n" + "|".join(["a"] * 1000) + "\n|" + "-|" * 1000 + "\n" + "b\n" * 200, 201000),
+        ("Read back.\n\n" + "|".join(["a"] * 2500) + "\n|" + "-|" * 2500 + "\n" + "b\n" * 480, 527500),
+        ("W0\n\n" + "a|" * 30 + "a\n|" + "-|" * 31 + "\n" + "b\n" * 70, 2201),
+    ],
+)
+def test_a_table_only_github_reads_is_counted_before_its_reading_is_parsed(
+    testimony: str, cells: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GitHub, which shows the card files, reads a table where Python-Markdown
+    reads none, a header without a pipe at its ends over a delimiter row with
+    them say, and fills every row out to the header's width too: 11 KB made
+    20 MB of HTML, which took html5lib a minute and 1.7 GB. Its cells are
+    counted in the HTML cmark-gfm makes, before that is parsed."""
+
+    def unbounded(*args: object, **kwargs: object) -> None:
+        raise AssertionError("GitHub's reading was parsed over the cell limit")
+
+    monkeypatch.setattr("autoform_cli.readback.html5lib.parseFragment", unbounded)
+    started = time.process_time()
+    tracemalloc.start()
+    try:
+        errors = _testimony_errors(testimony)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert errors == (
+        f"testimony has tables of up to {cells} cells as GitHub reads them, over the limit of 2048",
+    )
+    assert time.process_time() - started < 2
+    assert peak < 64 * 1024 * 1024
+
+
 def test_the_block_parser_reads_a_testimony_once(monkeypatch: pytest.MonkeyPatch) -> None:
     """The table cells are counted by the renderer's own table processor as
     it renders, not by a second pass of its block parser, which cost as much

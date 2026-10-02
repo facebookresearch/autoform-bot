@@ -177,7 +177,8 @@ TESTIMONY_MAX_BACKSLASHES = 2048
 #: The table cells a testimony may hold. Both Markdown readings fill every row
 #: out to the header's width, so a wide header over many short lines renders
 #: millions of cells from a few kilobytes; counted by the renderer's table
-#: processor before it builds a table.
+#: processor before it builds a table, and in GitHub's HTML before that is
+#: parsed.
 TESTIMONY_MAX_TABLE_CELLS = 2048
 #: The HTML a testimony may render to, a backstop for any other construct the
 #: renderer expands, checked before the HTML is parsed. Escaping alone takes
@@ -1187,6 +1188,13 @@ _LANGUAGE_ERROR = (
 #: where the site shows its characters, and html5lib takes time quadratic in
 #: the depth of nested tags outside a table, 2 s for 28 KB of "<ul>".
 _GITHUB_OPTIONS = Options.CMARK_OPT_FOOTNOTES | Options.CMARK_OPT_SOURCEPOS
+#: A table cell in GitHub's HTML, the one element cmark-gfm makes more of
+#: than the text has characters: it fills each row out to the header's
+#: width, up to its own cap of half a million cells, 20 MB of HTML from
+#: 11 KB, so cells are counted, against TESTIMONY_MAX_TABLE_CELLS, before
+#: that HTML is parsed. GitHub leaves out the HTML a testimony writes, and
+#: escapes "<" in text, so only a table makes one.
+_GITHUB_CELL = re.compile(r"<t[dh][\s>]")
 _GITHUB_EXTENSIONS = ["table", "strikethrough", "autolink", "tasklist"]
 #: A line that starts, after block quote and list markers, with what GitHub
 #: reads as a link's or a footnote's definition, which it hides or moves to
@@ -2132,6 +2140,12 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
         rendered, defines_links, uneven_table = _render_testimony(text)
     except _TableCellLimit as limit:
         return (f"testimony has tables of up to {limit.cells} cells, over the limit of {TESTIMONY_MAX_TABLE_CELLS}",)
+    github = _github_html(text)
+    if (cells := len(_GITHUB_CELL.findall(github))) > TESTIMONY_MAX_TABLE_CELLS:
+        return (
+            f"testimony has tables of up to {cells} cells as GitHub reads them, over the limit of "
+            f"{TESTIMONY_MAX_TABLE_CELLS}",
+        )
     size = len(rendered.encode("utf-8"))
     if size > TESTIMONY_MAX_RENDERED_BYTES:
         return (f"testimony renders to {size} bytes of HTML, over the limit of {TESTIMONY_MAX_RENDERED_BYTES}",)
@@ -2169,7 +2183,7 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
         errors.append("active Mermaid blocks are not allowed")
     pieces = _testimony_pieces(document)
     errors.extend(_vault_markup_errors(text, [piece for piece, kind in pieces if kind == "code"]))
-    errors.extend(_github_errors(text, document, compare=not errors))
+    errors.extend(_github_errors(text, document, github, compare=not errors))
     # The rendering is checked as well as the source, so a character the
     # renderer produced would not pass unseen either.
     hidden = _hidden_characters(text + "".join(document.itertext()))
@@ -2278,9 +2292,10 @@ def _vault_markup_errors(text: str, code: list[str]) -> list[str]:
     return errors
 
 
-def _github_errors(text: str, document: object, *, compare: bool) -> list[str]:
-    """What GitHub, which shows the vault's card files, shows of ``text``
-    that the site, whose rendering is ``document``, does not.
+def _github_errors(text: str, document: object, html: str, *, compare: bool) -> list[str]:
+    """What GitHub, which shows the vault's card files, shows of ``text``,
+    which is ``html``, that the site, whose rendering is ``document``, does
+    not.
 
     Python-Markdown and GitHub read some Markdown differently: lists, tables,
     code, emphasis, escapes, and formulas that one reads and the other shows
@@ -2295,7 +2310,7 @@ def _github_errors(text: str, document: object, *, compare: bool) -> list[str]:
     way to write the testimony that both read alike.
     """
 
-    github = html5lib.parseFragment(_github_html(text), namespaceHTMLElements=False)
+    github = html5lib.parseFragment(html, namespaceHTMLElements=False)
     lines = text.split("\n")
     errors = _github_formulas(github, lines)
     code: set[int] = set()
