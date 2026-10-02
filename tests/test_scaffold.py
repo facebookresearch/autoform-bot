@@ -12,6 +12,8 @@ import os
 import re
 import shutil
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -151,11 +153,12 @@ def test_substitutions_reach_the_site_config(tmp_path: Path) -> None:
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
     assert 'AUTOFORM_SOURCE: "https://example.test/autoform.git"' in verify
     assert f'AUTOFORM_REF: "{"0" * 40}"' in verify
-    assert (
-        'uv sync --no-config --locked --no-install-project --no-build --no-cache '
-        '--no-python-downloads --python "$host_python" --project "$AUTOFORM_DIR"'
-        in verify
-    )
+    assert 'UV_PROJECT_ENVIRONMENT="$AUTOFORM_ENV"' in verify
+    assert "uv sync --no-config --locked" in verify
+    assert "--no-install-project --no-build" in verify
+    assert "--no-cache --no-python-downloads" in verify
+    assert '--python "$host_python"' in verify
+    assert '--project "$AUTOFORM_DIR"' in verify
     assert 'runpy.run_module("autoform_cli",run_name="__main__")' in verify
     assert '"$AUTOFORM_DIR" check blueprint' in verify
     assert "uv run" not in verify
@@ -361,11 +364,12 @@ def test_generated_ci_uses_verified_plugin_pin(
 
     assert f"AUTOFORM_SOURCE: {json.dumps(source)}" in verify
     assert f"AUTOFORM_REF: {json.dumps(ref)}" in verify
-    assert (
-        'uv sync --no-config --locked --no-install-project --no-build --no-cache '
-        '--no-python-downloads --python "$host_python" --project "$AUTOFORM_DIR"'
-        in verify
-    )
+    assert 'UV_PROJECT_ENVIRONMENT="$AUTOFORM_ENV"' in verify
+    assert "uv sync --no-config --locked" in verify
+    assert "--no-install-project --no-build" in verify
+    assert "--no-cache --no-python-downloads" in verify
+    assert '--python "$host_python"' in verify
+    assert '--project "$AUTOFORM_DIR"' in verify
     assert 'runpy.run_module("autoform_cli",run_name="__main__")' in verify
     assert '"$AUTOFORM_DIR" check blueprint' in verify
     assert "uv run" not in verify
@@ -383,18 +387,91 @@ def test_generated_workflows_install_the_verified_lock(tmp_path: Path) -> None:
 
     for name in ("autoform-verify.yml", "blueprint-pages.yml"):
         workflow = (tmp_path / ".github/workflows" / name).read_text(encoding="utf-8")
-        assert 'fetch --depth=1 --no-tags --no-recurse-submodules origin "$AUTOFORM_REF"' in workflow
+        assert "safe_git -C" in workflow
+        assert "fetch --depth=1 --no-tags" in workflow
+        assert '--no-recurse-submodules origin "$AUTOFORM_REF"' in workflow
         assert 'test "$resolved" = "$AUTOFORM_REF"' in workflow
         assert "persist-credentials: false" in workflow
-        assert (
-            'uv sync --no-config --locked --no-install-project --no-build --no-cache '
-            '--no-python-downloads --python "$host_python" --project "$AUTOFORM_DIR"'
-            in workflow
-        )
+        assert "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1" in workflow
+        assert 'python-version: "3.13.14"' in workflow
+        assert "env -i PATH=" in workflow
+        assert "GIT_ATTR_NOSYSTEM=1" in workflow
+        assert "GIT_CONFIG_NOSYSTEM=1" in workflow
+        assert 'test ! -e "$AUTOFORM_DIR/.venv"' in workflow
+        assert 'cd "$RUNNER_TEMP"' in workflow
+        assert "PYTHONNOUSERSITE=1" in workflow
+        assert 'UV_PROJECT_ENVIRONMENT="$AUTOFORM_ENV"' in workflow
+        assert "uv sync --no-config --locked" in workflow
+        assert "--no-install-project --no-build" in workflow
+        assert "--no-cache --no-python-downloads" in workflow
         assert 'runpy.run_module("autoform_cli",run_name="__main__")' in workflow
-        assert '"$AUTOFORM_DIR/.venv/bin/python" -I -c' in workflow
+        assert '"$AUTOFORM_ENV/bin/python" -I -c' in workflow
         assert "uv run" not in workflow
         assert "uvx --from" not in workflow
+
+
+def test_locked_dependency_sync_does_not_build_the_project(tmp_path: Path) -> None:
+    uv = shutil.which("uv")
+    assert uv is not None
+    project = tmp_path / "project"
+    project.mkdir()
+    marker = project / "backend-imported"
+    (project / "build_backend.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({os.fspath(marker)!r}).write_text('executed')\n",
+        encoding="utf-8",
+    )
+    (project / "pyproject.toml").write_text(
+        "[build-system]\n"
+        "requires = []\n"
+        'build-backend = "build_backend"\n'
+        'backend-path = ["."]\n'
+        "[project]\n"
+        'name = "unsafe-root"\n'
+        'version = "0.1.0"\n'
+        'requires-python = ">=3.10"\n',
+        encoding="utf-8",
+    )
+    locked = subprocess.run(
+        [uv, "lock", "--offline", "--project", os.fspath(project)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert locked.returncode == 0, locked.stderr
+    assert not marker.exists()
+
+    environment = tmp_path / "environment"
+    completed = subprocess.run(
+        [
+            uv,
+            "sync",
+            "--no-config",
+            "--locked",
+            "--no-install-project",
+            "--no-build",
+            "--no-cache",
+            "--offline",
+            "--no-python-downloads",
+            "--python",
+            sys.executable,
+            "--project",
+            os.fspath(project),
+        ],
+        env={**os.environ, "UV_PROJECT_ENVIRONMENT": os.fspath(environment)},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert not marker.exists()
+    environment_python = (
+        environment / "Scripts/python.exe"
+        if os.name == "nt"
+        else environment / "bin/python"
+    )
+    assert environment_python.is_file()
 
 
 def test_scaffold_writes_the_verified_template_snapshot(
@@ -640,7 +717,8 @@ def test_an_explicit_source_overrides_the_default(
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
     assert "AUTOFORM_SOURCE: \"https://example.test/autoform.git\"" in verify
     assert f"AUTOFORM_REF: \"{'2' * 40}\"" in verify
-    assert "--no-install-project --no-build --no-cache" in verify
+    assert "--no-install-project --no-build" in verify
+    assert "--no-cache --no-python-downloads" in verify
     assert 'runpy.run_module("autoform_cli",run_name="__main__")' in verify
     assert '"$AUTOFORM_DIR" check blueprint' in verify
     assert "uvx --from" not in verify

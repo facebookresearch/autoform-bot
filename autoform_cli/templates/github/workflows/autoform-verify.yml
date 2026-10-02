@@ -30,6 +30,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13.14"
+
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -39,24 +44,53 @@ jobs:
         run: |
           set -euo pipefail
           export AUTOFORM_DIR="${RUNNER_TEMP}/autoform"
-          test ! -e "$AUTOFORM_DIR"
-          git init --quiet "$AUTOFORM_DIR"
-          git -C "$AUTOFORM_DIR" remote add origin "$AUTOFORM_SOURCE"
-          git -C "$AUTOFORM_DIR" \
-            -c protocol.allow=never \
-            -c protocol.https.allow=always \
-            fetch --depth=1 --no-tags --no-recurse-submodules origin "$AUTOFORM_REF"
-          resolved="$(git -C "$AUTOFORM_DIR" rev-parse --verify 'FETCH_HEAD^{commit}')"
+          export AUTOFORM_ENV="${RUNNER_TEMP}/autoform-env"
+          test ! -e "$AUTOFORM_DIR" && test ! -L "$AUTOFORM_DIR"
+          test ! -e "$AUTOFORM_ENV" && test ! -L "$AUTOFORM_ENV"
+          git_home="${RUNNER_TEMP}/autoform-git-home"
+          test ! -e "$git_home" && test ! -L "$git_home"
+          install -d -m 700 "$git_home"
+          safe_git() {
+            env -i PATH="$PATH" HOME="$git_home" USERPROFILE="$git_home" \
+              XDG_CONFIG_HOME="$git_home" LC_ALL=C NETRC=/dev/null \
+              HTTP_PROXY="${HTTP_PROXY:-}" HTTPS_PROXY="${HTTPS_PROXY:-}" \
+              NO_PROXY="${NO_PROXY:-}" http_proxy="${http_proxy:-}" \
+              https_proxy="${https_proxy:-}" no_proxy="${no_proxy:-}" \
+              GCM_INTERACTIVE=never GIT_ASKPASS=/bin/false \
+              GIT_ATTR_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+              GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 \
+              git -c core.askPass=/bin/false -c core.hooksPath=/dev/null \
+              -c credential.helper= -c protocol.allow=never \
+              -c protocol.https.allow=always "$@"
+          }
+          safe_git init --quiet --template= "$AUTOFORM_DIR"
+          safe_git -C "$AUTOFORM_DIR" remote add origin "$AUTOFORM_SOURCE"
+          safe_git -C "$AUTOFORM_DIR" fetch --depth=1 --no-tags \
+            --no-recurse-submodules origin "$AUTOFORM_REF"
+          resolved="$(safe_git -C "$AUTOFORM_DIR" rev-parse --verify 'FETCH_HEAD^{commit}')"
           test "$resolved" = "$AUTOFORM_REF"
-          git -C "$AUTOFORM_DIR" checkout --quiet --detach "$resolved"
+          safe_git -C "$AUTOFORM_DIR" checkout --quiet --detach "$resolved"
+          test ! -e "$AUTOFORM_DIR/.venv" && test ! -L "$AUTOFORM_DIR/.venv"
           echo "AUTOFORM_DIR=$AUTOFORM_DIR" >> "$GITHUB_ENV"
-          host_python="$(command -v python3)"
+          echo "AUTOFORM_ENV=$AUTOFORM_ENV" >> "$GITHUB_ENV"
+          host_python="$(command -v python)"
           test -x "$host_python"
-          uv sync --no-config --locked --no-install-project --no-build --no-cache --no-python-downloads --python "$host_python" --project "$AUTOFORM_DIR"
+          test "$("$host_python" -I -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')" = "3.13.14"
+          (
+            cd "$RUNNER_TEMP"
+            env -i PATH="$PATH" HOME="$git_home" LC_ALL=C PYTHONNOUSERSITE=1 \
+              HTTP_PROXY="${HTTP_PROXY:-}" HTTPS_PROXY="${HTTPS_PROXY:-}" \
+              NO_PROXY="${NO_PROXY:-}" http_proxy="${http_proxy:-}" \
+              https_proxy="${https_proxy:-}" no_proxy="${no_proxy:-}" \
+              UV_PROJECT_ENVIRONMENT="$AUTOFORM_ENV" \
+              uv sync --no-config --locked --no-install-project --no-build \
+              --no-cache --no-python-downloads --python "$host_python" \
+              --project "$AUTOFORM_DIR"
+          )
 
       - name: Validate the theorem DAG
         run: >-
-          "$AUTOFORM_DIR/.venv/bin/python" -I -c
+          "$AUTOFORM_ENV/bin/python" -I -c
           'import runpy,sys;sys.path.insert(0,sys.argv.pop(1));sys.argv[0]="autoform";runpy.run_module("autoform_cli",run_name="__main__")'
           "$AUTOFORM_DIR" check blueprint
 

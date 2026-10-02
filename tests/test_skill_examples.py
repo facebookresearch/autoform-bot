@@ -671,8 +671,8 @@ def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None
     """The executable example differs only by its concrete immutable pin."""
 
     substitutions = {
-        "{{AUTOFORM_SOURCE_YAML}}": '"https://github.com/VivienCabannes/autoform-bot.git"',
-        "{{AUTOFORM_REF_YAML}}": '"43097b2c07e68df899d6b8bca7849d091c294754"',
+        "{{AUTOFORM_SOURCE_YAML}}": '"https://github.com/facebookresearch/autoform-bot.git"',
+        "{{AUTOFORM_REF_YAML}}": '"45ca2ecff4c86c0cbcf82c3471dac27ebb956a89"',
     }
     template_dir = repo_root / "autoform_cli/templates/github/workflows"
     example_dir = repo_root / _EXAMPLE / ".github/workflows"
