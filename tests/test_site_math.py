@@ -671,6 +671,44 @@ def test_code_excuses_only_the_markup_it_shows(article: str, reason: str) -> Non
     assert any(error.startswith(f"line 1: {reason}") for error in errors), errors
 
 
+_RAW_HTML_FIX = (
+    "write it in Markdown (a blank line or a trailing backslash for a break, a heading or list for a section), "
+    "or in code to show it as typed; in a formula, put a space after <"
+)
+
+
+@pytest.mark.parametrize(
+    ("relative", "written", "expected"),
+    [
+        ("README.md", "# Project\n\nFirst line<br>second line.\n", f"README.md: line 3: raw HTML is not allowed: <br>; {_RAW_HTML_FIX}"),
+        (
+            "notes.md",
+            "# Notes\n\nA remark.\n{.bp-statement}\n",
+            "notes.md: line 4: attribute list {.bp-statement} is not allowed: a page may only give a heading an id",
+        ),
+        (
+            "base",
+            "A remark.\n{.bp-statement}",
+            "base: line 14: attribute list {.bp-statement} is not allowed: an article may only give a heading an id",
+        ),
+    ],
+)
+def test_a_refusal_says_what_the_page_is_and_how_to_write_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], relative: str, written: str, expected: str
+) -> None:
+    """A page other than an article is called a page, and the fix for raw
+    HTML says how Markdown writes what HTML is reached for."""
+
+    blueprint = _vault(tmp_path)
+    if relative == "base":
+        _with_base_notes(blueprint, written)
+    else:
+        (blueprint / relative).write_text(written, encoding="utf-8")
+
+    assert main(["check", str(blueprint)]) == 1
+    assert expected in capsys.readouterr().out
+
+
 @pytest.mark.parametrize(
     ("article", "names"),
     [
@@ -682,7 +720,7 @@ def test_code_excuses_only_the_markup_it_shows(article: str, reason: str) -> Non
 def test_tags_after_a_declaration_on_the_same_line_are_named(article: str, names: str) -> None:
     errors = publishable_article(article)[1]
 
-    assert f"line 1: raw HTML is not allowed: {names}; in a formula, put a space after <" in errors
+    assert f"line 1: raw HTML is not allowed: {names}; {_RAW_HTML_FIX}" in errors
 
 
 _OPENED = (
@@ -1118,9 +1156,9 @@ def test_check_judges_the_text_render_publishes(tmp_path: Path, monkeypatch: pyt
 
     judged: list[str] = []
 
-    def recording(text: str, reserved: frozenset[str]) -> tuple[str, list[str]]:
+    def recording(text: str, reserved: frozenset[str], *, kind: str = "article") -> tuple[str, list[str]]:
         judged.append(text)
-        return publishable_article(text, reserved)
+        return publishable_article(text, reserved, kind=kind)
 
     blueprint = _vault(tmp_path)
     _with_article(blueprint, "See [the base](base.md).")

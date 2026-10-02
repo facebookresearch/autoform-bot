@@ -351,7 +351,7 @@ def _publication(
     chapters = {page: group for group, page in group_pages.items()}
 
     def published(
-        text: str, source: Path, page: Path, reserved: Iterable[str], *, whole: bool = True
+        text: str, source: Path, page: Path, reserved: Iterable[str], *, whole: bool = True, kind: str = "article"
     ) -> tuple[str, tuple[str, ...]]:
         """The page ``text`` is published as, or the part of ``page`` it is
         unless ``whole``, and what refuses it. A chapter's page is its
@@ -370,6 +370,7 @@ def _publication(
                 sources_base=sources_base,
             ),
             reserved,
+            kind=kind,
         )
         group = chapters.get(page) if whole else None
         if group is not None:
@@ -383,7 +384,7 @@ def _publication(
                 targets=targets,
             )
             for stretch in _chapter_stretches(page_text, *layout):
-                found += publishable_article(stretch, reserved)[1]
+                found += publishable_article(stretch, reserved, kind=kind)[1]
         return page_text, tuple(dict.fromkeys(found))
 
     issues: list[str] = []
@@ -428,7 +429,7 @@ def _publication(
                     f"{relative.as_posix()}: is not UTF-8 text, as a Markdown page must be; save it as UTF-8"
                 )
                 continue
-            text, found = published(written, source, destination / relative, ())
+            text, found = published(written, source, destination / relative, (), kind="page")
             issues.extend(f"{relative.as_posix()}: {issue}" for issue in found)
             files[source] = text
         elif relative.as_posix() in written_over:

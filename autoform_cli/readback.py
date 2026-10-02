@@ -2868,6 +2868,13 @@ def _testimony_limit_errors(text: str) -> tuple[str, ...]:
     return tuple(errors)
 
 
+#: How to write what raw HTML in a page was reached for.
+_RAW_HTML_FIX = (
+    "write it in Markdown (a blank line or a trailing backslash for a break, a heading or list for a section), "
+    "or in code to show it as typed; in a formula, put a space after <"
+)
+
+
 def _raw_html_errors(text: str, code: Iterable[str] = ()) -> tuple[str, ...]:
     """Name the raw HTML in ``text`` outside the pieces of ``code`` the site's
     converter shows as code: tags, comments, declarations, processing
@@ -2891,7 +2898,7 @@ def _raw_html_errors(text: str, code: Iterable[str] = ()) -> tuple[str, ...]:
         tags.subtract(_html_names(piece))
     names = [name for name, count in tags.items() if count > 0]
     if names:
-        errors.append("raw HTML is not allowed: " + ", ".join(names) + "; in a formula, put a space after <")
+        errors.append("raw HTML is not allowed: " + ", ".join(names) + "; " + _RAW_HTML_FIX)
     # References are counted as the converter read them, cut to a length
     # Python converts, and named as they were written.
     written: dict[str, str] = {}
@@ -2955,7 +2962,9 @@ _DIAGRAM_ERROR = (
 )
 
 
-def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, tuple[str, ...]]:
+def publishable_article(
+    text: str, reserved: Iterable[str] = (), *, kind: str = "article"
+) -> tuple[str, tuple[str, ...]]:
     """The text of an article a site may publish, and what refuses it.
 
     Articles are Markdown and TeX, as read-backs are. Raw HTML in one would
@@ -2995,6 +3004,9 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
     And it is refused for a Mermaid diagram. The site draws only the graphs
     render writes, with the loose security their links need, which would also
     run a diagram's ``click ... call`` as script and draw its labels' markup.
+
+    ``kind`` names the text in what refuses it: an ``"article"``, or any
+    other ``"page"`` an author wrote.
     """
 
     visible = published_lines(_COMPLETE_HTML_COMMENT.sub("", text))
@@ -3068,7 +3080,7 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
         errors.extend(found)
         attributes.extend(assigned)
         diagrams = diagrams or reading.diagrams > 0
-    errors.extend(_attribute_errors(text, attributes, frozenset(reserved)))
+    errors.extend(_attribute_errors(text, attributes, frozenset(reserved), kind))
     if diagrams:
         lines = [number for number, line in enumerate(text.splitlines(), start=1) if _MERMAID_DIAGRAM.match(line)]
         errors.extend([f"line {number}: {_DIAGRAM_ERROR}" for number in lines] or [_DIAGRAM_ERROR])
@@ -3137,7 +3149,9 @@ def _named_markup(error: str) -> list[re.Pattern[str]]:
         return [re.compile(re.escape("<!--"))]
     # The names run from the first ": " to the "; " before the fix. A
     # reference is shown with what it reads as, and a long one cut short.
-    names = [name.split(" ")[0].removesuffix("...") for name in error.partition(": ")[2].rpartition("; ")[0].split(", ")]
+    listed = error.partition(": ")[2]
+    listed = listed.removesuffix("; " + _RAW_HTML_FIX) if listed.endswith(_RAW_HTML_FIX) else listed.rpartition("; ")[0]
+    names = [name.split(" ")[0].removesuffix("...") for name in listed.split(", ")]
     return [
         re.compile(re.escape(name[:-1]) + "(?![A-Za-z0-9-])", re.IGNORECASE)
         if name.startswith("<") and name.endswith(">") and not name.startswith(("<!", "<?"))
@@ -3147,11 +3161,15 @@ def _named_markup(error: str) -> list[re.Pattern[str]]:
 
 
 def _attribute_errors(
-    text: str, attributes: Iterable[tuple[str, str, list[tuple[str, str]]]], reserved: frozenset[str]
+    text: str,
+    attributes: Iterable[tuple[str, str, list[tuple[str, str]]]],
+    reserved: frozenset[str],
+    kind: str = "article",
 ) -> list[str]:
     """Name each attribute list the site's converter applied in ``text`` that
     does more than give a heading an id of its own, or a code fence its
-    language, by its line in ``text``."""
+    language, by its line in ``text``, which is an article or a page, as
+    ``kind`` says."""
 
     errors: list[str] = []
     for tag, written, pairs in attributes:
@@ -3163,7 +3181,8 @@ def _attribute_errors(
             )
         elif tag not in {"h1", "h2", "h3", "h4", "h5", "h6"} or identifier is None:
             reason = (
-                'is not allowed: an article may only give a heading an id, as in "## Title {#title}"; '
+                f'is not allowed: {"an article" if kind == "article" else "a page"} may only give a heading an id, '
+                'as in "## Title {#title}"; '
                 "delete it or keep only a heading's id"
             )
         elif not _HEADING_ID.fullmatch(identifier) or identifier.lower().startswith(_SITE_ID_PREFIXES):
