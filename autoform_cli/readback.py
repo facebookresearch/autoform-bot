@@ -2509,6 +2509,8 @@ def _github_hint(site: list[tuple[str, str, int]], github: list[tuple[str, str, 
             "GitHub nests a list or paragraph under an item when it is indented as far as the item's text, and "
             "the site at four spaces; indent nested lists and an item's further paragraphs four spaces"
         )
+    if in_item and one[0] == "code" and (other[1].startswith("<pre>") or shown_next(github)[0] == "math"):
+        return f"the site reads a fence on a list item's own line as code in a line of text; put the code block {fence_in_item}"
     if any(value.startswith("<pre>") for value in values | {next_block(site), next_block(github)}) or "code" in {
         one[0],
         other[0],

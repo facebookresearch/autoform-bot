@@ -1675,6 +1675,7 @@ _LIST = "write \\-, \\+, \\*, or 1\\. where a line of text starts with one"
 _TILDE = "write a space for a ~ that keeps words together, \\sim in a formula, or ~ in code"
 _IN_ITEM = "under a line of text in the item, indented four spaces more than the item's marker"
 _DISPLAY_IN_ITEM = "and a displayed one in a ```math fence, which in a list item goes " + _IN_ITEM
+_FENCE_IN_ITEM = "put the code block " + _IN_ITEM
 _DISPLAY_IN_QUOTE = "write a formula as $`...`$, displayed ones too: a block quote takes no ```math fence"
 
 
@@ -1761,6 +1762,15 @@ _DISPLAY_IN_QUOTE = "write a formula as $`...`$, displayed ones too: a block quo
         ("- W0 \\(x\\) W1", _DISPLAY_IN_ITEM, "- W0 $`x`$ W1"),
         ("> - \\[a\\]", _DISPLAY_IN_QUOTE, "> - $`a`$"),
         ("> \\[a\\]", _DISPLAY_IN_QUOTE, "> $`a`$"),
+        ("- ```lean\n  a\n  ```", _FENCE_IN_ITEM, "- The bound:\n\n    ```lean\n    a\n    ```"),
+        ("- ```math\n  a\n  ```", _FENCE_IN_ITEM, "- The bound:\n    ```math\n    a\n    ```"),
+        ("1. ```lean\n   a\n   ```", _FENCE_IN_ITEM, "1. The bound:\n    ```lean\n    a\n    ```"),
+        (
+            "- W0\n    - ```lean\n      a\n      ```",
+            _FENCE_IN_ITEM,
+            "- W0\n    - The bound:\n        ```lean\n        a\n        ```",
+        ),
+        ("> - ```lean\n>   a\n>   ```", _FENCE_IN_ITEM, "> - The bound:\n>     ```lean\n>     a\n>     ```"),
         ("Its value \\$x$ is typed.", "write dollar signs meant as typed in code, as `$x$`", "Its value `$x$` is typed."),
         ("\t\nThe map is open.", "drop the blank first line", "The map is open."),
         ("    \nThe map is open.", "drop the blank first line", "The map is open."),
