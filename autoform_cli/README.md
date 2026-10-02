@@ -601,20 +601,31 @@ signature printed in Lean's raw expression form, the canonical kernel material,
 the statement as written, and the source of every project definition it rests
 on, with every comment and docstring the probe can identify removed, so that a
 reader who is asked what the Lean literally asserts cannot read the author's
-intent into it. Lean's parser, not a separate lexer, locates those comments.
-The probe parses each source in the environment of its root's module, which
-has that module's global notation and the notation of everything it imports,
-but not the file's `local` notation.
-A source it cannot parse there (a body that uses `local notation`) is withheld
-if it may hold a comment. Source containing a known non-builtin token with
-`--` or `/-`, or one that starts with `-` or ends with `-` or `/` and so can
-swallow part of a comment opener, is also withheld unless that token was
-globally active through an import, since the probe cannot reconstruct when a
-same-module token was declared or where a scoped token was active. A withheld
-source leaves the declaration's signatures and kernel material in the packet
-and does not make the article unresolved. A `local` token containing `--` is
-invisible to the probe: the packet can then show code as a comment or a
-comment as code.
+intent into it. Lean's parser, not a separate lexer, locates those comments,
+and a source is shown only when the probe can prove it reads the source as
+Lean read it when compiling the file, `local` syntax aside. Where a comment
+starts depends on the token table in force at the declaration: with `++"` a
+token, `x ++" -- y "` holds a string, and without it a comment. Lean does not
+record that table, so the probe reconstructs it from the declaration's own
+module, once per module. Every global token the module's imports declare is
+in it; a token of a module outside its imports is not. A scoped token of an
+import, and a token the module itself declares, may or may not be; the probe
+counts such a token as absent only when it can place the parser that declares
+the token after the declaration's source ends. The probe parses the source
+under every table those uncertain tokens allow, counting only the tokens that
+occur in the text, since no other token changes how it lexes, and removes
+comments only when every table under which the source parses agrees on the
+text and on where each comment lies. Otherwise, or when the source contains
+more than eight uncertain tokens, a source that may hold a comment is
+withheld. The grammar it parses with is the root module's, with the
+declaration's namespaces and the `open`s written above it activated; a source
+that does not parse there, such as a body using `local notation`, is withheld
+if it may hold a comment. A withheld source leaves the declaration's
+signatures and kernel material in the packet and does not make the article
+unresolved. What the probe cannot see is `local` syntax, which Lean records
+nowhere: a `local` token, or a `local` or later-declared parser that reads raw
+characters after an existing token, can make the packet show code as a
+comment or a comment as code.
 
 Every item's signature is also printed raw, bypassing project notation,
 unexpanders, and custom delaborators, so an `infixl " + " => HMul.hMul` cannot

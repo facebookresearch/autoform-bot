@@ -469,53 +469,136 @@ def commentsJson (bytes : ByteArray) (stx : Syntax) (cut : Nat) : Json :=
     if Nat.ble cut s || acc.contains r then acc else acc.push r
   Json.arr <| (ranges.qsort (fun a b => Nat.blt a.1 b.1)).map fun (s, e) => Json.arr #[s, e]
 
-/-- The global tokens declared by imports of `mod`. Tokens declared in `mod`
-itself are not safe here: the final environment does not record whether their
-declaration came before or after the source being inspected. Nor does it record
-where scoped tokens were opened. A `local` token is not recorded at all. -/
-def importedGlobalTokens (env : Environment) (mod : Name) : Std.HashSet String := Id.run do
-  let mut tokens : Std.HashSet String := {{}}
-  let mut seen : Std.HashSet Name := {{}}
-  let some rootIdx := env.getModuleIdx? mod | return tokens
-  let mut work : Array Name := env.header.moduleData[rootIdx.toNat]!.imports.map (·.module)
-  while h : work.size > 0 do
-    let m := work[work.size - 1]
-    work := work.pop
-    if seen.contains m then continue
-    seen := seen.insert m
-    let some idx := env.getModuleIdx? m | continue
-    for e in Parser.parserExtension.ext.getModuleEntries env idx do
-      match e with
-      | .global (.token t) => tokens := tokens.insert t
-      | _ => pure ()
-    for i in env.header.moduleData[idx.toNat]!.imports do
-      work := work.push i.module
+/-! Token tables. Lean lexes a declaration with the token table in effect
+where it is written, and that table decides what is a comment: with `++"` a
+token, `x ++" -- y "` holds a string; without it, a comment. Lean does not
+record the table, so the probe proves what it can of it from the final
+environment, once per module. The table at a module's first line is exactly
+the builtin tokens and the global tokens of everything the module imports.
+Beyond those, a declaration may see a scoped token of an import or of its own
+module, which an `open` activates, and a token its module declares above it.
+A parser attribute takes effect no earlier than the declaration of its
+parser, so a token whose parsers are all declared after a declaration's
+source ends is absent from it. Every other token is absent, except a `local`
+one, which Lean does not record anywhere. -/
+
+/-- What the environment proves about one module's token table. -/
+structure ModuleTokens where
+  /-- The table at the module's first line: the builtin tokens and the global
+  tokens of every module it imports, directly or not. -/
+  imported : Parser.TokenTable
+  /-- Each other token a declaration of the module may see, with the earliest
+  position at which it can take effect there, `none` when that is unknown. -/
+  possible : Array (String × Option Position)
+
+/-- Whether `p` comes before `q` in a file. -/
+def before (p q : Position) : Bool :=
+  p.line < q.line || (p.line == q.line && p.column < q.column)
+
+/-- The earlier of two earliest positions; `none`, unknown, absorbs. -/
+def earliest : Option Position → Option Position → Option Position
+  | some p, some q => some (if before p q then p else q)
+  | _, _ => none
+
+/-- Every string literal in `e`. -/
+partial def stringLiterals (e : Expr) (acc : Array String) : Array String :=
+  match e with
+  | .lit (.strVal s) => acc.push s
+  | .app f a => stringLiterals a (stringLiterals f acc)
+  | .lam _ t b _ | .forallE _ t b _ => stringLiterals b (stringLiterals t acc)
+  | .letE _ t v b _ => stringLiterals b (stringLiterals v (stringLiterals t acc))
+  | .mdata _ b | .proj _ _ b => stringLiterals b acc
+  | _ => acc
+
+/-- The token facts of `mod`, read from the parser entries of its imports and
+then its own, which Lean keeps in the order the module added them.
+`ParserAttribute.add` records a parser's tokens just before its node kinds and
+the parser itself; a token is placed at that parser's declaration only when
+the parser's definition spells it, so a token added any other way is never
+placed. -/
+def moduleTokens (cache : IO.Ref (Std.HashMap Name ModuleTokens)) (mod : Name) :
+    CommandElabM ModuleTokens := do
+  if let some known := (← cache.get).get? mod then return known
+  let env ← getEnv
+  let mut imported ← Parser.builtinTokenTable.get
+  let mut possible : Std.HashMap String (Option Position) := {{}}
+  if let some modIdx := env.getModuleIdx? mod then
+    let mut seen : Std.HashSet Name := {{}}
+    let mut work : Array Name := env.header.moduleData[modIdx.toNat]!.imports.map (·.module)
+    while h : work.size > 0 do
+      let m := work[work.size - 1]
+      work := work.pop
+      if seen.contains m then continue
+      seen := seen.insert m
+      let some idx := env.getModuleIdx? m | continue
+      for e in Parser.parserExtension.ext.getModuleEntries env idx do
+        match e with
+        | .global (.token t) => imported := imported.insert t t
+        | .scoped _ (.token t) => possible := possible.insert t none
+        | _ => pure ()
+      for i in env.header.moduleData[idx.toNat]!.imports do
+        work := work.push i.module
+    let mut pending : Array String := #[]
+    for e in Parser.parserExtension.ext.getModuleEntries env modIdx do
+      let entry := match e with
+        | .global entry => entry
+        | .scoped _ entry => entry
+      match entry with
+      | .token t =>
+        pending := pending.push t
+      | .kind _ => pure ()
+      | .parser _ declName _ =>
+        let start := (← findDeclarationRanges? declName).map (·.range.pos)
+        let spelled := match env.find? declName with
+          | some (.defnInfo info) => stringLiterals info.value #[]
+          | _ => #[]
+        for t in pending do
+          let placed := if spelled.any (·.trimAscii.toString == t) then start else none
+          possible := possible.insert t (earliest placed ((possible.get? t).getD placed))
+        pending := #[]
+      | .category .. =>
+        for t in pending do possible := possible.insert t none
+        pending := #[]
+    for t in pending do possible := possible.insert t none
+  let tokens : ModuleTokens := {{
+    imported, possible := possible.toArray.filter fun (t, _) => (imported.find? t).isNone }}
+  cache.modify (·.insert mod tokens)
   return tokens
 
-/-- Whether `text` holds a non-builtin token that was not globally active
-through an import and contains `--` or a block-comment opener, or could join
-a neighbouring character into one by starting with `-` or ending with `-` or
-`/`, as `+-` turns `a +-- note` into `a +- (-note)`. The root module the
-probe imports, which may import more than this declaration's own file, a later
-declaration, or a reconstructed scoped `open` may activate it here even when
-the source did not, so the probe then cannot safely distinguish that token from
-a comment. -/
-def commentLikeToken (penv : Environment) (mod : Name) (text : String) : IO Bool := do
-  let builtin ← Parser.builtinTokenTable.get
-  let holds (s t : String) := Nat.blt 1 (s.splitOn t).length
-  let found := ((Parser.getTokenTable penv).findPrefix "").filter fun t =>
-    (builtin.find? t).isNone && holds text t &&
-      (holds t "--" || holds t "/-" || t.startsWith "-" || t.endsWith "-" || t.endsWith "/")
-  if found.isEmpty then return false
-  let global := importedGlobalTokens penv mod
-  return found.any fun t => !global.contains t
+/-- The most possible tokens a source is parsed under every subset of. -/
+def possibleTokenLimit : Nat := 8
+
+/-- A declaration's source as the probe parses it. -/
+structure Snippet where
+  text : String
+  /-- The probe's grammar, with the declaration's namespaces open. -/
+  env : Environment
+  /-- Every token table the source may have been lexed with, up to tokens it
+  does not contain, or none when it contains too many possible tokens. -/
+  tables : Array Parser.TokenTable
+
+/-- Parse `input` as one command of the grammar in `env`, lexed with `tokens`. -/
+def parseCommand (env : Environment) (tokens : Parser.TokenTable) (input : String) :
+    Option Syntax :=
+  let p := Parser.andthenFn Parser.whitespace (Parser.categoryParserFnImpl `command)
+  let ictx := Parser.mkInputContext input "<input>"
+  let s := p.run ictx {{ env, options := {{}} }} tokens (Parser.mkParserState input)
+  if s.allErrors.isEmpty && ictx.atEnd s.pos then some s.stxStack.back else none
+
+/-- The one result every token table under which the source parses gives:
+`none` when it parses under none, `some none` when they disagree. -/
+def agreement {{α : Type}} [BEq α] (results : Array (Option α)) : Option (Option α) := Id.run do
+  let parsed := results.filterMap id
+  let some first := parsed[0]? | return none
+  return some (if parsed.all (· == first) then some first else none)
 
 /-- Capture a declaration from the same source snapshot the probe inspects,
-and parse it with Lean's own parser. The surrounding source-tree guard rejects
-concurrent edits. The parse is `none` when the slice does not parse alone; the
-environment it was parsed in is returned for parsing parts of it. -/
-def declarationSnippet (c : Name) :
-    CommandElabM (Option (String × Option Syntax × Environment)) := do
+with the token tables it may have been lexed with. The surrounding source-tree
+guard rejects concurrent edits. Lexing depends only on the tokens that occur
+in the text, so the tables are the imported table extended by each subset of
+the possible tokens that occur in it; the true table is one of them. -/
+def declarationSnippet (tokenCache : IO.Ref (Std.HashMap Name ModuleTokens)) (c : Name) :
+    CommandElabM (Option Snippet) := do
   let env ← getEnv
   let some r ← findDeclarationRanges? c | return none
   let some idx := env.getModuleIdxFor? c | return none
@@ -525,6 +608,15 @@ def declarationSnippet (c : Name) :
   let text ← IO.FS.readFile path
   let lines := text.splitOn "\n"
   let snippet := sourceSlice text r.range
+  let known ← moduleTokens tokenCache mod
+  let mut present : Array String := #[]
+  for (t, start) in known.possible do
+    if start.all (before · r.range.endPos) && Nat.blt 1 (snippet.splitOn t).length then
+      present := present.push t
+  let tables := if possibleTokenLimit < present.size then #[] else
+    (List.range (2 ^ present.size)).toArray.map fun bits =>
+      (List.range present.size).foldl (init := known.imported) fun table i =>
+        if bits.testBit i then table.insert present[i]! present[i]! else table
   -- The declaration sits inside the namespaces its name lives in, and `open X`
   -- written there may refer to any of them, as in `namespace A` … `open B`.
   let mut scopes : Array Name := #[]
@@ -540,39 +632,36 @@ def declarationSnippet (c : Name) :
     for opened in openedNamespaces lines r.range.pos do
       for scope in scopes.push Name.anonymous do
         if env.isNamespace (scope ++ opened) then activateScoped (scope ++ opened)
-    let penv ← getEnv
-    match Parser.runParserCategory penv `command snippet with
-    | .error _ => return some (snippet, none, penv)
-    | .ok stx => return some (snippet, some stx, penv)
+    return some {{ text := snippet, env := (← getEnv), tables }}
 
-/-- A declaration's source and its comment ranges, `null` when it does not
-parse alone; the caller then decides whether the source can be shown. -/
-def declarationSource (c : Name) : CommandElabM (Option (String × Json)) := do
-  let some (snippet, stx?, penv) ← declarationSnippet c | return none
-  let comments := match stx? with
-    | some stx => commentsJson snippet.toUTF8 stx snippet.utf8ByteSize
-    | none => Json.null
-  let mod := (moduleOf penv c).getD Name.anonymous
-  if ← commentLikeToken penv mod snippet then return some (snippet, Json.null)
-  return some (snippet, comments)
+/-- A declaration's source and its comment ranges, `null` unless every token
+table under which it parses agrees on them; the caller then decides whether
+the source can be shown. -/
+def declarationSource (tokenCache : IO.Ref (Std.HashMap Name ModuleTokens)) (c : Name) :
+    CommandElabM (Option (String × Json)) := do
+  let some s ← declarationSnippet tokenCache c | return none
+  let comments := s.tables.map fun table =>
+    (parseCommand s.env table s.text).map fun stx => commentsJson s.text.toUTF8 stx s.text.utf8ByteSize
+  return some (s.text, (agreement comments).join.getD Json.null)
 
 /-- Some declarations have a source range only through a parent that Lean's
 environment structurally identifies, such as a constructor's inductive type.
 Show that parent unless it is a theorem or axiom, whose source carries a proof.
 An internal-looking name is not provenance: project metaprograms can create it. -/
-partial def companionSource (c : Name) : CommandElabM (Option (String × Json)) := do
+partial def companionSource (tokenCache : IO.Ref (Std.HashMap Name ModuleTokens)) (c : Name) :
+    CommandElabM (Option (String × Json)) := do
   let env ← getEnv
   let parent := c.getPrefix
   if (← findDeclarationRanges? c).isSome || !env.contains parent then return none
   if canonical env c == c then return none
   if (← findDeclarationRanges? parent).isNone then
-    return ← companionSource parent
+    return ← companionSource tokenCache parent
   -- A field's companions (`S.x._default`, `S.p._autoParam`) read best in the
   -- structure that declares the field.
   let shown := canonical env parent
   let kind := kindOf env shown
   if kind == "theorem" || kind == "axiom" then return none
-  declarationSource shown
+  declarationSource tokenCache shown
 
 /-- The node where a parsed declaration's value starts, ending its statement. -/
 def valueNode? (stx : Syntax) : Option Syntax :=
@@ -586,12 +675,12 @@ proof uses `local notation`: cut at successive `:=` tokens and parse the prefix
 with `:= sorry` as its value. The parsed value's start is the real statement
 boundary. A cut inside a structure-style proof therefore recovers its preceding
 `where`; one inside the statement (`let x := …`) does not parse as a command. -/
-def statementPrefix? (penv : Environment) (snippet : String) :
+def statementPrefix? (penv : Environment) (tokens : Parser.TokenTable) (snippet : String) :
     Option (String × Syntax) := Id.run do
   let mut written := ""
   for part in (snippet.splitOn ":=").dropLast do
     written := written ++ part
-    if let .ok stx := Parser.runParserCategory penv `command (written ++ ":= sorry") then
+    if let some stx := parseCommand penv tokens (written ++ ":= sorry") then
       if let some v := valueNode? stx then
         if let some pos := v.getPos? then
           if Nat.ble pos.byteIdx written.utf8ByteSize then
@@ -602,34 +691,50 @@ def statementPrefix? (penv : Environment) (snippet : String) :
 
 /-- The declaration's source up to its value: the statement as written, without
 the proof, with its comment ranges. Parsed with Lean's own parser rather than
-cut by pattern matching. -/
-def statementSource (root : Name) : CommandElabM (Option (String × Json)) := do
+cut by pattern matching, under every token table the source may have been
+lexed with; tables that cut the statement differently leave it unknown, and
+tables that agree on the cut but not on the comments leave its comments
+unknown. -/
+def statementSource (tokenCache : IO.Ref (Std.HashMap Name ModuleTokens)) (root : Name) :
+    CommandElabM (Option (String × Json)) := do
   let env ← getEnv
-  let some (snippet, stx?, penv) ← declarationSnippet root | return none
-  -- `parsed` is the text `stx` was parsed from; it starts with `written`.
-  let shown (written parsed : String) (stx? : Option Syntax) :
-      CommandElabM (Option (String × Json)) := do
-    if ← commentLikeToken penv ((moduleOf env root).getD Name.anonymous) written then
-      return some (written, Json.null)
-    return some (written, match stx? with
-      | some stx => commentsJson parsed.toUTF8 stx written.utf8ByteSize
-      | none => Json.null)
+  let some s ← declarationSnippet tokenCache root | return none
+  let snippet := s.text
   let kind := kindOf env root
   -- A type declaration has no value to strip: all of it is the statement.
-  if kind == "structure" || kind == "class" || kind == "inductive" then
-    return ← shown snippet.trimAsciiEnd.toString snippet stx?
-  let some stx := stx? | do
-    let some (written, stx) := statementPrefix? penv snippet | return none
-    shown written.trimAsciiEnd.toString (written ++ ":= sorry") (some stx)
-  let some v := valueNode? stx | do
-    if kind == "axiom" || kind == "opaque" then
-      return ← shown snippet.trimAsciiEnd.toString snippet (some stx)
-    return none
-  let some pos := v.getPos? | return none
-  -- `pos` is a byte position: cut by bytes, not by characters, or every `∀`
-  -- before the value pushes the cut past it.
-  let bytes := snippet.toUTF8.extract 0 pos.byteIdx
-  shown (String.fromUTF8! bytes).trimAsciiEnd.toString snippet (some stx)
+  let typeDecl := kind == "structure" || kind == "class" || kind == "inductive"
+  -- `parsed` is the text `stx` was parsed from; it starts with `written`.
+  let shown (written parsed : String) (stx : Syntax) : Option (String × Json) :=
+    some (written, commentsJson parsed.toUTF8 stx written.utf8ByteSize)
+  -- One table's statement: `none` when the source does not parse under it,
+  -- `some none` when it parses with no statement to cut.
+  let statement (table : Parser.TokenTable) : Option (Option (String × Json)) :=
+    match parseCommand s.env table snippet with
+    | none =>
+      if typeDecl then none else
+      (statementPrefix? s.env table snippet).map fun (written, stx) =>
+        shown written.trimAsciiEnd.toString (written ++ ":= sorry") stx
+    | some stx =>
+      if typeDecl then some (shown snippet.trimAsciiEnd.toString snippet stx) else
+      match valueNode? stx with
+      | none =>
+        some (if kind == "axiom" || kind == "opaque" then shown snippet.trimAsciiEnd.toString snippet stx
+          else none)
+      | some v => match v.getPos? with
+        | none => some none
+        -- `pos` is a byte position: cut by bytes, not by characters, or every
+        -- `∀` before the value pushes the cut past it.
+        | some pos =>
+          some (shown (String.fromUTF8! (snippet.toUTF8.extract 0 pos.byteIdx)).trimAsciiEnd.toString snippet stx)
+  let results := s.tables.map statement
+  match agreement results with
+  | some (some found) => return found
+  | some none =>
+    let written := results.map (·.map (·.map (·.1)))
+    return match agreement written with
+      | some (some (some w)) => some (w, Json.null)
+      | _ => none
+  | none => return if typeDecl then some (snippet.trimAsciiEnd.toString, Json.null) else none
 
 def rangeJson (c : Name) : CommandElabM Json := do
   match ← findDeclarationRanges? c with
@@ -672,6 +777,7 @@ def skeleton
     (projectRoots : List Name)
     (coreModules : Std.HashSet Name)
     (expandCache : IO.Ref (Std.HashMap Name (Array Name)))
+    (tokenCache : IO.Ref (Std.HashMap Name ModuleTokens))
     (semanticCache : IO.Ref SemanticCache)
     (emitted : IO.Ref (Std.HashSet (String × Name)))
     (request : String) (root : Name) : CommandElabM Unit := do
@@ -788,9 +894,9 @@ def skeleton
       let (source, sourceComments) ← if kind == "theorem" || kind == "axiom" then
         pure (Json.null, Json.null)
       else
-        match ← declarationSource c with
+        match ← declarationSource tokenCache c with
         | some (s, comments) => pure (Json.str s, comments)
-        | none => match ← companionSource c with
+        | none => match ← companionSource tokenCache c with
           | some (s, comments) => pure (Json.str s, comments)
           | none => pure (Json.null, Json.null)
       return Json.mkObj [
@@ -808,14 +914,14 @@ def skeleton
         ("source_comments", sourceComments)]
     items := items.push (Json.str (toString c))
   let rootDeps := (edges.find? (·.1 == root)).map (·.2) |>.getD #[]
-  let (statement, statementComments) := match ← statementSource root with
+  let (statement, statementComments) := match ← statementSource tokenCache root with
     | some (s, comments) => (Json.str s, comments)
     | none => (Json.null, Json.null)
   let rootKind := kindOf env root
   let (source, sourceComments) ← if rootKind == "theorem" || rootKind == "axiom" then
     pure (Json.null, Json.null)
   else
-    match ← declarationSource root with
+    match ← declarationSource tokenCache root with
     | some (s, comments) => pure (Json.str s, comments)
     | none => pure (Json.null, Json.null)
   for d in sortedAssumed ++ sortedAxioms do
@@ -848,6 +954,7 @@ def main (projectRoots : List Name) (roots : List (String × Name)) : CommandEla
   -- Elaborated proofs can be large; reading them has no heartbeat budget.
   withScope (fun scope => {{ scope with opts := maxHeartbeats.set scope.opts 0 }}) do
   let expandCache : IO.Ref (Std.HashMap Name (Array Name)) ← IO.mkRef {{}}
+  let tokenCache : IO.Ref (Std.HashMap Name AutoformSkeleton.ModuleTokens) ← IO.mkRef {{}}
   let emitted : IO.Ref (Std.HashSet (String × Name)) ← IO.mkRef {{}}
   let coreModules ← AutoformSkeleton.toolchainModules (← getEnv)
   -- A command's `IO.println` output is captured and printed as one message when
@@ -860,7 +967,8 @@ def main (projectRoots : List Name) (roots : List (String × Name)) : CommandEla
     for (request, root) in roots do
       -- An error confined to one root leaves the others to be read. A record
       -- that could not be written, or an interrupt, ends the whole probe.
-      tryCatch (AutoformSkeleton.skeleton projectRoots coreModules expandCache semanticCache emitted request root)
+      tryCatch (AutoformSkeleton.skeleton projectRoots coreModules expandCache tokenCache semanticCache
+          emitted request root)
         fun e => do
           if (← semanticCache.get).broken || e.isInterrupt then throw e
           let message ← e.toMessageData.toString

@@ -3345,30 +3345,138 @@ def test_a_dead_copy_after_exit_does_not_move_a_declaration(tmp_path: Path) -> N
     assert (declaration.module, declaration.path) == ("Skel.PktLive", "Skel/PktLive.lean")
 
 
+def _comment_range(source: str, opener: str, closer: str | None = None) -> tuple[int, int]:
+    """The UTF-8 byte range from ``opener`` up to the end of the next ``closer``,
+    or up to the end of its line when there is no closer."""
+
+    data = source.encode()
+    start = data.index(opener.encode())
+    if closer is None:
+        return start, data.index(b"\n", start)
+    return start, data.index(closer.encode(), start) + len(closer.encode())
+
+
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_a_token_that_can_swallow_a_comment_opener_withholds_the_source(tmp_path: Path) -> None:
-    # Lean compiled `a + b` with a comment, before `+-` was a token; parsed with
-    # `+-` active, the same text reads as `a +- (-the author ...)`, no comment.
-    project = _built_module(
-        tmp_path,
-        "PktTok",
-        "namespace Skel.PktTok\n"
-        "def tokDef (a b : Nat) : Nat := a +-- the author meant times here\n"
+def test_a_source_shows_only_comments_every_possible_token_table_agrees_on(tmp_path: Path) -> None:
+    # Each token below changes how the text before it lexes: `++"` and `++r`
+    # move a string's quotes, `+-` joins a comment opener's first `-`, and `+/`
+    # and `+/-` swallow a block comment's `/`. In PktLexAfter they are declared
+    # after the sources that contain them, so Lean read those as comments, and
+    # the probe, which proves the tokens absent there, shows the source without
+    # them. In PktLexBefore they may be active, so Lean may have read the same
+    # text as code, and the probe cannot tell; it shows none of it.
+    project = _project(tmp_path)
+    (project / "Skel" / "PktLexAfter.lean").write_text(
+        "namespace Skel.PktLexAfter\n"
+        'def leakQ : String := "a" ++" b " -- KEEPOUT_Q "\n'
+        '  ++ "c"\n'
+        'def leakR : String := "a" ++r"\\" -- KEEPOUT_R "\n'
+        '  ++ "z"\n'
+        "def joined (a b : Nat) : Nat := a +-- KEEPOUT_J\n"
         "  b\n"
-        "theorem tok_root (h : tokDef 1 2 = 3) : True := trivial\n"
+        "def opened (a b : Nat) : Nat := a +/- KEEPOUT_O -/ b\n"
+        "theorem lexRoot (h : leakQ = leakR ∧ joined = opened) : True := trivial\n"
+        'infixl:65 " ++\\" " => fun (a _b : String) => a\n'
+        'infixl:65 " ++r " => fun (a _b : String) => a\n'
         'infixl:65 " +- " => Nat.sub\n'
-        "end Skel.PktTok\n",
+        'infixl:65 " +/ " => Nat.sub\n'
+        "end Skel.PktLexAfter\n",
+        encoding="utf-8",
     )
-    blueprint = _blueprint(tmp_path, lean={"tok": "Skel.PktTok.tok_root"})
+    (project / "Skel" / "PktLexBefore.lean").write_text(
+        "namespace Skel.PktLexBefore\n"
+        'infixl:65 " ++\\" " => fun (a _b : String) => a\n'
+        'infixl:65 " ++r " => fun (a _b : String) => a\n'
+        'infixl:65 " +- " => HSub.hSub\n'
+        'infixl:65 " +/- " => HAdd.hAdd\n'
+        'infixl:65 " -/ " => HSub.hSub\n'
+        'def leakQ (b : String → String) : String := "a" ++" b " -- CODE_Q "\n'
+        '  ++ "c"\n'
+        'def leakR : String := "a" ++r"\\" -- CODE_R "\n'
+        '  ++ "z"\n'
+        "def joined (a : Int) (code : Int → Int) : Int := a +-- code\n"
+        "  a\n"
+        "def opened (b : Nat) : Nat := 1 +/- b -/ 2\n"
+        "theorem lexRoot (h : leakQ = leakQ ∧ leakR = leakR ∧ joined = joined ∧ opened = opened) : True := trivial\n"
+        "end Skel.PktLexBefore\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.PktLexAfter", "Skel.PktLexBefore")
+    blueprint = _blueprint(
+        tmp_path, lean={"after": "Skel.PktLexAfter.lexRoot", "before": "Skel.PktLexBefore.lexRoot"}
+    )
 
     report = extract_skeletons(blueprint, lean_root=project)
 
     assert report.clean
-    (declaration,) = report.nodes[0].declarations
-    (trusted,) = [item for item in declaration.trusted if item.name == "Skel.PktTok.tokDef"]
-    assert trusted.source_withheld
-    assert "author meant" not in declaration.blind_text()
-    assert "-- source not shown" in declaration.blind_text()
+    after = report.node("basics/after")
+    assert after is not None
+    trusted = {item.name.rsplit(".", 1)[1]: item for item in after.declarations[0].trusted}
+    for name, opener, closer in [("leakQ", "--", None), ("leakR", "--", None), ("joined", "--", None),
+                                 ("opened", "/-", "-/")]:
+        item = trusted[name]
+        assert item.source is not None and not item.source_withheld, name
+        assert item.source_comments == (_comment_range(item.source, opener, closer),), name
+    assert "KEEPOUT" not in after.blind_text()
+    before = report.node("basics/before")
+    assert before is not None
+    for item in before.declarations[0].trusted:
+        assert item.source is None and item.source_withheld, item.name
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_sources_whose_tokens_are_provable_are_shown_without_comments(tmp_path: Path) -> None:
+    # `+--` is a token wherever `Skel.CommentToken` is imported. PktPrecDep does
+    # not import it, so there its text is a comment even under a root that
+    # does; PktPrec does, so there it is code. Notation the file declares
+    # above its use, and scoped notation in its namespace, lex the same with
+    # or without their tokens as far as comments go.
+    project = _project(tmp_path)
+    (project / "Skel" / "PktPrecDep.lean").write_text(
+        "namespace Skel.PktPrecDep\n"
+        "/-- KEEPOUT_DOC: reads like `a +-- b`, notation this file does not import. -/\n"
+        "def depDoc (a : Nat) : Nat := a +-- KEEPOUT_DEP\n"
+        "  0\n"
+        "end Skel.PktPrecDep\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "PktPrec.lean").write_text(
+        "import Skel.CommentToken\n"
+        "import Skel.PktPrecDep\n"
+        "namespace Skel.PktPrec\n"
+        'infixl:65 " ⊕⊕ " => Nat.add\n'
+        "/-- KEEPOUT_SAME -/\n"
+        "def sameModule (a b : Nat) : Nat := a ⊕⊕ b -- KEEPOUT_SAME_LINE\n"
+        "namespace A\n"
+        'scoped infixl:70 " ⊗⊗ " => Nat.mul\n'
+        "def scopedUse (a b : Nat) : Nat := a ⊗⊗ b /- KEEPOUT_SCOPED -/\n"
+        "end A\n"
+        "def imported (a b : Nat) : Nat := a +-- b\n"
+        "/-- KEEPOUT_FOO -/\n"
+        "theorem A.foo (h : Skel.PktPrecDep.depDoc 1 = 1) : A.scopedUse 1 2 = 2 := rfl\n"
+        "theorem precRoot (h : imported 2 3 = 6) : sameModule 1 2 = 3 := -- KEEPOUT_PROOF\n"
+        "  rfl\n"
+        "end Skel.PktPrec\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.PktPrec")
+    blueprint = _blueprint(tmp_path, lean={"foo": "Skel.PktPrec.A.foo", "prec": "Skel.PktPrec.precRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    declarations = {d.name: d for node in report.nodes for d in node.declarations}
+    foo = declarations["Skel.PktPrec.A.foo"]
+    prec = declarations["Skel.PktPrec.precRoot"]
+    assert foo.statement == "/-- KEEPOUT_FOO -/\ntheorem A.foo (h : Skel.PktPrecDep.depDoc 1 = 1) : A.scopedUse 1 2 = 2"
+    assert prec.statement == "theorem precRoot (h : imported 2 3 = 6) : sameModule 1 2 = 3"
+    trusted = {item.name: item for d in (foo, prec) for item in d.trusted}
+    for name in ["Skel.PktPrecDep.depDoc", "Skel.PktPrec.sameModule", "Skel.PktPrec.A.scopedUse",
+                 "Skel.PktPrec.imported"]:
+        assert trusted[name].source is not None and not trusted[name].source_withheld, name
+    assert trusted["Skel.PktPrec.imported"].source_comments == ()
+    assert "def imported (a b : Nat) : Nat := a +-- b" in prec.blind_text()
+    assert "KEEPOUT" not in foo.blind_text() + prec.blind_text()
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
@@ -3926,11 +4034,11 @@ def test_source_lean_cannot_read_outside_its_file_is_withheld(tmp_path: Path) ->
     roots["tokenblind"] = "Skel.usesBlindTokenWithToken"
     with_token = extract(tmp_path / "with-token")
     assert with_token["Skel.Unparsed.usesBlindToken"] == blind
-    # Under a root whose module does import `+--`, the probe cannot tell whether
-    # that text is a comment in blindToken's file, so it shows no source containing it.
-    withheld = with_token["Skel.usesBlindTokenWithToken"]
-    assert trusted(withheld).name == "Skel.Unparsed.blindToken" and trusted(withheld).source_withheld
-    assert "+--" not in withheld.blind_text()
+    # Under a root whose module does import `+--`, blindToken's own file still
+    # does not, so its source reads as that file's lexer read it.
+    reached = with_token["Skel.usesBlindTokenWithToken"]
+    assert trusted(reached) == trusted(blind)
+    assert "+--" not in reached.blind_text()
     # Its own module imports the token, so there it is code.
     assert with_token["Skel.usesCommentToken"].statement == "theorem Skel.usesCommentToken : 2 +-- 3 = 6"
     assert with_token["Skel.Unparsed.usesLocalDef"].hash == alone["Skel.Unparsed.usesLocalDef"].hash
@@ -4584,7 +4692,8 @@ def test_statement_parsing_does_not_leak_scoped_notation(tmp_path: Path) -> None
     probe += """
 open Lean Elab Command
 run_cmd do
-  let _ ← AutoformSkeleton.statementSource `Skel.ScopedA.activatesScope
+  let tokens ← IO.mkRef ({} : Std.HashMap Name AutoformSkeleton.ModuleTokens)
+  let _ ← AutoformSkeleton.statementSource tokens `Skel.ScopedA.activatesScope
   let env ← getEnv
   match Parser.runParserCategory env `command
       "example : ⟬marker⟭ = Skel.Semantics.notationMarker := rfl" with
