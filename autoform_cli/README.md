@@ -602,34 +602,53 @@ signature printed in Lean's raw expression form, the canonical kernel material,
 the statement as written, and the source of every project definition it rests
 on, with every comment and docstring the probe can identify removed, so that a
 reader who is asked what the Lean literally asserts cannot read the author's
-intent into it. Lean's parser, not a separate lexer, locates those comments,
-and a source is shown only when the probe can prove it reads the source as
-Lean read it when compiling the file, `local` syntax aside. Where a comment
-starts depends on the token table in force at the declaration: with `++"` a
-token, `x ++" -- y "` holds a string, and without it a comment. Lean does not
-record that table, so the probe reconstructs it from the declaration's own
-module, once per module. Every global token of a module Lean loads to
-compile the file is in it, and a token of any other module is not; under
-the module system Lean loads the file's imports and, through each loaded
-module, only what that module imports `public`ly, unless a chain of
-`import all` reaches it. A scoped token of a loaded module, and a token the
-module itself declares, may or may not be; the probe counts such a token as
-absent only when it can place the parser that declares the token after the
-declaration's source ends. The probe parses the source
-under every table those uncertain tokens allow, counting only the tokens that
-occur in the text, since no other token changes how it lexes, and removes
-comments only when every table under which the source parses agrees on the
-text and on where each comment lies. Otherwise, or when the source contains
-more than eight uncertain tokens, a source that may hold a comment is
-withheld. The grammar it parses with is the root module's, with the
-declaration's namespaces and the `open`s written above it activated; a source
-that does not parse there, such as a body using `local notation`, is withheld
-if it may hold a comment. A withheld source leaves the declaration's
-signatures and kernel material in the packet and does not make the article
-unresolved. What the probe cannot see is `local` syntax, which Lean records
-nowhere: a `local` token, or a `local` or later-declared parser that reads raw
-characters after an existing token, can make the packet show code as a
-comment or a comment as code.
+intent into it. Lean's parser, not a separate lexer, locates those comments, and a source is
+shown only when the probe can prove it reads the source as Lean read it when
+compiling the file, apart from the residual cases listed below. Where a
+comment starts depends on the parser state in force at the declaration: with
+`++"` a token, `x ++" -- y "` holds a string, and without it a comment. Lean
+does not record that state, so the probe rebuilds every state Lean could have
+had there from what the environment does record, once per module:
+- The state at the module's first line holds the builtin grammar and the
+  global parser entries of every module Lean loads to compile the file, and
+  nothing else; under the module system Lean loads the file's imports and,
+  through each loaded module, only what that module imports `public`ly,
+  unless a chain of `import all` reaches it.
+- Lean keeps a module's own parser entries in the order its commands added
+  them, and parsed the declaration with some prefix of them. An entry naming
+  a parser declared in the same module was added after that declaration
+  began, and so were the token and kind entries its attribute wrote just
+  before it; the prefix stops before the first entry so placed at or after
+  the declaration's start. Nothing places any other entry: a parser declared
+  in another module, a later `attribute [term_parser]`, or a token added by a
+  metaprogram may have been added anywhere before that point.
+- A namespace's scoped entries, imported or the module's own, count as
+  possibly active only when the file's text above the declaration contains
+  the namespace's last component, since `namespace` and `open` name what they
+  activate; the probe tries each subset of those namespaces.
+The probe parses the source under every state these choices allow, leaving
+out entries that cannot change the parse (a token that does not occur in the
+text, a parser none of whose first tokens occurs in it), and keeps the
+comment ranges only when every state under which the source parses agrees on
+the text and on where each comment lies. Because the state Lean had is one of
+them, a state under which the source fails to parse is not it. Otherwise, or
+when no state parses the source, when it holds an `open` of one of those
+namespaces, or when there are more than 256 states, a source that may hold a
+comment is withheld. Substring rules against one table, which withhold
+whenever a doubtful token occurs in the text, were set aside because they
+can only guess which occurrences change the lexing, while parsing decides
+that with Lean's own parser under every state the environment leaves open. A
+withheld source leaves the declaration's signatures and kernel material in
+the packet and does not make the article unresolved. What the probe cannot
+prove, and so can get wrong, showing code as a comment or a comment as
+code: `local` syntax, which Lean records nowhere; a metaprogram that changes
+the parser state without recording an entry, records a parser entry naming
+a declaration made later in the module, activates a namespace without the
+file naming it, or gives a declaration a range outside the command that
+made it; a parser that reads the environment or options beyond the parser
+state, or input past the declaration's end; an initializer that changes the
+builtin grammar; and a source with CRLF line ends, whose offsets the probe
+takes from the text as Lean stores it.
 
 Every item's signature is also printed raw, bypassing project notation,
 unexpanders, and custom delaborators, so an `infixl " + " => HMul.hMul` cannot
@@ -640,8 +659,8 @@ generated companions, only the canonical kernel material, shown for every item,
 states the meaning without notation.
 
 Each theorem's packet also carries the statement *as written*, cut before a
-`:=` value or a structure-style `where` value by Lean's parser with its
-enclosing namespaces and the file's opened namespaces in scope. A proof Lean
+`:=` value or a structure-style `where` value by Lean's parser under the
+parser states its source is parsed under, and only where they agree. A proof Lean
 cannot parse, for example one using `local notation`, does not stop those cuts.
 The statement sits beside the elaborated signature: the printed form shows
 binders that `variable` and `include` inject and the type every cast lands in;

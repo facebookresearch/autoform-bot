@@ -3229,6 +3229,188 @@ def test_a_source_shows_only_comments_every_possible_token_table_agrees_on(tmp_p
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_token_registered_without_a_placeable_declaration_withholds_the_source(tmp_path: Path) -> None:
+    # Both modules make `!"` a token before their sources, so Lean read the
+    # `-- SECRET_…` text there as part of a string. AttrUse registers a parser
+    # declared in another module; RawUse writes the token and a parser entry
+    # naming that module's parser itself. Neither declaration is in the module,
+    # so its position bounds nothing there, and the token may be active.
+    project = _project(tmp_path)
+    parser = (
+        "import Lean\n"
+        "open Lean Parser\n"
+        "namespace Skel\n"
+        'syntax (name := bqKind) term:65 " ¡¡ " term:66 : term\n'
+        + "\n" * 40
+        + "{attr}def bangQuoteP : TrailingParser := "
+        'trailingNode `Skel.bqKind 65 0 (symbol " !\\" " >> termParser 66)\n'
+        "end Skel\n"
+    )
+    (project / "Skel" / "AttrDef.lean").write_text(
+        parser.format(attr="@[run_parser_attribute_hooks] "), encoding="utf-8"
+    )
+    (project / "Skel" / "AttrUse.lean").write_text(
+        "import Skel.AttrDef\n"
+        "attribute [term_parser] Skel.bangQuoteP\n"
+        "macro_rules | `($a ¡¡ $_b) => pure a\n"
+        'def Skel.attrLeak : String := "a" !" -- SECRET_ATTR "\n'
+        '  "b"\n'
+        "theorem Skel.attrRoot (h : Skel.attrLeak = Skel.attrLeak) : True := trivial\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "RawDef.lean").write_text(parser.format(attr=""), encoding="utf-8")
+    (project / "Skel" / "RawUse.lean").write_text(
+        "import Skel.RawDef\n"
+        "open Lean Elab Command\n"
+        'run_cmd do Lean.Parser.parserExtension.add (.token "!\\""); '
+        "Lean.Parser.parserExtension.add (.parser `term ``Skel.bangQuoteP false "
+        '(Lean.Parser.trailingNode `Skel.bqKind 65 0 (Lean.Parser.symbol " !\\" " >> '
+        "Lean.Parser.termParser 66)) 0)\n"
+        "macro_rules | `($a ¡¡ $_b) => pure a\n"
+        'def Skel.rawLeak : String := "a" !" -- SECRET_RAW "\n'
+        '  "b"\n'
+        "theorem Skel.rawRoot (h : Skel.rawLeak = Skel.rawLeak) : True := trivial\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.AttrUse", "Skel.RawUse")
+    blueprint = _blueprint(tmp_path, lean={"attr": "Skel.attrRoot", "raw": "Skel.rawRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    for node_id, name in [("basics/attr", "Skel.attrLeak"), ("basics/raw", "Skel.rawLeak")]:
+        node = report.node(node_id)
+        assert node is not None
+        (item,) = node.declarations[0].trusted
+        assert item.name == name
+        assert item.source is None and item.source_withheld, name
+        assert "SECRET" not in node.blind_text()
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_scoped_token_an_open_may_activate_withholds_the_source(tmp_path: Path) -> None:
+    # `namespace Leak` activates `!"` for `scopeLeak`, whose `_root_` name
+    # lives outside `Leak`, and an `open` with `Leak` on its next line
+    # activates it for `tabLeak`. Read as code, the `-- SECRET_…` text is a
+    # string. A parse without the scoped parser fails on its token there, so
+    # the probe must not take that failure as evidence the token was absent.
+    project = _project(tmp_path)
+    (project / "Skel" / "ScopeTok.lean").write_text(
+        "namespace Leak\n"
+        'scoped infixl:65 " !\\" " => fun (a _b : String) => a\n'
+        "end Leak\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "ScopeUse.lean").write_text(
+        "import Skel.ScopeTok\n"
+        "namespace Leak\n"
+        'def _root_.Skel.scopeLeak : String := "a" !" -- SECRET_ROOTNS "\n'
+        '  "b"\n'
+        "end Leak\n"
+        "open\n"
+        "  Leak\n"
+        'def Skel.tabLeak : String := "a" !" -- SECRET_TAB "\n'
+        '  "b"\n'
+        "theorem Skel.scopeRoot (h : Skel.scopeLeak = Skel.tabLeak) : True := trivial\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.ScopeUse")
+    blueprint = _blueprint(tmp_path, lean={"scope": "Skel.scopeRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    node = report.node("basics/scope")
+    assert node is not None
+    trusted = {item.name: item for item in node.declarations[0].trusted}
+    assert set(trusted) == {"Skel.scopeLeak", "Skel.tabLeak"}
+    for item in trusted.values():
+        assert item.source is None and item.source_withheld, item.name
+    assert "SECRET" not in node.blind_text()
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_the_probe_rebuilds_each_modules_grammar_once(tmp_path: Path) -> None:
+    # Two roots in CacheA trust declarations of CacheA and CacheB. Each
+    # module's grammar is rebuilt once per probe, however many sources and
+    # roots need it, and the probe says so once per module.
+    project = _project(tmp_path)
+    (project / "Skel" / "CacheB.lean").write_text(
+        "namespace Skel.CacheB\n"
+        "def b1 (n : Nat) : Nat := -- note b1\n"
+        "  n\n"
+        "end Skel.CacheB\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "CacheA.lean").write_text(
+        "import Skel.CacheB\n"
+        "namespace Skel.CacheA\n"
+        'infixl:65 " +++ " => Nat.add\n'
+        "def a1 (n : Nat) : Nat := -- note a1\n"
+        "  n +++ 1\n"
+        "def a2 (n : Nat) : Nat := -- note a2\n"
+        "  a1 n +++ Skel.CacheB.b1 n\n"
+        "theorem rootA (h : a2 0 = 1) : True := trivial\n"
+        "theorem rootB (h : a1 0 = Skel.CacheB.b1 1) : True := trivial\n"
+        "end Skel.CacheA\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.CacheA")
+    roots = ("Skel.CacheA.rootA", "Skel.CacheA.rootB")
+    probe = render_probe(imports=("Skel.CacheA",), roots=roots, project_roots=("Skel",))
+
+    output = run_probe(probe, project)
+
+    records = parse_probe_output(output, expected_roots=roots)
+    built = [
+        json.loads(line[len(PROBE_MARKER) :])["name"]
+        for line in output.splitlines()
+        if line.startswith(PROBE_MARKER) and '"table":"grammar"' in line
+    ]
+    assert sorted(built) == ["Skel.CacheA", "Skel.CacheB"]
+    trusted = {item["name"]: item for root in roots for item in records[root]["trusted"]}
+    assert set(trusted) == {"Skel.CacheA.a1", "Skel.CacheA.a2", "Skel.CacheB.b1"}
+    for item in trusted.values():
+        assert item["source"] is not None and item["source_comments"], item["name"]
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_tokens_only_the_probes_own_imports_declare_do_not_withhold_a_source(tmp_path: Path) -> None:
+    # `throwError` and `trace[` are tokens of the `Lean` modules the probe
+    # helper imports, not of HelperTokens, which imports nothing. Lean read
+    # them there as identifiers, and so must the probe.
+    project = _project(tmp_path)
+    (project / "Skel" / "HelperTokens.lean").write_text(
+        "namespace Skel.HelperTokens\n"
+        "def throwError (n : Nat) : Nat := -- note throwError\n"
+        "  n\n"
+        "def trace : Array Nat := #[1, 2]\n"
+        "def usesBoth : Nat := -- note usesBoth\n"
+        "  throwError trace[0]!\n"
+        "theorem helperRoot (h : usesBoth = throwError trace[1]!) : True := -- note proof\n"
+        "  trivial\n"
+        "end Skel.HelperTokens\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.HelperTokens")
+    blueprint = _blueprint(tmp_path, lean={"helper": "Skel.HelperTokens.helperRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    node = report.node("basics/helper")
+    assert node is not None
+    declaration = node.declarations[0]
+    assert declaration.statement == "theorem helperRoot (h : usesBoth = throwError trace[1]!) : True"
+    trusted = {item.name.rsplit(".", 1)[1]: item for item in declaration.trusted}
+    for name in ["throwError", "usesBoth"]:
+        item = trusted[name]
+        assert item.source is not None and not item.source_withheld, name
+        assert item.source_comments == (_comment_range(item.source, "--", None),), name
+    assert "note" not in node.blind_text()
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_sources_whose_tokens_are_provable_are_shown_without_comments(tmp_path: Path) -> None:
     # `+--` is a token wherever `Skel.CommentToken` is imported. PktPrecDep does
     # not import it, so there its text is a comment even under a root that
@@ -4371,8 +4553,11 @@ def test_statement_parsing_does_not_leak_scoped_notation(tmp_path: Path) -> None
     probe += """
 open Lean Elab Command
 run_cmd do
-  let tokens ← IO.mkRef ({} : Std.HashMap Name AutoformSkeleton.ModuleTokens)
-  let _ ← AutoformSkeleton.statementSource tokens `Skel.ScopedA.activatesScope
+  let grammars ← IO.mkRef ({} : AutoformSkeleton.GrammarCache)
+  -- The probe above already wrote this module's grammar record; a second
+  -- would be a duplicate, so this call's records are discarded.
+  let semantic ← IO.mkRef ({ output := ← IO.FS.Handle.mk "/dev/null" .write } : AutoformSkeleton.SemanticCache)
+  let _ ← AutoformSkeleton.statementSource grammars semantic `Skel.ScopedA.activatesScope
   let env ← getEnv
   match Parser.runParserCategory env `command
       "example : ⟬marker⟭ = Skel.Semantics.notationMarker := rfl" with
