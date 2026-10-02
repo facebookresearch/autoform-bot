@@ -1185,7 +1185,10 @@ as MathJax's `tex.macros` is: a name maps to a body, `[body, arguments]`, or
 backslash, since MathJax would join it to the text after it into one command,
 as `\` and `label` make `\label`. Each read-back card is typeset with a TeX input
 of its own that knows only base, ams, and noundefined, so nothing an article,
-another card, or the project's macros define reaches it. Every formula paints
+another card, or the project's macros define reaches it. A setting changed in
+any formula's MathJax menu, such as the renderer or the explorer a screen
+reader uses, applies to every formula on the page and on the pages shown after
+it, while each card keeps its own TeX input. Every formula paints
 only within its own box, so no article formula can cover a card or a status
 mark, and a card formula too wide for the page scrolls inside its card.
 
