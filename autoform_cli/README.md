@@ -1174,7 +1174,10 @@ example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 `render` also writes `javascripts/mathjax.js`, the site's MathJax
 configuration, on every build; list it in `mkdocs.yml` and nothing else for
 MathJax. It loads MathJax 3.2.2, the release the read-back checks were written
-for, and refuses to typeset with any other. The articles on a page share one
+for, and refuses to typeset with any other. Another script in `mkdocs.yml`
+cannot replace that configuration: an assignment to `window.MathJax`, such as
+the snippet Material's documentation gives, is ignored with an error in the
+browser console. The articles on a page share one
 TeX input, with the packages base, ams, noundefined, boldsymbol, cancel, and
 mathtools, and the project's macros from `blueprint/tex-macros.json`, written
 as MathJax's `tex.macros` is: a name maps to a body, `[body, arguments]`, or

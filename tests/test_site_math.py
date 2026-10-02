@@ -598,13 +598,15 @@ def test_every_formula_paints_inside_its_own_box(tmp_path: Path) -> None:
 
 # Runs javascripts/mathjax.js in node against a local MathJax, as a page would,
 # and reports what each document it made typeset. argv: the script, a page,
-# the next page as Material's instant navigation shows it, and "new" or "old":
-# whether mkdocs.yml also lists the bundle, after the script.
+# the next page as Material's instant navigation shows it, "new" or "old":
+# whether mkdocs.yml also lists the bundle, after the script, and "after" when
+# a project script listed after it assigns the configuration Material's
+# documentation gives.
 _HARNESS = r"""
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const [scriptPath, firstPath, secondPath, project] = process.argv.slice(2);
+const [scriptPath, firstPath, secondPath, project, override] = process.argv.slice(2);
 const report = {injected: [], errors: [], passes: [], inventory: [], version: null, base: null, load: null};
 global.window = globalThis;
 let contentLoaded = null;
@@ -624,6 +626,12 @@ report.load = MathJax.loader.load.slice();
 // The bundle carries these, and the menu, which needs a browser.
 MathJax.loader.load.push("input/tex", "input/mml", "output/chtml", "a11y/assistive-mml");
 MathJax.startup.document = fs.readFileSync(firstPath, "utf8");
+if (override === "after") {
+  window.MathJax = {
+    tex: {inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]], processEscapes: true, processEnvironments: true},
+    options: {ignoreHtmlClass: ".*|", processHtmlClass: "arithmatex"}
+  };
+}
 // The page has been parsed; MathJax would take its document from here.
 delete global.document;
 const main = require(path.join(process.env.AUTOFORM_MATHJAX_DIR, "es5", "node-main.js"));
@@ -699,16 +707,25 @@ _SECOND_PAGE = r"""<html><head></head><body><article>
 </article></body></html>
 """
 _LEQ = "<mo>&#x2264;</mo>"
+_OVERRIDDEN = (
+    "autoform: a script assigned window.MathJax after javascripts/mathjax.js; it is ignored, and the site's "
+    "configuration is kept. Configure MathJax only through javascripts/mathjax.js and tex-macros.json."
+)
 
 
 def _node_report(
-    tmp_path: Path, script: str, project: str, first: str = _FIRST_PAGE, second: str = _SECOND_PAGE
+    tmp_path: Path,
+    script: str,
+    project: str,
+    first: str = _FIRST_PAGE,
+    second: str = _SECOND_PAGE,
+    override: str = "none",
 ) -> dict:
     files = {"harness.js": _HARNESS, "mathjax.js": script, "first.html": first, "second.html": second}
     for name, text in files.items():
         (tmp_path / name).write_text(text, encoding="utf-8")
     done = subprocess.run(
-        ["node", "harness.js", "mathjax.js", "first.html", "second.html", project],
+        ["node", "harness.js", "mathjax.js", "first.html", "second.html", project, override],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -719,10 +736,12 @@ def _node_report(
     return json.loads(done.stdout)
 
 
+@pytest.mark.parametrize("override", ["none", "after"])
 @pytest.mark.parametrize("project", ["new", "old"])
-def test_the_rendered_configuration_typesets_each_card_alone(tmp_path: Path, project: str) -> None:
+def test_the_rendered_configuration_typesets_each_card_alone(tmp_path: Path, project: str, override: str) -> None:
     """MathJax itself, run on the script render wrote, as a page loads it now
-    and as a project scaffolded with the bundle in mkdocs.yml loads it."""
+    and as a project scaffolded with the bundle in mkdocs.yml loads it, and
+    with a project script after it that assigns a configuration of its own."""
 
     mathjax = os.environ.get("AUTOFORM_MATHJAX_DIR")
     if shutil.which("node") is None or not mathjax:
@@ -732,9 +751,9 @@ def test_the_rendered_configuration_typesets_each_card_alone(tmp_path: Path, pro
     # The release tested is the release the site loads.
     assert json.loads((Path(mathjax) / "package.json").read_text(encoding="utf-8"))["version"] == "3.2.2"
 
-    report = _node_report(tmp_path, script, project)
+    report = _node_report(tmp_path, script, project, override=override)
 
-    assert report["errors"] == []
+    assert report["errors"] == ([] if override == "none" else [_OVERRIDDEN])
     assert report["injected"] == ([_BUNDLE] if project == "new" else [])
     assert report["base"] == _BASE
     assert report["version"] == "3.2.2"
