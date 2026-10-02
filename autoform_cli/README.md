@@ -1357,6 +1357,11 @@ formula says, like the site's status marks. Put the project's notation in
 `blueprint/tex-macros.json`, which `check` validates too. A command you only
 mention, outside a formula or in code, is shown as typed. Each of these
 refusals names the line the HTML or the command is on.
+A link, an image, or a link definition, used or not, may lead only to the
+site's own pages or to an `http:`, `https:`, or `mailto:` address; one to a
+`javascript:`, `data:`, or any other scheme, in any case, would run or show
+what it holds on the site's origin, and is refused with the line it is on.
+An address shown in code is allowed.
 An attribute list may only give a heading an id, as in `## Title {#title}`;
 any class, style, or other attribute, and an id on anything but a heading, is
 refused with the line it is on, since it could make an article's text look

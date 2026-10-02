@@ -2986,6 +2986,11 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
     be one of ``reserved``, the ids the site gives its own elements on the
     article's page.
 
+    And it is refused for a link, an image, or a link definition, used or
+    not, that leads anywhere but the site's own pages and http, https, and
+    mailto addresses: a ``javascript:`` or ``data:`` one runs or shows what
+    it holds on the site's origin.
+
     And it is refused for a Mermaid diagram. The site draws only the graphs
     render writes, with the loose security their links need, which would also
     run a diagram's ``click ... call`` as script and draw its labels' markup.
@@ -2996,7 +3001,7 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
     attributes: list[tuple[str, str, list[tuple[str, str]]]] = []
     diagrams = False
     for source, markdown in published_markdown(visible):
-        rendered, passed, assigned, unclosed = _rendered_article(markdown)
+        rendered, passed, assigned, unclosed, defined = _rendered_article(markdown)
         reading = _RenderedText()
         reading.feed(rendered)
         reading.close()
@@ -3017,6 +3022,14 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
                 (f"line {numbers[-1]}: " if numbers else "")
                 + "code fence is not closed: the site would read it on into what autoform render puts after this "
                 + f"text, to the next fence on the page; close it with a line of {fence.group(1) if fence else '```'}"
+            )
+        schemes = list(dict.fromkeys(filter(None, map(_unsafe_scheme, [*reading.destinations, *defined]))))
+        if schemes:
+            found.append(
+                _lines_naming(text, [re.compile(re.escape(scheme) + r"[\t\n\r]*:", re.IGNORECASE) for scheme in schemes])
+                + "links are not allowed to " + ", ".join(f"{scheme}:" for scheme in schemes)
+                + " addresses: the site links only to its own pages and to http:, https:, and mailto: addresses; "
+                + "link to a page or such an address, or put the address in code to show it as typed"
             )
         commands = stateful_commands("".join(reading.text))
         if commands:
@@ -3040,6 +3053,26 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
         lines = [number for number, line in enumerate(text.splitlines(), start=1) if _MERMAID_DIAGRAM.match(line)]
         errors.extend([f"line {number}: {_DIAGRAM_ERROR}" for number in lines] or [_DIAGRAM_ERROR])
     return visible, tuple(dict.fromkeys(errors))
+
+
+#: The schemes a published link may name; one with none stays on the site.
+_LINK_SCHEMES = frozenset({"http", "https", "mailto"})
+#: A URL's scheme as a browser reads it, once it has dropped the tabs and
+#: line breaks in the URL and the spaces and control characters around it.
+_URL_SCHEME = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*):")
+
+
+def _unsafe_scheme(url: str) -> str | None:
+    """The scheme of ``url``, lowercased, unless a published link may name
+    it; ``None`` for a URL with none, which leads to the site's own pages.
+    Any other, ``javascript:`` and ``data:`` among them, could run script
+    on the site's origin or show a page it does not serve."""
+
+    read = re.sub(r"[\t\n\r]", "", url.strip("".join(map(chr, range(0x21)))))
+    scheme = _URL_SCHEME.match(read)
+    if scheme is None or scheme.group(1).lower() in _LINK_SCHEMES:
+        return None
+    return scheme.group(1).lower()
 
 
 def _lines_naming(text: str, patterns: list[re.Pattern[str]]) -> str:
@@ -3149,11 +3182,12 @@ def _attribute_places(text: str, written: str) -> list[tuple[str, str]]:
 
 def _rendered_article(
     text: str,
-) -> tuple[str, list[str], list[tuple[str, str, list[tuple[str, str]]]], str | None]:
+) -> tuple[str, list[str], list[tuple[str, str, list[tuple[str, str]]]], str | None, list[str]]:
     """The site's rendering of ``text``, what its renderer passes through
-    from ``text`` as raw HTML, each attribute list it applies, and the line
+    from ``text`` as raw HTML, each attribute list it applies, the line
     that opens a code fence at the margin still open where ``text`` ends, if
-    one is. An
+    one is, and the destination of each link definition in it, used or not:
+    a page is converted whole, so another text on it may use one. An
     attribute list is given as the element's tag, the list as read, and the
     attributes it sets; a fence's braces that set more than its language
     count as one, with ``fence`` for the tag and no attributes.
@@ -3219,7 +3253,7 @@ def _rendered_article(
     ]
     return rendered, [
         block for block in passed if not (_LOOSE_HTML_ENTITY.fullmatch(block) and not _live_reference(block))
-    ], assigned, unclosed
+    ], assigned, unclosed, [html.unescape(url) for url, _title in parser.references.values()]
 
 
 class _RenderedText(HTMLParser):
@@ -3244,6 +3278,8 @@ class _RenderedText(HTMLParser):
         self._formula: list[str] = []
         # How many elements the site's diagram script could draw.
         self.diagrams = 0
+        # Where each link and image leads, as a browser reads it.
+        self.destinations: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._end_string(tag)
@@ -3252,6 +3288,7 @@ class _RenderedText(HTMLParser):
             self._formula.append(tag)
         if DIAGRAM_CLASS in classes:
             self.diagrams += 1
+        self.destinations.extend(value for name, value in attrs if name in {"href", "src"} and value is not None)
         if tag in self._SKIPPED:
             if tag in {"code", "pre"} and not self._in_code():
                 self.code.append("")

@@ -968,6 +968,74 @@ def test_an_image_or_a_document_is_published_as_it_is(tmp_path: Path) -> None:
     assert "display: none" not in (site / "stylesheets/blueprint.css").read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    ("where", "written", "scheme"),
+    [
+        ("base", "See [the proof](javascript:alert(document.cookie)).", "javascript"),
+        ("base", "See [the proof](JaVaScRiPt:alert(1)).", "javascript"),
+        ("base", 'See [the proof](javascript:alert(1) "a title").', "javascript"),
+        ("base", "![a figure](javascript:alert(1))", "javascript"),
+        ("base", "See [the proof][p].\n\n[p]: data:text/html,x", "data"),
+        ("base", "Nothing uses it here.\n\n[p]: <vbscript:x> 'a title'", "vbscript"),
+        ("notes.md", "# Notes\n\nSee [the proof][p].\n\n[p]: DATA:text/html,x\n", "data"),
+        ("roadmap", "## Definitions\n\n[home](javascript:alert(1))\n\n- [Base](base.md)", "javascript"),
+    ],
+)
+def test_a_link_that_could_run_script_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], where: str, written: str, scheme: str
+) -> None:
+    """A link to a ``javascript:`` or ``data:`` address runs what it holds on
+    the site's origin when a reader follows it, whatever the case of its
+    scheme, and a link definition no link on its own text uses may be used
+    by another text on the page. Check refuses every link and definition
+    that leads anywhere but the site's own pages and http, https, and
+    mailto addresses, and render publishes nothing."""
+
+    blueprint = _vault(tmp_path)
+    if where == "base":
+        _with_base_notes(blueprint, written)
+    elif where == "roadmap":
+        _with_narrative(blueprint, written)
+    else:
+        (blueprint / where).write_text(written, encoding="utf-8")
+
+    assert main(["check", str(blueprint)]) == 1
+    out = capsys.readouterr().out
+    assert re.search(rf"{re.escape(where)}: lines? \d+.*: links are not allowed to {scheme}: addresses", out), out
+    with pytest.raises(PublicationError, match=f"links are not allowed to {scheme}:"):
+        _render(blueprint)
+
+
+@pytest.mark.parametrize(
+    "written",
+    ["[x](<javascript:alert(1)>)", "[x]( \x01javascript:alert(1))", "[x][r]\n\n[r]:\n  JAVASCRIPT:1", "[x](java&#x09;script:1)"],
+)
+def test_an_article_cannot_hide_a_link_scheme(written: str) -> None:
+    """However the destination is written, its scheme is read as a browser
+    reads it."""
+
+    assert any("links are not allowed to javascript:" in issue for issue in publishable_article(written)[1])
+
+
+def test_a_link_to_a_page_or_a_web_address_is_published(tmp_path: Path) -> None:
+    """Links to http, https, and mailto addresses, to the site's own pages
+    and their headings, and an address shown in code all pass."""
+
+    blueprint = _vault(tmp_path)
+    _with_base_notes(
+        blueprint,
+        "See [the paper](https://example.org/p.pdf), [mirror](HTTP://example.org), "
+        "[mail](mailto:a@example.org), <https://example.org/x>, [top](top.md#the-main-result), "
+        "[here](#remarks), and `javascript:void(0)`.\n\n[d]: https://example.org/d",
+    )
+
+    assert main(["check", str(blueprint)]) == 0
+    html = _published(_render(blueprint) / "roadmap/README.md")
+    assert 'href="https://example.org/p.pdf"' in html
+    assert 'href="mailto:a@example.org"' in html
+    assert "<code>javascript:void(0)</code>" in html
+
+
 def test_check_judges_the_text_render_publishes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check judges each page as render writes it, with its links moved, so
     what render publishes is what check saw."""
