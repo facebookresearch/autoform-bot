@@ -893,6 +893,22 @@ def test_a_scheduled_run_builds_only_when_the_verifier_would_have_its_whole_allo
     assert approvals._RESERVED_REQUESTS - approvals._LEFT_AFTER - 100 == 50
 
 
+def test_the_docs_state_how_few_spent_requests_hold_the_schedule_back(tmp_path: Path, repo_root: Path) -> None:
+    """A reviewer reads in the skill and the README when a withdrawal can wait past a day."""
+
+    scaffold_project(tmp_path, title="Finite Flat")
+    script = _step(tmp_path / ".github/workflows/blueprint-pages.yml", "decide", "Decide whether to build")
+    spent = re.search(r"if \(\( remaining < limit - (\d+) \)\); then", script)
+    assert spent is not None
+    readme, skill = (
+        " ".join((repo_root / path).read_text(encoding="utf-8").split())
+        for path in ("autoform_cli/README.md", "skills/human-review/SKILL.md")
+    )
+
+    assert f"other runs keep more than {spent[1]} of each hour's API requests spent" in readme
+    assert f"builds only while at most {spent[1]} of the hour's API requests are spent" in skill
+
+
 def test_a_scheduled_run_of_a_head_main_has_moved_past_builds_nothing(tmp_path: Path) -> None:
     done, calls, outputs = _decide(tmp_path, _github_after(head="b" * 40))
 
