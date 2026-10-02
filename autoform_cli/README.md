@@ -1353,8 +1353,18 @@ with one TeX input, it refuses as well a TeX command in a formula, the only
 text MathJax reads, that changes formulas other than its own: a definition such as
 `\newcommand`, `\def`, `\let`, or `\DeclareMathOperator`, `\require`, a tag
 form, or a `\label`. It refuses `\mmlToken` too, which colors a symbol as the
-formula says, like the site's status marks. Put the project's notation in
-`blueprint/tex-macros.json`, which `check` validates too. A command you only
+formula says, like the site's status marks, and a strike, `\cancel`,
+`\bcancel`, `\xcancel`, or `\cancelto`, not followed by its argument: an
+option in brackets after one colors the strike, pads it, or thickens it, and
+a `]`, `}`, or the end of a macro's argument after one lets what follows
+the macro be that option. Write `\cancel{x}`. These are every command of the
+page's packages that colors what it draws when given a color, as a test
+that typesets each of them with MathJax checks. Put the project's notation
+in `blueprint/tex-macros.json`, which `check` validates too, by the same
+rules: a macro may not use one of these commands, leave a strike without
+its argument right after it, or put a `[` or another argument right after
+an argument (`#1[`, `#1 #2`), where an article's argument ending in a strike
+would take an option; write `{#1}` instead. A command you only
 mention, outside a formula or in code, is shown as typed. Each of these
 refusals names the line the HTML or the command is on.
 A link, an image, or a link definition, used or not, may lead only to the

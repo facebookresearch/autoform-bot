@@ -248,6 +248,12 @@ _LONE = (
         ('{"f": "\\\\DeclareMathOperator{\\\\leq}{>}"}', "\\f uses \\DeclareMathOperator, which would change"),
         ('{"f": ["#1", 1, "\\\\label{x}"]}', "\\f uses \\label, which would change other formulas"),
         ('{"g": ["\\\\mmlToken{mi}[mathcolor=#1]{x}", 1]}', "\\g uses \\mmlToken, which sets a symbol's color"),
+        ('{"s": "\\\\cancel"}', "\\s leaves \\cancel room for an option, which sets the color"),
+        ('{"s": ["\\\\bcancel[mathcolor=red]{#1}", 1]}', "\\s leaves \\bcancel room for an option"),
+        ('{"s": ["\\\\xcancel #1", 1]}', "\\s leaves \\xcancel room for an option"),
+        ('{"s": ["#1{x}", 1, "\\\\cancelto"]}', "\\s leaves \\cancelto room for an option"),
+        ('{"t": ["#1[mathcolor=green]{x}", 1]}', "\\t puts a [ or another argument right after #1"),
+        ('{"t": ["#1 #2", 2]}', "\\t puts a [ or another argument right after #1"),
         ('{"bs": "\\\\"}', _LONE.format("bs")),
         ('{"bs": "a\\\\\\\\\\\\"}', _LONE.format("bs")),
         ('{"L": ["#1label", 1, "\\\\"]}', _LONE.format("L")),
@@ -483,6 +489,43 @@ def test_tex_that_sets_what_a_symbol_looks_like_is_refused(article: str) -> None
         "itself, "
         "and put a command you only name in code",
     )
+
+
+@pytest.mark.parametrize(
+    ("article", "command"),
+    [
+        ("$\\cancel[mathcolor=#31A24C]{x}$ approved", "\\cancel"),
+        ("$$\n\\bcancel [mathbackground=white]{x}\n$$", "\\bcancel"),
+        ("$`\\xcancel[color=red,data-thickness=900]{x}`$", "\\xcancel"),
+        ("```math\n\\cancelto[mathcolor=red]{0}{x}\n```", "\\cancelto"),
+        # A strike a macro's argument ends with takes what follows the macro.
+        ("$\\id{\\cancel}[mathcolor=red]{x}$", "\\cancel"),
+        ("$\\id[\\cancel][mathcolor=red]{x}$", "\\cancel"),
+    ],
+)
+def test_a_strike_cannot_be_given_an_option(article: str, command: str) -> None:
+    """Cancel's strikes take a color, a background, a padding, and a
+    thickness in brackets after the command, which the site's filter keeps,
+    so an article could color one like the site's status marks."""
+
+    errors = publishable_article(article)[1]
+    line = "line 2" if article.startswith(("$$\n", "```math\n")) else "line 1"
+
+    assert errors == (
+        f"{line}: TeX strikes must be followed by their argument: {command}; an option in brackets, or one a "
+        f"macro supplies, sets the color and other attributes of the strike, so write {command}{{...}}",
+    )
+
+
+def test_a_strike_with_its_argument_is_published(tmp_path: Path) -> None:
+    """A strike given its argument, in braces or as one symbol, and a macro
+    that gives it one, still pass."""
+
+    blueprint = _vault(tmp_path, macros=json.dumps({"crossed": ["\\cancel{#1}", 1], "pair": ["[#1, #2]", 2]}))
+    _with_article(blueprint, "$\\cancel{x} + \\bcancel y = \\cancelto{0}{z} \\crossed{w} \\pair{a}{b}$")
+
+    assert main(["check", str(blueprint)]) == 0
+    assert "\\cancelto{0}{z}" in (_render(blueprint) / "roadmap/README.md").read_text(encoding="utf-8")
 
 
 def test_render_refuses_a_definition_in_an_article(tmp_path: Path) -> None:
@@ -1867,6 +1910,72 @@ def test_the_rendered_configuration_typesets_each_card_alone(tmp_path: Path, pro
     assert {"\\DeclareMathOperator", "\\DeclarePairedDelimiter", "\\label", "\\newtagform"} <= {
         name for name, _ in report["inventory"]
     }
+
+
+#: Typesets every command and environment the page's packages define with a
+#: color in brackets in each place an option could go, and prints those that
+#: color what they draw.
+_OPTION_INVENTORY = r"""
+"use strict";
+const path = require("path");
+const [packages] = process.argv.slice(2);
+const names = JSON.parse(packages);
+const config = {
+  loader: {load: ["input/tex-base", ...names.filter((name) => name !== "base").map((name) => `[tex]/${name}`)]},
+  tex: {packages: names},
+};
+require(path.join(process.env.AUTOFORM_MATHJAX_DIR, "es5", "node-main.js")).init(config).then((MathJax) => {
+  MathJax.tex2mml("x");
+  const tex = MathJax.startup.input[0];
+  const commands = new Set();
+  for (const kind of ["macro", "environment"]) {
+    for (const entry of tex.parseOptions.handlers.get(kind)._configuration) {
+      if (!(entry.item.map instanceof Map)) continue;
+      for (const [name] of entry.item.map) commands.add(kind === "macro" ? "\\" + name : "env:" + name);
+    }
+  }
+  const colored = new Set();
+  for (const command of commands) {
+    for (const key of ["mathcolor", "color", "mathbackground", "background"]) {
+      const option = `[${key}=#31A24C]`;
+      const forms = command.startsWith("env:")
+        ? [`\\begin{${command.slice(4)}}${option}{x}{x} x \\end{${command.slice(4)}}`]
+        : [0, 1, 2, 3].map((before) => command + "{x}".repeat(before).replace("{x}", before ? "{mi}" : "") + option + "{x}{x}");
+      for (const form of forms) {
+        let mml = "";
+        try { mml = MathJax.tex2mml(form); } catch (error) {}
+        if (/(color|background)="#31A24C"/.test(mml)) colored.add(command);
+      }
+    }
+  }
+  console.log(JSON.stringify({commands: commands.size, colored: [...colored].sort()}));
+});
+"""
+
+
+def test_the_commands_an_option_colors_are_all_refused(tmp_path: Path) -> None:
+    """The commands of the page's packages that color what they draw when
+    given a color in brackets, found by typesetting each of them, are the
+    ones check refuses, wholly or with an option."""
+
+    mathjax = mathjax_package()
+    from autoform_cli.mathjax import ATTRIBUTE_TEX, OPTION_TEX, PAGE_PACKAGES
+
+    (tmp_path / "inventory.js").write_text(_OPTION_INVENTORY, encoding="utf-8")
+    done = subprocess.run(
+        [NODE, "inventory.js", json.dumps(list(PAGE_PACKAGES))],
+        cwd=tmp_path,
+        env=dict(os.environ, AUTOFORM_MATHJAX_DIR=str(mathjax)),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    report = json.loads(done.stdout)
+
+    assert report["commands"] > 900
+    assert set(report["colored"]) == ATTRIBUTE_TEX | OPTION_TEX
 
 
 def test_the_rendered_configuration_refuses_another_release(tmp_path: Path) -> None:

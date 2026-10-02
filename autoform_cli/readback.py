@@ -69,7 +69,7 @@ from .markdown import (
     published_lines,
     published_markdown,
 )
-from .mathjax import TEX_MACROS, attribute_commands, stateful_commands
+from .mathjax import TEX_MACROS, attribute_commands, option_commands, stateful_commands
 from .skeleton import (
     DeclarationSkeleton,
     SkeletonReport,
@@ -2977,7 +2977,8 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
     MathJax reads. The articles on a page are typeset with one TeX input, so
     a definition in one would change what the others show. So is
     ``\\mmlToken``, which colors a symbol as the formula says, like the
-    site's marks.
+    site's marks, and a strike such as ``\\cancel`` that something other
+    than its argument follows, which could be an option that colors it.
 
     And it is refused for an attribute list that does anything but give a
     heading an id, or, in a code fence's braces, name its language, which
@@ -3044,6 +3045,14 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
                 _lines_naming(text, _commands(commands))
                 + "TeX commands that set what a symbol looks like are not allowed: " + ", ".join(commands)
                 + "; write the symbol itself, and put a command you only name in code"
+            )
+        commands = option_commands("".join(reading.text))
+        if commands:
+            found.append(
+                _lines_naming(text, _commands(commands))
+                + "TeX strikes must be followed by their argument: " + ", ".join(commands)
+                + "; an option in brackets, or one a macro supplies, sets the color and other attributes of the "
+                + f"strike, so write {commands[0]}{{...}}"
             )
         errors.extend(found)
         attributes.extend(assigned)
