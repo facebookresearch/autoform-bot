@@ -3002,8 +3002,13 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
         reading.close()
         found = [_lines_naming(text, _named_markup(error)) + error for error in _raw_html_errors(source, reading.code)]
         if passed and not found:
-            shown = ", ".join(repr(block[:40]) for block in dict.fromkeys(passed))
-            found.append(f"raw HTML is not allowed: the site would publish {shown} as HTML")
+            blocks = dict.fromkeys(passed)
+            shown = ", ".join(repr(block[:40]) for block in blocks)
+            starts = [re.compile(re.escape(line.strip())) for block in blocks for line in block.splitlines()[:1] if line.strip()]
+            found.append(
+                _lines_naming(text, starts)
+                + f"raw HTML is not allowed: the site would publish {shown} as HTML; write it in Markdown, or in code to show it as typed"
+            )
         commands = stateful_commands("".join(reading.text))
         if commands:
             found.append(

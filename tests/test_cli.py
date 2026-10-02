@@ -130,7 +130,7 @@ def _with_body(tmp_path: Path, body: str) -> Path:
 @pytest.mark.parametrize(
     ("body", "issue"),
     [
-        ("<img/src=x onerror=alert(1)>", "raw HTML is not allowed"),
+        ("<img/src=x onerror=alert(1)>", "raw HTML is not allowed: the site would publish"),
         ("Some <span style='display:none'>hidden</span> text.", "raw HTML is not allowed: <span>"),
         ("Fish &amp; chips.", "HTML character references are not allowed: &amp;"),
         ("<!-- a note that never ends", "HTML comments are not allowed"),
@@ -142,7 +142,7 @@ def test_check_refuses_raw_html_in_an_article(tmp_path: Path, capsys, body: str,
 
     assert main(["check", str(blueprint)]) == 1
     output = capsys.readouterr().out
-    assert f"error: result: {issue}" in output
+    assert f"error: result: line 9: {issue}" in output
     assert "OK:" not in output
 
 
@@ -185,4 +185,4 @@ def test_check_judges_the_articles_its_graph_loaded(tmp_path: Path, monkeypatch:
     monkeypatch.undo()
 
     assert main(["check", str(blueprint)]) == 1
-    assert "error: result: raw HTML is not allowed: <script>" in capsys.readouterr().out
+    assert "error: result: line 9: raw HTML is not allowed: <script>" in capsys.readouterr().out
