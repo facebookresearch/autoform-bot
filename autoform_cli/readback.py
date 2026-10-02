@@ -171,7 +171,8 @@ TESTIMONY_MAX_ASTERISKS = 1024
 TESTIMONY_MAX_BACKSLASHES = 2048
 #: The table cells a testimony may hold. Both Markdown readings fill every row
 #: out to the header's width, so a wide header over many short lines renders
-#: millions of cells from a few kilobytes; counted before parsing.
+#: millions of cells from a few kilobytes; counted by the renderer's block
+#: parser before any cell is built.
 TESTIMONY_MAX_TABLE_CELLS = 2048
 #: The HTML a testimony may render to, a backstop for any other construct the
 #: renderer expands, checked before the HTML is parsed. Escaping alone takes
@@ -180,12 +181,6 @@ TESTIMONY_MAX_RENDERED_BYTES = 256 * 1024
 _MATH_DELIMITER = re.compile(r"\$|\\[()\[\]]")
 _BACKTICK_RUN = re.compile(r"`+")
 _UNDERSCORE_OPENER = re.compile(r"(?<!\w)_")
-#: A line that could be a table's delimiter row, in a block quote or a list or
-#: not: Python-Markdown takes any row of pipes, colons, hyphens, and spaces
-#: that splits into as many cells as its header, so a pipe is all it needs.
-#: And the line that ends a table wherever it is.
-_TABLE_DELIMITER_ROW = re.compile(r"(?=[^|]*\|)[\s>|:-]+")
-_BLANK_LINE = re.compile(r"\s*")
 #: Everything a line can open before its content: indentation, block quotes,
 #: and list markers, each of which nests one more block.
 _NESTING_PREFIX = re.compile(r"(?:[ >]|[-+*](?= )|\d{1,9}[.)](?= ))*")
@@ -1053,6 +1048,17 @@ def _formula_fence(source: str, *args: object, **kwargs: object) -> str:
     ``<p>`` the renderer gives every other one."""
 
     return '<p class="arithmatex">\\[\n' + html.escape(source, quote=False) + "\n\\]</p>"
+
+
+class _TableCells(TableProcessor):
+    """Python-Markdown's tables, with their cells counted rather than built:
+    the header's, and each written row's, which is filled out or cut to the
+    header's width."""
+
+    cells = 0
+
+    def _build_row(self, row: str, parent: object, align: list[str | None]) -> None:  # type: ignore[override]
+        self.cells += len(align)
 
 
 class _CountedTable(TableProcessor):
@@ -2734,7 +2740,11 @@ def _testimony_limit_errors(text: str) -> tuple[str, ...]:
     size = len(text.encode("utf-8"))
     if size > TESTIMONY_MAX_BYTES:
         errors.append(f"testimony is {size} bytes, over the {TESTIMONY_MAX_BYTES}-byte limit")
-    lines = text.split("\n")
+    # The lines are counted as the renderer reads them, after its own
+    # normalization: "\r" and "\r\n" end a line, a tab expands to the next
+    # tab stop, and two blank lines are appended, which are not counted.
+    converter = _testimony_converter()
+    lines = converter.preprocessors["normalize_whitespace"].run(text.split("\n"))[:-2]
     if len(lines) > TESTIMONY_MAX_LINES:
         errors.append(f"testimony has {len(lines)} lines, over the {TESTIMONY_MAX_LINES}-line limit")
     delimiters = len(_MATH_DELIMITER.findall(text))
@@ -2756,7 +2766,7 @@ def _testimony_limit_errors(text: str) -> tuple[str, ...]:
             f"testimony has {brackets} opening brackets, over the limit of {TESTIMONY_MAX_BRACKETS}; in a formula "
             "write \\lbrack and \\rbrack for [ and ]"
         )
-    nesting = max((_NESTING_PREFIX.match(line.expandtabs(4)).end() for line in lines), default=0)
+    nesting = max((_NESTING_PREFIX.match(line).end() for line in lines), default=0)
     if nesting > TESTIMONY_MAX_NESTING:
         errors.append(
             f"testimony nests blocks {nesting} columns deep, over the limit of {TESTIMONY_MAX_NESTING}"
@@ -2773,18 +2783,18 @@ def _testimony_limit_errors(text: str) -> tuple[str, ...]:
     backslashes = text.count("\\")
     if backslashes > TESTIMONY_MAX_BACKSLASHES:
         errors.append(f"testimony has {backslashes} backslashes, over the limit of {TESTIMONY_MAX_BACKSLASHES}")
-    # Every line that could be a delimiter row is taken for one, with its
-    # header, the line before it, and the lines after it up to the next blank
-    # one, which is as far as a table can run outside a block quote. A table
-    # has as many columns as its header has cells, and the header no more
-    # than one more than its pipes, less one for each pipe at either end.
-    cells = following = 0
-    for index in range(len(lines) - 1, 0, -1):
-        if _TABLE_DELIMITER_ROW.fullmatch(lines[index]):
-            header = lines[index - 1].lstrip(" >").rstrip(" ")
-            columns = header.count("|") + 1 - header.startswith("|") - (len(header) > 1 and header.endswith("|"))
-            cells += columns * (following + 1)
-        following = 0 if _BLANK_LINE.fullmatch(lines[index]) else following + 1
+    # Tables are found by the renderer's own preprocessors and block parser,
+    # which read no inline markup and, within the byte, line, and nesting
+    # limits, are bounded; the cells are counted, not built.
+    if size > TESTIMONY_MAX_BYTES or len(lines) > TESTIMONY_MAX_LINES or nesting > TESTIMONY_MAX_NESTING:
+        return tuple(errors)
+    table = _TableCells(converter.parser, converter.parser.blockprocessors["table"].config)
+    converter.parser.blockprocessors.register(table, "table", 75)
+    lines = text.split("\n")
+    for preprocessor in converter.preprocessors:
+        lines = preprocessor.run(lines)
+    converter.parser.parseDocument(lines)
+    cells = table.cells
     if cells > TESTIMONY_MAX_TABLE_CELLS:
         errors.append(f"testimony has tables of up to {cells} cells, over the limit of {TESTIMONY_MAX_TABLE_CELLS}")
     return tuple(errors)

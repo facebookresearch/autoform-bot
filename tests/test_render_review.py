@@ -2,6 +2,8 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import re
+import time
+import tracemalloc
 
 import html5lib
 import markdown as markdown_renderer
@@ -21,6 +23,7 @@ from autoform_cli.readback import (
     _github_html,
     _shown,
     _testimony_errors,
+    _testimony_limit_errors,
     load_readbacks,
     publishable_article,
     render_testimony,
@@ -1070,6 +1073,8 @@ def test_writer_refuses_testimony_without_a_letter_or_digit(testimony: str, tmp_
         ("".join("  " * depth + "- a\n" for depth in range(512)), "columns deep"),
         ("word " * 7000, "-byte limit"),
         ("x\n" * 600, "-line limit"),
+        ("x\r" * 600, "-line limit"),
+        ("x\r\n" * 600, "-line limit"),
         ("_a " * 300, "underscores that start a word"),
         ("*a" * 1100, "asterisks"),
         ("\\" * 3000 + "x", "backslashes"),
@@ -1077,6 +1082,9 @@ def test_writer_refuses_testimony_without_a_letter_or_digit(testimony: str, tmp_
         ("Read back.\n\n" + "|" * 10501 + "\n|" + "-|" * 10500 + "\n" + "a\n" * 490, "cells"),
         ("Read back.\n\n" + "|" * 7901 + "\n|" + ":-|" * 7900 + "\n" + "a\n" * 490, "cells"),
         ("> " + "|" * 2101 + "\n> |" + "-|" * 2100 + "\n" + "> a\n" * 400, "cells"),
+        ("Read back.\r\r|" + "a|" * 2047 + "\r|" + "-|" * 2047 + "\r" + "b\r" * 494, "cells"),
+        ("Read back.\r\n\r\n|" + "a|" * 2047 + "\r\n|" + "-|" * 2047 + "\r\n" + "b\r\n" * 494, "cells"),
+        ("|" * 10001 + "\r" + "|" * 10001 + "\r" + "b\r" * 100, "cells"),
     ],
 )
 def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
@@ -1087,14 +1095,30 @@ def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
     over two minutes, and a list 512 levels deep overflowed the stack. 256
     brackets before 16,000 escapes took sixteen. A table's rows are filled
     out to its header's width, so a 32 KiB table of 10,500 columns and 490
-    lines rendered 46 MB of HTML, and took a minute and 3 GB to check."""
+    lines rendered 46 MB of HTML, and took a minute and 3 GB to check; with
+    its rows ended by "\r", which Python-Markdown reads as a line end, a
+    9 KB one took 3.4 s and 317 MB before the rendered-size limit refused
+    it. Tables are counted by the block parser alone, which reads no inline
+    markup, and only within the byte, line, and nesting limits."""
 
     def unbounded(*args: object, **kwargs: object) -> None:
         raise AssertionError("the Markdown renderer ran on testimony over a limit")
 
-    monkeypatch.setattr("autoform_cli.readback.markdown_renderer.Markdown", unbounded)
+    _testimony_limit_errors("a")
+    monkeypatch.setattr("autoform_cli.readback.markdown_renderer.Markdown.convert", unbounded)
+    if limit in {"columns deep", "-byte limit", "-line limit"}:
+        monkeypatch.setattr("markdown.blockparser.BlockParser.parseDocument", unbounded)
+    started = time.process_time()
+    tracemalloc.start()
+    try:
+        errors = _testimony_errors(testimony)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
 
-    assert any(limit in error for error in _testimony_errors(testimony))
+    assert any(limit in error for error in errors)
+    assert time.process_time() - started < 1
+    assert peak < 16 * 1024 * 1024
 
 
 def test_brackets_over_the_limit_are_refused_with_a_rewrite_that_is_accepted() -> None:
@@ -1898,7 +1922,7 @@ def test_a_card_over_a_limit_is_invalid_without_being_parsed(
     def unbounded(*args: object, **kwargs: object) -> None:
         raise AssertionError("the Markdown renderer ran on a card over a limit")
 
-    monkeypatch.setattr("autoform_cli.readback.markdown_renderer.Markdown", unbounded)
+    monkeypatch.setattr("autoform_cli.readback.markdown_renderer.Markdown.convert", unbounded)
     card = load_readbacks(tmp_path)[("af_0123456789abcdef01234567", _declaration().name)]
 
     assert not card.valid
