@@ -66,6 +66,10 @@ SITE_EXTENSION_CONFIGS: dict[str, dict[str, object]] = {
     },
 }
 
+#: The file names MkDocs converts to pages, as ``mkdocs.utils.markdown_extensions``
+#: lists them. A file so named in the vault is a page on the site, whoever wrote it.
+PAGE_SUFFIXES = (".markdown", ".mdown", ".mkdn", ".mkd", ".md")
+
 #: A published heading's ID, read back out of the rendered HTML.
 _HEADING_ID = re.compile(r"<h[1-6][^>]*\bid=\"([^\"]*)\"", re.IGNORECASE)
 
@@ -765,6 +769,7 @@ __all__ = [
     "INLINE_CODE",
     "LINK",
     "NOTES_BOX",
+    "PAGE_SUFFIXES",
     "SITE_EXTENSIONS",
     "SITE_EXTENSION_CONFIGS",
     "STATEMENT_BOX",

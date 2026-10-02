@@ -25,9 +25,9 @@ from . import graph_pages, graph_views, mermaid, status
 from .approvals import ApprovalStatus, ApprovalVerifier, approval_statuses, current_approvals
 from .coverage import CoverageSummary, load_coverage
 from .graph import Graph, Node, load_graph
-from .lean import SourceLinker, build_linker, declaration_names
+from .lean import SourceLinker, build_linker, declaration_names, detect_ref, detect_repository_url
 from .markdown import content_lines as _content_lines
-from .markdown import NOTES_BOX, STATEMENT_BOX, boxed, statement_and_notes
+from .markdown import NOTES_BOX, PAGE_SUFFIXES, STATEMENT_BOX, boxed, statement_and_notes
 from .markdown import outside_fences as _outside_fences
 from .mathjax import MATHJAX_SCRIPT, in_the_way, mathjax_script
 from .readback import READBACKS_DIR, Readback, load_readbacks, publishable_article, readback_for, render_testimony
@@ -241,34 +241,164 @@ class PublicationError(ValueError):
         super().__init__("; ".join(self.issues))
 
 
-def _article_text(graph: Graph, node: Node) -> str:
-    """The text of ``node`` as published: the bytes the graph parsed, without
-    their HTML comments, and refused if any raw HTML is left."""
+def publication_issues(graph: Graph, blueprint: Path, *, lean_root: str | Path | None = None) -> list[str]:
+    """What stops the site for ``graph`` being published, as ``autoform check``
+    reports it: the inputs render refuses to capture, and the issues of the
+    pages it would publish from them.
 
-    text, issues = publishable_article(graph.article_text(node))
-    if issues:
-        raise PublicationError([f"{node.id}: {issue}" for issue in issues])
-    return text
+    Render refuses on these same issues, worked out by :func:`_publication`
+    from the same capture, so the two judge one thing. The repository
+    coordinates are found as render finds them by default, from the Lean
+    root ``lean_root``, the blueprint's parent unless given, since they
+    decide whether source notes are published as pages.
+    """
+
+    blueprint = Path(blueprint).expanduser().resolve()
+    try:
+        snapshot = _capture_publication(blueprint, graph)
+    except PublicationError as exc:
+        return _blocked_assets(blueprint) + mathjax_script(blueprint)[1] + list(exc.issues)
+    repo_root = Path(lean_root).expanduser().resolve() if lean_root is not None else blueprint.parent
+    sources_base = _sources_base(blueprint, repo_root, detect_repository_url(repo_root), detect_ref(repo_root))
+    return _publication(graph, blueprint, snapshot, destination=blueprint, sources_base=sources_base).issues
 
 
-def publication_issues(graph: Graph, blueprint: Path) -> list[str]:
-    """What stops the site for ``graph`` being published: each article's
-    issues, named by its node, then the MathJax configuration's.
+@dataclass(frozen=True, slots=True)
+class _Publication:
+    """What render publishes from a blueprint's own files, and what refuses it."""
 
-    ``autoform check`` reports these and render refuses on them, so the two
-    judge one thing. Articles are published as Markdown, so raw HTML in one
-    would be markup on the site; a heading's id is checked against the ids
-    the site gives its own elements on the page the article is published on.
-    Render writes the site's own assets over the vault's copies, so anything
-    but a file where one goes is refused before it can stop the build.
+    groups: dict[str, list[str]]
+    #: Where each node is published: its page, and its anchor there.
+    targets: dict[str, tuple[Path, str]]
+    #: Each article's file, by its canonical path, and the node it is.
+    node_sources: dict[Path, str]
+    #: The files copied into the site, by their path in the blueprint: each
+    #: page's Markdown as published, and any other file's bytes.
+    files: dict[Path, str | bytes]
+    #: Each formalizable leaf's statement and the sections after it, as
+    #: published in its box on its chapter's page.
+    statements: dict[str, tuple[str, str]]
+    issues: list[str]
+
+
+def _publication(
+    graph: Graph,
+    blueprint: Path,
+    snapshot: BlueprintSnapshot,
+    *,
+    destination: Path,
+    sources_base: "_SourceBase | None",
+) -> _Publication:
+    """The pages and files the site for ``graph`` gets from ``snapshot``, and
+    the issues that refuse them: each page's, named by its node or its file,
+    then the MathJax configuration's.
+
+    Every page an author wrote is untrusted: an article, the landing page,
+    the coverage notes, and any other Markdown page. Each is published as
+    the text :func:`~autoform_cli.readback.publishable_article` returns for
+    it once render has resolved its links against where it is published,
+    and is refused on that function's issues, so the text checked is the
+    text published. Links resolve relative to pages, so ``destination``
+    need only be where the site's files would go; check passes the
+    blueprint itself. Raw HTML in a page would be markup on the site's own
+    origin; a heading's id is checked against the ids the site gives its
+    own elements on the page an article is published on. Render writes the
+    site's own assets over the vault's copies, so anything but a file where
+    one goes is refused before it can stop the build.
     """
 
     taken = _site_ids(graph)
-    issues = [
-        f"{node.id}: {issue}"
-        for node in graph.nodes.values()
-        for issue in publishable_article(graph.article_text(node), taken[node.id])[1]
-    ]
+    # Nodes are published as environments on their milestone page, the way a
+    # blueprint chapter carries many statements in sequence. Each keeps an
+    # anchor so every cross-reference still lands on the statement itself.
+    groups = _group_nodes(graph)
+    anchors = {
+        node_id: _anchor(node_id, group)
+        for group, node_ids in groups.items()
+        for node_id in node_ids
+    }
+    group_pages = {group: destination / _group_page(group) for group in groups}
+    targets = {
+        node_id: (group_pages[group], anchors[node_id])
+        for group, node_ids in groups.items()
+        for node_id in node_ids
+    }
+    targets.update(
+        {
+            node_id: (destination / node.path.relative_to(blueprint), "")
+            for node_id, node in graph.nodes.items()
+            if graph.children(node_id) or not node.formalizable
+        }
+    )
+    node_sources = {
+        node.path.resolve(): node_id for node_id, node in graph.nodes.items()
+    }
+
+    def published(text: str, source: Path, page: Path, reserved: Iterable[str]) -> tuple[str, tuple[str, ...]]:
+        return publishable_article(
+            _rewrite_links(
+                text,
+                source_dir=source.parent,
+                page=page,
+                blueprint=blueprint,
+                destination=destination,
+                node_sources=node_sources,
+                targets=targets,
+                sources_base=sources_base,
+            ),
+            reserved,
+        )
+
+    issues: list[str] = []
+    articles: dict[Path, str] = {}
+    statements: dict[str, tuple[str, str]] = {}
+    for node_id, node in graph.nodes.items():
+        # The text the graph parsed, so a page shows the article its status
+        # and any review disclosure describe.
+        text, found = published(graph.article_text(node), node.path, targets[node_id][0], taken[node_id])
+        issues.extend(f"{node_id}: {issue}" for issue in found)
+        # Narrative articles remain book pages. Only formalizable leaves are
+        # consolidated into their containing article with stable anchors.
+        if node.formalizable and not graph.children(node_id):
+            statements[node_id] = statement_and_notes(text)
+        else:
+            articles[node.path.resolve()] = text
+
+    files: dict[Path, str | bytes] = {}
+    for source in sorted(snapshot.files):
+        relative = source.relative_to(blueprint)
+        # Source notes leave the site entirely once readers can reach them in
+        # the repository, so the book has one reference surface rather than two.
+        if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
+            continue
+        # Read-backs are testimony about a statement, shown inside its box,
+        # never pages of their own.
+        if relative.parts[:1] == (READBACKS_DIR,):
+            continue
+        if source.resolve() in node_sources:
+            if source.resolve() in articles:
+                files[source] = articles[source.resolve()]
+        elif source.suffix.lower() in PAGE_SUFFIXES:
+            try:
+                written = snapshot.text(source)
+            except UnicodeDecodeError:
+                issues.append(
+                    f"{relative.as_posix()}: is not UTF-8 text, as a Markdown page must be; save it as UTF-8"
+                )
+                continue
+            text, found = published(written, source, destination / relative, ())
+            issues.extend(f"{relative.as_posix()}: {issue}" for issue in found)
+            files[source] = text
+        else:
+            files[source] = snapshot.files[source]
+    issues.extend(_blocked_assets(blueprint))
+    issues.extend(mathjax_script(blueprint)[1])
+    return _Publication(groups, targets, node_sources, files, statements, issues)
+
+
+def _blocked_assets(blueprint: Path) -> list[str]:
+    """Anything but a file where render writes one of the site's assets."""
+
     blocked: dict[str, str] = {}
     for relative in _ASSETS:
         found = in_the_way(blueprint, relative)
@@ -279,7 +409,7 @@ def publication_issues(graph: Graph, blueprint: Path) -> list[str]:
                 if where == relative
                 else f"{where}: is {kind}, where autoform render needs a folder for {relative}; remove it"
             )
-    return issues + list(blocked.values()) + list(mathjax_script(blueprint)[1])
+    return list(blocked.values())
 
 
 def _site_ids(graph: Graph) -> dict[str, frozenset[str]]:
@@ -379,20 +509,20 @@ def render_site(
         )
     if coverage is None:
         raise PublicationError(["coverage contract could not be loaded"])
-    issues = publication_issues(graph, blueprint)
-    if issues:
-        raise PublicationError(issues)
-    # The site's MathJax configuration is written here, never kept from the vault.
-    math_script = mathjax_script(blueprint)[0]
-    statuses = status.derive(graph)
     # The repository root, not the vault's parent. A blueprint nested at
     # <repo>/docs/blueprint would otherwise be described as <repo>/blueprint,
     # and every generated permalink would 404.
     repo_root = Path(lean_root).expanduser().resolve() if lean_root is not None else blueprint.parent
     linker = build_linker(repo_root, repository_url=repository_url, ref=ref)
+    sources_base = _sources_base(blueprint, repo_root, linker.repository_url, linker.ref)
+    site = _publication(graph, blueprint, snapshot, destination=destination, sources_base=sources_base)
+    if site.issues:
+        raise PublicationError(site.issues)
+    # The site's MathJax configuration is written here, never kept from the vault.
+    math_script = mathjax_script(blueprint)[0]
+    statuses = status.derive(graph)
     numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
-    sources_base = _sources_base(blueprint, repo_root, linker)
     if review_bundle is None:
         readbacks = {}
     elif readbacks is None:
@@ -428,66 +558,17 @@ def render_site(
     )
 
     report = RenderReport(output_dir=destination)
-    node_paths = {node.path.resolve(): node for node in graph.nodes.values()}
-    # Nodes are published as environments on their milestone page, the way a
-    # blueprint chapter carries many statements in sequence. Each keeps an
-    # anchor so every cross-reference still lands on the statement itself.
-    groups = _group_nodes(graph)
-    anchors = {
-        node_id: _anchor(node_id, group)
-        for group, node_ids in groups.items()
-        for node_id in node_ids
-    }
+    groups, targets, node_sources = site.groups, site.targets, site.node_sources
     group_pages = {group: destination / _group_page(group) for group in groups}
-    targets = {
-        node_id: (group_pages[group], anchors[node_id])
-        for group, node_ids in groups.items()
-        for node_id in node_ids
-    }
-    targets.update(
-        {
-            node_id: (destination / node.path.relative_to(blueprint), "")
-            for node_id, node in graph.nodes.items()
-            if graph.children(node_id) or not node.formalizable
-        }
-    )
-    node_sources = {
-        node.path.resolve(): node_id for node_id, node in graph.nodes.items()
-    }
-
-    for source in sorted(snapshot.files):
-        relative = source.relative_to(blueprint)
-        # Source notes leave the site entirely once readers can reach them in
-        # the repository, so the book has one reference surface rather than two.
-        if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
-            continue
-        # Read-backs are testimony about a statement, shown inside its box,
-        # never pages of their own.
-        if relative.parts[:1] == (READBACKS_DIR,):
-            continue
-        target = destination / relative
-        # Directories are created on demand below, so a directory holding
-        # nothing but absorbed nodes leaves no empty shell behind.
-        # Narrative articles remain book pages. Only formalizable leaves are
-        # consolidated into their containing article with stable anchors.
-        article = node_paths.get(source.resolve())
-        if article is not None and article.formalizable and not graph.children(article.id):
-            continue
+    for source, content in site.files.items():
+        target = destination / source.relative_to(blueprint)
+        # Directories are created on demand, so a directory holding nothing
+        # but absorbed nodes leaves no empty shell behind.
         target.parent.mkdir(parents=True, exist_ok=True)
-        if source.suffix.lower() == ".md":
-            rewritten = _rewrite_links(
-                snapshot.text(source) if article is None else _article_text(graph, article),
-                source_dir=source.parent,
-                page=target,
-                blueprint=blueprint,
-                destination=destination,
-                node_sources=node_sources,
-                targets=targets,
-                sources_base=sources_base,
-            )
-            target.write_text(rewritten, encoding="utf-8")
+        if isinstance(content, str):
+            target.write_text(content, encoding="utf-8")
         else:
-            target.write_bytes(snapshot.files[source])
+            target.write_bytes(content)
         report.pages += 1
 
     overview = destination / "README.md"
@@ -524,7 +605,7 @@ def render_site(
             repo_root=repo_root,
             destination=destination,
             node_sources=node_sources,
-            sources_base=sources_base,
+            statements=site.statements,
             skeleton=skeleton,
             review_bundle=review_bundle,
             readbacks=readbacks,
@@ -692,7 +773,9 @@ def _is_hidden(relative: Path) -> bool:
     return any(part.startswith(".") for part in relative.parts)
 
 
-def _sources_base(blueprint: Path, repo_root: Path, linker: SourceLinker) -> "_SourceBase | None":
+def _sources_base(
+    blueprint: Path, repo_root: Path, repository_url: str | None, ref: str | None
+) -> "_SourceBase | None":
     """Where `blueprint/sources/` lives in the repository, if it can be linked.
 
     Source notes are a reader's transcription of the paper being formalised.
@@ -705,7 +788,7 @@ def _sources_base(blueprint: Path, repo_root: Path, linker: SourceLinker) -> "_S
     from. The pages are then published as before, because a site with no
     sources and no way to reach them is worse than a redundant page.
     """
-    if not linker.repository_url or not linker.ref:
+    if not repository_url or not ref:
         return None
     try:
         relative = (blueprint / SOURCES_DIR).resolve().relative_to(repo_root).as_posix()
@@ -713,7 +796,7 @@ def _sources_base(blueprint: Path, repo_root: Path, linker: SourceLinker) -> "_S
         # The vault is outside the repository being linked, so no blob URL
         # describes it. Better no link than one that 404s.
         return None
-    return _SourceBase(linker.repository_url, linker.ref, relative)
+    return _SourceBase(repository_url, ref, relative)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1443,7 +1526,8 @@ def _document_body(text: str) -> str:
     kept: list[str] = []
     dropped_title = False
     source_lines = lines[start:]
-    visible_lines = _content_lines("\n".join(source_lines))
+    # One "\n" after every line, so blank lines at the end stay lines.
+    visible_lines = _content_lines("".join(f"{line}\n" for line in source_lines))
     for line, visible in zip(source_lines, visible_lines, strict=True):
         heading = _HEADING.match(visible)
         if heading is not None and len(heading.group(1)) == 1 and not dropped_title:
@@ -1643,7 +1727,7 @@ def _render_chapter(
     repo_root: Path,
     destination: Path,
     node_sources: dict[Path, str],
-    sources_base: "_SourceBase | None" = None,
+    statements: dict[str, tuple[str, str]],
     skeleton: SkeletonReport | None = None,
     review_bundle: ReviewBundle | None = None,
     readbacks: dict[tuple[str, str], Readback] | None = None,
@@ -1665,12 +1749,9 @@ def _render_chapter(
             linker=linker,
             links=links,
             page=page,
-            blueprint=blueprint,
             repo_root=repo_root,
             destination=destination,
-            node_sources=node_sources,
-            targets=targets,
-            sources_base=sources_base,
+            statements=statements,
             skeleton=skeleton,
             review_bundle=review_bundle,
             readbacks=readbacks or {},
@@ -1750,12 +1831,9 @@ def _render_environment(
     linker: SourceLinker,
     links: dict[str, str],
     page: Path,
-    blueprint: Path,
     repo_root: Path,
     destination: Path,
-    node_sources: dict[Path, str],
-    targets: dict[str, tuple[Path, str]],
-    sources_base: "_SourceBase | None" = None,
+    statements: dict[str, tuple[str, str]],
     skeleton: SkeletonReport | None = None,
     review_bundle: ReviewBundle | None = None,
     readbacks: dict[tuple[str, str], Readback] | None = None,
@@ -1763,24 +1841,9 @@ def _render_environment(
 ) -> tuple[str, int, list[str]]:
     node_status = statuses[node.id]
     caption, _, number = numbers[node.id].rpartition(" ")
-    # The text the graph parsed, so the box shows the statement its status and
-    # any review disclosure describe, or rendering stops.
-    statement, remainder = statement_and_notes(_article_text(graph, node))
-    # The body is leaving its own directory for the chapter page, so its
-    # relative links have to be recomputed from the chapter's location.
-    statement, remainder = (
-        _rewrite_links(
-            part,
-            source_dir=node.path.parent,
-            page=page,
-            blueprint=blueprint,
-            destination=destination,
-            node_sources=node_sources,
-            targets=targets,
-            sources_base=sources_base,
-        )
-        for part in (statement, remainder)
-    )
+    # The statement as checked: the text the graph parsed, with its links
+    # resolved from the chapter page it is published on.
+    statement, remainder = statements[node.id]
 
     code_links, implementation_rows, linked, unresolved = _lean_presentation(node, linker)
     context_link = _graph_context_link(node, page=page, destination=destination)

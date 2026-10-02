@@ -402,7 +402,7 @@ def _check(args: argparse.Namespace) -> int:
     try:
         graph = load_graph(args.blueprint_dir)
         # Render refuses to publish on these same issues.
-        markup = publication_issues(graph, Path(args.blueprint_dir))
+        markup = publication_issues(graph, Path(args.blueprint_dir), lean_root=args.lean_root)
     except GraphValidationError as exc:
         for issue in exc.issues:
             print(f"error: {issue}")

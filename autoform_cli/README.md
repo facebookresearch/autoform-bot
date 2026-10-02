@@ -1342,6 +1342,14 @@ anchor. `check` reads each article as the site publishes it: every line break
 Python reads (a form feed or U+2028 among them) as a new line, without the
 metadata MkDocs takes off the top of a page, and a statement in its box with
 its indentation kept, so an indented line stays code.
+Every other Markdown page the site publishes is held to the same rules, since
+its script or classes would run and show on the same site as the cards: the
+landing page `blueprint/README.md` (the text you wrote, before `render` adds
+its dashboard), `coverage/README.md`, and any other Markdown page in the vault.
+`check` reads each page, articles included, after `render` points its relative
+links at the pages and anchors they land on, and refuses what it refuses in an
+article, naming the file. `render` writes a moved link's target percent-encoded,
+so a target such as `%3Cscript%3E.md` stays a link and adds no markup.
 `render` refuses the same articles, so the site never publishes markup that an
 article's reviewer read as text and the owners of its theme never saw. It validates structure and
 leaves mathematical correctness to the agent and the Lean kernel.

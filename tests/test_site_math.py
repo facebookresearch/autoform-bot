@@ -521,6 +521,89 @@ def test_links_render_moves_resolve_as_before(tmp_path: Path) -> None:
     ) in written
 
 
+def test_check_judges_the_text_render_publishes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Check judges each page as render writes it, with its links moved, so
+    what render publishes is what check saw."""
+
+    import autoform_cli.render as render_module
+
+    judged: list[str] = []
+
+    def recording(text: str, reserved: frozenset[str]) -> tuple[str, list[str]]:
+        judged.append(text)
+        return publishable_article(text, reserved)
+
+    blueprint = _vault(tmp_path)
+    _with_article(blueprint, "See [the base](base.md).")
+    (blueprint / "notes.md").write_text("# Notes\n\nSee [the result](roadmap/top.md).\n", encoding="utf-8")
+    monkeypatch.setattr(render_module, "publishable_article", recording)
+
+    assert main(["check", str(blueprint)]) == 0
+
+    assert any("See [the base](#base)." in text for text in judged)
+    assert any("See [the result](roadmap/README.md#top)." in text for text in judged)
+    assert not any("base.md" in text or "roadmap/top.md" in text for text in judged)
+
+
+_UNSAFE_PAGE = (
+    "<script>document.title='X'</script>\n\n"
+    "Text\n{: .bp-readback .bp-readback-current }\n\n"
+    "$\\DeclareMathOperator{\\leq}{>}$\n"
+)
+
+
+@pytest.mark.parametrize("relative", ["README.md", "coverage/README.md", "notes.md", "more/notes.mdown"])
+def test_a_page_that_is_not_an_article_is_held_to_the_same_rules(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], relative: str
+) -> None:
+    """The landing page, the coverage contract, and any other Markdown page
+    are published on the site's origin as articles are, so check refuses
+    script, attribute lists, and stateful TeX in them, naming the file, and
+    render refuses to publish them."""
+
+    blueprint = _vault(tmp_path)
+    page = blueprint / relative
+    page.parent.mkdir(parents=True, exist_ok=True)
+    before = page.read_text(encoding="utf-8") if page.exists() else "# Notes\n"
+    page.write_text(f"{before.rstrip()}\n\n{_UNSAFE_PAGE}", encoding="utf-8")
+
+    assert main(["check", str(blueprint)]) == 1
+    out = capsys.readouterr().out
+    assert f"error: {relative}: raw HTML is not allowed: <script>, </script>" in out
+    assert f"error: {relative}: line " in out and "attribute list {: .bp-readback .bp-readback-current }" in out
+    assert f"error: {relative}: " in out and "\\DeclareMathOperator" in out
+    with pytest.raises(PublicationError):
+        _render(blueprint)
+
+
+def test_the_landing_page_is_checked_without_the_dashboard_render_adds(tmp_path: Path) -> None:
+    """Render adds HTML of its own around the landing page's text; only the
+    author's text is checked, so a plain landing page passes."""
+
+    blueprint = _vault(tmp_path)
+
+    assert main(["check", str(blueprint)]) == 0
+    assert '<div class="bp-landing"' in (_render(blueprint) / "README.md").read_text(encoding="utf-8")
+
+
+def test_a_page_that_is_not_utf8_is_refused_by_name(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    blueprint = _vault(tmp_path)
+    (blueprint / "notes.md").write_bytes(b"# Notes\n\n\xff\n")
+
+    assert main(["check", str(blueprint)]) == 1
+    assert "error: notes.md: is not UTF-8 text, as a Markdown page must be; save it as UTF-8" in capsys.readouterr().out
+
+
+def test_the_scaffolded_pages_pass_the_page_check(tmp_path: Path) -> None:
+    from autoform_cli.graph import load_graph
+    from autoform_cli.render import publication_issues
+
+    scaffold_project(tmp_path, title="Finite Flat")
+    blueprint = tmp_path / "blueprint"
+
+    assert publication_issues(load_graph(blueprint), blueprint) == []
+
+
 @pytest.mark.parametrize("separator", ["\u2028", "\x0b", "\x0c", "\x1e", "\x85"])
 def test_a_line_break_markdown_does_not_read_is_checked_as_the_site_writes_it(
     tmp_path: Path, separator: str
