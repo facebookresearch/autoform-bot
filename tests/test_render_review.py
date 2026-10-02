@@ -554,6 +554,24 @@ def test_negative_tex_spacing_at_either_end_of_a_formula_is_refused(testimony: s
     assert _testimony_errors(rewritten) == ()
 
 
+@pytest.mark.parametrize(
+    ("command", "width"),
+    [(r"\pmod{n}", 24), (r"\mod n", 24), (r"\bmod n", 10), (r"\iff b", 10), (r"\implies b", 10), (r"\impliedby b", 10)],
+)
+def test_tex_macros_that_add_space_count_it_toward_the_formula(command: str, width: int) -> None:
+    r"""MathJax 3.2.2 kerns 18 mu before ``mod`` in a displayed formula and
+    6 after it, and puts ``\;`` on either side of the arrows; with that
+    space a formula stays within 8 em, and one more thin space is over."""
+
+    space = r"\qquad" * 3 + r"\," * ((144 - 108 - width) // 3)
+
+    assert _testimony_errors(f"$a{space}{command}$") == ()
+    assert any(
+        "TeX spacing over 8 em in one formula is not allowed" in error
+        for error in _testimony_errors(f"$a{space}\\,{command}$")
+    )
+
+
 _PROOF_ROWS = r"\begin{aligned} " + r" \\ ".join([r"a &= b \quad \text{by } h_i"] * 7) + r" \end{aligned}"
 
 
@@ -607,6 +625,7 @@ def test_tex_spacing_counts_once_per_column_and_adds_up_across_formulas(testimon
         (r"$\sqrt{&}$", r"TeX & and \\ are allowed only between the cells and rows of an environment"),
         (r"$a & b$", r"TeX & and \\ are allowed only between the cells and rows of an environment"),
         (r"$\not 0$", r"\not is allowed only before a relation"),
+        (r"$P \not\implies Q$", r"\not is allowed only before a relation"),
         (r"$x^a^b$", "a second TeX superscript or subscript on one symbol is not allowed"),
         (r"$x^a'$", "a second TeX superscript or subscript on one symbol is not allowed"),
         (r"$\begin{matrix} a$", r"TeX \begin and \end that do not match are not allowed"),
@@ -618,7 +637,8 @@ def test_tex_spacing_counts_once_per_column_and_adds_up_across_formulas(testimon
 def test_tex_mathjax_would_not_set_is_refused(testimony: str, reason: str) -> None:
     r"""MathJax 3.2.2 shows an error in place of each of these formulas,
     except ``\not 0``, which it sets as a struck-out zero that reads as a
-    different symbol, and ``\text{\alpha}``, which it shows as typed."""
+    different symbol, ``\not\implies``, which strikes through the space
+    before the arrow, and ``\text{\alpha}``, which it shows as typed."""
 
     assert any(reason in error for error in _testimony_errors(testimony))
 

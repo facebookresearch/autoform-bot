@@ -1147,7 +1147,8 @@ class _Tex(NamedTuple):
     ``kind`` is ``"glyph"`` for a command that sets a symbol, ``"operator"``
     for a large or named operator, which ``\\limits`` may follow, ``"space"``
     for horizontal space ``width`` mu wide (an eighteenth of an em; negative
-    space pulls the next symbol back), ``"style"`` for a command that changes
+    space pulls the next symbol back), any other kind setting ``width`` mu
+    of space around what it sets, ``"style"`` for a command that changes
     the size of what follows but sets nothing itself, ``"size"`` for one that
     sizes a delimiter, or the name of a command the layout model reads itself.
     ``arguments`` spells what follows the command, in order: ``g`` where it
@@ -1167,7 +1168,9 @@ def _tex(names: str, kind: str = "glyph", arguments: str = "g", width: float = 0
 
 
 #: Relations, which alone may follow ``\not``, which strikes through the next
-#: symbol whatever it is.
+#: symbol whatever it is. ``\iff``, ``\implies``, and ``\impliedby`` are not
+#: among them: MathJax sets space before their arrow, and ``\not`` strikes
+#: through that.
 _TEX_RELATIONS = frozenset(
     r"""
     = < > \lt \gt \le \leq \ge \geq \ne \neq \ll \gg \leqslant \geqslant \nleq \ngeq \lneq \gneq
@@ -1183,7 +1186,7 @@ _TEX_RELATIONS = frozenset(
     \vartriangleright \ntriangleleft \ntriangleright \ntrianglelefteq \ntrianglerighteq
     \to \gets \mapsto \longmapsto \rightarrow \leftarrow \leftrightarrow \Rightarrow \Leftarrow
     \Leftrightarrow \longrightarrow \longleftarrow \longleftrightarrow \Longrightarrow
-    \Longleftarrow \Longleftrightarrow \iff \implies \impliedby \hookrightarrow \hookleftarrow
+    \Longleftarrow \Longleftrightarrow \hookrightarrow \hookleftarrow
     \twoheadrightarrow \uparrow \downarrow \updownarrow \Uparrow \Downarrow \Updownarrow \nearrow
     \searrow \swarrow \nwarrow \nleftarrow \nrightarrow \nLeftarrow \nRightarrow \nleftrightarrow
     \nLeftrightarrow \leftleftarrows \rightrightarrows \upuparrows \downdownarrows
@@ -1241,10 +1244,14 @@ _TESTIMONY_TEX: dict[str, _Tex] = {
         \curlyvee \oplus \ominus \otimes \oslash \odot \circledast \circleddash \dotplus \sqcap
         \sqcup \uplus \amalg \dagger \ddagger \diamond \intercal \wr \divideontimes \ltimes \rtimes
         \leftthreetimes \rightthreetimes \lhd \rhd \unlhd \unrhd \boxplus \boxminus \boxtimes
-        \boxdot \bmod \circledcirc \divsymbol \doublecap \doublecup
+        \boxdot \circledcirc \divsymbol \doublecap \doublecup
         """
     ),
-    **_tex(r"\mod \pmod", arguments="ge"),
+    # Commands MathJax 3.2.2 defines as macros that add space: \mod and \pmod
+    # 18 mu before ``mod`` in a displayed formula and 6 after it, \bmod and
+    # the arrows 5 mu on either side.
+    **_tex(r"\mod \pmod", arguments="ge", width=24),
+    **_tex(r"\bmod \iff \implies \impliedby", width=10),
     # Large and named operators.
     **_tex(
         r"""
@@ -1702,6 +1709,7 @@ class _TexLayout:
                 self.environment()
             else:
                 self.arguments(token, entry.arguments)
+                self.spacing += entry.width
             self.new_atom(kind == "operator")
 
     def group(self, context: str) -> None:
