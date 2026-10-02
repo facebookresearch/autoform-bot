@@ -2927,23 +2927,22 @@ def _stage_output(destination: Path, stages: list[Path], content: str | None = N
         mode = stat.S_IMODE(destination.stat().st_mode) if existing else None
     except OSError as exc:
         raise SkeletonError([f"cannot inspect skeleton output {destination}: {exc}"]) from exc
-    for _ in range(100):
-        stage = destination.with_name(f".{destination.name}.autoform-stage-{secrets.token_hex(8)}")
-        stages.append(stage)
-        try:
-            stream = stage.mkdir() if content is None else stage.open("x", encoding="utf-8")
-        except FileExistsError:
-            stages.remove(stage)
-            continue
-        if stream is not None:
-            with stream:
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
-        if mode is not None:
-            stage.chmod(mode)
-        return stage
-    raise SkeletonError([f"cannot allocate a stage beside {destination}"])
+    stage = destination.with_name(f".{destination.name}.autoform-stage-{secrets.token_hex(8)}")
+    stages.append(stage)
+    try:
+        stream = stage.mkdir() if content is None else stage.open("x", encoding="utf-8")
+    except FileExistsError:
+        # Never created here, so the owner of ``stages`` must not remove a foreign path.
+        stages.remove(stage)
+        raise
+    if stream is not None:
+        with stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+    if mode is not None:
+        stage.chmod(mode)
+    return stage
 
 
 def _stage_report_output(
