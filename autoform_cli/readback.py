@@ -2395,15 +2395,29 @@ def _github_hint(site: list[tuple[str, str, int]], github: list[tuple[str, str, 
                 ends.append(value)
         return ends
 
+    def shown_next(tokens: list[tuple[str, str, int]]) -> tuple[str, str]:
+        """The first thing shown at token ``at`` or after it, past the ends
+        of blocks, which a list item's paragraph adds on one side only."""
+        return next((token[:2] for token in tokens[at:] if token[0] not in {"block", "break", "mark"}), ("", ""))
+
     in_table = opened(site, "table") or opened(github, "table")
+    in_item = opened(site, "li") or opened(github, "li")
+    in_quote = opened(site, "blockquote") or opened(github, "blockquote")
+    fence_in_item = "under a line of text in the item, indented four spaces more than the item's marker"
     if site[:1] == [("block", "<pre></pre>", 1)] and github[:1] != site[:1]:
         return "the site reads a first line of four spaces or a tab as an empty code block; drop the blank first line"
     if "\t" in other[1] and "\t" not in one[1]:
         return "the site reads a tab in a formula or in code as spaces, and GitHub keeps it; write spaces for tabs"
-    if one[0] == "math" and other in {("text", "("), ("text", "[")}:
+    if shown_next(site)[0] == "math" and shown_next(github) in {("text", "("), ("text", "[")}:
+        if in_quote:
+            return (
+                "GitHub reads \\( and \\[ as ( and [, not as the start of a formula; write a formula as $`...`$, "
+                "displayed ones too: a block quote takes no ```math fence"
+            )
         return (
             "GitHub reads \\( and \\[ as ( and [, not as the start of a formula; write a formula in a line of "
             "text as $`...`$, and a displayed one in a ```math fence"
+            + (f", which in a list item goes {fence_in_item}" if in_item else "")
         )
     if "math" in {one[0], other[0]}:
         if one[0] == "math" and "\n" in one[1]:
@@ -2460,7 +2474,6 @@ def _github_hint(site: list[tuple[str, str, int]], github: list[tuple[str, str, 
             "GitHub reads a line of three or more *, -, or _, spaced or not, as a rule, in a list item too; write a "
             "rule as *** after a blank line, and \\ before the first character of a line of text that is one"
         )
-    in_quote = opened(site, "blockquote") or opened(github, "blockquote")
     if quotes(site) != quotes(github) or (
         in_quote and one[0] == other[0] == "text" and (">" in one[1]) != (">" in other[1])
     ):

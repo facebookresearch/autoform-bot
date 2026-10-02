@@ -1673,6 +1673,9 @@ _RULE = "write a rule as *** after a blank line, and \\ before the first charact
 _QUOTE = "start each line of a block quote, blank ones too, with > where the quote's first > is, and put a line of text between two block quotes"
 _LIST = "write \\-, \\+, \\*, or 1\\. where a line of text starts with one"
 _TILDE = "write a space for a ~ that keeps words together, \\sim in a formula, or ~ in code"
+_IN_ITEM = "under a line of text in the item, indented four spaces more than the item's marker"
+_DISPLAY_IN_ITEM = "and a displayed one in a ```math fence, which in a list item goes " + _IN_ITEM
+_DISPLAY_IN_QUOTE = "write a formula as $`...`$, displayed ones too: a block quote takes no ```math fence"
 
 
 @pytest.mark.parametrize(
@@ -1753,6 +1756,11 @@ _TILDE = "write a space for a ~ that keeps words together, \\sim in a formula, o
             "W0 **a \\*\\*b\\*\\* c** W1\n\n***\n\nW2",
         ),
         ("A 50\\% share.\n\n***\n\nW2", "drop the one before %", "A 50% share.\n\n***\n\nW2"),
+        ("- \\[x^2\\]", _DISPLAY_IN_ITEM, "- The bound:\n\n    ```math\n    x^2\n    ```"),
+        ("1. \\[x^2\\]", _DISPLAY_IN_ITEM, "1. The bound:\n    ```math\n    x^2\n    ```"),
+        ("- W0 \\(x\\) W1", _DISPLAY_IN_ITEM, "- W0 $`x`$ W1"),
+        ("> - \\[a\\]", _DISPLAY_IN_QUOTE, "> - $`a`$"),
+        ("> \\[a\\]", _DISPLAY_IN_QUOTE, "> $`a`$"),
         ("Its value \\$x$ is typed.", "write dollar signs meant as typed in code, as `$x$`", "Its value `$x$` is typed."),
         ("\t\nThe map is open.", "drop the blank first line", "The map is open."),
         ("    \nThe map is open.", "drop the blank first line", "The map is open."),
