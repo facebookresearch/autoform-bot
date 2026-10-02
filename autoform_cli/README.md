@@ -608,11 +608,14 @@ Lean read it when compiling the file, `local` syntax aside. Where a comment
 starts depends on the token table in force at the declaration: with `++"` a
 token, `x ++" -- y "` holds a string, and without it a comment. Lean does not
 record that table, so the probe reconstructs it from the declaration's own
-module, once per module. Every global token the module's imports declare is
-in it; a token of a module outside its imports is not. A scoped token of an
-import, and a token the module itself declares, may or may not be; the probe
-counts such a token as absent only when it can place the parser that declares
-the token after the declaration's source ends. The probe parses the source
+module, once per module. Every global token of a module Lean loads to
+compile the file is in it, and a token of any other module is not; under
+the module system Lean loads the file's imports and, through each loaded
+module, only what that module imports `public`ly, unless a chain of
+`import all` reaches it. A scoped token of a loaded module, and a token the
+module itself declares, may or may not be; the probe counts such a token as
+absent only when it can place the parser that declares the token after the
+declaration's source ends. The probe parses the source
 under every table those uncertain tokens allow, counting only the tokens that
 occur in the text, since no other token changes how it lexes, and removes
 comments only when every table under which the source parses agrees on the

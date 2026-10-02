@@ -474,8 +474,9 @@ where it is written, and that table decides what is a comment: with `++"` a
 token, `x ++" -- y "` holds a string; without it, a comment. Lean does not
 record the table, so the probe proves what it can of it from the final
 environment, once per module. The table at a module's first line is exactly
-the builtin tokens and the global tokens of everything the module imports.
-Beyond those, a declaration may see a scoped token of an import or of its own
+the builtin tokens and the global tokens of every module Lean loads to
+compile it, which under the module system is not every module it imports,
+directly or not. Beyond those, a declaration may see a scoped token of an import or of its own
 module, which an `open` activates, and a token its module declares above it.
 A parser attribute takes effect no earlier than the declaration of its
 parser, so a token whose parsers are all declared after a declaration's
@@ -485,13 +486,15 @@ one, which Lean does not record anywhere. -/
 /-- What the environment proves about one module's token table. -/
 structure ModuleTokens where
   /-- The table at the module's first line: the builtin tokens and the global
-  tokens of every module it imports, directly or not. -/
+  tokens of every module Lean loads to compile it. -/
   imported : Parser.TokenTable
   /-- Each other token a declaration of the module may see, with the earliest
   position at which it can take effect there, `none` when that is unknown. -/
   possible : Array (String × Option Position)
-  /-- The module's own global tokens, which every file importing it has. -/
-  ownGlobal : Array String
+  /-- The table of a file, outside the module system, whose only import is
+  the module: the builtin tokens and the global tokens of the module and of
+  everything it imports, directly or not. -/
+  importer : Parser.TokenTable
 
 /-- Whether `p` comes before `q` in a file. -/
 def before (p q : Position) : Bool :=
@@ -512,6 +515,29 @@ partial def stringLiterals (e : Expr) (acc : Array String) : Array String :=
   | .mdata _ b | .proj _ _ b => stringLiterals b acc
   | _ => acc
 
+/-- The modules whose data Lean loads to compile the module at `modIdx`, as
+`importModulesCore` decides: every module it imports, directly or not,
+unless it is in the module system. Then each module it imports is loaded,
+and through a loaded module only what that module imports `public`ly, or
+everything when an unbroken chain of `import all` reaches it. -/
+def compiledImports (env : Environment) (modIdx : ModuleIdx) : Std.HashSet Name := Id.run do
+  let header := env.header.moduleData[modIdx.toNat]!
+  let everything := !header.isModule
+  -- Each loaded module, with whether `import all` alone reaches it.
+  let mut loaded : Std.HashMap Name Bool := {{}}
+  let mut work : Array (Name × Bool) := header.imports.map fun i => (i.module, everything || i.importAll)
+  while h : work.size > 0 do
+    let (m, all) := work[work.size - 1]
+    work := work.pop
+    if let some known := loaded.get? m then
+      if known || !all then continue
+    loaded := loaded.insert m all
+    let some idx := env.getModuleIdx? m | continue
+    for i in env.header.moduleData[idx.toNat]!.imports do
+      if i.isExported || all then
+        work := work.push (i.module, everything || (all && i.importAll))
+  return loaded.fold (init := {{}}) fun set m _ => set.insert m
+
 /-- The token facts of `mod`, read from the parser entries of its imports and
 then its own, which Lean keeps in the order the module added them.
 `ParserAttribute.add` records a parser's tokens just before its node kinds and
@@ -523,9 +549,10 @@ def moduleTokens (cache : IO.Ref (Std.HashMap Name ModuleTokens)) (mod : Name) :
   if let some known := (← cache.get).get? mod then return known
   let env ← getEnv
   let mut imported ← Parser.builtinTokenTable.get
+  let mut importer := imported
   let mut possible : Std.HashMap String (Option Position) := {{}}
-  let mut ownGlobal : Array String := #[]
   if let some modIdx := env.getModuleIdx? mod then
+    let compiled := compiledImports env modIdx
     let mut seen : Std.HashSet Name := {{}}
     let mut work : Array Name := env.header.moduleData[modIdx.toNat]!.imports.map (·.module)
     while h : work.size > 0 do
@@ -536,8 +563,10 @@ def moduleTokens (cache : IO.Ref (Std.HashMap Name ModuleTokens)) (mod : Name) :
       let some idx := env.getModuleIdx? m | continue
       for e in Parser.parserExtension.ext.getModuleEntries env idx do
         match e with
-        | .global (.token t) => imported := imported.insert t t
-        | .scoped _ (.token t) => possible := possible.insert t none
+        | .global (.token t) =>
+          importer := importer.insert t t
+          if compiled.contains m then imported := imported.insert t t
+        | .scoped _ (.token t) => if compiled.contains m then possible := possible.insert t none
         | _ => pure ()
       for i in env.header.moduleData[idx.toNat]!.imports do
         work := work.push i.module
@@ -549,7 +578,7 @@ def moduleTokens (cache : IO.Ref (Std.HashMap Name ModuleTokens)) (mod : Name) :
       match entry with
       | .token t =>
         pending := pending.push t
-        if e matches .global _ then ownGlobal := ownGlobal.push t
+        if e matches .global _ then importer := importer.insert t t
       | .kind _ => pure ()
       | .parser _ declName _ =>
         let start := (← findDeclarationRanges? declName).map (·.range.pos)
@@ -565,7 +594,7 @@ def moduleTokens (cache : IO.Ref (Std.HashMap Name ModuleTokens)) (mod : Name) :
         pending := #[]
     for t in pending do possible := possible.insert t none
   let tokens : ModuleTokens := {{
-    imported, ownGlobal, possible := possible.toArray.filter fun (t, _) => (imported.find? t).isNone }}
+    imported, importer, possible := possible.toArray.filter fun (t, _) => (imported.find? t).isNone }}
   cache.modify (·.insert mod tokens)
   return tokens
 
@@ -809,7 +838,7 @@ def skeleton
   -- escapes it, whatever the helper's own imports declare.
   let rootTokens ← moduleTokens tokenCache ((moduleOf root).getD Name.anonymous)
   let printEnv := Parser.parserExtension.modifyState env fun s =>
-    {{ s with tokens := rootTokens.ownGlobal.foldl (fun t tk => t.insert tk tk) rootTokens.imported }}
+    {{ s with tokens := rootTokens.importer }}
   let signature (c : Name) : CommandElabM String := withEnv printEnv (signatureOf c)
   let rawSignature (c : Name) : CommandElabM String := withEnv printEnv (rawSignatureOf c)
   let mut trusted : Array Name := #[]

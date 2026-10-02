@@ -3480,6 +3480,39 @@ def test_sources_whose_tokens_are_provable_are_shown_without_comments(tmp_path: 
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_module_lexes_with_the_tokens_of_the_imports_lean_loads_for_it(tmp_path: Path) -> None:
+    # Under the module system Lean does not load what an import imports
+    # privately, so `+--` is not a token in ModUse, and the build proves it:
+    # read as code, `KEEPOUT_M` would be an unknown identifier. The probe,
+    # which imports everything, must not take the token as present there.
+    project = _project(tmp_path)
+    (project / "Skel" / "ModTok.lean").write_text(
+        'module\n\nnamespace Skel.ModTok\ninfixl:65 " +-- " => Nat.sub\nend Skel.ModTok\n', encoding="utf-8"
+    )
+    (project / "Skel" / "ModMid.lean").write_text(
+        "module\n\nimport Skel.ModTok\n\npublic section\nnamespace Skel.ModMid\ndef mid : Nat := 1\nend Skel.ModMid\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "ModUse.lean").write_text(
+        "module\n\npublic import Skel.ModMid\n\npublic section\nnamespace Skel.ModUse\n"
+        "def hidden (a b : Nat) : Nat := a +-- KEEPOUT_M\n  b\n"
+        "theorem modRoot (h : hidden 1 2 = 1) : True := trivial\n"
+        "end Skel.ModUse\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.ModUse")
+
+    report = extract_skeletons(_blueprint(tmp_path, lean={"mod": "Skel.ModUse.modRoot"}), lean_root=project)
+
+    assert report.clean
+    (root,) = [d for node in report.nodes for d in node.declarations]
+    (hidden,) = root.trusted
+    assert hidden.source is not None and not hidden.source_withheld
+    assert hidden.source_comments == (_comment_range(hidden.source, "--"),)
+    assert "KEEPOUT" not in root.blind_text()
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_signatures_escape_only_the_tokens_of_their_module(tmp_path: Path) -> None:
     # `throwError` is a keyword once `Lean.Exception` is imported, as it is in
     # the probe's helper, but not in a file whose only import is Skel.EscUse,
