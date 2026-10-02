@@ -33,12 +33,15 @@ env:
   AUTOFORM_REF: "43097b2c07e68df899d6b8bca7849d091c294754"
 
 # Pushes, dispatches, and scheduled runs on the default branch share one
-# group, so their builds run one at a time, in order, and a scheduled run
-# decides only after the run before it has finished. queue: max keeps every
-# pending run: by default a newly queued run, such as a re-run of an old one,
-# cancels the pending run, which may be the only build of the current head.
-# Every other ref, such as a pull request's refs/pull/N/merge, has its own
-# group, so it never cancels a pending build of the default branch.
+# group, so their builds run one at a time, and a scheduled run decides only
+# after the run before it has finished. GitHub does not promise the order, so
+# a scheduled run that starts before a pending push run of the same head
+# builds it, and the push run builds it again; the deploy job's head check
+# keeps an older commit from publishing whatever the order. queue: max keeps
+# every pending run: by default a newly queued run, such as a re-run of an old
+# one, cancels the pending run, which may be the only build of the current
+# head. Every other ref, such as a pull request's refs/pull/N/merge, has its
+# own group, so it never cancels a pending build of the default branch.
 concurrency:
   group: blueprint-pages-${{ github.ref }}
   cancel-in-progress: false
