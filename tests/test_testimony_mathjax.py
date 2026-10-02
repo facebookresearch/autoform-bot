@@ -182,6 +182,10 @@ def _corpus() -> list[str]:
         r"a \\ * b",
         r"\begin{equation}[x] a \\ b \end{equation} + \frac{c}{d}",
         r"\frac{\begin{equation*} c \\ \end{equation*}}{d}",
+        r"\left[\begin{array}{cc|c} 1 & 0 & 2 \\ \hline 0 & 1 & 3 \end{array}\right]",
+        r"\begin{array}{ c : c } a & b \\ \hline c & d \\ \hline e & f \end{array}",
+        r"\begin{array}{c||c} a & b \end{array}",
+        r"\begin{array}{c} \hline a \\ b \\ \hline \end{array}",
     ]
     return formulas
 
@@ -299,6 +303,8 @@ def test_the_model_refuses_every_formula_found_to_differ(typeset: _Typeset) -> N
         r"\sum^{\limits}x",
         r"\begin{align} \begin{equation} a \end{equation} \end{align}",
         r"\begin{equation} a & b \end{equation}",
+        r"\begin{array}{c} a \hline \end{array}",
+        r"x \hline y",
     ]
 
     results = typeset(differing)

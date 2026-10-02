@@ -1318,6 +1318,7 @@ _TESTIMONY_TEX: dict[str, _Tex] = {
     r"\qquad": _Tex("space", "", 36),
     **_tex(r"\! \negthinspace", "space", "", -3),
     "\\\\": _Tex("rows", ""),
+    r"\hline": _Tex("hline", ""),
     r"\begin": _Tex("begin", ""),
     r"\end": _Tex("end", ""),
 }
@@ -1350,8 +1351,10 @@ _TEX_ALIGNABLE = frozenset({"aligned", "gathered", "array"})
 #: nested in the first, gets an error in place of the formula.
 _TEX_EQUATIONS = frozenset({"align", "align*", "gather", "gather*", "equation", "equation*"})
 #: The columns ``\begin{array}`` may take. MathJax draws ``|`` and ``:`` as
-#: rules between columns and drops any other character without showing it.
-_TEX_ARRAY_COLUMNS = re.compile(r"\s*\{ *[lcr][lcr ]{0,31}\}")
+#: rules between columns, one rule for two of them, and at either edge a rule
+#: that reads as a bar beside the cells; it drops any other character without
+#: showing it.
+_TEX_ARRAY_COLUMNS = re.compile(r"\s*\{ *[lcr](?: *(?:[|:] *)?[lcr]){0,31} *\}")
 #: Commands MathJax 3.2.2 reads as a function name waiting for what follows,
 #: or expands into several items. A superscript or subscript that is one of
 #: them alone gets an error in place of the formula, or takes only the first
@@ -1412,7 +1415,7 @@ _TEX_CLOSERS = {"group": "}", "substack": "}", "left": r"\right", "environment":
 _TEX_NOT_SCRIPTS = frozenset({"}", "&", "^", "_", "'", "’"})
 #: The two characters MathJax sets as a prime.
 _TEX_PRIMES = frozenset({"'", "’"})
-_TEX_UNSCRIPTED = frozenset({"style", "not", "begin", "limits", "middle", "right", "end", "rows"})
+_TEX_UNSCRIPTED = frozenset({"style", "not", "begin", "limits", "middle", "right", "end", "rows", "hline"})
 _TEX_ENVIRONMENT = re.compile(r"\s*\{([^{}\\]{0,64})\}")
 #: ``\\[<dimension>]`` spaces rows apart, or with a negative dimension draws
 #: one over another; MathJax reads a star, then the bracket, only right after
@@ -1438,7 +1441,14 @@ _TEX_NOT = "\\not is allowed only before a relation such as =, \\in, or \\le"
 _TEX_SCRIPTS = "a second TeX superscript or subscript on one symbol is not allowed: use braces"
 _TEX_MISPLACED = "TeX & and \\\\ are allowed only between the cells and rows of an environment"
 _TEX_UNBALANCED_ENVIRONMENT = "TeX \\begin and \\end that do not match are not allowed"
-_TEX_ARRAY = "TeX \\begin{array} is allowed only with its columns as l, c, and r in braces, such as {lcr}"
+_TEX_ARRAY = (
+    "TeX \\begin{array} is allowed only with its columns as l, c, and r in braces, such as {lcr}, and one | or : "
+    "between two of them for a rule, as in {cc|c}"
+)
+_TEX_HLINE = (
+    "TeX \\hline is allowed only right after \\\\ in an array, once, before a row that shows something: a rule "
+    "at the top or bottom of the cells reads as an overline or underline"
+)
 _TEX_ALIGNMENT = (
     "a bracket after TeX \\begin{aligned}, \\begin{gathered}, or \\begin{array} other than [t], [b], or [c] "
     "is not allowed: MathJax does not show what it holds; write {} before a bracket that starts the first row"
@@ -1467,6 +1477,11 @@ class _TexRows:
     widths: list[float]
     rows: int = 0
     columns: int = 0
+    #: For ``\hline``: whether the environment is an array, where the
+    #: current row's first token is, and whether a rule is above it.
+    array: bool = False
+    start: int = 0
+    ruled: bool = False
 
 
 class _TexLayout:
@@ -1690,7 +1705,7 @@ class _TexLayout:
             self.glyph()
             return
         kind = entry.kind
-        if alone and (entry.arguments.strip("g") or kind in {"left", "right", "middle", "begin", "end", "rows"}):
+        if alone and (entry.arguments.strip("g") or kind in {"left", "right", "middle", "begin", "end", "rows", "hline"}):
             self.missing[token] = None
         elif kind == "limits":
             if alone or not self.operator:
@@ -1715,6 +1730,11 @@ class _TexLayout:
             else:
                 self.errors[_TEX_MISPLACED] = None
             self.new_atom()
+        elif kind == "hline":
+            if context == "environment" and rows is not None and rows.array and rows.rows and rows.start == self.index - 1:
+                rows.ruled = True
+            else:
+                self.errors[_TEX_HLINE] = None
         elif kind == "right":
             self.errors[_TEX_LEFT_RIGHT] = None
             self.delimiter(token)
@@ -1911,7 +1931,7 @@ class _TexLayout:
                 self.errors[_TEX_ARRAY] = None
             else:
                 self.skip_to(match.end())
-        rows = _TexRows(self.glyphs, self.glyphs, self.spacing, [])
+        rows = _TexRows(self.glyphs, self.glyphs, self.spacing, [], array=name == "array", start=self.index)
         if self.read_list("environment", rows) is None or self.environment_name(r"\end") != name:
             self.errors[_TEX_UNBALANCED_ENVIRONMENT] = None
         self.end_rows(rows)
@@ -1967,6 +1987,9 @@ class _TexLayout:
         self.rows += 1
         if rows is None:
             return
+        if rows.ruled and self.glyphs == rows.row:
+            self.errors[_TEX_HLINE] = None
+        rows.start, rows.ruled = self.index, False
         self.empty_cells += self.glyphs == rows.cell and rows.columns > 0
         self.empty_rows += self.glyphs == rows.row
         rows.cell = rows.row = self.glyphs
@@ -1983,6 +2006,8 @@ class _TexLayout:
         if rows.columns:
             self.empty_cells += self.glyphs == rows.cell
             self.empty_rows += self.glyphs == rows.row
+        if rows.ruled and self.glyphs == rows.row:
+            self.errors[_TEX_HLINE] = None
         self.measure(rows)
         self.spacing = rows.spacing + sum(rows.widths)
 

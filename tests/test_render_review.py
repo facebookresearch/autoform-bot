@@ -366,6 +366,8 @@ def test_writer_refuses_tex_outside_the_allowlist_by_name(testimony: str, comman
         r"$\begin{aligned} \begin{align*} a \end{align*} \end{aligned}$",
         r"$\begin{equation} e^{i\pi} + 1 = 0 \end{equation}$ and $\frac{\begin{equation*} a \\ b \end{equation*}}{c}$",
         r"$\mathopen{]} 0, 1 \mathclose{[}$, $a \equiv b \pod{n}$, and $\mbox{if } x > 0$",
+        r"$\left[\begin{array}{cc|c} 1 & 0 & 2 \\ \hline 0 & 1 & 3 \end{array}\right]$",
+        r"$\begin{array}{ c : c } a & b \\ \hline c & d \\ \hline e & f \end{array}$",
     ],
 )
 def test_tex_mathjax_sets_and_the_model_follows_is_allowlisted(testimony: str) -> None:
@@ -373,6 +375,9 @@ def test_tex_mathjax_sets_and_the_model_follows_is_allowlisted(testimony: str) -
     sets with base and ams, and whose layout the model reads."""
 
     assert _testimony_errors(testimony) == ()
+
+
+_HLINE = r"TeX \hline is allowed only right after \\ in an array, once, before a row that shows something"
 
 
 @pytest.mark.parametrize(
@@ -394,14 +399,26 @@ def test_tex_mathjax_sets_and_the_model_follows_is_allowlisted(testimony: str) -
         (r"$\begin{array}{|c|} a \end{array}$", r"TeX \begin{array} is allowed only with its columns as l, c, and r"),
         (r"$\begin{array} a \end{array}$", r"TeX \begin{array} is allowed only with its columns as l, c, and r"),
         (r"$\begin{array}{c@{x}c} a & b \end{array}$", r"TeX \begin{array} is allowed only with its columns"),
+        (r"$\begin{array}{c||c} a & b \end{array}$", r"TeX \begin{array} is allowed only with its columns"),
+        (r"$\begin{array}{c|:c} a & b \end{array}$", r"TeX \begin{array} is allowed only with its columns"),
+        (r"$\begin{array}{|cc} a & b \end{array}$", r"TeX \begin{array} is allowed only with its columns"),
+        (r"$\begin{array}{c} \hline a \end{array}$", _HLINE),
+        (r"$\begin{array}{c} a \\ \hline \end{array}$", _HLINE),
+        (r"$\begin{array}{c} a \\ \hline \\ b \end{array}$", _HLINE),
+        (r"$\begin{array}{c} a \\ \hline \hline b \end{array}$", _HLINE),
+        (r"$\begin{array}{cc} a & \hline b \end{array}$", _HLINE),
+        (r"$\begin{array}{c} a \hline \end{array}$", _HLINE),
+        (r"$\begin{pmatrix} a \\ \hline b \end{pmatrix}$", _HLINE),
         (r"$\begin{array}[x]{c} a \end{array}$", r"a bracket after TeX \begin{aligned}"),
     ],
 )
 def test_tex_environments_mathjax_sets_differently_are_refused(testimony: str, reason: str) -> None:
     r"""A second ``align``, ``gather``, or ``equation`` gets an error in
     place of the formula, as does ``&`` in ``equation``; ``array`` takes its
-    first argument as its columns, drawing ``|`` as a rule and dropping what
-    else it does not know."""
+    first argument as its columns, drawing ``|`` as a rule, one rule for
+    ``||``, and dropping what else it does not know. A rule at the edge of
+    the cells, from ``|`` or ``\hline``, reads as a bar, an overline, or an
+    underline."""
 
     assert any(reason in error for error in _testimony_errors(testimony))
 
