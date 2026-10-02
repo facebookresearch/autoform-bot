@@ -828,10 +828,11 @@ unless code owner review guards all of them at R, the trusted ref
   parser only ever narrows what GitHub accepts.
 
 When any of these but the current-head check fails, every approval is
-self-approved with one reason that names the missing settings, GitHub's errors, or the rules without an enforced
-owner, ten at most, and `review check --authenticate github` prints it for
-each. The check is of R as it is now; the verifier does not
-audit how R's CODEOWNERS or ruleset came to be.
+self-approved with one reason that names the missing settings, GitHub's
+errors, or the rules without an enforced owner, ten at most, and
+`review check --authenticate github` prints it for each. The check is of R as
+it is now; the verifier does not audit how R's CODEOWNERS or ruleset came to
+be.
 
 Then let p be an article's path and H its `review_approved` hash. The approval
 is authenticated only when all of these hold:
@@ -907,16 +908,15 @@ self-approved, and `review check --authenticate github`, `render
 usable answer (an HTTP error other than 404, a network failure, or malformed
 JSON), a list changed between its pages, or the budget ran out, any of which
 a later run may get past, `render` also lists the approval with the reason
-under `unchecked_approvals` in the site's `publication.json`; the Pages workflow
-deploys that site, then fails the run, so a site that understates its
+under `unchecked_approvals` in the site's `publication.json`; the Pages
+workflow deploys that site, then fails the run, so a site that understates its
 approvals never passes for a green build, and its hourly scheduled run builds
-the head again. A run may make 500
-requests plus 10 per approval, at most 900. That bounds one run, not the
-hour: GitHub's limit of 1000 requests an hour for a workflow's `GITHUB_TOKEN`
-is shared by every run in the repository, so two full builds within an hour,
-or a build after many gate runs, can run out, and the approvals the refused
-requests leave are unchecked. The reason for an approval the budget left
-unchecked names the budget and the limit. The
+the head again. A run may make 500 requests plus 10 per approval, at most 900.
+That bounds one run, not the hour: GitHub's limit of 1000 requests an hour for
+a workflow's `GITHUB_TOKEN` is shared by every run in the repository, so two
+full builds within an hour, or a build after many gate runs, can run out, and
+the approvals the refused requests leave are unchecked. The reason for an
+approval the budget left unchecked names the budget and the limit. The
 precondition costs one request for the repository, one for the default
 branch's head outside the gate, one per page of rules, one per ruleset with a
 pull request rule, one for GitHub's CODEOWNERS errors, and one permission
