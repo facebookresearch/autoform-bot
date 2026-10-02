@@ -1363,7 +1363,14 @@ need, which would also run a click's `call` as script. Show a diagram's source
 in a ```` ```text ```` fence instead. `check` reads each article as the site publishes it: every line break
 Python reads (a form feed or U+2028 among them) as a new line, without the
 metadata MkDocs takes off the top of a page, and a statement in its box with
-its indentation kept, so an indented line stays code.
+its indentation kept, so an indented line stays code. A chapter's page is its
+narrative with the statements `render` puts in place of their links, so each
+stretch of the narrative between them is read on its own, as the page has it.
+The site reads code fences over a whole page, so a fence at the margin left
+open where an article, a statement, its notes, or a stretch ends would run on
+through what `render` puts after it, status marks included, to the next fence
+on the page; it is refused with the line it opens on, and the fix is to close
+it.
 Every other Markdown page the site publishes is held to the same rules, since
 its script or classes would run and show on the same site as the cards: the
 landing page `blueprint/README.md` (the text you wrote, before `render` adds

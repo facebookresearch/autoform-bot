@@ -817,6 +817,103 @@ def test_a_link_render_moves_keeps_its_fragment_encoded(tmp_path: Path, text: st
     assert f'<a href="{href}">x</a>' in published
 
 
+def _with_base_notes(blueprint: Path, notes: str) -> None:
+    base = blueprint / "roadmap/base.md"
+    base.write_text(
+        base.read_text(encoding="utf-8").replace("The base object.", f"The base object.\n\n## Remarks\n\n{notes}"),
+        encoding="utf-8",
+    )
+
+
+def _with_narrative(blueprint: Path, text: str) -> None:
+    chapter = blueprint / "roadmap/README.md"
+    chapter.write_text(
+        chapter.read_text(encoding="utf-8").replace("## Definitions\n\n- [Base](base.md)", text), encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize("fence", ["````", "```", "~~~~"])
+def test_a_fence_left_open_cannot_run_into_the_next_article(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], fence: str
+) -> None:
+    """Two leaves share their chapter's page, and the site reads fences over
+    the whole page: a fence one leaves open would run through render's own
+    markup, its status marks included, and end at the next leaf's first
+    fence, so the code that leaf was checked with would be published live.
+    Check refuses the open fence, by its line, and render publishes
+    nothing."""
+
+    blueprint = _vault(tmp_path)
+    _with_base_notes(blueprint, f"{fence}\n")
+    _with_article(blueprint, f"The main result.\n\n{fence}\n{_FORGED} $\\gdef\\x{{1}}$\n{fence}")
+
+    assert main(["check", str(blueprint)]) == 1
+    out = capsys.readouterr().out
+    assert "base: line 13: code fence is not closed" in out
+    assert f"close it with a line of {fence}" in out
+    with pytest.raises(PublicationError, match="code fence is not closed"):
+        _render(blueprint)
+
+
+def test_a_chapter_is_read_in_the_stretches_its_page_has(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Render replaces a slot with its statement, so the narrative on either
+    side of it is read apart: a code span that crosses the slot in the
+    narrative as written ends before it on the page, and what it held
+    would be published as markup. Check reads each stretch as the page has
+    it."""
+
+    blueprint = _vault(tmp_path)
+    _with_narrative(blueprint, f"## Definitions\n\n`a\n- [Base](base.md)\nb` and `c {_FORGED} d`")
+
+    assert main(["check", str(blueprint)]) == 1
+    assert "roadmap: line 12: raw HTML is not allowed: <span>, </span>, <script>" in capsys.readouterr().out
+    with pytest.raises(PublicationError, match="raw HTML is not allowed"):
+        _render(blueprint)
+
+
+def test_a_chapter_cannot_leave_a_fence_open_over_its_statements(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A fence the narrative leaves open before a slot would run on into the
+    statement render puts there."""
+
+    blueprint = _vault(tmp_path)
+    _with_narrative(blueprint, "## Definitions\n\n````\n\n- [Base](base.md)")
+
+    assert main(["check", str(blueprint)]) == 1
+    assert "roadmap: line 10: code fence is not closed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("notes", ["> ```\n> quoted\n", "- item\n\n    ```\n    indented\n"])
+def test_a_fence_the_next_margin_line_ends_is_published(tmp_path: Path, notes: str) -> None:
+    """An indented or quoted fence ends at the first line at the margin, and
+    render's markup starts there, so leaving one open, in a leaf's notes or
+    at the end of a page, hides nothing."""
+
+    blueprint = _vault(tmp_path)
+    _with_base_notes(blueprint, notes)
+    (blueprint / "notes.md").write_text(f"# Notes\n\n{notes}", encoding="utf-8")
+
+    assert main(["check", str(blueprint)]) == 0
+    published = _published(_render(blueprint) / "roadmap/README.md")
+    assert published.count('<span class="bp-mark"') == 2
+
+
+def test_a_statement_after_a_paragraph_is_a_box_of_its_own(tmp_path: Path) -> None:
+    """A slot right below a line of prose is replaced by a statement set
+    apart by blank lines, so the statement is its own box on the page, not
+    a run of the paragraph."""
+
+    blueprint = _vault(tmp_path)
+    _with_narrative(blueprint, "## Definitions\n\nThe base object comes first:\n- [Base](base.md)\nand then the rest.")
+
+    published = _published(_render(blueprint) / "roadmap/README.md")
+
+    assert "<p>The base object comes first:</p>" in published
+    assert "<p>and then the rest.</p>" in published
+    assert '<div class="bp-thmcontent">\n<p>The base object.</p>\n</div>' in published
+
+
 def test_check_judges_the_text_render_publishes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check judges each page as render writes it, with its links moved, so
     what render publishes is what check saw."""

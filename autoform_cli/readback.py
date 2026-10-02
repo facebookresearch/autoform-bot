@@ -2996,7 +2996,7 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
     attributes: list[tuple[str, str, list[tuple[str, str]]]] = []
     diagrams = False
     for source, markdown in published_markdown(visible):
-        rendered, passed, assigned = _rendered_article(markdown)
+        rendered, passed, assigned, unclosed = _rendered_article(markdown)
         reading = _RenderedText()
         reading.feed(rendered)
         reading.close()
@@ -3008,6 +3008,15 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
             found.append(
                 _lines_naming(text, starts)
                 + f"raw HTML is not allowed: the site would publish {shown} as HTML; write it in Markdown, or in code to show it as typed"
+            )
+        if unclosed is not None:
+            opener = unclosed.strip()
+            numbers = [number for number, line in enumerate(text.splitlines(), start=1) if line.expandtabs(4).strip() == opener]
+            fence = re.match(r"[> ]*(`{3,}|~{3,})", unclosed)
+            found.append(
+                (f"line {numbers[-1]}: " if numbers else "")
+                + "code fence is not closed: the site would read it on into what autoform render puts after this "
+                + f"text, to the next fence on the page; close it with a line of {fence.group(1) if fence else '```'}"
             )
         commands = stateful_commands("".join(reading.text))
         if commands:
@@ -3138,12 +3147,21 @@ def _attribute_places(text: str, written: str) -> list[tuple[str, str]]:
     return [("", "{" + written.strip()[:78] + "}")]
 
 
-def _rendered_article(text: str) -> tuple[str, list[str], list[tuple[str, str, list[tuple[str, str]]]]]:
+def _rendered_article(
+    text: str,
+) -> tuple[str, list[str], list[tuple[str, str, list[tuple[str, str]]]], str | None]:
     """The site's rendering of ``text``, what its renderer passes through
-    from ``text`` as raw HTML, and each attribute list it applies: the
-    element's tag, the list as read, and the attributes it sets. A fence's
-    braces that set more than its language count as one, with ``fence`` for
-    the tag and no attributes.
+    from ``text`` as raw HTML, each attribute list it applies, and the line
+    that opens a code fence at the margin still open where ``text`` ends, if
+    one is. An
+    attribute list is given as the element's tag, the list as read, and the
+    attributes it sets; a fence's braces that set more than its language
+    count as one, with ``fence`` for the tag and no attributes.
+
+    The renderer reads fences over a whole page before anything else, so a
+    fence a piece leaves open is ended by whatever fence comes next on the
+    page it is published on, and everything between, the site's own markup
+    included, is code; the text after that fence is read anew.
 
     The renderer stashes raw HTML, character references, and highlighted code
     blocks alike. Code blocks are stashed while fences are read, before any
@@ -3157,12 +3175,18 @@ def _rendered_article(text: str) -> tuple[str, list[str], list[tuple[str, str, l
     fences = parser.preprocessors["fenced_code_block"]
     read_fences = fences.run
     highlighted = 0
+    unclosed: str | None = None
 
     def counted(lines: list[str]) -> list[str]:
-        nonlocal highlighted
-        lines = read_fences(lines)
+        nonlocal highlighted, unclosed
+        read = read_fences(lines)
+        # An indented or quoted fence ends at the first line the site puts
+        # after the text, which starts at the margin; one at the margin runs on.
+        if fences.fence is not None and not fences.ws_virtual_len and not fences.quote_level:  # type: ignore[attr-defined]
+            # Every line after the opener is the open fence's content.
+            unclosed = lines[len(lines) - len(fences.code) - 1]  # type: ignore[attr-defined]
         highlighted = len(parser.htmlStash.rawHtmlBlocks)
-        return lines
+        return read
 
     fences.run = counted  # type: ignore[method-assign]
     attribute_lists = parser.treeprocessors["attr_list"]
@@ -3195,7 +3219,7 @@ def _rendered_article(text: str) -> tuple[str, list[str], list[tuple[str, str, l
     ]
     return rendered, [
         block for block in passed if not (_LOOSE_HTML_ENTITY.fullmatch(block) and not _live_reference(block))
-    ], assigned
+    ], assigned, unclosed
 
 
 class _RenderedText(HTMLParser):

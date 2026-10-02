@@ -337,8 +337,17 @@ def _publication(
         node.path.resolve(): node_id for node_id, node in graph.nodes.items()
     }
 
-    def published(text: str, source: Path, page: Path, reserved: Iterable[str]) -> tuple[str, tuple[str, ...]]:
-        return publishable_article(
+    chapters = {page: group for group, page in group_pages.items()}
+
+    def published(
+        text: str, source: Path, page: Path, reserved: Iterable[str], *, whole: bool = True
+    ) -> tuple[str, tuple[str, ...]]:
+        """The page ``text`` is published as, or the part of ``page`` it is
+        unless ``whole``, and what refuses it. A chapter's page is its
+        narrative with render's own markup set between its lines, so each
+        stretch between is read too, as it sits there."""
+
+        page_text, found = publishable_article(
             _rewrite_links(
                 text,
                 source_dir=source.parent,
@@ -351,6 +360,20 @@ def _publication(
             ),
             reserved,
         )
+        group = chapters.get(page) if whole else None
+        if group is not None:
+            layout = _chapter_layout(
+                group,
+                groups[group],
+                page_text,
+                graph=graph,
+                blueprint=blueprint,
+                node_sources=node_sources,
+                targets=targets,
+            )
+            for stretch in _chapter_stretches(page_text, *layout):
+                found += publishable_article(stretch, reserved)[1]
+        return page_text, tuple(dict.fromkeys(found))
 
     issues: list[str] = []
     articles: dict[Path, str] = {}
@@ -358,11 +381,14 @@ def _publication(
     for node_id, node in graph.nodes.items():
         # The text the graph parsed, so a page shows the article its status
         # and any review disclosure describe.
-        text, found = published(graph.article_text(node), node.path, targets[node_id][0], taken[node_id])
+        leaf = node.formalizable and not graph.children(node_id)
+        text, found = published(
+            graph.article_text(node), node.path, targets[node_id][0], taken[node_id], whole=not leaf
+        )
         issues.extend(f"{node_id}: {issue}" for issue in found)
         # Narrative articles remain book pages. Only formalizable leaves are
         # consolidated into their containing article with stable anchors.
-        if node.formalizable and not graph.children(node_id):
+        if leaf:
             statements[node_id] = statement_and_notes(text)
         else:
             articles[node.path.resolve()] = text
@@ -1070,24 +1096,6 @@ def _inject_after_title(text: str, block: str) -> str:
             merged = [*lines[: index + 1], "", block.rstrip(), "", *lines[index + 1 :]]
             return "\n".join(merged) + ("\n" if text.endswith("\n") else "")
     return text.rstrip() + "\n\n" + block.rstrip() + "\n"
-
-
-def _inject_after_lead(text: str, block: str) -> str:
-    """Place chapter metadata after its opening prose and before the first section."""
-    lines = text.splitlines()
-    seen_h1 = False
-    for index, line in enumerate(_content_lines(text)):
-        heading = _HEADING.match(line)
-        if heading is None:
-            continue
-        level = len(heading.group(1))
-        if level == 1:
-            seen_h1 = True
-        elif seen_h1 and level == 2:
-            merged = [*lines[:index], "", block.rstrip(), "", *lines[index:]]
-            return "\n".join(merged) + ("\n" if text.endswith("\n") else "")
-    return text.rstrip() + "\n\n" + block.rstrip() + "\n"
-
 
 
 def _next_target(
@@ -1829,39 +1837,57 @@ def _render_chapter(
         title = graph.nodes[group].title if group in graph.nodes else group.replace("-", " ").capitalize()
         narrative = "\n".join(["---", f"kind: article\ntitle: {title}", "---", "", f"# {title}"])
 
-    chapter, placed = _place_environments(
-        _inject_after_lead(narrative, chapter_summary),
-        source_dir=graph.nodes[group].path.parent if group in graph.nodes else blueprint / "roadmap",
-        node_sources=node_sources,
-        environments=environments,
-        targets=targets,
+    lead, slots = _chapter_layout(
+        group, node_ids, narrative, graph=graph, blueprint=blueprint, node_sources=node_sources, targets=targets
     )
+    chapter = _place_environments(narrative, lead, slots, summary=chapter_summary, environments=environments)
+    placed = set(slots.values())
     remaining = [environments[node_id] for node_id in node_ids if node_id not in placed]
     if remaining:
         chapter = chapter.rstrip() + f"\n\n## {_ADDITIONAL_TARGETS}\n\n" + "\n\n".join(remaining)
     return chapter.rstrip() + "\n", linked, unresolved
 
 
-def _place_environments(
+def _chapter_layout(
+    group: str,
+    node_ids: Iterable[str],
     narrative: str,
     *,
-    source_dir: Path,
+    graph: Graph,
+    blueprint: Path,
     node_sources: dict[Path, str],
-    environments: dict[str, str],
     targets: dict[str, tuple[Path, str]],
-) -> tuple[str, set[str]]:
-    """Replace standalone leaf links with their environment at the authored position."""
-    placed: set[str] = set()
-    output: list[str] = []
-    anchor_nodes = {
-        targets[node_id][1]: node_id for node_id in environments if targets[node_id][1]
-    }
-    source_lines = narrative.splitlines()
+) -> tuple[int, dict[int, str]]:
+    """Where render puts its own markup in the ``narrative`` of ``group``'s
+    chapter: the line its progress summary goes before, after the opening
+    prose and before the first section (the number of lines when it goes at
+    the end), and the lines that are slots, each a standalone link to one of
+    ``node_ids`` that render replaces with the node's statement, by the node.
+
+    Check reads each stretch of the narrative between these lines on its
+    own, as the page has it."""
+
+    lines = narrative.splitlines()
     visible_lines = _content_lines(narrative)
-    for line, visible in zip(source_lines, visible_lines, strict=True):
+    lead = len(lines)
+    seen_h1 = False
+    for index, line in enumerate(visible_lines):
+        heading = _HEADING.match(line)
+        if heading is None:
+            continue
+        level = len(heading.group(1))
+        if level == 1:
+            seen_h1 = True
+        elif seen_h1 and level == 2:
+            lead = index
+            break
+    source_dir = graph.nodes[group].path.parent if group in graph.nodes else blueprint / "roadmap"
+    slotted = set(node_ids)
+    anchor_nodes = {targets[node_id][1]: node_id for node_id in slotted if targets[node_id][1]}
+    slots: dict[int, str] = {}
+    for index, visible in enumerate(visible_lines):
         slot = _ARTICLE_SLOT.match(visible)
         if slot is None:
-            output.append(line)
             continue
         target = slot.group("target")
         path, separator, fragment = target.partition("#")
@@ -1871,12 +1897,50 @@ def _place_environments(
             node_id = None
         else:
             node_id = node_sources.get((source_dir / unquote(path)).resolve())
-        if node_id is None or node_id not in environments or node_id in placed:
-            output.append(line)
+        if node_id is None or node_id not in slotted or node_id in slots.values():
             continue
-        output.append(environments[node_id])
-        placed.add(node_id)
-    return "\n".join(output), placed
+        slots[index] = node_id
+    return lead, slots
+
+
+def _place_environments(
+    narrative: str, lead: int, slots: dict[int, str], *, summary: str, environments: dict[str, str]
+) -> str:
+    """The chapter page: ``narrative`` with the progress ``summary`` before
+    line ``lead`` and each slot line replaced by its statement's environment,
+    as :func:`_chapter_layout` placed them.
+
+    Each environment is a block of HTML the site reads as one, which ends
+    any paragraph, list, or span of the narrative it meets, so each stretch
+    of the narrative reads on the page as check read it."""
+
+    lines = narrative.splitlines()
+    output: list[str] = []
+    for index, line in enumerate(lines):
+        if index == lead:
+            output.extend(["", summary.rstrip(), ""])
+        if index in slots:
+            output.append(environments[slots[index]])
+        else:
+            output.append(line)
+    chapter = "\n".join(output)
+    if lead == len(lines):
+        chapter = chapter.rstrip() + "\n\n" + summary.rstrip()
+    return chapter
+
+
+def _chapter_stretches(narrative: str, lead: int, slots: dict[int, str]) -> list[str]:
+    """Each stretch of ``narrative`` between the lines where render puts its
+    own markup, the slot lines left out, with the lines before it blank so
+    it keeps its line numbers."""
+
+    lines = narrative.splitlines()
+    breaks = sorted({0, lead, *slots, *(index + 1 for index in slots), len(lines)})
+    return [
+        "\n" * start + "".join(f"{line}\n" for line in lines[start:end])
+        for start, end in zip(breaks, breaks[1:])
+        if start not in slots and any(line.strip() for line in lines[start:end])
+    ]
 
 
 def _render_environment(
