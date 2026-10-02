@@ -66,11 +66,33 @@ shows `<` as typed. Label a fenced code block `lean`, `lean4`, or `text`, or
 leave it bare.
 
 The testimony must also read the same on GitHub, which shows the vault's
-cards with a different Markdown reader. Put a blank line before every list,
-table, and code block, indent a nested list four spaces, number every list
-from 1, give every table row as many cells as the header, and write `\|` for
-a pipe in a table cell, in code too. Do not open a block quote with `[!NOTE]`
-or the like.
+cards with a different Markdown reader; where the two readings differ it is
+refused, with the line and a way to fix it. Put a blank line before every
+list, table, and code block, and a line of text between a bulleted and a
+numbered list. Indent a nested list four spaces, and number every list from 1.
+Give every table row as many cells as the header and every cell of the
+delimiter row a `-`; write `\|` for a pipe in a table cell, and keep code
+that holds a pipe out of tables. Close a code block with the fence that opens
+it, at the same indent. Do not end a line with a backslash, start a list item
+with `[x]` or `[ ]`, write `~` in text, or open a block quote with `[!NOTE]`
+or the like, and write a backslash before punctuation only where Markdown
+would read it otherwise, as in `\*`: GitHub hides the backslash before any
+punctuation, and the site only before some.
+
+Write a formula in a line of text between dollar signs, as `$P_i$`, and a
+displayed formula in a code block whose opening fence is ```` ```math ````
+alone. GitHub reads `$...$` as a formula only where the first `$` starts a
+line or follows a space or `(`, neither `$` has a space just inside it, no
+letter, digit, or `_` follows the last, the formula stays on one line, and it
+is not in emphasis; it reads Markdown escapes such as `\{`, `\_`, and `\\`
+in it first, and a pair of `*` as emphasis. Where any of that matters, or a
+`<`, `>`, or `&` follows the formula right away, write it as `` $`...`$ ``,
+whose TeX GitHub takes as written, with no letter, digit, `_`, or `\` just
+before it: `` $`\{x\}`$ ``, not `$\{x\}$`; `` $`n`$th ``, not `$n$th`;
+`` $`2*3*4`$ ``, not `$2*3*4$`. Never use `\(...\)` or `\[...\]`: write
+`$x$`, not `\(x\)`. Keep dollar signs out of formulas and `$$` out of lines of
+text. In text write `\$` for a dollar sign, and put dollar signs meant as
+typed in code.
 
 Everything you write must be visible as written. Do not use invisible
 characters such as zero-width spaces, or stack more than two accents above or
@@ -82,8 +104,8 @@ relations, operators, arrows, delimiters, `\frac`, `\sqrt`, accents, the fonts
 Any other command is refused by name, including `\phantom`, `\rlap`, `\kern`,
 `\color`, `\tag`, `\large`, and macro definitions. Space with `\,`, `\;`,
 `\quad`, or `~`: one formula may space 8 em in all, as much as 8 `\quad`, and
-a read-back 64 em. Never write two `\!` in a row. Do not write `%`; write `\%`
-for a percent sign. A read-back that breaks this is rejected, however faithful
+a read-back 64 em. Never write two `\!` in a row. In a formula write `\%` for
+a percent sign, never `%`. A read-back that breaks this is rejected, however faithful
 it is. Keep it to a few kilobytes: a read-back over 32 KiB, or with more than
 64 `[`, is refused unread; in a formula `\lbrack` and `\rbrack` do not count.
 

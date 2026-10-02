@@ -1283,19 +1283,36 @@ def test_a_message_names_at_most_eight_things_and_cuts_long_names(testimony: str
 
 
 def test_the_read_back_guide_states_the_rules_the_validator_applies() -> None:
-    """The guide's rewrites pass and show what they rewrite, its limits are the validator's, and the commands it
-    names are refused, so the guide and the validator cannot drift apart."""
+    """The guide's rewrites pass and show what they rewrite, its limits are the validator's, the commands it
+    names are refused, and what it tells a writer to avoid for GitHub's sake is refused while the writing it
+    asks for passes, so the guide and the validator cannot drift apart."""
 
     guide = " ".join(
         (Path(__file__).resolve().parent.parent / "skills/human-review/references/readback.md")
         .read_text(encoding="utf-8")
         .split()
     )
-    rewrites = re.findall(r"`([^`]+)`, not `([^`]+)`", guide)
-    assert rewrites
+    spans = list(re.finditer(r"(?<!`)(`+)(?!`) ?(.*?) ?(?<!`)\1(?!`)", guide))
+    rewrites = [(one[2], other[2]) for one, other in zip(spans, spans[1:]) if guide[one.end() : other.start()] == ", not "]
+    assert len(rewrites) >= 5
     for good, bad in rewrites:
         assert not _testimony_errors(good) and _testimony_errors(bad), (good, bad)
         assert re.sub(r"\W", "", good) == re.sub(r"\W", "", bad), (good, bad)
+    for rule, bad, good in (
+        ("Put a blank line before every list", "Steps:\n- a\n- b", "Steps:\n\n- a\n- b"),
+        ("a line of text between a bulleted and a numbered list", "- a\n\n1. b", "- a\n\nThen:\n\n1. b"),
+        ("Indent a nested list four spaces", "- a\n  - b", "- a\n\n    - b"),
+        ("number every list from 1.", "3. a\n4. b", "1. a\n2. b"),
+        ("as many cells as the header", "| a | b |\n|---|---|\n| 1 |", "| a | b |\n|---|---|\n| 1 | 2 |"),
+        ("write `\\|` for a pipe in a table cell", "| a |\n|---|\n| `x|y` |", "| a |\n|---|\n| x \\| y |"),
+        ("Close a code block with the fence that opens it", "```lean\nx\n````", "```lean\nx\n```"),
+        ("Do not end a line with a backslash", "Hence $a$\\\nand $b$.", "Hence $a$\nand $b$."),
+        ("start a list item with `[x]`", "- [x] is", "- \\[x] is"),
+        ("write `~` in text", "By Theorem~3 and Lemma~4.", "By Theorem 3 and Lemma 4."),
+        ("write a backslash before punctuation only where", "A 50\\% share.", "A 50% share."),
+    ):
+        assert rule in guide, rule
+        assert _testimony_errors(bad) and not _testimony_errors(good), (rule, _testimony_errors(good))
     *languages, last = sorted(_TESTIMONY_LANGUAGES)
     for limit in (
         f"over {TESTIMONY_MAX_BYTES // 1024} KiB",
@@ -1305,6 +1322,9 @@ def test_the_read_back_guide_states_the_rules_the_validator_applies() -> None:
         ", ".join(f"`{language}`" for language in languages) + f", or `{last}`",
     ):
         assert limit in guide, limit
+    assert not _testimony_errors("a" * TESTIMONY_MAX_BYTES) and _testimony_errors("a" * (TESTIMONY_MAX_BYTES + 1))
+    marks = "\u0301" * _MAX_STACKED_MARKS
+    assert not _testimony_errors("Le" + marks) and _testimony_errors("Le" + marks + "\u0301")
     quads = int(re.search(r"as much as (\d+) `\\quad`", guide).group(1))
     assert not _testimony_errors("$a" + r"\quad" * quads + " b$")
     assert _testimony_errors("$a" + r"\quad" * (quads + 1) + " b$")

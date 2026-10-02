@@ -461,39 +461,62 @@ mismatches, and malformed or empty testimony. Testimony must show a reader
 everything it says: invisible and reordering characters (zero-width spaces,
 bidirectional overrides, Unicode's default-ignorable characters, spaces other
 than the ASCII space, right-to-left letters and digits), more than four
-combining marks on one character, TeX comments, and raw HTML are rejected. Testimony
+combining marks on one character or more than two above or below it, a
+combining mark with no character before it, TeX comments, and raw HTML are
+rejected. Testimony
 is rendered once, by a Markdown renderer that reads no HTML, and the site shows
 that rendering byte for byte, so what was validated is what a reviewer sees.
 Code is shown as typed. Outside code, formulas included, HTML tags, comments,
 declarations, autolinks, and character references are refused by name, since a
 Markdown viewer of the vault would read them, so in a formula put a space after
-`<`. Links, link definitions, images, headings, and Mermaid blocks are refused;
-attribute lists are shown as typed. TeX
-may use only an allowlist of the notation statements need, kept in
+`<`. Links, link definitions, images, headings, footnotes, GitHub alerts,
+Mermaid blocks, code fences naming anything but `lean`, `lean4`, or `text`,
+and table rows with more or fewer cells than the header are refused;
+attribute lists are shown as typed. GitHub shows the vault's cards, so
+testimony is read a second time as GitHub reads it, by cmark-gfm with
+formulas found where GitHub's Markdown API was seen to find them. It is
+refused where that reading shows anything otherwise than the site does,
+naming the line where the two part and a rewrite both read alike, and where
+it holds a formula GitHub was not seen to read that way. How to write
+formulas and Markdown that both read alike is set out in one place, the
+read-back guide `skills/human-review/references/readback.md`: in short,
+`$...$` in a line of text, `` $`...`$ `` where GitHub would read that
+otherwise, a ```` ```math ```` fence for displayed math, and never `\(` or
+`\[`. MathJax reads no text of a card outside the formulas the renderer
+marked, so other TeX in text shows as typed, and `\$` shows a dollar sign.
+TeX may use only an allowlist of the notation statements need, kept in
 `readback.py` against the site's pinned MathJax 3.2.2: letters, symbols,
 relations, operators, arrows, delimiters, fractions, roots, accents, fonts,
-styles, `\text`, spaces from `\!` to `\qquad`, and the `cases`, `aligned`,
-and matrix environments. Any other command or environment, such as
+styles, `\text`, spaces from `\!` to `\qquad` and `~`, and the `cases`,
+`array`, matrix, `aligned`, `gathered`, `split`, `align`, `gather`, and
+`equation` environments, with at most one `align`, `gather`, or `equation` in
+a formula. Any other command or environment, such as
 `\phantom`, `\rlap`, `\kern`, `\color`, `\tag`, or a macro definition, is
 refused by name. Each formula is read the way MathJax lays it out. TeX it
 would not set is refused: unbalanced braces, `\left` without `\right`, a
-missing argument, `x^a^b`, or `\not` before anything but a relation. So are
+missing argument, `x^a^b`, `\not` before anything but a relation, a function
+name such as `\sin` alone as a script (write `x^{\sin}`), `\pmb` inside
+`\pmb`, a character MathJax's fonts lack, a combining mark, array columns
+other than `l`, `c`, and `r` with one `|` or `:` between two of them, and a
+bracket after `aligned`, `gathered`, or `array` other than `[t]`, `[b]`, or
+`[c]`. So are
 arguments that show nothing (`\mathrm{}`, `\hat{\displaystyle}`), space
 between two symbols that adds up to less than one negative thin space, and
-row spacing after `\\`. A formula may hold at most 8 em of space, 9 `&` in a
-row, 16 `\\` in an environment and 32 in all, 16 empty cells, and no empty
-row, nested at most 16 deep with scripts 8 deep. Outside code, `$`, `\(`,
-`\)`, `\[`, `\]`, `\begin{`, and `\ref{` that the renderer did not read as a
-formula are refused, since MathJax reads the whole page for them: write `\$`
-for a dollar sign, and put displayed math in a paragraph of its own.
+row spacing after `\\`. A formula may hold at most 2,048 characters, 8 em of
+space, 9 `&` in a row, 16 `\\` in an environment and 32 in all, 16 empty
+cells, and no empty row, nested at most 16 deep with scripts 8 deep; a
+testimony may hold at most 64 em of space, the space in the rows of an
+environment counted once per column.
 Testimony must also show at least one letter or digit. Before any card is parsed its
 testimony must fit limits well above what real read-backs use: 32 KiB, 500
 lines, 1,024 math delimiters, 512 backticks in runs of at most 16, 64 opening
 brackets, 64 columns of nesting, 256 underscores that start a word, 1,024
-asterisks, and 2,048 backslashes. The Markdown parser is superlinear in each of
-these, so a byte limit alone would not bound it, and every card in a pull
-request is read before its validity is known. Cards are read through no-follow
-descriptors, so a card or directory swapped for a link is skipped. A card file
+asterisks, 2,048 backslashes, and 2,048 table cells. The Markdown parser is
+superlinear in each of these, so a byte limit alone would not bound it, and
+every card in a pull request is read before its validity is known. The
+rendering of a testimony must also fit in 256 KiB of HTML before that HTML is
+parsed. Cards are read through no-follow descriptors, so a card or directory
+swapped for a link is skipped. A card file
 holds at most 4 MiB, and no file is read more than one byte past that, the byte
 that shows it is larger. A file at a card path that is larger, is not UTF-8, or
 cannot be read, and a directory or FIFO there, is reported as an invalid card,
