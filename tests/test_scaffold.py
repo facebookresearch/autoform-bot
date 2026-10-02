@@ -755,8 +755,8 @@ def test_a_scheduled_run_publishes_on_a_default_branch_not_called_main(tmp_path:
 
     assert done.returncode == 0, done.stderr
     assert outputs == {"publish": "true", "build": "true"}
-    assert calls[0] == f"{_REPOSITORY}/git/ref/heads/trunk"
-    assert f"{_RUNS}?branch=trunk&" in calls[1]
+    assert calls[1] == f"{_REPOSITORY}/git/ref/heads/trunk"
+    assert calls[-1].startswith(f"{_RUNS}?branch=trunk&")
 
 
 @pytest.mark.parametrize("event", ["push", "pull_request", "workflow_dispatch"])
@@ -789,6 +789,18 @@ def test_every_event_but_the_schedule_builds_without_asking_github(tmp_path: Pat
         # However many failures, a day at most.
         pytest.param(_github_after(failed=(("schedule", 23),) * 10), False, id="backing-off-a-day"),
         pytest.param(_github_after(failed=(("schedule", 25),) * 10), True, id="backed-off-a-day"),
+        # Failures the site recovered from before its last deployment never lengthen the wait.
+        pytest.param(
+            _github_after(deployed=("success", 25), failed=(("push", 30),) * 5 + (("schedule", 2),)),
+            True,
+            id="recovered-failures-uncounted",
+        ),
+        pytest.param(
+            _github_after(deployed=("success", 25), failed=(("push", 30),) * 5 + (("schedule", 0.5),)),
+            False,
+            id="backing-off-after-recovering",
+        ),
+        pytest.param(_github_after(remaining=903), False, id="spent-hour"),
     ],
 )
 def test_a_scheduled_run_builds_the_head_until_it_has_a_complete_build(
@@ -802,15 +814,20 @@ def test_a_scheduled_run_builds_the_head_until_it_has_a_complete_build(
     assert done.returncode == 0, done.stderr
     assert outputs == {"publish": "true", "build": "true" if build else "false"}
     head = "a" * 40
-    counted = [call for call in calls if call != "rate_limit"]
-    assert counted[:3] == [
+    # GET /rate_limit costs nothing, and is asked first, so a spent hour makes no request fail.
+    assert calls[0] == "rate_limit"
+    remaining = answers["rate_limit"]["resources"]["core"]["remaining"]
+    if remaining < 904:
+        assert calls == ["rate_limit"]
+        assert done.stdout.startswith(f"::notice::Only {remaining} GitHub API requests are left this hour")
+        return
+    statuses = [f"{_DEPLOYMENTS}/7/statuses?per_page=1"] if f"{_DEPLOYMENTS}/7/statuses" in answers else []
+    assert calls[1:] == [
         _MAIN,
-        f"{_RUNS}?branch=main&head_sha={head}&status=completed&per_page=100",
         f"{_DEPLOYMENTS}?environment=github-pages&sha={head}&per_page=1",
+        *statuses,
+        f"{_RUNS}?branch=main&head_sha={head}&status=completed&per_page=100",
     ]
-    assert counted[3:] == ([f"{_DEPLOYMENTS}/7/statuses?per_page=1"] if f"{_DEPLOYMENTS}/7/statuses" in answers else [])
-    # GET /rate_limit costs nothing, and is asked only before a build.
-    assert ("rate_limit" in calls) is (build or answers["rate_limit"] != {"resources": {"core": {"remaining": 1000}}})
     assert ("::notice::Building" in done.stdout) is build
 
 
@@ -818,27 +835,46 @@ def test_a_scheduled_run_of_a_head_main_has_moved_past_builds_nothing(tmp_path: 
     done, calls, outputs = _decide(tmp_path, _github_after(head="b" * 40))
 
     assert done.returncode == 0, done.stderr
-    assert (outputs, calls) == ({"publish": "true", "build": "false"}, [_MAIN])
+    assert (outputs, calls) == ({"publish": "true", "build": "false"}, ["rate_limit", _MAIN])
 
 
 @pytest.mark.parametrize(
     "broken",
     [
-        {_RUNS: None},
+        {"rate_limit": None},
+        {"rate_limit": {"resources": {"core": {}}}},
+        {_MAIN: None},
+        {_DEPLOYMENTS: None},
         # Never put into a path: the stub answers it, as GitHub might.
         {_DEPLOYMENTS: [{"id": "7 8"}], f"{_DEPLOYMENTS}/7 8/statuses": [{"state": "success"}]},
-        {"rate_limit": {"resources": {"core": {}}}},
+        {f"{_DEPLOYMENTS}/7/statuses": None},
+        {_RUNS: None},
+        {_RUNS: {"workflow_runs": [{"event": "push", "conclusion": "failure", "updated_at": "soon"}]}},
     ],
-    ids=["failed-lookup", "malformed-deployment", "no-remaining-count"],
+    ids=[
+        "failed-rate-limit",
+        "no-remaining-count",
+        "failed-head",
+        "failed-deployments",
+        "malformed-deployment",
+        "failed-statuses",
+        "failed-runs",
+        "malformed-runs",
+    ],
 )
-def test_a_scheduled_run_that_cannot_decide_fails(tmp_path: Path, broken: dict[str, object]) -> None:
-    answers = {**_github_after(), **broken}
+def test_a_scheduled_run_that_cannot_decide_builds_nothing_and_warns(tmp_path: Path, broken: dict[str, object]) -> None:
+    """A red run would count as a failed run of the head, and lengthen the wait
+    for its next build, or end a complete build's day early."""
+
+    answers = {**_github_after(deployed=("success", 1)), **broken}
     answers = {path: answer for path, answer in answers.items() if answer is not None}
 
     done, calls, outputs = _decide(tmp_path, answers)
 
-    assert done.returncode != 0
-    assert "build" not in outputs
+    assert done.returncode == 0, done.stderr
+    assert outputs == {"publish": "true", "build": "false"}
+    assert done.stdout.startswith("::warning::GitHub did not say ")
+    assert done.stdout.endswith(", so this run builds nothing; the next scheduled run asks again\n")
     assert not any("/7 8/" in call for call in calls)
 
 

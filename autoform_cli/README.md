@@ -1111,18 +1111,23 @@ when the site has no complete build of it, or when that build is a day old. A
 complete build is a deployment of the head whose newest status is a success,
 with no failed run of the head after it, so a run that deployed and then
 failed on unchecked approvals does not count. After failed runs of the head it
-waits an hour, doubling with each failure up to a day, and it builds only when
-`GET /rate_limit`, which costs nothing, reports at least 900 of the hour's
-requests left, the most one verification makes. A scheduled run that builds
-nothing makes at most four requests (the head, the workflow's runs on it, its
-newest deployment, and that deployment's status): at most 96 a day, under 1%
+waits an hour, doubling with each failure up to a day; when the head's newest
+deployment is a success, only the runs that failed after it count, so failures
+the site has since recovered from never lengthen the wait. It first asks
+`GET /rate_limit`, which costs nothing, and builds only when that reports at
+least 904 of the hour's requests left: the most one verification makes, plus
+its own. A scheduled run that builds nothing makes at most four requests
+besides that one (the head, its newest deployment, that deployment's status,
+and the workflow's runs on the head): at most 96 a day, under 1%
 of the 24,000 the hourly limit allows. The daily rebuild is one full
 verification, at most 900 requests a day, and is what bounds how long a
 withdrawn approval stays on the site; rebuilding every hour could spend most
 of every hour's allowance, leaving pushes and the gate short. The `decide` job
 needs `actions: read` and `deployments: read` besides `contents: read`. When
-it cannot read GitHub's answers it fails its run, which counts as a failed run
-of the head, so it can start an extra rebuild once the backoff has passed. A
+GitHub does not answer one of its requests, or answers with something it
+cannot read, it builds nothing and ends its run green with a warning, since a
+red run would count as a failed run of the head; the next hour asks again. A
+warning on every scheduled run means the schedule is not building at all. A
 head whose build fails every time, such as one whose Lean does not compile, is
 retried once a day after its first few failures. In a public repository GitHub
 disables a schedule after 60 days without activity; re-enable the workflow

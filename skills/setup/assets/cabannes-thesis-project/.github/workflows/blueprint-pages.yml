@@ -49,13 +49,14 @@ jobs:
   # other event but the schedule builds. Only a build of the default branch
   # outside a pull request publishes. A scheduled run builds the current
   # head of the default branch only when the site has no complete build of
-  # it, meaning no
-  # deployment of it whose newest status is a success with no failed run of
-  # it since, or when that build is a day old, to pick up what changes
-  # without a push. After failed runs of the head it waits an hour, doubling
-  # with each one up to a day, and it builds only when this hour has the 900
-  # requests a run may make left. A scheduled run that builds nothing makes
-  # at most four requests.
+  # it, meaning no deployment of it whose newest status is a success with no
+  # failed run of it since, or when that build is a day old, to pick up what
+  # changes without a push. After failed runs of the head (when its newest
+  # deployment succeeded, only those since) it waits an hour, doubling with
+  # each one up to a day. It builds only when this hour has the 900
+  # requests a run may make left, and asks how many first. A scheduled run
+  # that builds nothing makes at most four requests besides that free one,
+  # and when GitHub does not answer one it ends green with a warning.
   decide:
     if: github.event_name != 'push' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
@@ -94,37 +95,57 @@ jobs:
             echo "build=false" >> "$GITHUB_OUTPUT"
             exit 0
           }
+          # A read that fails or makes no sense ends the run green with a
+          # warning, so this run's own failure is never counted as a failed
+          # run of the head; the next scheduled run asks again.
+          unread() {
+            echo "::warning::GitHub did not say $1, so this run builds nothing; the next scheduled run asks again"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          # Free, and the limit is shared by every run in the repository. Asked
+          # first, so a spent hour makes no request fail.
+          remaining="$(gh api rate_limit --jq .resources.core.remaining)" || unread "how many API requests are left this hour"
+          [[ "$remaining" =~ ^[0-9]+$ ]] || unread "how many API requests are left this hour"
+          if (( remaining < 904 )); then
+            skip "Only $remaining GitHub API requests are left this hour, fewer than the 900 a build may make and the 4 this run asks first"
+          fi
           api="repos/$GITHUB_REPOSITORY"
           branch="${GITHUB_REF#refs/heads/}"
-          head="$(gh api "$api/git/ref/heads/$branch" --jq .object.sha)"
+          head="$(gh api "$api/git/ref/heads/$branch" --jq .object.sha)" || unread "which commit $branch is at"
           if [[ "$head" != "$GITHUB_SHA" ]]; then
             skip "$branch moved past $GITHUB_SHA after this run was scheduled; the next one checks its new head"
           fi
-          # How many runs of this workflow on the head failed, and when the last one ended.
-          failed="$(gh api "$api/actions/workflows/blueprint-pages.yml/runs?branch=$branch&head_sha=$head&status=completed&per_page=100" \
-            --jq '[.workflow_runs[] | select(.event != "pull_request")
-              | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure")
-              | .updated_at | fromdateiso8601] | "\(length) \(max // 0)"')"
-          read -r failures failed_at <<< "$failed"
           # The newest deployment of the head to the site, and how it ended.
-          deployment="$(gh api "$api/deployments?environment=github-pages&sha=$head&per_page=1" --jq '.[0].id // 0')"
-          if [[ ! "$deployment" =~ ^[0-9]+$ ]]; then
-            echo "::error::GitHub did not give the id of the newest deployment of $head"
-            exit 1
-          fi
+          deployment="$(gh api "$api/deployments?environment=github-pages&sha=$head&per_page=1" --jq '.[0].id // 0')" \
+            || unread "which deployment of $head is the newest"
+          [[ "$deployment" =~ ^[0-9]+$ ]] || unread "the id of the newest deployment of $head"
           state=none
           deployed_at=0
           if [[ "$deployment" != 0 ]]; then
             status="$(gh api "$api/deployments/$deployment/statuses?per_page=1" \
-              --jq '.[0] // {} | "\(.state // "none") \(.created_at // "1970-01-01T00:00:00Z" | fromdateiso8601)"')"
+              --jq '.[0] // {} | "\(.state // "none") \(.created_at // "1970-01-01T00:00:00Z" | fromdateiso8601)"')" \
+              || unread "how the newest deployment of $head ended"
             read -r state deployed_at <<< "$status"
+            [[ "$deployed_at" =~ ^[0-9]+$ ]] || unread "when the newest deployment of $head ended"
           fi
-          if [[ ! "$failures $failed_at $deployed_at" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ ]]; then
-            echo "::error::GitHub did not say which runs and deployments of $head failed or succeeded"
-            exit 1
+          # How many runs of this workflow on the head failed, and when the last
+          # one ended. After a successful deployment only the runs that failed
+          # since count, so failures the site has recovered from never
+          # lengthen the wait.
+          since=0
+          if [[ "$state" == success ]]; then
+            since="$deployed_at"
           fi
+          failed="$(gh api "$api/actions/workflows/blueprint-pages.yml/runs?branch=$branch&head_sha=$head&status=completed&per_page=100" \
+            --jq '[.workflow_runs[] | select(.event != "pull_request")
+              | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure")
+              | .updated_at | fromdateiso8601 | select(. >= '"$since"')] | "\(length) \(max // 0)"')" \
+            || unread "which runs of $head failed"
+          read -r failures failed_at <<< "$failed"
+          [[ "$failures $failed_at" =~ ^[0-9]+\ [0-9]+$ ]] || unread "which runs of $head failed"
           now="$(date +%s)"
-          if [[ "$state" == success ]] && (( failed_at < deployed_at )); then
+          if [[ "$state" == success ]] && (( failures == 0 )); then
             if (( now - deployed_at < 86400 )); then
               skip "The site was deployed from $head less than a day ago, and no run of it has failed since"
             fi
@@ -140,15 +161,6 @@ jobs:
             why="$failures runs of $head have failed, the last one $(( delay / 3600 ))h or more ago"
           else
             why="the site has no complete build of $head"
-          fi
-          # Free, and the limit is shared by every run in the repository.
-          remaining="$(gh api rate_limit --jq .resources.core.remaining)"
-          if [[ ! "$remaining" =~ ^[0-9]+$ ]]; then
-            echo "::error::GitHub did not say how many API requests are left this hour"
-            exit 1
-          fi
-          if (( remaining < 900 )); then
-            skip "Only $remaining GitHub API requests are left this hour, fewer than the 900 a build may make"
           fi
           echo "::notice::Building, since $why"
           echo "build=true" >> "$GITHUB_OUTPUT"
