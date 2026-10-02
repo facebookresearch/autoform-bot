@@ -1349,18 +1349,18 @@ refusals names the line the HTML or the command is on.
 An attribute list may only give a heading an id, as in `## Title {#title}`;
 any class, style, or other attribute, and an id on anything but a heading, is
 refused with the line it is on, since it could make an article's text look
-like a card, a status mark, or an approval label. The braces of a code fence
+like a card, a status mark, or an approval label. The id starts with a letter,
+uses letters, digits, `-`, and `_`, is at most 64 characters, does not start
+with `bp-`, `autoform`, `mjx-`, `mermaid`, `md-`, or `__`, and is not an id
+the site gives one of its own elements on that page, such as a statement's
+anchor. The braces of a code fence
 may only name its language, as in ```` ```{.lean} ````, and options such as
 `title` or `linenums`; a class, an id, or another attribute there lands on the
 code block and is refused the same way. A Mermaid diagram, such as a
 ```` ```mermaid ```` fence, is refused with its line too: the site draws only
 the dependency graphs `render` writes, with the loose security their links
 need, which would also run a click's `call` as script. Show a diagram's source
-in a ```` ```text ```` fence instead. The id starts with a letter,
-uses letters, digits, `-`, and `_`, is at most 64 characters, does not start
-with `bp-`, `autoform`, `mjx-`, `mermaid`, `md-`, or `__`, and is not an id
-the site gives one of its own elements on that page, such as a statement's
-anchor. `check` reads each article as the site publishes it: every line break
+in a ```` ```text ```` fence instead. `check` reads each article as the site publishes it: every line break
 Python reads (a form feed or U+2028 among them) as a new line, without the
 metadata MkDocs takes off the top of a page, and a statement in its box with
 its indentation kept, so an indented line stays code.
@@ -1370,8 +1370,9 @@ landing page `blueprint/README.md` (the text you wrote, before `render` adds
 its dashboard), `coverage/README.md`, and any other Markdown page in the vault.
 `check` reads each page, articles included, after `render` points its relative
 links at the pages and anchors they land on, and refuses what it refuses in an
-article, naming the file and the line. `render` writes a moved link's target percent-encoded,
-so a target such as `%3Cscript%3E.md` stays a link and adds no markup.
+article, naming the file and the line. `render` writes a moved link's target
+percent-encoded, so a target such as `%3Cscript%3E.md` stays a link and adds
+no markup.
 `render` refuses the same articles, so the site never publishes markup that an
 article's reviewer read as text and the owners of its theme never saw. It validates structure and
 leaves mathematical correctness to the agent and the Lean kernel.
