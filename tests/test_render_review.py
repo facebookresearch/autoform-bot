@@ -1078,6 +1078,23 @@ def test_html_outside_code_is_refused_by_name(testimony: str, reason: str) -> No
 
 
 @pytest.mark.parametrize(
+    "testimony",
+    ["Code `<?` alone for $n$.", "Code `<!x` alone and `a > b` for $n$.", "Code `a<?b` and `c` for $n$."],
+)
+def test_an_html_opener_in_code_is_excused_by_name(testimony: str) -> None:
+    """A declaration's opener in code is found there alone, so the source is
+    not read past the code to the next ``>`` and counted as outside it."""
+
+    assert _testimony_errors(testimony) == ()
+
+
+def test_html_after_an_opener_in_code_is_named_as_written() -> None:
+    assert _testimony_errors("Text `<?` then <b>bold</b> for $n$.") == (
+        "raw HTML is not allowed: <b>, </b>; in a formula, put a space after <",
+    )
+
+
+@pytest.mark.parametrize(
     ("testimony", "shown"),
     [
         ("Its type is `List<T>`, not `Array<Nat>`.", "<code>List&lt;T&gt;</code>"),

@@ -2150,7 +2150,9 @@ def _vault_markup_errors(text: str, code: list[str]) -> list[str]:
     reader cannot see. They are found in the source, since the renderer
     consumes Markdown a viewer could read as part of a tag, such as the
     ``>`` that starts a line, and each found is excused only by as many
-    occurrences of it in code. Formulas are not code there.
+    occurrences of it in code. Formulas are not code there. Tags are counted
+    by name, as :func:`_html_names` gives them, so a declaration's opener in
+    code is not read on past the code to the next ``>``.
     """
 
     def outside_code(pattern: re.Pattern[str]) -> list[str]:
@@ -2159,7 +2161,9 @@ def _vault_markup_errors(text: str, code: list[str]) -> list[str]:
             found.subtract(match.group() for match in pattern.finditer(piece))
         return [markup for markup, count in found.items() if count > 0]
 
-    tags = dict.fromkeys(_HTML_NAME.match(markup).group() for markup in outside_code(_HTML_TAG))
+    tags = Counter(_html_names(text))
+    for piece in code:
+        tags.subtract(_html_names(piece))
     entities = [
         _entity_name(entity)
         for entity in outside_code(_HTML_ENTITY)
@@ -2168,8 +2172,7 @@ def _vault_markup_errors(text: str, code: list[str]) -> list[str]:
     errors: list[str] = []
     if outside_code(re.compile("<!--")):
         errors.append("HTML comments are not allowed: Markdown viewers hide the text they enclose")
-    if tags:
-        names = (name if name.startswith(("<!", "<?")) else name + ">" for name in tags)
+    if names := [name for name, count in tags.items() if count > 0]:
         errors.append("raw HTML is not allowed: " + _named(names) + "; in a formula, put a space after <")
     if outside_code(_AUTOLINK):
         errors.append("Markdown links, images, and autolinks are not allowed")
