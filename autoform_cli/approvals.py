@@ -102,11 +102,13 @@ def _printable(text: str) -> str:
     Reasons quote file names, refs, and GitHub's own answers, which a pull
     request author can choose. A newline in one, printed to a CI log, could
     start a line with ``::``, which GitHub Actions runs as a workflow command.
-    Every reason the verifier records and every ApprovalError message passes
-    through here.
+    The runner also runs the older ``##[command]`` form anywhere in a line, so
+    the second ``#`` of each ``##[`` is written ``\\x23``. Every reason the
+    verifier records and every ApprovalError message passes through here.
     """
 
-    return "".join(char if char.isprintable() else char.encode("unicode_escape").decode("ascii") for char in text)
+    escaped = "".join(char if char.isprintable() else char.encode("unicode_escape").decode("ascii") for char in text)
+    return escaped.replace("##[", "#\\x23[")
 
 
 class ApprovalError(ValueError):

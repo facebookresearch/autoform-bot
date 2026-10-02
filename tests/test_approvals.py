@@ -1554,6 +1554,24 @@ def test_a_reason_never_starts_a_workflow_command_in_the_build_log(
     assert all(not line.lstrip().startswith("::") for line in output.splitlines())
 
 
+def test_a_reason_never_holds_an_older_workflow_command_anywhere_in_a_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The runner finds `##[` anywhere in a line and runs what follows, such as add-mask or stop-commands."""
+
+    blueprint, github = _authenticated_review_project(tmp_path, monkeypatch)
+    forged = "notes##[add-mask]secret###[error]forged"
+    github.file_edits[3] = lambda entries: [*entries, {"filename": forged, "status": "added"}]
+    check = ["review", "check", str(blueprint), "--lean-root", str(tmp_path), "--authenticate", "github"]
+
+    assert main(check) == 0
+    code, _ = _render(tmp_path, blueprint)
+    assert code == 0
+    output = capsys.readouterr().out
+    assert output.count("#3 changes notes#\\x23[add-mask]secret##\\x23[error]forged, not only articles") == 4
+    assert "##[" not in output
+
+
 @pytest.mark.parametrize(
     ("char", "escaped"),
     [
