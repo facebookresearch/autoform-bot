@@ -565,6 +565,40 @@ def test_an_attribute_list_other_than_a_heading_id_is_refused(article: str, show
     assert errors == (f"line {line}: attribute list {shown} is not allowed: {_ATTRIBUTE_RULE}",)
 
 
+_FENCE_RULE = 'a code fence may only name its language, as in "```lean" or "```{.lean}"; keep only the language'
+
+
+@pytest.mark.parametrize(
+    ("article", "shown"),
+    [
+        ("```{.text .bp-readback .bp-readback-current}\nApproved.\n```", "{.text .bp-readback .bp-readback-current}"),
+        ("```text {.bp-mark #claim data-kind=result}\nx\n```", "{.bp-mark #claim data-kind=result}"),
+        ('```text {style="position:fixed;inset:0;z-index:1000"}\nx\n```', '{style="position:fixed;inset:0;z-index:1000"}'),
+        ("``` { .lean #anchor }\nx\n```", "{ .lean #anchor }"),
+        ("- item\n\n    ```{.text .bp-mark}\n    x\n    ```", "{.text .bp-mark}"),
+        ("> ~~~{.text .mermaid .bp-graph}\n> graph LR\n> ~~~", "{.text .mermaid .bp-graph}"),
+    ],
+)
+def test_a_fence_header_that_sets_more_than_a_language_is_refused(article: str, shown: str) -> None:
+    """A class, an id, or another attribute in a fence's braces lands on the
+    code block's element, as one in an attribute list does, so it could make
+    the block look like a card or a mark, cover the page, or be drawn as a
+    diagram."""
+
+    errors = publishable_article(f"# Top\n\n{article}\n")[1]
+
+    line = 3 + article[: article.index(shown)].count("\n")
+    assert errors == (f"line {line}: attribute list {shown} is not allowed: {_FENCE_RULE}",)
+
+
+@pytest.mark.parametrize(
+    "article",
+    ["```{.lean}\nx\n```", "``` { .lean }\nx\n```", '```lean title="Main.lean" linenums="1"\nx\n```', '```{.lean hl_lines="1"}\nx\n```'],
+)
+def test_a_fence_header_that_names_a_language_is_accepted(article: str) -> None:
+    assert publishable_article(f"# Top\n\n{article}\n")[1] == ()
+
+
 @pytest.mark.parametrize(
     "identifier", ["bp-mark", "autoform-sweep", "mjx-eqn", "MJX-x", "mermaid-1", "md-content", "__drawer", "1st", "a:b", "a.b", "x" * 65]
 )

@@ -2893,8 +2893,9 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
     site's marks.
 
     And it is refused for an attribute list that does anything but give a
-    heading an id, which could make its text look like a card, a mark, or an
-    approval, or cover the page. The id may not look like the site's own, or
+    heading an id, or, in a code fence's braces, name its language, which
+    could make its text look like a card, a mark, or an approval, cover the
+    page, or be drawn as a diagram. The id may not look like the site's own, or
     be one of ``reserved``, the ids the site gives its own elements on the
     article's page.
     """
@@ -2933,12 +2934,18 @@ def _attribute_errors(
     text: str, attributes: Iterable[tuple[str, str, list[tuple[str, str]]]], reserved: frozenset[str]
 ) -> list[str]:
     """Name each attribute list the site's converter applied in ``text`` that
-    does more than give a heading an id of its own, by its line in ``text``."""
+    does more than give a heading an id of its own, or a code fence its
+    language, by its line in ``text``."""
 
     errors: list[str] = []
     for tag, written, pairs in attributes:
         identifier = pairs[0][1] if len(pairs) == 1 and pairs[0][0] == "id" else None
-        if tag not in {"h1", "h2", "h3", "h4", "h5", "h6"} or identifier is None:
+        if tag == "fence":
+            reason = (
+                'is not allowed: a code fence may only name its language, as in "```lean" or "```{.lean}"; '
+                "keep only the language"
+            )
+        elif tag not in {"h1", "h2", "h3", "h4", "h5", "h6"} or identifier is None:
             reason = (
                 'is not allowed: an article may only give a heading an id, as in "## Title {#title}"; '
                 "delete it or keep only a heading's id"
@@ -2984,7 +2991,9 @@ def _attribute_places(text: str, written: str) -> list[tuple[str, str]]:
 def _rendered_article(text: str) -> tuple[str, list[str], list[tuple[str, str, list[tuple[str, str]]]]]:
     """The site's rendering of ``text``, what its renderer passes through
     from ``text`` as raw HTML, and each attribute list it applies: the
-    element's tag, the list as read, and the attributes it sets.
+    element's tag, the list as read, and the attributes it sets. A fence's
+    braces that set more than its language count as one, with ``fence`` for
+    the tag and no attributes.
 
     The renderer stashes raw HTML, character references, and highlighted code
     blocks alike. Code blocks are stashed while fences are read, before any
@@ -3017,6 +3026,17 @@ def _rendered_article(text: str) -> tuple[str, list[str], list[tuple[str, str, l
         return assign(element, written, strict=strict)
 
     attribute_lists.assign_attrs = recorded  # type: ignore[attr-defined]
+    # A fence's braces are an attribute list too: what they set besides the
+    # language lands on the code block's element.
+    read_braces = fences.handle_attrs  # type: ignore[attr-defined]
+
+    def braced(match: re.Match[str]) -> bool:
+        okay = read_braces(match)
+        if okay and (fences.classes or fences.id or fences.attrs):  # type: ignore[attr-defined]
+            assigned.append(("fence", match.group("attrs"), []))
+        return okay
+
+    fences.handle_attrs = braced  # type: ignore[attr-defined]
     rendered = parser.convert(_bounded_references(text))
     passed = [
         block if isinstance(block, str) else "<element>"

@@ -1232,7 +1232,10 @@ mention, outside a formula or in code, is shown as typed.
 An attribute list may only give a heading an id, as in `## Title {#title}`;
 any class, style, or other attribute, and an id on anything but a heading, is
 refused with the line it is on, since it could make an article's text look
-like a card, a status mark, or an approval label. The id starts with a letter,
+like a card, a status mark, or an approval label. The braces of a code fence
+may only name its language, as in ```` ```{.lean} ````, and options such as
+`title` or `linenums`; a class, an id, or another attribute there lands on the
+code block and is refused the same way. The id starts with a letter,
 uses letters, digits, `-`, and `_`, is at most 64 characters, does not start
 with `bp-`, `autoform`, `mjx-`, `mermaid`, `md-`, or `__`, and is not an id
 the site gives one of its own elements on that page, such as a statement's
