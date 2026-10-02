@@ -29,7 +29,7 @@ from .lean import SourceLinker, build_linker, declaration_names
 from .markdown import content_lines as _content_lines
 from .markdown import NOTES_BOX, STATEMENT_BOX, boxed, statement_and_notes
 from .markdown import outside_fences as _outside_fences
-from .mathjax import MATHJAX_SCRIPT, mathjax_script
+from .mathjax import MATHJAX_SCRIPT, in_the_way, mathjax_script
 from .readback import READBACKS_DIR, Readback, load_readbacks, publishable_article, readback_for, render_testimony
 from .review import ReviewBundle, ReviewError, ReviewDeclaration, validate_review_bundle
 from .skeleton import DeclarationSkeleton, SkeletonReport
@@ -100,6 +100,8 @@ DECLARATION_LABELS = {
 STYLESHEET = "stylesheets/blueprint.css"
 MERMAID_SCRIPT = "javascripts/blueprint-mermaid.js"
 LOGO = "assets/autoform.svg"
+#: The files render writes into every site, whatever the vault holds there.
+_ASSETS = (STYLESHEET, MERMAID_SCRIPT, MATHJAX_SCRIPT, LOGO)
 
 
 def _logo() -> str:
@@ -254,6 +256,8 @@ def publication_issues(graph: Graph, blueprint: Path) -> list[str]:
     judge one thing. Articles are published as Markdown, so raw HTML in one
     would be markup on the site; a heading's id is checked against the ids
     the site gives its own elements on the page the article is published on.
+    Render writes the site's own assets over the vault's copies, so anything
+    but a file where one goes is refused before it can stop the build.
     """
 
     taken = _site_ids(graph)
@@ -262,7 +266,17 @@ def publication_issues(graph: Graph, blueprint: Path) -> list[str]:
         for node in graph.nodes.values()
         for issue in publishable_article(graph.article_text(node), taken[node.id])[1]
     ]
-    return issues + list(mathjax_script(blueprint)[1])
+    blocked: dict[str, str] = {}
+    for relative in _ASSETS:
+        found = in_the_way(blueprint, relative)
+        if found is not None and found[0] not in blocked:
+            where, kind = found
+            blocked[where] = (
+                f"{where}: is {kind}, where autoform render writes a file; remove it"
+                if where == relative
+                else f"{where}: is {kind}, where autoform render needs a folder for {relative}; remove it"
+            )
+    return issues + list(blocked.values()) + list(mathjax_script(blueprint)[1])
 
 
 def _site_ids(graph: Graph) -> dict[str, frozenset[str]]:

@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import stat
 from pathlib import Path
 
 #: The MathJax release the site loads. The testimony validator's commands were
@@ -90,6 +91,36 @@ def stateful_commands(text: str) -> list[str]:
     return list(dict.fromkeys(command for command in _TEX_COMMAND.findall(text) if command in STATEFUL_TEX))
 
 
+def in_the_way(blueprint: Path, relative: str) -> tuple[str, str] | None:
+    """What stands where a regular file at ``relative`` in ``blueprint``
+    would be: the first path on the way that is not a directory, or the file
+    itself when it is not a regular file, with what it is. ``None`` when the
+    file is regular or absent."""
+
+    parts = relative.split("/")
+    path = blueprint
+    for index, part in enumerate(parts):
+        path = path / part
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            return None
+        last = index == len(parts) - 1
+        if stat.S_ISREG(mode) if last else stat.S_ISDIR(mode):
+            continue
+        kind = (
+            "a symlink"
+            if stat.S_ISLNK(mode)
+            else "a directory"
+            if stat.S_ISDIR(mode)
+            else "a file"
+            if stat.S_ISREG(mode)
+            else "a special file"
+        )
+        return "/".join(parts[: index + 1]), kind
+    return None
+
+
 def mathjax_script(blueprint_dir: str | Path) -> tuple[str, list[str]]:
     """The ``javascripts/mathjax.js`` the site gets for the vault at
     ``blueprint_dir``, and what refuses it: an invalid ``tex-macros.json``, or
@@ -98,7 +129,8 @@ def mathjax_script(blueprint_dir: str | Path) -> tuple[str, list[str]]:
     blueprint = Path(blueprint_dir)
     issues: list[str] = []
     kept = blueprint / MATHJAX_SCRIPT
-    if kept.is_file():
+    # Anything else at that path is refused with the site's other assets.
+    if kept.is_file() and in_the_way(blueprint, MATHJAX_SCRIPT) is None:
         digest = hashlib.sha256(kept.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
         if digest not in _SHIPPED_CONFIGURATIONS:
             issues.append(
@@ -118,6 +150,11 @@ def _tex_macros(path: Path) -> tuple[dict[str, object], list[str]]:
     the site could then reach it through the macro.
     """
 
+    blocked = in_the_way(path.parent, path.name)
+    if blocked is not None:
+        return {}, [
+            f"{TEX_MACROS}: is {blocked[1]}, where autoform reads the project's macros from a file; remove it"
+        ]
     if not path.is_file():
         return {}, []
     try:
@@ -311,6 +348,7 @@ __all__ = [
     "PAGE_PACKAGES",
     "STATEFUL_TEX",
     "TEX_MACROS",
+    "in_the_way",
     "mathjax_script",
     "stateful_commands",
 ]

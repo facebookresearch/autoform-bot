@@ -1190,6 +1190,11 @@ after it. It needs no edits: `render` replaces a copy `autoform init` wrote
 with its own, and the script finds MathJax already loaded and checks its
 version instead of loading it. A copy edited since is refused, since the edits
 would be lost; move its macros to `tex-macros.json` and delete it.
+`render` writes `stylesheets/blueprint.css`, `javascripts/blueprint-mermaid.js`,
+and `assets/autoform.svg` over the vault's copies the same way. A directory,
+symlink, or special file at any of these paths, at `tex-macros.json`, or a file
+where one of their folders goes, is refused by `check` and `render` with the
+path it is at.
 
 ## Validation
 
