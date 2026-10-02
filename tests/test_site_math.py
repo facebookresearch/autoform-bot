@@ -795,6 +795,28 @@ def test_a_link_render_moves_keeps_its_query(tmp_path: Path) -> None:
     assert "See [the paper](../sources.md?plain=1#lemma-3) and [as text](../sources.md?plain=1)." in written
 
 
+@pytest.mark.parametrize(
+    ("text", "href"),
+    [
+        ("See [x][r].\n\n[r]: <../sources.md#a) b<c`d>", "../sources.md#a%29%20b%3Cc%60d"),
+        ("See [x](../sources.md#a<b`c).", "../sources.md#a%3Cb%60c"),
+    ],
+)
+def test_a_link_render_moves_keeps_its_fragment_encoded(tmp_path: Path, text: str, href: str) -> None:
+    """Render writes a moved link's fragment encoded as well as its path: an
+    angle-bracketed destination loses its brackets when it is rewritten, so
+    a raw parenthesis, space, ``<`` or backtick in the fragment would end or
+    split the link."""
+
+    blueprint = _vault(tmp_path)
+    (blueprint / "sources.md").write_text("# Paper\n", encoding="utf-8")
+    _with_article(blueprint, text)
+
+    published = _published(_render(blueprint) / "roadmap/README.md")
+
+    assert f'<a href="{href}">x</a>' in published
+
+
 def test_check_judges_the_text_render_publishes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check judges each page as render writes it, with its links moved, so
     what render publishes is what check saw."""
