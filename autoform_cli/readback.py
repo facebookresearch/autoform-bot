@@ -1537,8 +1537,8 @@ class _TexLayout:
         errors = [prefix + _named(sorted(names)) + suffix for prefix, names, suffix in named if names]
         if self.marks:
             errors.append(
-                "combining marks in a formula are not allowed: MathJax sets each apart from the symbol before it; "
-                "write an accent such as \\acute{x}, or the character already composed"
+                "combining marks in a formula are not allowed: MathJax sets each as a symbol of its own, beside or "
+                "over the one before it; write an accent such as \\acute{x}, or the character already composed"
             )
         if self.total_spacing > _TEX_MAX_TESTIMONY_SPACING:
             errors.append(
@@ -1831,6 +1831,7 @@ class _TexLayout:
             self.skip_to(position)
         if re.search(r"[\\$]", _TEX_TEXT_ESCAPE.sub("", content)):
             self.errors[_TEX_TEXT] = None
+        self.marks = self.marks or any(unicodedata.category(character) in {"Mn", "Me"} for character in content)
         shown = content.strip()
         if content[:1].isspace():
             self.space(4.5)

@@ -661,6 +661,25 @@ def test_tex_mathjax_would_set_differently_is_refused(testimony: str, reason: st
 
 
 @pytest.mark.parametrize(
+    ("testimony", "rewritten"),
+    [
+        ("$x\\mathrel{\\in\\text{\u0338}}A$", "$x\\mathrel{\u2209}A$"),
+        ("$x\\in\\!\\text{\u0338}A$", "$x\u2209A$"),
+        ("$a=\\text{\u0338}b$", "$a\u2260b$"),
+        ("$x\\text{\u0301}$", "$\\acute{x}$"),
+        ("$\\text{e\u0301 b}$", "$\\text{\u00e9 b}$"),
+    ],
+)
+def test_combining_marks_in_tex_text_are_refused_with_a_rewrite(testimony: str, rewritten: str) -> None:
+    r"""MathJax sets a combining mark in ``\text`` as a symbol of its own,
+    drawn over the one before it, so ``\in\text{\u0338}`` shows as a
+    struck-out relation the model read as ``\in``."""
+
+    assert any(error.startswith("combining marks in a formula are not allowed") for error in _testimony_errors(testimony))
+    assert _testimony_errors(rewritten) == ()
+
+
+@pytest.mark.parametrize(
     "testimony",
     [
         r"$\begin{aligned}[t] x &= y \end{aligned}$ and $\begin{gathered}[ b ] x \end{gathered}$",
