@@ -283,6 +283,7 @@ def test_writer_accepts_ordinary_mathematical_testimony(testimony: str, tmp_path
         "The claim holds for x" + "\u0301\u0323" * 2 + ".",
         "Vi\u1ec7t, or Vie\u0323\u0302t, names the same place.",
         "The town Ba\u0302\u0301c and the word \u03b1\u0314\u0301\u0345 carry two marks above.",
+        "The letter \u1faf carries three marks once decomposed, and Cafe\u0301 one.",
         "The Tibetan stack \u0f66\u0f92\u0fb2\u0f72\u0f7e carries four marks.",
         "The cardinal \u2135 and $\\aleph_0$ are left to right.",
     ],
@@ -315,6 +316,43 @@ def test_combining_marks_stacked_over_the_lines_around_are_refused(testimony: st
     rendered text as well as in the source."""
 
     assert any(error.startswith(_STACKED) for error in _testimony_errors(testimony))
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        "The letter \u1eaa\u0301\u0302 for $n$.",
+        "The letter \u01fb\u0302\u0303 for $n$.",
+        "The letter \u1faf\u0301\u0302 for $n$.",
+    ],
+)
+def test_marks_on_a_composed_letter_stack_on_the_ones_it_stands_for(testimony: str) -> None:
+    """A letter composed in advance is the same text as its decomposition, so
+    the marks added to it are counted with the ones it carries."""
+
+    assert any(error.startswith(_STACKED) for error in _testimony_errors(testimony))
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        "We have $a$ $=$\u0338 $b$ for these.",
+        "The set $S$\u20dd is closed.",
+        "The conjugate is $z$\u0304 here.",
+        "\u20dd\u20dd\u20dd\u20ddStart of the paragraph.",
+        "| a | b |\n|---|---|\n| \u20dd c | d |",
+        "The code `x`\u0301 and the mark \u0301 alone.",
+    ],
+)
+def test_a_combining_mark_with_no_character_before_it_is_refused(testimony: str) -> None:
+    """A mark that starts a text node, after a formula or another element or
+    at the start of a block, or that follows a space, has no character of its
+    own: the browser draws it over whatever is before it."""
+
+    assert any(
+        error.startswith("combining marks with no character before them in their text are not allowed")
+        for error in _testimony_errors(testimony)
+    )
 
 
 @pytest.mark.parametrize(

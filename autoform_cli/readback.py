@@ -2094,11 +2094,18 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     if hidden:
         errors.append("invisible or reordering characters are not allowed: " + _named(hidden))
     # Inline elements end where the marks after them begin, so the marks of
-    # adjacent ones fall on one character.
-    if _overstacked(text + "\n" + "".join(document.itertext())):
+    # adjacent ones fall on one character. Marks are counted on the canonical
+    # decomposition, where a letter composed in advance carries its own.
+    if _overstacked(unicodedata.normalize("NFD", text + "\n" + "".join(document.itertext()))):
         errors.append(
             f"more than {_MAX_COMBINING_MARKS} combining marks on one character, or more than "
             f"{_MAX_STACKED_MARKS} above or below it, are not allowed: they stack over the lines around it"
+        )
+    if any(_baseless_mark(piece) for piece, kind in pieces if kind != "math"):
+        errors.append(
+            "combining marks with no character before them in their text are not allowed: the browser draws them "
+            "over the formula, mark, or border before them; write the character already composed, or an accent in "
+            "a formula such as \\bar{z}"
         )
     layout = _TexLayout()
     for piece, kind in pieces:
@@ -2635,6 +2642,19 @@ def _overstacked(text: str) -> bool:
         above += unicodedata.combining(character) in _MARKS_ABOVE
         below += unicodedata.combining(character) in _MARKS_BELOW
         if total > _MAX_COMBINING_MARKS or max(above, below) > _MAX_STACKED_MARKS:
+            return True
+    return False
+
+
+def _baseless_mark(text: str) -> bool:
+    """Whether a combining mark in ``text``, decomposed, starts it or follows
+    whitespace, so that it has no character of its own to sit on."""
+
+    previous = " "
+    for character in unicodedata.normalize("NFD", text):
+        if unicodedata.category(character) not in {"Mn", "Me"}:
+            previous = character
+        elif previous.isspace():
             return True
     return False
 
