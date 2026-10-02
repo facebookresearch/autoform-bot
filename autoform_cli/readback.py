@@ -2107,6 +2107,10 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     bounded spacing, rows, and cells; and at least one visible letter or digit.
     """
 
+    # Both Markdown readings, and a CommonMark viewer of the vault, end a line
+    # at "\r\n" and at a lone "\r" as at "\n", so every check reads the lines
+    # they read.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     if limits := _testimony_limit_errors(text):
         return limits
     rendered, defines_links, uneven_table = _render_testimony(text)
