@@ -744,6 +744,43 @@ def test_lookups_are_cached_and_the_request_budget_fails_closed(tmp_path: Path) 
     assert all("budget of 2 GitHub API requests" in (status.reason or "") for status in statuses.values())
 
 
+@pytest.mark.parametrize("gate", [False, True], ids=["precondition", "gate"])
+def test_a_budget_spent_outside_a_candidate_is_refused_at_the_ceiling_and_unchecked_below_it(
+    tmp_path: Path, gate: bool
+) -> None:
+    """Whether the budget runs out in the precondition, or in a gate's checks of its pull request, a run with
+    the whole ceiling gets no further than any other, and a run with less may."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _branch(root, "approve")
+    _approve(root, "result", _HASH)
+    _approve(root, "other", _HASH)
+    _commit(root, "Approve two articles")
+    head = github.open_pull(7, "bob")
+    github.review(7, "alice", "APPROVED", head)
+    if gate:
+        assert all(status.authenticated for status in _verify(root, github, pull_request=7).values())
+        # Out of requests at the last one, inside the checks of an approval.
+        budget = len(github.calls) - 1
+    else:
+        _land(root, github, 7)
+        # Out of requests in the precondition, after the head check.
+        budget = 2
+    kwargs = {"pull_request": 7} if gate else {}
+
+    github.hourly = (budget + 200, budget + 200)
+    verifier = _verified(root, github, **kwargs)
+    assert verifier.reasons
+    assert all("needs more than the" in reason for reason in verifier.reasons.values())
+    assert verifier.unchecked == {}
+
+    github.hourly = (1000, budget + 50)
+    verifier = _verified(root, github, **kwargs)
+    assert verifier.reasons
+    assert verifier.unchecked == verifier.reasons
+
+
 def test_a_failed_request_refuses_only_the_approvals_that_need_it(tmp_path: Path) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
