@@ -21,6 +21,7 @@ from autoform_cli.approvals import (
     ApprovalError,
     GitHubClient,
     GitHubReviewVerifier,
+    GitHubUnavailable,
     SupersededBuildError,
     approval_statuses,
     code_owners,
@@ -758,7 +759,7 @@ def test_a_failed_request_refuses_only_the_approvals_that_need_it(tmp_path: Path
 
     def flaky(path: str, query: dict | None = None) -> object | None:
         if path == "/pulls/8/files":
-            raise ApprovalError(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
+            raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
         return answer(path, query)
 
     github.get = flaky  # type: ignore[method-assign]
@@ -785,7 +786,7 @@ def test_a_failed_request_in_the_gate_refuses_only_the_approval_that_needs_it(tm
 
     def flaky(path: str, query: dict | None = None) -> object | None:
         if path == "/contents/blueprint/roadmap/basics/other.md":
-            raise ApprovalError(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
+            raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
         return answer(path, query)
 
     github.get = flaky  # type: ignore[method-assign]
@@ -821,9 +822,10 @@ def test_a_budget_spent_after_the_setup_refuses_only_the_approvals_left(tmp_path
     assert f"budget of {budget} GitHub API requests" in (statuses["basics/result"].reason or "")
 
 
-@pytest.mark.parametrize("failure", ["HTTP 502", "HTTP 404"])
+@pytest.mark.parametrize("failure", ["HTTP 502", "HTTP 404", "HTTP 422", "oversized"])
 def test_only_an_approval_a_later_run_may_authenticate_is_unchecked(tmp_path: Path, failure: str) -> None:
-    """A later run may get the answer a failed request did not; a 404, or a spent budget, is no verdict either."""
+    """A later run may get the answer a failed request did not, or a spent budget did not ask for. A 404, any
+    other 4xx but a rate limit, and an oversized answer come back the same on every run: a verdict, not a gap."""
 
     root = _project(tmp_path)
     github = FakeGitHub(root)
@@ -841,14 +843,18 @@ def test_only_an_approval_a_later_run_may_authenticate_is_unchecked(tmp_path: Pa
         if path != "/pulls/8/files":
             return answer(path, query)
         if failure == "HTTP 502":
-            raise ApprovalError(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
+            raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
+        if failure == "HTTP 422":
+            raise ApprovalError(f"GitHub API GET {path} failed with HTTP 422: Unprocessable Entity")
+        if failure == "oversized":
+            raise ApprovalError(f"GitHub API GET {path} returned more than 8388608 bytes")
         return None
 
     github.get = flaky  # type: ignore[method-assign]
     verifier = _verified(root, github)
 
     assert list(verifier.reasons) == ["basics/other"]
-    assert verifier.unchecked == ({} if failure == "HTTP 404" else verifier.reasons)
+    assert verifier.unchecked == (verifier.reasons if failure == "HTTP 502" else {})
 
     github.get = answer  # type: ignore[method-assign]
     # The setup with alice's permission, then the nine requests for #8, which "basics/other" sorts first to use.
@@ -876,7 +882,7 @@ def test_a_head_lookup_that_fails_outside_a_publishing_run_leaves_every_approval
         if path != "/git/ref/heads/main":
             return answer(path, query)
         if failure == "HTTP 502":
-            raise ApprovalError(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
+            raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
         return None
 
     github.get = flaky  # type: ignore[method-assign]
@@ -1176,6 +1182,49 @@ def test_the_client_reads_how_many_requests_are_left_and_nothing_else(
     assert requests[0].unredirected_hdrs == {"Authorization": "Bearer secret"}  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize(
+    ("failure", "unavailable"),
+    [
+        (urllib.error.HTTPError("", 500, "error", {}, io.BytesIO(b"")), True),  # type: ignore[arg-type]
+        (urllib.error.HTTPError("", 502, "error", {}, io.BytesIO(b"")), True),  # type: ignore[arg-type]
+        (urllib.error.HTTPError("", 408, "error", {}, io.BytesIO(b"")), True),  # type: ignore[arg-type]
+        (urllib.error.HTTPError("", 429, "error", {}, io.BytesIO(b"")), True),  # type: ignore[arg-type]
+        # GitHub marks its primary and secondary rate limits with these headers.
+        (urllib.error.HTTPError("", 403, "error", {"x-ratelimit-remaining": "0"}, io.BytesIO(b"")), True),  # type: ignore[arg-type]
+        (urllib.error.HTTPError("", 403, "error", {"retry-after": "60"}, io.BytesIO(b"")), True),  # type: ignore[arg-type]
+        (urllib.error.HTTPError("", 403, "error", {"x-ratelimit-remaining": "12"}, io.BytesIO(b"")), False),  # type: ignore[arg-type]
+        (urllib.error.HTTPError("", 401, "error", {}, io.BytesIO(b"")), False),  # type: ignore[arg-type]
+        (urllib.error.HTTPError("", 410, "error", {}, io.BytesIO(b"")), False),  # type: ignore[arg-type]
+        (urllib.error.HTTPError("", 422, "error", {}, io.BytesIO(b"")), False),  # type: ignore[arg-type]
+        (urllib.error.URLError("timed out"), True),
+        (TimeoutError("timed out"), True),
+        (b"not json", True),
+        (b"[" + b" " * 64 + b"]", False),
+    ],
+)
+def test_the_client_tells_a_failure_a_later_run_may_not_repeat_from_a_verdict(
+    monkeypatch: pytest.MonkeyPatch, failure: bytes | Exception, unavailable: bool
+) -> None:
+    class Response(io.BytesIO):
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self.close()
+
+    def urlopen(request: object, timeout: float) -> object:
+        if isinstance(failure, Exception):
+            raise failure
+        return Response(failure)
+
+    monkeypatch.setattr(approvals.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(approvals, "_MAX_RESPONSE_BYTES", 32)
+
+    with pytest.raises(ApprovalError) as raised:
+        GitHubClient("secret", "owner/project").get("/pulls/1/reviews")
+    assert isinstance(raised.value, GitHubUnavailable) is unavailable
+
+
 # What every verification on the default branch reads first: the repository, the branch's head, its
 # rules, the ruleset they come from, GitHub's errors in CODEOWNERS, and the permission of the catch-all owner.
 _SETUP_CALLS = [
@@ -1459,7 +1508,7 @@ def test_a_failed_request_still_renders_the_site(
         # Past the head check, which a failed request stops instead.
         if path in ("", "/git/ref/heads/main"):
             return answer(path, query)
-        raise ApprovalError(f"GitHub API GET {path} failed with HTTP 502: Bad <Gateway>")
+        raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: Bad <Gateway>")
 
     github.get = flaky  # type: ignore[method-assign]
     code, pages = _render(tmp_path, blueprint)
@@ -1495,7 +1544,7 @@ def test_a_reason_never_starts_a_workflow_command_in_the_build_log(
 
     def forging(path: str, query: dict | None = None) -> object:
         if path == "":
-            raise ApprovalError(f"GitHub API GET {path} failed with HTTP 502: {forged}")
+            raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: {forged}")
         return answer(path, query)
 
     github.get = forging  # type: ignore[method-assign]
@@ -1623,7 +1672,7 @@ def test_a_build_whose_head_cannot_be_read_fails_before_writing_the_site(
 
         def flaky(path: str, query: dict | None = None) -> object:
             if path == failing:
-                raise ApprovalError(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
+                raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
             return answer(path, query)
 
         github.get = flaky  # type: ignore[method-assign]

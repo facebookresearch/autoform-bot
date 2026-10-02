@@ -453,8 +453,9 @@ class GitHubClient:
     """A minimal read-only GitHub REST client over the standard library.
 
     Paths are relative to ``/repos/{repository}``. A 404 is returned as None,
-    meaning no evidence; every other failure raises ``ApprovalError``. The
-    token is never forwarded across a redirect.
+    meaning no evidence. A failure a later request may not repeat raises
+    ``GitHubUnavailable``; any other, such as a 422 or an oversized answer,
+    raises ``ApprovalError``. The token is never forwarded across a redirect.
     """
 
     def __init__(
@@ -494,15 +495,20 @@ class GitHubClient:
             if exc.code == 404:
                 return None
             detail = exc.read(500).decode("utf-8", "replace").strip()
-            raise ApprovalError(f"GitHub API GET {path} failed with HTTP {exc.code}: {detail}") from exc
+            message = f"GitHub API GET {path} failed with HTTP {exc.code}: {detail}"
+            if exc.code >= 500 or exc.code in (408, 429) or (exc.code == 403 and _rate_limited(exc.headers)):
+                raise GitHubUnavailable(message) from exc
+            # Any other 4xx answers the same way on every run.
+            raise ApprovalError(message) from exc
         except (urllib.error.URLError, OSError) as exc:
-            raise ApprovalError(f"GitHub API GET {path} failed: {exc}") from exc
+            raise GitHubUnavailable(f"GitHub API GET {path} failed: {exc}") from exc
         if len(body) > _MAX_RESPONSE_BYTES:
+            # As large on every run: anyone who can review a pull request can make its reviews this large.
             raise ApprovalError(f"GitHub API GET {path} returned more than {_MAX_RESPONSE_BYTES} bytes")
         try:
             return json.loads(body)
         except (UnicodeError, json.JSONDecodeError) as exc:
-            raise ApprovalError(f"GitHub API GET {path} returned malformed JSON") from exc
+            raise GitHubUnavailable(f"GitHub API GET {path} returned malformed JSON") from exc
 
     def rate_limit(self) -> tuple[int, int] | None:
         """This token's hourly limit of core API requests and how many are left, or None if GitHub does not say.
@@ -528,6 +534,19 @@ class GitHubClient:
         if not all(type(count) is int and count >= 0 for count in (limit, remaining)):
             return None
         return limit, remaining
+
+
+def _rate_limited(headers: object) -> bool:
+    """Whether a 403 is GitHub's primary or secondary rate limit, which it marks with these headers."""
+
+    get = getattr(headers, "get", None)
+    if get is None:
+        return False
+    return get("x-ratelimit-remaining") == "0" or get("retry-after") is not None
+
+
+class GitHubUnavailable(ApprovalError):
+    """GitHub gave no answer this time: a 5xx, a rate limit, a timeout, a network failure, or malformed JSON."""
 
 
 class _BudgetSpent(Exception):
@@ -597,8 +616,10 @@ class GitHubReviewVerifier:
 
     Anything else that cannot be checked, including a failed request, a
     spent request budget, or undecidable ownership, leaves that one approval
-    self-approved and says why in ``reasons``; a failed request or a spent
-    budget, which a later run may get past, also puts it in ``unchecked``.
+    self-approved and says why in ``reasons``; a request GitHub did not
+    answer (``GitHubUnavailable``), a list that changed between its pages, or
+    a spent budget, which a later run may get past, also puts it in
+    ``unchecked``.
     A budget is the requests left this hour less ``_LEFT_AFTER``, at most the
     hour's limit less ``_RESERVED_REQUESTS``; spending that ceiling is a
     verdict, not a failure, since no run gets further.
@@ -1381,7 +1402,7 @@ class GitHubReviewVerifier:
         self.requests += 1
         try:
             return self.client.get(path, query)
-        except ApprovalError as exc:
+        except GitHubUnavailable as exc:
             raise _Unanswered(str(exc)) from exc
 
     def _pages(
