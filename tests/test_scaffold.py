@@ -392,6 +392,7 @@ def test_generated_workflows_install_the_verified_lock(tmp_path: Path) -> None:
         assert '--no-recurse-submodules origin "$AUTOFORM_REF"' in workflow
         assert 'test "$resolved" = "$AUTOFORM_REF"' in workflow
         assert "persist-credentials: false" in workflow
+        assert "runs-on: ubuntu-24.04" in workflow
         assert "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1" in workflow
         assert 'python-version: "3.13.14"' in workflow
         assert "env -i PATH=" in workflow
