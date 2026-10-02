@@ -336,7 +336,8 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'version: "0.12.1"' in verify
     assert "elan/releases/download/v4.2.3" in verify
     assert "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2" in verify
-    assert "github.ref == 'refs/heads/main'" in workflow
+    assert "if: needs.decide.outputs.publish == 'true'" in workflow
+    assert "refs/heads/main" not in workflow
     assert workflow.count('- "theme/**"') == 1
     assert 'version: "0.12.1"' in workflow
     assert "@main" not in verify

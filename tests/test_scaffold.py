@@ -373,9 +373,10 @@ def test_the_approval_gate_runs_apart_from_the_lean_build(tmp_path: Path) -> Non
     assert "base.sha }}" not in gate and "BASE_SHA" not in gate
     assert "PR_NUMBER: ${{ github.event.pull_request.number }}" in gate
     assert "pull-requests: read" in gate
-    # Pages reads the verify run and builds every push to main, so a change to CODEOWNERS relabels the site.
+    # Pages reads the verify run and builds every push to the default branch, so a change to CODEOWNERS
+    # relabels the site. A trigger cannot name the default branch, so every branch triggers.
     assert "actions: read" in pages
-    assert "  push:\n    branches: [main]\n  pull_request:\n" in pages
+    assert '  push:\n    branches: ["**"]\n  pull_request:\n' in pages
     # A pull request's runs never cancel a pending main build, and neither does a newer run of main, such as
     # a re-run of an old one: the pending run may be the only build of the current head.
     assert "  group: blueprint-pages-${{ github.ref }}\n  cancel-in-progress: false\n  queue: max\n" in pages
@@ -397,7 +398,7 @@ def test_pages_authenticates_approvals_in_a_job_that_never_builds_the_project(
     assert "lake build" in lean and "autoform skeleton blueprint --lean-root ." in lean
     assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in lean
     assert "GITHUB_TOKEN" not in lean and "--authenticate" not in lean
-    assert "    needs: lean\n" in build
+    assert "    needs: [decide, lean]\n" in build
     assert "lake" not in build and "elan" not in build
     assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in build
     assert "--authenticate github" in build and "fetch-depth: 0" in build
@@ -614,8 +615,7 @@ def test_pages_fails_after_deploying_a_site_whose_approvals_could_not_be_checked
         AUTOFORM_SOURCE="https://example.com/autoform.git",
         AUTOFORM_REF="main",
         AUTOFORM_REVIEW_ENABLED="true",
-        GITHUB_EVENT_NAME="push",
-        GITHUB_REF="refs/heads/main",
+        PUBLISH="true",
         RUNNER_TEMP=str(tmp_path),
     )
     assert done.returncode == 0, done.stderr
@@ -664,11 +664,30 @@ def _github_after(
     return answers
 
 
-def _decide(tmp_path: Path, answers: dict[str, object], event: str = "schedule"):
+def _decide(
+    tmp_path: Path,
+    answers: dict[str, object],
+    event: str = "schedule",
+    *,
+    ref: str = "refs/heads/main",
+    default_branch: str = "main",
+):
     scaffold_project(tmp_path / "project", title="Finite Flat")
     script = _step(tmp_path / "project/.github/workflows/blueprint-pages.yml", "decide", "Decide whether to build")
+    # A scheduled run's payload names no repository.
+    payload = tmp_path / "event.json"
+    payload.write_text(
+        json.dumps({} if event == "schedule" else {"repository": {"default_branch": default_branch}}),
+        encoding="utf-8",
+    )
     return _run_step(
-        tmp_path, script, answers, GITHUB_EVENT_NAME=event, GITHUB_REF="refs/heads/main", GITHUB_SHA="a" * 40
+        tmp_path,
+        script,
+        answers,
+        GITHUB_EVENT_NAME=event,
+        GITHUB_EVENT_PATH=str(payload),
+        GITHUB_REF=ref,
+        GITHUB_SHA="a" * 40,
     )
 
 
@@ -680,11 +699,64 @@ def test_pages_runs_every_hour_and_builds_only_what_decide_asks_for(tmp_path: Pa
     assert pages[True]["schedule"] == [{"cron": "23 * * * *"}]
     decide = pages["jobs"]["decide"]
     assert decide["permissions"] == {"contents": "read", "actions": "read", "deployments": "read"}
-    assert decide["outputs"] == {"build": "${{ steps.decide.outputs.build }}"}
+    assert decide["outputs"] == {
+        "build": "${{ steps.decide.outputs.build }}",
+        "publish": "${{ steps.decide.outputs.publish }}",
+    }
     assert pages["jobs"]["lean"]["needs"] == "decide"
     assert pages["jobs"]["lean"]["if"] == "needs.decide.outputs.build == 'true'"
     # The build and deploy jobs need the lean job, so they skip with it.
-    assert pages["jobs"]["build"]["needs"] == "lean" and pages["jobs"]["deploy"]["needs"] == "build"
+    assert pages["jobs"]["build"]["needs"] == ["decide", "lean"]
+    assert pages["jobs"]["deploy"]["needs"] == ["decide", "build"]
+
+
+def test_pages_publishes_only_builds_of_the_default_branch_whatever_its_name(tmp_path: Path) -> None:
+    """A repository whose default branch is not main once built every hour and never deployed:
+    the schedule runs on the default branch, but uploading and deploying asked for main."""
+
+    yaml = pytest.importorskip("yaml")
+    scaffold_project(tmp_path, title="Finite Flat")
+    text = (tmp_path / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8")
+    assert "refs/heads/main" not in text and "[main]" not in text
+    jobs = yaml.safe_load(text)["jobs"]
+    # A push to any other branch starts no runner: GitHub evaluates the condition before queuing the job.
+    assert jobs["decide"]["if"] == (
+        "github.event_name != 'push' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+    )
+    upload = next(step for step in jobs["build"]["steps"] if step.get("name") == "Upload Pages artifact")
+    assert upload["if"] == jobs["deploy"]["if"] == "needs.decide.outputs.publish == 'true'"
+    render = next(step for step in jobs["build"]["steps"] if step.get("name") == "Render the blueprint")
+    assert render["env"]["PUBLISH"] == "${{ needs.decide.outputs.publish }}"
+
+
+@pytest.mark.parametrize(
+    ("event", "ref", "publish"),
+    [
+        ("push", "refs/heads/trunk", "true"),
+        ("workflow_dispatch", "refs/heads/trunk", "true"),
+        ("workflow_dispatch", "refs/heads/feature", "false"),
+        ("workflow_dispatch", "refs/heads/main", "false"),
+        ("pull_request", "refs/pull/3/merge", "false"),
+    ],
+)
+def test_decide_publishes_a_build_only_of_the_default_branch(
+    tmp_path: Path, event: str, ref: str, publish: str
+) -> None:
+    done, calls, outputs = _decide(tmp_path, {}, event, ref=ref, default_branch="trunk")
+
+    assert done.returncode == 0, done.stderr
+    assert (outputs, calls) == ({"publish": publish, "build": "true"}, [])
+
+
+def test_a_scheduled_run_publishes_on_a_default_branch_not_called_main(tmp_path: Path) -> None:
+    answers = {path.replace("heads/main", "heads/trunk"): answer for path, answer in _github_after().items()}
+
+    done, calls, outputs = _decide(tmp_path, answers, ref="refs/heads/trunk")
+
+    assert done.returncode == 0, done.stderr
+    assert outputs == {"publish": "true", "build": "true"}
+    assert calls[0] == f"{_REPOSITORY}/git/ref/heads/trunk"
+    assert f"{_RUNS}?branch=trunk&" in calls[1]
 
 
 @pytest.mark.parametrize("event", ["push", "pull_request", "workflow_dispatch"])
@@ -692,7 +764,7 @@ def test_every_event_but_the_schedule_builds_without_asking_github(tmp_path: Pat
     done, calls, outputs = _decide(tmp_path, {}, event)
 
     assert done.returncode == 0, done.stderr
-    assert (outputs, calls) == ({"build": "true"}, [])
+    assert (outputs, calls) == ({"publish": "false" if event == "pull_request" else "true", "build": "true"}, [])
 
 
 @pytest.mark.parametrize(
@@ -728,7 +800,7 @@ def test_a_scheduled_run_builds_the_head_until_it_has_a_complete_build(
     done, calls, outputs = _decide(tmp_path, answers)
 
     assert done.returncode == 0, done.stderr
-    assert outputs == {"build": "true" if build else "false"}
+    assert outputs == {"publish": "true", "build": "true" if build else "false"}
     head = "a" * 40
     counted = [call for call in calls if call != "rate_limit"]
     assert counted[:3] == [
@@ -746,7 +818,7 @@ def test_a_scheduled_run_of_a_head_main_has_moved_past_builds_nothing(tmp_path: 
     done, calls, outputs = _decide(tmp_path, _github_after(head="b" * 40))
 
     assert done.returncode == 0, done.stderr
-    assert (outputs, calls) == ({"build": "false"}, [_MAIN])
+    assert (outputs, calls) == ({"publish": "true", "build": "false"}, [_MAIN])
 
 
 @pytest.mark.parametrize(

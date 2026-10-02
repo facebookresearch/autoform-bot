@@ -826,12 +826,16 @@ unless code owner review guards all of them at R, the trusted ref
   the head, or the failed lookup. Whatever the review settings, the generated
   Pages workflow's `deploy` job makes the same check before it deploys, so a
   build the branch has moved past never replaces the site. That workflow
-  builds every push to the default branch, and neither a pull request's runs
-  nor a newer run of the branch, such as a re-run of an old one, can cancel a
-  pending one (`queue: max`), so the build of the newer head publishes the
-  site. A head that starts no run of its own, such as one pushed with
-  `[skip ci]` or by a workflow's `GITHUB_TOKEN`, is built by the workflow's
-  hourly scheduled run. The gate below trusts its base commit instead.
+  builds every push to the default branch, whatever its name: a trigger cannot
+  name the default branch, so a push to any branch starts a run, and for any
+  other branch every job is skipped before a runner starts. Only a build of
+  the default branch outside a pull request authenticates approvals and
+  deploys. Neither a pull request's runs nor a newer run of the branch, such
+  as a re-run of an old one, can cancel a pending one (`queue: max`), so the
+  build of the newer head publishes the site. A head that starts no run of its
+  own, such as one pushed with `[skip ci]` or by a workflow's `GITHUB_TOKEN`,
+  is built by the workflow's hourly scheduled run. The gate below trusts its
+  base commit instead.
 - **Ruleset.** The active rulesets on the default branch, as
   `GET /repos/{owner}/{repo}/rules/branches/{branch}` reports them, have pull
   request rules that turn on *Require review from Code Owners*
