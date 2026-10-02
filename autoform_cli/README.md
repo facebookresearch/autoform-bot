@@ -1168,7 +1168,19 @@ warning on every scheduled run means the schedule is not building at all. A
 head whose build fails every time, such as one whose Lean does not compile, is
 retried once a day after its first few failures. In a public repository GitHub
 disables a schedule after 60 days without activity; re-enable the workflow
-from the Actions tab.
+from the Actions tab. In a private repository GitHub bills Actions by the
+minute, rounding each job up to a whole minute, so the schedule costs minutes
+even when it builds nothing: each scheduled run's `decide` job is at least a
+minute, about 24 a day and 720 a month, and every push and pull request run
+pays a minute for its own `decide` as well. The daily rebuild adds its Lean,
+build, and deploy jobs, longer when review checks run `lake build`. Every
+pending run of a ref is kept (`queue: max`), so several quick pushes to one
+pull request build one after another, not only the newest. That is a large
+share of the minutes a plan includes, 2,000 a month on GitHub Free. A private
+repository whose plan has no GitHub Pages fails `configure-pages` on every
+build; delete the `schedule` trigger from
+`.github/workflows/blueprint-pages.yml` there. Public repositories pay no
+minutes on GitHub-hosted runners.
 
 When `--output`, `--packets`, and `--passages` are combined, all three outputs
 are staged before publication and a failed commit restores the previous set.
