@@ -1668,7 +1668,7 @@ def _translate_lakefile(root: Path) -> bytes:
     lake = shutil.which("lake")
     if lake is None:
         raise SkeletonError(["lake is not on PATH, so lakefile.lean cannot be evaluated"])
-    with tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
+    with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
         target = Path(scratch) / "lakefile.toml"
         result = _run_bounded_command(
             [lake, "translate-config", "toml", str(target)],
@@ -2797,7 +2797,9 @@ def extract_skeletons(
         )
     index = index_project(root)
     prepare: Callable[[tuple[str, ...]], None] | None = None
-    with tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
+    # The guard encloses the scratch directory, so the commands inside reuse it
+    # and a termination signal is re-delivered only after the directory is gone.
+    with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
         if runner is None:
             probe_timeout = DEFAULT_PROBE_TIMEOUT if timeout is None else timeout
             helper: Path | None = None

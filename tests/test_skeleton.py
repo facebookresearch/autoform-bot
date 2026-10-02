@@ -747,6 +747,80 @@ def test_a_signal_as_the_probe_pool_starts_its_cleanup_does_not_skip_it(tmp_path
     _assert_no_survivors([pid_file])
 
 
+_STALLING_LAKE = """\
+#!{python}
+import os, pathlib, subprocess, sys, time
+args = sys.argv[1:]
+phase = os.environ["FAKE_LAKE_PHASE"]
+
+
+def stall():
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    pathlib.Path(os.environ["FAKE_LAKE_PIDS"]).write_text(f"{{os.getpid()}} {{child.pid}}")
+    time.sleep(60)
+
+
+if args[:1] == ["--rehash"]:
+    sys.exit(0)
+if "-o" in args:
+    if phase == "helper":
+        stall()
+    pathlib.Path(args[args.index("-o") + 1]).write_bytes(b"")
+    sys.exit(0)
+stall()
+"""
+
+
+@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
+@pytest.mark.parametrize("signum", [signal.SIGTERM, getattr(signal, "SIGHUP", signal.SIGTERM)], ids=["term", "hup"])
+@pytest.mark.parametrize("phase", ["translate", "helper", "probe"])
+def test_a_termination_signal_during_extraction_removes_its_scratch(tmp_path: Path, phase: str, signum: int) -> None:
+    # Lake stalls while translating lakefile.lean, while building the probe
+    # helper, or while a probe runs; the signal must still remove every
+    # temporary directory the extraction made before it ends the process.
+    project = _project(tmp_path)
+    (project / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
+    if phase == "translate":
+        (project / "lakefile.toml").unlink()
+        (project / "lakefile.lean").write_text("import Lake\n", encoding="utf-8")
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "lake").write_text(_STALLING_LAKE.format(python=sys.executable), encoding="utf-8")
+    (bin_dir / "lake").chmod(0o755)
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    pid_file = tmp_path / "lake.pids"
+    driver = (
+        "import signal, sys; from pathlib import Path; "
+        "signal.signal(signal.SIGHUP, signal.SIG_DFL); "
+        "from autoform_cli.skeleton import extract_skeletons; "
+        "extract_skeletons(Path(sys.argv[1]), lean_root=Path(sys.argv[2]))"
+    )
+    env = os.environ.copy()
+    env.update(
+        PYTHONPATH=str(Path(__file__).resolve().parents[1]),
+        PATH=f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        TMPDIR=str(scratch),
+        FAKE_LAKE_PHASE=phase,
+        FAKE_LAKE_PIDS=str(pid_file),
+    )
+    cli = subprocess.Popen([sys.executable, "-c", driver, str(blueprint), str(project)], cwd=tmp_path, env=env)
+    try:
+        deadline = time.monotonic() + 30
+        while not pid_file.exists() or len(pid_file.read_text(encoding="utf-8").split()) < 2:
+            assert time.monotonic() < deadline and cli.poll() is None
+            time.sleep(0.05)
+        assert list(scratch.glob("autoform-skeleton-*"))
+        os.kill(cli.pid, signum)
+        assert cli.wait(timeout=15) == -signum
+    finally:
+        if cli.poll() is None:
+            cli.kill()
+    _assert_no_survivors([pid_file])
+    assert list(scratch.glob("autoform-skeleton-*")) == []
+
+
 def test_a_probe_cancelled_before_its_process_starts_never_starts_it(tmp_path: Path, monkeypatch) -> None:
     # The pool is cancelled after a worker takes the probe and before it
     # starts the process.
