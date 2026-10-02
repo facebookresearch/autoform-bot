@@ -1268,7 +1268,10 @@ the snippet Material's documentation gives, is ignored with an error in the
 browser console, and a script that changes it instead, such as one that sets
 `window.MathJax.startup.pageReady` or `window.MathJax.options` (or, in a
 project that lists the bundle too, `window.MathJax.config`), stops MathJax
-with an error there, and the formulas stay as typed. The articles on a page
+with an error there, and the formulas stay as typed. MathJax itself starts on
+a configuration made from the site's settings as it starts, which no other
+script has seen, so a change the check cannot see, such as a proxy put in
+place of part of the configuration, is not read either. The articles on a page
 share one TeX input, with the packages base, ams, noundefined, boldsymbol,
 cancel, and
 mathtools, and the project's macros from `blueprint/tex-macros.json`, written

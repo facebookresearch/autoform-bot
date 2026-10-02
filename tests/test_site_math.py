@@ -1623,6 +1623,20 @@ const changes = {
     let reads = 0;
     Object.defineProperty(startup, "pageReady", {enumerable: true, get: () => reads++ ? () => {} : ready});
   },
+  // A proxy shows every check what it was given, and MathJax what it says.
+  proxyStartup: (config) => {
+    const replaced = () => { report.errors.push("harness: pageReady replaced"); };
+    config.startup = new Proxy(config.startup, {get: (target, key) => key === "pageReady" ? replaced : target[key]});
+  },
+  proxySnippet: (config) => {
+    const said = {
+      tex: {inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]]},
+      options: {ignoreHtmlClass: ".*|", processHtmlClass: "arithmatex"},
+    };
+    Object.keys(said).forEach((name) => {
+      config[name] = new Proxy(config[name] || {}, {get: (target, key) => key in said[name] ? said[name][key] : target[key]});
+    });
+  },
 };
 function change() {
   report.changed = window.MathJax.version === undefined;
@@ -2160,8 +2174,30 @@ def test_a_configuration_changed_after_the_script_is_not_started(
     assert report["passes"] == []
 
 
+@pytest.mark.parametrize("changing", ["proxyStartup", "proxySnippet"])
+@pytest.mark.parametrize("project, moment", [("new", "fetch"), ("new", "start"), ("old", "fetch")])
+def test_a_configuration_a_proxy_stands_for_is_not_read(
+    tmp_path: Path, project: str, moment: str, changing: str
+) -> None:
+    """A later script can put a proxy where the configuration's startup or
+    options were, which shows the check what the script set and MathJax
+    something else. MathJax starts on the site's configuration all the same,
+    and reads the cards as it does with nothing changed: the document it
+    starts with, which its menu renders with saved settings, reads no card."""
+
+    script = _node_script(tmp_path)
+    kept = _node_report(tmp_path, script, project, startup="renders")
+    report = _node_report(tmp_path, script, project, startup="renders", mutation=f"{changing}@{moment}")
+
+    assert report["changed"] is True
+    assert report["errors"] == kept["errors"] == []
+    assert report["version"] == "3.2.2"
+    assert report["startup"] == kept["startup"]
+    assert report["passes"] == kept["passes"] and len(report["passes"]) == 2
+
+
 @pytest.mark.parametrize("through", ["config", "mathjax"])
-@pytest.mark.parametrize("changing", ["pageReady", "options"])
+@pytest.mark.parametrize("changing", ["pageReady", "options", "proxyStartup", "proxySnippet"])
 def test_a_configuration_changed_after_a_listed_bundle_is_not_started(
     tmp_path: Path, changing: str, through: str
 ) -> None:
