@@ -490,6 +490,7 @@ class GitHubClient:
             },
         )
         request.add_unredirected_header("Authorization", f"Bearer {self.token}")
+        endpoint = path or "of the repository"
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 body = response.read(_MAX_RESPONSE_BYTES + 1)
@@ -497,20 +498,20 @@ class GitHubClient:
             if exc.code == 404:
                 return None
             detail = exc.read(500).decode("utf-8", "replace").strip()
-            message = f"GitHub API GET {path} failed with HTTP {exc.code}: {detail}"
+            message = f"GitHub API GET {endpoint} failed with HTTP {exc.code}: {detail}"
             if exc.code >= 500 or exc.code in (408, 429) or (exc.code == 403 and _rate_limited(exc.headers)):
                 raise GitHubUnavailable(message) from exc
             # Any other 4xx answers the same way on every run.
             raise ApprovalError(message) from exc
         except (urllib.error.URLError, OSError) as exc:
-            raise GitHubUnavailable(f"GitHub API GET {path} failed: {exc}") from exc
+            raise GitHubUnavailable(f"GitHub API GET {endpoint} failed: {exc}") from exc
         if len(body) > _MAX_RESPONSE_BYTES:
             # As large on every run: anyone who can review a pull request can make its reviews this large.
-            raise ApprovalError(f"GitHub API GET {path} returned more than {_MAX_RESPONSE_BYTES} bytes")
+            raise ApprovalError(f"GitHub API GET {endpoint} returned more than {_MAX_RESPONSE_BYTES} bytes")
         try:
             return json.loads(body)
         except (UnicodeError, json.JSONDecodeError) as exc:
-            raise GitHubUnavailable(f"GitHub API GET {path} returned malformed JSON") from exc
+            raise GitHubUnavailable(f"GitHub API GET {endpoint} returned malformed JSON") from exc
 
     def rate_limit(self) -> tuple[int, int] | None:
         """This token's hourly limit of core API requests and how many are left, or None if GitHub does not say.

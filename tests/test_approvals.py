@@ -1225,6 +1225,41 @@ def test_the_client_tells_a_failure_a_later_run_may_not_repeat_from_a_verdict(
     assert isinstance(raised.value, GitHubUnavailable) is unavailable
 
 
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        (urllib.error.HTTPError("", 502, "error", {}, io.BytesIO(b"Bad Gateway")), "failed with HTTP 502: Bad Gateway"),  # type: ignore[arg-type]
+        (urllib.error.URLError("timed out"), "failed: <urlopen error timed out>"),
+        (b"not json", "returned malformed JSON"),
+        (b"[" + b" " * 64 + b"]", "returned more than 32 bytes"),
+    ],
+    ids=["http", "network", "malformed", "oversized"],
+)
+def test_a_failed_request_for_the_repository_says_what_it_asked_for(
+    monkeypatch: pytest.MonkeyPatch, failure: bytes | Exception, message: str
+) -> None:
+    """The repository's own path is empty, which left `GitHub API GET  failed` naming nothing."""
+
+    class Response(io.BytesIO):
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self.close()
+
+    def urlopen(request: object, timeout: float) -> object:
+        if isinstance(failure, Exception):
+            raise failure
+        return Response(failure)
+
+    monkeypatch.setattr(approvals.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(approvals, "_MAX_RESPONSE_BYTES", 32)
+
+    with pytest.raises(ApprovalError) as raised:
+        GitHubClient("secret", "owner/project").get("")
+    assert str(raised.value) == f"GitHub API GET of the repository {message}"
+
+
 # What every verification on the default branch reads first: the repository, the branch's head, its
 # rules, the ruleset they come from, GitHub's errors in CODEOWNERS, and the permission of the catch-all owner.
 _SETUP_CALLS = [
@@ -1683,7 +1718,7 @@ def test_check_whose_head_cannot_be_read_still_reports_the_findings(
 @pytest.mark.parametrize(
     ("failing", "reason"),
     [
-        ("", "GitHub API GET  failed with HTTP 502"),
+        ("", "GitHub API GET of the repository failed with HTTP 502"),
         ("/git/ref/heads/main", "GitHub API GET /git/ref/heads/main failed with HTTP 502"),
         (None, "GitHub finds no branch main"),
     ],
@@ -1703,7 +1738,7 @@ def test_a_build_whose_head_cannot_be_read_fails_before_writing_the_site(
 
         def flaky(path: str, query: dict | None = None) -> object:
             if path == failing:
-                raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
+                raise GitHubUnavailable(f"GitHub API GET {path or 'of the repository'} failed with HTTP 502: Bad Gateway")
             return answer(path, query)
 
         github.get = flaky  # type: ignore[method-assign]
