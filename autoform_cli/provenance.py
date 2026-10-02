@@ -1071,6 +1071,7 @@ def _package_roots(pyproject: bytes) -> tuple[str, ...]:
         entry_point = metadata["scripts"]["autoform"]
         tool = project["tool"]
         hatch = tool["hatch"]
+        uv = tool.get("uv")
         build = hatch["build"]
         targets = build["targets"]
         wheel = targets["wheel"]
@@ -1083,7 +1084,7 @@ def _package_roots(pyproject: bytes) -> tuple[str, ...]:
         or build_system["build-backend"] != "hatchling.build"
         or type(metadata) is not dict
         or type(tool) is not dict
-        or "uv" in tool
+        or (uv is not None and (type(uv) is not dict or set(uv) != {"constraint-dependencies"}))
         or "dependency-groups" in project
         or type(hatch) is not dict
         or set(hatch) != {"build"}
@@ -1099,6 +1100,8 @@ def _package_roots(pyproject: bytes) -> tuple[str, ...]:
         raise _GitFailure
     _require_remote_python_requirements(build_system.get("requires"))
     _require_remote_python_requirements(metadata.get("dependencies", []))
+    if uv is not None:
+        _require_remote_python_requirements(uv["constraint-dependencies"])
     optional_dependencies = metadata.get("optional-dependencies", {})
     if type(optional_dependencies) is not dict:
         raise _GitFailure

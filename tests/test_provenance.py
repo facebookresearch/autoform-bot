@@ -1353,6 +1353,46 @@ def test_python_build_and_dependencies_cannot_execute_local_code(
         provenance._package_roots(pyproject)
 
 
+def test_remote_uv_constraints_are_part_of_the_verified_package_contract() -> None:
+    pyproject = (
+        "[build-system]\n"
+        'requires = ["hatchling>=1.27"]\n'
+        'build-backend = "hatchling.build"\n'
+        "[project]\n"
+        'name = "autoform"\n'
+        'dependencies = ["fastmcp>=3"]\n'
+        "[project.scripts]\n"
+        'autoform = "autoform_cli.__main__:main"\n'
+        "[tool.hatch.build.targets.wheel]\n"
+        'packages = ["autoform_cli", "servers"]\n'
+        "[tool.uv]\n"
+        "constraint-dependencies = [\n"
+        '  "cryptography<49; sys_platform == \'darwin\' and platform_machine == \'x86_64\'",\n'
+        "]\n"
+    ).encode()
+
+    assert provenance._package_roots(pyproject) == ("autoform_cli", "servers")
+
+
+def test_uv_constraints_cannot_reference_local_code() -> None:
+    pyproject = (
+        "[build-system]\n"
+        'requires = ["hatchling>=1.27"]\n'
+        'build-backend = "hatchling.build"\n'
+        "[project]\n"
+        'name = "autoform"\n'
+        "[project.scripts]\n"
+        'autoform = "autoform_cli.__main__:main"\n'
+        "[tool.hatch.build.targets.wheel]\n"
+        'packages = ["autoform_cli"]\n'
+        "[tool.uv]\n"
+        'constraint-dependencies = ["helper @ file:///tmp/helper"]\n'
+    ).encode()
+
+    with pytest.raises(provenance._GitFailure):
+        provenance._package_roots(pyproject)
+
+
 def _lock_with_helper(source: str, *, artifact: str = "") -> bytes:
     return (
         "version = 1\n"
