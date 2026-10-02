@@ -33,6 +33,7 @@ import stat
 import time
 import unicodedata
 import warnings
+import xml.etree.ElementTree as etree
 from collections import Counter
 from dataclasses import dataclass, replace
 from html.entities import html5 as _NAMED_REFERENCES
@@ -45,8 +46,9 @@ import html5lib
 import markdown as markdown_renderer
 from markdown.blockprocessors import HashHeaderProcessor
 from markdown.extensions.tables import TableProcessor
+from markdown.inlinepatterns import BACKTICK_RE, BacktickInlineProcessor
 from markdown.treeprocessors import Treeprocessor
-from markdown.util import ETX, STX
+from markdown.util import ETX, STX, AtomicString
 from markdown_it import MarkdownIt
 
 try:
@@ -1016,6 +1018,38 @@ class _HashHeading(HashHeaderProcessor):
     RE = re.compile(r"(?:^|\n)(?P<level>#{1,6})(?=[ \t\n]|$)(?P<header>(?:\\.|[^\\])*?)#*(?:\n|$)")
 
 
+class _CodeFormula(BacktickInlineProcessor):
+    """Python-Markdown's code spans, and a formula written as code between
+    dollar signs, ``$`...`$``, the form GitHub also reads as a formula with
+    the code as its TeX, so that neither reads escapes or emphasis in it. The
+    code is read as CommonMark reads a code span, line breaks as spaces and
+    one space trimmed from each end, and a dollar sign after a letter, digit,
+    underscore, or backslash opens no formula, as on GitHub."""
+
+    def handleMatch(self, m: re.Match[str], data: str) -> tuple[etree.Element | str, int, int]:  # type: ignore[override]
+        start, end = m.start(0), m.end(0)
+        if not (
+            m.group(3)
+            and data[start - 1 : start] == "$" == data[end : end + 1]
+            and not re.match(r"[A-Za-z0-9_\\]", data[max(start - 2, 0) : start - 1])
+        ):
+            return super().handleMatch(m, data)
+        code = m.group(3).replace("\n", " ")
+        if len(code) > 2 and code[0] == code[-1] == " " and code.strip(" "):
+            code = code[1:-1]
+        formula = etree.Element("span", {"class": "arithmatex"})
+        formula.text = AtomicString(f"\\({code}\\)")
+        return formula, start - 1, end + 1
+
+
+def _formula_fence(source: str, *args: object, **kwargs: object) -> str:
+    """A ```` ```math ```` block, which GitHub shows as a displayed formula
+    with the block's text as its TeX: a display formula for MathJax, in the
+    ``<p>`` the renderer gives every other one."""
+
+    return '<p class="arithmatex">\\[\n' + html.escape(source, quote=False) + "\n\\]</p>"
+
+
 class _CountedTable(TableProcessor):
     """Python-Markdown's tables, noting a row with more or fewer cells than
     the header. The renderer, like a CommonMark viewer of the vault, cuts
@@ -1042,10 +1076,13 @@ def _testimony_converter() -> markdown_renderer.Markdown:
         extension_configs={
             "pymdownx.arithmatex": {"generic": True, "block_tag": "p"},
             "pymdownx.highlight": {"use_pygments": False},
-            "pymdownx.superfences": {"custom_fences": []},
+            "pymdownx.superfences": {
+                "custom_fences": [{"name": "math", "class": "arithmatex", "format": _formula_fence}]
+            },
         },
     )
     converter.preprocessors.deregister("html_block")
+    converter.inlinePatterns.register(_CodeFormula(BACKTICK_RE), "backtick", 190)
     converter.parser.blockprocessors.register(_HashHeading(converter.parser), "hashheader", 70)
     table = converter.parser.blockprocessors["table"]
     converter.parser.blockprocessors.register(_CountedTable(converter.parser, table.config), "table", 75)
@@ -2226,7 +2263,7 @@ def _commonmark_errors(text: str, document: object, *, compare: bool) -> list[st
             language = token.info.strip().lower()
             if language.split()[:1] == ["mermaid"]:
                 errors.append("active Mermaid blocks are not allowed")
-            elif language and language not in _TESTIMONY_LANGUAGES:
+            elif language and language not in _TESTIMONY_LANGUAGES | {"math"}:
                 errors.append(_LANGUAGE_ERROR)
             shown.append(f" {token.content} ")
         elif token.type in {"code_block", "html_block"}:

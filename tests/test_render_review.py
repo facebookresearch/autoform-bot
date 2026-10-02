@@ -942,6 +942,54 @@ def test_a_dollar_sign_is_written_with_a_backslash() -> None:
     assert render_testimony(testimony) == r'<p>It costs \$5 and <span class="arithmatex">\(x\)</span> more.</p>'
 
 
+@pytest.mark.parametrize(
+    ("testimony", "rendered"),
+    [
+        ("A $`x`$ b.", r'<p>A <span class="arithmatex">\(x\)</span> b.</p>'),
+        (r"So $` \{ p \} `$ holds.", r'<p>So <span class="arithmatex">\(\{ p \}\)</span> holds.</p>'),
+        ("Both $`x`$$`y`$ hold.", r'<p>Both <span class="arithmatex">\(x\)</span><span class="arithmatex">\(y\)</span> hold.</p>'),
+        ("Two $``p`q``$ ticks.", r'<p>Two <span class="arithmatex">\(p`q\)</span> ticks.</p>'),
+        ("Code ``a $`b`$ c`` stays.", "<p>Code <code>a $`b`$ c</code> stays.</p>"),
+    ],
+)
+def test_code_between_dollar_signs_is_read_as_a_formula(testimony: str, rendered: str) -> None:
+    r"""GitHub reads ``$`...`$`` as a formula with the code's text as its TeX,
+    untouched by Markdown escapes, so the site reads it the same way."""
+
+    assert render_testimony(testimony) == rendered
+    assert _testimony_errors(testimony) == ()
+
+
+def test_tex_in_code_between_dollar_signs_is_checked() -> None:
+    assert _testimony_errors(r"A $`\href{x}{y}`$ b.") == ("TeX outside the read-back allowlist is not allowed: \\href",)
+
+
+@pytest.mark.parametrize(
+    ("testimony", "rendered"),
+    [
+        (
+            "Shown:\n\n```math\nx \\{ y \\} < z\n```\n\nafter.",
+            '<p>Shown:</p><p class="arithmatex">\\[\nx \\{ y \\} &lt; z\n\\]</p><p>after.</p>',
+        ),
+        ("> ```math\n> x \\{ y \\}\n> ```", '<blockquote><p class="arithmatex">\\[\nx \\{ y \\}\n\\]</p>\n</blockquote>'),
+        (
+            "- An item:\n\n    ```math\n    x \\{ y \\}\n    ```",
+            '<ul><li><p>An item:</p><p class="arithmatex">\\[\nx \\{ y \\}\n\\]</p>\n</li>\n</ul>',
+        ),
+    ],
+)
+def test_a_math_fence_is_read_as_displayed_math(testimony: str, rendered: str) -> None:
+    """GitHub shows a ``math`` fence as displayed math with the fence's text
+    as its TeX, so the site does too, escaping it as text."""
+
+    assert render_testimony(testimony) == rendered
+    assert _testimony_errors(testimony) == ()
+
+
+def test_tex_in_a_math_fence_is_checked() -> None:
+    assert _testimony_errors("```math\n\\href{x}{y}\n```") == ("TeX outside the read-back allowlist is not allowed: \\href",)
+
+
 def test_formula_delimiters_and_a_tab_are_not_allowlisted_tex() -> None:
     r"""In a formula ``\(`` and the rest show in red, and the renderer turns a
     tab into spaces, so ``\<tab>`` reaches MathJax as a control space."""
