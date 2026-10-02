@@ -515,11 +515,12 @@ class GitHubReviewVerifier:
     Nothing is authenticated unless code owner review guards everything an
     approval rests on. Once per run, at ``trusted_ref`` R:
 
-    0. Outside the gate, R is the head of the default branch on GitHub;
-       otherwise SupersededBuildError stops the run, so a build the branch has
-       moved past is not published, and a failed lookup of that head stops it
-       with HeadCheckError. The active rulesets on the default
-       branch, leaving out any this verifier's token can bypass, have pull
+    0. Outside the gate, R is the head of the default branch on GitHub.
+       When ``publishing``, as in the Pages build, SupersededBuildError stops
+       the run otherwise, so a build the branch has moved past is not
+       published, and HeadCheckError stops it when that head cannot be read.
+       Without it, as in ``review check``, every approval is self-approved,
+       saying why. The active rulesets on the default branch, leaving out any this verifier's token can bypass, have pull
        request rules that require code owner review, dismiss stale approvals
        on push, and require approval of the most recent push. GitHub reports
        no error in CODEOWNERS at R, and it gives every path that could exist
@@ -577,10 +578,12 @@ class GitHubReviewVerifier:
         verify_workflow: str = DEFAULT_VERIFY_WORKFLOW,
         web_url: str | None = None,
         max_requests: int | None = None,
+        publishing: bool = True,
     ) -> None:
         self.client = client
         self.trusted_ref = trusted_ref
         self.pull_request = pull_request
+        self.publishing = publishing
         self.verify_workflow = verify_workflow
         self.web_url = (web_url or _web_url(getattr(client, "api_url", DEFAULT_GITHUB_API_URL))).rstrip("/")
         self.max_requests = max_requests
@@ -597,6 +600,7 @@ class GitHubReviewVerifier:
         trusted_ref: str = "HEAD",
         pull_request: int | None = None,
         environ: Mapping[str, str] | None = None,
+        publishing: bool = True,
     ) -> GitHubReviewVerifier:
         """Build from the variables GitHub Actions provides, naming any that are missing.
 
@@ -622,6 +626,7 @@ class GitHubReviewVerifier:
             pull_request=pull_request,
             verify_workflow=env.get("AUTOFORM_VERIFY_WORKFLOW") or DEFAULT_VERIFY_WORKFLOW,
             web_url=web_url,
+            publishing=publishing,
         )
 
     def verify(self, graph: Graph, approvals: Mapping[str, str]) -> dict[str, ApprovalAttestation]:
@@ -750,38 +755,38 @@ class GitHubReviewVerifier:
         self._check_coverage(*codeowners)
 
     def _current_default_branch(self, trusted: str) -> str:
-        """The default branch, whose head on GitHub R must be.
-
-        Failing to read either stops the run like a superseded build does:
-        labelling every approval self-approved instead would let a lookup that
-        failed downgrade the live site.
-        """
-
-        try:
-            default = self._default_branch()
-            self._check_current(default, trusted)
-        except HeadCheckError:
-            raise
-        except (_Refused, ApprovalError) as exc:
-            raise HeadCheckError(
-                f"cannot tell whether {self.trusted_ref} is the head of the default branch on GitHub: {exc}"
-            ) from exc
-        except _BudgetSpent as exc:
-            raise HeadCheckError(
-                f"cannot tell whether {self.trusted_ref} is the head of the default branch on GitHub: "
-                f"the budget of {self.budget} GitHub API requests was spent"
-            ) from exc
-        return default
-
-    def _check_current(self, default: str, trusted: str) -> None:
-        """R is the head of the default branch on GitHub now.
+        """The default branch, of which R must be the head on GitHub now.
 
         The rulesets and permissions are read as they are now, so a build of
         an older commit, such as a re-run of an old Pages run, would pair them
         with that commit's CODEOWNERS and bring back the approvals a newer
-        CODEOWNERS withdrew. Such a build raises SupersededBuildError, which
-        fails it before it deploys.
+        CODEOWNERS withdrew. When publishing, such a build stops with
+        SupersededBuildError, and a failure to read the branch or its head
+        stops with HeadCheckError: labelling every approval self-approved
+        instead would let either downgrade the live site. Otherwise a
+        checkout that is not the head refuses every approval, saying why, and
+        a failed lookup leaves every approval unchecked.
         """
+
+        try:
+            default = self._default_branch()
+            head = self._head(default)
+        except (_Refused, ApprovalError, _BudgetSpent) as exc:
+            why = f"the budget of {self.budget} GitHub API requests was spent" if isinstance(exc, _BudgetSpent) else exc
+            message = f"cannot tell whether {self.trusted_ref} is the head of the default branch on GitHub: {why}"
+            raise (HeadCheckError if self.publishing else ApprovalError)(message) from exc
+        if head != trusted:
+            reason = (
+                f"{self.trusted_ref} is {trusted[:12]}, not {head[:12]}, the head of {default} on GitHub; "
+                "approvals are authenticated only at the head of the default branch"
+            )
+            if not self.publishing:
+                raise _Refused(reason)
+            raise SupersededBuildError(f"{reason}, so this build stops rather than render every approval self-approved")
+        return default
+
+    def _head(self, default: str) -> str:
+        """The commit the default branch points to on GitHub."""
 
         found = self._get(f"/git/ref/heads/{urllib.parse.quote(default)}")
         if found is None:
@@ -790,12 +795,7 @@ class GitHubReviewVerifier:
         head = target.get("sha") if isinstance(target, dict) and target.get("type") == "commit" else None
         if not isinstance(found, dict) or found.get("ref") != f"refs/heads/{default}" or not isinstance(head, str):
             raise ApprovalError(f"GitHub API GET of refs/heads/{default} did not name the commit it points to")
-        if head.lower() != trusted:
-            raise SupersededBuildError(
-                f"superseded build: {self.trusted_ref} is {trusted[:12]}, not {head[:12]}, the head of {default} "
-                "on GitHub; only a build of the current head authenticates, so this one stops instead of "
-                "publishing every approval as self-approved, and the build of the newer head publishes"
-            )
+        return head.lower()
 
     def _check_codeowners_errors(self, trusted: str) -> None:
         """GitHub's own reading of CODEOWNERS at R finds nothing wrong.

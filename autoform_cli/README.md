@@ -767,15 +767,17 @@ unless code owner review guards all of them at R, the trusted ref
   it. The rulesets and permissions below are read as they are now, so a build
   of an older commit, such as a re-run of an old Pages run, would pair them
   with that commit's CODEOWNERS and bring back approvals a newer CODEOWNERS
-  withdrew. Only a build of the current head authenticates; one the branch has
-  moved past stops with a `superseded build` error instead of labelling
-  anything, and so does one whose default branch or its head cannot be read,
-  since labelling every approval self-approved would let a failed lookup
-  downgrade the site. Whatever the review settings, the generated Pages
-  workflow's `deploy` job makes the same check before it deploys, so a build
-  the branch has moved past never replaces the site. That workflow builds
-  every push to the default branch, and neither a pull request's runs nor a
-  newer run of the branch, such as a re-run of an old one, can cancel a
+  withdrew. Only the current head authenticates. `render --authenticate
+  github`, which builds the site, stops instead of labelling anything when R
+  is a commit the branch has moved past, or when the default branch or its
+  head cannot be read, since labelling every approval self-approved would let
+  either downgrade the site. `review check` and `review authenticate`, which
+  publish nothing, label every approval self-approved instead, naming R and
+  the head, or the failed lookup. Whatever the review settings, the generated
+  Pages workflow's `deploy` job makes the same check before it deploys, so a
+  build the branch has moved past never replaces the site. That workflow
+  builds every push to the default branch, and neither a pull request's runs
+  nor a newer run of the branch, such as a re-run of an old one, can cancel a
   pending one (`queue: max`), so the build of the newer head publishes the
   site. The gate below trusts its base commit instead.
 - **Ruleset.** The active rulesets on the default branch, as
@@ -917,8 +919,11 @@ In the gate, steps 1, 2, and 6 cost nothing, and P itself costs one request
 (`GET /repos/{owner}/{repo}/pulls/{number}`). Only a misconfigured
 environment (missing or malformed GitHub variables, or a blueprint outside
 the Git checkout), a checkout without full history, an unknown trusted ref,
-a superseded build, or a failed lookup of the default branch or its head
-stops the whole run.
+or, in `render`, a superseded build or a failed lookup of the default branch
+or its head stops the whole run. Apart from missing or malformed GitHub
+variables, which it reports before building anything, `review check` still
+prints its findings when authentication stops, with every approval
+self-approved and the error as the reason, and exits 2.
 
 Code owners come from the first of `.github/CODEOWNERS`, `CODEOWNERS`, and
 `docs/CODEOWNERS` that exists at a commit. P cannot name its own reviewer:

@@ -961,7 +961,7 @@ def _report_recorded(written: list[tuple[Path, str]], total: int) -> None:
 
 def _review_check(args: argparse.Namespace) -> int:
     try:
-        verifier = _approval_verifier(args.authenticate)
+        verifier = _approval_verifier(args.authenticate, publishing=False)
         graph, skeleton, bundle, cards = _current_review(
             args.blueprint_dir,
             lean_root=args.lean_root,
@@ -970,11 +970,21 @@ def _review_check(args: argparse.Namespace) -> int:
             skeleton_path=args.skeleton_report,
         )
         findings = review_findings(graph, bundle, skeleton, readbacks=cards)
-        approvals = approval_statuses(graph, current_approvals(graph, bundle, cards), verifier)
+        current = current_approvals(graph, bundle, cards)
     except (ApprovalError, GraphValidationError, ReviewError, SkeletonError) as exc:
         for issue in exc.issues:
             print(f"error: {issue}", file=sys.stderr)
         return 2
+    failure: ApprovalError | None = None
+    try:
+        approvals = approval_statuses(graph, current, verifier)
+    except ApprovalError as exc:
+        # The findings stand; only the approvals go unauthenticated, each saying why.
+        failure = exc
+        approvals = {
+            node_id: ApprovalStatus(node_id, review_hash, reason=str(exc))
+            for node_id, review_hash in sorted(current.items())
+        }
     if args.json:
         print(
             json.dumps(
@@ -999,6 +1009,10 @@ def _review_check(args: argparse.Namespace) -> int:
     if not args.json:
         for item in approvals.values():
             print(_approval_line(item, verified=verifier is not None))
+    if failure is not None:
+        for issue in failure.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        return 2
     return 1 if findings else 0
 
 
@@ -1020,7 +1034,7 @@ def _review_authenticate(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     try:
-        verifier = _approval_verifier("github", trusted_ref=args.trusted_ref, pull_request=args.pr)
+        verifier = _approval_verifier("github", trusted_ref=args.trusted_ref, pull_request=args.pr, publishing=False)
         graph = load_graph(args.blueprint_dir)
         recorded = {
             node.id: node.review_approved for node in graph.nodes.values() if node.review_approved is not None
@@ -1053,11 +1067,16 @@ def _review_authenticate(args: argparse.Namespace) -> int:
 
 
 def _approval_verifier(
-    method: str | None, *, trusted_ref: str = "HEAD", pull_request: int | None = None
+    method: str | None, *, trusted_ref: str = "HEAD", pull_request: int | None = None, publishing: bool = True
 ) -> GitHubReviewVerifier | None:
+    """The verifier ``method`` names; ``publishing`` when the run renders the site, which a build that is
+    not of the default branch's head, or cannot be shown to be, must not do."""
+
     if method is None:
         return None
-    return GitHubReviewVerifier.from_environment(trusted_ref=trusted_ref, pull_request=pull_request)
+    return GitHubReviewVerifier.from_environment(
+        trusted_ref=trusted_ref, pull_request=pull_request, publishing=publishing
+    )
 
 
 def _approval_line(item: ApprovalStatus, *, verified: bool) -> str:

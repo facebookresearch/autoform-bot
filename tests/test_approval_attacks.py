@@ -908,9 +908,8 @@ def test_a_build_of_an_older_commit_cannot_bring_back_a_withdrawn_approval(tmp_p
     with pytest.raises(SupersededBuildError) as raised:
         _verify(root, github, trusted_ref=landed)
     assert str(raised.value) == (
-        f"superseded build: {landed} is {landed[:12]}, not {current[:12]}, the head of main on GitHub; only a "
-        "build of the current head authenticates, so this one stops instead of publishing every approval as "
-        "self-approved, and the build of the newer head publishes"
+        f"{landed} is {landed[:12]}, not {current[:12]}, the head of main on GitHub; approvals are authenticated "
+        "only at the head of the default branch, so this build stops rather than render every approval self-approved"
     )
 
 

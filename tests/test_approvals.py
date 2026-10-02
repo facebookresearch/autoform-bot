@@ -553,7 +553,7 @@ def test_code_owners_must_hold_before_the_merge_and_at_the_trusted_ref(tmp_path:
         "(before #7) and at HEAD"
     ) in (status.reason or "")
     # Nor does a build of the merge, which the default branch has moved past: it stops.
-    with pytest.raises(SupersededBuildError, match="the head of main on GitHub; only a build of the current head"):
+    with pytest.raises(SupersededBuildError, match="the head of main on GitHub; approvals are authenticated only"):
         _verify(root, github, trusted_ref=landed)
 
 
@@ -1335,11 +1335,66 @@ def test_a_build_the_default_branch_has_moved_past_fails_before_writing_the_site
     assert code == 1
     assert not (tmp_path / "site").exists() and pages == ""
     output = capsys.readouterr().out
-    assert f"error: superseded build: HEAD is {_git(tmp_path, 'rev-parse', 'HEAD')[:12]}, not {newer[:12]}" in output
+    assert (
+        f"error: HEAD is {_git(tmp_path, 'rev-parse', 'HEAD')[:12]}, not {newer[:12]}, the head of main on GitHub; "
+        "approvals are authenticated only at the head of the default branch, so this build stops rather than render "
+        "every approval self-approved"
+    ) in output
     assert "self-approved:" not in output
+
+
+def test_check_and_authenticate_of_a_commit_main_has_moved_past_say_so_for_each_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Locally that is no build to stop: the findings stand, and each approval says why it is self-approved."""
+
+    blueprint, github = _authenticated_review_project(tmp_path, monkeypatch)
+    newer = "f" * 40
+    github.heads["main"] = {"ref": "refs/heads/main", "object": {"sha": newer, "type": "commit"}}
+    reason = (
+        f"(HEAD is {_git(tmp_path, 'rev-parse', 'HEAD')[:12]}, not {newer[:12]}, the head of main on GitHub; "
+        "approvals are authenticated only at the head of the default branch)"
+    )
+
     check = ["review", "check", str(blueprint), "--lean-root", str(tmp_path), "--authenticate", "github"]
+    assert main(check) == 0
+    output = capsys.readouterr()
+    assert "OK: statement reviews match" in output.out
+    assert "basics/result: self-approved · sha256:" in output.out and output.out.count(reason) == 2
+    assert "superseded" not in output.out + output.err and output.err == ""
+
+    assert main(["review", "authenticate", str(blueprint), "--github"]) == 0
+    output = capsys.readouterr()
+    assert output.out.count(reason) == 2
+    assert "superseded" not in output.out + output.err
+
+
+def test_check_whose_head_cannot_be_read_still_reports_the_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blueprint, github = _authenticated_review_project(tmp_path, monkeypatch)
+    github.heads["main"] = None
+    reason = (
+        "(cannot tell whether HEAD is the head of the default branch on GitHub: GitHub finds no branch main, so "
+        "HEAD cannot be shown to be its head)"
+    )
+
+    check = ["review", "check", str(blueprint), "--lean-root", str(tmp_path), "--authenticate", "github"]
+    assert main(check) == 0
+    output = capsys.readouterr().out
+    assert "OK: statement reviews match" in output
+    assert output.count(reason) == 2
+
+    # A checkout that cannot be authenticated at all still reports what it found.
+    monkeypatch.setattr(
+        "autoform_cli.__main__._approval_verifier",
+        lambda method, **kwargs: GitHubReviewVerifier(github, trusted_ref="no-such-ref", publishing=False),
+    )
     assert main(check) == 2
-    assert "error: superseded build:" in capsys.readouterr().err
+    output = capsys.readouterr()
+    assert "OK: statement reviews match" in output.out
+    assert "basics/result: self-approved · sha256:" in output.out
+    assert "error: " in output.err and "no-such-ref" in output.err
 
 
 @pytest.mark.parametrize(
@@ -1509,8 +1564,9 @@ def test_authenticate_without_pr_in_a_pull_request_run_names_pr(
     _commit(root, "Approve the result")
     github.open_pull(7, "bob")
 
-    # The branch is not main's head, so the run stops as superseded, after the hint.
-    assert main(["review", "authenticate", str(root / "blueprint"), "--github", "--since", base]) == 2
-    err = capsys.readouterr().err
-    assert ("hint: this is a pull request run; pass --pr with its number" in err) is hinted
-    assert "error: superseded build: HEAD is" in err
+    # The branch is not main's head, so the approval is refused as not at the head, after the hint.
+    assert main(["review", "authenticate", str(root / "blueprint"), "--github", "--since", base]) == 1
+    output = capsys.readouterr()
+    assert ("hint: this is a pull request run; pass --pr with its number" in output.err) is hinted
+    assert "the head of main on GitHub; approvals are authenticated only at the head of the default branch)" in output.out
+    assert "error: 1 approval added or changed since" in output.err
