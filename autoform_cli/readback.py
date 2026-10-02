@@ -3011,10 +3011,21 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
             blocks = dict.fromkeys(passed)
             shown = ", ".join(repr(block[:40]) for block in blocks)
             starts = [re.compile(re.escape(line.strip())) for block in blocks for line in block.splitlines()[:1] if line.strip()]
-            found.append(
-                _lines_naming(text, starts)
-                + f"raw HTML is not allowed: the site would publish {shown} as HTML; write it in Markdown, or in code to show it as typed"
-            )
+            named = _lines_naming(text, starts)
+            opened = _lines_naming(text, [_TAG_OPENING])
+            if not named and opened:
+                # What passed is the site's own markup, which a < before a
+                # letter, as in a formula, opened a tag that runs on over.
+                found.append(
+                    opened
+                    + "raw HTML is not allowed: the site would read a < before a letter as the start of a tag, "
+                    + f"and publish {shown} after it as HTML; in a formula, put a space after <, as in $a < b$"
+                )
+            else:
+                found.append(
+                    named
+                    + f"raw HTML is not allowed: the site would publish {shown} as HTML; write it in Markdown, or in code to show it as typed"
+                )
         if unclosed is not None:
             opener = unclosed.strip()
             numbers = [number for number, line in enumerate(text.splitlines(), start=1) if line.expandtabs(4).strip() == opener]
@@ -3082,6 +3093,10 @@ def _unsafe_scheme(url: str) -> str | None:
     if scheme is None or scheme.group(1).lower() in _LINK_SCHEMES:
         return None
     return scheme.group(1).lower()
+
+
+#: A ``<`` the site's converter may read as opening a tag.
+_TAG_OPENING = re.compile(r"<[A-Za-z]")
 
 
 def _lines_naming(text: str, patterns: list[re.Pattern[str]]) -> str:

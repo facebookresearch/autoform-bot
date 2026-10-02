@@ -685,6 +685,37 @@ def test_tags_after_a_declaration_on_the_same_line_are_named(article: str, names
     assert f"line 1: raw HTML is not allowed: {names}; in a formula, put a space after <" in errors
 
 
+_OPENED = (
+    "raw HTML is not allowed: the site would read a < before a letter as the start of a tag, and publish "
+    "'</div>' after it as HTML; in a formula, put a space after <, as in $a < b$"
+)
+
+
+@pytest.mark.parametrize(
+    ("article", "line"),
+    [
+        ("Intro.\n\nLet $a<b$ hold.", 3),
+        ("Intro.\n\n$$\\sum_{i<n} x$$", 3),
+        ("Intro.\n\n$$\n\\sum_{i<n}\n$$", 4),
+    ],
+)
+def test_a_tag_only_the_site_reads_in_a_formula_is_named_by_its_line(article: str, line: int) -> None:
+    """A < before a letter in a formula is no tag to the pattern check reads
+    HTML with, but the site's converter opens one there and publishes the
+    markup render puts after the text as HTML. The refusal names the line
+    the < is on, and how a formula keeps clear of it."""
+
+    assert publishable_article(article)[1] == (f"line {line}: {_OPENED}",)
+
+
+def test_check_names_the_line_of_a_tag_only_the_site_reads(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    blueprint = _vault(tmp_path)
+    _with_article(blueprint, "The main result, for $a<b$.")
+
+    assert main(["check", str(blueprint)]) == 1
+    assert f"top: line 11: {_OPENED}" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize(
     ("reference", "shown"),
     [
