@@ -1272,17 +1272,21 @@ def test_a_failed_request_still_renders_the_site(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     blueprint, github = _authenticated_review_project(tmp_path, monkeypatch)
+    answer = github.get
 
     def flaky(path: str, query: dict | None = None) -> object:
+        # Past the head check, which a failed request stops instead.
+        if path in ("", "/git/ref/heads/main"):
+            return answer(path, query)
         raise ApprovalError(f"GitHub API GET {path} failed with HTTP 502: Bad <Gateway>")
 
     github.get = flaky  # type: ignore[method-assign]
     code, pages = _render(tmp_path, blueprint)
 
     assert code == 0
-    assert pages.count('class="bp-review-self-approved" title="GitHub API GET  failed with HTTP 502: Bad &lt;Gateway&gt;"') == 2
+    assert pages.count('class="bp-review-self-approved" title="GitHub API GET /rules/branches/main failed with HTTP 502: Bad &lt;Gateway&gt;"') == 2
     assert "bp-review-approved" not in pages
-    assert "warning: basics/result is self-approved: GitHub API GET  failed with HTTP 502" in capsys.readouterr().out
+    assert "warning: basics/result is self-approved: GitHub API GET /rules/branches/main failed with HTTP 502" in capsys.readouterr().out
 
 
 def test_a_build_the_default_branch_has_moved_past_fails_before_writing_the_site(
@@ -1304,6 +1308,43 @@ def test_a_build_the_default_branch_has_moved_past_fails_before_writing_the_site
     check = ["review", "check", str(blueprint), "--lean-root", str(tmp_path), "--authenticate", "github"]
     assert main(check) == 2
     assert "error: superseded build:" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("failing", "reason"),
+    [
+        ("", "GitHub API GET  failed with HTTP 502"),
+        ("/git/ref/heads/main", "GitHub API GET /git/ref/heads/main failed with HTTP 502"),
+        (None, "GitHub finds no branch main"),
+    ],
+    ids=["repository", "head", "no-branch"],
+)
+def test_a_build_whose_head_cannot_be_read_fails_before_writing_the_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failing: str | None,
+    reason: str,
+) -> None:
+    """A failed lookup must not downgrade the live site to every approval self-approved either."""
+
+    blueprint, github = _authenticated_review_project(tmp_path, monkeypatch)
+    if failing is None:
+        github.heads["main"] = None
+    else:
+        answer = github.get
+
+        def flaky(path: str, query: dict | None = None) -> object:
+            if path == failing:
+                raise ApprovalError(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
+            return answer(path, query)
+
+        github.get = flaky  # type: ignore[method-assign]
+
+    code, pages = _render(tmp_path, blueprint)
+
+    assert code == 1
+    assert not (tmp_path / "site").exists() and pages == ""
+    output = capsys.readouterr().out
+    assert f"error: cannot tell whether HEAD is the head of the default branch on GitHub: {reason}" in output
+    assert "self-approved:" not in output
 
 
 def _render_with_statuses(

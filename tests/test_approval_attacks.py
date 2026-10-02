@@ -8,7 +8,13 @@ from pathlib import Path
 import pytest
 
 from autoform_cli import approvals
-from autoform_cli.approvals import ApprovalError, SupersededBuildError, code_owners, parse_codeowners
+from autoform_cli.approvals import (
+    ApprovalError,
+    HeadCheckError,
+    SupersededBuildError,
+    code_owners,
+    parse_codeowners,
+)
 from tests.test_approvals import (
     _ARTICLE,
     _CODEOWNERS,
@@ -910,15 +916,19 @@ _UNNAMED_HEAD = "GitHub API GET of refs/heads/main did not name the commit it po
         (lambda found: {**found, "object": {"type": "commit"}}, _UNNAMED_HEAD),
     ],
 )
-def test_a_default_branch_head_github_does_not_name_authenticates_nothing(
+def test_a_default_branch_head_github_does_not_name_stops_the_build(
     tmp_path: Path, edit: object, reason: str
 ) -> None:
+    """Labelling every approval self-approved instead would let it downgrade the live site."""
+
     root = _project(tmp_path)
     github = FakeGitHub(root)
     _approved(root, github)
     github.heads["main"] = edit(github.get("/git/ref/heads/main"))  # type: ignore[operator]
 
-    _refused(root, github, reason)
+    with pytest.raises(HeadCheckError) as raised:
+        _verify(root, github)
+    assert str(raised.value) == f"cannot tell whether HEAD is the head of the default branch on GitHub: {reason}"
 
 
 @pytest.mark.parametrize("broken", ["base", "main"])

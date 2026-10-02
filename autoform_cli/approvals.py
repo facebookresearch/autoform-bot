@@ -102,13 +102,18 @@ class ApprovalError(ValueError):
         super().__init__(message)
 
 
-class SupersededBuildError(ApprovalError):
-    """The build is of a commit the default branch has moved past, so nothing it renders may be published.
+class HeadCheckError(ApprovalError):
+    """The build cannot be shown to be of the head of the default branch, so nothing it renders may be published.
 
-    Unlike every other refusal, this one stops the whole run instead of
-    labelling each approval self-approved: a Pages build that deployed would
-    replace a correct site with one where every approval reads self-approved.
+    Unlike every other refusal or failed request, this one stops the whole run
+    instead of labelling each approval self-approved: a Pages build that
+    deployed would replace a correct site with one where every approval reads
+    self-approved.
     """
+
+
+class SupersededBuildError(HeadCheckError):
+    """The build is of a commit the default branch has moved past."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -498,7 +503,8 @@ class GitHubReviewVerifier:
 
     0. Outside the gate, R is the head of the default branch on GitHub;
        otherwise SupersededBuildError stops the run, so a build the branch has
-       moved past is not published. The active rulesets on the default
+       moved past is not published, and a failed lookup of that head stops it
+       with HeadCheckError. The active rulesets on the default
        branch, leaving out any this verifier's token can bypass, have pull
        request rules that require code owner review, dismiss stale approvals
        on push, and require approval of the most recent push. GitHub reports
@@ -541,8 +547,8 @@ class GitHubReviewVerifier:
     are skipped: nothing is merged or finished yet. A P from a fork is
     refused in both modes before anything about it is read.
 
-    Anything that cannot be checked, including a failed request, a spent
-    request budget, or undecidable ownership, leaves that one approval
+    Anything else that cannot be checked, including a failed request, a
+    spent request budget, or undecidable ownership, leaves that one approval
     self-approved and says why in ``reasons``.
     """
 
@@ -623,7 +629,7 @@ class GitHubReviewVerifier:
         )
         try:
             self._check_protection(root, trusted)
-        except SupersededBuildError:
+        except HeadCheckError:
             raise
         except (_Refused, ApprovalError) as exc:
             self.reasons = dict.fromkeys(sorted(approvals), str(exc))
@@ -710,9 +716,10 @@ class GitHubReviewVerifier:
         request could add.
         """
 
-        default = self._default_branch()
         if self.pull_request is None:
-            self._check_current(default, trusted)
+            default = self._current_default_branch(trusted)
+        else:
+            default = self._default_branch()
         self._check_ruleset(default)
         codeowners = self._once(
             ("codeowners", trusted), lambda: load_codeowners(root, trusted, name=self.trusted_ref)
@@ -721,6 +728,30 @@ class GitHubReviewVerifier:
             raise _Refused(f"{self.trusted_ref} has no CODEOWNERS file, so no reviewer is allowed")
         self._check_codeowners_errors(trusted)
         self._check_coverage(*codeowners)
+
+    def _current_default_branch(self, trusted: str) -> str:
+        """The default branch, whose head on GitHub R must be.
+
+        Failing to read either stops the run like a superseded build does:
+        labelling every approval self-approved instead would let a lookup that
+        failed downgrade the live site.
+        """
+
+        try:
+            default = self._default_branch()
+            self._check_current(default, trusted)
+        except HeadCheckError:
+            raise
+        except (_Refused, ApprovalError) as exc:
+            raise HeadCheckError(
+                f"cannot tell whether {self.trusted_ref} is the head of the default branch on GitHub: {exc}"
+            ) from exc
+        except _BudgetSpent as exc:
+            raise HeadCheckError(
+                f"cannot tell whether {self.trusted_ref} is the head of the default branch on GitHub: "
+                f"the budget of {self.budget} GitHub API requests was spent"
+            ) from exc
+        return default
 
     def _check_current(self, default: str, trusted: str) -> None:
         """R is the head of the default branch on GitHub now.
@@ -1587,6 +1618,7 @@ __all__ = [
     "ApprovalVerifier",
     "GitHubClient",
     "GitHubReviewVerifier",
+    "HeadCheckError",
     "SupersededBuildError",
     "approval_statuses",
     "approvals_at",

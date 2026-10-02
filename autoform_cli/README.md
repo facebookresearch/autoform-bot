@@ -769,7 +769,9 @@ unless code owner review guards all of them at R, the trusted ref
   them with that commit's CODEOWNERS and bring back approvals a newer
   CODEOWNERS withdrew. Only a build of the current head authenticates; one
   the branch has moved past stops with a `superseded build` error instead of
-  labelling anything. Whatever the review settings, the generated Pages
+  labelling anything, and so does one whose default branch or its head
+  cannot be read, since labelling every approval self-approved would let a
+  failed lookup downgrade the site. Whatever the review settings, the generated Pages
   workflow's `deploy` job makes the same check before it deploys, so a build
   the branch has moved past never replaces the site. That workflow builds
   every push to the default branch, and a pull request's runs cannot cancel
@@ -820,8 +822,8 @@ unless code owner review guards all of them at R, the trusted ref
   owner`, or another kind) refuses, naming the lines. The verifier's own
   parser only ever narrows what GitHub accepts.
 
-When any of these fails, every approval is self-approved with one reason that
-names the missing settings, GitHub's errors, or the rules without an enforced
+When any of these but the current-head check fails, every approval is
+self-approved with one reason that names the missing settings, GitHub's errors, or the rules without an enforced
 owner, ten at most, and `review check --authenticate github` prints it for
 each. The check is of R as it is now; the verifier does not
 audit how R's CODEOWNERS or ruleset came to be.
@@ -914,7 +916,8 @@ In the gate, steps 1, 2, and 6 cost nothing, and P itself costs one request
 (`GET /repos/{owner}/{repo}/pulls/{number}`). Only a misconfigured
 environment (missing or malformed GitHub variables, or a blueprint outside
 the Git checkout), a checkout without full history, an unknown trusted ref,
-or a superseded build stops the whole run.
+a superseded build, or a failed lookup of the default branch or its head
+stops the whole run.
 
 Code owners come from the first of `.github/CODEOWNERS`, `CODEOWNERS`, and
 `docs/CODEOWNERS` that exists at a commit. P cannot name its own reviewer:
