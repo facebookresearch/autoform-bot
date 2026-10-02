@@ -2753,6 +2753,11 @@ mjx-container:not([display="true"]) {{
   margin-block: 0.5em;
 }}
 div.arithmatex {{ overflow-x: auto; }}
+/* Material caps every svg in its pages at its container's width, which would
+   shrink a wide formula the SVG renderer draws until it cannot be read and,
+   on a phone, where a display's box is as narrow as it can be, to nothing.
+   A formula keeps the size TeX set, and scrolls or is cut like any other. */
+mjx-container > svg {{ max-width: none !important; }}
 :is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *) {{
   overflow-x: clip;
 }}

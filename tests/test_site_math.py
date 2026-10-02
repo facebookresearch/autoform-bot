@@ -717,6 +717,10 @@ def test_every_formula_paints_inside_its_own_band(tmp_path: Path) -> None:
     assert "display: inline-block" in rules['mjx-container:not([display="true"])']
     assert "padding-block: 0.5em" in rules[':root mjx-container[jax][display="true"]']
     assert "overflow-x: auto" in rules["div.arithmatex"]
+    # Material caps every svg in its pages at its container's width; one MathJax
+    # draws keeps the size TeX set, rather than shrinking to fit or, on a phone,
+    # to nothing.
+    assert "max-width: none !important" in rules["mjx-container > svg"]
     # Across, ink stops at the edge of the block an article formula is in; a
     # card's blocks are left to scroll with it.
     block = rules[":is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *)"]

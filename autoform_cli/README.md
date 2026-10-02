@@ -1207,9 +1207,10 @@ text. Inside that block a formula paints as TeX sets it, so the text `\rlap`,
 `\llap`, and the mathtools laps put beside a formula is kept, while an inline
 formula wider than its paragraph is cut at the paragraph's edge; write a
 formula that wide as a display, which scrolls on its own when it is too wide
-for the page. A card too wide for the page scrolls inside its card, and a
-shade at its edge shows there is more that way. A card's approval label wraps
-on a narrow screen instead of running off it.
+for the page. Either renderer draws a formula at the size TeX set; neither
+shrinks a wide one to fit. A card too wide for the page scrolls inside its
+card, and a shade at its edge shows there is more that way. A card's approval
+label wraps on a narrow screen instead of running off it.
 
 A project scaffolded before `render` wrote that file keeps a
 `blueprint/javascripts/mathjax.js` and lists the MathJax bundle in `mkdocs.yml`
