@@ -80,6 +80,8 @@ _SHIPPED_CONFIGURATIONS = frozenset(
 )
 
 _MACRO_NAME = re.compile(r"[A-Za-z]+")
+#: A backslash at the end of a text that no backslash before it escapes.
+_SINGLE_BACKSLASH_AT_END = re.compile(r"(?<!\\)(?:\\\\)*\\\Z")
 #: A TeX control sequence as MathJax reads one: a backslash and then a run of
 #: letters, or any one character.
 _TEX_COMMAND = re.compile(r"\\(?:[A-Za-z]+|.)", re.DOTALL)
@@ -148,6 +150,17 @@ def _tex_macros(path: Path) -> tuple[dict[str, object], list[str]]:
     ``[body, arguments, default]``, as MathJax's ``tex.macros`` does. A body
     may not use a command in :data:`STATEFUL_TEX`, since every article on
     the site could then reach it through the macro.
+
+    Nor may a body or default end in a single backslash. MathJax expands a
+    macro by splicing strings: the body with each argument in place of its
+    ``#n``, then the rest of the formula. Where the text before a splice ends
+    in a command name and the text after starts with a letter, it puts a
+    space between them, so a name never runs on into the letters after it.
+    The text before a ``#n`` cannot end in a single backslash, since ``\\#``
+    is a character, and neither can an argument an article writes, since the
+    backslash would take the next character with it. A body or default can,
+    and then it joins the text after it into one command, which neither this
+    check nor the article's sees: ``\\`` and then ``label`` is ``\\label``.
     """
 
     blocked = in_the_way(path.parent, path.name)
@@ -189,6 +202,11 @@ def _tex_macros(path: Path) -> tuple[dict[str, object], list[str]]:
         if stateful:
             issues.append(
                 f"{TEX_MACROS}: \\{name} uses {', '.join(stateful)}, which would change other formulas"
+            )
+        if any(_SINGLE_BACKSLASH_AT_END.search(text) for text in texts):
+            issues.append(
+                f"{TEX_MACROS}: \\{name} ends a body or default in a single backslash, which would join the "
+                "text after it into one command; double it or remove it"
             )
     return (macros if not issues else {}), issues
 

@@ -169,6 +169,12 @@ def test_project_macros_reach_article_formulas_only(tmp_path: Path) -> None:
     assert "macros" not in settings["card"]
 
 
+_LONE = (
+    "tex-macros.json: \\{} ends a body or default in a single backslash, which would join the text after it "
+    "into one command; double it or remove it"
+)
+
+
 @pytest.mark.parametrize(
     ("macros", "reason"),
     [
@@ -180,6 +186,9 @@ def test_project_macros_reach_article_formulas_only(tmp_path: Path) -> None:
         ('{"f": ["#1", true]}', "\\f must be a body, [body, arguments], or [body, arguments, default]"),
         ('{"f": "\\\\DeclareMathOperator{\\\\leq}{>}"}', "\\f uses \\DeclareMathOperator, which would change"),
         ('{"f": ["#1", 1, "\\\\label{x}"]}', "\\f uses \\label, which would change other formulas"),
+        ('{"bs": "\\\\"}', _LONE.format("bs")),
+        ('{"bs": "a\\\\\\\\\\\\"}', _LONE.format("bs")),
+        ('{"L": ["#1label", 1, "\\\\"]}', _LONE.format("L")),
     ],
 )
 def test_project_macros_that_cannot_be_used_are_refused(
@@ -692,8 +701,10 @@ _SECOND_PAGE = r"""<html><head></head><body><article>
 _LEQ = "<mo>&#x2264;</mo>"
 
 
-def _node_report(tmp_path: Path, script: str, project: str) -> dict:
-    files = {"harness.js": _HARNESS, "mathjax.js": script, "first.html": _FIRST_PAGE, "second.html": _SECOND_PAGE}
+def _node_report(
+    tmp_path: Path, script: str, project: str, first: str = _FIRST_PAGE, second: str = _SECOND_PAGE
+) -> dict:
+    files = {"harness.js": _HARNESS, "mathjax.js": script, "first.html": first, "second.html": second}
     for name, text in files.items():
         (tmp_path / name).write_text(text, encoding="utf-8")
     done = subprocess.run(
@@ -792,3 +803,54 @@ def test_the_rendered_configuration_refuses_another_release(tmp_path: Path) -> N
         "autoform: this page loaded MathJax 3.2.2, but javascripts/mathjax.js was written for 3.2.1; formulas "
         "are left as typed. Load MathJax only through javascripts/mathjax.js in mkdocs.yml."
     ]
+
+
+def _articles(*formulas: str) -> str:
+    spans = "".join(f'<p><span class="arithmatex">\\({formula}\\)</span></p>' for formula in formulas)
+    return f"<html><head></head><body><article>{spans}</article></body></html>"
+
+
+#: Each tries to make a project macro spell \DeclareMathOperator out of what
+#: follows it, and is followed by the formula that shows whether it did.
+_SPLICES = (
+    "\\op{\\D}{\\leq}{>}",
+    "\\opt[\\D]{\\leq}{>}",
+    "\\nl DeclareMathOperator{\\leq}{>}",
+    "\\op\\D{\\leq}{>}",
+)
+
+
+def test_project_macros_cannot_join_into_a_command(tmp_path: Path) -> None:
+    """MathJax expands a macro by splicing strings. A body that ends in a
+    single backslash joins the text after it into one command, so it is
+    refused; what is left spells nothing new, as MathJax itself shows."""
+
+    mathjax = os.environ.get("AUTOFORM_MATHJAX_DIR")
+    if shutil.which("node") is None or not mathjax:
+        pytest.skip("needs node and AUTOFORM_MATHJAX_DIR, an unpacked mathjax package")
+    from autoform_cli.mathjax import _script
+
+    accepted = {"op": ["#1eclareMathOperator", 1], "opt": ["#1eclareMathOperator", 1, "x"], "nl": "\\\\"}
+    blueprint = _vault(tmp_path / "vault", macros=json.dumps(accepted))
+    assert main(["check", str(blueprint)]) == 0
+    script = (_render(blueprint) / "javascripts/mathjax.js").read_text(encoding="utf-8")
+    page = _articles(*(formula for splice in _SPLICES for formula in (splice, "a \\leq b")))
+
+    report = _node_report(tmp_path, script, "new", first=page, second=page)
+
+    assert report["errors"] == []
+    shown = report["passes"][0][0]["math"]
+    assert [math["tex"] for math in shown[::2]] == list(_SPLICES)
+    for splice, math in zip(_SPLICES, shown[1::2], strict=True):
+        assert _LEQ in math["mml"] and "&gt;" not in math["mml"], splice
+
+    # The refused forms, written past check, do declare it.
+    for macros, splice in (
+        ({"bs": "\\"}, "\\bs DeclareMathOperator{\\leq}{>}"),
+        ({"L": ["#1DeclareMathOperator", 1, "\\"]}, "\\L{\\leq}{>}"),
+    ):
+        page = _articles(splice, "a \\leq b")
+        report = _node_report(tmp_path, _script(macros), "new", first=page, second=page)
+        assert report["errors"] == []
+        assert "<mo>&gt;</mo>" in report["passes"][0][0]["math"][1]["mml"], splice
+
