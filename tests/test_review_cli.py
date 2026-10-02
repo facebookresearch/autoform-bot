@@ -343,7 +343,7 @@ def _published_card(
         ),
         (
             "- For $a<b$, `c`\n- and\n\n    1. nested\n\n| a | b |\n|:--|--:|\n| $x$ | y |\n\n"
-            "$$\nx \\le y\n$$\n",
+            "$$\nx \\le y\n$$\n\nIt costs \\$5.\n",
             '<span class="arithmatex">\\(a&lt;b\\)</span>',
         ),
     ],

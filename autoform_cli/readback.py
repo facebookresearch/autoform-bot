@@ -50,7 +50,7 @@ from markdown.blockprocessors import HashHeaderProcessor
 from markdown.extensions.tables import TableProcessor
 from markdown.inlinepatterns import BACKTICK_RE, BacktickInlineProcessor
 from markdown.treeprocessors import Treeprocessor
-from markdown.util import ETX, STX, AtomicString
+from markdown.util import AtomicString
 
 try:
     import fcntl
@@ -981,20 +981,15 @@ def _safe_model_label(value: str) -> bool:
     )
 
 
-#: Python-Markdown's placeholder for a backslash-escaped dollar sign.
-_ESCAPED_DOLLAR = STX + str(ord("$")) + ETX
-
-
 class _LiteralText(Treeprocessor):
-    """Show every ``&`` as typed, and keep an escaped dollar sign escaped.
+    """Show every ``&`` as typed.
 
     The testimony renderer reads no HTML, so each ``<``, ``>``, and ``&`` in a
     testimony is text. The serializer escapes ``<`` and ``>`` but leaves an
     ``&`` that starts something shaped like a character reference, so ``&``
     is escaped here first, outside code, whose text the renderer escaped
-    already. ``\\$`` would otherwise come out as a bare ``$``, which MathJax
-    pairs with the next one into a formula; it is kept as ``\\$``, which
-    MathJax shows as a dollar sign.
+    already. ``\\$`` comes out as a bare ``$``, as GitHub shows it: MathJax
+    reads no text of a card outside the formulas the renderer marked.
     """
 
     def run(self, root: object) -> None:
@@ -1006,7 +1001,7 @@ class _LiteralText(Treeprocessor):
 
     @staticmethod
     def _literal(text: str) -> str:
-        literal = text.replace("&", "&amp;").replace(_ESCAPED_DOLLAR, "\\" + _ESCAPED_DOLLAR)
+        literal = text.replace("&", "&amp;")
         # Formulas are atomic strings, which the renderer must not read again.
         return type(text)(literal) if literal != text else text
 
@@ -2344,6 +2339,11 @@ def _github_hint(site: list[tuple[str, str, int]], github: list[tuple[str, str, 
             return (
                 "GitHub reads Markdown escapes such as \\{ and \\_ in $...$ first; write the formula as $`...`$, "
                 "whose TeX GitHub takes as written"
+            )
+        if one[:2] == ("text", "$") and other[0] == "math":
+            return (
+                "GitHub reads \\$ as a dollar sign before it looks for formulas, and pairs it with the next one; "
+                "write dollar signs meant as typed in code, as `$x$`"
             )
         return (
             "GitHub reads $...$ as a formula only when the first $ starts a line or follows a space or (, no "

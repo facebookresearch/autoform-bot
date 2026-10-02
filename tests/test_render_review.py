@@ -952,12 +952,13 @@ def test_math_delimiters_inside_a_formula_are_refused(testimony: str, delimiter:
 
 
 def test_a_dollar_sign_is_written_with_a_backslash() -> None:
-    r"""The renderer keeps ``\$``, where GitHub shows a dollar sign."""
+    r"""The site shows ``\$`` as a dollar sign, as GitHub does: MathJax reads
+    no text of a card outside the formulas the renderer marked."""
 
     testimony = r"It costs \$5 and $x$ more."
 
-    assert "GitHub hides a backslash before any punctuation" in _testimony_errors(testimony)[0]
-    assert render_testimony(testimony) == r'<p>It costs \$5 and <span class="arithmatex">\(x\)</span> more.</p>'
+    assert _testimony_errors(testimony) == ()
+    assert render_testimony(testimony) == r'<p>It costs $5 and <span class="arithmatex">\(x\)</span> more.</p>'
 
 
 @pytest.mark.parametrize(
@@ -1591,6 +1592,7 @@ _TILDE = "write a space for a ~ that keeps words together, \\sim in a formula, o
         ("W0\n\n```lean\ntheorem x : True\n  ```", _FENCE, "W0\n\n```lean\ntheorem x : True\n```"),
         ("W0 **a **b** c** W1", "write \\* or \\_ for the character itself", "W0 **a \\*\\*b\\*\\* c** W1"),
         ("A 50\\% share.", "drop the one before %", "A 50% share."),
+        ("Its value \\$x$ is typed.", "write dollar signs meant as typed in code, as `$x$`", "Its value `$x$` is typed."),
     ],
 )
 def test_a_github_reading_that_differs_is_refused_with_a_hint_that_fixes_it(
