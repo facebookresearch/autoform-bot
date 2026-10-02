@@ -359,14 +359,16 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "https://github.com/facebookresearch/autoform-bot" in theme
     assert '<a href="{{ config.repo_url }}">Formalization source</a>.' in theme
     workflow = (example / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8")
-    assert "autoform check blueprint --lean-root ." in workflow
-    assert "autoform render blueprint" in workflow
+    assert '"$AUTOFORM_DIR" check blueprint --lean-root .' in workflow
+    assert '"$AUTOFORM_DIR" render blueprint' in workflow
+    assert 'runpy.run_module("autoform_cli",run_name="__main__")' in workflow
     assert "--require-declarations" in workflow
     assert "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128" in workflow
     assert "@main" not in workflow
 
     verify = (example / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
-    assert "autoform check blueprint" in verify
+    assert '"$AUTOFORM_DIR" check blueprint' in verify
+    assert 'runpy.run_module("autoform_cli",run_name="__main__")' in verify
     assert 'lake clean "$root_package"' in verify
     assert "lake build" in verify
     assert "Reject kernel-check bypass options" in verify
@@ -529,6 +531,8 @@ def test_setup_skill_uses_verified_plugin_provenance(repo_root: Path) -> None:
     assert "autoform project provenance --json" in setup
     assert "--autoform-source <VERIFIED_HTTPS_GIT_SOURCE>" in setup
     assert "--autoform-ref <VERIFIED_40_CHAR_SHA>" in setup
+    assert "template capture and installed-tree verification" in setup
+    assert "require POSIX descriptor" in setup
     assert "plain directory copy" not in setup
     assert "scripts/workspace_inspector.py" not in setup
     assert "scripts/make_project.sh" not in setup

@@ -52,7 +52,11 @@ Before writing, run `autoform project provenance --json`. This online check
 verifies the plugin checkout or its Codex or Claude installation record against
 the recorded remote commit. With neither provenance flag supplied, `init`
 repeats that verification and pins generated workflows to the verified source
-and commit. If verification fails, it writes no CI rather than guessing.
+and commit. The workflows check out that commit and run Autoform through its
+verified `uv.lock`. If verification fails, `init` writes no CI rather than
+guessing. Secure `init` template capture and installed-tree verification
+require POSIX descriptor and no-follow support; unsupported platforms fail
+closed.
 
 For an explicit override, pass both
 `--autoform-source <VERIFIED_HTTPS_GIT_SOURCE>` and

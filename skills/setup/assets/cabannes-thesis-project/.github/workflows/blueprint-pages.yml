@@ -35,36 +35,55 @@ jobs:
     steps:
       - name: Check out project
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.12.1"
 
+      - name: Check out verified Autoform
+        run: |
+          set -euo pipefail
+          export AUTOFORM_DIR="${RUNNER_TEMP}/autoform"
+          test ! -e "$AUTOFORM_DIR"
+          git init --quiet "$AUTOFORM_DIR"
+          git -C "$AUTOFORM_DIR" remote add origin "$AUTOFORM_SOURCE"
+          git -C "$AUTOFORM_DIR" \
+            -c protocol.allow=never \
+            -c protocol.https.allow=always \
+            fetch --depth=1 --no-tags --no-recurse-submodules origin "$AUTOFORM_REF"
+          resolved="$(git -C "$AUTOFORM_DIR" rev-parse --verify 'FETCH_HEAD^{commit}')"
+          test "$resolved" = "$AUTOFORM_REF"
+          git -C "$AUTOFORM_DIR" checkout --quiet --detach "$resolved"
+          echo "AUTOFORM_DIR=$AUTOFORM_DIR" >> "$GITHUB_ENV"
+          host_python="$(command -v python3)"
+          test -x "$host_python"
+          uv sync --no-config --locked --no-install-project --no-build --no-cache --no-python-downloads --python "$host_python" --project "$AUTOFORM_DIR" --extra dev
+
       # Rejects cycles and dangling links, and fails when a node names a Lean
       # declaration that is not in the sources.
       - name: Validate the theorem DAG and its declarations
         run: >-
-          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          autoform check blueprint --lean-root .
+          "$AUTOFORM_DIR/.venv/bin/python" -I -c
+          'import runpy,sys;sys.path.insert(0,sys.argv.pop(1));sys.argv[0]="autoform";runpy.run_module("autoform_cli",run_name="__main__")'
+          "$AUTOFORM_DIR" check blueprint --lean-root .
 
       # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
       # and permalinks into the Lean code at this exact commit.
       - name: Render the blueprint
         run: >-
-          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          autoform render blueprint
+          "$AUTOFORM_DIR/.venv/bin/python" -I -c
+          'import runpy,sys;sys.path.insert(0,sys.argv.pop(1));sys.argv[0]="autoform";runpy.run_module("autoform_cli",run_name="__main__")'
+          "$AUTOFORM_DIR" render blueprint
           --output site-src
           --lean-root .
           --require-declarations
 
       - name: Build the Markdown site
         run: >-
-          uvx --from mkdocs==1.6.1
-          --with mkdocs-material==9.6.21
-          --with mkdocs-literate-nav==0.6.2
-          --with pymdown-extensions==10.21.3
-          mkdocs build --strict
+          "$AUTOFORM_DIR/.venv/bin/mkdocs" build --strict
 
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

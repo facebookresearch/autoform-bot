@@ -133,6 +133,9 @@ and pins the generated workflows to its source and commit. To override that
 pair, pass both `--autoform-source <https-git-url>` and `--autoform-ref <sha>`.
 A ref supplied alone is resolved against the canonical repository. Use
 `--force` to overwrite and `--json` for machine-readable output.
+Local template capture uses retained no-follow directory descriptors, so
+`init` currently fails closed on platforms without the required POSIX APIs,
+including Windows.
 
 Inspect a Lean project and list Autoform's bundled known-good release pairs:
 
@@ -175,9 +178,20 @@ options outside the report are left to Lake.
 
 `project provenance` is the online step. It reads an exact plugin-root checkout,
 a bounded Codex installer record, or bounded Claude installation and marketplace
-records. It fetches the recorded commit and compares the installed plugin and
-importable packages with that commit. It reports a credential-free HTTPS source
-and full SHA only after all checks pass. A plain wheel cannot infer provenance.
+records. It fetches the recorded commit and compares the complete installed
+tracked tree with that commit, allowing only exact host metadata recorded by the
+Claude registry. It reports a credential-free HTTPS source
+and full SHA only after all checks pass. Secure installed-tree comparison
+requires POSIX directory-descriptor and no-follow support; unsupported
+platforms, including Windows, return `project-provenance-unavailable`. A plain
+wheel cannot infer provenance. Installers must preserve the tracked tree;
+untracked files outside the exact cache/build-state allowlist fail closed. The
+comparison is bounded to 20,000 entries and 64 MiB. The command attests only the installed file
+contents observed during that invocation. Files can change between individual
+reads or after the command returns. Generated CI does not consume live installed
+bytes: it checks out that exact commit, installs only hashed wheels from its
+verified `uv.lock`, and runs the verified source without building the Autoform
+package or resolving its build requirements.
 
 Publishing a project runs four steps in order: validate, write the Mermaid
 graph into the vault, render the site source, then strict-build the site.

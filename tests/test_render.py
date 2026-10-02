@@ -1121,7 +1121,7 @@ def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path
     from autoform_cli.scaffold import scaffold_project
 
     project = tmp_path / "project"
-    scaffold_project(project, title="Empty")
+    scaffold_project(project, title="Empty", autoform_ref="1" * 40)
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out)
