@@ -1060,6 +1060,22 @@ def test_testimony_at_a_limit_is_accepted_and_one_more_is_refused(at_limit: str,
     assert _testimony_errors(over) == (reason,)
 
 
+@pytest.mark.parametrize(
+    ("testimony", "cells"),
+    [
+        ("Read back.\n\n|" + "a|" * 100 + "\n|" + "-|" * 100 + "\n>\n" + "b\n" * 30, 3200),
+        ("|" + "a|" * 100 + "\n|" + ":|" * 100 + "\n" + "b\n" * 30, 3100),
+        ("|" * 101 + "\n" + "|" * 101 + "\n" + "b\n" * 30, 3100),
+    ],
+)
+def test_every_table_python_markdown_reads_is_counted_before_parsing(testimony: str, cells: int) -> None:
+    """Python-Markdown takes a delimiter row of colons or of pipes alone, and
+    runs a table on past a line of ">" outside a block quote, so each of these
+    is counted to its header's width over every line up to a blank one."""
+
+    assert _testimony_errors(testimony) == (f"testimony has tables of up to {cells} cells, over the limit of 2048",)
+
+
 def test_html_over_the_rendered_limit_is_refused_before_it_is_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
     """A backstop for any construct the renderer expands. Escaping takes the
     largest testimony to at most five times its size, well under the limit."""

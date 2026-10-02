@@ -169,9 +169,11 @@ _MATH_DELIMITER = re.compile(r"\$|\\[()\[\]]")
 _BACKTICK_RUN = re.compile(r"`+")
 _UNDERSCORE_OPENER = re.compile(r"(?<!\w)_")
 #: A line that could be a table's delimiter row, in a block quote or a list or
-#: not, and one that ends a table.
-_TABLE_DELIMITER_ROW = re.compile(r"(?=[^|]*\|)(?=[^-]*-)[\s>|:-]+")
-_BLANK_LINE = re.compile(r"[\s>]*")
+#: not: Python-Markdown takes any row of pipes, colons, hyphens, and spaces
+#: that splits into as many cells as its header, so a pipe is all it needs.
+#: And the line that ends a table wherever it is.
+_TABLE_DELIMITER_ROW = re.compile(r"(?=[^|]*\|)[\s>|:-]+")
+_BLANK_LINE = re.compile(r"\s*")
 #: Everything a line can open before its content: indentation, block quotes,
 #: and list markers, each of which nests one more block.
 _NESTING_PREFIX = re.compile(r"(?:[ >]|[-+*](?= )|\d{1,9}[.)](?= ))*")
@@ -2365,15 +2367,17 @@ def _testimony_limit_errors(text: str) -> tuple[str, ...]:
     if backslashes > TESTIMONY_MAX_BACKSLASHES:
         errors.append(f"testimony has {backslashes} backslashes, over the limit of {TESTIMONY_MAX_BACKSLASHES}")
     # Every line that could be a delimiter row is taken for one, with its
-    # columns spanning its header and the lines up to the next blank one,
-    # which is as far as a table can run.
+    # header, the line before it, and the lines after it up to the next blank
+    # one, which is as far as a table can run outside a block quote. A table
+    # has as many columns as its header has cells, and the header no more
+    # than one more than its pipes, less one for each pipe at either end.
     cells = following = 0
-    for line in reversed(lines):
-        if _TABLE_DELIMITER_ROW.fullmatch(line):
-            row = line.lstrip(" \t>").rstrip()
-            columns = row.count("|") + 1 - row.startswith("|") - (len(row) > 1 and row.endswith("|"))
+    for index in range(len(lines) - 1, 0, -1):
+        if _TABLE_DELIMITER_ROW.fullmatch(lines[index]):
+            header = lines[index - 1].lstrip(" >").rstrip(" ")
+            columns = header.count("|") + 1 - header.startswith("|") - (len(header) > 1 and header.endswith("|"))
             cells += columns * (following + 1)
-        following = 0 if _BLANK_LINE.fullmatch(line) else following + 1
+        following = 0 if _BLANK_LINE.fullmatch(lines[index]) else following + 1
     if cells > TESTIMONY_MAX_TABLE_CELLS:
         errors.append(f"testimony has tables of up to {cells} cells, over the limit of {TESTIMONY_MAX_TABLE_CELLS}")
     return tuple(errors)
