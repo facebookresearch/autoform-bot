@@ -517,7 +517,7 @@ def test_tex_that_sets_nothing_hides_nothing_and_ends_no_spacing(testimony: str,
         ("$" + "x^{" * 9 + "x" + "}" * 9 + "$", "TeX scripts nested more than 8 deep are not allowed"),
         ("$" + "x^{" * 300 + "x" + "}" * 300 + "$", "TeX scripts nested more than 8 deep are not allowed"),
         ("$P" + r"\qquad" * 4 + " Q$ and $P" + r"\qquad" * 4 + " Q$", None),
-        (r"$P\!$ and $\!Q$", None),
+        (r"$P\!\,$ and $\,\!Q$", None),
         (r"$\frac{a}$ $b$", r"TeX commands missing an argument are not allowed: \frac"),
     ],
 )
@@ -531,6 +531,27 @@ def test_tex_limits_hold_at_their_exact_values_and_per_formula(testimony: str, r
     errors = _testimony_errors(testimony)
 
     assert errors == () if reason is None else any(reason in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("testimony", "rewritten"),
+    [
+        (r"Here $1\!$$\!1$ holds.", r"Here $1\!1$ holds."),
+        (r"Take $\!x$ here.", r"Take $y\!x$ here."),
+        (r"Take ${}\!\sum_i x$ here.", r"Take $\int\!\sum_i x$ here."),
+        (r"Take $x^2\!$ here.", r"Take $x^2\!y$ here."),
+    ],
+)
+def test_negative_tex_spacing_at_either_end_of_a_formula_is_refused(testimony: str, rewritten: str) -> None:
+    """Negative space at the edge of a formula slides it over what sits
+    beside it, which may be the negative space of the next formula; between
+    two symbols of one formula it is counted."""
+
+    assert (
+        "negative TeX spacing at the start or end of a formula is not allowed: it slides the formula over what sits "
+        "beside it; write it between two symbols of one formula"
+    ) in _testimony_errors(testimony)
+    assert _testimony_errors(rewritten) == ()
 
 
 _PROOF_ROWS = r"\begin{aligned} " + r" \\ ".join([r"a &= b \quad \text{by } h_i"] * 7) + r" \end{aligned}"

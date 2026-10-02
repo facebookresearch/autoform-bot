@@ -1459,7 +1459,9 @@ class _TexLayout:
     source order across groups, arguments, cells, and commands that set
     nothing, so a run below one negative thin space slides a symbol over its
     neighbour wherever the two sit. A run never carries from one formula to
-    the next, but the spacing of every formula counts toward the testimony's.
+    the next, so neither end of a formula may hold negative space, which
+    would slide it over what sits beside it; the spacing of every formula
+    counts toward the testimony's.
     """
 
     def __init__(self) -> None:
@@ -1471,7 +1473,7 @@ class _TexLayout:
         self.braced: dict[str, None] = {}
         self.unset: dict[str, None] = {}
         self.stray: dict[str, None] = {}
-        self.overlap = self.double_integral = self.marks = False
+        self.overlap = self.double_integral = self.marks = self.edge = False
         self.total_spacing = 0.0
 
     def read(self, tex: str) -> None:
@@ -1499,6 +1501,7 @@ class _TexLayout:
             self.errors[str(abort)] = None
             return
         self.overlap = self.overlap or self.run < _TEX_MIN_RUN
+        self.edge = self.edge or self.run < 0
         self.total_spacing += self.spacing
         if not self.glyphs:
             self.errors["TeX formulas that show nothing are not allowed"] = None
@@ -1556,6 +1559,11 @@ class _TexLayout:
                 "repeated negative TeX spacing is not allowed: it slides symbols over one another"
                 + ("; write \\iint for a double integral" if self.double_integral else "")
             )
+        if self.edge:
+            errors.append(
+                "negative TeX spacing at the start or end of a formula is not allowed: it slides the formula over "
+                "what sits beside it; write it between two symbols of one formula"
+            )
         return errors + list(self.errors)
 
     def peek(self) -> str | None:
@@ -1574,6 +1582,7 @@ class _TexLayout:
 
     def glyph(self) -> None:
         self.overlap = self.overlap or self.run < _TEX_MIN_RUN
+        self.edge = self.edge or (not self.glyphs and self.run < 0)
         self.run = 0.0
         self.glyphs += 1
 
