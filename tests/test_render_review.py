@@ -365,6 +365,7 @@ def test_writer_refuses_tex_outside_the_allowlist_by_name(testimony: str, comman
         r"$\begin{align} a &= b \end{align}$ and $\begin{gather*} c \end{gather*}$",
         r"$\begin{aligned} \begin{align*} a \end{align*} \end{aligned}$",
         r"$\begin{equation} e^{i\pi} + 1 = 0 \end{equation}$ and $\frac{\begin{equation*} a \\ b \end{equation*}}{c}$",
+        r"$\mathopen{]} 0, 1 \mathclose{[}$, $a \equiv b \pod{n}$, and $\mbox{if } x > 0$",
     ],
 )
 def test_tex_mathjax_sets_and_the_model_follows_is_allowlisted(testimony: str) -> None:
@@ -403,6 +404,27 @@ def test_tex_environments_mathjax_sets_differently_are_refused(testimony: str, r
     else it does not know."""
 
     assert any(reason in error for error in _testimony_errors(testimony))
+
+
+@pytest.mark.parametrize(
+    ("testimony", "replacement", "rewritten"),
+    [
+        (r"${n \choose k}$", r"write \binom{n}{k} for {n \choose k}", r"$\binom{n}{k}$"),
+        (r"${a \over b}$", r"write \frac{a}{b} for {a \over b}", r"$\frac{a}{b}$"),
+        (r"$\cfrac{1}{1 + \cfrac{1}{2}}$", r"write \dfrac for \cfrac", r"$\dfrac{1}{1 + \dfrac{1}{2}}$"),
+        (r"$\genfrac{(}{)}{0pt}{}{n}{k}$", r"write \frac or \binom for \genfrac", r"$\binom{n}{k}$ or $\frac{n}{k}$"),
+        (r"$a \hspace{1em} b$", r"write \quad or \, for \hspace", r"$a \quad b$ or $a \, b$"),
+        (r"$\boxed{x = 1}$", r"write the boxed formula alone, without \boxed", r"$x = 1$"),
+    ],
+)
+def test_tex_commands_outside_the_allowlist_are_refused_with_a_replacement(
+    testimony: str, replacement: str, rewritten: str
+) -> None:
+    """MathJax 3.2.2 sets each of these, and the message names the command
+    to write in its place, which is accepted."""
+
+    assert any(replacement in error for error in _testimony_errors(testimony))
+    assert _testimony_errors(rewritten) == ()
 
 
 @pytest.mark.parametrize(
@@ -608,12 +630,21 @@ def test_negative_tex_spacing_at_either_end_of_a_formula_is_refused(testimony: s
 
 @pytest.mark.parametrize(
     ("command", "width"),
-    [(r"\pmod{n}", 24), (r"\mod n", 24), (r"\bmod n", 10), (r"\iff b", 10), (r"\implies b", 10), (r"\impliedby b", 10)],
+    [
+        (r"\pmod{n}", 24),
+        (r"\mod n", 24),
+        (r"\pod{n}", 18),
+        (r"\bmod n", 10),
+        (r"\iff b", 10),
+        (r"\implies b", 10),
+        (r"\impliedby b", 10),
+    ],
 )
 def test_tex_macros_that_add_space_count_it_toward_the_formula(command: str, width: int) -> None:
     r"""MathJax 3.2.2 kerns 18 mu before ``mod`` in a displayed formula and
-    6 after it, and puts ``\;`` on either side of the arrows; with that
-    space a formula stays within 8 em, and one more thin space is over."""
+    6 after it, 18 mu before the parenthesis of ``\pod``, and puts ``\;`` on
+    either side of the arrows; with that space a formula stays within 8 em,
+    and one more thin space is over."""
 
     space = r"\qquad" * 3 + r"\," * ((144 - 108 - width) // 3)
 
@@ -749,6 +780,7 @@ _UNSET = "characters MathJax cannot set in a formula are not allowed: "
         (r"$P^\iff Q$", _BRACED + r"\iff"),
         (r"$x^\pmb{a}$", _BRACED + r"\pmb"),
         (r"$a^\pmod{n}$", _BRACED + r"\pmod"),
+        (r"$a^\pod{n}$", _BRACED + r"\pod"),
         ("$x^’$", "TeX commands missing an argument are not allowed: ^"),
         ("$f’^a'$", "a second TeX superscript or subscript on one symbol is not allowed"),
         (r"$\begin{aligned} \sum & \limits_i a \end{aligned}$", r"\limits and \nolimits are allowed only after"),

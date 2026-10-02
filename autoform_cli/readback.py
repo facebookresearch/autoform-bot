@@ -1248,9 +1248,10 @@ _TESTIMONY_TEX: dict[str, _Tex] = {
         """
     ),
     # Commands MathJax 3.2.2 defines as macros that add space: \mod and \pmod
-    # 18 mu before ``mod`` in a displayed formula and 6 after it, \bmod and
-    # the arrows 5 mu on either side.
+    # 18 mu before ``mod`` in a displayed formula and 6 after it, \pod 18 mu
+    # before its parenthesis, \bmod and the arrows 5 mu on either side.
     **_tex(r"\mod \pmod", arguments="ge", width=24),
+    r"\pod": _Tex("glyph", "ge", 18),
     **_tex(r"\bmod \iff \implies \impliedby", width=10),
     # Large and named operators.
     **_tex(
@@ -1300,11 +1301,11 @@ _TESTIMONY_TEX: dict[str, _Tex] = {
     **_tex(
         r"""
         \mathbb \Bbb \mathcal \mathfrak \mathscr \mathrm \mathbf \mathsf \mathit \mathtt \pmb \mathrel
-        \mathbin \mathord
+        \mathbin \mathord \mathopen \mathclose
         """,
         arguments="m",
     ),
-    **_tex(r"\text \textrm \textbf \textit \texttt \textsf \textnormal \textup", arguments="t"),
+    **_tex(r"\text \textrm \textbf \textit \texttt \textsf \textnormal \textup \mbox", arguments="t"),
     **_tex(r"\displaystyle \textstyle \scriptstyle \scriptscriptstyle \rm \bf \it \sf \tt \cal", "style", ""),
     # Spaces, rows, and environments.
     **_tex(r"\, \thinspace", "space", "", 3),
@@ -1326,14 +1327,20 @@ _TEX_ENVIRONMENTS = frozenset(
     {"cases", "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix", "smallmatrix", "array"}
     | {"aligned", "gathered", "split", "align", "align*", "gather", "gather*", "equation", "equation*"}
 )
-#: What to write for environments outside the allowlist that MathJax sets the
-#: way one inside it does.
+#: What to write for commands and environments outside the allowlist that
+#: MathJax sets the way one inside it does.
 _TEX_INSTEAD = {
-    r"\begin{multline}": r"\begin{gathered}",
-    r"\begin{multline*}": r"\begin{gathered}",
-    r"\begin{alignat}": r"\begin{aligned}, without the column count,",
-    r"\begin{alignat*}": r"\begin{aligned}, without the column count,",
-    r"\begin{alignedat}": r"\begin{aligned}, without the column count,",
+    r"\choose": r"\binom{n}{k} for {n \choose k}",
+    r"\over": r"\frac{a}{b} for {a \over b}",
+    r"\cfrac": r"\dfrac for \cfrac",
+    r"\genfrac": r"\frac or \binom for \genfrac",
+    r"\hspace": r"\quad or \, for \hspace",
+    r"\boxed": r"the boxed formula alone, without \boxed",
+    r"\begin{multline}": r"\begin{gathered} for \begin{multline}",
+    r"\begin{multline*}": r"\begin{gathered} for \begin{multline*}",
+    r"\begin{alignat}": r"\begin{aligned}, without the column count, for \begin{alignat}",
+    r"\begin{alignat*}": r"\begin{aligned}, without the column count, for \begin{alignat*}",
+    r"\begin{alignedat}": r"\begin{aligned}, without the column count, for \begin{alignedat}",
 }
 #: The environments MathJax 3.2.2 reads a bracket after, for where their rows
 #: sit: it applies ``[t]``, ``[b]``, or ``[c]`` and shows nothing else written
@@ -1353,7 +1360,7 @@ _TEX_BRACED_SCRIPTS = frozenset(
     r"""
     \arcsin \arccos \arctan \arg \cos \cosh \cot \coth \csc \deg \dim \exp \hom \ker \lg \ln \log \sec
     \sin \sinh \tan \tanh \mathop \dots \varinjlim \varprojlim \varliminf \varlimsup \idotsint \iff
-    \implies \impliedby \pmb \mod \pmod
+    \implies \impliedby \pmb \mod \pmod \pod
     """.split()
 )
 #: The characters past ASCII MathJax 3.2.2 sets in a formula, outside
@@ -1538,7 +1545,7 @@ class _TexLayout:
     def messages(self) -> list[str]:
         """What every formula read so far holds that is not allowed."""
 
-        instead = [f"{_TEX_INSTEAD[name]} for {name}" for name in sorted(self.unlisted) if name in _TEX_INSTEAD]
+        instead = [_TEX_INSTEAD[name] for name in sorted(self.unlisted) if name in _TEX_INSTEAD]
         if any(name.startswith("\\begin") and name not in _TEX_INSTEAD for name in self.unlisted):
             instead.append(
                 "one of the environments allowed: equation, align, gather, aligned, gathered, split, cases, array, "
