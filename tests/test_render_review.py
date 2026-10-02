@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import re
 
+import html5lib
 import markdown as markdown_renderer
 import pytest
 
@@ -16,6 +17,9 @@ from autoform_cli.readback import (
     TESTIMONY_MAX_BYTES,
     TESTIMONY_MAX_RENDERED_BYTES,
     Readback,
+    _github_formulas,
+    _github_html,
+    _shown,
     _testimony_errors,
     load_readbacks,
     publishable_article,
@@ -259,15 +263,17 @@ def test_writer_rejects_testimony_that_hides_what_it_says(testimony: str, reason
 @pytest.mark.parametrize(
     "testimony",
     [
-        r"For every $x \in [0, 1]$ and the set $\{x\}$, the claim holds.",
+        r"For every $x \in [0, 1]$ and the set $`\{x\}`$, the claim holds.",
         r"$\alpha \ne \beta$",
-        r"Integrate with a thin negative space, $\int\! f$, once.",
-        r"At least $50\%$ of cases, or 50\% in prose.",
+        r"Integrate with a thin negative space, $`\int\! f`$, once.",
+        r"At least $`50\%`$ of cases, or 50% in prose.",
         "Code such as `a % b` is shown as written.",
         r"For $0<x<1$, $\frac12 < \sqrt[3]{x}$ and $\lfloor x \rfloor = 0$ in $\mathbb R$.",
-        r"Here $\operatorname*{arg\,max}_x f(x)$ and $\langle u, v \rangle \le \|u\|\,\|v\|$ hold.",
-        r"$$f(x) = \begin{cases} x^2 & \text{if } x \ge 0, \\ -x & \text{otherwise} \end{cases}$$",
-        r"$$A = \begin{pmatrix} a & b \\ c & d \end{pmatrix}, \quad \begin{aligned} x &= y \\ &\le z \end{aligned}$$",
+        r"Here $`\operatorname*{arg\,max}_x f(x)`$ and $`\langle u, v \rangle \le \|u\|\,\|v\|`$ hold.",
+        "```math\n" r"f(x) = \begin{cases} x^2 & \text{if } x \ge 0, \\ -x & \text{otherwise} \end{cases}" "\n```",
+        "```math\n"
+        r"A = \begin{pmatrix} a & b \\ c & d \end{pmatrix}, \quad \begin{aligned} x &= y \\ &\le z \end{aligned}"
+        "\n```",
         r"For $a < b > c$ and the group $\langle g \rangle$, AT&T and R & D; the claim holds.",
     ],
 )
@@ -397,15 +403,15 @@ def test_writer_refuses_tex_outside_the_allowlist_by_name(testimony: str, comman
         r"$\iiiint_D f$, $\intop\limits_a^b f$, $\injlim_i A_i$, $\varliminf_n x_n$, and $\idotsint$",
         r"$\overleftrightarrow{AB}$, $\underleftarrow{x}$, $\Bbb{R}$, $\textnormal{a b}$, and $\textup{c}$",
         r"${\rm d}x$, ${\cal F}$, ${\bf v}$, ${\it x}$, ${\sf S}$, and ${\tt t}$",
-        r"$\begin{smallmatrix} a & b \\ c & d \end{smallmatrix}$",
-        r"$\begin{array}{lc} a & b \\ c & d \end{array}$ and $\begin{array}[t]{ r } x \end{array}$",
-        r"$\begin{split} a &= b \\ &= c \end{split}$",
+        r"$`\begin{smallmatrix} a & b \\ c & d \end{smallmatrix}`$",
+        r"$`\begin{array}{lc} a & b \\ c & d \end{array}`$ and $\begin{array}[t]{ r } x \end{array}$",
+        r"$`\begin{split} a &= b \\ &= c \end{split}`$",
         r"$\begin{align} a &= b \end{align}$ and $\begin{gather*} c \end{gather*}$",
         r"$\begin{aligned} \begin{align*} a \end{align*} \end{aligned}$",
-        r"$\begin{equation} e^{i\pi} + 1 = 0 \end{equation}$ and $\frac{\begin{equation*} a \\ b \end{equation*}}{c}$",
+        r"$\begin{equation} e^{i\pi} + 1 = 0 \end{equation}$ and $`\frac{\begin{equation*} a \\ b \end{equation*}}{c}`$",
         r"$\mathopen{]} 0, 1 \mathclose{[}$, $a \equiv b \pod{n}$, and $\mbox{if } x > 0$",
-        r"$\left[\begin{array}{cc|c} 1 & 0 & 2 \\ \hline 0 & 1 & 3 \end{array}\right]$",
-        r"$\begin{array}{ c : c } a & b \\ \hline c & d \\ \hline e & f \end{array}$",
+        r"$`\left[\begin{array}{cc|c} 1 & 0 & 2 \\ \hline 0 & 1 & 3 \end{array}\right]`$",
+        r"$`\begin{array}{ c : c } a & b \\ \hline c & d \\ \hline e & f \end{array}`$",
     ],
 )
 def test_tex_mathjax_sets_and_the_model_follows_is_allowlisted(testimony: str) -> None:
@@ -468,7 +474,7 @@ def test_tex_environments_mathjax_sets_differently_are_refused(testimony: str, r
         (r"${a \over b}$", r"write \frac{a}{b} for {a \over b}", r"$\frac{a}{b}$"),
         (r"$\cfrac{1}{1 + \cfrac{1}{2}}$", r"write \dfrac for \cfrac", r"$\dfrac{1}{1 + \dfrac{1}{2}}$"),
         (r"$\genfrac{(}{)}{0pt}{}{n}{k}$", r"write \frac or \binom for \genfrac", r"$\binom{n}{k}$ or $\frac{n}{k}$"),
-        (r"$a \hspace{1em} b$", r"write \quad or \, for \hspace", r"$a \quad b$ or $a \, b$"),
+        (r"$a \hspace{1em} b$", r"write \quad or \, for \hspace", r"$a \quad b$ or $`a \, b`$"),
         (r"$\boxed{x = 1}$", r"write the boxed formula alone, without \boxed", r"$x = 1$"),
     ],
 )
@@ -486,9 +492,9 @@ def test_tex_commands_outside_the_allowlist_are_refused_with_a_replacement(
     ("testimony", "replacement", "rewritten"),
     [
         (
-            r"$\begin{multline} a + b \\ = c \end{multline}$",
+            r"$`\begin{multline} a + b \\ = c \end{multline}`$",
             r"write \begin{gathered} for \begin{multline}",
-            r"$\begin{gathered} a + b \\ = c \end{gathered}$",
+            r"$`\begin{gathered} a + b \\ = c \end{gathered}`$",
         ),
         (
             r"$\begin{alignat}{2} a &= b &\quad c &= d \end{alignat}$",
@@ -511,9 +517,9 @@ def test_tex_commands_outside_the_allowlist_are_refused_with_a_replacement(
             r"$\begin{align} a = b \end{align}$",
         ),
         (
-            r"$\begin{gather} \begin{gather*} a \\ b \end{gather*} \end{gather}$",
+            r"$`\begin{gather} \begin{gather*} a \\ b \end{gather*} \end{gather}`$",
             "write aligned or gathered",
-            r"$\begin{gather} \begin{gathered} a \\ b \end{gathered} \end{gather}$",
+            r"$`\begin{gather} \begin{gathered} a \\ b \end{gathered} \end{gather}`$",
         ),
     ],
 )
@@ -555,14 +561,14 @@ _ROW_SPACING = "TeX row spacing after \\\\ is not allowed: it can draw rows over
 @pytest.mark.parametrize(
     ("testimony", "reason", "rewritten"),
     [
-        (r"$\begin{pmatrix} 1 & 0 \\* & 1 \end{pmatrix}$", _ROW_STAR, r"$\begin{pmatrix} 1 & 0 \\ * & 1 \end{pmatrix}$"),
-        (r"$\begin{aligned} x &= 2 \\* 3 \end{aligned}$", _ROW_STAR, r"$\begin{aligned} x &= 2 \\ * 3 \end{aligned}$"),
+        (r"$`\begin{pmatrix} 1 & 0 \\* & 1 \end{pmatrix}`$", _ROW_STAR, r"$`\begin{pmatrix} 1 & 0 \\ * & 1 \end{pmatrix}`$"),
+        (r"$`\begin{aligned} x &= 2 \\* 3 \end{aligned}`$", _ROW_STAR, r"$`\begin{aligned} x &= 2 \\ * 3 \end{aligned}`$"),
         (
-            r"$\begin{cases} 1 & x > 0 \\[4pt] 0 & \text{otherwise} \end{cases}$",
+            r"$`\begin{cases} 1 & x > 0 \\[4pt] 0 & \text{otherwise} \end{cases}`$",
             _ROW_SPACING,
-            r"$\begin{cases} 1 & x > 0 \\ 0 & \text{otherwise} \end{cases}$",
+            r"$`\begin{cases} 1 & x > 0 \\ 0 & \text{otherwise} \end{cases}`$",
         ),
-        (r"$\begin{aligned} a \\[0, 1] \end{aligned}$", _ROW_SPACING, r"$\begin{aligned} a \\ {}[0, 1] \end{aligned}$"),
+        (r"$`\begin{aligned} a \\[0, 1] \end{aligned}`$", _ROW_SPACING, r"$`\begin{aligned} a \\ {}[0, 1] \end{aligned}`$"),
     ],
 )
 def test_what_tex_reads_right_after_a_row_break_is_refused_with_a_rewrite(
@@ -624,21 +630,21 @@ def test_tex_that_sets_nothing_hides_nothing_and_ends_no_spacing(testimony: str,
         ("$" + r"\text{ a}" * 33 + "$", "TeX spacing over 8 em in one formula is not allowed"),
         ("$" + r"\text{a }" * 32 + "$", None),
         ("$" + r"\text{a }" * 33 + "$", "TeX spacing over 8 em in one formula is not allowed"),
-        ("$" + r"a\!" * 20 + "b" + r"\qquad" * 4 + " c$", None),
-        ("$" + r"a\!" * 20 + "b" + r"\qquad" * 4 + r"\, c$", "TeX spacing over 8 em in one formula is not allowed"),
-        (r"$P\!Q$ and $P\!\!\,Q$", None),
-        (r"$P\!\!Q$", "repeated negative TeX spacing"),
-        (r"$P\;\!\!\!Q$", "repeated negative TeX spacing"),
+        ("$`" + r"a\!" * 20 + "b" + r"\qquad" * 4 + " c`$", None),
+        ("$`" + r"a\!" * 20 + "b" + r"\qquad" * 4 + r"\, c`$", "TeX spacing over 8 em in one formula is not allowed"),
+        (r"$`P\!Q`$ and $`P\!\!\,Q`$", None),
+        (r"$`P\!\!Q`$", "repeated negative TeX spacing"),
+        (r"$`P\;\!\!\!Q`$", "repeated negative TeX spacing"),
         ("$" + _matrix(0, 9) + "$", None),
         ("$" + _matrix(0, 10) + "$", "more than 9 TeX & in one row are not allowed"),
-        ("$" + _matrix(16, 0) + "$", None),
-        ("$" + _matrix(17, 0) + "$", r"more than 16 TeX \\ in one environment are not allowed"),
-        ("$" + _matrix(16, 0) + _matrix(15, 0) + r" \\ a$", None),
-        ("$" + _matrix(16, 0) + _matrix(16, 0) + r" \\ a$", r"more than 32 TeX \\ in one formula are not allowed"),
-        (r"$\begin{aligned} " + r" \\ ".join(["& a"] * 16) + r" \end{aligned}$", None),
-        (r"$\begin{aligned} " + r" \\ ".join(["& a"] * 17) + r" \end{aligned}$", "more than 16 empty TeX cells"),
-        (r"$\begin{matrix} a \\ b \\ \end{matrix}$", None),
-        (r"$\begin{matrix} a \\ \\ b \end{matrix}$", "empty TeX rows are not allowed"),
+        ("$`" + _matrix(16, 0) + "`$", None),
+        ("$`" + _matrix(17, 0) + "`$", r"more than 16 TeX \\ in one environment are not allowed"),
+        ("$`" + _matrix(16, 0) + _matrix(15, 0) + r" \\ a`$", None),
+        ("$`" + _matrix(16, 0) + _matrix(16, 0) + r" \\ a`$", r"more than 32 TeX \\ in one formula are not allowed"),
+        (r"$`\begin{aligned} " + r" \\ ".join(["& a"] * 16) + r" \end{aligned}`$", None),
+        (r"$`\begin{aligned} " + r" \\ ".join(["& a"] * 17) + r" \end{aligned}`$", "more than 16 empty TeX cells"),
+        (r"$`\begin{matrix} a \\ b \\ \end{matrix}`$", None),
+        (r"$`\begin{matrix} a \\ \\ b \end{matrix}`$", "empty TeX rows are not allowed"),
         ("$" + "{" * 16 + "a" + "}" * 16 + "$", None),
         ("$" + "{" * 17 + "a" + "}" * 17 + "$", "TeX nested more than 16 deep is not allowed"),
         ("$" + "{" * 300 + "a" + "}" * 300 + "$", "TeX nested more than 16 deep is not allowed"),
@@ -646,7 +652,7 @@ def test_tex_that_sets_nothing_hides_nothing_and_ends_no_spacing(testimony: str,
         ("$" + "x^{" * 9 + "x" + "}" * 9 + "$", "TeX scripts nested more than 8 deep are not allowed"),
         ("$" + "x^{" * 300 + "x" + "}" * 300 + "$", "TeX scripts nested more than 8 deep are not allowed"),
         ("$P" + r"\qquad" * 4 + " Q$ and $P" + r"\qquad" * 4 + " Q$", None),
-        (r"$P\!\,$ and $\,\!Q$", None),
+        (r"$`P\!\,`$ and $`\,\!Q`$", None),
         (r"$\frac{a}$ $b$", r"TeX commands missing an argument are not allowed: \frac"),
     ],
 )
@@ -665,10 +671,10 @@ def test_tex_limits_hold_at_their_exact_values_and_per_formula(testimony: str, r
 @pytest.mark.parametrize(
     ("testimony", "rewritten"),
     [
-        (r"Here $1\!$$\!1$ holds.", r"Here $1\!1$ holds."),
-        (r"Take $\!x$ here.", r"Take $y\!x$ here."),
-        (r"Take ${}\!\sum_i x$ here.", r"Take $\int\!\sum_i x$ here."),
-        (r"Take $x^2\!$ here.", r"Take $x^2\!y$ here."),
+        (r"Here $`1\!`$$`\!1`$ holds.", r"Here $`1\!1`$ holds."),
+        (r"Take $`\!x`$ here.", r"Take $`y\!x`$ here."),
+        (r"Take $`{}\!\sum_i x`$ here.", r"Take $`\int\!\sum_i x`$ here."),
+        (r"Take $`x^2\!`$ here.", r"Take $`x^2\!y`$ here."),
     ],
 )
 def test_negative_tex_spacing_at_either_end_of_a_formula_is_refused(testimony: str, rewritten: str) -> None:
@@ -703,10 +709,10 @@ def test_tex_macros_that_add_space_count_it_toward_the_formula(command: str, wid
 
     space = r"\qquad" * 3 + r"\," * ((144 - 108 - width) // 3)
 
-    assert _testimony_errors(f"$a{space}{command}$") == ()
+    assert _testimony_errors(f"$`a{space}{command}`$") == ()
     assert any(
         "TeX spacing over 8 em in one formula is not allowed" in error
-        for error in _testimony_errors(f"$a{space}\\,{command}$")
+        for error in _testimony_errors(f"$`a{space}\\,{command}`$")
     )
 
 
@@ -716,7 +722,7 @@ _PROOF_ROWS = r"\begin{aligned} " + r" \\ ".join([r"a &= b \quad \text{by } h_i"
 @pytest.mark.parametrize(
     ("testimony", "reason"),
     [
-        ("$" + _PROOF_ROWS + "$", None),
+        ("$`" + _PROOF_ROWS + "`$", None),
         (r"$\begin{matrix} a\qquad\qquad & b\qquad\qquad & c \end{matrix}$", None),
         (r"$\begin{matrix} a\qquad\qquad & b\qquad\qquad\, & c \end{matrix}$", "TeX spacing over 8 em in one formula"),
         (
@@ -789,10 +795,10 @@ _TEXT_FORMULA = "close \\text before a formula, as in \\text{if } x > 0"
     ("testimony", "rewritten"),
     [
         (
-            "Restated:\n\n$$\nf(x) = \\begin{cases} 1 & \\text{if $x \\in \\mathbb{Q}$} \\\\ 0 & \\text{otherwise} \\end{cases}\n$$",
-            "Restated:\n\n$$\nf(x) = \\begin{cases} 1 & \\text{if } x \\in \\mathbb{Q} \\\\ 0 & \\text{otherwise} \\end{cases}\n$$",
+            "Restated:\n\n```math\nf(x) = \\begin{cases} 1 & \\text{if $x \\in \\mathbb{Q}$} \\\\ 0 & \\text{otherwise} \\end{cases}\n```",
+            "Restated:\n\n```math\nf(x) = \\begin{cases} 1 & \\text{if } x \\in \\mathbb{Q} \\\\ 0 & \\text{otherwise} \\end{cases}\n```",
         ),
-        (r"\(\text{for all $x$}\)", r"\(\text{for all } x\)"),
+        (r"\(\text{for all $x$}\)", r"$\text{for all } x$"),
         (r"$\text{if \alpha > 0}$", r"$\text{if } x > 0$ and $\text{if } \alpha > 0$"),
     ],
 )
@@ -811,7 +817,7 @@ def test_tex_inside_text_is_refused_with_a_rewrite(testimony: str, rewritten: st
         r"$\left( a \middle| b \right)$ and $\sum\limits_{i} a_i$",
         r"$a \mod n$, $a \not= b \not\in c$, and $x'^a + x_a'$",
         r"$\not\exists x, P(x)$ and $\not \exists_y Q(y)$",
-        r"$\mathrm{{{x}}}$ and $\text{a \$ b}$",
+        r"$\mathrm{{{x}}}$ and $\text{a b}$",
         r"$a \mathrel{R} b \mathbin{\star} c$ and $P {\scriptscriptstyle \land Q}$",
         r"$\lvert x \rvert$, $\varinjlim_i$, $\textsf{x}$, $\Bbbk$, $\nleftarrow$, and $\circledast$",
         r"$\iint_D f$",
@@ -934,11 +940,11 @@ def test_math_delimiters_outside_a_formula_are_refused(testimony: str, delimiter
 
 
 def test_a_dollar_sign_is_written_with_a_backslash() -> None:
-    r"""The renderer keeps ``\$``, which MathJax shows as a dollar sign."""
+    r"""The renderer keeps ``\$``, where GitHub shows a dollar sign."""
 
     testimony = r"It costs \$5 and $x$ more."
 
-    assert _testimony_errors(testimony) == ()
+    assert "GitHub hides a backslash before any punctuation" in _testimony_errors(testimony)[0]
     assert render_testimony(testimony) == r'<p>It costs \$5 and <span class="arithmatex">\(x\)</span> more.</p>'
 
 
@@ -971,7 +977,6 @@ def test_tex_in_code_between_dollar_signs_is_checked() -> None:
             "Shown:\n\n```math\nx \\{ y \\} < z\n```\n\nafter.",
             '<p>Shown:</p><p class="arithmatex">\\[\nx \\{ y \\} &lt; z\n\\]</p><p>after.</p>',
         ),
-        ("> ```math\n> x \\{ y \\}\n> ```", '<blockquote><p class="arithmatex">\\[\nx \\{ y \\}\n\\]</p>\n</blockquote>'),
         (
             "- An item:\n\n    ```math\n    x \\{ y \\}\n    ```",
             '<ul><li><p>An item:</p><p class="arithmatex">\\[\nx \\{ y \\}\n\\]</p>\n</li>\n</ul>',
@@ -992,11 +997,15 @@ def test_tex_in_a_math_fence_is_checked() -> None:
 
 def test_formula_delimiters_and_a_tab_are_not_allowlisted_tex() -> None:
     r"""In a formula ``\(`` and the rest show in red, and the renderer turns a
-    tab into spaces, so ``\<tab>`` reaches MathJax as a control space."""
+    tab into spaces, so ``\<tab>`` reaches MathJax as a control space where
+    GitHub keeps the tab; it is refused, and ``\<space>`` is accepted."""
 
     assert not {"\\(", "\\)", "\\[", "\\]", "\\\t"} & set(_TESTIMONY_TEX)
     assert "\t" not in render_testimony("$a\\\tb$")
-    assert _testimony_errors("$a\\\tb$") == ()
+    assert _testimony_errors("$a\\\tb$")[0].endswith(
+        "the site reads a tab in a formula or in code as spaces, and GitHub keeps it; write spaces for tabs"
+    )
+    assert _testimony_errors("$a\\ b$") == ()
 
 
 def test_a_link_definition_is_refused_even_when_no_link_uses_it() -> None:
@@ -1149,6 +1158,17 @@ def test_tags_are_text_to_the_renderer_and_need_no_limit() -> None:
         "HTML comments are not allowed: Markdown viewers hide the text they enclose",
     )
     assert _testimony_errors(("<a " * 10900)[:32000]) == ()
+
+
+def test_github_s_reading_leaves_html_out() -> None:
+    """html5lib takes time quadratic in the depth of nested tags outside a
+    table, so GitHub's reading leaves the HTML it passes through out, and
+    HTML GitHub reads where the site shows code is still refused."""
+
+    assert "<ul" not in _github_html("<ul>" * 3)
+    (error,) = _testimony_errors("```lean\n  ```\n" + "<ul>" * 7000 + "\n```")
+    assert error.startswith(_VIEWER)
+    assert error.endswith(_FENCE)
 
 
 @pytest.mark.parametrize(
@@ -1395,7 +1415,7 @@ def test_tables_whose_rows_match_the_header_are_accepted(testimony: str) -> None
     assert _testimony_errors(testimony) == ()
 
 
-_VIEWER = "testimony a CommonMark viewer such as GitHub shows differently is not allowed"
+_VIEWER = "testimony GitHub shows differently from the site is not allowed"
 _LINKS = "Markdown links, images, and autolinks are not allowed"
 _DEFINITIONS = "Markdown link definitions are not allowed"
 _FOOTNOTES = "footnote definitions are not allowed"
@@ -1420,6 +1440,7 @@ _LANGUAGES = "code fences naming anything but lean, lean4, or text are not allow
         ("The verdict is $\\text{[faithful](https://attacker.example/approved)}$ for this card.", _LINKS),
         ("Badge: $\\text{![Approved](https://attacker.example/badge.svg)}$ shown.", _LINKS),
         ("The map $f[x](y)$ is continuous.", _LINKS),
+        ("See www.example.com and https://example.com for details on $x$.", _LINKS),
         ("W0 the lemma holds for all $x$.\n\n[^1]: W1 not faithful W2\n", _FOOTNOTES),
         ("W0\n[^a]: W1\nW2", _FOOTNOTES),
         ("W0 [^a] W1\n\n[^a]: W2 W3\n\nW4", _FOOTNOTES),
@@ -1439,6 +1460,8 @@ _LANGUAGES = "code fences naming anything but lean, lean4, or text are not allow
         ("| W0 | W1 |\n|---|---|\n| `W2 | W3` | W4 |\n", _VIEWER),
         ("3. W0\n4. W1\n", _VIEWER),
         ("1. W0\n   1. W1\n", _VIEWER),
+        ("- W0\n  - W1\n", _VIEWER),
+        ("Steps:\n1. W0\n2. W1", _VIEWER),
     ],
 )
 def test_markdown_a_commonmark_viewer_reads_differently_is_refused(testimony: str, reason: str) -> None:
@@ -1458,10 +1481,13 @@ def test_markdown_a_commonmark_viewer_reads_differently_is_refused(testimony: st
         "```Lean4\ntheorem x : True\n```\n\nThe statement holds.",
         "```text\nx > 0\n```\n\nThe statement holds.",
         "1. W0\n    1. W1\n",
-        "- W0\n  - W1\n",
-        "Steps:\n1. W0\n2. W1",
+        "- W0\n    - W1\n",
+        "Steps:\n\n1. W0\n2. W1",
         "The interval $[0, 1]$ and the set [x] are fine.",
         "~~~\nplain code\n~~~\n\nThe statement holds.",
+        "The statement:\n\n```lean\ntheorem x : True\n```\nholds for $x$.",
+        "> The statement:\n> ```lean\n> theorem x : True\n> ```\n> holds.",
+        "| a | b |\n|---|---|",
     ],
 )
 def test_markdown_both_readings_show_alike_is_accepted(testimony: str) -> None:
@@ -1472,10 +1498,315 @@ def test_a_commonmark_reading_that_differs_names_where() -> None:
     errors = _testimony_errors("3. W0\n4. W1\n")
 
     assert errors == (
-        f'{_VIEWER}: the site shows "1 W0 2 W1" where it shows "3 W0 4 W1"; put a blank line before lists, tables, '
-        "and code, indent nested lists four spaces, number lists from 1, and write \\| for a pipe in a table cell, "
-        "in code too",
+        f'{_VIEWER}: on line 1 the site shows "<ol start=1><li>W0</li><li>W1" where GitHub shows '
+        '"<ol start=3><li>W0</li><li>W1"; GitHub numbers a list from its first number and the site from 1; number '
+        "each list from 1",
     )
+
+
+_TABLE_SPLIT = "keep code that holds a | out of tables, and write \\vert in a formula"
+_NESTING = "indent nested lists and an item's further paragraphs four spaces"
+_ONE_LINE = "keep each formula in a line of text on one line"
+_PLACE = "with no letter, digit, _, or \\ just before it"
+_FENCE = "close each code block with the fence it opens with, starting where that one does, and nothing after it"
+_LIST = "write \\-, \\+, \\*, or 1\\. where a line of text starts with one"
+_TILDE = "write a space for a ~ that keeps words together, \\sim in a formula, or ~ in code"
+
+
+@pytest.mark.parametrize(
+    ("testimony", "hint", "rewritten"),
+    [
+        (
+            "| $x$ | $\\|x\\|$ |\n|---|---|\n| $(3,4)$ | $5$ |\n\nThe table lists Euclidean norms.",
+            "write \\vert for | and \\Vert for \\| there",
+            "| $x$ | $\\Vert x\\Vert$ |\n|---|---|\n| $(3,4)$ | $5$ |\n\nThe table lists Euclidean norms.",
+        ),
+        ("The value is $f(x) =\n- 1$ at zero.", _ONE_LINE, "The value is $f(x) = - 1$ at zero."),
+        ("We have $x\n+ y = z$ for all reals.", _ONE_LINE, "We have $x + y = z$ for all reals."),
+        ("> The bound is $C\n- 1$ for every n.", _ONE_LINE, "> The bound is $C - 1$ for every n."),
+        ("The product $a\n* b$ is zero.", _ONE_LINE, "The product $a * b$ is zero."),
+        ("The bound holds and\n- 1 is the least value.", _LIST, "The bound holds and\n\\- 1 is the least value."),
+        ("Steps:\n1. W0\n2. W1", _LIST, "Steps:\n\n1. W0\n2. W1"),
+        ("| a | b |\n|---|---|\n| `x | is <!-- not --> open` | |", _TABLE_SPLIT, "| a | b |\n|---|---|\n| x | open |"),
+        (
+            "| Lean | meaning |\n|---|---|\n| `fun x => \\|x\\|` | absolute value |",
+            _TABLE_SPLIT,
+            "| Lean | meaning |\n|---|---|\n| `abs` | absolute value |\n\nHere `abs` is `fun x => |x|`.",
+        ),
+        # Raw HTML nested as deep as it goes, which GitHub reads in the cell.
+        ("| a |\n|---|\n| `x | " + "<b>" * 3000 + "` |", _TABLE_SPLIT, "| a |\n|---|\n| x |"),
+        (
+            "- [x] is the class of $x$ in the quotient.",
+            "write \\[x] there",
+            "- \\[x] is the class of $x$ in the quotient.",
+        ),
+        (
+            "- For every $x > 0$:\n  - $f(x) > 0$\n- $f(0) = 0$",
+            _NESTING,
+            "- For every $x > 0$:\n    - $f(x) > 0$\n- $f(0) = 0$",
+        ),
+        ("- item one\n\n  continued paragraph", _NESTING, "- item one\n\n    continued paragraph"),
+        ("The map is ~~not~~ surjective onto $Y$.", _TILDE, "The map is not surjective onto $Y$."),
+        ("By Theorem~3 and Lemma~4 the map is open.", _TILDE, "By Theorem 3 and Lemma 4 the map is open."),
+        ("We have $2*3*4 = 24$.", _PLACE, "We have $`2*3*4 = 24`$."),
+        ("the $n$th term", _PLACE, "the $`n`$th term"),
+        (
+            "Summary:\n| a | b |\n|---|---|\n| 1 | 2 |",
+            "put a blank line before a table",
+            "Summary:\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+        ),
+        ("| a | b |\n|:|:|\n| 1 | 2 |", "write the row as |---|---|", "| a | b |\n|---|---|\n| 1 | 2 |"),
+        ("Hence $a$\\\nand $b$.", "drop it", "Hence $a$\nand $b$."),
+        ("- a\n- b\n\n1. c\n2. d", "put a line of text between the two lists", "- a\n- b\n\nThen:\n\n1. c\n2. d"),
+        ("3. W0\n4. W1", "number each list from 1", "1. W0\n2. W1"),
+        ("$a\\\tb$", "write spaces for tabs", "$a\\ b$"),
+        (
+            "For \\(x > 0\\) the bound holds.",
+            "and a displayed one in a ```math fence",
+            "For $`x > 0`$ the bound holds.",
+        ),
+        (
+            "The set $\\{x\\}$ is closed.",
+            "write the formula as $`...`$, whose TeX GitHub takes as written",
+            "The set $`\\{x\\}`$ is closed.",
+        ),
+        (
+            "W0\n\n$$\\{x\\}$$",
+            "write displayed math in a ```math fence, whose TeX GitHub takes as written",
+            "W0\n\n```math\n\\{x\\}\n```",
+        ),
+        ("```lean\ntheorem x : True", _FENCE, "```lean\ntheorem x : True\n```"),
+        ("W0\n\n```lean\ntheorem x : True\n  ```", _FENCE, "W0\n\n```lean\ntheorem x : True\n```"),
+        ("W0 **a **b** c** W1", "write \\* or \\_ for the character itself", "W0 **a \\*\\*b\\*\\* c** W1"),
+        ("A 50\\% share.", "drop the one before %", "A 50% share."),
+    ],
+)
+def test_a_github_reading_that_differs_is_refused_with_a_hint_that_fixes_it(
+    testimony: str, hint: str, rewritten: str
+) -> None:
+    """GitHub reads some Markdown otherwise than the site: lists, tables,
+    code, emphasis, escapes, and formulas. Each refusal names a way to write
+    the testimony that both read alike, and the testimony written that way is
+    accepted."""
+
+    assert any(error.startswith(_VIEWER) and error.endswith(hint) for error in _testimony_errors(testimony))
+    assert _testimony_errors(rewritten) == ()
+
+
+def _github_reading(testimony: str) -> tuple[str, list[str]]:
+    document = html5lib.parseFragment(_github_html(testimony), namespaceHTMLElements=False)
+    doubts = _github_formulas(document, testimony.split("\n"))
+    return "".join(value for _, value, _ in _shown(document)), doubts
+
+
+@pytest.mark.parametrize(
+    ("testimony", "shown"),
+    [
+        ("P1 a $x$ b", "<p>P1 a \\(x\\) b</p>"),
+        ("P2 a ($x$) b", "<p>P2 a (\\(x\\)) b</p>"),
+        (
+            "P3 a $x$. b $y$, c $z$; d $w$: e $v$! f $u$? g",
+            "<p>P3 a \\(x\\). b \\(y\\), c \\(z\\); d \\(w\\): e \\(v\\)! f \\(u\\)? g</p>",
+        ),
+        ("P4 a$x$ b", "<p>P4 a$x$ b</p>"),
+        ('P5 a -$x$ b "$y$" c', '<p>P5 a -$x$ b "$y$" c</p>'),
+        ("P6 a $x$-b c $y$'s d $z$_e", "<p>P6 a \\(x\\)-b c \\(y\\)'s d $z$_e</p>"),
+        ("P7 a $p\nq$ b", "<p>P7 a $p q$ b</p>"),
+        ("P8 a $p$ and $q$ b", "<p>P8 a \\(p\\) and \\(q\\) b</p>"),
+        ("P10 It costs $5 and $x$ more.", "<p>P10 It costs $5 and \\(x\\) more.</p>"),
+        ("P11 a $5 *b* c$ d", "<p>P11 a $5<em> b</em> c$ d</p>"),
+        ("P12 a $5 **and** $6$ e", "<p>P12 a $5<strong> and</strong> \\(6\\) e</p>"),
+        ("P13 a $x $y$ b", "<p>P13 a $x \\(y\\) b</p>"),
+        ("P16 a $ $ b", "<p>P16 a $ $ b</p>"),
+        ("P17 a **$x$** b", "<p>P17 a<strong> \\(x\\)</strong> b</p>"),
+        ("P18 a $x$\nb", "<p>P18 a \\(x\\) b</p>"),
+        ("P19 a $x\\\\$ b $y$", "<p>P19 a $x\\$ b \\(y\\)</p>"),
+        ("P20 a $x$é b é$y$ c 1$z$ d $w$1 e", "<p>P20 a \\(x\\)é b é$y$ c 1$z$ d $w$1 e</p>"),
+        ("P22 a $``p`q``$ b", "<p>P22 a \\(p`q\\) b</p>"),
+        ("P23 a $` p `$ b", "<p>P23 a \\(p\\) b</p>"),
+        ("P24 a$`x`$b", "<p>P24 a$<code>x</code>$b</p>"),
+        ("P25 a $`x` $ b", "<p>P25 a $<code>x</code> $ b</p>"),
+        ("P26 a $`x`$$`y`$ b", "<p>P26 a \\(x\\)\\(y\\) b</p>"),
+        ("P27 a \\$5 and $x$ b", "<p>P27 a $5 and \\(x\\) b</p>"),
+        (
+            "P28 ~one~ ~~two~~ Theorem~3 and Lemma~4",
+            "<p>P28<del> one</del><del> two</del> Theorem<del>3 and Lemma</del>4</p>",
+        ),
+        ("P29 a $x$, $y$ and $z$.", "<p>P29 a \\(x\\), \\(y\\) and \\(z\\).</p>"),
+        ("P30 a $f(x) = 1$ and $\\alpha + \\beta$ b", "<p>P30 a \\(f(x) = 1\\) and \\(\\alpha + \\beta\\) b</p>"),
+        ("B0 a [$x$ b", "<p>B0 a [$x$ b</p>"),
+        ("B1 a {$x$ b", "<p>B1 a {$x$ b</p>"),
+        ("B2 a '$x$ b", "<p>B2 a '$x$ b</p>"),
+        ("B3 a *$x$ b", "<p>B3 a *$x$ b</p>"),
+        ("B4 a +$x$ b", "<p>B4 a +$x$ b</p>"),
+        ("B5 a =$x$ b", "<p>B5 a =$x$ b</p>"),
+        ("B6 a >$x$ b", "<p>B6 a >$x$ b</p>"),
+        ("B7 a |$x$ b", "<p>B7 a |$x$ b</p>"),
+        ("B8 a ~$x$ b", "<p>B8 a ~$x$ b</p>"),
+        ("B9 a /$x$ b", "<p>B9 a /$x$ b</p>"),
+        ("B11 a \t$x$ b", "<p>B11 a \\(x\\) b</p>"),
+        ("B12 a —$x$ b", "<p>B12 a —$x$ b</p>"),
+        ("B13 a &$x$ b", "<p>B13 a &$x$ b</p>"),
+        ("B14 a !$x$ b", "<p>B14 a !$x$ b</p>"),
+        ("B15 a ,$x$ b", "<p>B15 a ,$x$ b</p>"),
+        ("B16 a .$x$ b", "<p>B16 a .$x$ b</p>"),
+        ("B17 a ;$x$ b", "<p>B17 a ;$x$ b</p>"),
+        ("B18 a :$x$ b", "<p>B18 a :$x$ b</p>"),
+        ("B19 a ?$x$ b", "<p>B19 a ?$x$ b</p>"),
+        ("B20 a )$x$ b", "<p>B20 a )$x$ b</p>"),
+        ("B21 a ]$x$ b", "<p>B21 a ]$x$ b</p>"),
+        ("B22 a %$x$ b", "<p>B22 a %$x$ b</p>"),
+        ("B23 a #$x$ b", "<p>B23 a #$x$ b</p>"),
+        ("B24 a @$x$ b", "<p>B24 a @$x$ b</p>"),
+        ("B25 a ^$x$ b", "<p>B25 a ^$x$ b</p>"),
+        ("A0 a $x$/ b", "<p>A0 a \\(x\\)/ b</p>"),
+        ("A1 a $x$] b", "<p>A1 a \\(x\\)] b</p>"),
+        ("A2 a $x$} b", "<p>A2 a \\(x\\)} b</p>"),
+        ('A3 a $x$" b', '<p>A3 a \\(x\\)" b</p>'),
+        ("A4 a $x$* b", "<p>A4 a \\(x\\)* b</p>"),
+        ("A5 a $x$+ b", "<p>A5 a \\(x\\)+ b</p>"),
+        ("A6 a $x$= b", "<p>A6 a \\(x\\)= b</p>"),
+        ("A8 a $x$| b", "<p>A8 a \\(x\\)| b</p>"),
+        ("A9 a $x$~ b", "<p>A9 a \\(x\\)~ b</p>"),
+        ("A11 a $x$# b", "<p>A11 a \\(x\\)# b</p>"),
+        ("A12 a $x$% b", "<p>A12 a \\(x\\)% b</p>"),
+        ("A13 a $x$@ b", "<p>A13 a \\(x\\)@ b</p>"),
+        ("A14 a $x$^ b", "<p>A14 a \\(x\\)^ b</p>"),
+        ("A16 a $x$… b", "<p>A16 a \\(x\\)… b</p>"),
+        ("A17 a $x$’ b", "<p>A17 a \\(x\\)’ b</p>"),
+        ("A18 a $x$( b", "<p>A18 a \\(x\\)( b</p>"),
+        ("A19 a $x$[ b", "<p>A19 a \\(x\\)[ b</p>"),
+        ("A20 a $x${ b", "<p>A20 a \\(x\\){ b</p>"),
+        ("A21 a $x$\t b", "<p>A21 a \\(x\\) b</p>"),
+        ("A22 a $x$— b", "<p>A22 a \\(x\\)— b</p>"),
+        ("A23 a $x$\\ b", "<p>A23 a \\(x\\)\\ b</p>"),
+        ("C1 a *$x$* b", "<p>C1 a<em> $x$</em> b</p>"),
+        ("C2 a `c`$x$ d", "<p>C2 a <code>c</code>\\(x\\) d</p>"),
+        ("C3 a $x$`c` d", "<p>C3 a \\(x\\)<code>c</code> d</p>"),
+        ("C4 a **b**$x$ c", "<p>C4 a<strong> b</strong>\\(x\\) c</p>"),
+        ("C5 a $x$**b** c", "<p>C5 a \\(x\\)<strong>b</strong> c</p>"),
+        ("C6 a ($`x`$) b", "<p>C6 a (\\(x\\)) b</p>"),
+        ("C7 a $`x`$. b $`y`$, c $`z`$; d", "<p>C7 a \\(x\\). b \\(y\\), c \\(z\\); d</p>"),
+        ("C8 a $`x`$y b", "<p>C8 a \\(x\\)y b</p>"),
+        ("C9 $`x`$ at start", "<p>C9 \\(x\\) at start</p>"),
+        ("C10 a -$`x`$ b", "<p>C10 a -\\(x\\) b</p>"),
+        ("C11 a $`x`$-b c $`y`$'s d $`z`$_e", "<p>C11 a \\(x\\)-b c \\(y\\)'s d \\(z\\)_e</p>"),
+        ("C12 a **$`x`$** b", "<p>C12 a<strong> \\(x\\)</strong> b</p>"),
+        ("C13 a [$`x`$] b", "<p>C13 a [\\(x\\)] b</p>"),
+        ("C14 a $`x`$é b é$`y`$ c", "<p>C14 a \\(x\\)é b é\\(y\\) c</p>"),
+        ("C16 a $$`x`$$ b", "<p>C16 a $\\(x\\)$ b</p>"),
+        ("C17 a $x$ $`y`$ b", "<p>C17 a \\(x\\) \\(y\\) b</p>"),
+        ("C18 a $`x`$ $y$ b", "<p>C18 a \\(x\\) \\(y\\) b</p>"),
+        ("C20 a $a\\_b$ b", "<p>C20 a \\(a_b\\) b</p>"),
+        ("C21 a $x^*$ and $y^*$ b", "<p>C21 a $x^<em>$ and $y^</em>$ b</p>"),
+        ("C22 a $`x`$\xa0b", "<p>C22 a \\(x\\) b</p>"),
+        ("C23 a $x$$`y`$ b", "<p>C23 a \\(x\\)\\(y\\) b</p>"),
+        ("C24 a $`x`$$y$ b", "<p>C24 a \\(x\\)\\(y\\) b</p>"),
+        ("E1 a\n$x$ b", "<p>E1 a \\(x\\) b</p>"),
+        ("E2 a $x$ b > c & d", "<p>E2 a \\(x\\) b > c & d</p>"),
+        ("E3 a \\$x$ b", "<p>E3 a \\(x\\) b</p>"),
+        ("E4 a $x\\$ b$ c", "<p>E4 a \\(x\\) b$ c</p>"),
+        ("E5 a \\$`x`$ b", "<p>E5 a \\(x\\) b</p>"),
+        ("E6 a *b $x$ c* d", "<p>E6 a<em> b $x$ c</em> d</p>"),
+        ("E7 a _$x$_ b", "<p>E7 a<em> $x$</em> b</p>"),
+        ("E8 a ~~$x$~~ b", "<p>E8 a<del> \\(x\\)</del> b</p>"),
+        ("E9 a ~~b $x$ c~~ d", "<p>E9 a<del> b \\(x\\) c</del> d</p>"),
+        ("E10 a $x$ < b", "<p>E10 a \\(x\\) < b</p>"),
+        ("E11 a $x$\n$y$ b", "<p>E11 a \\(x\\) \\(y\\) b</p>"),
+        ("E13 a **b $x$ c** d", "<p>E13 a<strong> b \\(x\\) c</strong> d</p>"),
+        ("E14 a $x$.", "<p>E14 a \\(x\\).</p>"),
+        ("E15 a $`x`$> b and $`y`$ & c", "<p>E15 a \\(x\\)> b and \\(y\\) & c</p>"),
+        ("E16 a $x$; b > c", "<p>E16 a \\(x\\); b > c</p>"),
+        ("$$x$$", "<p>\\[x\\]</p>"),
+        ("> $$\n> y\n> $$", "<blockquote><p>\\[y\\]</p></blockquote>"),
+        ("> $$x$$", "<blockquote><p>\\[x\\]</p></blockquote>"),
+        (
+            "| h | k |\n|---|---|\n| $`a`$ | $x$ |",
+            "<table><tr><th>h</th><th>k</th></tr><tr><td>\\(a\\)</td><td>\\(x\\)</td></tr></table>",
+        ),
+        ("- ```math\n  a<b\n  ```", "<ul><li><p>\\[a<b\\]</p></li></ul>"),
+        ("- D1 a $x$ and $y$ b", "<ul><li>D1 a \\(x\\) and \\(y\\) b</li></ul>"),
+        ("> D2 a $x$ b", "<blockquote><p>D2 a \\(x\\) b</p></blockquote>"),
+        ("D6 a $x$\\\nb", "<p>D6 a \\(x\\)<br>b</p>"),
+        ("D8 a <b>x</b> $x$ b", "<p>D8 a<!--> raw HTML omitted</!--> x<!--> raw HTML omitted</!--> \\(x\\) b</p>"),
+        ("$$\nx \\{ y \\}\n$$", "<p>\\[x { y }\\]</p>"),
+        ("$$ z $$", "<p>\\[z\\]</p>"),
+        ("```math\np \\{ q \\}\n```", "<p>\\[p \\{ q \\}\\]</p>"),
+        ("- $x$ is E12", "<ul><li>\\(x\\) is E12</li></ul>"),
+        ("> E17 a\n> $x$ b", "<blockquote><p>E17 a \\(x\\) b</p></blockquote>"),
+        ("```math\nc \\$ d\n```", "<p>\\[c \\$ d\\]</p>"),
+    ],
+)
+def test_formulas_are_read_where_github_s_markdown_api_reads_them(testimony: str, shown: str) -> None:
+    """Each of these was sent to GitHub's Markdown API in gfm mode, and the
+    formulas it marked, with their TeX, are those marked here; spaces and
+    element ends are placed as :func:`_shown` places them, and HTML, which
+    this reading leaves out, shows as the comment cmark-gfm writes for it."""
+
+    assert _github_reading(testimony) == (shown, [])
+
+
+@pytest.mark.parametrize(
+    "testimony",
+    [
+        "P9 a $p$$q$ b",
+        "P14 a $x$$ b",
+        "P15 a $$x$ b",
+        "P21 a $`p$q`$ b",
+        "B10 a \xa0$x$ b",
+        "A7 a $x$> b",
+        "A10 a $x$& b",
+        "A15 a $x$\xa0 b",
+        "C15 a $`$x$`$ b",
+        "C19 a $\\$$ b",
+        "| D5 $x$ | $$y$$ |\n|---|---|\n| $`a|b`$ | c |",
+        "$$x$$ trailing",
+        "P32\n$$\nx\n$$",
+        "- $$\n  x\n  $$",
+        "- $$x$$",
+        "- D4 $$x$$",
+        "$$x$$ $y$",
+        "D7 a $$x$$",
+        "$$y$$ z",
+        "A $`\\text{a \\$ b}`$ z.",
+        "B $`a$b`$ z.",
+        "E $$x$$ z.",
+        "F $x$<y z.",
+        "G $x$&y z.",
+        "H a $`x`$ and $`y \\$`$ z.",
+    ],
+)
+def test_formulas_github_was_not_seen_to_read_alike_are_named(testimony: str) -> None:
+    """GitHub's Markdown API was sent each of these too, and what it made of
+    them is not what a reader, or MathJax, would take the testimony to say,
+    or depends on a rule it was not seen to follow; they are named, not
+    guessed."""
+
+    assert _github_reading(testimony)[1]
+
+
+_DOUBT = "formulas GitHub may read otherwise are not allowed: "
+
+
+@pytest.mark.parametrize(
+    ("testimony", "doubt", "rewritten"),
+    [
+        ("W0 $$x$$ trailing", "on line 1, two dollar signs together", "W0 $`x`$ trailing"),
+        ("A $`\\text{a \\$ b}`$ z.", "on line 1, a formula that holds a dollar sign", "A $`\\text{a b}`$ z."),
+        ("$$a$b$$", "on line 1, a displayed formula that holds a dollar sign", "```math\na b\n```"),
+        ("W0\n\n$$ $$", "on line 3, a displayed formula that holds nothing", "W0"),
+        ("W0 $x$ and\n$y$> z.", "on line 2, > right after a formula", "W0 $x$ and\n$`y`$> z."),
+        ("W0 *a $`x`$ b* W1", "on line 1, a formula in emphasis", "W0 *a* $`x`$ *b* W1"),
+        ("W0\n\n> ```math\n> d\n> ```", "on line 3, a math fence other than ```math alone", "W0\n\n```math\nd\n```"),
+        ("~~~math\ng\n~~~", "on line 1, a math fence other than ```math alone", "```math\ng\n```"),
+        ("```math extra\ne\n```", "on line 1, a math fence other than ```math alone", "```math\ne\n```"),
+    ],
+)
+def test_a_formula_github_may_read_otherwise_is_refused_with_advice_that_fixes_it(
+    testimony: str, doubt: str, rewritten: str
+) -> None:
+    assert any(error.startswith(_DOUBT + doubt) for error in _testimony_errors(testimony))
+    assert _testimony_errors(rewritten) == ()
 
 
 @pytest.mark.parametrize(

@@ -24,10 +24,10 @@ dependencies = [
     # construction, not tokenising: browsers repair malformed markup rather than
     # reject it, and the repair decides what stays hidden.
     "html5lib>=1.1,<2",
-    # GitHub shows the vault's card files, and reads their Markdown the
-    # CommonMark way. Read-back testimony is read that way too and must show
-    # there what it shows on the site.
-    "markdown-it-py==4.2.0",
+    # GitHub shows the vault's card files, and reads their Markdown with
+    # cmark-gfm. Read-back testimony is read that way too and must show there
+    # what it shows on the site.
+    "cmarkgfm==2025.10.22",
 ]
 
 [project.scripts]

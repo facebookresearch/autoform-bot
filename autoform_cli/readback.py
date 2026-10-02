@@ -42,14 +42,15 @@ from pathlib import Path
 from typing import Iterable, Iterator, Mapping, NamedTuple
 from urllib.parse import unquote_to_bytes
 
+import cmarkgfm
 import html5lib
+from cmarkgfm.cmark import Options
 import markdown as markdown_renderer
 from markdown.blockprocessors import HashHeaderProcessor
 from markdown.extensions.tables import TableProcessor
 from markdown.inlinepatterns import BACKTICK_RE, BacktickInlineProcessor
 from markdown.treeprocessors import Treeprocessor
 from markdown.util import ETX, STX, AtomicString
-from markdown_it import MarkdownIt
 
 try:
     import fcntl
@@ -143,12 +144,12 @@ _MARKS_BELOW = frozenset({202, 218, 220, 222, 233})
 #: use: at most 5.9 KB, 62 lines, 304 math delimiters, 72 backticks in runs of
 #: one, 2 brackets, and 3 columns of indentation; the asterisk limit is five
 #: times the most any blueprint page at hand holds. The renderer reads no HTML,
-#: and the scans for HTML a vault viewer would read are linear, so "<" needs no
-#: limit: a thousand nested tags, which once overflowed the stack, are refused
-#: in a hundredth of a second. Brackets cost most, 0.6 s at their limit alone;
-#: the CommonMark reading scans from a "[" too, and the same limit bounds it.
-#: At every limit at once the slowest testimony found validates in 1.8 s and
-#: 12 MB, 0.2 s of it in the CommonMark reading, on a machine under load.
+#: the scans for HTML a vault viewer would read are linear, and GitHub's
+#: reading leaves HTML out, so "<" needs no limit: a thousand nested tags,
+#: which once overflowed the stack, are refused in a hundredth of a second.
+#: Brackets cost most, 0.6 s at their limit alone. At every limit at once the
+#: slowest testimony found validates in 1.2 s and 5.9 MB, 0.03 s of it in
+#: GitHub's reading, on a machine under load.
 TESTIMONY_MAX_BYTES = 32 * 1024
 TESTIMONY_MAX_LINES = 500
 TESTIMONY_MAX_MATH_DELIMITERS = 1024
@@ -1151,15 +1152,22 @@ _LANGUAGE_ERROR = (
     "code fences naming anything but lean, lean4, or text are not allowed: a Markdown viewer hides the other "
     "words after a fence; leave the fence bare otherwise"
 )
-#: How a CommonMark viewer of the vault reads a testimony: GitHub's, with its
-#: tables, reading HTML, and nesting as deep as a testimony may. Character
-#: references and escapes are left as tokens of their own, to be counted as
-#: written, as the site shows them.
-_COMMONMARK = MarkdownIt("commonmark", {"html": True, "maxNesting": 128}).enable("table").disable("text_join")
-#: A line GitHub reads as a footnote's definition, which it hides or moves to
-#: the end of the card, and the first line of a block quote it shows as one of
-#: its own alerts in place of the line.
-_FOOTNOTE_DEFINITION = re.compile(r"^[ \t]*\[\^[^\]\n]*\]:", re.MULTILINE)
+#: How GitHub reads a card file in the vault: cmark-gfm, with the extensions
+#: and footnotes github.com reads, marking each block with the lines of the
+#: source it comes from. It leaves out the HTML GitHub passes through to be
+#: seen, writing a comment in its place: testimony holding HTML GitHub reads
+#: is refused, as raw HTML where the site reads it too and as shown otherwise
+#: where the site shows its characters, and html5lib takes time quadratic in
+#: the depth of nested tags outside a table, 2 s for 28 KB of "<ul>".
+_GITHUB_OPTIONS = Options.CMARK_OPT_FOOTNOTES | Options.CMARK_OPT_SOURCEPOS
+_GITHUB_EXTENSIONS = ["table", "strikethrough", "autolink", "tasklist"]
+#: A line that starts, after block quote and list markers, with what GitHub
+#: reads as a link's or a footnote's definition, which it hides or moves to
+#: the end of the card, and the first line of a block quote it shows as one
+#: of its own alerts in place of the line. A definition is looked for on
+#: every line GitHub does not read as code, though it reads one only where a
+#: paragraph could start.
+_LINK_DEFINITION = re.compile(r"(?:[ \t>]|[-+*](?=[ \t])|\d{1,9}[.)](?=[ \t]))*\[(\^?)[^\n]*\]:")
 _ALERT = re.compile(r"[ \t]*\[!(?:note|tip|important|warning|caution)\][ \t]*", re.IGNORECASE)
 _FOOTNOTE_ERROR = (
     "footnote definitions are not allowed: GitHub hides them or moves them to the end of the card; write the note "
@@ -2077,9 +2085,10 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     :func:`render_testimony` makes of it, which is exactly what the site
     shows: only the elements and attributes the renderer emits for prose,
     code, and formulas; no HTML a Markdown viewer of the vault would read
-    outside code, and nothing a CommonMark viewer such as GitHub reads as a
-    link, heading, footnote, or alert, or shows otherwise than the site does;
-    no invisible or reordering characters; no math delimiters
+    outside code, and nothing GitHub, which shows the vault's card files,
+    reads as a link, heading, footnote, or alert, or shows otherwise than the
+    site does, formulas included; no invisible or reordering characters; no
+    math delimiters
     outside the formulas the renderer marked; in those, only the TeX listed in
     :data:`_TESTIMONY_TEX`, well formed, read by :class:`_TexLayout` for
     arguments that show something, spacing that does not overlap symbols, and
@@ -2126,7 +2135,7 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
         errors.append("active Mermaid blocks are not allowed")
     pieces = _testimony_pieces(document)
     errors.extend(_vault_markup_errors(text, [piece for piece, kind in pieces if kind == "code"]))
-    errors.extend(_commonmark_errors(text, document, compare=not errors))
+    errors.extend(_github_errors(text, document, compare=not errors))
     # The rendering is checked as well as the source, so a character the
     # renderer produced would not pass unseen either.
     hidden = _hidden_characters(text + "".join(document.itertext()))
@@ -2229,122 +2238,477 @@ def _vault_markup_errors(text: str, code: list[str]) -> list[str]:
     return errors
 
 
-def _commonmark_errors(text: str, document: object, *, compare: bool) -> list[str]:
-    """What a CommonMark viewer of the vault reads in ``text`` that the site,
-    whose rendering is ``document``, does not show.
+def _github_errors(text: str, document: object, *, compare: bool) -> list[str]:
+    """What GitHub, which shows the vault's card files, shows of ``text``
+    that the site, whose rendering is ``document``, does not.
 
-    Python-Markdown and CommonMark read some Markdown differently: link
-    definitions, headings, lists, tables, and code that one takes for its
-    own and the other shows as text, or reads to a different end. So the
-    testimony is read a second time the way GitHub reads it, and is refused
-    if that reading holds a link, link definition, heading, footnote, alert,
-    or code fence the site would not show, or if its letters and digits, the
-    numbers of ordered lists included, differ from what the site shows.
-    Formulas are text to it, as they are to GitHub when one holds Markdown.
-    The letters are compared only if ``compare``, when nothing more specific
-    has been found.
+    Python-Markdown and GitHub read some Markdown differently: lists, tables,
+    code, emphasis, escapes, and formulas that one reads and the other shows
+    as text, or reads to a different end. So the testimony is read a second
+    time as GitHub reads it, by :func:`_github_html` and
+    :func:`_github_formulas`, and is refused if that reading holds a link,
+    heading, footnote, alert, or code fence the site would not show, a
+    formula GitHub may read otherwise than emulated, or, compared by
+    :func:`_shown`, shows anything else otherwise than the site does. The
+    reading is compared only if ``compare``, when nothing more specific has
+    been found, and the refusal names the line where the two first part and a
+    way to write the testimony that both read alike.
     """
 
-    env: dict[str, dict[str, object]] = {}
-    tokens = _COMMONMARK.parse(text, env)
-    errors: list[str] = []
-    # CommonMark reads a footnote's definition alone on its line, in a list
-    # or a block quote, as a link's.
-    for label in env.get("references", {}):
-        message = _FOOTNOTE_ERROR if label.startswith("^") else "Markdown link definitions are not allowed"
-        if message not in errors:
-            errors.append(message)
-    shown: list[str] = []
-    numbers: list[int | None] = []
-    for index, token in enumerate(tokens):
-        if token.type == "heading_open":
+    github = html5lib.parseFragment(_github_html(text), namespaceHTMLElements=False)
+    lines = text.split("\n")
+    errors = _github_formulas(github, lines)
+    code: set[int] = set()
+    for element in github.iter():
+        tag = element.tag.lower() if isinstance(element.tag, str) else ""
+        if tag in {"a", "img"}:
+            errors.append("Markdown links, images, and autolinks are not allowed")
+        elif re.fullmatch("h[1-6]", tag):
             errors.append("Markdown headings are not allowed: they read as the page's own; use **bold** text")
-        elif token.type == "fence":
-            language = token.info.strip().lower()
+        elif tag == "pre":
+            first, last = (int(place.split(":")[0]) for place in element.get("data-sourcepos", "0:0-0:0").split("-"))
+            code.update(range(first, last + 1))
+            language = _fence_info(lines, element)[1].strip().lower()
             if language.split()[:1] == ["mermaid"]:
                 errors.append("active Mermaid blocks are not allowed")
-            elif language and language not in _TESTIMONY_LANGUAGES | {"math"}:
+            elif language and language not in _TESTIMONY_LANGUAGES:
                 errors.append(_LANGUAGE_ERROR)
-            shown.append(f" {token.content} ")
-        elif token.type in {"code_block", "html_block"}:
-            shown.append(f" {token.content} ")
-        elif token.type in {"bullet_list_open", "ordered_list_open"}:
-            numbers.append(int(token.attrs.get("start", 1)) if token.type == "ordered_list_open" else None)
-        elif token.type in {"bullet_list_close", "ordered_list_close"}:
-            numbers.pop()
-        elif token.type == "list_item_open" and numbers[-1] is not None:
-            shown.append(f" {numbers[-1]} ")
-            numbers[-1] += 1
-        elif token.type == "inline":
-            if tokens[index - 1].type == "paragraph_open" and _FOOTNOTE_DEFINITION.search(token.content):
-                errors.append(_FOOTNOTE_ERROR)
-            if index > 1 and tokens[index - 2].type == "blockquote_open" and _ALERT.fullmatch(
-                token.content.split("\n")[0]
-            ):
+        elif tag == "blockquote" and (first := element.find("p")) is not None and first is element[0]:
+            if _ALERT.fullmatch((first.text or "").split("\n")[0]):
                 errors.append(
                     "GitHub alerts are not allowed: GitHub shows a block quote that opens with [!NOTE] or the like "
                     "as its own notice; write the label as text"
                 )
-            for child in token.children or ():
-                if child.type in {"link_open", "image"}:
-                    errors.append("Markdown links, images, and autolinks are not allowed")
-                if child.type == "text_special":
-                    shown.append(child.markup)
-                elif child.type in {"text", "code_inline", "html_inline", "image"}:
-                    shown.append(child.content)
-                elif child.type in {"softbreak", "hardbreak"}:
-                    shown.append(" ")
-            shown.append(" ")
+    for number, line in enumerate(lines, 1):
+        if number not in code and (definition := _LINK_DEFINITION.match(line)):
+            message = _FOOTNOTE_ERROR if definition[1] else "Markdown link definitions are not allowed"
+            if message not in errors:
+                errors.append(message)
     if errors or not compare:
         return errors
-    site, viewer = _site_reading(document), "".join(shown)
-    site_letters = [(at, character) for at, character in enumerate(site) if character.isalnum()]
-    viewer_letters = [(at, character) for at, character in enumerate(viewer) if character.isalnum()]
-    if [character for _, character in site_letters] != [character for _, character in viewer_letters]:
-        differ = next(
-            (count for count, (one, other) in enumerate(zip(site_letters, viewer_letters)) if one[1] != other[1]),
-            min(len(site_letters), len(viewer_letters)),
+    site, shown = _shown(document), _shown(github)
+    at = next(
+        (index for index, (one, other) in enumerate(zip(site, shown)) if one[:2] != other[:2]),
+        min(len(site), len(shown)),
+    )
+    if at == len(site) == len(shown):
+        return errors
+    line = (shown[at] if at < len(shown) else shown[-1] if shown else ("", "", 1))[2]
+
+    def around(tokens: list[tuple[str, str, int]]) -> str:
+        return "".join(
+            "</p><p>" if kind == "break" else value if len(value) <= 40 else value[:37] + "..."
+            for kind, value, _ in tokens[max(0, at - 8) : at + 8]
         )
 
-        def around(reading: str, letters: list[tuple[int, str]]) -> str:
-            at = letters[differ][0] if differ < len(letters) else len(reading)
-            words = reading[max(0, at - 24) : at + 24].split()
-            return " ".join(words[1:] if at > 24 and len(words) > 1 else words)
-
-        errors.append(
-            "testimony a CommonMark viewer such as GitHub shows differently is not allowed: the site shows "
-            f'"{around(site, site_letters)}" where it shows "{around(viewer, viewer_letters)}"; put a blank line '
-            "before lists, tables, and code, indent nested lists four spaces, number lists from 1, and write \\| "
-            "for a pipe in a table cell, in code too"
-        )
+    errors.append(
+        f'testimony GitHub shows differently from the site is not allowed: on line {line} the site shows '
+        f'"{around(site)}" where GitHub shows "{around(shown)}"; {_github_hint(site, shown, at)}'
+    )
     return errors
 
 
-_SPACED_TAGS = frozenset({"blockquote", "br", "li", "p", "pre", "td", "th", "tr"})
+def _github_hint(site: list[tuple[str, str, int]], github: list[tuple[str, str, int]], at: int) -> str:
+    """How to write what the site and GitHub first show apart, at token
+    ``at`` of each of :func:`_shown`, so that both show it alike."""
+
+    one, other = (tokens[at][:2] if at < len(tokens) else ("", "") for tokens in (site, github))
+    values = {one[1], other[1]}
+
+    def opened(tokens: list[tuple[str, str, int]], tag: str) -> bool:
+        before = [value for kind, value, _ in tokens[:at] if kind == "block"]
+        return sum(value.startswith(f"<{tag}") for value in before) > before.count(f"</{tag}>")
+
+    def next_block(tokens: list[tuple[str, str, int]]) -> str:
+        return next((value for kind, value, _ in tokens[at:] if kind == "block" and value[:2] != "</"), "")
+
+    in_table = opened(site, "table") or opened(github, "table")
+    if "\t" in other[1] and "\t" not in one[1]:
+        return "the site reads a tab in a formula or in code as spaces, and GitHub keeps it; write spaces for tabs"
+    if one[0] == "math" and other in {("text", "("), ("text", "[")}:
+        return (
+            "GitHub reads \\( and \\[ as ( and [, not as the start of a formula; write a formula in a line of "
+            "text as $`...`$, and a displayed one in a ```math fence"
+        )
+    if "math" in {one[0], other[0]}:
+        if one[0] == "math" and "\n" in one[1]:
+            return (
+                "GitHub ends a formula at a line break, and may read the next line as a list; keep each "
+                "formula in a line of text on one line"
+            )
+        if one[0] == other[0] and one[1][:2] == other[1][:2]:
+            if in_table:
+                return "in a table GitHub reads \\| as | even in a formula; write \\vert for | and \\Vert for \\| there"
+            if one[1].startswith("\\["):
+                return (
+                    "GitHub reads Markdown escapes such as \\{ in $$...$$ first; write displayed math in a ```math "
+                    "fence, whose TeX GitHub takes as written"
+                )
+            return (
+                "GitHub reads Markdown escapes such as \\{ and \\_ in $...$ first; write the formula as $`...`$, "
+                "whose TeX GitHub takes as written"
+            )
+        return (
+            "GitHub reads $...$ as a formula only when the first $ starts a line or follows a space or (, no "
+            "letter, digit, or _ follows the last, and it is not in emphasis; elsewhere write $`...`$, as in "
+            "$`n`$th, with no letter, digit, _, or \\ just before it"
+        )
+    if values & {"<del>", "</del>"}:
+        return (
+            "GitHub strikes through text between tildes; write a space for a ~ that keeps words together, \\sim "
+            "in a formula, or ~ in code"
+        )
+    if "<input>" in values:
+        return "GitHub shows [ ], [x], or [X] that starts a list item as a checkbox; write \\[x] there"
+    if "<br>" in values:
+        return "GitHub reads a backslash at the end of a line as a line break; drop it"
+    if next_block(github).startswith("<table") and one[0] == "text":
+        return "GitHub reads a table right after a line of text; put a blank line before a table"
+    if next_block(site).startswith("<table") and not next_block(github).startswith("<table"):
+        return (
+            "GitHub reads a table only when each cell of its delimiter row holds a -, with as many cells as the "
+            "header; write the row as |---|---|"
+        )
+    if in_table:
+        return (
+            "GitHub splits a table row at every | not written \\|, in code and formulas too, and drops the "
+            "backslash of \\| there; keep code that holds a | out of tables, and write \\vert in a formula"
+        )
+    lists = ("<ul>", "<ol ")
+    if one[1] == "<li>" and other[1] in {"</ul>", "</ol>"} and github[at + 1 : at + 2] and github[at + 1][1].startswith(lists):
+        return (
+            "GitHub starts a new list where a bulleted list turns numbered or the other way; put a line of "
+            "text between the two lists"
+        )
+    if one[1].startswith("<ol ") and other[1].startswith("<ol "):
+        return "GitHub numbers a list from its first number and the site from 1; number each list from 1"
+    if next_block(github).startswith(lists) and one[0] == "text":
+        return (
+            "GitHub reads a list right after a line of text, and a line that starts with -, +, *, or a number "
+            "and . or ) as one; put a blank line before a list, and write \\-, \\+, \\*, or 1\\. where a line "
+            "of text starts with one"
+        )
+    if any(value.startswith(("<ul", "<ol", "<li", "</ul", "</ol", "</li")) for value in values) or "break" in {
+        one[0],
+        other[0],
+    }:
+        return (
+            "GitHub nests a list or paragraph under an item when it is indented as far as the item's text, and "
+            "the site at four spaces; indent nested lists and an item's further paragraphs four spaces"
+        )
+    if any(value.startswith("<pre>") for value in values) or "code" in {one[0], other[0]}:
+        return (
+            "GitHub ends a code block at any fence at least as long as the one that opens it, or else at the end "
+            "of the testimony, and the site only at a fence like the opening one; close each code block with the "
+            "fence it opens with, starting where that one does, and nothing after it"
+        )
+    if values & {"<em>", "</em>", "<strong>", "</strong>"}:
+        return "GitHub and the site read * and _ apart here; write \\* or \\_ for the character itself"
+    if one[1] == "\\" and at + 1 < len(site) and site[at + 1][:2] == other:
+        return f"GitHub hides a backslash before any punctuation, and the site only before some; drop the one before {other[1]}"
+    return "put a blank line before lists, tables, and code, and indent nested lists four spaces"
 
 
-def _site_reading(document: object) -> str:
-    """The text the site shows for ``document``, with the number of each
-    item of an ordered list."""
+def _github_html(text: str) -> str:
+    """The HTML GitHub makes of ``text`` in a card file, before it marks the
+    formulas in it."""
 
-    parts: list[str] = []
+    return cmarkgfm.markdown_to_html_with_extensions(text, options=_GITHUB_OPTIONS, extensions=_GITHUB_EXTENSIONS)
 
-    def walk(node: object) -> None:
-        if node.text:  # type: ignore[attr-defined]
-            parts.append(node.text)  # type: ignore[attr-defined]
-        number = int(node.attrib.get("start", 1)) if node.tag == "ol" else None  # type: ignore[attr-defined]
+
+def _fence_info(lines: list[str], pre: object) -> tuple[str, str]:
+    """The fence and the info string of the code block ``pre`` GitHub read
+    from ``lines``, or two empty strings for an indented code block."""
+
+    line, column = (int(number) for number in pre.get("data-sourcepos", "1:1").split("-")[0].split(":"))  # type: ignore[attr-defined]
+    start = lines[line - 1].encode("utf-8")[column - 1 :].decode("utf-8", "replace") if line <= len(lines) else ""
+    fence = re.match(r"(`{3,}|~{3,})(.*)", start)
+    return (fence[1], fence[2]) if fence else ("", "")
+
+
+#: What GitHub reads as a displayed formula: a paragraph that is one, its TeX
+#: being the paragraph's text after Markdown escapes.
+_GITHUB_DISPLAY = re.compile(r"\$\$(.*)\$\$", re.DOTALL)
+_ASCII_WORD = re.compile(r"[A-Za-z0-9_]")
+_DOLLAR_ADVICE = "keep dollar signs out of formulas"
+
+
+def _github_formulas(document: object, lines: list[str]) -> list[str]:
+    """Mark the formulas GitHub reads in its HTML ``document`` of ``lines``
+    as the site marks its own, and name each place GitHub's reading is not
+    known well enough to say what it shows.
+
+    GitHub reads formulas from the text after Markdown has been read, with its
+    escapes. Each rule here follows what its Markdown API returned for
+    synthetic text, recorded in the tests: a paragraph that is only
+    ``$$...$$``, at the top or in a block quote, and a ``math`` fence are
+    displayed; code with a ``$`` right before and after it, and no letter,
+    digit, or ``_`` before that, is a formula of the code's text; and a
+    ``$`` that starts a line of text or follows a space, tab, or ``(``, and is
+    followed by other than a space, opens a formula that the next ``$`` after
+    other than a space or ``\\``, and before other than a letter, digit, or
+    ``_``, closes. Formulas do not cross an element or line break, and none is
+    read in emphasis. What the API was not seen to read, such as ``$$`` in a
+    line or a formula holding ``$``, is named rather than guessed.
+    """
+
+    unsure: list[tuple[int, str]] = []
+
+    def doubt(line: int, what: str, advice: str = "") -> None:
+        advice = advice or "write a formula in a line of text as $`...`$, and a displayed one in a ```math fence"
+        unsure.append((line, f"formulas GitHub may read otherwise are not allowed: on line {line}, {what}; {advice}"))
+
+    def formula(tex: str, display: bool = False) -> object:
+        element = etree.Element("p" if display else "span", {"class": "arithmatex"})
+        element.text = f"\\[{tex}\\]" if display else f"\\({tex}\\)"
+        return element
+
+    def dollars(value: str, line: int) -> list[object]:
+        read: list[object] = []
+        for number, part in enumerate(value.split("\n")):
+            read.append("\n" if number else "")
+            start, opener = 0, None
+            if "$$" in part:
+                doubt(line + number, "two dollar signs together")
+                read.append(part)
+                continue
+            for index, character in enumerate(part):
+                if character != "$":
+                    continue
+                before, after = part[index - 1 : index], part[index + 1 : index + 2]
+                if any(space.isspace() and space not in " \t" for space in before + after):
+                    doubt(line + number, "a space other than a plain one next to a dollar sign")
+                if (
+                    opener is not None
+                    and index > opener + 1
+                    and not before.isspace()
+                    and before != "\\"
+                    and not _ASCII_WORD.match(after)
+                ):
+                    if "$" in part[opener + 1 : index]:
+                        doubt(line + number, "a formula that holds a dollar sign", _DOLLAR_ADVICE)
+                    if after in {"<", ">", "&"}:
+                        doubt(
+                            line + number,
+                            f"{after} right after a formula, which GitHub shows as an HTML escape such as &lt;",
+                            "write the formula as $`...`$",
+                        )
+                    read += [part[start:opener], formula(part[opener + 1 : index])]
+                    start, opener = index + 1, None
+                elif before in {"", " ", "\t", "("} and after.strip():
+                    opener = index
+            read.append(part[start:])
+        return read
+
+    # Elements are taken from a stack rather than by recursion, since raw HTML
+    # nests them as deep as its tags go.
+    stack: list[tuple[object, bool, int, bool, int]] = [(document, True, 0, False, 1)]
+    while stack:
+        node, top, quotes, emphasis, line = stack.pop()
+        tag = node.tag.lower() if isinstance(node.tag, str) else ""  # type: ignore[attr-defined]
+        if source := node.get("data-sourcepos"):  # type: ignore[attr-defined]
+            line = int(source.split(":")[0]) or line
+        items: list[object] = [node.text or ""]  # type: ignore[attr-defined]
+        for child in list(node):  # type: ignore[attr-defined]
+            items += [child, child.tail or ""]
+            child.tail = None
+            node.remove(child)  # type: ignore[attr-defined]
+        at = line
+        for index, item in enumerate(items):
+            if isinstance(item, str):
+                at += item.count("\n")
+                continue
+            name = item.tag.lower() if isinstance(item.tag, str) else ""
+            start = int(item.get("data-sourcepos", "0").split(":")[0]) or at
+            code = item.find("code") if name == "pre" else None
+            display = _GITHUB_DISPLAY.fullmatch(item.text or "") if name == "p" and len(item) == 0 else None
+            if code is not None and "language-math" in code.get("class", "").split():
+                fence, info = _fence_info(lines, item)
+                if quotes or fence[:1] != "`" or info.strip(" \t") != "math":
+                    doubt(start, "a math fence other than ```math alone, outside a block quote")
+                items[index] = formula((code.text or "").rstrip("\n"), display=True)
+            elif display and (top or quotes == 1 and tag == "blockquote"):
+                if "$" in display[1]:
+                    doubt(start, "a displayed formula that holds a dollar sign", _DOLLAR_ADVICE)
+                elif not display[1].strip():
+                    doubt(start, "a displayed formula that holds nothing", "leave it out")
+                items[index] = formula(display[1], display=True)
+            elif name not in {"code", "pre"}:
+                stack.append((item, False, quotes + (name == "blockquote"), emphasis or name == "em", at))
+        at = line
+        for index, item in enumerate(items):
+            if isinstance(item, str):
+                at += item.count("\n")
+                continue
+            before, after = (items[index - 1], items[index + 1]) if 0 < index < len(items) - 1 else ("", "")
+            if item.tag != "code" or not (before.endswith("$") and after.startswith("$")):
+                continue
+            if not _ASCII_WORD.match(before[-2:-1]):
+                if emphasis:
+                    doubt(at, "a formula in emphasis")
+                    continue
+                if "$" in (item.text or ""):
+                    doubt(at, "a formula that holds a dollar sign", _DOLLAR_ADVICE)
+                items[index - 1 : index + 2] = [before[:-1], formula(item.text or ""), after[1:]]
+        if not emphasis and tag not in {"code", "pre"}:
+            read: list[object] = []
+            at = line
+            for item in items:
+                read += dollars(item, at) if isinstance(item, str) else [item]
+                at += item.count("\n") if isinstance(item, str) else 0
+            items = read
+        last = None
+        node.text = ""  # type: ignore[attr-defined]
+        for item in items:
+            if not isinstance(item, str):
+                node.append(item)  # type: ignore[attr-defined]
+                last = item
+            elif last is None:
+                node.text += item  # type: ignore[attr-defined]
+            else:
+                last.tail = (last.tail or "") + item
+    return [message for _, message in sorted(unsure, key=lambda place: place[0])]
+
+
+#: The elements that start a block of their own, around which spaces show
+#: nothing; inline elements and their ends are kept in place in the text.
+_SHOWN_BLOCKS = frozenset(
+    {"p", "blockquote", "ul", "ol", "li", "table", "tr", "th", "td", "hr", "br", "section", "div"}
+    | {f"h{level}" for level in range(1, 7)}
+)
+_VOID_ELEMENTS = frozenset({"br", "hr", "img", "input"})
+
+
+def _shown(document: object) -> list[tuple[str, str, int]]:
+    """What ``document`` shows, in order, as ``(kind, value, line)``: each
+    visible character, one space where any run of them shows, each code span,
+    formula, and code block whole, and the start and end of each element,
+    with the line of the source each comes from, where the document marks it.
+
+    Two documents compared this way differ only in what a reader cannot tell
+    apart. Spaces at the edge of a block, of a code span, or of a formula's
+    TeX, and the newlines that end a code block, are dropped; an inline
+    element's ends come before the spaces next to them; a paragraph in a list
+    item is a break between what the item shows, so tight and loose lists
+    alike; an empty paragraph, which HTML makes of the end of one the site
+    wrote around a code block, and a table row of empty cells, which the site
+    adds to a table that has none, show nothing and are dropped; text HTML
+    leaves out of any paragraph after such a code block is framed as the
+    paragraph GitHub makes of it, by :func:`_paragraphs`; table
+    sections, a code block's language, and the classes and styles by which
+    the two set formulas, tables, and code are left out.
+    """
+
+    shown: list[tuple[str, str, int]] = []
+    line = 1
+    pending = False
+
+    def add(kind: str, value: str) -> None:
+        nonlocal pending
+        if kind in {"block", "break"}:
+            pending = False
+            if shown and shown[-1][0] == "break":
+                shown.pop()
+            if kind == "break" and (not shown or shown[-1][0] == "block"):
+                return
+        elif kind != "mark":
+            last = next((item[0] for item in reversed(shown) if item[0] != "mark"), "block")
+            if pending and last not in {"block", "break"}:
+                shown.append(("text", " ", line))
+            pending = False
+        shown.append((kind, value, line))
+
+    def text(value: str) -> None:
+        nonlocal line, pending
+        for character in value:
+            if character.isspace():
+                pending = True
+                line += character == "\n"
+            else:
+                add("text", character)
+
+    # The document is read from a stack of elements, text, and element ends
+    # rather than by recursion, since raw HTML nests elements as deep as its
+    # tags go.
+    stack: list[object] = [(document, False)]
+    while stack:
+        entry = stack.pop()
+        if isinstance(entry, str):
+            text(entry)
+            continue
+        if len(entry) == 3:  # type: ignore[arg-type]
+            add(entry[1], entry[2])  # type: ignore[index]
+            continue
+        node, in_item = entry  # type: ignore[misc]
+        tag = node.tag.lower() if isinstance(node.tag, str) else "!--"  # type: ignore[attr-defined]
+        if source := node.get("data-sourcepos"):  # type: ignore[attr-defined]
+            line = int(source.split(":")[0]) or line
+        if "arithmatex" in node.get("class", "").split():  # type: ignore[attr-defined]
+            content = "".join(node.itertext())  # type: ignore[attr-defined]
+            formula = content.strip()
+            for kind, value in [("block", "<p>")] * (tag == "p") + [
+                ("math", formula[:2] + formula[2:-2].strip() + formula[-2:])
+            ] + [("block", "</p>")] * (tag == "p"):
+                add(kind, value)
+            line += content.count("\n")
+            continue
+        if tag == "pre":
+            content = "".join(node.itertext())  # type: ignore[attr-defined]
+            add("block", "<pre>" + content.rstrip("\n") + "</pre>")
+            line += content.count("\n")
+            continue
+        if tag == "code":
+            content = "".join(node.itertext())  # type: ignore[attr-defined]
+            add("code", "<code>" + content.replace("\n", " ").strip(" ") + "</code>")
+            continue
+        empty = [node] if tag == "p" else list(node) if tag == "tr" else []  # type: ignore[call-overload]
+        if empty and all(not (part.text or "").strip() and not len(part) for part in empty):
+            continue
+        kind, name = ("block" if tag in _SHOWN_BLOCKS else "mark"), tag
+        if tag == "ol":
+            name = f"ol start={node.get('start', '1')}"  # type: ignore[attr-defined]
+        elif tag in {"td", "th"}:
+            align = node.get("align") or "".join(re.findall(r"text-align: (\w+)", node.get("style", "")))  # type: ignore[attr-defined]
+            name = f"{tag} align={align}" if align else tag
+        if tag in {"thead", "tbody", "document_fragment"}:
+            kind = ""
+        elif tag == "p" and in_item:
+            kind = "break"
+        if kind:
+            add(kind, "" if kind == "break" else f"<{name}>")
+        later: list[object] = [node.text or ""]  # type: ignore[attr-defined]
         for child in node:  # type: ignore[attr-defined]
-            if number is not None and child.tag == "li":
-                parts.append(f" {number} ")
-                number += 1
-            if isinstance(child.tag, str):
-                walk(child)
-                parts.append(" " if child.tag in _SPACED_TAGS else "")
-            if child.tail:
-                parts.append(child.tail)
+            later += [(child, tag == "li"), child.tail or ""]
+        if tag in {"document_fragment", "blockquote"}:
+            later = _paragraphs(later)
+        if kind and tag not in _VOID_ELEMENTS:
+            later.append((None, kind, "" if kind == "break" else f"</{tag}>"))
+        stack += reversed(later)
+    return shown
 
-    walk(document)
-    return "".join(parts)
+
+def _paragraphs(parts: list[object]) -> list[object]:
+    """``parts``, the text and elements of a document or block quote in
+    order, with each run of text and inline elements in it set between the
+    ends of a paragraph, as the paragraph it shows as: HTML closes the
+    paragraph the site writes around a code block at the block, and leaves
+    the text after it, which GitHub sets as a paragraph, out of any."""
+
+    framed: list[object] = []
+    inline = False
+    for part in parts:
+        if isinstance(part, str):
+            starts = bool(part.strip())
+        else:
+            child = part[0]  # type: ignore[index]
+            name = child.tag.lower() if isinstance(child.tag, str) else ""
+            starts = None if not name else name in {"br", "code"} or name not in _SHOWN_BLOCKS | {"pre"}
+        if starts is None or starts == inline or not starts and isinstance(part, str):
+            framed.append(part)
+            continue
+        framed += [(None, "block", "<p>"), part] if starts else [(None, "block", "</p>"), part]
+        inline = starts
+    return framed + [(None, "block", "</p>")] * inline
 
 
 def _shows_letter_or_digit(text: str) -> bool:
