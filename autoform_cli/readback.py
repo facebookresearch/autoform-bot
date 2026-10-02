@@ -176,8 +176,8 @@ TESTIMONY_MAX_ASTERISKS = 1024
 TESTIMONY_MAX_BACKSLASHES = 2048
 #: The table cells a testimony may hold. Both Markdown readings fill every row
 #: out to the header's width, so a wide header over many short lines renders
-#: millions of cells from a few kilobytes; counted by the renderer's block
-#: parser before any cell is built.
+#: millions of cells from a few kilobytes; counted by the renderer's table
+#: processor before it builds a table.
 TESTIMONY_MAX_TABLE_CELLS = 2048
 #: The HTML a testimony may render to, a backstop for any other construct the
 #: renderer expands, checked before the HTML is parsed. Escaping alone takes
@@ -1055,25 +1055,35 @@ def _formula_fence(source: str, *args: object, **kwargs: object) -> str:
     return '<p class="arithmatex">\\[\n' + html.escape(source, quote=False) + "\n\\]</p>"
 
 
-class _TableCells(TableProcessor):
-    """Python-Markdown's tables, with their cells counted rather than built:
-    the header's, and each written row's, which is filled out or cut to the
-    header's width."""
+class _TableCellLimit(Exception):
+    """The tables of a testimony hold more cells than
+    :data:`TESTIMONY_MAX_TABLE_CELLS`, ``cells`` of them so far."""
 
-    cells = 0
-
-    def _build_row(self, row: str, parent: object, align: list[str | None]) -> None:  # type: ignore[override]
-        self.cells += len(align)
+    def __init__(self, cells: int) -> None:
+        super().__init__(cells)
+        self.cells = cells
 
 
 class _CountedTable(TableProcessor):
-    """Python-Markdown's tables, noting a row with more or fewer cells than
-    the header. The renderer, like a CommonMark viewer of the vault, cuts
-    such a row to the header's width or fills it out with empty cells, so a
-    cell past the header's would not be shown, and a line run on after the
-    table would be shown as a row."""
+    """Python-Markdown's tables, counting their cells before building them,
+    and noting a row with more or fewer cells than the header.
 
+    The header and each written row are filled out or cut to the header's
+    width, so a table holds that many cells for each; once the tables hold
+    more than :data:`TESTIMONY_MAX_TABLE_CELLS`, :class:`_TableCellLimit`
+    ends the rendering before the table is built. The renderer, like a
+    CommonMark viewer of the vault, cuts an uneven row to the header's width
+    or fills it out with empty cells, so a cell past the header's would not
+    be shown, and a line run on after the table would be shown as a row."""
+
+    cells = 0
     uneven = False
+
+    def run(self, parent: object, blocks: list[str]) -> None:  # type: ignore[override]
+        self.cells += len(self.separator) * blocks[0].count("\n")
+        if self.cells > TESTIMONY_MAX_TABLE_CELLS:
+            raise _TableCellLimit(self.cells)
+        super().run(parent, blocks)  # type: ignore[arg-type]
 
     def _build_row(self, row: str, parent: object, align: list[str | None]) -> None:  # type: ignore[override]
         self.uneven = self.uneven or len(self._split_row(row)) != len(align)
@@ -1110,7 +1120,9 @@ def _testimony_converter() -> markdown_renderer.Markdown:
 
 def render_testimony(text: str) -> str:
     """The HTML a testimony is shown as: what the validator inspects and what
-    the site embeds, byte for byte."""
+    the site embeds, byte for byte. Testimony whose tables hold more cells
+    than :data:`TESTIMONY_MAX_TABLE_CELLS`, which the validator refuses,
+    raises :class:`_TableCellLimit`."""
 
     return _render_testimony(text)[0]
 
@@ -2093,7 +2105,10 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     A testimony is measured against :data:`TESTIMONY_MAX_BYTES` and the other
     limits first, and one that exceeds any of them is refused unparsed: every
     card in a pull request is validated, so parsing must be bounded before
-    anything is known about it. What is then checked is the HTML
+    anything is known about it. Table cells, which only a Markdown reading
+    can find, are counted as each reading finds a table, and a testimony
+    over :data:`TESTIMONY_MAX_TABLE_CELLS` is refused before any table is
+    built. What is then checked is the HTML
     :func:`render_testimony` makes of it, which is exactly what the site
     shows: only the elements and attributes the renderer emits for prose,
     code, and formulas; no HTML a Markdown viewer of the vault would read
@@ -2113,7 +2128,10 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     if limits := _testimony_limit_errors(text):
         return limits
-    rendered, defines_links, uneven_table = _render_testimony(text)
+    try:
+        rendered, defines_links, uneven_table = _render_testimony(text)
+    except _TableCellLimit as limit:
+        return (f"testimony has tables of up to {limit.cells} cells, over the limit of {TESTIMONY_MAX_TABLE_CELLS}",)
     size = len(rendered.encode("utf-8"))
     if size > TESTIMONY_MAX_RENDERED_BYTES:
         return (f"testimony renders to {size} bytes of HTML, over the limit of {TESTIMONY_MAX_RENDERED_BYTES}",)
@@ -2834,20 +2852,6 @@ def _testimony_limit_errors(text: str) -> tuple[str, ...]:
     backslashes = text.count("\\")
     if backslashes > TESTIMONY_MAX_BACKSLASHES:
         errors.append(f"testimony has {backslashes} backslashes, over the limit of {TESTIMONY_MAX_BACKSLASHES}")
-    # Tables are found by the renderer's own preprocessors and block parser,
-    # which read no inline markup and, within the byte, line, and nesting
-    # limits, are bounded; the cells are counted, not built.
-    if size > TESTIMONY_MAX_BYTES or len(lines) > TESTIMONY_MAX_LINES or nesting > TESTIMONY_MAX_NESTING:
-        return tuple(errors)
-    table = _TableCells(converter.parser, converter.parser.blockprocessors["table"].config)
-    converter.parser.blockprocessors.register(table, "table", 75)
-    lines = text.split("\n")
-    for preprocessor in converter.preprocessors:
-        lines = preprocessor.run(lines)
-    converter.parser.parseDocument(lines)
-    cells = table.cells
-    if cells > TESTIMONY_MAX_TABLE_CELLS:
-        errors.append(f"testimony has tables of up to {cells} cells, over the limit of {TESTIMONY_MAX_TABLE_CELLS}")
     return tuple(errors)
 
 

@@ -8,6 +8,7 @@ import unicodedata
 
 import html5lib
 import markdown as markdown_renderer
+from markdown.blockparser import BlockParser
 import pytest
 
 from autoform_cli.readback import (
@@ -1100,16 +1101,19 @@ def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
     lines rendered 46 MB of HTML, and took a minute and 3 GB to check; with
     its rows ended by "\r", which Python-Markdown reads as a line end, a
     9 KB one took 3.4 s and 317 MB before the rendered-size limit refused
-    it. Tables are counted by the block parser alone, which reads no inline
-    markup, and only within the byte, line, and nesting limits."""
+    it. Tables are counted by the renderer's table processor before it
+    builds one, so neither a cell nor any inline markup is read."""
 
     def unbounded(*args: object, **kwargs: object) -> None:
         raise AssertionError("the Markdown renderer ran on testimony over a limit")
 
     _testimony_limit_errors("a")
-    monkeypatch.setattr("autoform_cli.readback.markdown_renderer.Markdown.convert", unbounded)
-    if limit in {"columns deep", "-byte limit", "-line limit"}:
-        monkeypatch.setattr("markdown.blockparser.BlockParser.parseDocument", unbounded)
+    if limit == "cells":
+        monkeypatch.setattr("markdown.extensions.tables.TableProcessor._build_row", unbounded)
+        monkeypatch.setattr("markdown.treeprocessors.InlineProcessor.run", unbounded)
+        monkeypatch.setattr("autoform_cli.readback.html5lib.parseFragment", unbounded)
+    else:
+        monkeypatch.setattr("autoform_cli.readback.markdown_renderer.Markdown.convert", unbounded)
     started = time.process_time()
     tracemalloc.start()
     try:
@@ -1121,6 +1125,25 @@ def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
     assert any(limit in error for error in errors)
     assert time.process_time() - started < 1
     assert peak < 16 * 1024 * 1024
+
+
+def test_the_block_parser_reads_a_testimony_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The table cells are counted by the renderer's own table processor as
+    it renders, not by a second pass of its block parser, which cost as much
+    as the rendering: 32 KiB of 63 nested quotes over a line of pipes spent a
+    second in each."""
+
+    calls = []
+    parse = BlockParser.parseDocument
+
+    def counted(self: BlockParser, lines: list[str]) -> object:
+        calls.append(len(lines))
+        return parse(self, lines)
+
+    monkeypatch.setattr(BlockParser, "parseDocument", counted)
+
+    assert _testimony_errors("| a | b |\n|---|---|\n| c | d |\n") == ()
+    assert len(calls) == 1
 
 
 def test_brackets_over_the_limit_are_refused_with_a_rewrite_that_is_accepted() -> None:
