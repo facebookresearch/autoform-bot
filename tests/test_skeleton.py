@@ -3480,6 +3480,30 @@ def test_sources_whose_tokens_are_provable_are_shown_without_comments(tmp_path: 
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_signatures_escape_only_the_tokens_of_their_module(tmp_path: Path) -> None:
+    # `throwError` is a keyword once `Lean.Exception` is imported, as it is in
+    # the probe's helper, but not in a file whose only import is Skel.EscUse,
+    # where `#check` prints these binders bare.
+    project = _project(tmp_path)
+    (project / "Skel" / "EscUse.lean").write_text(
+        "namespace Skel.EscUse\n"
+        "def plain (throwError : Nat) : Nat := throwError\n"
+        "theorem useRoot (throwError : Nat) : plain throwError = throwError := rfl\n"
+        "end Skel.EscUse\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.EscUse")
+
+    report = extract_skeletons(_blueprint(tmp_path, lean={"use": "Skel.EscUse.useRoot"}), lean_root=project)
+
+    assert report.clean
+    (use,) = [d for node in report.nodes for d in node.declarations]
+    (plain,) = use.trusted
+    for text in (use.signature, use.raw_signature, plain.signature):
+        assert "throwError" in text and "«" not in text, text
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_signatures_print_at_the_format_width_check_uses(tmp_path: Path) -> None:
     # 115 characters: `#check` keeps it on one line at the default
     # `format.width` of 120.

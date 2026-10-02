@@ -318,10 +318,11 @@ the module's `local notation` and local instances, and the `open` and
 printing options, `pp.funBinderTypes` and `pp.coercions.types`, so a reader
 sees what each binder ranges over and where each cast lands; signatures
 otherwise print as `#check` prints them in a file whose only import is the
-module. The helper module's own imports (`Lean.Elab.Command`,
+module, with an identifier that spells one of that file's tokens escaped as
+`«»`. The helper module's own imports (`Lean.Elab.Command`,
 `Lean.Util.CollectAxioms`, `Lean.Util.Path`, and `Lean.Data.Json`) are in
 that environment too, with whatever global notation and instances they
-declare. Before any probe, Lake must confirm once, without rebuilding, that
+declare, but their tokens do not change how a signature is escaped. Before any probe, Lake must confirm once, without rebuilding, that
 every probed module matches its exact source inputs; a missing
 `lake-manifest.json`, stale artifacts, or a source tree that changes during
 extraction makes the command fail. Only the probed modules need to be built

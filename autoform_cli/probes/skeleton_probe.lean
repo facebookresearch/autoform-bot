@@ -490,6 +490,8 @@ structure ModuleTokens where
   /-- Each other token a declaration of the module may see, with the earliest
   position at which it can take effect there, `none` when that is unknown. -/
   possible : Array (String × Option Position)
+  /-- The module's own global tokens, which every file importing it has. -/
+  ownGlobal : Array String
 
 /-- Whether `p` comes before `q` in a file. -/
 def before (p q : Position) : Bool :=
@@ -522,6 +524,7 @@ def moduleTokens (cache : IO.Ref (Std.HashMap Name ModuleTokens)) (mod : Name) :
   let env ← getEnv
   let mut imported ← Parser.builtinTokenTable.get
   let mut possible : Std.HashMap String (Option Position) := {{}}
+  let mut ownGlobal : Array String := #[]
   if let some modIdx := env.getModuleIdx? mod then
     let mut seen : Std.HashSet Name := {{}}
     let mut work : Array Name := env.header.moduleData[modIdx.toNat]!.imports.map (·.module)
@@ -546,6 +549,7 @@ def moduleTokens (cache : IO.Ref (Std.HashMap Name ModuleTokens)) (mod : Name) :
       match entry with
       | .token t =>
         pending := pending.push t
+        if e matches .global _ then ownGlobal := ownGlobal.push t
       | .kind _ => pure ()
       | .parser _ declName _ =>
         let start := (← findDeclarationRanges? declName).map (·.range.pos)
@@ -561,7 +565,7 @@ def moduleTokens (cache : IO.Ref (Std.HashMap Name ModuleTokens)) (mod : Name) :
         pending := #[]
     for t in pending do possible := possible.insert t none
   let tokens : ModuleTokens := {{
-    imported, possible := possible.toArray.filter fun (t, _) => (imported.find? t).isNone }}
+    imported, ownGlobal, possible := possible.toArray.filter fun (t, _) => (imported.find? t).isNone }}
   cache.modify (·.insert mod tokens)
   return tokens
 
@@ -800,6 +804,14 @@ def skeleton
     | none   => true
   let expand (c : Name) : CommandElabM (Array Name) :=
     expandedMeaning expandCache env projectRoots c
+  -- Signatures print with the token table of a file whose only import is the
+  -- root's module, so a name is escaped as `«…»` exactly where `#check` there
+  -- escapes it, whatever the helper's own imports declare.
+  let rootTokens ← moduleTokens tokenCache ((moduleOf root).getD Name.anonymous)
+  let printEnv := Parser.parserExtension.modifyState env fun s =>
+    {{ s with tokens := rootTokens.ownGlobal.foldl (fun t tk => t.insert tk tk) rootTokens.imported }}
+  let signature (c : Name) : CommandElabM String := withEnv printEnv (signatureOf c)
+  let rawSignature (c : Name) : CommandElabM String := withEnv printEnv (rawSignatureOf c)
   let mut trusted : Array Name := #[]
   let mut edges : Array (Name × Array Name) := #[]
   let mut assumed : Array Name := #[]
@@ -905,8 +917,8 @@ def skeleton
         ("kind", Json.str kind),
         ("module", Json.str (toString ((moduleOf c).getD Name.anonymous))),
         ("range", ← rangeJson c),
-        ("signature", Json.str (← signatureOf c)),
-        ("raw_signature", Json.str (← rawSignatureOf c)),
+        ("signature", Json.str (← signature c)),
+        ("raw_signature", Json.str (← rawSignature c)),
         ("semantic_schema", Json.str semanticSchema),
         ("semantic", ← cachedSemanticMaterial semanticCache env c),
         ("depends", Json.arr (deps.map fun d => Json.str (toString d))),
@@ -937,8 +949,8 @@ def skeleton
     ("lean_version", Json.str Lean.versionString),
     ("module", Json.str (toString ((moduleOf root).getD Name.anonymous))),
     ("range", ← rangeJson root),
-    ("signature", Json.str (← signatureOf root)),
-    ("raw_signature", Json.str (← rawSignatureOf root)),
+    ("signature", Json.str (← signature root)),
+    ("raw_signature", Json.str (← rawSignature root)),
     ("semantic_schema", Json.str semanticSchema),
     ("semantic", ← cachedSemanticMaterial semanticCache env root),
     ("depends", Json.arr (rootDeps.map fun d => Json.str (toString d))),
