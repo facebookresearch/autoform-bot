@@ -1209,6 +1209,17 @@ other than its own wherever MathJax would read it: a definition such as
 `\newcommand`, `\def`, `\let`, or `\DeclareMathOperator`, `\require`, a tag
 form, or a `\label`. Put the project's notation in `blueprint/tex-macros.json`,
 which `check` validates too, and write a command you only mention in code.
+An attribute list may only give a heading an id, as in `## Title {#title}`;
+any class, style, or other attribute, and an id on anything but a heading, is
+refused with the line it is on, since it could make an article's text look
+like a card, a status mark, or an approval label. The id starts with a letter,
+uses letters, digits, `-`, and `_`, is at most 64 characters, does not start
+with `bp-`, `autoform`, `mjx-`, `mermaid`, `md-`, or `__`, and is not an id
+the site gives one of its own elements on that page, such as a statement's
+anchor. `check` reads each article as the site publishes it: every line break
+Python reads (a form feed or U+2028 among them) as a new line, without the
+metadata MkDocs takes off the top of a page, and a statement in its box with
+its indentation kept, so an indented line stays code.
 `render` refuses the same articles, so the site never publishes markup that an
 article's reviewer read as text and the owners of its theme never saw. It validates structure and
 leaves mathematical correctness to the agent and the Lean kernel.

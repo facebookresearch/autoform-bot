@@ -28,7 +28,6 @@ from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_k
 from .doctor import diagnose_project
 from .graph import Graph, GraphValidationError, load_graph
 from .lean import build_linker, declaration_names
-from .mathjax import mathjax_script
 from .readback import (
     PreparedReadback,
     Readback,
@@ -36,10 +35,9 @@ from .readback import (
     planned_readback,
     prepare_readback,
     publish_readback,
-    publishable_article,
     readback_conflicts,
 )
-from .render import PublicationError, render_site
+from .render import PublicationError, publication_issues, render_site
 from .review import (
     RecordRequest,
     ReviewBundle,
@@ -403,14 +401,8 @@ def _init(args: argparse.Namespace) -> int:
 def _check(args: argparse.Namespace) -> int:
     try:
         graph = load_graph(args.blueprint_dir)
-        # The site publishes articles as Markdown; raw HTML in one would be markup there.
-        markup = [
-            f"{node.id}: {issue}"
-            for node in graph.nodes.values()
-            for issue in publishable_article(graph.article_text(node))[1]
-        ]
-        # The renderer writes the site's MathJax configuration from the vault's macros.
-        markup += mathjax_script(args.blueprint_dir)[1]
+        # Render refuses to publish on these same issues.
+        markup = publication_issues(graph, Path(args.blueprint_dir))
     except GraphValidationError as exc:
         for issue in exc.issues:
             print(f"error: {issue}")

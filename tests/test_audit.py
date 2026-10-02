@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from autoform_cli.__main__ import main
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.graph import load_graph
 
@@ -516,13 +517,35 @@ def test_an_explicit_attr_list_anchor_resolves(tmp_path: Path) -> None:
     paper = blueprint / "sources" / "paper.md"
     paper.parent.mkdir(parents=True, exist_ok=True)
     paper.write_text(
-        "---\n---\n\n# Paper\n\n## A result {#main-result .highlight data-kind=result}\n\nText.\n",
+        "---\n---\n\n# Paper\n\n## A result {#main-result}\n\nText.\n",
         encoding="utf-8",
     )
 
     codes = {finding.code for finding in audit_blueprint(blueprint).findings}
 
     assert "source-anchor-not-found" not in codes
+
+
+def test_an_attr_list_that_does_more_than_name_a_heading_is_refused(tmp_path: Path, capsys) -> None:
+    """An article's attribute list may give a heading its id and nothing
+    else: a class or another attribute could restyle the page, so check
+    refuses it by line and says what to keep."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    _article(
+        blueprint,
+        "cited.md",
+        "## A result {#main-result .highlight data-kind=result}\n\nText.",
+        declaration="theorem",
+    )
+
+    assert main(["check", str(blueprint)]) == 1
+    assert (
+        "error: cited: line 7: attribute list {#main-result .highlight data-kind=result} is not allowed: "
+        'an article may only give a heading an id, as in "## Title {#title}"; delete it or keep only a '
+        "heading's id\n"
+    ) in capsys.readouterr().out
 
 
 def test_audit_reads_article_text_only_as_its_graph_parsed_it(tmp_path: Path, monkeypatch) -> None:

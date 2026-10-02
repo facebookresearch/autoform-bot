@@ -26,6 +26,7 @@ from autoform_cli.readback import (
     render_testimony,
     write_readback,
 )
+from autoform_cli.markdown import site_converter
 from autoform_cli.render import _mermaid_script, _readback_block, _skeleton_block
 from autoform_cli.skeleton import DeclarationSkeleton
 
@@ -181,14 +182,26 @@ def test_parser_marks_hand_authored_active_testimony_invalid(tmp_path: Path) -> 
 )
 def test_attribute_lists_are_shown_as_typed(testimony: str, tmp_path: Path) -> None:
     """The testimony renderer reads no attribute lists, so one cannot hide,
-    restyle, or activate anything; a reader sees the braces."""
+    restyle, or activate anything; a reader sees the braces. Nor does the
+    site's converter, which reads them, read the card again on the page."""
 
     _file(tmp_path, testimony)
     rendered = render_testimony(testimony)
+    declaration = _declaration()
+    card = load_readbacks(tmp_path)[("af_0123456789abcdef01234567", declaration.name)]
+    box = ['<div class="bp-thmwrapper" markdown="1">', "", *_readback_block(declaration, card), "</div>"]
+    published = site_converter().convert("\n".join(box))
 
     assert "{" in rendered
     assert re.findall(r"<[a-z]+\s[^>]*>", rendered) == []
     assert 'querySelectorAll(".mermaid")' in _mermaid_script()
+    assert "{" in published
+    tags = re.findall(r"<[a-z]+\s[^>]*>", published)
+    assert {name for tag in tags for name in re.findall(r"\s([^\s=>]+)=", tag)} == {"class"}
+    assert set(" ".join(re.findall(r'class="([^"]*)"', published)).split()) <= {
+        "bp-thmwrapper", "bp-readback", "bp-readback-current", "bp-readback-invalid", "bp-readback-title",
+        "bp-readback-status", "bp-readback-body", "arithmatex",
+    }
 
 
 def test_writer_keeps_inert_markdown_and_mathematics(tmp_path: Path) -> None:

@@ -19,14 +19,16 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
+from markdown.extensions.toc import slugify
+
 from . import graph_pages, graph_views, mermaid, status
 from .approvals import ApprovalStatus, ApprovalVerifier, approval_statuses, current_approvals
 from .coverage import CoverageSummary, load_coverage
 from .graph import Graph, Node, load_graph
 from .lean import SourceLinker, build_linker, declaration_names
 from .markdown import content_lines as _content_lines
-from .markdown import FENCE as _FENCE
-from .markdown import FENCE_CLOSE as _FENCE_CLOSE
+from .markdown import NOTES_BOX, STATEMENT_BOX, boxed, statement_and_notes
+from .markdown import outside_fences as _outside_fences
 from .mathjax import MATHJAX_SCRIPT, mathjax_script
 from .readback import READBACKS_DIR, Readback, load_readbacks, publishable_article, readback_for, render_testimony
 from .review import ReviewBundle, ReviewError, ReviewDeclaration, validate_review_bundle
@@ -43,10 +45,11 @@ _LINK_DEFINITION = re.compile(
     r'^(?P<indent>[ ]{0,3})\[(?P<label>[^\]]+)\]:[ \t]*'
     r'(?P<target><[^>\r\n]+>|[^\s]+)(?P<rest>[ \t]+.*)?$'
 )
+#: The heading over the statements no slot in their chapter's narrative places.
+_ADDITIONAL_TARGETS = "Additional formalization targets"
 _ARTICLE_SLOT = re.compile(
     r"^(?P<indent>[ \t]*)[-*+]\s+\[[^\]]+\]\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)\s*$"
 )
-_DEPENDENCY_SECTIONS = frozenset({"depends on", "proof depends on"})
 _SKIPPED_DIRECTORIES = frozenset({".obsidian", ".trash", ".git"})
 
 #: Transcriptions of the paper being formalised. Vault material, not chapters.
@@ -243,6 +246,49 @@ def _article_text(graph: Graph, node: Node) -> str:
     return text
 
 
+def publication_issues(graph: Graph, blueprint: Path) -> list[str]:
+    """What stops the site for ``graph`` being published: each article's
+    issues, named by its node, then the MathJax configuration's.
+
+    ``autoform check`` reports these and render refuses on them, so the two
+    judge one thing. Articles are published as Markdown, so raw HTML in one
+    would be markup on the site; a heading's id is checked against the ids
+    the site gives its own elements on the page the article is published on.
+    """
+
+    taken = _site_ids(graph)
+    issues = [
+        f"{node.id}: {issue}"
+        for node in graph.nodes.values()
+        for issue in publishable_article(graph.article_text(node), taken[node.id])[1]
+    ]
+    return issues + list(mathjax_script(blueprint)[1])
+
+
+def _site_ids(graph: Graph) -> dict[str, frozenset[str]]:
+    """The ids the site gives its own elements on each node's page.
+
+    A leaf is published on its chapter's page, where each statement's box
+    has its anchor for an id; any other article is a page of its own, the
+    chapter page when leaves are grouped under it. The heading render adds
+    for leaves no slot places is on any chapter page.
+    """
+
+    groups = _group_nodes(graph)
+    boxes = {group: {_anchor(node_id, group) for node_id in node_ids} for group, node_ids in groups.items()}
+    added = slugify(_ADDITIONAL_TARGETS, "-")
+    return {
+        node_id: frozenset(
+            boxes.get(
+                node.parent or "roadmap" if node.formalizable and not graph.children(node_id) else node_id,
+                set(),
+            )
+            | {added}
+        )
+        for node_id, node in graph.nodes.items()
+    }
+
+
 def render_site(
     blueprint_dir: str | Path,
     output_dir: str | Path,
@@ -316,18 +362,11 @@ def render_site(
         )
     if coverage is None:
         raise PublicationError(["coverage contract could not be loaded"])
-    # Articles are published as Markdown, so raw HTML in one would be markup on the site.
-    article_issues = [
-        f"{node.id}: {issue}"
-        for node in graph.nodes.values()
-        for issue in publishable_article(graph.article_text(node))[1]
-    ]
-    if article_issues:
-        raise PublicationError(article_issues)
+    issues = publication_issues(graph, blueprint)
+    if issues:
+        raise PublicationError(issues)
     # The site's MathJax configuration is written here, never kept from the vault.
-    math_script, math_issues = mathjax_script(blueprint)
-    if math_issues:
-        raise PublicationError(math_issues)
+    math_script = mathjax_script(blueprint)[0]
     statuses = status.derive(graph)
     # The repository root, not the vault's parent. A blueprint nested at
     # <repo>/docs/blueprint would otherwise be described as <repo>/blueprint,
@@ -1522,24 +1561,6 @@ def _is_within(path: Path, directory: Path) -> bool:
     return True
 
 
-def _outside_fences(text: str, transform) -> str:
-    """Apply *transform* to every line that is not inside a code fence."""
-    fence: tuple[str, int] | None = None
-    out: list[str] = []
-    for line in text.splitlines():
-        match = _FENCE.match(line) if fence is None else _FENCE_CLOSE.match(line)
-        if match:
-            marker = match.group(1)
-            if fence is None:
-                fence = (marker[0], len(marker))
-            elif marker[0] == fence[0] and len(marker) >= fence[1]:
-                fence = None
-            out.append(line)
-            continue
-        out.append(line if fence is not None else transform(line))
-    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
-
-
 def _number_nodes(graph: Graph) -> dict[str, str]:
     """Number nodes per declaration kind in dependency order, as a blueprint does."""
     counters: dict[str, int] = {}
@@ -1634,7 +1655,7 @@ def _render_chapter(
     )
     remaining = [environments[node_id] for node_id in node_ids if node_id not in placed]
     if remaining:
-        chapter = chapter.rstrip() + "\n\n## Additional formalization targets\n\n" + "\n\n".join(remaining)
+        chapter = chapter.rstrip() + f"\n\n## {_ADDITIONAL_TARGETS}\n\n" + "\n\n".join(remaining)
     return chapter.rstrip() + "\n", linked, unresolved
 
 
@@ -1701,7 +1722,7 @@ def _render_environment(
     caption, _, number = numbers[node.id].rpartition(" ")
     # The text the graph parsed, so the box shows the statement its status and
     # any review disclosure describe, or rendering stops.
-    statement, remainder = _split_body(_article_text(graph, node))
+    statement, remainder = statement_and_notes(_article_text(graph, node))
     # The body is leaving its own directory for the chapter page, so its
     # relative links have to be recomputed from the chapter's location.
     statement, remainder = (
@@ -1752,14 +1773,10 @@ def _render_environment(
         f'<span class="bp-mark" title="{html.escape(node_status.label, quote=True)}">'
         f'{mark}<span class="bp-mark-label">{html.escape(node_status.label)}</span></span>',
         "</div>",
-        '<div class="bp-thmcontent" markdown="1">',
-        "",
-        statement,
-        "",
-        "</div>",
+        *boxed(statement, STATEMENT_BOX),
     ]
     if remainder:
-        lines.extend(['<div class="bp-thmnotes" markdown="1">', "", remainder, "", "</div>"])
+        lines.extend(boxed(remainder, NOTES_BOX))
     if meta:
         lines.append(meta)
     if dependencies:
@@ -2088,72 +2105,6 @@ def _discussion_link(discussion: str, linker: SourceLinker) -> str:
     else:
         return html.escape(discussion)
     return f'<a href="{html.escape(url, quote=True)}">{html.escape(label)}</a>'
-
-
-def _split_body(text: str) -> tuple[str, str]:
-    """Return the node's statement and whatever trailing sections follow it.
-
-    Only the statement belongs inside the theorem environment; ``## Sources``
-    and friends are page material that sits after it, the way a blueprint sets
-    a statement apart from the prose around it.
-    """
-    body = _body_without_dependencies(text)
-    lines = body.splitlines()
-    for index, line in enumerate(_content_lines(body)):
-        if _HEADING.match(line):
-            statement = "\n".join(lines[:index]).strip()
-            # Many statements now share one chapter page, so a node's own
-            # subheadings must not compete with the chapter's structure.
-            return statement, _demote_headings("\n".join(lines[index:]).strip())
-    return body.strip(), ""
-
-
-def _demote_headings(text: str) -> str:
-    def demote(line: str) -> str:
-        heading = _HEADING.match(line)
-        if heading is None:
-            return line
-        level = min(len(heading.group(1)) + 4, 6)
-        return f"{'#' * level} {heading.group(2)}"
-
-    return _outside_fences(text, demote)
-
-
-def _body_without_dependencies(text: str) -> str:
-    """Drop the frontmatter, the H1, and the dependency sections.
-
-    The DAG is re-presented in the metadata line, so repeating the raw link
-    lists on the page would only duplicate it.
-    """
-    lines = text.splitlines()
-    start = 0
-    if lines and lines[0].strip() == "---":
-        for index in range(1, len(lines)):
-            if lines[index].strip() == "---":
-                start = index + 1
-                break
-
-    kept: list[str] = []
-    skipping = False
-    dropped_title = False
-    source_lines = lines[start:]
-    visible_lines = _content_lines("\n".join(source_lines))
-    for line, visible in zip(source_lines, visible_lines, strict=True):
-        heading = _HEADING.match(visible)
-        if heading:
-            level = len(heading.group(1))
-            name = heading.group(2).strip().casefold()
-            if level == 1 and not dropped_title:
-                dropped_title = True
-                skipping = False
-                continue
-            if level <= 2:
-                skipping = level == 2 and name in _DEPENDENCY_SECTIONS
-                if skipping:
-                    continue
-        if not skipping:
-            kept.append(line)
-    return "\n".join(kept).strip()
 
 
 def _stylesheet() -> str:

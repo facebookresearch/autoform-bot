@@ -47,6 +47,7 @@ import html5lib
 from cmarkgfm.cmark import Options
 import markdown as markdown_renderer
 from markdown.blockprocessors import HashHeaderProcessor
+from markdown.extensions.attr_list import get_attrs_and_remainder
 from markdown.extensions.tables import TableProcessor
 from markdown.inlinepatterns import BACKTICK_RE, BacktickInlineProcessor
 from markdown.treeprocessors import Treeprocessor
@@ -58,7 +59,7 @@ except ImportError:  # pragma: no cover - Windows, which cannot publish cards
     fcntl = None  # type: ignore[assignment]
 
 from .graph import ARTICLE_ID_PATTERN
-from .markdown import SITE_EXTENSION_CONFIGS, SITE_EXTENSIONS
+from .markdown import SITE_EXTENSION_CONFIGS, SITE_EXTENSIONS, content_lines, published_lines, published_markdown
 from .mathjax import TEX_MACROS, stateful_commands
 from .skeleton import (
     DeclarationSkeleton,
@@ -2849,8 +2850,18 @@ def _html_names(text: str) -> list[str]:
 #: An HTML comment with its end: the text a site leaves out of an article.
 _COMPLETE_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
+#: The id an article may give a heading with an attribute list.
+_HEADING_ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
 
-def publishable_article(text: str) -> tuple[str, tuple[str, ...]]:
+#: How the ids the site, its theme, and the scripts it loads give their own
+#: elements begin; an article's heading may not take one.
+_SITE_ID_PREFIXES = ("bp-", "autoform", "mjx-", "mermaid", "md-", "__")
+
+#: An attribute list as written, around what the site's converter reads.
+_ATTRIBUTE_LIST = r"\{{:?[ ]*{}[ ]*\}}"
+
+
+def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, tuple[str, ...]]:
     """The text of an article a site may publish, and what refuses it.
 
     Articles are Markdown and TeX, as read-backs are. Raw HTML in one would
@@ -2858,45 +2869,114 @@ def publishable_article(text: str) -> tuple[str, tuple[str, ...]]:
     nobody gave, or run script, and the reviewers who approve articles do not
     own the site's templates. Complete HTML comments are a common way to leave
     a note, so they are dropped rather than refused; the text returned is the
-    article without them, so a comment a browser would end sooner than the
-    pattern does exposes nothing. What remains is refused when
-    :func:`_raw_html_errors` finds HTML in it outside code, or when the site's
-    Markdown renderer would pass any of it through as raw HTML: the two parse
-    markup differently, and the renderer's reading is what gets published.
+    article without them, with its lines written as the site writes them, so
+    a comment a browser would end sooner than the pattern does exposes
+    nothing. What remains is refused when :func:`_raw_html_errors` finds HTML
+    in it outside code, or when the site's Markdown renderer would pass any of
+    it through as raw HTML: the two parse markup differently, and the
+    renderer's reading is what gets published. Every piece the site can
+    publish is read, as :func:`~autoform_cli.markdown.published_markdown`
+    gives it, so the text checked is the text published.
 
     It is refused, too, for a TeX command that changes formulas other than
     its own, wherever the page's MathJax would read it. The articles on a
     page are typeset with one TeX input, so a definition in one would change
     what the others show.
+
+    And it is refused for an attribute list that does anything but give a
+    heading an id, which could make its text look like a card, a mark, or an
+    approval, or cover the page. The id may not look like the site's own, or
+    be one of ``reserved``, the ids the site gives its own elements on the
+    article's page.
     """
 
-    visible = _COMPLETE_HTML_COMMENT.sub("", text)
-    rendered, passed = _rendered_article(visible)
-    reading = _RenderedText()
-    reading.feed(rendered)
-    reading.close()
-    errors = list(_raw_html_errors(visible, reading.code))
-    if passed and not errors:
-        shown = ", ".join(repr(block[:40]) for block in dict.fromkeys(passed))
-        errors.append(f"raw HTML is not allowed: the site would publish {shown} as HTML")
-    commands = stateful_commands("".join(reading.text))
-    if commands:
-        errors.append(
-            "TeX commands that change other formulas are not allowed: " + ", ".join(commands)
-            + f"; define notation in the vault's {TEX_MACROS} instead, and put a command you only name in code"
-        )
-    return visible, tuple(errors)
+    visible = published_lines(_COMPLETE_HTML_COMMENT.sub("", text))
+    errors: list[str] = []
+    attributes: list[tuple[str, str, list[tuple[str, str]]]] = []
+    for source, markdown in published_markdown(visible):
+        rendered, passed, assigned = _rendered_article(markdown)
+        reading = _RenderedText()
+        reading.feed(rendered)
+        reading.close()
+        found = list(_raw_html_errors(source, reading.code))
+        if passed and not found:
+            shown = ", ".join(repr(block[:40]) for block in dict.fromkeys(passed))
+            found.append(f"raw HTML is not allowed: the site would publish {shown} as HTML")
+        commands = stateful_commands("".join(reading.text))
+        if commands:
+            found.append(
+                "TeX commands that change other formulas are not allowed: " + ", ".join(commands)
+                + f"; define notation in the vault's {TEX_MACROS} instead, and put a command you only name in code"
+            )
+        errors.extend(found)
+        attributes.extend(assigned)
+    errors.extend(_attribute_errors(text, attributes, frozenset(reserved)))
+    return visible, tuple(dict.fromkeys(errors))
 
 
-def _rendered_article(text: str) -> tuple[str, list[str]]:
-    """The site's rendering of ``text``, and what its renderer passes through
-    from ``text`` as raw HTML.
+def _attribute_errors(
+    text: str, attributes: Iterable[tuple[str, str, list[tuple[str, str]]]], reserved: frozenset[str]
+) -> list[str]:
+    """Name each attribute list the site's converter applied in ``text`` that
+    does more than give a heading an id of its own, by its line in ``text``."""
+
+    errors: list[str] = []
+    for tag, written, pairs in attributes:
+        identifier = pairs[0][1] if len(pairs) == 1 and pairs[0][0] == "id" else None
+        if tag not in {"h1", "h2", "h3", "h4", "h5", "h6"} or identifier is None:
+            reason = (
+                'is not allowed: an article may only give a heading an id, as in "## Title {#title}"; '
+                "delete it or keep only a heading's id"
+            )
+        elif not _HEADING_ID.fullmatch(identifier) or identifier.lower().startswith(_SITE_ID_PREFIXES):
+            errors.extend(
+                f"{where}heading id {identifier!r} is not allowed: start it with a letter, use only letters, "
+                "digits, hyphens, and underscores, up to 64 characters, and do not start it with "
+                + ", ".join(_SITE_ID_PREFIXES[:-1]) + f", or {_SITE_ID_PREFIXES[-1]}"
+                for where, _ in _attribute_places(text, written)
+            )
+            continue
+        elif identifier in reserved:
+            errors.extend(
+                f"{where}heading id {identifier!r} is taken: the site gives it to an element of its own on this "
+                "page; choose another"
+                for where, _ in _attribute_places(text, written)
+            )
+            continue
+        else:
+            continue
+        errors.extend(f"{where}attribute list {shown} {reason}" for where, shown in _attribute_places(text, written))
+    return errors
+
+
+def _attribute_places(text: str, written: str) -> list[tuple[str, str]]:
+    """Where in ``text`` an attribute list reading ``written`` is, as a
+    ``line N: `` prefix, and the list as it is written there; outside code
+    first, and anywhere when it is in none."""
+
+    pattern = re.compile(_ATTRIBUTE_LIST.format(re.escape(written.strip())))
+    for lines in (content_lines(text), text.splitlines()):
+        places = [
+            (f"line {number}: ", found.group()[:80])
+            for number, line in enumerate(lines, start=1)
+            if (found := pattern.search(line)) is not None
+        ]
+        if places:
+            return places
+    return [("", "{" + written.strip()[:78] + "}")]
+
+
+def _rendered_article(text: str) -> tuple[str, list[str], list[tuple[str, str, list[tuple[str, str]]]]]:
+    """The site's rendering of ``text``, what its renderer passes through
+    from ``text`` as raw HTML, and each attribute list it applies: the
+    element's tag, the list as read, and the attributes it sets.
 
     The renderer stashes raw HTML, character references, and highlighted code
     blocks alike. Code blocks are stashed while fences are read, before any
     raw HTML is, so whatever is stashed after that came from the text itself;
-    a reference a browser shows as typed is left out. References by number
-    are cut to a length Python converts first, standing for what they did.
+    a reference a browser shows as typed is left out, as is the empty
+    placeholder a ``markdown="1"`` box leaves. References by number are cut
+    to a length Python converts first, standing for what they did.
     """
 
     parser = markdown_renderer.Markdown(extensions=list(SITE_EXTENSIONS), extension_configs=SITE_EXTENSION_CONFIGS)
@@ -2911,11 +2991,26 @@ def _rendered_article(text: str) -> tuple[str, list[str]]:
         return lines
 
     fences.run = counted  # type: ignore[method-assign]
+    attribute_lists = parser.treeprocessors["attr_list"]
+    assign = attribute_lists.assign_attrs  # type: ignore[attr-defined]
+    assigned: list[tuple[str, str, list[tuple[str, str]]]] = []
+
+    def recorded(element: object, written: str, *, strict: bool = False) -> str:
+        pairs, remainder = get_attrs_and_remainder(written)
+        if not (strict and remainder):
+            assigned.append((element.tag, written, pairs))  # type: ignore[attr-defined]
+        return assign(element, written, strict=strict)
+
+    attribute_lists.assign_attrs = recorded  # type: ignore[attr-defined]
     rendered = parser.convert(_bounded_references(text))
-    passed = [block if isinstance(block, str) else "<element>" for block in parser.htmlStash.rawHtmlBlocks[highlighted:]]
+    passed = [
+        block if isinstance(block, str) else "<element>"
+        for block in parser.htmlStash.rawHtmlBlocks[highlighted:]
+        if block != ""
+    ]
     return rendered, [
         block for block in passed if not (_LOOSE_HTML_ENTITY.fullmatch(block) and not _live_reference(block))
-    ]
+    ], assigned
 
 
 class _RenderedText(HTMLParser):

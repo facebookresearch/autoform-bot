@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.__main__ import main
+from autoform_cli.markdown import statement_and_notes
 from autoform_cli.readback import publishable_article
 from autoform_cli.render import PublicationError, render_site
 from autoform_cli.scaffold import scaffold_project
@@ -308,6 +309,202 @@ def test_check_and_render_refuse_a_long_character_reference(
     assert "(39003 characters)" in capsys.readouterr().out
     with pytest.raises(PublicationError, match=r"\(39003 characters\)"):
         _render(blueprint)
+
+
+_FORGED = '<span class="bp-mark">FORGED MARK</span><script>document.title="INJECTED"</script>'
+
+
+def _published(page: Path) -> str:
+    """``page`` as MkDocs publishes it: its metadata read off, and the rest
+    converted as the site's configuration converts it."""
+
+    from mkdocs.utils.meta import get_data
+
+    from autoform_cli.markdown import site_converter
+
+    return site_converter().convert(get_data(page.read_text(encoding="utf-8"))[0])
+
+
+def test_a_statement_keeps_the_indent_check_read_it_with(tmp_path: Path) -> None:
+    """A statement that opens with an indented code block is code in its box
+    too, as check read it, not the HTML its text spells out."""
+
+    blueprint = _vault(tmp_path)
+    _with_article(blueprint, f"    {_FORGED}\n\nEvery object is equal to itself.")
+
+    assert main(["check", str(blueprint)]) == 0
+    published = _published(_render(blueprint) / "roadmap/README.md")
+
+    assert "<script>" not in published
+    assert '<span class="bp-mark">FORGED' not in published
+    assert '<pre><code>&lt;span class="bp-mark"&gt;FORGED MARK' in published
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\x0b", "\x0c", "\x1e", "\x85"])
+def test_a_line_break_markdown_does_not_read_is_checked_as_the_site_writes_it(
+    tmp_path: Path, separator: str
+) -> None:
+    """The site writes every line break Python reads as a newline, so text
+    after one is checked on a line of its own, where it is HTML, not code."""
+
+    blueprint = _vault(tmp_path)
+    _with_article(blueprint, f"Every object is equal to itself.\n\n    x = 1{separator}{_FORGED}")
+
+    assert main(["check", str(blueprint)]) == 1
+    with pytest.raises(PublicationError, match=r"top: raw HTML is not allowed: <span>, </span>, <script>, </script>"):
+        _render(blueprint)
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\x0c", "\x85"])
+@pytest.mark.parametrize(
+    ("payload", "refusal"),
+    [
+        (_FORGED, r"roadmap: raw HTML is not allowed: <span>, </span>, <script>, </script>"),
+        (r"$\DeclareMathOperator{\leq}{>}$", r"roadmap: TeX commands that change other formulas are not allowed: \\DeclareMathOperator"),
+    ],
+)
+def test_a_page_with_a_line_break_markdown_does_not_read_is_checked_as_the_site_writes_it(
+    tmp_path: Path, separator: str, payload: str, refusal: str
+) -> None:
+    """A chapter page is published whole, line by line, its dependency
+    section included, so it is checked that way too: after the break, the
+    text is a paragraph, not code."""
+
+    blueprint = _vault(tmp_path)
+    chapter = blueprint / "roadmap/README.md"
+    chapter.write_text(
+        chapter.read_text(encoding="utf-8") + f"\n## Depends on\n\n    x = 1{separator}{payload}\n", encoding="utf-8"
+    )
+
+    assert main(["check", str(blueprint)]) == 1
+    with pytest.raises(PublicationError, match=refusal):
+        _render(blueprint)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        # Without YAML frontmatter, MkDocs takes leading "key: value" lines
+        # for metadata.
+        "Note: an aside\n",
+        # The graph reads no frontmatter after a byte order mark, but MkDocs
+        # drops the mark, and it ends YAML frontmatter at "..." as well.
+        "\ufeff---\nnote: an aside\n...\n",
+    ],
+)
+def test_a_page_is_checked_without_the_metadata_mkdocs_reads_off(tmp_path: Path, metadata: str) -> None:
+    """The page MkDocs publishes starts after the metadata it reads off, and
+    that page is checked: there the indented line belongs to the list item
+    and is HTML, not code."""
+
+    blueprint = _vault(tmp_path)
+    chapter = blueprint / "roadmap/README.md"
+    body = chapter.read_text(encoding="utf-8").removeprefix("---\n---\n\n")
+    chapter.write_text(f"{metadata}- item\n\n    {_FORGED}\n\n{body}", encoding="utf-8")
+
+    assert main(["check", str(blueprint)]) == 1
+    with pytest.raises(PublicationError, match=r"roadmap: raw HTML is not allowed: <span>, </span>, <script>, </script>"):
+        _render(blueprint)
+
+
+def test_check_and_render_share_one_reading_of_a_statement() -> None:
+    """The statement and the sections after it are what the box publishes,
+    and they are what check reads."""
+
+    statement, notes = statement_and_notes(
+        "---\ndeclaration: theorem\n---\n\n# Top\n\n\n    x = 1\n\nClaim.\n\n## Sources\n\nA book.\n\n"
+        "## Depends on\n\n- [Base](base.md)\n"
+    )
+
+    assert statement == "    x = 1\n\nClaim."
+    assert notes == "###### Sources\n\nA book."
+
+
+def test_an_article_that_ends_in_blank_lines_is_read() -> None:
+    """Check reads every article line by line, so blank lines at the end
+    of one are lines like any other."""
+
+    assert statement_and_notes("# Top\n\nClaim.\n\n\n") == ("Claim.", "")
+    assert statement_and_notes("---\nkind: x\n---\n") == ("", "")
+
+
+_ATTRIBUTE_RULE = 'an article may only give a heading an id, as in "## Title {#title}"; delete it or keep only a heading\'s id'
+_ID_RULE = (
+    "start it with a letter, use only letters, digits, hyphens, and underscores, up to 64 characters, "
+    "and do not start it with bp-, autoform, mjx-, mermaid, md-, or __"
+)
+
+
+@pytest.mark.parametrize(
+    ("article", "shown"),
+    [
+        ("Claim.\n{: .bp-readback .bp-readback-current }", "{: .bp-readback .bp-readback-current }"),
+        ('Claim.\n{: style="position:fixed;inset:0;z-index:1000" }', '{: style="position:fixed;inset:0;z-index:1000" }'),
+        (
+            "Claim.\n{: #autorun tabindex=\"-1\" autofocus=\"autofocus\" onfocus=\"document.title='x'\" }",
+            "{: #autorun tabindex=\"-1\" autofocus=\"autofocus\" onfocus=\"document.title='x'\" }",
+        ),
+        ("Claim.\n{: #claim }", "{: #claim }"),
+        ("A *claim*{ .bp-mark } here.", "{ .bp-mark }"),
+        ("$x${hidden}", "{hidden}"),
+        ("- item\n  {: .bp-mark }", "{: .bp-mark }"),
+        ("| a {: .bp-mark } |\n| --- |\n| b |", "{: .bp-mark }"),
+        ("Text `code`{.bp-mark} more.", "{.bp-mark}"),
+        ("## Result {#main-result .highlight data-kind=result}", "{#main-result .highlight data-kind=result}"),
+        ("## Result {: #one #two }", "{: #one #two }"),
+    ],
+)
+def test_an_attribute_list_other_than_a_heading_id_is_refused(article: str, shown: str) -> None:
+    """An attribute list could make an article's text look like a card, a
+    mark, or an approval, or cover the page; an id on a heading is all an
+    article needs, for links to land on it."""
+
+    errors = publishable_article(f"# Top\n\n{article}\n")[1]
+
+    line = 3 + article[: article.index(shown)].count("\n")
+    assert errors == (f"line {line}: attribute list {shown} is not allowed: {_ATTRIBUTE_RULE}",)
+
+
+@pytest.mark.parametrize(
+    "identifier", ["bp-mark", "autoform-sweep", "mjx-eqn", "MJX-x", "mermaid-1", "md-content", "__drawer", "1st", "a:b", "a.b", "x" * 65]
+)
+def test_a_heading_id_like_the_sites_own_is_refused(identifier: str) -> None:
+    errors = publishable_article(f"# Top\n\n## Result {{#{identifier}}}\n")[1]
+
+    assert errors == (f"line 3: heading id {identifier!r} is not allowed: {_ID_RULE}",)
+
+
+@pytest.mark.parametrize("heading", ["## A result {#main-result}", "## A result {: #main-result }", "### A_result-2 {#A_result-2}"])
+def test_a_heading_id_is_accepted(heading: str) -> None:
+    assert publishable_article(f"# Top\n\n{heading}\n\nText.\n")[1] == ()
+
+
+@pytest.mark.parametrize("identifier", ["top", "base", "additional-formalization-targets"])
+def test_a_heading_id_the_page_gives_its_own_element_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], identifier: str
+) -> None:
+    """A heading that took a statement's anchor would be where every link to
+    that statement lands."""
+
+    blueprint = _vault(tmp_path)
+    _with_article(blueprint, f"The main result.\n\n## Remark {{#{identifier}}}\n\nA remark.")
+    message = (
+        f"top: line 13: heading id {identifier!r} is taken: the site gives it to an element of its own on "
+        "this page; choose another"
+    )
+
+    assert main(["check", str(blueprint)]) == 1
+    assert f"error: {message}\n" in capsys.readouterr().out
+    with pytest.raises(PublicationError, match=re.escape(message)):
+        _render(blueprint)
+
+
+def test_a_heading_id_is_published(tmp_path: Path) -> None:
+    blueprint = _vault(tmp_path)
+    _with_article(blueprint, "The main result.\n\n## Remark {#a-remark}\n\nA remark.")
+
+    assert main(["check", str(blueprint)]) == 0
+    assert '<h6 id="a-remark">Remark</h6>' in _published(_render(blueprint) / "roadmap/README.md")
 
 
 def test_every_formula_paints_inside_its_own_box(tmp_path: Path) -> None:

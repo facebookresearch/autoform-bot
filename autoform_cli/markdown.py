@@ -397,6 +397,178 @@ def site_converter() -> pymarkdown.Markdown:
     )
 
 
+#: The sections that list an article's dependencies. The site shows them in
+#: its own form in the article's box, so they are not published as written.
+DEPENDENCY_SECTIONS = frozenset({"depends on", "proof depends on"})
+
+#: The boxes a leaf article's statement and the sections after it are
+#: published in, on the page of the article that contains it.
+STATEMENT_BOX = "bp-thmcontent"
+NOTES_BOX = "bp-thmnotes"
+
+# How MkDocs 1.6 reads a page's metadata off it (``mkdocs.utils.meta``).
+_MKDOCS_YAML = re.compile(r"^-{3}[ \t]*\n(.*?\n)(?:\.{3}|-{3})[ \t]*\n", re.UNICODE | re.DOTALL)
+_MKDOCS_META = re.compile(r"^[ ]{0,3}(?P<key>[A-Za-z0-9_-]+):\s*(?P<value>.*)")
+_MKDOCS_META_MORE = re.compile(r"^([ ]{4}|\t)(\s*)(?P<value>.*)")
+
+
+def published_lines(text: str) -> str:
+    """``text`` with every line break :meth:`str.splitlines` reads written as
+    ``\\n``, and ending in one.
+
+    The site edits articles a line at a time and writes them back this way,
+    so a form feed or U+2028, which Python-Markdown reads as text, is a line
+    break by the time the page is converted. Checking this text, rather than
+    the bytes in the vault, checks the lines the page has."""
+
+    return "".join(f"{line}\n" for line in text.splitlines())
+
+
+def published_markdown(text: str) -> list[tuple[str, str]]:
+    """Each piece of the article ``text`` the site can publish, with the
+    Markdown it is converted in.
+
+    A narrative article is a page of its own, as MkDocs reads it from the
+    page's file; a formalizable leaf is its statement and the sections after
+    it, each in a box on its chapter's page. ``text`` is
+    :func:`published_lines` text. The renderer publishes these pieces with
+    :func:`statement_and_notes` and :func:`boxed`, and the checker converts
+    every one, so neither reads an article in a way the other does not."""
+
+    pieces = [(page, page) for page in page_markdown(text)]
+    for part, box in zip(statement_and_notes(text), (STATEMENT_BOX, NOTES_BOX), strict=True):
+        if part:
+            pieces.append((part, "\n".join(boxed(part, box))))
+    return pieces
+
+
+def page_markdown(text: str) -> tuple[str, ...]:
+    """The Markdown MkDocs can convert for a page whose file holds ``text``.
+
+    MkDocs drops a byte order mark, then YAML frontmatter when it parses as a
+    mapping, which only a YAML parser can tell, so both readings are given;
+    without frontmatter it takes leading ``key: value`` lines, and the
+    indented lines that continue them, for metadata, up to the first blank
+    line. What follows is the page."""
+
+    text = text.removeprefix("\ufeff")
+    frontmatter = _MKDOCS_YAML.match(text)
+    if frontmatter is not None:
+        return text, text[frontmatter.end() :].lstrip("\n")
+    lines = text.split("\n")
+    key = False
+    while lines:
+        line = lines.pop(0)
+        if not line.strip():
+            break
+        if _MKDOCS_META.match(line):
+            key = True
+        elif not (key and _MKDOCS_META_MORE.match(line)):
+            lines.insert(0, line)
+            break
+    return ("\n".join(lines).lstrip("\n"),)
+
+
+def boxed(part: str, box: str) -> list[str]:
+    """The lines that publish ``part`` as Markdown in a ``<div>`` of class
+    ``box`` on a page."""
+
+    return [f'<div class="{box}" markdown="1">', "", part, "", "</div>"]
+
+
+def statement_and_notes(text: str) -> tuple[str, str]:
+    """A leaf article's statement and the sections after it, as the site
+    publishes them in the article's box.
+
+    Only the statement belongs inside the theorem environment; ``## Sources``
+    and friends are page material that sits after it, the way a blueprint
+    sets a statement apart from the prose around it. Blank lines at either
+    end are dropped, and nothing else: an indented first line is code in the
+    vault and stays code in the box."""
+
+    body = _body_without_dependencies(text)
+    lines = body.splitlines()
+    for index, line in enumerate(content_lines(body)):
+        if HEADING.match(line):
+            statement = _trimmed("\n".join(lines[:index]))
+            # Many statements share one chapter page, so a node's own
+            # subheadings must not compete with the chapter's structure.
+            return statement, _demote_headings(_trimmed("\n".join(lines[index:])))
+    return body, ""
+
+
+def outside_fences(text: str, transform) -> str:
+    """Apply *transform* to every line that is not inside a code fence."""
+    fence: tuple[str, int] | None = None
+    out: list[str] = []
+    for line in text.splitlines():
+        match = FENCE.match(line) if fence is None else FENCE_CLOSE.match(line)
+        if match:
+            marker = match.group(1)
+            if fence is None:
+                fence = (marker[0], len(marker))
+            elif marker[0] == fence[0] and len(marker) >= fence[1]:
+                fence = None
+            out.append(line)
+            continue
+        out.append(line if fence is not None else transform(line))
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def _trimmed(text: str) -> str:
+    """``text`` without its leading blank lines and trailing whitespace."""
+
+    return re.sub(r"\A(?:[ \t]*\n)+", "", text.rstrip())
+
+
+def _demote_headings(text: str) -> str:
+    def demote(line: str) -> str:
+        heading = HEADING.match(line)
+        if heading is None:
+            return line
+        level = min(len(heading.group(1)) + 4, 6)
+        return f"{'#' * level} {heading.group(2)}"
+
+    return outside_fences(text, demote)
+
+
+def _body_without_dependencies(text: str) -> str:
+    """Drop the frontmatter, the H1, and the dependency sections.
+
+    The DAG is re-presented in the metadata line, so repeating the raw link
+    lists on the page would only duplicate it.
+    """
+    lines = text.splitlines()
+    start = 0
+    if lines and lines[0].strip() == "---":
+        for index in range(1, len(lines)):
+            if lines[index].strip() == "---":
+                start = index + 1
+                break
+
+    kept: list[str] = []
+    skipping = False
+    dropped_title = False
+    source_lines = lines[start:]
+    visible_lines = content_lines("".join(f"{line}\n" for line in source_lines))
+    for line, visible in zip(source_lines, visible_lines, strict=True):
+        heading = HEADING.match(visible)
+        if heading:
+            level = len(heading.group(1))
+            name = heading.group(2).strip().casefold()
+            if level == 1 and not dropped_title:
+                dropped_title = True
+                skipping = False
+                continue
+            if level <= 2:
+                skipping = level == 2 and name in DEPENDENCY_SECTIONS
+                if skipping:
+                    continue
+        if not skipping:
+            kept.append(line)
+    return _trimmed("\n".join(kept))
+
+
 def markdown_anchors(path: Path) -> set[str]:
     """Return the heading anchors MkDocs will publish for ``path``.
 
@@ -575,6 +747,7 @@ def _is_within(path: Path, directory: Path) -> bool:
 
 
 __all__ = [
+    "DEPENDENCY_SECTIONS",
     "EXTERNAL_SCHEMES",
     "FENCE",
     "FENCE_CLOSE",
@@ -582,9 +755,12 @@ __all__ = [
     "HTML_COMMENT",
     "INLINE_CODE",
     "LINK",
+    "NOTES_BOX",
     "SITE_EXTENSIONS",
     "SITE_EXTENSION_CONFIGS",
+    "STATEMENT_BOX",
     "Content",
+    "boxed",
     "content",
     "content_lines",
     "frontmatter_end",
@@ -593,10 +769,15 @@ __all__ = [
     "markdown_anchors",
     "PublishedTable",
     "markdown_links",
+    "outside_fences",
+    "page_markdown",
+    "published_lines",
+    "published_markdown",
     "published_tables",
     "render_html",
     "render_tree",
     "rendered_visible_text",
     "site_converter",
+    "statement_and_notes",
     "strip_line_comments",
 ]

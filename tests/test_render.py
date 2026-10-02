@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.lean import _normalize_remote
-from autoform_cli.render import PUBLICATION_MANIFEST, PublicationError, _split_body, render_site
+from autoform_cli.markdown import statement_and_notes
+from autoform_cli.render import PUBLICATION_MANIFEST, PublicationError, render_site
 from autoform_cli.status import STATES
 
 
@@ -677,7 +678,7 @@ def test_render_refuses_a_contract_truncated_by_a_fenced_block(tmp_path: Path) -
 
 
 def test_statement_split_uses_commonmark_closing_fences() -> None:
-    statement, remainder = _split_body(
+    statement, remainder = statement_and_notes(
         "---\n---\n\n# Result\n\nClaim.\n\n```text\n"
         "``` trailing text\n## still fenced\n```\n\nAfter the fence.\n\n"
         "## Sources\n\n[Book](source.txt#L1-L1)\n"
@@ -689,7 +690,7 @@ def test_statement_split_uses_commonmark_closing_fences() -> None:
 
 
 def test_statement_split_ignores_headings_inside_html_comments() -> None:
-    statement, remainder = _split_body(
+    statement, remainder = statement_and_notes(
         "---\n---\n\n# Result\n\nClaim A.\n\n<!--\n## hidden section\n-->\n"
         "Claim B.\n\n## Sources\n\n[Book](source.txt#L1-L1)\n"
     )
