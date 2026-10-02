@@ -901,7 +901,12 @@ Anything the verifier cannot decide, including a failed request (a later page
 of a list included, and a 404 for any list but the branch's rules), a spent
 request budget, or an undecidable CODEOWNERS rule, leaves that one approval
 self-approved, and `review check --authenticate github`, `render
---authenticate github`, and the rendered label say why. A run may make 500
+--authenticate github`, and the rendered label say why. When a failed request
+or a spent budget, which a later run may get past, rather than a refusal,
+left it so, `render` also lists the approval with the reason under
+`unchecked_approvals` in the site's `publication.json`; the Pages workflow
+deploys that site, then fails the run, so a site that understates its
+approvals never passes for a green build. A run may make 500
 requests plus 10 per approval, at most 900, which stays under GitHub's limit
 of 1000 requests an hour for a workflow's `GITHUB_TOKEN` in one repository;
 the reason for an approval left unchecked names both. The
@@ -1019,7 +1024,8 @@ so nothing the `lean` job writes is restored into the `build` job. Its
 permissions, first asks GitHub for the head of the default branch and fails
 unless it is the commit the run built, with or without statement review, so
 a re-run of an old run, or a build the branch moved past while it ran, never
-replaces the site; a failed lookup fails the job too.
+replaces the site; a failed lookup fails the job too. After deploying, it
+fails the run when `publication.json` lists any `unchecked_approvals`.
 
 When `--output`, `--packets`, and `--passages` are combined, all three outputs
 are staged before publication and a failed commit restores the previous set.
@@ -1259,5 +1265,7 @@ beside a hash or page order that describes different bytes. A published file
 must be a regular file of at most 64 MiB.
 
 Every render writes `publication.json` with the source-content hash, Git ref,
-article and dependency counts, and available views. It contains no timestamp or
-absolute path, so identical inputs produce identical output files.
+article and dependency counts, and available views, and, with
+`--authenticate`, `unchecked_approvals`: each approval the verifier could not
+finish checking, with the reason. It contains no timestamp or absolute path,
+so identical inputs produce identical output files.

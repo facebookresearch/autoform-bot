@@ -31,6 +31,7 @@ from tests.test_approvals import (
     _land,
     _project,
     _pull_approving,
+    _verified,
     _verify,
 )
 
@@ -1778,6 +1779,10 @@ def test_a_budget_spent_on_an_older_candidate_keeps_the_newer_ones_reason(tmp_pa
     assert reason.startswith(f"{pushed[:12]}: commit {pushed[:12]}, which recorded this hash, came from no "), reason
     assert f"; not checked: the budget of {budget} GitHub API requests was spent" in reason
     assert "GitHub's limit of 1000 requests an hour for a workflow's GITHUB_TOKEN" in reason
+    # The older candidate may authenticate it once a run has the budget, so a later run checks again.
+    assert _verified(root, github, max_requests=budget).unchecked == {"basics/result": reason}
+    # With the budget for both, each candidate is refused, which a later run would only repeat.
+    assert _verified(root, github).unchecked == {}
 
 
 def test_the_newest_authenticated_re_approval_is_the_one_shown(tmp_path: Path) -> None:

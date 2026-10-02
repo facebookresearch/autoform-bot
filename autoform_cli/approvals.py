@@ -148,8 +148,10 @@ class ApprovalVerifier(Protocol):
     returns an attestation for each approval it authenticates, naming that
     exact hash. An approval it cannot authenticate is simply absent. A verifier
     may also expose ``reasons``, node ids mapped to why they were not
-    authenticated, which callers show next to the self-approved label, and
-    ``web_url``, the only site a rendered page links references to.
+    authenticated, which callers show next to the self-approved label,
+    ``unchecked``, those of them it could not finish checking, such as for a
+    failed request, which a later run may authenticate, and ``web_url``, the
+    only site a rendered page links references to.
     """
 
     method: str
@@ -505,6 +507,10 @@ class _BudgetSpent(Exception):
     pass
 
 
+class _Unanswered(ApprovalError):
+    """A request to GitHub failed, so a later run may decide what it would have."""
+
+
 class _Refused(Exception):
     """One approval is not authenticated, for the stated reason."""
 
@@ -564,7 +570,8 @@ class GitHubReviewVerifier:
 
     Anything else that cannot be checked, including a failed request, a
     spent request budget, or undecidable ownership, leaves that one approval
-    self-approved and says why in ``reasons``.
+    self-approved and says why in ``reasons``; a failed request or a spent
+    budget, which a later run may get past, also puts it in ``unchecked``.
     """
 
     method = GITHUB_REVIEW_METHOD
@@ -590,6 +597,7 @@ class GitHubReviewVerifier:
         self.budget = 0
         self.requests = 0
         self.reasons: dict[str, str] = {}
+        self.unchecked: dict[str, str] = {}
         self._cache: dict[tuple[object, ...], object] = {}
         self._blueprint = ""
 
@@ -634,9 +642,11 @@ class GitHubReviewVerifier:
             return self._verify(graph, approvals)
         finally:
             self.reasons = {node_id: _printable(reason) for node_id, reason in self.reasons.items()}
+            self.unchecked = {node_id: self.reasons[node_id] for node_id in self.unchecked}
 
     def _verify(self, graph: Graph, approvals: Mapping[str, str]) -> dict[str, ApprovalAttestation]:
         self.reasons = {}
+        self.unchecked = {}
         if not approvals:
             return {}
         # Only a checkout that cannot answer at all stops here; everything
@@ -658,9 +668,12 @@ class GitHubReviewVerifier:
             raise
         except (_Refused, ApprovalError) as exc:
             self.reasons = dict.fromkeys(sorted(approvals), str(exc))
+            if isinstance(exc, _Unanswered):
+                self.unchecked = dict(self.reasons)
             return {}
         except _BudgetSpent:
             self.reasons = dict.fromkeys(sorted(approvals), self._not_checked())
+            self.unchecked = dict(self.reasons)
             return {}
         attestations: dict[str, ApprovalAttestation] = {}
         for node_id, review_hash in sorted(approvals.items()):
@@ -669,12 +682,12 @@ class GitHubReviewVerifier:
                 if node is None:
                     raise _Refused("no such article in the blueprint")
                 attestations[node_id] = self._verify_one(root, trusted, node_id, node.path, review_hash)
-            except _Refused as exc:
+            except (_Refused, ApprovalError) as exc:
                 self.reasons[node_id] = str(exc)
-            except ApprovalError as exc:
-                self.reasons[node_id] = str(exc)
+                if isinstance(exc, _Unanswered):
+                    self.unchecked[node_id] = str(exc)
             except _BudgetSpent:
-                self.reasons[node_id] = self._not_checked()
+                self.reasons[node_id] = self.unchecked[node_id] = self._not_checked()
         return attestations
 
     def _not_checked(self) -> str:
@@ -695,6 +708,7 @@ class GitHubReviewVerifier:
             return self._attest(node_id, review_hash, self._gate_pull(), path, wanted, owners)
         candidates = self._introductions(root, trusted, path, wanted)
         reasons: list[str] = []
+        unanswered = False
         for commit, parent in candidates:
             try:
                 if parent is None:
@@ -713,11 +727,14 @@ class GitHubReviewVerifier:
                 return self._attest(node_id, review_hash, pull, path, wanted, owners)
             except (_Refused, ApprovalError) as exc:
                 reasons.append(str(exc) if len(candidates) == 1 else f"{commit[:12]}: {exc}")
+                unanswered = unanswered or isinstance(exc, _Unanswered)
             except _BudgetSpent:
                 # Keep what the earlier candidates were refused for.
                 reasons.append(self._not_checked())
+                unanswered = True
                 break
-        raise _Refused("; ".join(dict.fromkeys(reasons)))
+        # A candidate that could not be checked may be the one a later run authenticates.
+        raise (_Unanswered if unanswered else _Refused)("; ".join(dict.fromkeys(reasons)))
 
     def _attest(
         self, node_id: str, review_hash: str, pull: dict, path: str, wanted: str, owners: frozenset[str]
@@ -774,7 +791,9 @@ class GitHubReviewVerifier:
         except (_Refused, ApprovalError, _BudgetSpent) as exc:
             why = f"the budget of {self.budget} GitHub API requests was spent" if isinstance(exc, _BudgetSpent) else exc
             message = f"cannot tell whether {self.trusted_ref} is the head of the default branch on GitHub: {why}"
-            raise (HeadCheckError if self.publishing else ApprovalError)(message) from exc
+            if self.publishing:
+                raise HeadCheckError(message) from exc
+            raise (_Unanswered if isinstance(exc, (_Unanswered, _BudgetSpent)) else ApprovalError)(message) from exc
         if head != trusted:
             reason = (
                 f"{self.trusted_ref} is {trusted[:12]}, not {head[:12]}, the head of {default} on GitHub; "
@@ -1309,7 +1328,10 @@ class GitHubReviewVerifier:
         if self.requests >= self.budget:
             raise _BudgetSpent
         self.requests += 1
-        return self.client.get(path, query)
+        try:
+            return self.client.get(path, query)
+        except ApprovalError as exc:
+            raise _Unanswered(str(exc)) from exc
 
     def _pages(
         self,
@@ -1335,7 +1357,8 @@ class GitHubReviewVerifier:
             if batch is None and page == 1:
                 raise ApprovalError(f"GitHub API GET {path} found nothing (HTTP 404), so the list cannot be read")
             if batch is None:
-                raise ApprovalError(f"GitHub API GET {path} found no page {page}, so the list is incomplete")
+                # The list shrank between pages, which a later run may read whole.
+                raise _Unanswered(f"GitHub API GET {path} found no page {page}, so the list is incomplete")
             if key is not None:
                 batch = batch.get(key) if isinstance(batch, dict) else None
             if not isinstance(batch, list):

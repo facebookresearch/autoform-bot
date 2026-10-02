@@ -125,6 +125,8 @@ jobs:
   build:
     needs: lean
     runs-on: ubuntu-latest
+    outputs:
+      unchecked: ${{ steps.render.outputs.unchecked }}
     permissions:
       contents: read
       pull-requests: read
@@ -211,7 +213,13 @@ jobs:
       # with the reason, which the log repeats. This is the authoritative
       # label: a pull request runs its own copy of autoform-review-gate.yml,
       # so it can disable that gate but cannot change this label.
+      #
+      # An approval left self-approved by a failed request or a spent request
+      # budget, rather than by a refusal, is listed with the reason under
+      # unchecked_approvals in site-src/publication.json, and counted here
+      # for the deploy job.
       - name: Render the blueprint
+        id: render
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -229,6 +237,8 @@ jobs:
             --lean-root . \
             --require-declarations \
             "${review_args[@]}"
+          unchecked="$(jq '.unchecked_approvals // {} | length' site-src/publication.json)"
+          echo "unchecked=$unchecked" >> "$GITHUB_OUTPUT"
 
       - name: Build the Markdown site
         run: >-
@@ -283,3 +293,14 @@ jobs:
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+
+      # The site just deployed understates these approvals, and says so in
+      # publication.json. The run fails so that is seen, not passed over as
+      # green, and a later run checks them again.
+      - name: Fail when approvals could not be checked
+        if: needs.build.outputs.unchecked != '0'
+        env:
+          UNCHECKED: ${{ needs.build.outputs.unchecked }}
+        run: |
+          echo "::error::The site is deployed, but $UNCHECKED approvals could not be checked, so they read self-approved; publication.json lists each with the reason, and a later run checks them again"
+          exit 1

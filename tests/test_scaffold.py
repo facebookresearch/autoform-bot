@@ -438,10 +438,17 @@ def _step(workflow: Path, job: str, name: str) -> str:
 
 
 def _run_step(
-    tmp_path: Path, script: str, answers: dict[str, object], **env: str
+    tmp_path: Path,
+    script: str,
+    answers: dict[str, object],
+    *,
+    tools: dict[str, str] | None = None,
+    cwd: Path | None = None,
+    **env: str,
 ) -> tuple[subprocess.CompletedProcess[str], list[str], dict[str, str]]:
     """Run a step's script with ``gh api`` answering from ``answers``.
 
+    ``tools`` maps other commands the step runs to stand-in bash scripts.
     Returns the finished process, the paths it asked GitHub for, and what it
     wrote to $GITHUB_OUTPUT.
     """
@@ -455,10 +462,14 @@ def _run_step(
     gh.chmod(0o755)
     for path, answer in answers.items():
         (stub / (re.sub(r"[^A-Za-z0-9]", "_", path) + ".json")).write_text(json.dumps(answer), encoding="utf-8")
+    for name, body in (tools or {}).items():
+        (stub / name).write_text(f"#!/bin/bash\n{body}\n", encoding="utf-8")
+        (stub / name).chmod(0o755)
     output = tmp_path / "github-output"
     output.touch()
     done = subprocess.run(
         ["bash", "-c", script],
+        cwd=cwd,
         env={
             "PATH": f"{stub}{os.pathsep}{os.path.dirname(shutil.which('jq') or '')}{os.pathsep}/usr/bin:/bin",
             "GH_STUB": str(stub),
@@ -521,6 +532,62 @@ def test_pages_deploys_only_a_build_of_the_default_branch_head(
     if not deploys:
         assert "::error::" in done.stdout or "HTTP 502" in done.stderr
 
+
+@pytest.mark.parametrize(
+    ("manifest", "unchecked"),
+    [
+        ({"unchecked_approvals": {"a/b": "HTTP 502", "a/c": "HTTP 502"}}, "2"),
+        ({"unchecked_approvals": {}}, "0"),
+        # A render without --authenticate checks nothing, so it leaves nothing unchecked.
+        ({}, "0"),
+    ],
+)
+def test_pages_fails_after_deploying_a_site_whose_approvals_could_not_be_checked(
+    tmp_path: Path, manifest: dict[str, object], unchecked: str
+) -> None:
+    """The site still deploys, and says which approvals it understates, but the run is not green."""
+
+    yaml = pytest.importorskip("yaml")
+    scaffold_project(tmp_path / "project", title="Finite Flat")
+    workflow = tmp_path / "project/.github/workflows/blueprint-pages.yml"
+    jobs = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]
+    assert [step["id"] for step in jobs["build"]["steps"] if step.get("name") == "Render the blueprint"] == ["render"]
+    assert jobs["build"]["outputs"] == {"unchecked": "${{ steps.render.outputs.unchecked }}"}
+    name = "Fail when approvals could not be checked"
+    names = [step.get("name") for step in jobs["deploy"]["steps"]]
+    assert names.index(name) == len(names) - 1 and names[-2] == "Deploy"
+    assert jobs["deploy"]["steps"][-1]["if"] == "needs.build.outputs.unchecked != '0'"
+
+    site = tmp_path / "checkout"
+    site.mkdir()
+    uvx = 'mkdir -p site-src && printf \'%s\' "$MANIFEST" > site-src/publication.json'
+    done, _, outputs = _run_step(
+        tmp_path,
+        _step(workflow, "build", "Render the blueprint"),
+        {},
+        tools={"uvx": uvx},
+        cwd=site,
+        MANIFEST=json.dumps(manifest),
+        AUTOFORM_SOURCE="https://example.com/autoform.git",
+        AUTOFORM_REF="main",
+        AUTOFORM_REVIEW_ENABLED="true",
+        GITHUB_EVENT_NAME="push",
+        GITHUB_REF="refs/heads/main",
+        RUNNER_TEMP=str(tmp_path),
+    )
+    assert done.returncode == 0, done.stderr
+    assert outputs == {"unchecked": unchecked}
+
+    failed = subprocess.run(
+        ["bash", "-c", _step(workflow, "deploy", name)],
+        env={"PATH": "/usr/bin:/bin", "UNCHECKED": "2"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert failed.returncode == 1
+    assert failed.stdout.startswith("::error::The site is deployed, but 2 approvals could not be checked")
 
 
 @pytest.mark.parametrize("merged", [True, False], ids=["merge-commit", "linear"])

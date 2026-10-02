@@ -443,6 +443,16 @@ def _verify(root: Path, github: FakeGitHub, *, trusted_ref: str = "HEAD", **kwar
     return approval_statuses(graph, approved, verifier)
 
 
+def _verified(root: Path, github: FakeGitHub, **kwargs: object) -> GitHubReviewVerifier:
+    """A verifier of ``root`` at HEAD after it has checked every approval."""
+
+    verifier = GitHubReviewVerifier(github, trusted_ref="HEAD", **kwargs)  # type: ignore[arg-type]
+    graph = load_graph(root / "blueprint")
+    approval_statuses(graph, {node.id: node.review_approved for node in graph.nodes.values() if node.review_approved}, verifier)
+    assert verifier.unchecked.items() <= verifier.reasons.items()
+    return verifier
+
+
 def _pull_approving(
     root: Path, github: FakeGitHub, *, author: str = "bob", number: int = 7, strategy: str = "squash"
 ) -> str:
@@ -801,6 +811,70 @@ def test_a_budget_spent_after_the_setup_refuses_only_the_approvals_left(tmp_path
     assert statuses["basics/other"].authenticated, statuses["basics/other"].reason
     assert not statuses["basics/result"].authenticated
     assert f"budget of {budget} GitHub API requests" in (statuses["basics/result"].reason or "")
+
+
+@pytest.mark.parametrize("failure", ["HTTP 502", "HTTP 404"])
+def test_only_an_approval_a_later_run_may_authenticate_is_unchecked(tmp_path: Path, failure: str) -> None:
+    """A later run may get the answer a failed request did not; a 404, or a spent budget, is no verdict either."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    head = _pull_approving(root, github)
+    github.review(7, "alice", "APPROVED", head)
+    _branch(root, "other")
+    _approve(root, "other", _OTHER_HASH)
+    _commit(root, "Approve the other article")
+    other_head = github.open_pull(8, "bob")
+    github.review(8, "alice", "APPROVED", other_head)
+    _land(root, github, 8)
+    answer = github.get
+
+    def flaky(path: str, query: dict | None = None) -> object | None:
+        if path != "/pulls/8/files":
+            return answer(path, query)
+        if failure == "HTTP 502":
+            raise ApprovalError(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
+        return None
+
+    github.get = flaky  # type: ignore[method-assign]
+    verifier = _verified(root, github)
+
+    assert list(verifier.reasons) == ["basics/other"]
+    assert verifier.unchecked == ({} if failure == "HTTP 404" else verifier.reasons)
+
+    github.get = answer  # type: ignore[method-assign]
+    # The setup with alice's permission, then the nine requests for #8, which "basics/other" sorts first to use.
+    budget = len(_SETUP_CALLS) + 1 + 9
+    verifier = _verified(root, github, max_requests=budget)
+    assert list(verifier.reasons) == ["basics/result"]
+    assert verifier.unchecked == verifier.reasons
+    # Spent before the rules, past the head check, it leaves every approval for a later run.
+    assert sorted(_verified(root, github, max_requests=2).unchecked) == ["basics/other", "basics/result"]
+
+
+@pytest.mark.parametrize("failure", ["HTTP 502", "HTTP 404"])
+def test_a_head_lookup_that_fails_outside_a_publishing_run_leaves_every_approval_unchecked(
+    tmp_path: Path, failure: str
+) -> None:
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    head = _pull_approving(root, github)
+    github.review(7, "alice", "APPROVED", head)
+    answer = github.get
+
+    def flaky(path: str, query: dict | None = None) -> object | None:
+        if path != "/git/ref/heads/main":
+            return answer(path, query)
+        if failure == "HTTP 502":
+            raise ApprovalError(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
+        return None
+
+    github.get = flaky  # type: ignore[method-assign]
+    verifier = _verified(root, github, publishing=False)
+
+    assert list(verifier.reasons) == ["basics/result"]
+    assert verifier.reasons["basics/result"].startswith("cannot tell whether HEAD is the head of the default branch")
+    assert verifier.unchecked == ({} if failure == "HTTP 404" else verifier.reasons)
 
 
 @pytest.mark.parametrize(("count", "budget"), [(1, 510), (2, 520), (40, 900), (1000, 900)])
@@ -1263,6 +1337,8 @@ def test_check_and_render_say_why_an_approval_stayed_self_approved(
     code, pages = _render(tmp_path, blueprint)
     assert code == 0
     assert '<span class="bp-review-self-approved" title="#3 has no review">self-approved · sha256:' in pages
+    # A refusal is a verdict, which a later build would only repeat.
+    assert json.loads((tmp_path / "site/publication.json").read_text(encoding="utf-8"))["unchecked_approvals"] == {}
     # The build log says why as well, since the page shows it only on hover.
     output = capsys.readouterr().out
     assert "warning: basics/other is self-approved: #3 has no review" in output
@@ -1288,6 +1364,10 @@ def test_a_failed_request_still_renders_the_site(
     assert pages.count('class="bp-review-self-approved" title="GitHub API GET /rules/branches/main failed with HTTP 502: Bad &lt;Gateway&gt;"') == 2
     assert "bp-review-approved" not in pages
     assert "warning: basics/result is self-approved: GitHub API GET /rules/branches/main failed with HTTP 502" in capsys.readouterr().out
+    # The site says what it understates, and why, for the run to fail on and a later one to retry.
+    reason = "GitHub API GET /rules/branches/main failed with HTTP 502: Bad <Gateway>"
+    manifest = json.loads((tmp_path / "site/publication.json").read_text(encoding="utf-8"))
+    assert manifest["unchecked_approvals"] == {"basics/other": reason, "basics/result": reason}
 
 
 def test_a_reason_never_starts_a_workflow_command_in_the_build_log(

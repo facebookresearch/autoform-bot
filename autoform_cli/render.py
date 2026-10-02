@@ -276,7 +276,10 @@ def render_site(
     a second state of the blueprint on the site.
 
     A current approval is labelled self-approved unless ``approval_verifier``
-    authenticates it; without a verifier no network is used.
+    authenticates it; without a verifier no network is used. With one, the
+    publication manifest lists under ``unchecked_approvals`` the approvals it
+    could not finish checking, and why, so the site says it may understate
+    them.
     """
     blueprint = Path(blueprint_dir).expanduser().resolve()
     requested_destination = Path(output_dir).expanduser()
@@ -350,6 +353,11 @@ def render_site(
             ).items()
         }
     )
+    unchecked = (
+        None
+        if review_bundle is None or approval_verifier is None
+        else dict(getattr(approval_verifier, "unchecked", {}))
+    )
 
     _prepare_destination(destination, clean=clean)
     _write_publication_manifest(
@@ -360,6 +368,7 @@ def render_site(
         linker,
         coverage=coverage,
         complete=False,
+        unchecked=unchecked,
     )
 
     report = RenderReport(output_dir=destination)
@@ -525,6 +534,7 @@ def render_site(
         linker,
         coverage=coverage,
         complete=True,
+        unchecked=unchecked,
     )
     return report
 
@@ -693,8 +703,9 @@ def _write_publication_manifest(
     *,
     coverage: CoverageSummary,
     complete: bool,
+    unchecked: dict[str, str] | None,
 ) -> None:
-    manifest = {
+    manifest: dict[str, object] = {
         "complete": complete,
         "coverage": {
             "complete": coverage.complete,
@@ -711,6 +722,9 @@ def _write_publication_manifest(
         "dependencies": graph.edge_count,
         "views": ["book", "progress", "project", "chapter", "focus", "full"],
     }
+    if unchecked is not None:
+        # Approvals a failed request or spent budget left self-approved; a later build may authenticate them.
+        manifest["unchecked_approvals"] = dict(sorted(unchecked.items()))
     (destination / PUBLICATION_MANIFEST).write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
