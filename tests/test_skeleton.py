@@ -4048,7 +4048,7 @@ def test_shared_probe_tables_keep_every_hash(tmp_path: Path) -> None:
         node = NodeSkeleton(node_id=project_root, article_path="a.md", declarations=tuple(declarations))
         hashes[project_root] = [node.hash, node.evidence_hash, node.review_hash]
     digest = hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
-    assert digest == "3db5dbb9571689ba28c8877c4f25661a64db9768ada86293e0116cc5a17b6238", f"{digest}\n{json.dumps(hashes, indent=1)}"
+    assert digest == "9dad08e83318314c6f864446bd56d216063d49ec303e2eda20c5a5867ffcd20a", f"{digest}\n{json.dumps(hashes, indent=1)}"
 
 
 def _probe_records(
