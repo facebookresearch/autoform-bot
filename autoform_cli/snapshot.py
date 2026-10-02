@@ -41,6 +41,11 @@ class BlueprintSnapshot:
     def __post_init__(self) -> None:
         object.__setattr__(self, "files", MappingProxyType(dict(self.files)))
 
+    def __reduce__(self) -> tuple[type[BlueprintSnapshot], tuple[dict[Path, bytes]]]:
+        """Pickle the captured bytes as a plain dict, since a read-only view does not pickle."""
+
+        return (BlueprintSnapshot, (dict(self.files),))
+
     def text(self, path: Path) -> str:
         """Return a captured file as UTF-8 text."""
 
