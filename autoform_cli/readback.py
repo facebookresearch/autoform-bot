@@ -1427,8 +1427,8 @@ _TEX_ALIGNMENT = (
     "is not allowed: MathJax does not show what it holds; write {} before a bracket that starts the first row"
 )
 _TEX_TEXT = (
-    "TeX commands and formulas inside \\text are not allowed: they are shown as typed or typeset apart; "
-    "write \\$, \\{, \\}, or \\\\ for the character"
+    "TeX commands and formulas inside \\text are not allowed: MathJax shows a command there as typed; close "
+    "\\text before a formula, as in \\text{if } x > 0, and write \\$, \\{, \\}, or \\\\ for the character itself"
 )
 
 

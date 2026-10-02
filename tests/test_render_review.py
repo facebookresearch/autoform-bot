@@ -643,6 +643,29 @@ def test_tex_mathjax_would_not_set_is_refused(testimony: str, reason: str) -> No
     assert any(reason in error for error in _testimony_errors(testimony))
 
 
+_TEXT_FORMULA = "close \\text before a formula, as in \\text{if } x > 0"
+
+
+@pytest.mark.parametrize(
+    ("testimony", "rewritten"),
+    [
+        (
+            "Restated:\n\n$$\nf(x) = \\begin{cases} 1 & \\text{if $x \\in \\mathbb{Q}$} \\\\ 0 & \\text{otherwise} \\end{cases}\n$$",
+            "Restated:\n\n$$\nf(x) = \\begin{cases} 1 & \\text{if } x \\in \\mathbb{Q} \\\\ 0 & \\text{otherwise} \\end{cases}\n$$",
+        ),
+        (r"\(\text{for all $x$}\)", r"\(\text{for all } x\)"),
+        (r"$\text{if \alpha > 0}$", r"$\text{if } x > 0$ and $\text{if } \alpha > 0$"),
+    ],
+)
+def test_tex_inside_text_is_refused_with_a_rewrite(testimony: str, rewritten: str) -> None:
+    r"""MathJax 3.2.2 shows a command inside ``\text`` as typed. It does set
+    a formula there, but the message points to the one way that reads alike
+    wherever the formula is shown: close ``\text`` first."""
+
+    assert any(_TEXT_FORMULA in error for error in _testimony_errors(testimony))
+    assert _testimony_errors(rewritten) == ()
+
+
 @pytest.mark.parametrize(
     "testimony",
     [
