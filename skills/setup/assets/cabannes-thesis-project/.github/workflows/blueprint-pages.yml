@@ -54,12 +54,12 @@ jobs:
   # head of the default branch only when the site has no complete build of
   # it, meaning no deployment of it whose newest status is a success with no
   # failed run of it since, or when that build is a day old, to pick up what
-  # changes without a push. After failed runs of the head (when its newest
-  # deployment succeeded, only those since) it waits an hour, doubling with
-  # each one up to a day. It builds only when this hour has every request
-  # a build may make left, and asks how many first. A scheduled run
-  # that builds nothing makes at most four requests besides that free one,
-  # and when GitHub does not answer one it ends green with a warning.
+  # changes without a push. After failed runs of the head (only those since
+  # its newest successful deployment) it waits an hour, doubling with each
+  # one up to a day. It builds only while at most 100 of this hour's
+  # requests are spent, and asks how many first. A scheduled run that
+  # builds nothing makes at most nine requests besides that free one, and
+  # when GitHub does not answer one it ends green with a warning.
   decide:
     if: github.event_name != 'push' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest

@@ -929,7 +929,7 @@ def test_a_scheduled_run_builds_the_head_until_it_has_a_complete_build(
 
 def test_a_scheduled_run_builds_only_when_the_verifier_would_have_its_whole_allowance(tmp_path: Path) -> None:
     """The verifier has its whole ceiling while at most _RESERVED_REQUESTS - _LEFT_AFTER are spent when it
-    begins. Decide starts a build only with 50 of those to spare, for its own four requests and the other runs
+    begins. Decide starts a build only with 50 of those to spare, for its own requests and the other runs
     of the hour during the Lean build, so a request or two elsewhere never turns a run past the ceiling red."""
 
     scaffold_project(tmp_path, title="Finite Flat")
