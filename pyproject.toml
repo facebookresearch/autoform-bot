@@ -52,3 +52,12 @@ packages = ["autoform_cli", "servers"]
 
 [tool.ruff]
 line-length = 120
+
+[tool.uv]
+# cryptography (pulled in by fastmcp -> authlib/joserfc) stopped publishing Intel-macOS
+# wheels at 49.0.0. Without a wheel, uv builds it from source, which needs Rust and
+# OpenSSL headers, so the MCP servers fail to start on x86_64 Macs.
+constraint-dependencies = [
+    "cryptography<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+]
+
