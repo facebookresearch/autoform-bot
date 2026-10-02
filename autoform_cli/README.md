@@ -901,15 +901,19 @@ Anything the verifier cannot decide, including a failed request (a later page
 of a list included, and a 404 for any list but the branch's rules), a spent
 request budget, or an undecidable CODEOWNERS rule, leaves that one approval
 self-approved, and `review check --authenticate github`, `render
---authenticate github`, and the rendered label say why. When a failed request
-or a spent budget, which a later run may get past, rather than a refusal,
-left it so, `render` also lists the approval with the reason under
-`unchecked_approvals` in the site's `publication.json`; the Pages workflow
+--authenticate github`, and the rendered label say why. When GitHub gave no
+usable answer (an HTTP error other than 404, a network failure, or malformed
+JSON), a list changed between its pages, or the budget ran out, any of which
+a later run may get past, `render` also lists the approval with the reason
+under `unchecked_approvals` in the site's `publication.json`; the Pages workflow
 deploys that site, then fails the run, so a site that understates its
 approvals never passes for a green build. A run may make 500
-requests plus 10 per approval, at most 900, which stays under GitHub's limit
-of 1000 requests an hour for a workflow's `GITHUB_TOKEN` in one repository;
-the reason for an approval left unchecked names both. The
+requests plus 10 per approval, at most 900. That bounds one run, not the
+hour: GitHub's limit of 1000 requests an hour for a workflow's `GITHUB_TOKEN`
+is shared by every run in the repository, so two full builds within an hour,
+or a build after many gate runs, can run out, and the approvals the refused
+requests leave are unchecked. The reason for an approval the budget left
+unchecked names the budget and the limit. The
 precondition costs one request for the repository, one for the default
 branch's head outside the gate, one per page of rules, one per ruleset with a
 pull request rule, one for GitHub's CODEOWNERS errors, and one permission

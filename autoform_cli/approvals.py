@@ -49,11 +49,12 @@ _MAX_PULL_FILES = 3000
 _MAX_CODEOWNERS_BYTES = 3_000_000
 _UNCOVERED_SHOWN = 10
 # GitHub allows a workflow's GITHUB_TOKEN 1000 API requests an hour in one
-# repository. A run may make _BASE_REQUESTS, enough for one rebase merge of
-# _MAX_PULL_COMMITS commits, and _REQUESTS_PER_APPROVAL more for each
-# approval, about what an approval recorded in its own pull request needs,
-# but never more than _MAX_REQUESTS, which leaves the rest of the hour's
-# allowance to other steps and runs.
+# repository, shared by every run there. A run may make _BASE_REQUESTS,
+# enough for one rebase merge of _MAX_PULL_COMMITS commits, and
+# _REQUESTS_PER_APPROVAL more for each approval, about what an approval
+# recorded in its own pull request needs, but never more than _MAX_REQUESTS.
+# That bounds one run, not the hour: two full builds in an hour can run out,
+# and the approvals the refused requests leave are unchecked.
 _GITHUB_TOKEN_HOURLY_LIMIT = 1000
 _BASE_REQUESTS = 500
 _REQUESTS_PER_APPROVAL = 10
@@ -694,8 +695,8 @@ class GitHubReviewVerifier:
         return (
             f"not checked: the budget of {self.budget} GitHub API requests was spent; a run's budget grows with "
             f"its approvals up to {_MAX_REQUESTS}, under GitHub's limit of {_GITHUB_TOKEN_HOURLY_LIMIT} requests "
-            "an hour for a workflow's GITHUB_TOKEN, and approvals recorded in one pull request share most of "
-            "their requests"
+            "an hour for a workflow's GITHUB_TOKEN, which every run in the repository shares, and approvals "
+            "recorded in one pull request share most of their requests"
         )
 
     def _verify_one(

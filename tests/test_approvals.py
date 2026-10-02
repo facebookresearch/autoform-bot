@@ -878,7 +878,7 @@ def test_a_head_lookup_that_fails_outside_a_publishing_run_leaves_every_approval
 
 
 @pytest.mark.parametrize(("count", "budget"), [(1, 510), (2, 520), (40, 900), (1000, 900)])
-def test_the_request_budget_grows_with_the_approvals_and_stays_under_the_hourly_limit(
+def test_the_request_budget_grows_with_the_approvals_and_keeps_one_run_under_the_hourly_limit(
     tmp_path: Path, count: int, budget: int
 ) -> None:
     root = _project(tmp_path)
