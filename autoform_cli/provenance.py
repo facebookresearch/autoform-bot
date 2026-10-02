@@ -22,6 +22,7 @@ import tempfile
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from decimal import Decimal, DecimalException
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -103,6 +104,7 @@ _OPTIONAL_SHIPPED_FILES = frozenset(
     }
 )
 _FORBIDDEN_RUNTIME_FILES = frozenset({".python-version", "uv.toml"})
+_FORBIDDEN_RUNTIME_ROOTS = frozenset({".venv"})
 _CLAUDE_REWRITTEN_MANIFESTS = frozenset(
     {".claude-plugin/plugin.json", ".muse-plugin/plugin.json"}
 )
@@ -417,6 +419,10 @@ def _run_git(
         if process is not None:
             _stop_process(process)
         raise _GitFailure from error
+    except BaseException:
+        if process is not None:
+            _stop_process(process)
+        raise
     finally:
         if process is not None and process.stdout is not None:
             process.stdout.close()
@@ -586,6 +592,7 @@ def _decode_json_object(encoded: bytes, message: str) -> dict[str, Any]:
         payload = json.loads(
             encoded.decode("utf-8", errors="strict"),
             object_pairs_hook=_unique_object,
+            parse_float=Decimal,
             parse_constant=reject_constant,
         )
     except (
@@ -593,6 +600,7 @@ def _decode_json_object(encoded: bytes, message: str) -> dict[str, Any]:
         ValueError,
         RecursionError,
         MemoryError,
+        DecimalException,
         _InvalidJson,
     ) as error:
         raise ProvenanceError(message) from error
@@ -741,6 +749,7 @@ def _claude_install_metadata(
     if not isinstance(entries, list):
         raise ProvenanceError(message)
     metadata: list[tuple[str | None, str | None]] = []
+    matching_entries = 0
     for entry in entries:
         if not isinstance(entry, dict):
             raise ProvenanceError(message)
@@ -748,6 +757,7 @@ def _claude_install_metadata(
         installed = _absolute_registry_path(install_path, message)
         if installed != root:
             continue
+        matching_entries += 1
         revision = entry.get("gitCommitSha")
         version = entry.get("version")
         if revision is None and version is None:
@@ -766,7 +776,7 @@ def _claude_install_metadata(
         ):
             raise ProvenanceError(message)
         metadata.append((normalized_revision, version))
-    if len(metadata) > 1:
+    if matching_entries > 1 or len(metadata) > 1:
         raise ProvenanceError(message)
     return metadata[0] if metadata else (None, None)
 
@@ -1017,6 +1027,10 @@ def _read_git_blobs(
         if process is not None:
             _stop_process(process)
         raise _GitFailure from error
+    except BaseException:
+        if process is not None:
+            _stop_process(process)
+        raise
     finally:
         if process is not None and process.stdout is not None:
             process.stdout.close()
@@ -1265,6 +1279,9 @@ def _optional_shipped_file(relative: str) -> str | None:
 
 def _require_canonical_optional_surfaces(paths: Iterable[str]) -> None:
     for relative in paths:
+        parts = PurePosixPath(relative).parts
+        if parts and parts[0].casefold() in _FORBIDDEN_RUNTIME_ROOTS:
+            raise _GitFailure
         if "/" not in relative and relative.casefold() == _CLAUDE_BUILD_COMMIT.casefold():
             raise _GitFailure
         if "/" not in relative and relative.casefold() in _FORBIDDEN_RUNTIME_FILES:
@@ -1850,15 +1867,9 @@ def _validate_claude_overlay(
     if len(base_versions) != 1:
         raise ProvenanceError(message)
     base_version = next(iter(base_versions))
-    installed_version = candidate.installed_version
-    version_match = re.fullmatch(
-        re.escape(base_version)
-        + r"\+(?:[0-9A-Za-z-]+\.)+(?P<revision>[0-9a-f]{7,40})",
-        installed_version,
-    )
+    installed_version = f"{base_version}+deicyde.{candidate.revision[:7]}"
     if (
-        version_match is None
-        or not candidate.revision.startswith(version_match.group("revision"))
+        candidate.installed_version != installed_version
         or candidate.cache_version != installed_version.replace("+", "-", 1)
     ):
         raise ProvenanceError(message)

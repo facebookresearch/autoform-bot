@@ -184,7 +184,7 @@ def _claude_transformed_install(
     _git(checkout, "remote", "add", "origin", _SOURCE)
     revision = _git(checkout, "rev-parse", "HEAD")
     layout = _layout(checkout)
-    installed_version = registry_version or f"0.5.0+test.{revision[:7]}"
+    installed_version = registry_version or f"0.5.0+deicyde.{revision[:7]}"
 
     installed = (
         tmp_path
@@ -287,7 +287,6 @@ def test_verifies_a_claude_cache_copy_at_its_recorded_revision(
                 "plugins": {
                     "autoform@market": [
                         {"installPath": str(tmp_path / "other-scope")},
-                        {"installPath": str(installed)},
                         {
                             "gitCommitSha": revision,
                             "installPath": str(installed),
@@ -373,6 +372,8 @@ def test_verifies_exact_claude_host_metadata_transform(
         "cache-leaf",
         "missing-registry-sha",
         "duplicate-registry",
+        "duplicate-empty-registry",
+        "cachebuster-label",
         "type-confusion",
         "nonfinite",
     ],
@@ -416,15 +417,39 @@ def test_rejects_invalid_claude_host_metadata_transform(
         registry_payload["plugins"]["autoform@market"][0]["installPath"] = str(moved)
         registry.write_text(json.dumps(registry_payload), encoding="utf-8")
         installed = moved
-    elif tamper in {"missing-registry-sha", "duplicate-registry"}:
+    elif tamper in {
+        "missing-registry-sha",
+        "duplicate-registry",
+        "duplicate-empty-registry",
+    }:
         registry = Path(provenance._CLAUDE_PLUGIN_REGISTRY)
         registry_payload = json.loads(registry.read_text(encoding="utf-8"))
         entry = registry_payload["plugins"]["autoform@market"][0]
         if tamper == "missing-registry-sha":
             entry.pop("gitCommitSha")
-        else:
+        elif tamper == "duplicate-registry":
             registry_payload["plugins"]["autoform@market"].append(dict(entry))
+        else:
+            registry_payload["plugins"]["autoform@market"].append(
+                {"installPath": str(installed)}
+            )
         registry.write_text(json.dumps(registry_payload), encoding="utf-8")
+    elif tamper == "cachebuster-label":
+        registry = Path(provenance._CLAUDE_PLUGIN_REGISTRY)
+        registry_payload = json.loads(registry.read_text(encoding="utf-8"))
+        entry = registry_payload["plugins"]["autoform@market"][0]
+        evil_version = entry["version"].replace("+deicyde.", "+evil.")
+        moved = installed.with_name(evil_version.replace("+", "-", 1))
+        installed.rename(moved)
+        entry["version"] = evil_version
+        entry["installPath"] = str(moved)
+        registry.write_text(json.dumps(registry_payload), encoding="utf-8")
+        for relative in (".claude-plugin/plugin.json", ".muse-plugin/plugin.json"):
+            target = moved / relative
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            payload["version"] = evil_version
+            target.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        installed = moved
     elif tamper == "type-confusion":
         muse = installed / ".muse-plugin/plugin.json"
         payload = json.loads(muse.read_text(encoding="utf-8"))
@@ -477,6 +502,31 @@ def test_claude_manifest_comparison_has_an_explicit_depth_bound() -> None:
         right_cursor = right_child
 
     assert not provenance._json_type_exact(left, right)
+
+
+@pytest.mark.parametrize(
+    ("source", "installed"),
+    [
+        (b'{"value":0.10000000000000001}', b'{"value":0.1}'),
+        (b'{"value":1e999}', b'{"value":9e999}'),
+    ],
+)
+def test_claude_manifest_numbers_are_compared_losslessly(
+    source: bytes, installed: bytes
+) -> None:
+    message = "invalid"
+    assert not provenance._json_type_exact(
+        provenance._decode_json_object(source, message),
+        provenance._decode_json_object(installed, message),
+    )
+
+
+def test_claude_manifest_rejects_unbounded_decimal_exponents() -> None:
+    with pytest.raises(provenance.ProvenanceError, match="invalid"):
+        provenance._decode_json_object(
+            b'{"value":1e999999999999999999999999999999999999999}',
+            "invalid",
+        )
 
 
 def test_claude_cache_detection_is_scoped_to_the_configured_cache(
@@ -1388,7 +1438,10 @@ def test_uv_lock_rejects_local_or_credentialed_sources(lock: bytes) -> None:
         provenance._validate_uv_lock(lock)
 
 
-@pytest.mark.parametrize("relative", ["uv.toml", "UV.TOML", ".python-version"])
+@pytest.mark.parametrize(
+    "relative",
+    ["uv.toml", "UV.TOML", ".python-version", ".venv/bin/python"],
+)
 def test_runtime_uv_configuration_is_outside_the_verified_boundary(relative: str) -> None:
     with pytest.raises(provenance._GitFailure):
         provenance._require_canonical_optional_surfaces([relative])
@@ -1587,6 +1640,66 @@ def test_git_blob_batch_timeout_kills_the_complete_process_group(
         )
     time.sleep(1.5)
 
+    assert not marker.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-specific")
+@pytest.mark.parametrize("operation", ["run", "batch"])
+def test_git_cancellation_kills_the_complete_process_group(
+    operation: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "descendant-survived"
+    ready = tmp_path / "descendant-started"
+    executable = tmp_path / "bin/git"
+    executable.parent.mkdir()
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, subprocess, sys, time\n"
+        f"code = \"import pathlib, time; time.sleep(1); pathlib.Path({os.fspath(marker)!r}).write_text('alive')\"\n"
+        "subprocess.Popen([sys.executable, '-c', code], stdin=subprocess.DEVNULL, "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        f"pathlib.Path({os.fspath(ready)!r}).write_text('ready')\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{executable.parent}{os.pathsep}{os.environ['PATH']}")
+
+    class InterruptingSelector:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def register(self, *_args: object) -> None:
+            return None
+
+        def select(self, _timeout: float) -> list[object]:
+            deadline = time.monotonic() + 5
+            while not ready.exists():
+                if time.monotonic() >= deadline:
+                    raise AssertionError("fake Git did not start its descendant")
+                time.sleep(0.01)
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(provenance.selectors, "DefaultSelector", InterruptingSelector)
+    entry = provenance._TreeObject(mode=0o100644, kind="blob", object_id="1" * 40)
+
+    with pytest.raises(KeyboardInterrupt):
+        if operation == "run":
+            provenance._run_git(["fetch"], cwd=tmp_path, timeout=5)
+        else:
+            provenance._read_git_blobs(
+                tmp_path,
+                [entry],
+                deadline=time.monotonic() + 5,
+            )
+    time.sleep(1.5)
+
+    assert ready.is_file()
     assert not marker.exists()
 
 
