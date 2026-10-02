@@ -186,6 +186,7 @@ def _corpus() -> list[str]:
         r"\begin{array}{ c : c } a & b \\ \hline c & d \\ \hline e & f \end{array}",
         r"\begin{array}{c||c} a & b \end{array}",
         r"\begin{array}{c} \hline a \\ b \\ \hline \end{array}",
+        r"\not\exists x, P(x) + \not \exists_y Q",
     ]
     return formulas
 

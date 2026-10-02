@@ -1168,7 +1168,8 @@ def _tex(names: str, kind: str = "glyph", arguments: str = "g", width: float = 0
 
 
 #: Relations, which alone may follow ``\not``, which strikes through the next
-#: symbol whatever it is. ``\iff``, ``\implies``, and ``\impliedby`` are not
+#: symbol whatever it is, but for ``\exists``, which MathJax 3.2.2 sets as
+#: ``\nexists`` after it. ``\iff``, ``\implies``, and ``\impliedby`` are not
 #: among them: MathJax sets space before their arrow, and ``\not`` strikes
 #: through that.
 _TEX_RELATIONS = frozenset(
@@ -1437,7 +1438,7 @@ _TEX_BRACES = "unbalanced TeX braces are not allowed"
 _TEX_LEFT_RIGHT = "unbalanced \\left and \\right are not allowed"
 _TEX_MIDDLE = "\\middle is allowed only between \\left and \\right"
 _TEX_LIMITS = "\\limits and \\nolimits are allowed only after a large or named operator"
-_TEX_NOT = "\\not is allowed only before a relation such as =, \\in, or \\le"
+_TEX_NOT = "\\not is allowed only before a relation such as =, \\in, or \\le, or before \\exists"
 _TEX_SCRIPTS = "a second TeX superscript or subscript on one symbol is not allowed: use braces"
 _TEX_MISPLACED = "TeX & and \\\\ are allowed only between the cells and rows of an environment"
 _TEX_UNBALANCED_ENVIRONMENT = "TeX \\begin and \\end that do not match are not allowed"
@@ -1711,7 +1712,7 @@ class _TexLayout:
             if alone or not self.operator:
                 self.errors[_TEX_LIMITS] = None
         elif kind == "not":
-            if alone or self.peek() not in _TEX_RELATIONS:
+            if alone or (self.peek() not in _TEX_RELATIONS and self.peek() != r"\exists"):
                 self.errors[_TEX_NOT] = None
         elif kind == "rows":
             spacing = _TEX_ROW_SPACING.match(self.tex, self.tokens[self.index - 1][0] + 2)

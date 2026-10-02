@@ -725,6 +725,7 @@ def test_tex_spacing_counts_once_per_column_and_adds_up_across_formulas(testimon
         (r"$\sqrt{&}$", r"TeX & and \\ are allowed only between the cells and rows of an environment"),
         (r"$a & b$", r"TeX & and \\ are allowed only between the cells and rows of an environment"),
         (r"$\not 0$", r"\not is allowed only before a relation"),
+        (r"$\not\forall x$", r"\not is allowed only before a relation such as =, \in, or \le, or before \exists"),
         (r"$P \not\implies Q$", r"\not is allowed only before a relation"),
         (r"$x^a^b$", "a second TeX superscript or subscript on one symbol is not allowed"),
         (r"$x^a'$", "a second TeX superscript or subscript on one symbol is not allowed"),
@@ -771,6 +772,7 @@ def test_tex_inside_text_is_refused_with_a_rewrite(testimony: str, rewritten: st
     [
         r"$\left( a \middle| b \right)$ and $\sum\limits_{i} a_i$",
         r"$a \mod n$, $a \not= b \not\in c$, and $x'^a + x_a'$",
+        r"$\not\exists x, P(x)$ and $\not \exists_y Q(y)$",
         r"$\mathrm{{{x}}}$ and $\text{a \$ b}$",
         r"$a \mathrel{R} b \mathbin{\star} c$ and $P {\scriptscriptstyle \land Q}$",
         r"$\lvert x \rvert$, $\varinjlim_i$, $\textsf{x}$, $\Bbbk$, $\nleftarrow$, and $\circledast$",
