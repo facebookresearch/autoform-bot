@@ -11,6 +11,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=3.4.5,<4",
+    "packaging>=24,<27",
     "psutil>=5.9",
     "tomli>=2.0.1; python_version < '3.11'",
     # The blueprint checks predict what the generated MkDocs site publishes.

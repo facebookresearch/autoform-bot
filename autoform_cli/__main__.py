@@ -88,7 +88,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     project_versions.add_argument("--json", action="store_true", help="write stable machine-readable output")
     project_provenance = project_subparsers.add_parser(
         "provenance",
-        help="verify immutable provenance for this Autoform installation",
+        help="verify Autoform installation contents observed during this invocation",
     )
     project_provenance.add_argument(
         "--json", action="store_true", help="write stable machine-readable output"

@@ -1,8 +1,9 @@
 """Resolve and verify immutable provenance for the running Autoform plugin.
 
-The source and revision emitted here are persisted in generated workflows.  A
+The source and revision emitted here are persisted in generated workflows. A
 candidate is therefore returned only when its remote commit is obtainable and
-the installed runtime and plugin surface match that commit.
+the complete installed tracked tree matches that commit, apart from narrowly
+validated host metadata.
 """
 
 from __future__ import annotations
@@ -13,16 +14,20 @@ import os
 import py_compile
 import re
 import selectors
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+
+import psutil
+from packaging.requirements import InvalidRequirement, Requirement
 
 from .bounded_toml import BoundedTomlError, loads_bounded_toml
 
@@ -53,10 +58,11 @@ _BYTECODE_NAME = re.compile(
     r"(?P<stem>.+?)\.(?P<tag>[A-Za-z0-9_-]+)"
     r"(?:\.opt-(?P<optimization>[A-Za-z0-9]+))?\.pyc"
 )
+_LOCK_HASH = re.compile(r"sha256:[0-9a-f]{64}")
 
-# These paths are consumed by a plugin host or by the packaged Python runtime.
-# Tests, repository policy, and CI files are development inputs, not installed
-# executable state.  Package roots declared by pyproject.toml are added below.
+# These roots and files are required in every supported Autoform source tree.
+# Provenance comparison covers every tracked blob; these names additionally
+# define the minimum plugin contract and package metadata used to validate it.
 _SHIPPED_ROOTS = frozenset(
     {
         ".claude-plugin",
@@ -96,12 +102,19 @@ _OPTIONAL_SHIPPED_FILES = frozenset(
         "settings.json",
     }
 )
+_FORBIDDEN_RUNTIME_FILES = frozenset({".python-version", "uv.toml"})
+_CLAUDE_REWRITTEN_MANIFESTS = frozenset(
+    {".claude-plugin/plugin.json", ".muse-plugin/plugin.json"}
+)
+_CLAUDE_BUILD_COMMIT = "BUILD_COMMIT"
+_CLAUDE_BASE_VERSION = re.compile(
+    r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
 
 # These are host- or tool-owned state rather than source.  The exact list is
 # deliberately local; arbitrary gitignored paths are not automatically trusted.
 _DERIVED_ROOTS = frozenset(
     {
-        ".claude",
         ".git",
         ".mypy_cache",
         ".pytest_cache",
@@ -144,6 +157,9 @@ class PluginProvenance:
 class _Candidate:
     source: str
     revision: str
+    installed_version: str | None = field(default=None, compare=False)
+    cache_version: str | None = field(default=None, compare=False)
+    registry_revision: str | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,7 +263,7 @@ def normalize_git_source(
     return urlunsplit(("https", hostname.lower(), "/".join(parts), "", ""))
 
 
-def _git_environment() -> dict[str, str]:
+def _git_environment(home: Path) -> dict[str, str]:
     """Build an environment that cannot redirect Git outside owned scratch."""
 
     environment = {
@@ -261,16 +277,39 @@ def _git_environment() -> dict[str, str]:
             "GIT_ASKPASS": os.devnull,
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_LAZY_FETCH": "1",
             "GIT_OPTIONAL_LOCKS": "0",
             "GIT_TERMINAL_PROMPT": "0",
+            "HOME": os.fspath(home),
             "LC_ALL": "C",
+            "NETRC": os.devnull,
+            "USERPROFILE": os.fspath(home),
+            "XDG_CONFIG_DIRS": os.fspath(home),
+            "XDG_CONFIG_HOME": os.fspath(home),
         }
     )
     return environment
 
 
 def _stop_process(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is None:
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            if process.poll() is None:
+                process.kill()
+    elif process.poll() is None:
+        try:
+            descendants = psutil.Process(process.pid).children(recursive=True)
+        except (psutil.Error, OSError):
+            descendants = []
+        for descendant in reversed(descendants):
+            try:
+                descendant.kill()
+            except psutil.Error:
+                pass
         process.kill()
     try:
         process.wait(timeout=5)
@@ -278,16 +317,17 @@ def _stop_process(process: subprocess.Popen[bytes]) -> None:
         pass
 
 
-def _run_git(
-    arguments: list[str],
-    *,
-    cwd: Path,
-    timeout: int = 15,
-    max_stdout_bytes: int = _MAX_GIT_TEXT_BYTES,
-) -> bytes:
-    """Run Git with bounded output and no inherited Git control variables."""
+def _start_git(
+    arguments: list[str], *, cwd: Path, stdin: Any
+) -> tuple[subprocess.Popen[bytes], tempfile.TemporaryDirectory[str]]:
+    """Start one isolated Git process in its own killable process group."""
 
-    process: subprocess.Popen[bytes] | None = None
+    git_home = tempfile.TemporaryDirectory(prefix="autoform-git-home-")
+    popen_options: dict[str, object] = {}
+    if os.name == "posix":
+        popen_options["start_new_session"] = True
+    elif os.name == "nt":
+        popen_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     try:
         process = subprocess.Popen(
             [
@@ -303,18 +343,53 @@ def _run_git(
                 *arguments,
             ],
             cwd=cwd,
-            env=_git_environment(),
-            stdin=subprocess.DEVNULL,
+            env=_git_environment(Path(git_home.name)),
+            stdin=stdin,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
+            **popen_options,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        git_home.cleanup()
+        raise _GitFailure from error
+    return process, git_home
+
+
+def _run_git(
+    arguments: list[str],
+    *,
+    cwd: Path,
+    timeout: float = 15,
+    deadline: float | None = None,
+    max_stdout_bytes: int = _MAX_GIT_TEXT_BYTES,
+    stdin_bytes: bytes | None = None,
+) -> bytes:
+    """Run Git with bounded output and no inherited Git control variables."""
+
+    process: subprocess.Popen[bytes] | None = None
+    request_file: Any = None
+    git_home: tempfile.TemporaryDirectory[str] | None = None
+    try:
+        operation_deadline = time.monotonic() + timeout if deadline is None else deadline
+        if operation_deadline <= time.monotonic() or max_stdout_bytes < 0:
+            raise _GitFailure
+        if stdin_bytes is not None:
+            if len(stdin_bytes) > _MAX_GIT_LIST_BYTES:
+                raise _GitFailure
+            request_file = tempfile.TemporaryFile()
+            request_file.write(stdin_bytes)
+            request_file.seek(0)
+        process, git_home = _start_git(
+            arguments,
+            cwd=cwd,
+            stdin=request_file if request_file is not None else subprocess.DEVNULL,
         )
         assert process.stdout is not None
-        deadline = time.monotonic() + timeout
         output = bytearray()
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)
             while True:
-                remaining = deadline - time.monotonic()
+                remaining = operation_deadline - time.monotonic()
                 if remaining <= 0:
                     raise _GitFailure
                 if not selector.select(remaining):
@@ -328,7 +403,9 @@ def _run_git(
                 output.extend(chunk)
                 if len(output) > max_stdout_bytes:
                     raise _GitFailure
-        remaining = max(0.1, deadline - time.monotonic())
+        remaining = operation_deadline - time.monotonic()
+        if remaining <= 0:
+            raise _GitFailure
         if process.wait(timeout=remaining) != 0:
             raise _GitFailure
         return bytes(output)
@@ -343,11 +420,15 @@ def _run_git(
     finally:
         if process is not None and process.stdout is not None:
             process.stdout.close()
+        if request_file is not None:
+            request_file.close()
+        if git_home is not None:
+            git_home.cleanup()
 
 
-def _git_text(arguments: list[str], *, cwd: Path) -> str:
+def _git_text(arguments: list[str], *, cwd: Path, deadline: float | None = None) -> str:
     try:
-        value = _run_git(arguments, cwd=cwd).decode("utf-8", errors="strict").strip()
+        value = _run_git(arguments, cwd=cwd, deadline=deadline).decode("utf-8", errors="strict").strip()
     except (UnicodeDecodeError, _GitFailure) as error:
         raise _GitFailure from error
     if not value or "\n" in value or "\r" in value:
@@ -498,10 +579,14 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _decode_json_object(encoded: bytes, message: str) -> dict[str, Any]:
+    def reject_constant(_value: str) -> None:
+        raise _InvalidJson
+
     try:
         payload = json.loads(
             encoded.decode("utf-8", errors="strict"),
             object_pairs_hook=_unique_object,
+            parse_constant=reject_constant,
         )
     except (
         UnicodeDecodeError,
@@ -594,7 +679,7 @@ def _claude_registry_paths() -> tuple[Path, Path]:
 
 def _claude_cache_coordinates(
     root: Path, plugin_registry: Path | None = None
-) -> tuple[str, str] | None:
+) -> tuple[str, str, str] | None:
     if plugin_registry is None:
         plugin_registry, _ = _claude_registry_paths()
     cache_root = Path(os.path.abspath(plugin_registry.parent / "cache"))
@@ -613,7 +698,7 @@ def _claude_cache_coordinates(
         for component in (marketplace, plugin, version)
     ):
         return None
-    return marketplace, plugin
+    return marketplace, plugin, version
 
 
 def _absolute_registry_path(value: object, message: str) -> Path:
@@ -634,28 +719,28 @@ def _absolute_registry_path(value: object, message: str) -> Path:
     return Path(os.path.abspath(path))
 
 
-def _claude_install_revision(
+def _claude_install_metadata(
     root: Path,
     marketplace: str,
     plugin: str,
     plugin_registry: Path | None = None,
-) -> str | None:
+) -> tuple[str | None, str | None]:
     message = "The Claude plugin installation registry is invalid."
     if plugin_registry is None:
         plugin_registry, _ = _claude_registry_paths()
     encoded = _read_bounded_path(plugin_registry, message=message)
     if encoded is None:
-        return None
+        return None, None
     payload = _decode_json_object(encoded, message)
     plugins = payload.get("plugins")
     if not isinstance(plugins, dict):
         raise ProvenanceError(message)
     entries = plugins.get(f"{plugin}@{marketplace}")
     if entries is None:
-        return None
+        return None, None
     if not isinstance(entries, list):
         raise ProvenanceError(message)
-    revisions: set[str] = set()
+    metadata: list[tuple[str | None, str | None]] = []
     for entry in entries:
         if not isinstance(entry, dict):
             raise ProvenanceError(message)
@@ -664,17 +749,36 @@ def _claude_install_revision(
         if installed != root:
             continue
         revision = entry.get("gitCommitSha")
-        if revision is None:
+        version = entry.get("version")
+        if revision is None and version is None:
             continue
-        if not isinstance(revision, str):
+        if revision is not None and not isinstance(revision, str):
             raise ProvenanceError(message)
-        normalized_revision = revision.lower()
-        if _FULL_SHA.fullmatch(normalized_revision) is None:
+        normalized_revision = revision.lower() if revision is not None else None
+        if normalized_revision is not None and _FULL_SHA.fullmatch(normalized_revision) is None:
             raise ProvenanceError(message)
-        revisions.add(normalized_revision)
-    if len(revisions) > 1:
+        if version is not None and (
+            type(version) is not str
+            or not version
+            or len(version) > 255
+            or version != version.strip()
+            or any(ord(character) < 32 or ord(character) == 127 for character in version)
+        ):
+            raise ProvenanceError(message)
+        metadata.append((normalized_revision, version))
+    if len(metadata) > 1:
         raise ProvenanceError(message)
-    return next(iter(revisions), None)
+    return metadata[0] if metadata else (None, None)
+
+
+def _claude_install_revision(
+    root: Path,
+    marketplace: str,
+    plugin: str,
+    plugin_registry: Path | None = None,
+) -> str | None:
+    revision, _ = _claude_install_metadata(root, marketplace, plugin, plugin_registry)
+    return revision
 
 
 def _claude_marketplace_candidate(root: Path) -> _Candidate | None:
@@ -682,8 +786,10 @@ def _claude_marketplace_candidate(root: Path) -> _Candidate | None:
     coordinates = _claude_cache_coordinates(root, plugin_registry)
     if coordinates is None:
         return None
-    marketplace, plugin = coordinates
-    revision = _claude_install_revision(root, marketplace, plugin, plugin_registry)
+    marketplace, plugin, cache_version = coordinates
+    revision, installed_version = _claude_install_metadata(
+        root, marketplace, plugin, plugin_registry
+    )
 
     message = "The Claude plugin marketplace registry is invalid."
     encoded = _read_bounded_path(marketplace_registry, message=message)
@@ -704,7 +810,13 @@ def _claude_marketplace_candidate(root: Path) -> _Candidate | None:
         raise ProvenanceError(message) from error
     if checkout is None:
         raise ProvenanceError(message)
-    return _Candidate(checkout.source, revision or checkout.revision)
+    return _Candidate(
+        checkout.source,
+        revision or checkout.revision,
+        installed_version=installed_version,
+        cache_version=cache_version,
+        registry_revision=revision,
+    )
 
 
 def _valid_relative_path(encoded: bytes) -> str:
@@ -723,21 +835,214 @@ def _valid_relative_path(encoded: bytes) -> str:
     return relative
 
 
-def _read_git_blob(repository: Path, entry: _TreeObject) -> bytes:
-    try:
-        size = int(_git_text(["cat-file", "-s", entry.object_id], cwd=repository))
-    except (ValueError, _GitFailure) as error:
-        raise _GitFailure from error
-    if size < 0 or size > _MAX_SHIPPED_FILE_BYTES:
+def _object_request(object_ids: Iterable[str]) -> bytes:
+    unique = sorted(set(object_ids))
+    if (
+        len(unique) > _MAX_MANIFEST_ENTRIES
+        or any(_FULL_SHA.fullmatch(object_id) is None for object_id in unique)
+    ):
         raise _GitFailure
-    content = _run_git(
-        ["cat-file", "blob", entry.object_id],
+    encoded = b"".join(f"{object_id}\n".encode("ascii") for object_id in unique)
+    if len(encoded) > _MAX_GIT_LIST_BYTES:
+        raise _GitFailure
+    return encoded
+
+
+def _require_blob_presence(
+    repository: Path,
+    objects: Iterable[_TreeObject],
+    expected: Iterable[str],
+    *,
+    deadline: float,
+) -> None:
+    """Require exactly ``expected`` blobs to exist without lazy network access."""
+
+    object_ids = sorted({entry.object_id for entry in objects if entry.kind == "blob"})
+    expected_ids = set(expected)
+    if not expected_ids.issubset(object_ids):
+        raise _GitFailure
+    output = _run_git(
+        [
+            "cat-file",
+            "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+            "--batch-all-objects",
+            "--unordered",
+        ],
         cwd=repository,
-        max_stdout_bytes=size,
+        deadline=deadline,
+        max_stdout_bytes=_MAX_GIT_LIST_BYTES,
     )
-    if len(content) != size:
+    present_ids: set[str] = set()
+    for line in output.splitlines():
+        fields = line.split(b" ")
+        if len(fields) != 3 or not fields[2].isdigit():
+            raise _GitFailure
+        try:
+            object_id = fields[0].decode("ascii")
+            kind = fields[1].decode("ascii")
+        except UnicodeDecodeError as error:
+            raise _GitFailure from error
+        if _FULL_SHA.fullmatch(object_id) is None:
+            raise _GitFailure
+        if kind == "blob":
+            if object_id in present_ids:
+                raise _GitFailure
+            present_ids.add(object_id)
+    if present_ids != expected_ids:
         raise _GitFailure
-    return content
+
+
+def _fetch_git_objects(repository: Path, object_ids: Iterable[str], *, deadline: float) -> None:
+    """Fetch only selected promised blobs through Git's partial-clone transport."""
+
+    request = _object_request(object_ids)
+    if not request:
+        return
+    _run_git(
+        [
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--recurse-submodules=no",
+            "--filter=blob:none",
+            "--stdin",
+            "origin",
+        ],
+        cwd=repository,
+        deadline=deadline,
+        max_stdout_bytes=1024 * 1024,
+        stdin_bytes=request,
+    )
+
+
+def _read_git_blobs(
+    repository: Path,
+    objects: Iterable[_TreeObject],
+    *,
+    deadline: float,
+    known: dict[str, bytes] | None = None,
+) -> dict[str, bytes]:
+    """Read unique local blobs through one bounded ``cat-file --batch`` process."""
+
+    contents = dict(known or {})
+    entries = tuple(objects)
+    if any(entry.kind != "blob" for entry in entries):
+        raise _GitFailure
+    requested = sorted({entry.object_id for entry in entries if entry.object_id not in contents})
+    request = _object_request(requested)
+    total = sum(len(content) for content in contents.values())
+    if total > _MAX_SHIPPED_TOTAL_BYTES:
+        raise _GitFailure
+    if not requested:
+        return contents
+
+    process: subprocess.Popen[bytes] | None = None
+    request_file: Any = None
+    git_home: tempfile.TemporaryDirectory[str] | None = None
+    try:
+        if deadline <= time.monotonic():
+            raise _GitFailure
+        request_file = tempfile.TemporaryFile()
+        request_file.write(request)
+        request_file.seek(0)
+        process, git_home = _start_git(
+            ["cat-file", "--batch"],
+            cwd=repository,
+            stdin=request_file,
+        )
+        assert process.stdout is not None
+        buffer = bytearray()
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+
+            def read_more() -> bool:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise _GitFailure
+                chunk = os.read(process.stdout.fileno(), 64 * 1024)
+                if not chunk:
+                    return False
+                buffer.extend(chunk)
+                return True
+
+            def read_line() -> bytes:
+                while True:
+                    end = buffer.find(b"\n")
+                    if end >= 0:
+                        if end > 128:
+                            raise _GitFailure
+                        line = bytes(buffer[:end])
+                        del buffer[: end + 1]
+                        return line
+                    if len(buffer) > 128 or not read_more():
+                        raise _GitFailure
+
+            def read_exact(size: int) -> bytes:
+                while len(buffer) < size:
+                    if not read_more():
+                        raise _GitFailure
+                value = bytes(buffer[:size])
+                del buffer[:size]
+                return value
+
+            for object_id in requested:
+                fields = read_line().split(b" ")
+                if (
+                    len(fields) != 3
+                    or fields[0] != object_id.encode("ascii")
+                    or fields[1] != b"blob"
+                    or not fields[2].isdigit()
+                ):
+                    raise _GitFailure
+                size = int(fields[2])
+                if size > _MAX_SHIPPED_FILE_BYTES or total + size > _MAX_SHIPPED_TOTAL_BYTES:
+                    raise _GitFailure
+                content = read_exact(size)
+                if read_exact(1) != b"\n":
+                    raise _GitFailure
+                contents[object_id] = content
+                total += size
+
+            if buffer or read_more():
+                raise _GitFailure
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or process.wait(timeout=remaining) != 0:
+            raise _GitFailure
+        return contents
+    except _GitFailure:
+        if process is not None:
+            _stop_process(process)
+        raise
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        if process is not None:
+            _stop_process(process)
+        raise _GitFailure from error
+    finally:
+        if process is not None and process.stdout is not None:
+            process.stdout.close()
+        if request_file is not None:
+            request_file.close()
+        if git_home is not None:
+            git_home.cleanup()
+
+
+def _require_remote_python_requirements(value: object) -> None:
+    if type(value) is not list:
+        raise _GitFailure
+    for specification in value:
+        if (
+            type(specification) is not str
+            or not specification
+            or specification != specification.strip()
+            or any(ord(character) < 32 or ord(character) == 127 for character in specification)
+        ):
+            raise _GitFailure
+        try:
+            requirement = Requirement(specification)
+        except InvalidRequirement as error:
+            raise _GitFailure from error
+        if requirement.url is not None:
+            raise _GitFailure
 
 
 def _package_roots(pyproject: bytes) -> tuple[str, ...]:
@@ -746,12 +1051,47 @@ def _package_roots(pyproject: bytes) -> tuple[str, ...]:
             pyproject.decode("utf-8", errors="strict"),
             max_depth=_MAX_TOML_DEPTH,
         )
-        name = project["project"]["name"]
-        entry_point = project["project"]["scripts"]["autoform"]
-        packages = project["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]
+        build_system = project["build-system"]
+        metadata = project["project"]
+        name = metadata["name"]
+        entry_point = metadata["scripts"]["autoform"]
+        tool = project["tool"]
+        hatch = tool["hatch"]
+        build = hatch["build"]
+        targets = build["targets"]
+        wheel = targets["wheel"]
+        packages = wheel["packages"]
     except (BoundedTomlError, KeyError, TypeError, UnicodeDecodeError) as error:
         raise _GitFailure from error
-    if name != "autoform" or entry_point != "autoform_cli.__main__:main":
+    if (
+        type(build_system) is not dict
+        or set(build_system) != {"build-backend", "requires"}
+        or build_system["build-backend"] != "hatchling.build"
+        or type(metadata) is not dict
+        or type(tool) is not dict
+        or "uv" in tool
+        or "dependency-groups" in project
+        or type(hatch) is not dict
+        or set(hatch) != {"build"}
+        or type(build) is not dict
+        or set(build) != {"targets"}
+        or type(targets) is not dict
+        or set(targets) != {"wheel"}
+        or type(wheel) is not dict
+        or set(wheel) != {"packages"}
+        or name != "autoform"
+        or entry_point != "autoform_cli.__main__:main"
+    ):
+        raise _GitFailure
+    _require_remote_python_requirements(build_system.get("requires"))
+    _require_remote_python_requirements(metadata.get("dependencies", []))
+    optional_dependencies = metadata.get("optional-dependencies", {})
+    if type(optional_dependencies) is not dict:
+        raise _GitFailure
+    for requirements in optional_dependencies.values():
+        _require_remote_python_requirements(requirements)
+    dynamic = metadata.get("dynamic", [])
+    if dynamic != []:
         raise _GitFailure
     if type(packages) is not list or any(type(path) is not str for path in packages):
         raise _GitFailure
@@ -771,6 +1111,87 @@ def _package_roots(pyproject: bytes) -> tuple[str, ...]:
     if "autoform_cli" not in roots or len(set(roots)) != len(roots):
         raise _GitFailure
     return tuple(sorted(roots))
+
+
+def _require_https_lock_url(value: object) -> None:
+    if (
+        type(value) is not str
+        or value != value.strip()
+        or any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise _GitFailure
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise _GitFailure from error
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise _GitFailure
+
+
+def _validate_uv_lock(encoded: bytes) -> None:
+    try:
+        lock = loads_bounded_toml(
+            encoded.decode("utf-8", errors="strict"),
+            max_depth=_MAX_TOML_DEPTH,
+        )
+        packages = lock["package"]
+    except (BoundedTomlError, KeyError, TypeError, UnicodeDecodeError) as error:
+        raise _GitFailure from error
+    if type(packages) is not list or len(packages) > _MAX_MANIFEST_ENTRIES:
+        raise _GitFailure
+    autoform_packages = 0
+    for package in packages:
+        if type(package) is not dict or type(package.get("name")) is not str:
+            raise _GitFailure
+        source = package.get("source")
+        if package["name"] == "autoform":
+            if source != {"editable": "."}:
+                raise _GitFailure
+            autoform_packages += 1
+        else:
+            if type(source) is not dict or set(source) != {"registry"}:
+                raise _GitFailure
+            _require_https_lock_url(source["registry"])
+        artifacts: list[object] = []
+        if "sdist" in package:
+            artifacts.append(package["sdist"])
+        wheels = package.get("wheels", [])
+        if type(wheels) is not list:
+            raise _GitFailure
+        artifacts.extend(wheels)
+        if package["name"] != "autoform" and not artifacts:
+            raise _GitFailure
+        for artifact in artifacts:
+            if (
+                type(artifact) is not dict
+                or not {"url", "hash", "size"}.issubset(artifact)
+                or not set(artifact).issubset({"url", "hash", "size", "upload-time"})
+                or type(artifact["hash"]) is not str
+                or _LOCK_HASH.fullmatch(artifact["hash"]) is None
+                or type(artifact["size"]) is not int
+                or artifact["size"] <= 0
+            ):
+                raise _GitFailure
+            _require_https_lock_url(artifact["url"])
+            upload_time = artifact.get("upload-time")
+            if upload_time is not None and (
+                type(upload_time) is not str
+                or not upload_time
+                or upload_time != upload_time.strip()
+                or any(ord(character) < 32 or ord(character) == 127 for character in upload_time)
+            ):
+                raise _GitFailure
+    if autoform_packages != 1:
+        raise _GitFailure
 
 
 def _validate_package_manifest(encoded: bytes) -> None:
@@ -807,7 +1228,7 @@ def _validate_package_manifest(encoded: bytes) -> None:
                 ):
                     raise _GitFailure
 
-    for field in (
+    for dependency_field in (
         "dependencies",
         "devDependencies",
         "optionalDependencies",
@@ -815,7 +1236,7 @@ def _validate_package_manifest(encoded: bytes) -> None:
         "overrides",
         "resolutions",
     ):
-        require_remote_specifications(package.get(field, {}))
+        require_remote_specifications(package.get(dependency_field, {}))
 
 
 def _under_root(relative: str, root: str) -> bool:
@@ -844,6 +1265,10 @@ def _optional_shipped_file(relative: str) -> str | None:
 
 def _require_canonical_optional_surfaces(paths: Iterable[str]) -> None:
     for relative in paths:
+        if "/" not in relative and relative.casefold() == _CLAUDE_BUILD_COMMIT.casefold():
+            raise _GitFailure
+        if "/" not in relative and relative.casefold() in _FORBIDDEN_RUNTIME_FILES:
+            raise _GitFailure
         root = _optional_shipped_root(relative)
         if root is not None and not _under_root(relative, root):
             raise _GitFailure
@@ -852,21 +1277,51 @@ def _require_canonical_optional_surfaces(paths: Iterable[str]) -> None:
             raise _GitFailure
 
 
+def _source_roots(paths: Iterable[str], base_roots: Iterable[str]) -> tuple[str, ...]:
+    roots = set(base_roots)
+    for relative in paths:
+        parts = PurePosixPath(relative).parts
+        if len(parts) == 1 and _looks_importable(relative):
+            raise _GitFailure
+        if len(parts) > 1:
+            roots.add(parts[0])
+    return tuple(sorted(roots))
+
+
 def _fetch_source_layout(source: str, revision: str, scratch: Path) -> _SourceLayout:
+    deadline = time.monotonic() + 60
     repository = scratch / "repository.git"
-    _run_git(["init", "--bare", "--template=", str(repository)], cwd=scratch)
+    _run_git(["init", "--bare", "--template=", str(repository)], cwd=scratch, deadline=deadline)
+    _run_git(["remote", "add", "origin", source], cwd=repository, deadline=deadline)
+    _run_git(["config", "remote.origin.promisor", "true"], cwd=repository, deadline=deadline)
     _run_git(
-        ["fetch", "--no-tags", "--no-recurse-submodules", "--depth=1", source, revision],
+        ["config", "remote.origin.partialCloneFilter", "blob:none"],
         cwd=repository,
-        timeout=60,
+        deadline=deadline,
+    )
+    _run_git(
+        [
+            "fetch",
+            "--no-tags",
+            "--no-recurse-submodules",
+            "--depth=1",
+            "--filter=blob:none",
+            "origin",
+            revision,
+        ],
+        cwd=repository,
+        deadline=deadline,
         max_stdout_bytes=1024 * 1024,
     )
-    resolved = _git_text(["rev-parse", "--verify", "FETCH_HEAD^{commit}"], cwd=repository).lower()
+    resolved = _git_text(
+        ["rev-parse", "--verify", "FETCH_HEAD^{commit}"], cwd=repository, deadline=deadline
+    ).lower()
     if resolved != revision:
         raise _GitFailure
     listing = _run_git(
         ["ls-tree", "-rz", "--full-tree", resolved],
         cwd=repository,
+        deadline=deadline,
         max_stdout_bytes=_MAX_GIT_LIST_BYTES,
     )
     objects: dict[str, _TreeObject] = {}
@@ -883,6 +1338,8 @@ def _fetch_source_layout(source: str, revision: str, scratch: Path) -> _SourceLa
             object_id = raw_object.decode("ascii")
         except (UnicodeDecodeError, ValueError) as error:
             raise _GitFailure from error
+        if _FULL_SHA.fullmatch(object_id) is None:
+            raise _GitFailure
         relative = _valid_relative_path(raw_path)
         if relative in objects:
             raise _GitFailure
@@ -890,44 +1347,74 @@ def _fetch_source_layout(source: str, revision: str, scratch: Path) -> _SourceLa
 
     _require_canonical_optional_surfaces(objects)
 
+    # Git has no stable porcelain for querying a promised blob's remote size.
+    # Require the server to honor blob:none, then request only objects inside
+    # the verified install boundary. Size limits are enforced as those selected
+    # objects leave cat-file; they cannot be preflighted before their transfer.
+    _require_blob_presence(repository, objects.values(), set(), deadline=deadline)
+
     pyproject_object = objects.get("pyproject.toml")
     if pyproject_object is None or pyproject_object.kind != "blob" or pyproject_object.mode != 0o100644:
         raise _GitFailure
-    pyproject = _read_git_blob(repository, pyproject_object)
-    package_roots = _package_roots(pyproject)
+    uv_lock_object = objects.get("uv.lock")
+    if uv_lock_object is None or uv_lock_object.kind != "blob" or uv_lock_object.mode != 0o100644:
+        raise _GitFailure
+    metadata_objects = [pyproject_object, uv_lock_object]
     package_object = objects.get("package.json")
     if package_object is not None:
         if package_object.kind != "blob" or package_object.mode != 0o100644:
             raise _GitFailure
-        _validate_package_manifest(_read_git_blob(repository, package_object))
+        metadata_objects.append(package_object)
+    metadata_ids = {entry.object_id for entry in metadata_objects}
+    _fetch_git_objects(repository, metadata_ids, deadline=deadline)
+    _require_blob_presence(repository, objects.values(), metadata_ids, deadline=deadline)
+    blob_contents = _read_git_blobs(repository, metadata_objects, deadline=deadline)
+    pyproject = blob_contents[pyproject_object.object_id]
+    package_roots = _package_roots(pyproject)
+    _validate_uv_lock(blob_contents[uv_lock_object.object_id])
+    if package_object is not None:
+        _validate_package_manifest(blob_contents[package_object.object_id])
     optional_roots = {
         root
         for root in _OPTIONAL_SHIPPED_ROOTS
         if any(_under_root(path, root) for path in objects)
     }
-    roots = tuple(sorted(set((*_SHIPPED_ROOTS, *optional_roots, *package_roots))))
+    roots = _source_roots(
+        objects,
+        (*_SHIPPED_ROOTS, *optional_roots, *package_roots),
+    )
     for root in roots:
         if not any(_under_root(path, root) for path in objects):
             raise _GitFailure
     if not _SHIPPED_FILES.issubset(objects):
         raise _GitFailure
 
-    manifest: dict[str, _ManifestEntry] = {}
-    total = 0
+    selected: dict[str, _TreeObject] = {}
     for relative, tree_object in sorted(objects.items()):
-        in_boundary = (
-            relative in _SHIPPED_FILES
-            or relative in _OPTIONAL_SHIPPED_FILES
-            or any(_under_root(relative, root) for root in roots)
-        )
-        if not in_boundary or PurePosixPath(relative).name == ".DS_Store":
-            continue
         path = PurePosixPath(relative)
-        if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
+        if any(part.casefold() == "__pycache__" for part in path.parts) or path.suffix.casefold() in {
+            ".pyc",
+            ".pyo",
+        }:
             raise _GitFailure
         if tree_object.kind != "blob" or tree_object.mode not in {0o100644, 0o100755}:
             raise _GitFailure
-        content = pyproject if relative == "pyproject.toml" else _read_git_blob(repository, tree_object)
+        selected[relative] = tree_object
+
+    selected_ids = {entry.object_id for entry in selected.values()}
+    _fetch_git_objects(repository, selected_ids - blob_contents.keys(), deadline=deadline)
+    _require_blob_presence(repository, objects.values(), selected_ids, deadline=deadline)
+    blob_contents = _read_git_blobs(
+        repository,
+        selected.values(),
+        deadline=deadline,
+        known=blob_contents,
+    )
+
+    manifest: dict[str, _ManifestEntry] = {}
+    total = 0
+    for relative, tree_object in selected.items():
+        content = blob_contents[tree_object.object_id]
         total += len(content)
         if total > _MAX_SHIPPED_TOTAL_BYTES:
             raise _GitFailure
@@ -1224,26 +1711,54 @@ def _validate_bytecode(
         )
 
 
-def _is_derived_path(relative: str) -> bool:
+def _derived_entry_kind(relative: str) -> str | None:
     path = PurePosixPath(relative)
-    return (
-        path.parts[0] in _DERIVED_ROOTS
-        or any(part in _DERIVED_DIRECTORY_NAMES for part in path.parts)
-        or path.name in _DERIVED_FILE_NAMES
-        or relative == INSTALL_RECORD
-    )
+    if len(path.parts) != 1:
+        return None
+    if relative == INSTALL_RECORD:
+        return "file"
+    if relative == ".git":
+        return "git"
+    if relative in _DERIVED_ROOTS or relative in _DERIVED_DIRECTORY_NAMES:
+        return "directory"
+    if relative in _DERIVED_FILE_NAMES:
+        return "file"
+    return None
+
+
+def _require_derived_entry(
+    descriptor: int,
+    name: str,
+    relative: str,
+) -> bool:
+    kind = _derived_entry_kind(relative)
+    if kind is None:
+        return False
+    try:
+        metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    except OSError as error:
+        raise ProvenanceError("The installed Autoform derived state is invalid.") from error
+    regular_non_executable = stat.S_ISREG(metadata.st_mode) and not metadata.st_mode & 0o111
+    if kind == "directory" and not stat.S_ISDIR(metadata.st_mode):
+        raise ProvenanceError("The installed Autoform derived state is invalid.")
+    if kind == "file" and not regular_non_executable:
+        raise ProvenanceError("The installed Autoform derived state is invalid.")
+    if kind == "git" and not (stat.S_ISDIR(metadata.st_mode) or regular_non_executable):
+        raise ProvenanceError("The installed Autoform derived state is invalid.")
+    return True
 
 
 def _looks_importable(relative: str) -> bool:
-    name = PurePosixPath(relative).name
+    name = PurePosixPath(relative).name.casefold()
     return any(name.endswith(suffix) for suffix in _IMPORTABLE_SUFFIXES)
 
 
-def _scan_for_extra_importable(
+def _scan_for_unverified_entries(
     descriptor: int,
     prefix: str,
     *,
     layout: _SourceLayout,
+    allowed_host_files: frozenset[str],
     counter: list[int],
     depth: int,
 ) -> None:
@@ -1251,7 +1766,15 @@ def _scan_for_extra_importable(
         raise ProvenanceError("The installed Autoform tree is too deep to verify safely.")
     for name in _safe_names(descriptor, counter):
         relative = f"{prefix}/{name}" if prefix else name
+        if "/" not in relative and relative.casefold() in _FORBIDDEN_RUNTIME_FILES:
+            raise ProvenanceError(
+                "The installed Autoform tree contains unverified runtime configuration."
+            )
         if any(_under_root(relative, root) for root in layout.roots):
+            continue
+        if relative in layout.files:
+            continue
+        if relative in allowed_host_files:
             continue
         if (expected_file := _optional_shipped_file(relative)) is not None:
             if relative == expected_file and relative in layout.files:
@@ -1263,35 +1786,109 @@ def _scan_for_extra_importable(
             raise ProvenanceError(
                 "The installed Autoform tree contains an unverified plugin surface."
             )
-        if _is_derived_path(relative):
+        if _require_derived_entry(descriptor, name, relative):
             continue
-        try:
-            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-        except OSError as error:
-            raise ProvenanceError("The installed Autoform files could not be inspected safely.") from error
-        if stat.S_ISDIR(metadata.st_mode):
-            child = _open_child_directory(descriptor, name, metadata)
-            try:
-                _scan_for_extra_importable(
-                    child,
-                    relative,
-                    layout=layout,
-                    counter=counter,
-                    depth=depth + 1,
-                )
-                _require_child_identity(descriptor, name, child)
-            finally:
-                os.close(child)
-        elif relative not in layout.all_files and (
-            not stat.S_ISREG(metadata.st_mode) or _looks_importable(relative)
-        ):
-            raise ProvenanceError("The installed Autoform tree contains extra importable code.")
+        raise ProvenanceError(
+            "The installed Autoform tree contains an unverified file or directory."
+        )
+
+
+def _json_type_exact(left: object, right: object) -> bool:
+    pending: list[tuple[object, object, int]] = [(left, right, 1)]
+    while pending:
+        left_value, right_value, depth = pending.pop()
+        if type(left_value) is not type(right_value) or depth > _MAX_JSON_DEPTH:
+            return False
+        if isinstance(left_value, dict):
+            assert isinstance(right_value, dict)
+            if set(left_value) != set(right_value):
+                return False
+            pending.extend(
+                (left_value[key], right_value[key], depth + 1) for key in left_value
+            )
+        elif isinstance(left_value, list):
+            assert isinstance(right_value, list)
+            if len(left_value) != len(right_value):
+                return False
+            pending.extend(
+                (left_item, right_item, depth + 1)
+                for left_item, right_item in zip(left_value, right_value, strict=True)
+            )
+        elif left_value != right_value:
+            return False
+    return True
+
+
+def _validate_claude_overlay(
+    root_descriptor: int,
+    layout: _SourceLayout,
+    actual_files: dict[str, _ActualEntry],
+    candidate: _Candidate,
+    budget: list[int],
+) -> frozenset[str]:
+    message = "The installed Claude plugin metadata is invalid."
+    if candidate.installed_version is None or candidate.cache_version is None:
+        raise ProvenanceError(message)
+    if candidate.registry_revision != candidate.revision:
+        raise ProvenanceError(message)
+    expected_objects: dict[str, dict[str, Any]] = {}
+    actual_objects: dict[str, dict[str, Any]] = {}
+    base_versions: set[str] = set()
+    for relative in _CLAUDE_REWRITTEN_MANIFESTS:
+        expected = layout.files.get(relative)
+        actual = actual_files.get(relative)
+        if expected is None or actual is None:
+            raise ProvenanceError(message)
+        expected_object = _decode_json_object(expected.content, message)
+        actual_object = _decode_json_object(actual.content, message)
+        base_version = expected_object.get("version")
+        if type(base_version) is not str or _CLAUDE_BASE_VERSION.fullmatch(base_version) is None:
+            raise ProvenanceError(message)
+        base_versions.add(base_version)
+        expected_objects[relative] = expected_object
+        actual_objects[relative] = actual_object
+    if len(base_versions) != 1:
+        raise ProvenanceError(message)
+    base_version = next(iter(base_versions))
+    installed_version = candidate.installed_version
+    version_match = re.fullmatch(
+        re.escape(base_version)
+        + r"\+(?:[0-9A-Za-z-]+\.)+(?P<revision>[0-9a-f]{7,40})",
+        installed_version,
+    )
+    if (
+        version_match is None
+        or not candidate.revision.startswith(version_match.group("revision"))
+        or candidate.cache_version != installed_version.replace("+", "-", 1)
+    ):
+        raise ProvenanceError(message)
+    for relative in _CLAUDE_REWRITTEN_MANIFESTS:
+        expected_object = expected_objects[relative]
+        expected_object["version"] = installed_version
+        if not _json_type_exact(expected_object, actual_objects[relative]):
+            raise ProvenanceError(message)
+    read = _read_bounded_regular(
+        root_descriptor,
+        _CLAUDE_BUILD_COMMIT,
+        limit=41,
+        message=message,
+    )
+    if read is None:
+        raise ProvenanceError(message)
+    content, metadata = read
+    if content != f"{candidate.revision}\n".encode("ascii") or metadata.st_mode & 0o111:
+        raise ProvenanceError(message)
+    budget[0] += len(content)
+    if budget[0] > _MAX_SHIPPED_TOTAL_BYTES:
+        raise ProvenanceError("The installed Autoform tree is too large to verify safely.")
+    return frozenset({_CLAUDE_BUILD_COMMIT})
 
 
 def _compare_installed_tree(
     root: Path,
     root_descriptor: int,
     layout: _SourceLayout,
+    candidate: _Candidate,
 ) -> None:
     actual_files: dict[str, _ActualEntry] = {}
     actual_directories: set[str] = set()
@@ -1300,9 +1897,12 @@ def _compare_installed_tree(
     budget = [0]
 
     roots: list[str] = []
-    for candidate in sorted(layout.roots, key=lambda value: (len(PurePosixPath(value).parts), value)):
-        if not any(_under_root(candidate, selected) for selected in roots):
-            roots.append(candidate)
+    for root_candidate in sorted(
+        layout.roots,
+        key=lambda value: (len(PurePosixPath(value).parts), value),
+    ):
+        if not any(_under_root(root_candidate, selected) for selected in roots):
+            roots.append(root_candidate)
     for relative in roots:
         descriptor, opened = _open_boundary_root(root_descriptor, relative, actual_directories)
         try:
@@ -1319,7 +1919,9 @@ def _compare_installed_tree(
         finally:
             _close_boundary_root(opened)
 
-    root_files = _SHIPPED_FILES | (_OPTIONAL_SHIPPED_FILES & layout.files.keys())
+    root_files = {
+        relative for relative in layout.files if len(PurePosixPath(relative).parts) == 1
+    }
     for relative in root_files:
         if len(PurePosixPath(relative).parts) != 1:
             raise ProvenanceError("The installed Autoform boundary is invalid.")
@@ -1328,22 +1930,40 @@ def _compare_installed_tree(
     expected_directories = _expected_directories(layout.files)
     if set(actual_files) != set(layout.files) or actual_directories != expected_directories:
         raise ProvenanceError("The installed Autoform tree does not match the recorded commit.")
+    mismatched: set[str] = set()
     for relative, expected in layout.files.items():
         found = actual_files[relative]
-        if found.mode != expected.mode or found.content != expected.content:
+        if found.mode != expected.mode:
             raise ProvenanceError("The installed Autoform files do not match the recorded commit.")
+        if found.content != expected.content:
+            mismatched.add(relative)
+    if mismatched:
+        if mismatched != _CLAUDE_REWRITTEN_MANIFESTS:
+            raise ProvenanceError("The installed Autoform files do not match the recorded commit.")
+        allowed_host_files = _validate_claude_overlay(
+            root_descriptor,
+            layout,
+            actual_files,
+            candidate,
+            budget,
+        )
+    else:
+        allowed_host_files = frozenset()
     _validate_bytecode(root, bytecode, actual_files, layout.files)
-    _scan_for_extra_importable(
+    _scan_for_unverified_entries(
         root_descriptor,
         "",
         layout=layout,
+        allowed_host_files=allowed_host_files,
         counter=[0],
         depth=0,
     )
 
 
-def verify_plugin_provenance(root: Path | None = None) -> PluginProvenance:
-    """Verify the source, remote commit, and installed plugin before returning."""
+def _verify_plugin_layout(
+    root: Path | None = None,
+) -> tuple[PluginProvenance, _SourceLayout]:
+    """Return provenance together with the exact verified source snapshot."""
 
     selected_root, root_descriptor = _open_root(root or plugin_root())
     try:
@@ -1368,19 +1988,26 @@ def verify_plugin_provenance(root: Path | None = None) -> PluginProvenance:
                     candidate.revision,
                     Path(temporary),
                 )
-                _compare_installed_tree(selected_root, root_descriptor, layout)
+                _compare_installed_tree(selected_root, root_descriptor, layout, candidate)
                 # Re-read the complete boundary before committing the result.
                 # A mutation after an earlier root was scanned must not be
                 # hidden by that root's unchanged parent-directory identity.
-                _compare_installed_tree(selected_root, root_descriptor, layout)
+                _compare_installed_tree(selected_root, root_descriptor, layout, candidate)
         except ProvenanceError:
             raise
         except (_GitFailure, OSError) as error:
             raise ProvenanceError("The recorded Autoform commit could not be verified.") from error
         _require_root_identity(selected_root, root_descriptor)
-        return PluginProvenance(source=candidate.source, revision=candidate.revision)
+        return PluginProvenance(source=candidate.source, revision=candidate.revision), layout
     finally:
         os.close(root_descriptor)
+
+
+def verify_plugin_provenance(root: Path | None = None) -> PluginProvenance:
+    """Verify the source, remote commit, and installed plugin before returning."""
+
+    verified, _ = _verify_plugin_layout(root)
+    return verified
 
 
 def plugin_pin() -> tuple[str, str]:

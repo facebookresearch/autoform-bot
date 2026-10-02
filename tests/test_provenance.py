@@ -8,6 +8,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,9 @@ def _write_plugin(root: Path) -> None:
         "skills/setup/SKILL.md": b"# Setup\n",
         "uv.lock": b"version = 1\n",
         "pyproject.toml": (
+            b"[build-system]\n"
+            b'requires = ["hatchling>=1.27"]\n'
+            b'build-backend = "hatchling.build"\n'
             b"[project]\n"
             b'name = "autoform"\n'
             b"[project.scripts]\n"
@@ -57,31 +61,22 @@ def _layout(root: Path) -> provenance._SourceLayout:
         for shipped_root in provenance._OPTIONAL_SHIPPED_ROOTS
         if any(provenance._under_root(relative, shipped_root) for relative in all_files)
     }
-    roots = tuple(
-        sorted(
-            (
-                *provenance._SHIPPED_ROOTS,
-                *optional_roots,
-                "autoform_cli",
-                "servers",
-            )
-        )
+    roots = provenance._source_roots(
+        all_files,
+        (
+            *provenance._SHIPPED_ROOTS,
+            *optional_roots,
+            "autoform_cli",
+            "servers",
+        ),
     )
     files: dict[str, provenance._ManifestEntry] = {}
     for path in paths:
         relative = path.relative_to(root).as_posix()
         if relative not in all_files:
             continue
-        if (
-            relative in provenance._SHIPPED_FILES
-            or relative in provenance._OPTIONAL_SHIPPED_FILES
-            or any(
-                provenance._under_root(relative, shipped_root)
-                for shipped_root in roots
-            )
-        ):
-            mode = 0o100755 if path.stat().st_mode & 0o111 else 0o100644
-            files[relative] = provenance._ManifestEntry(mode=mode, content=path.read_bytes())
+        mode = 0o100755 if path.stat().st_mode & 0o111 else 0o100644
+        files[relative] = provenance._ManifestEntry(mode=mode, content=path.read_bytes())
     return provenance._SourceLayout(
         files=files,
         all_files=frozenset(all_files),
@@ -162,6 +157,76 @@ def _mock_fetch(
 
     monkeypatch.setattr(provenance, "_fetch_source_layout", fetch)
     return calls
+
+
+def _claude_transformed_install(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    registry_version: str | None = None,
+) -> tuple[Path, str, provenance._SourceLayout]:
+    checkout = tmp_path / "checkout"
+    _write_plugin(checkout)
+    source_manifest = {
+        "description": "verified",
+        "name": "autoform",
+        "schemaVersion": 1,
+        "version": "0.5.0",
+    }
+    for relative in (".claude-plugin/plugin.json", ".muse-plugin/plugin.json"):
+        (checkout / relative).write_text(
+            json.dumps(source_manifest, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    _git(checkout, "init", "-q")
+    _git(checkout, "add", ".")
+    _git(checkout, "commit", "-q", "-m", "source")
+    _git(checkout, "remote", "add", "origin", _SOURCE)
+    revision = _git(checkout, "rev-parse", "HEAD")
+    layout = _layout(checkout)
+    installed_version = registry_version or f"0.5.0+test.{revision[:7]}"
+
+    installed = (
+        tmp_path
+        / ".claude/plugins/cache/market/autoform"
+        / installed_version.replace("+", "-", 1)
+    )
+    shutil.copytree(checkout, installed, ignore=shutil.ignore_patterns(".git"))
+    installed_manifest = {**source_manifest, "version": installed_version}
+    for relative in (".claude-plugin/plugin.json", ".muse-plugin/plugin.json"):
+        (installed / relative).write_text(
+            json.dumps(installed_manifest, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    (installed / "BUILD_COMMIT").write_text(f"{revision}\n", encoding="ascii")
+
+    registry = tmp_path / ".claude/plugins/installed_plugins.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        json.dumps(
+            {
+                "plugins": {
+                    "autoform@market": [
+                        {
+                            "gitCommitSha": revision,
+                            "installPath": str(installed),
+                            "version": installed_version,
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    marketplaces = tmp_path / ".claude/plugins/known_marketplaces.json"
+    marketplaces.write_text(
+        json.dumps({"market": {"installLocation": str(checkout)}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(provenance, "_CLAUDE_PLUGIN_REGISTRY", registry)
+    monkeypatch.setattr(provenance, "_CLAUDE_MARKETPLACE_REGISTRY", marketplaces)
+    _mock_fetch(monkeypatch, layout)
+    return installed, revision, layout
 
 
 def test_verifies_an_exact_clean_checkout(
@@ -283,6 +348,135 @@ def test_verifies_a_claude_cache_under_the_configured_directory(
 
     assert result == provenance.PluginProvenance(_SOURCE, revision)
     assert calls == [(_SOURCE, revision)]
+
+
+def test_verifies_exact_claude_host_metadata_transform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    installed, revision, _ = _claude_transformed_install(tmp_path, monkeypatch)
+
+    assert provenance.verify_plugin_provenance(installed) == provenance.PluginProvenance(
+        _SOURCE, revision
+    )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "registry-version",
+        "manifest-field",
+        "duplicate-key",
+        "build-commit",
+        "missing-build",
+        "partial-overlay",
+        "cache-leaf",
+        "missing-registry-sha",
+        "duplicate-registry",
+        "type-confusion",
+        "nonfinite",
+    ],
+)
+def test_rejects_invalid_claude_host_metadata_transform(
+    tamper: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    registry_version = "0.5.0+wrong" if tamper == "registry-version" else None
+    installed, _, layout = _claude_transformed_install(
+        tmp_path,
+        monkeypatch,
+        registry_version=registry_version,
+    )
+    manifest = installed / ".claude-plugin/plugin.json"
+    if tamper == "manifest-field":
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        payload["description"] = "tampered"
+        manifest.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    elif tamper == "duplicate-key":
+        installed_version = json.loads(manifest.read_text(encoding="utf-8"))["version"]
+        manifest.write_text(
+            '{"name":"autoform","version":'
+            f'{json.dumps(installed_version)},"version":{json.dumps(installed_version)},'
+            '"description":"verified","schemaVersion":1}\n',
+            encoding="utf-8",
+        )
+    elif tamper == "build-commit":
+        (installed / "BUILD_COMMIT").write_text(f'{"f" * 40}\n', encoding="ascii")
+    elif tamper == "missing-build":
+        (installed / "BUILD_COMMIT").unlink()
+    elif tamper == "partial-overlay":
+        (installed / ".muse-plugin/plugin.json").write_bytes(
+            layout.files[".muse-plugin/plugin.json"].content
+        )
+    elif tamper == "cache-leaf":
+        moved = installed.with_name(f"{installed.name}-wrong")
+        installed.rename(moved)
+        registry = Path(provenance._CLAUDE_PLUGIN_REGISTRY)
+        registry_payload = json.loads(registry.read_text(encoding="utf-8"))
+        registry_payload["plugins"]["autoform@market"][0]["installPath"] = str(moved)
+        registry.write_text(json.dumps(registry_payload), encoding="utf-8")
+        installed = moved
+    elif tamper in {"missing-registry-sha", "duplicate-registry"}:
+        registry = Path(provenance._CLAUDE_PLUGIN_REGISTRY)
+        registry_payload = json.loads(registry.read_text(encoding="utf-8"))
+        entry = registry_payload["plugins"]["autoform@market"][0]
+        if tamper == "missing-registry-sha":
+            entry.pop("gitCommitSha")
+        else:
+            registry_payload["plugins"]["autoform@market"].append(dict(entry))
+        registry.write_text(json.dumps(registry_payload), encoding="utf-8")
+    elif tamper == "type-confusion":
+        muse = installed / ".muse-plugin/plugin.json"
+        payload = json.loads(muse.read_text(encoding="utf-8"))
+        payload["schemaVersion"] = True
+        muse.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    elif tamper == "nonfinite":
+        muse = installed / ".muse-plugin/plugin.json"
+        payload = json.loads(muse.read_text(encoding="utf-8"))
+        payload["schemaVersion"] = float("nan")
+        muse.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    with pytest.raises(provenance.ProvenanceError):
+        provenance.verify_plugin_provenance(installed)
+
+
+def test_codex_install_cannot_claim_claude_host_transform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    _write_plugin(source)
+    source_manifest = b'{"name":"autoform","version":"0.5.0"}\n'
+    for relative in (".claude-plugin/plugin.json", ".muse-plugin/plugin.json"):
+        (source / relative).write_bytes(source_manifest)
+    layout = _layout(source)
+    installed = tmp_path / "installed"
+    shutil.copytree(source, installed)
+    for relative in (".claude-plugin/plugin.json", ".muse-plugin/plugin.json"):
+        (installed / relative).write_bytes(
+            b'{"name":"autoform","version":"0.5.0+forged"}\n'
+        )
+    (installed / "BUILD_COMMIT").write_text(f"{_REVISION}\n", encoding="ascii")
+    _write_record(installed)
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError):
+        provenance.verify_plugin_provenance(installed)
+
+
+def test_claude_manifest_comparison_has_an_explicit_depth_bound() -> None:
+    left: list[object] = []
+    right: list[object] = []
+    left_cursor = left
+    right_cursor = right
+    for _ in range(provenance._MAX_JSON_DEPTH + 1):
+        left_child: list[object] = []
+        right_child: list[object] = []
+        left_cursor.append(left_child)
+        right_cursor.append(right_child)
+        left_cursor = left_child
+        right_cursor = right_child
+
+    assert not provenance._json_type_exact(left, right)
 
 
 def test_claude_cache_detection_is_scoped_to_the_configured_cache(
@@ -665,11 +859,10 @@ def test_symlink_in_the_shipped_boundary_is_rejected(
         provenance.verify_plugin_provenance(root)
 
 
-def test_recognized_derived_state_and_non_importable_files_are_ignored(
+def test_recognized_derived_directory_is_ignored(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, layout = _installed_copy(tmp_path)
-    (root / "NOTES.txt").write_text("local note\n", encoding="utf-8")
     (root / ".venv/lib/python3.13/site-packages").mkdir(parents=True)
     (root / ".venv/lib/python3.13/site-packages/injected.py").write_text(
         "VALUE = 2\n", encoding="utf-8"
@@ -677,6 +870,162 @@ def test_recognized_derived_state_and_non_importable_files_are_ignored(
     _mock_fetch(monkeypatch, layout)
 
     assert provenance.verify_plugin_provenance(root).revision == _REVISION
+
+
+def test_untracked_claude_host_configuration_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    (root / ".claude").mkdir()
+    (root / ".claude/settings.json").write_text("{}\n", encoding="utf-8")
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="unverified"):
+        provenance.verify_plugin_provenance(root)
+
+
+@pytest.mark.parametrize("relative", [".venv", ".lake", ".pytest_cache", "site"])
+def test_derived_directory_alias_must_be_a_real_directory(
+    relative: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / relative).symlink_to(outside, target_is_directory=True)
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="derived"):
+        provenance.verify_plugin_provenance(root)
+
+
+def test_derived_file_must_be_regular_and_non_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    derived = root / ".zuliprc"
+    derived.write_text("local state\n", encoding="utf-8")
+    derived.chmod(0o755)
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="derived"):
+        provenance.verify_plugin_provenance(root)
+
+
+def test_tracked_top_level_importable_code_outside_the_boundary_is_rejected(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    _write_plugin(source)
+    (source / "sitecustomize.py").write_text("raise RuntimeError\n", encoding="utf-8")
+
+    with pytest.raises(provenance._GitFailure):
+        _layout(source)
+
+
+def test_tracked_nested_importable_code_is_compared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    _write_plugin(source)
+    nested = source / "tests/evil.py"
+    nested.parent.mkdir()
+    nested.write_text("VALUE = 1\n", encoding="utf-8")
+    layout = _layout(source)
+    installed = tmp_path / "installed"
+    shutil.copytree(source, installed)
+    _write_record(installed)
+    (installed / "tests/evil.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="installed Autoform"):
+        provenance.verify_plugin_provenance(installed)
+
+
+def test_tracked_non_python_runtime_payload_is_compared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    _write_plugin(source)
+    payload = source / "helpers/runner.sh"
+    payload.parent.mkdir()
+    payload.write_text("exit 0\n", encoding="utf-8")
+    layout = _layout(source)
+    installed = tmp_path / "installed"
+    shutil.copytree(source, installed)
+    _write_record(installed)
+    (installed / "helpers/runner.sh").write_text("exit 1\n", encoding="utf-8")
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="installed Autoform"):
+        provenance.verify_plugin_provenance(installed)
+
+
+def test_untracked_non_derived_file_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    (root / "unverified.txt").write_text("not in the recorded commit\n", encoding="utf-8")
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="unverified"):
+        provenance.verify_plugin_provenance(root)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "sitecustomize.PY",
+        "hook.PYC",
+        "hook.PYO",
+        "hook.PTH",
+        "payload.SO",
+        "payload.PYD",
+        "payload.DYLIB",
+    ],
+)
+def test_importable_suffix_checks_are_case_insensitive(relative: str) -> None:
+    assert provenance._looks_importable(relative)
+
+
+def test_untracked_nested_non_code_file_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    (root / "assets/unverified.txt").write_text("extra\n", encoding="utf-8")
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="installed Autoform tree"):
+        provenance.verify_plugin_provenance(root)
+
+
+def test_untracked_empty_directory_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    (root / "unverified-directory").mkdir()
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="unverified"):
+        provenance.verify_plugin_provenance(root)
+
+
+def test_tracked_sitecustomize_package_is_compared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    _write_plugin(source)
+    hook = source / "sitecustomize/__init__.py"
+    hook.parent.mkdir()
+    hook.write_text("VALUE = 1\n", encoding="utf-8")
+    layout = _layout(source)
+    installed = tmp_path / "installed"
+    shutil.copytree(source, installed)
+    _write_record(installed)
+    (installed / "sitecustomize/__init__.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="installed Autoform"):
+        provenance.verify_plugin_provenance(installed)
 
 
 @pytest.mark.parametrize("optimization", [0, 1, 2])
@@ -854,6 +1203,8 @@ def test_unreachable_revision_fails_closed(
 
 def test_deep_remote_pyproject_fails_with_a_bounded_error() -> None:
     pyproject = (
+        '[build-system]\nrequires = ["hatchling>=1.27"]\n'
+        'build-backend = "hatchling.build"\n'
         '[project]\nname = "autoform"\n'
         '[project.scripts]\nautoform = "autoform_cli.__main__:main"\n'
         '[tool.hatch.build.targets.wheel]\npackages = ["autoform_cli"]\n'
@@ -864,7 +1215,203 @@ def test_deep_remote_pyproject_fails_with_a_bounded_error() -> None:
         provenance._package_roots(pyproject)
 
 
+@pytest.mark.parametrize(
+    ("build_system", "project_fields", "optional_fields"),
+    [
+        (
+            'requires = ["hatchling>=1.27"]\n'
+            'build-backend = "hatchling.build"\n'
+            'backend-path = ["backend"]\n',
+            "",
+            "",
+        ),
+        (
+            'requires = ["hatchling>=1.27"]\n'
+            'build-backend = "backend.build"\n',
+            "",
+            "",
+        ),
+        (
+            'requires = ["hatchling @ file:///tmp/hatchling"]\n'
+            'build-backend = "hatchling.build"\n',
+            "",
+            "",
+        ),
+        (
+            'requires = ["hatchling>=1.27"]\n'
+            'build-backend = "hatchling.build"\n',
+            'dependencies = ["helper @ file:///tmp/helper"]\n',
+            "",
+        ),
+        (
+            'requires = ["hatchling>=1.27"]\n'
+            'build-backend = "hatchling.build"\n',
+            "",
+            '[project.optional-dependencies]\ndev = ["helper @ ../helper"]\n',
+        ),
+        (
+            'requires = ["hatchling>=1.27"]\n'
+            'build-backend = "hatchling.build"\n',
+            'dynamic = ["dependencies"]\n',
+            "",
+        ),
+        (
+            'requires = ["hatchling>=1.27"]\n'
+            'build-backend = "hatchling.build"\n',
+            'dynamic = ["version"]\n',
+            "",
+        ),
+        (
+            'requires = ["hatchling>=1.27"]\n'
+            'build-backend = "hatchling.build"\n',
+            "",
+            '[tool.uv.sources]\nhelper = { path = "../helper" }\n',
+        ),
+        (
+            'requires = ["hatchling>=1.27"]\n'
+            'build-backend = "hatchling.build"\n',
+            "",
+            '[dependency-groups]\ndev = ["helper @ file:///tmp/helper"]\n',
+        ),
+        (
+            'requires = ["hatchling>=1.27"]\n'
+            'build-backend = "hatchling.build"\n',
+            "",
+            '[tool.hatch.build.hooks.custom]\npath = "tools/hatch_build.py"\n',
+        ),
+    ],
+)
+def test_python_build_and_dependencies_cannot_execute_local_code(
+    build_system: str,
+    project_fields: str,
+    optional_fields: str,
+) -> None:
+    pyproject = (
+        "[build-system]\n"
+        f"{build_system}"
+        "[project]\n"
+        'name = "autoform"\n'
+        f"{project_fields}"
+        "[project.scripts]\n"
+        'autoform = "autoform_cli.__main__:main"\n'
+        "[tool.hatch.build.targets.wheel]\n"
+        'packages = ["autoform_cli"]\n'
+        f"{optional_fields}"
+    ).encode()
+
+    with pytest.raises(provenance._GitFailure):
+        provenance._package_roots(pyproject)
+
+
+def _lock_with_helper(source: str, *, artifact: str = "") -> bytes:
+    return (
+        "version = 1\n"
+        "[[package]]\n"
+        'name = "autoform"\n'
+        'source = { editable = "." }\n'
+        "[[package]]\n"
+        'name = "helper"\n'
+        f"source = {{ {source} }}\n"
+        f"{artifact}"
+    ).encode()
+
+
+def test_uv_lock_accepts_only_the_local_autoform_project() -> None:
+    provenance._validate_uv_lock(
+        _lock_with_helper(
+            'registry = "https://pypi.org/simple"',
+            artifact=(
+                'wheels = [{ url = "https://files.pythonhosted.org/helper.whl", '
+                f'hash = "sha256:{"0" * 64}", size = 1, '
+                'upload-time = "2026-01-01T00:00:00Z" }]\n'
+            ),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "lock",
+    [
+        _lock_with_helper('directory = "../helper"'),
+        _lock_with_helper('editable = "../helper"'),
+        _lock_with_helper('registry = "https://pypi.org/simple"'),
+        _lock_with_helper('registry = "file:///tmp/simple"'),
+        _lock_with_helper(
+            'registry = "https://pypi.org/simple"',
+            artifact='wheels = [{ url = "file:///tmp/helper.whl" }]\n',
+        ),
+        _lock_with_helper(
+            'registry = "https://pypi.org/simple"',
+            artifact=(
+                'wheels = [{ url = "https://files.pythonhosted.org/helper.whl", '
+                'size = 1 }]\n'
+            ),
+        ),
+        _lock_with_helper(
+            'registry = "https://pypi.org/simple"',
+            artifact=(
+                'wheels = [{ url = "https://files.pythonhosted.org/helper.whl", '
+                'hash = "sha256:00", size = 1 }]\n'
+            ),
+        ),
+        _lock_with_helper(
+            'registry = "https://pypi.org/simple"',
+            artifact=(
+                'wheels = [{ url = "https://files.pythonhosted.org/helper.whl", '
+                f'hash = "sha256:{"0" * 64}", size = 0 }}]\n'
+            ),
+        ),
+        _lock_with_helper(
+            'registry = "https://pypi.org/simple"',
+            artifact=(
+                'wheels = [{ url = "https://files.pythonhosted.org/helper.whl", '
+                f'hash = "sha256:{"0" * 64}", size = 1, path = "../evil" }}]\n'
+            ),
+        ),
+        _lock_with_helper(
+            'registry = "https://pypi.org/simple"',
+            artifact=(
+                'wheels = [{ url = "https://files.pythonhosted.org/helper\\tbad.whl", '
+                f'hash = "sha256:{"0" * 64}", size = 1 }}]\n'
+            ),
+        ),
+        (
+            "version = 1\n"
+            "[[package]]\n"
+            'name = "autoform"\n'
+            'source = { editable = "../autoform" }\n'
+        ).encode(),
+    ],
+)
+def test_uv_lock_rejects_local_or_credentialed_sources(lock: bytes) -> None:
+    with pytest.raises(provenance._GitFailure):
+        provenance._validate_uv_lock(lock)
+
+
+@pytest.mark.parametrize("relative", ["uv.toml", "UV.TOML", ".python-version"])
+def test_runtime_uv_configuration_is_outside_the_verified_boundary(relative: str) -> None:
+    with pytest.raises(provenance._GitFailure):
+        provenance._require_canonical_optional_surfaces([relative])
+
+
+def test_source_tree_cannot_claim_claude_build_metadata() -> None:
+    with pytest.raises(provenance._GitFailure):
+        provenance._require_canonical_optional_surfaces(["BUILD_COMMIT"])
+
+
+def test_installed_runtime_uv_configuration_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    (root / "uv.toml").write_text('index-url = "https://example.test/simple"\n')
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="runtime configuration"):
+        provenance.verify_plugin_provenance(root)
+
+
 def test_git_environment_removes_every_inherited_git_control(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GIT_DIR", "/tmp/foreign")
@@ -873,16 +1420,381 @@ def test_git_environment_removes_every_inherited_git_control(
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "credential.helper")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "malicious")
 
-    environment = provenance._git_environment()
+    monkeypatch.setenv("HOME", os.fspath(tmp_path / "inherited-home"))
+    monkeypatch.setenv("USERPROFILE", os.fspath(tmp_path / "inherited-profile"))
+    home = tmp_path / "empty-home"
+    home.mkdir()
 
+    environment = provenance._git_environment(home)
+
+    assert environment["HOME"] == os.fspath(home)
+    assert environment["USERPROFILE"] == os.fspath(home)
+    assert environment["XDG_CONFIG_HOME"] == os.fspath(home)
+    assert environment["NETRC"] == os.devnull
     assert environment["GIT_CONFIG_GLOBAL"] == os.devnull
     assert environment["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert environment["GIT_NO_LAZY_FETCH"] == "1"
     assert environment["GIT_TERMINAL_PROMPT"] == "0"
     assert not any(
         key.upper().startswith("GIT_")
         for key in environment
-        if key not in {"GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_OPTIONAL_LOCKS", "GIT_ASKPASS", "GIT_TERMINAL_PROMPT"}
+        if key
+        not in {
+            "GIT_ASKPASS",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_NOSYSTEM",
+            "GIT_NO_LAZY_FETCH",
+            "GIT_OPTIONAL_LOCKS",
+            "GIT_TERMINAL_PROMPT",
+        }
     )
+
+
+def _blob_object(root: Path, relative: str) -> provenance._TreeObject:
+    raw = _git(root, "ls-tree", "HEAD", relative)
+    mode, kind, object_id = raw.split("\t", 1)[0].split(" ")
+    return provenance._TreeObject(mode=int(mode, 8), kind=kind, object_id=object_id)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="safe provenance inspection is POSIX-only")
+def test_git_blob_batch_deduplicates_objects_and_processes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "first.txt").write_bytes(b"same")
+    (root / "second.txt").write_bytes(b"same")
+    _git(root, "init", "-q")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "source")
+    first = _blob_object(root, "first.txt")
+    second = _blob_object(root, "second.txt")
+    assert first.object_id == second.object_id
+
+    real_popen = provenance.subprocess.Popen
+    cat_file_processes = 0
+
+    def tracked_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        nonlocal cat_file_processes
+        command = args[0]
+        if isinstance(command, list) and "cat-file" in command:
+            cat_file_processes += 1
+        return real_popen(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(provenance.subprocess, "Popen", tracked_popen)
+    contents = provenance._read_git_blobs(
+        root,
+        [first, second] * 100,
+        deadline=time.monotonic() + 10,
+    )
+
+    assert contents == {first.object_id: b"same"}
+    assert cat_file_processes == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="safe provenance inspection is POSIX-only")
+def test_git_blob_batch_rejects_one_oversized_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "payload.bin").write_bytes(b"oversized")
+    _git(root, "init", "-q")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "source")
+    payload = _blob_object(root, "payload.bin")
+    monkeypatch.setattr(provenance, "_MAX_SHIPPED_FILE_BYTES", 4)
+
+    with pytest.raises(provenance._GitFailure):
+        provenance._read_git_blobs(
+            root,
+            [payload],
+            deadline=time.monotonic() + 10,
+        )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="safe provenance inspection is POSIX-only")
+def test_git_blob_batch_rejects_aggregate_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "first.bin").write_bytes(b"first")
+    (root / "second.bin").write_bytes(b"second")
+    _git(root, "init", "-q")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "source")
+    objects = [_blob_object(root, "first.bin"), _blob_object(root, "second.bin")]
+    monkeypatch.setattr(provenance, "_MAX_SHIPPED_TOTAL_BYTES", 8)
+
+    with pytest.raises(provenance._GitFailure):
+        provenance._read_git_blobs(
+            root,
+            objects,
+            deadline=time.monotonic() + 10,
+        )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="safe provenance inspection is POSIX-only")
+def test_blobless_fetch_check_rejects_an_unrequested_present_blob(tmp_path: Path) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "payload.bin").write_bytes(b"payload")
+    _git(root, "init", "-q")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "source")
+    payload = _blob_object(root, "payload.bin")
+
+    with pytest.raises(provenance._GitFailure):
+        provenance._require_blob_presence(
+            root,
+            [payload],
+            set(),
+            deadline=time.monotonic() + 10,
+        )
+    provenance._require_blob_presence(
+        root,
+        [payload],
+        {payload.object_id},
+        deadline=time.monotonic() + 10,
+    )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-specific")
+def test_git_blob_batch_timeout_kills_the_complete_process_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "descendant-survived"
+    executable = tmp_path / "bin/git"
+    executable.parent.mkdir()
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import subprocess, sys, time\n"
+        f"code = \"import pathlib, time; time.sleep(1.5); pathlib.Path({os.fspath(marker)!r}).write_text('alive')\"\n"
+        "subprocess.Popen([sys.executable, '-c', code])\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{executable.parent}{os.pathsep}{os.environ['PATH']}")
+    entry = provenance._TreeObject(mode=0o100644, kind="blob", object_id="1" * 40)
+
+    with pytest.raises(provenance._GitFailure):
+        provenance._read_git_blobs(
+            tmp_path,
+            [entry],
+            deadline=time.monotonic() + 1,
+        )
+    time.sleep(1.5)
+
+    assert not marker.exists()
+
+
+def test_source_fetch_uses_one_deadline_and_blobless_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = {
+        ".claude-plugin/plugin.json": "2" * 40,
+        ".codex-plugin/plugin.json": "3" * 40,
+        ".muse-plugin/plugin.json": "4" * 40,
+        ".mcp.json": "5" * 40,
+        "assets/payload.txt": "6" * 40,
+        "autoform_cli/__init__.py": "7" * 40,
+        "pyproject.toml": "8" * 40,
+        "skills/setup/SKILL.md": "9" * 40,
+        "uv.lock": "a" * 40,
+    }
+    listing = b"".join(
+        f"100644 blob {object_id}\t{relative}\0".encode()
+        for relative, object_id in paths.items()
+    )
+    pyproject = (
+        b"[build-system]\n"
+        b'requires = ["hatchling>=1.27"]\n'
+        b'build-backend = "hatchling.build"\n'
+        b"[project]\n"
+        b'name = "autoform"\n'
+        b"[project.scripts]\n"
+        b'autoform = "autoform_cli.__main__:main"\n'
+        b"[tool.hatch.build.targets.wheel]\n"
+        b'packages = ["autoform_cli"]\n'
+    )
+    deadlines: list[float | None] = []
+    commands: list[list[str]] = []
+
+    def fake_run_git(
+        arguments: list[str],
+        *,
+        cwd: Path,
+        timeout: float = 15,
+        deadline: float | None = None,
+        max_stdout_bytes: int = provenance._MAX_GIT_TEXT_BYTES,
+        stdin_bytes: bytes | None = None,
+    ) -> bytes:
+        del cwd, timeout, max_stdout_bytes, stdin_bytes
+        deadlines.append(deadline)
+        commands.append(arguments)
+        if arguments[:2] == ["rev-parse", "--verify"]:
+            return f"{_REVISION}\n".encode()
+        if arguments and arguments[0] == "ls-tree":
+            return listing
+        return b""
+
+    helper_deadlines: list[float] = []
+    presence_calls: list[set[str]] = []
+    object_fetches: list[set[str]] = []
+
+    def fake_presence(
+        repository: Path,
+        objects: object,
+        expected: object,
+        *,
+        deadline: float,
+    ) -> None:
+        del repository, objects
+        helper_deadlines.append(deadline)
+        presence_calls.append(set(expected))  # type: ignore[arg-type]
+
+    def fake_fetch_objects(
+        repository: Path, object_ids: object, *, deadline: float
+    ) -> None:
+        del repository
+        helper_deadlines.append(deadline)
+        object_fetches.append(set(object_ids))  # type: ignore[arg-type]
+
+    contents = {object_id: b"content" for object_id in paths.values()}
+    contents[paths["pyproject.toml"]] = pyproject
+    contents[paths["uv.lock"]] = (
+        b"version = 1\n"
+        b"[[package]]\n"
+        b'name = "autoform"\n'
+        b'source = { editable = "." }\n'
+    )
+
+    def fake_read_blobs(
+        repository: Path,
+        objects: object,
+        *,
+        deadline: float,
+        known: dict[str, bytes] | None = None,
+    ) -> dict[str, bytes]:
+        del repository
+        helper_deadlines.append(deadline)
+        result = dict(known or {})
+        for entry in objects:  # type: ignore[union-attr]
+            result[entry.object_id] = contents[entry.object_id]
+        return result
+
+    monkeypatch.setattr(provenance, "_run_git", fake_run_git)
+    monkeypatch.setattr(provenance, "_require_blob_presence", fake_presence)
+    monkeypatch.setattr(provenance, "_fetch_git_objects", fake_fetch_objects)
+    monkeypatch.setattr(provenance, "_read_git_blobs", fake_read_blobs)
+
+    layout = provenance._fetch_source_layout(_SOURCE, _REVISION, tmp_path)
+
+    assert layout.files["pyproject.toml"].content == pyproject
+    assert deadlines and deadlines[0] is not None
+    assert set(deadlines + helper_deadlines) == {deadlines[0]}
+    fetch = next(arguments for arguments in commands if arguments and arguments[0] == "fetch")
+    assert "--filter=blob:none" in fetch
+    metadata_ids = {paths["pyproject.toml"], paths["uv.lock"]}
+    selected_ids = set(paths.values())
+    assert presence_calls == [set(), metadata_ids, selected_ids]
+    assert object_fetches == [metadata_ids, selected_ids - metadata_ids]
+
+
+def test_selected_git_object_fetch_uses_sorted_stdin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[list[str], bytes | None]] = []
+
+    def fake_run_git(
+        arguments: list[str],
+        *,
+        cwd: Path,
+        timeout: float = 15,
+        deadline: float | None = None,
+        max_stdout_bytes: int = provenance._MAX_GIT_TEXT_BYTES,
+        stdin_bytes: bytes | None = None,
+    ) -> bytes:
+        del cwd, timeout, deadline, max_stdout_bytes
+        calls.append((arguments, stdin_bytes))
+        return b""
+
+    monkeypatch.setattr(provenance, "_run_git", fake_run_git)
+    provenance._fetch_git_objects(
+        tmp_path,
+        ["b" * 40, "a" * 40, "b" * 40],
+        deadline=time.monotonic() + 10,
+    )
+
+    assert calls == [
+        (
+            [
+                "fetch",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "--recurse-submodules=no",
+                "--filter=blob:none",
+                "--stdin",
+                "origin",
+            ],
+            f'{"a" * 40}\n{"b" * 40}\n'.encode("ascii"),
+        )
+    ]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-specific")
+def test_git_timeout_kills_the_complete_process_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "descendant-survived"
+    executable = tmp_path / "bin/git"
+    executable.parent.mkdir()
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import subprocess, sys, time\n"
+        f"code = \"import pathlib, time; time.sleep(1.5); pathlib.Path({os.fspath(marker)!r}).write_text('alive')\"\n"
+        "subprocess.Popen([sys.executable, '-c', code])\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{executable.parent}{os.pathsep}{os.environ['PATH']}")
+
+    with pytest.raises(provenance._GitFailure):
+        provenance._run_git(["fetch"], cwd=tmp_path, timeout=1)
+    time.sleep(1.5)
+
+    assert not marker.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-specific")
+def test_failed_git_leader_does_not_leave_its_process_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "descendant-survived"
+    executable = tmp_path / "bin/git"
+    executable.parent.mkdir()
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import subprocess, sys\n"
+        f"code = \"import pathlib, time; time.sleep(1.5); pathlib.Path({os.fspath(marker)!r}).write_text('alive')\"\n"
+        "subprocess.Popen([sys.executable, '-c', code], stdin=subprocess.DEVNULL, "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{executable.parent}{os.pathsep}{os.environ['PATH']}")
+
+    with pytest.raises(provenance._GitFailure):
+        provenance._run_git(["fetch"], cwd=tmp_path, timeout=5)
+    time.sleep(1.5)
+
+    assert not marker.exists()
 
 
 def test_unsupported_descriptor_platform_fails_before_remote_access(
@@ -999,3 +1911,14 @@ def test_expected_modes_are_compared_as_executable_or_not(
 
     with pytest.raises(provenance.ProvenanceError, match="installed Autoform"):
         provenance.verify_plugin_provenance(root)
+
+
+@pytest.mark.skipif(
+    os.environ.get("AUTOFORM_PROVENANCE_NETWORK") != "1",
+    reason="set AUTOFORM_PROVENANCE_NETWORK=1 for the clean-checkout integration test",
+)
+def test_live_clean_checkout_provenance(repo_root: Path) -> None:
+    verified = provenance.verify_plugin_provenance(repo_root)
+
+    assert verified.source.startswith("https://")
+    assert len(verified.revision) == 40
