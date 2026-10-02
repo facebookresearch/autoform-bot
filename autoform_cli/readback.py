@@ -521,7 +521,7 @@ def _add_card(found: dict[tuple[str, str], Readback], readback: Readback) -> Non
 
 
 def _card_files(root: Path) -> Iterator[tuple[Path, bytes | None, str | None]]:
-    """Every ``*.md`` entry under ``root``, with its bytes, read without following a link.
+    """Every ``*.md`` entry under ``root``, in any case, with its bytes, read without following a link.
 
     A card is a file inside the vault; a symlink could point anywhere. The
     candidates come from a listing, which can be out of date by the time a
@@ -556,7 +556,9 @@ def _card_files(root: Path) -> Iterator[tuple[Path, bytes | None, str | None]]:
             Path(directory, name)
             for directory, subdirectories, files in os.walk(root, onerror=unlistable)
             for name in (*subdirectories, *files)
-            if name.endswith(".md")
+            # Matched in any case: on a volume that ignores case, the writer's
+            # ``.md`` path reaches a ``.MD`` file, so the loader reports it too.
+            if name[-3:].lower() == ".md"
         )
         for path in sorted(listed):
             read = _read_card_file(root, root_descriptor, path.relative_to(root))

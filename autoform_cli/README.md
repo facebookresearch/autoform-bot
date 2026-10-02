@@ -498,8 +498,11 @@ holds at most 4 MiB, and no file is read more than one byte past that, the byte
 that shows it is larger. A file at a card path that is larger, is not UTF-8, or
 cannot be read, and a directory or FIFO there, is reported as an invalid card,
 not skipped, even when the declaration's name is too long for the filename to
-spell. A directory under `readbacks/` that cannot be listed stops loading with
-an error naming it, rather than reading as though it held no card. Writes name
+spell. A card is attributed to the declaration its path names, so one that
+records another declaration, or whose `.md` is in another case, is reported as
+that declaration's invalid card. A directory under `readbacks/` that cannot be
+listed stops loading with an error naming it, rather than reading as though it
+held no card. Writes name
 a card by the hash of its bytes, so a card that is not UTF-8 is replaced like
 any other; one over the limit must be removed by hand.
 

@@ -512,6 +512,19 @@ def test_a_card_copied_to_a_long_named_card_path_leaves_the_card_it_copies_valid
     assert (orphan.code, orphan.declaration) == ("readback-orphaned", stray.stem)
 
 
+def test_a_card_whose_suffix_differs_only_in_case_is_reported_for_the_declaration_its_path_names(
+    tmp_path: Path,
+) -> None:
+    blueprint = _blueprint(tmp_path)
+    path = _file_card(blueprint, "Fine.")
+    variant = path.rename(path.with_suffix(".MD"))
+
+    # On a volume that ignores case the writer reaches this file, so it is not missing.
+    (finding,) = readback_findings(_report(), load_readbacks(blueprint), article_ids={"basics/sup-unique": _ARTICLE_ID})
+    assert finding.code == "readback-invalid"
+    assert f"does not match the card path {variant.relative_to(path.parent.parent).as_posix()!r}" in finding.reason
+
+
 def test_card_body_rejects_interstitial_content(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     declaration = _declaration()
