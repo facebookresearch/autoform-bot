@@ -115,8 +115,8 @@ jobs:
           # A build may make the hour's limit less 200, and only while it
           # keeps 50 of what is left for the rest of its run, so it has all
           # of that while at most 150 are spent when it begins. Starting one
-          # only while at most 100 are spent leaves 50 for this run's 4 and
-          # the other runs of the hour during the Lean build.
+          # only while at most 100 are spent leaves 50 for this run's own (9
+          # at most) and the other runs of the hour during the Lean build.
           if (( remaining < limit - 100 )); then
             skip "Only $remaining of the hour's $limit GitHub API requests are left, and a build starts only while at most 100 are spent"
           fi
@@ -126,27 +126,40 @@ jobs:
           if [[ "$head" != "$GITHUB_SHA" ]]; then
             skip "$branch moved past $GITHUB_SHA after this run was scheduled; the next one checks its new head"
           fi
-          # The newest deployment of the head to the site, and how it ended.
-          deployment="$(gh api "$api/deployments?environment=github-pages&sha=$head&per_page=1" --jq '.[0].id // 0')" \
-            || unread "which deployment of $head is the newest"
-          [[ "$deployment" =~ ^[0-9]+$ ]] || unread "the id of the newest deployment of $head"
+          # The head's newest deployments to the site, newest first. How the
+          # newest one ended says whether the site has a complete build of
+          # the head; the newest that succeeded is when it last had one. A
+          # deploy job that fails, even after deploying, leaves a failed
+          # deployment, so the search goes back past those, up to 6; past
+          # that every failed run of the head counts, which after so many
+          # failures changes the wait little.
+          deployments="$(gh api "$api/deployments?environment=github-pages&sha=$head&per_page=6" --jq '[.[].id | tostring] | join(",")')" \
+            || unread "which deployments of $head are the newest"
+          [[ "$deployments" =~ ^([0-9]+(,[0-9]+)*)?$ ]] || unread "the ids of the newest deployments of $head"
           state=none
           deployed_at=0
-          if [[ "$deployment" != 0 ]]; then
+          since=0
+          newest=true
+          for deployment in ${deployments//,/ }; do
             status="$(gh api "$api/deployments/$deployment/statuses?per_page=1" \
               --jq '.[0] // {} | "\(.state // "none") \(.created_at // "1970-01-01T00:00:00Z" | fromdateiso8601)"')" \
-              || unread "how the newest deployment of $head ended"
-            read -r state deployed_at <<< "$status"
-            [[ "$deployed_at" =~ ^[0-9]+$ ]] || unread "when the newest deployment of $head ended"
-          fi
+              || unread "how a deployment of $head ended"
+            read -r ended at <<< "$status"
+            [[ "$at" =~ ^[0-9]+$ ]] || unread "when a deployment of $head ended"
+            if [[ "$newest" == true ]]; then
+              state="$ended"
+              deployed_at="$at"
+              newest=false
+            fi
+            if [[ "$ended" == success ]]; then
+              since="$at"
+              break
+            fi
+          done
           # How many runs of this workflow on the head failed, and when the last
-          # one ended. After a successful deployment only the runs that failed
-          # since count, so failures the site has recovered from never
+          # one ended. Only the runs that failed after the newest successful
+          # deployment count, so failures the site has recovered from never
           # lengthen the wait.
-          since=0
-          if [[ "$state" == success ]]; then
-            since="$deployed_at"
-          fi
           # This file, whatever it is called: owner/repo/.github/workflows/NAME@ref.
           workflow="${GITHUB_WORKFLOW_REF%%@*}"
           workflow="${workflow##*/}"

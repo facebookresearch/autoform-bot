@@ -659,13 +659,15 @@ def _github_after(
     *,
     failed: tuple[tuple[str, float] | tuple[str, float, str], ...] = (),
     deployed: tuple[str, float] | None = None,
+    earlier: tuple[tuple[str, float], ...] = (),
     remaining: int = 1000,
     limit: int = 1000,
     head: str = "a" * 40,
 ) -> dict[str, object]:
     """GitHub's answers when runs of the head failed ``failed`` = ((event, hours ago), ...)
-    and its newest deployment ended ``deployed`` = (state, hours ago). A run
-    may name another conclusion than failure as a third item."""
+    and its newest deployment ended ``deployed`` = (state, hours ago), the ones
+    before it ``earlier``, newest first. A run may name another conclusion
+    than failure as a third item."""
 
     def ago(hours: float) -> str:
         return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -678,11 +680,12 @@ def _github_after(
     answers: dict[str, object] = {
         _MAIN: {"object": {"sha": head}},
         _RUNS: {"workflow_runs": runs},
-        _DEPLOYMENTS: [] if deployed is None else [{"id": 7}],
         "rate_limit": {"resources": {"core": {"limit": limit, "remaining": remaining}}},
     }
-    if deployed is not None:
-        answers[f"{_DEPLOYMENTS}/7/statuses"] = [{"state": deployed[0], "created_at": ago(deployed[1])}]
+    deployments = ((deployed,) + earlier) if deployed is not None else ()
+    answers[_DEPLOYMENTS] = [{"id": 7 - index} for index in range(len(deployments))]
+    for index, (state, hours) in enumerate(deployments):
+        answers[f"{_DEPLOYMENTS}/{7 - index}/statuses"] = [{"state": state, "created_at": ago(hours)}]
     return answers
 
 
@@ -837,7 +840,45 @@ def test_every_event_but_the_schedule_builds_without_asking_github(tmp_path: Pat
             False,
             id="backing-off-after-recovering",
         ),
-        # A build has all it may make, the limit less 100, only while it keeps 50 back; decide makes 4.
+        # A deploy job that deploys and then fails, say on unchecked approvals, leaves a failed deployment:
+        # the failures before the last successful one still never count, and each red deploy since does.
+        *(
+            pytest.param(
+                _github_after(
+                    deployed=("failure", hours),
+                    earlier=(("success", 25),),
+                    failed=(("push", 30),) * 5 + (("schedule", hours),),
+                ),
+                True,
+                id=f"red-deploy-after-recovering-{hours}h",
+            )
+            for hours in (1.1, 2, 12, 23)
+        ),
+        pytest.param(
+            _github_after(
+                deployed=("failure", 1.5),
+                earlier=(("failure", 3.5), ("success", 25)),
+                failed=(("push", 30),) * 5 + (("schedule", 3.5), ("schedule", 1.5)),
+            ),
+            False,
+            id="red-deploys-backing-off",
+        ),
+        pytest.param(
+            _github_after(
+                deployed=("failure", 2.5),
+                earlier=(("failure", 4.5), ("success", 25)),
+                failed=(("push", 30),) * 5 + (("schedule", 4.5), ("schedule", 2.5)),
+            ),
+            True,
+            id="red-deploys-backed-off",
+        ),
+        # Six failed deployments and no successful one among them: every failure counts.
+        pytest.param(
+            _github_after(deployed=("failure", 23), earlier=(("failure", 24),) * 5, failed=(("schedule", 23),) * 6),
+            False,
+            id="six-red-deploys",
+        ),
+        # A build starts only while at most 100 of the hour's requests are spent.
         pytest.param(_github_after(remaining=900), True, id="full-allowance"),
         pytest.param(_github_after(remaining=899), False, id="spent-hour"),
         pytest.param(_github_after(remaining=14900, limit=15000), True, id="enterprise-full-allowance"),
@@ -871,10 +912,15 @@ def test_a_scheduled_run_builds_the_head_until_it_has_a_complete_build(
         assert calls == ["rate_limit"]
         assert done.stdout.startswith(f"::notice::Only {hour['remaining']} of the hour's {hour['limit']} GitHub API")
         return
-    statuses = [f"{_DEPLOYMENTS}/7/statuses?per_page=1"] if f"{_DEPLOYMENTS}/7/statuses" in answers else []
+    # Each deployment's newest status, newest first, up to the first that succeeded.
+    statuses = []
+    for deployment in answers[_DEPLOYMENTS]:  # type: ignore[attr-defined]
+        statuses.append(f"{_DEPLOYMENTS}/{deployment['id']}/statuses?per_page=1")
+        if answers[f"{_DEPLOYMENTS}/{deployment['id']}/statuses"][0]["state"] == "success":  # type: ignore[index]
+            break
     assert calls[1:] == [
         _MAIN,
-        f"{_DEPLOYMENTS}?environment=github-pages&sha={head}&per_page=1",
+        f"{_DEPLOYMENTS}?environment=github-pages&sha={head}&per_page=6",
         *statuses,
         f"{_RUNS}?branch=main&head_sha={head}&status=completed&per_page=100",
     ]

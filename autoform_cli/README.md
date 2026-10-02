@@ -1150,18 +1150,22 @@ when the site has no complete build of it, or when that build is a day old. A
 complete build is a deployment of the head whose newest status is a success,
 with no failed run of the head after it, so a run that deployed and then
 failed on unchecked approvals does not count. After failed runs of the head it
-waits an hour, doubling with each failure up to a day; when the head's newest
-deployment is a success, only the runs that failed after it count, so failures
-the site has since recovered from never lengthen the wait. It first asks `GET
+waits an hour, doubling with each failure up to a day. Only the runs that
+failed after the head's newest successful deployment count, so failures the
+site has since recovered from never lengthen the wait; a run that deployed and
+then failed leaves a failed deployment, so `decide` looks back through the
+head's six newest deployments for a successful one, and when none of them is,
+every failed run of the head counts. It first asks `GET
 /rate_limit`, which costs nothing, and builds only when at most 100 of the
 hour's requests are spent, so that the verification has all it may make, the
-ceiling above, even after decide's own requests and 46 more by other runs
-during the build; in a repository whose other runs keep more than 100 of
+ceiling above, even after decide's own requests (at most nine) and 41 more by
+other runs during the build; in a repository whose other runs keep more than 100 of
 every hour's requests spent, the schedule never builds, and only
 pushes and manual runs rebuild the site. A scheduled run that builds nothing
-makes at most four requests besides that one (the head, its newest deployment,
-that deployment's status, and the workflow's runs on the head): at most 96 a
-day, under 1% of the 24,000 the hourly limit allows. The daily rebuild is one
+makes at most nine requests besides that one (the head, its newest
+deployments, the status of each up to the newest that succeeded, at most six,
+and the workflow's runs on the head), usually four: at most 216 a day, under
+1% of the 24,000 the hourly limit allows. The daily rebuild is one
 full verification, at most the ceiling a day, and is what bounds how long a
 withdrawn approval stays on the site; rebuilding every hour could spend most
 of every hour's allowance, leaving pushes and the gate short. The `decide` job
