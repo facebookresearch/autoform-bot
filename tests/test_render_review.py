@@ -915,26 +915,38 @@ def test_a_double_integral_spelled_with_negative_space_is_refused_with_a_hint() 
 
 
 @pytest.mark.parametrize(
-    ("testimony", "delimiter"),
+    "testimony",
     [
-        ("It costs $5 and $x$ more.", "$"),
-        ("Both $$b$$ inline.", "$"),
-        (r"So a \\( b holds.", "\\("),
-        (r"See \begin{equation} a = b \end{equation} here.", "\\begin{"),
-        (r"See \ref{x} here.", "\\ref{"),
-        (r"See \eqref{x} here.", "\\eqref{"),
-        ("A path C:" + "\\" * 4 + "$x and more.", "$"),
-        (r"$a \( b$", "\\("),
-        (r"$a \] b$", "\\]"),
+        "It costs $5 and $x$ more.",
+        "It costs $5 in all.",
+        r"So a \\( b holds.",
+        r"See \begin{equation} a = b \end{equation} here.",
+        r"See \ref{x} here.",
+        r"See \eqref{x} here.",
+        "A path C:" + "\\" * 4 + "$x and more.",
     ],
 )
-def test_math_delimiters_outside_a_formula_are_refused(testimony: str, delimiter: str) -> None:
-    r"""MathJax reads the page's text for ``$``, ``\(``, ``\[``, and
-    environments, so TeX the renderer did not mark as a formula would be
-    typeset unchecked. Inside a formula they are not TeX at all."""
+def test_tex_in_text_shows_as_typed_and_is_accepted(testimony: str) -> None:
+    r"""MathJax reads no text of a card outside the formulas the renderer
+    marked, and GitHub reads none of this as a formula, so both show it as
+    typed."""
+
+    assert _testimony_errors(testimony) == ()
+
+
+@pytest.mark.parametrize(
+    ("testimony", "delimiter"),
+    [
+        (r"$a \( b$", "\\("),
+        (r"$a \] b$", "\\]"),
+        ("$$a$b$$", "$"),
+    ],
+)
+def test_math_delimiters_inside_a_formula_are_refused(testimony: str, delimiter: str) -> None:
+    """Inside a formula they are not TeX at all."""
 
     assert any(
-        error.startswith("math delimiters the renderer did not read as a formula are not allowed: " + delimiter)
+        error.startswith("math delimiters inside a formula are not allowed: " + delimiter)
         for error in _testimony_errors(testimony)
     )
 
@@ -1735,6 +1747,13 @@ def _github_reading(testimony: str) -> tuple[str, list[str]]:
         ("- $x$ is E12", "<ul><li>\\(x\\) is E12</li></ul>"),
         ("> E17 a\n> $x$ b", "<blockquote><p>E17 a \\(x\\) b</p></blockquote>"),
         ("```math\nc \\$ d\n```", "<p>\\[c \\$ d\\]</p>"),
+        ("S1 a \\begin{aligned}a\\end{aligned} b", "<p>S1 a \\begin{aligned}a\\end{aligned} b</p>"),
+        ("S2 a \\ref{z} and \\eqref{q} b", "<p>S2 a \\ref{z} and \\eqref{q} b</p>"),
+        ("S3 a \\begin{x} b and \\end{x} c", "<p>S3 a \\begin{x} b and \\end{x} c</p>"),
+        ("S4 It costs $5 in all.", "<p>S4 It costs $5 in all.</p>"),
+        ("S5 It costs \\$5 and \\$6 in all.", "<p>S5 It costs $5 and $6 in all.</p>"),
+        ("S6 a \\(y\\) b \\[v\\] c", "<p>S6 a (y) b [v] c</p>"),
+        ("\\begin{equation}\nx\n\\end{equation}", "<p>\\begin{equation} x \\end{equation}</p>"),
     ],
 )
 def test_formulas_are_read_where_github_s_markdown_api_reads_them(testimony: str, shown: str) -> None:

@@ -1472,11 +1472,8 @@ _TEX_ROW_SPACING = re.compile(r"[*\[]")
 #: The escapes ``\text`` and its kin read, rather than show as typed.
 _TEX_TEXT_ESCAPE = re.compile(r"\\[${}\\]")
 _TEX_DOUBLE_INTEGRAL = re.compile(r"\\int\s*(?:\\!\s*){2,}\\int")
-#: What MathJax, which reads the escapes ``\\`` and ``\$`` first, takes for
-#: either end of a formula in text: the delimiters javascripts/mathjax.js
-#: configures, environments, and references. In a formula they are typeset as
-#: one, or end it early.
-_TEX_TEXT_DELIMITER = re.compile(r"\\\\|\\\$|(\$|\\[()\[\]]|\\begin\s*\{|\\(?:eq)?ref\s*\{)")
+#: The delimiters javascripts/mathjax.js configures, which in a formula are
+#: typeset as one, or end it early.
 _TEX_FORMULA_DELIMITERS = frozenset({"$", r"\(", r"\)", r"\[", r"\]"})
 _TEX_ENVIRONMENT_NAME = re.compile(r"\\(?:begin|end)\s*\{[^{}]*\}")
 _TEX_CONTROL_SEQUENCE = re.compile(r"\\(?:[A-Za-z]+|.)", re.DOTALL)
@@ -1647,9 +1644,9 @@ class _TexLayout:
             )
         if self.stray:
             errors.append(
-                "math delimiters the renderer did not read as a formula are not allowed: "
+                "math delimiters inside a formula are not allowed: "
                 + _named(sorted(self.stray))
-                + "; write \\$ for a dollar sign, and put displayed math in a paragraph of its own"
+                + "; drop them, and keep dollar signs out of formulas"
             )
         if self.overlap:
             errors.append(
@@ -2155,12 +2152,12 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
             "over the formula, mark, or border before them; write the character already composed, or an accent in "
             "a formula such as \\bar{z}"
         )
+    # MathJax reads no text of a card outside the formulas the renderer
+    # marked, so TeX left in text shows as typed; where GitHub reads it as a
+    # formula, the comparison with GitHub's reading refuses it.
     layout = _TexLayout()
     for piece, kind in pieces:
-        if kind == "text":
-            matches = _TEX_TEXT_DELIMITER.finditer(piece)
-            layout.stray.update(dict.fromkeys(re.sub(r"\s", "", match[1]) for match in matches if match[1]))
-        elif kind == "math":
+        if kind == "math":
             layout.read(piece.strip()[2:-2])
     errors.extend(layout.messages())
     if any(_TEX_COMMENT.search(piece) for piece, kind in pieces if kind == "math"):
