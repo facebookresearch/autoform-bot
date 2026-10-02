@@ -64,6 +64,7 @@ from .markdown import (
     FORMULA_CLASS,
     SITE_EXTENSION_CONFIGS,
     SITE_EXTENSIONS,
+    INLINE_CODE,
     content_lines,
     published_lines,
     published_markdown,
@@ -3024,20 +3025,22 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
         reading = _RenderedText()
         reading.feed(rendered)
         reading.close()
-        found = list(_raw_html_errors(source, reading.code))
+        found = [_lines_naming(text, _named_markup(error)) + error for error in _raw_html_errors(source, reading.code)]
         if passed and not found:
             shown = ", ".join(repr(block[:40]) for block in dict.fromkeys(passed))
             found.append(f"raw HTML is not allowed: the site would publish {shown} as HTML")
         commands = stateful_commands("".join(reading.text))
         if commands:
             found.append(
-                "TeX commands that change other formulas are not allowed: " + ", ".join(commands)
+                _lines_naming(text, _commands(commands))
+                + "TeX commands that change other formulas are not allowed: " + ", ".join(commands)
                 + f"; define notation in the vault's {TEX_MACROS} instead, and put a command you only name in code"
             )
         commands = attribute_commands("".join(reading.text))
         if commands:
             found.append(
-                "TeX commands that set what a symbol looks like are not allowed: " + ", ".join(commands)
+                _lines_naming(text, _commands(commands))
+                + "TeX commands that set what a symbol looks like are not allowed: " + ", ".join(commands)
                 + "; write the symbol itself, and put a command you only name in code"
             )
         errors.extend(found)
@@ -3048,6 +3051,45 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
         lines = [number for number, line in enumerate(text.splitlines(), start=1) if _MERMAID_DIAGRAM.match(line)]
         errors.extend([f"line {number}: {_DIAGRAM_ERROR}" for number in lines] or [_DIAGRAM_ERROR])
     return visible, tuple(dict.fromkeys(errors))
+
+
+def _lines_naming(text: str, patterns: list[re.Pattern[str]]) -> str:
+    """A ``line N: `` or ``lines N, M: `` prefix naming the lines of ``text``
+    one of ``patterns`` matches: outside code and comments first, and
+    anywhere when that finds none; empty when no line has one."""
+
+    shown = [INLINE_CODE.sub("", line) for line in content_lines(text)]
+    for lines in (shown, text.splitlines()):
+        numbers = [str(number) for number, line in enumerate(lines, start=1) if any(p.search(line) for p in patterns)]
+        if numbers:
+            return f"{'line' if len(numbers) == 1 else 'lines'} {', '.join(numbers)}: "
+    return ""
+
+
+def _commands(commands: Iterable[str]) -> list[re.Pattern[str]]:
+    """Patterns for the TeX ``commands`` as written, a name not running on
+    into the letters after it."""
+
+    return [
+        re.compile(re.escape(command) + ("(?![A-Za-z])" if command[1:].isalpha() else ""))
+        for command in commands
+    ]
+
+
+def _named_markup(error: str) -> list[re.Pattern[str]]:
+    """Patterns for the markup a :func:`_raw_html_errors` message names."""
+
+    if error.startswith("HTML comments"):
+        return [re.compile(re.escape("<!--"))]
+    # The names run from the first ": " to the "; " before the fix. A
+    # reference is shown with what it reads as, and a long one cut short.
+    names = [name.split(" ")[0].removesuffix("...") for name in error.partition(": ")[2].rpartition("; ")[0].split(", ")]
+    return [
+        re.compile(re.escape(name[:-1]) + "(?![A-Za-z0-9-])", re.IGNORECASE)
+        if name.startswith("<") and name.endswith(">") and not name.startswith(("<!", "<?"))
+        else re.compile(re.escape(name), re.IGNORECASE)
+        for name in names
+    ]
 
 
 def _attribute_errors(

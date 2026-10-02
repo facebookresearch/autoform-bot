@@ -1329,7 +1329,8 @@ text MathJax reads, that changes formulas other than its own: a definition such 
 form, or a `\label`. It refuses `\mmlToken` too, which colors a symbol as the
 formula says, like the site's status marks. Put the project's notation in
 `blueprint/tex-macros.json`, which `check` validates too. A command you only
-mention, outside a formula or in code, is shown as typed.
+mention, outside a formula or in code, is shown as typed. Each of these
+refusals names the line the HTML or the command is on.
 An attribute list may only give a heading an id, as in `## Title {#title}`;
 any class, style, or other attribute, and an id on anything but a heading, is
 refused with the line it is on, since it could make an article's text look
@@ -1354,7 +1355,7 @@ landing page `blueprint/README.md` (the text you wrote, before `render` adds
 its dashboard), `coverage/README.md`, and any other Markdown page in the vault.
 `check` reads each page, articles included, after `render` points its relative
 links at the pages and anchors they land on, and refuses what it refuses in an
-article, naming the file. `render` writes a moved link's target percent-encoded,
+article, naming the file and the line. `render` writes a moved link's target percent-encoded,
 so a target such as `%3Cscript%3E.md` stays a link and adds no markup.
 `render` refuses the same articles, so the site never publishes markup that an
 article's reviewer read as text and the owners of its theme never saw. It validates structure and

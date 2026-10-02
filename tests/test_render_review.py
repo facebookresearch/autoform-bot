@@ -2062,7 +2062,7 @@ def test_markdown_the_site_converter_renders_is_checked_for_raw_html(markup: str
 
     errors = publishable_article(markup)[1]
 
-    assert errors == () if reason is None else any(error.startswith(reason) for error in errors)
+    assert errors == () if reason is None else any(error.startswith(f"line 1: {reason}") for error in errors)
 
 
 def test_a_card_over_a_limit_is_invalid_without_being_parsed(

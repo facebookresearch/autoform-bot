@@ -447,9 +447,11 @@ def test_tex_that_changes_other_formulas_is_refused(article: str, commands: str)
     in one would change what the others show."""
 
     errors = publishable_article(article)[1]
+    # Each is refused on the line it is on.
+    line = "line 2" if article.startswith("$$\n") else "line 1"
 
     assert errors == (
-        f"TeX commands that change other formulas are not allowed: {commands}; define notation in "
+        f"{line}: TeX commands that change other formulas are not allowed: {commands}; define notation in "
         "the vault's tex-macros.json instead, and put a command you only name in code",
     )
 
@@ -469,9 +471,11 @@ def test_tex_that_sets_what_a_symbol_looks_like_is_refused(article: str) -> None
     links it could set, but not its colors."""
 
     errors = publishable_article(article)[1]
+    line = "line 2" if article.startswith("$$\n") else "line 1"
 
     assert errors == (
-        "TeX commands that set what a symbol looks like are not allowed: \\mmlToken; write the symbol itself, "
+        f"{line}: TeX commands that set what a symbol looks like are not allowed: \\mmlToken; write the symbol "
+        "itself, "
         "and put a command you only name in code",
     )
 
@@ -481,8 +485,54 @@ def test_render_refuses_a_definition_in_an_article(tmp_path: Path) -> None:
     _with_article(blueprint, "Let $\\DeclareMathOperator{\\leq}{>}$ hold.")
 
     assert main(["check", str(blueprint)]) == 1
-    with pytest.raises(PublicationError, match=r"top: TeX commands that change other formulas"):
+    with pytest.raises(PublicationError, match=r"top: line 11: TeX commands that change other formulas"):
         _render(blueprint)
+
+
+_CHANGES = "TeX commands that change other formulas are not allowed: "
+_LOOKS = "TeX commands that set what a symbol looks like are not allowed: "
+
+
+@pytest.mark.parametrize(
+    ("article", "reason"),
+    [
+        ("First.\n\nThen $\\def\\x{1}$.", f"error: top: line 13: {_CHANGES}\\def; define notation"),
+        ("First.\n\nThen $\\mmlToken{mi}{x}$.", f"error: top: line 13: {_LOOKS}\\mmlToken; write the symbol"),
+        (
+            "Then $\\def\\x{1}$,\n\nand\n\n$$\n\\let\\y\\x\n$$",
+            f"error: top: lines 11, 16: {_CHANGES}\\def, \\let; define notation",
+        ),
+        # A command only named in code is not the one refused.
+        ("Write `\\def` in code.\n\nThen $\\def\\x{1}$.", f"error: top: line 13: {_CHANGES}\\def; define"),
+        # Nor is a longer command that starts with its name.
+        ("Prose names \\defined.\n\nThen $\\def\\x{1}$.", f"error: top: line 13: {_CHANGES}\\def; define"),
+        ("First.\n\nThen <b>bold</b>.", "error: top: line 13: raw HTML is not allowed: <b>, </b>;"),
+    ],
+)
+def test_a_refusal_names_the_article_and_the_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], article: str, reason: str
+) -> None:
+    """The statement is on line 11 of the article, after its metadata."""
+
+    blueprint = _vault(tmp_path)
+    _with_article(blueprint, article)
+
+    assert main(["check", str(blueprint)]) == 1
+    assert reason in capsys.readouterr().out
+    with pytest.raises(PublicationError, match=re.escape(reason.removeprefix("error: "))):
+        _render(blueprint)
+
+
+def test_a_refusal_in_a_chapter_names_the_chapter_and_the_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blueprint = _vault(tmp_path)
+    chapter = blueprint / "roadmap/README.md"
+    chapter.write_text(chapter.read_text(encoding="utf-8") + "\nLast, $\\mmlToken{mi}{x}$.\n", encoding="utf-8")
+    line = len(chapter.read_text(encoding="utf-8").splitlines())
+
+    assert main(["check", str(blueprint)]) == 1
+    assert f"error: roadmap: line {line}: {_LOOKS}\\mmlToken;" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
@@ -527,7 +577,7 @@ def test_markup_shown_as_typed_is_accepted(article: str) -> None:
 def test_code_excuses_only_the_markup_it_shows(article: str, reason: str) -> None:
     errors = publishable_article(article)[1]
 
-    assert any(error.startswith(reason) for error in errors), errors
+    assert any(error.startswith(f"line 1: {reason}") for error in errors), errors
 
 
 @pytest.mark.parametrize(
@@ -541,7 +591,7 @@ def test_code_excuses_only_the_markup_it_shows(article: str, reason: str) -> Non
 def test_tags_after_a_declaration_on_the_same_line_are_named(article: str, names: str) -> None:
     errors = publishable_article(article)[1]
 
-    assert f"raw HTML is not allowed: {names}; in a formula, put a space after <" in errors
+    assert f"line 1: raw HTML is not allowed: {names}; in a formula, put a space after <" in errors
 
 
 @pytest.mark.parametrize(
@@ -558,7 +608,7 @@ def test_a_long_character_reference_is_refused_by_name(reference: str, shown: st
 
     errors = publishable_article(f"A reference {reference} here.")[1]
 
-    assert errors == (f"HTML character references are not allowed: {shown}; type the character itself",)
+    assert errors == (f"line 1: HTML character references are not allowed: {shown}; type the character itself",)
 
 
 def test_check_and_render_refuse_a_long_character_reference(
@@ -731,9 +781,10 @@ def test_a_page_that_is_not_an_article_is_held_to_the_same_rules(
 
     assert main(["check", str(blueprint)]) == 1
     out = capsys.readouterr().out
-    assert f"error: {relative}: raw HTML is not allowed: <script>, </script>" in out
-    assert f"error: {relative}: line " in out and "attribute list {: .bp-readback .bp-readback-current }" in out
-    assert f"error: {relative}: " in out and "\\DeclareMathOperator" in out
+    lines = len(before.rstrip().splitlines()) + 2
+    assert f"error: {relative}: line {lines}: raw HTML is not allowed: <script>, </script>" in out
+    assert f"error: {relative}: line {lines + 3}: attribute list {{: .bp-readback .bp-readback-current }}" in out
+    assert f"error: {relative}: line {lines + 5}: TeX commands that change other formulas" in out
     with pytest.raises(PublicationError):
         _render(blueprint)
 
@@ -777,7 +828,7 @@ def test_a_line_break_markdown_does_not_read_is_checked_as_the_site_writes_it(
     _with_article(blueprint, f"Every object is equal to itself.\n\n    x = 1{separator}{_FORGED}")
 
     assert main(["check", str(blueprint)]) == 1
-    with pytest.raises(PublicationError, match=r"top: raw HTML is not allowed: <span>, </span>, <script>, </script>"):
+    with pytest.raises(PublicationError, match=r"top: line \d+: raw HTML is not allowed: <span>, </span>, <script>, </script>"):
         _render(blueprint)
 
 
@@ -785,8 +836,11 @@ def test_a_line_break_markdown_does_not_read_is_checked_as_the_site_writes_it(
 @pytest.mark.parametrize(
     ("payload", "refusal"),
     [
-        (_FORGED, r"roadmap: raw HTML is not allowed: <span>, </span>, <script>, </script>"),
-        (r"$\DeclareMathOperator{\leq}{>}$", r"roadmap: TeX commands that change other formulas are not allowed: \\DeclareMathOperator"),
+        (_FORGED, r"roadmap: line \d+: raw HTML is not allowed: <span>, </span>, <script>, </script>"),
+        (
+            r"$\DeclareMathOperator{\leq}{>}$",
+            r"roadmap: line \d+: TeX commands that change other formulas are not allowed: \\DeclareMathOperator",
+        ),
     ],
 )
 def test_a_page_with_a_line_break_markdown_does_not_read_is_checked_as_the_site_writes_it(
@@ -829,7 +883,9 @@ def test_a_page_is_checked_without_the_metadata_mkdocs_reads_off(tmp_path: Path,
     chapter.write_text(f"{metadata}- item\n\n    {_FORGED}\n\n{body}", encoding="utf-8")
 
     assert main(["check", str(blueprint)]) == 1
-    with pytest.raises(PublicationError, match=r"roadmap: raw HTML is not allowed: <span>, </span>, <script>, </script>"):
+    with pytest.raises(
+        PublicationError, match=r"roadmap: line \d+: raw HTML is not allowed: <span>, </span>, <script>, </script>"
+    ):
         _render(blueprint)
 
 
