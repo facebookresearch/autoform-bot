@@ -897,13 +897,13 @@ def test_a_head_lookup_that_fails_outside_a_publishing_run_leaves_every_approval
     ("hourly", "budget"),
     [
         # A workflow's GITHUB_TOKEN may make 1000 requests an hour in one repository, and 15000 on Enterprise Cloud.
-        ((1000, 1000), 900),
-        ((1000, 950), 900),
-        ((1000, 949), 899),
+        ((1000, 1000), 800),
+        ((1000, 850), 800),
+        ((1000, 849), 799),
         ((1000, 30), 0),
-        ((15000, 15000), 14900),
+        ((15000, 15000), 14800),
         # No answer: a workflow's GITHUB_TOKEN with the hour to itself, though a spent budget stays unchecked.
-        (None, 900),
+        (None, 800),
     ],
 )
 def test_the_request_budget_is_what_the_hour_has_left_and_leaves_some_of_it(
@@ -919,7 +919,7 @@ def test_the_request_budget_is_what_the_hour_has_left_and_leaves_some_of_it(
     verifier.verify(load_graph(root / "blueprint"), {f"node{index}": _HASH for index in range(3)})
 
     assert verifier.budget == budget
-    assert verifier._at_ceiling() is (hourly is not None and hourly[1] >= hourly[0] - 50)
+    assert verifier._at_ceiling() is (hourly is not None and hourly[1] >= hourly[0] - 150)
 
 
 def test_approvals_past_the_ceiling_of_a_run_with_the_hour_to_itself_are_refused_not_unchecked(
@@ -940,21 +940,27 @@ def test_approvals_past_the_ceiling_of_a_run_with_the_hour_to_itself_are_refused
     # The setup with alice's permission, then the nine requests for #8, which "basics/other" sorts first to use.
     budget = len(_SETUP_CALLS) + 1 + 9
     # A token whose hourly limit leaves exactly that budget, with the whole hour left.
-    github.hourly = (budget + 100, budget + 100)
+    github.hourly = (budget + 200, budget + 200)
 
     verifier = _verified(root, github)
 
     assert list(verifier.reasons) == ["basics/result"]
     assert verifier.reasons["basics/result"] == (
         f"not checked: checking every approval needs more than the {budget} GitHub API requests a run may make "
-        f"(GitHub's limit of {budget + 100} an hour for this repository's token, less 100 kept for the gate and "
+        f"(GitHub's limit of {budget + 200} an hour for this repository's token, less 200 kept for the gate and "
         "later pushes), so the approvals past it stay self-approved; approvals recorded in one pull request "
         "share most of their requests"
     )
     assert verifier.unchecked == {}
-    # A run that began with 51 of the hour's requests spent keeps 50 back and has one request fewer, so a
+    # Other runs of the hour, such as gate runs during the build, may have spent 150 before this one began,
+    # and it still has the whole ceiling, so the same approval is refused.
+    github.hourly = (budget + 200, budget + 50)
+    verifier = _verified(root, github)
+    assert list(verifier.reasons) == ["basics/result"]
+    assert verifier.unchecked == {}
+    # A run that began with 151 of the hour's requests spent keeps 50 back and has one request fewer, so a
     # later run might get further.
-    github.hourly = (budget + 100, budget + 49)
+    github.hourly = (budget + 200, budget + 49)
     verifier = _verified(root, github)
     assert verifier.unchecked == verifier.reasons
     assert verifier.reasons["basics/result"].startswith(f"not checked: the budget of {budget - 1} GitHub API requests")

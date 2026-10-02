@@ -984,21 +984,24 @@ recording the approval again in a new pull request restores it, unless that
 one is flooded too. A run first reads `GET /rate_limit`, which costs nothing,
 and may make what the hour has left less 50, which it keeps for the rest of
 its run (the deploy job) and a gate run beside it, but never more than the
-hour's limit less 100, which it keeps for the gate and later pushes. GitHub
+hour's limit less 200, which it keeps for the gate and later pushes. GitHub
 allows a workflow's `GITHUB_TOKEN` 1000 requests an hour in one repository,
 shared by every run there (15,000 on GitHub Enterprise Cloud), so the ceiling
-is 900 (14,900). Two full builds within an hour, or a build after many gate
-runs, start with less, and the approvals a spent budget below the ceiling
-leaves are unchecked, with a reason that names the budget and what the hour
-had left. When GitHub does not answer `GET /rate_limit`, a run takes the
-budget of a `GITHUB_TOKEN` with the hour to itself, 900, and what it leaves is
-unchecked too. The ceiling is the most any run gets, so the approvals that a
-run with all of it still leaves are a verdict, not a failure: they read
-self-approved with a reason naming the ceiling, are not listed as unchecked,
-and the run stays green, as does every later run while the approvals cost more
-than the ceiling. Approvals are checked in the order of their article ids, so
-the same ones stay past it. A project reaches the ceiling at about 100
-approvals each recorded in its own pull request, fewer when lists need more
+is 800 (14,800), and a run has all of it while at most 150 of the hour's
+requests are spent when it begins, which leaves room for gate runs and other
+workflows earlier in the hour. Two full builds within an hour, or a build
+after many gate runs, start with less, and the approvals a spent budget below
+the ceiling leaves are unchecked, with a reason that names the budget and what
+the hour had left. When GitHub does not answer `GET /rate_limit`, a run takes
+the budget of a `GITHUB_TOKEN` with the hour to itself, 800, and what it
+leaves is unchecked too. The ceiling is the most any run gets, so the
+approvals that a run with all of it still leaves are a verdict, not a failure:
+they read self-approved with a reason naming the ceiling, are not listed as
+unchecked, and the run stays green, as does every later run that begins with
+at most 150 of the hour's requests spent while the approvals cost more than
+the ceiling. Approvals are checked in the order of their article ids, so the
+same ones stay past it. A project reaches the ceiling at about 90 approvals
+each recorded in its own pull request, fewer when lists need more
 than one page or other commits land between approval pull requests; approvals
 recorded in one pull request share most of their requests. The precondition
 costs one request for the repository, one for the default branch's head
@@ -1060,8 +1063,8 @@ ruleset, starts no build: the Pages workflow's scheduled run rebuilds the site
 a day after its last build, so the change shows within about a day and an hour
 when that rebuild succeeds. It shows later when the rebuild fails, since each
 failure delays the next try by an hour, then two, four, and so on up to a day;
-when the repository's other runs keep more than 46 of each hour's API requests
-spent, in which case the schedule never builds; and when GitHub delays
+when the repository's other runs keep more than 100 of each hour's API
+requests spent, in which case the schedule never builds; and when GitHub delays
 scheduled runs, or disables them in a public repository after 60 days without
 activity. To show it at once, run the Pages workflow by hand
 (`workflow_dispatch`).
@@ -1150,10 +1153,11 @@ failed on unchecked approvals does not count. After failed runs of the head it
 waits an hour, doubling with each failure up to a day; when the head's newest
 deployment is a success, only the runs that failed after it count, so failures
 the site has since recovered from never lengthen the wait. It first asks `GET
-/rate_limit`, which costs nothing, and builds only when at most 46 of the
-hour's requests are spent, so that after its own four the verification has all
-it may make, the ceiling above; in a repository whose other runs keep more
-than 46 of every hour's requests spent, the schedule never builds, and only
+/rate_limit`, which costs nothing, and builds only when at most 100 of the
+hour's requests are spent, so that the verification has all it may make, the
+ceiling above, even after decide's own requests and 46 more by other runs
+during the build; in a repository whose other runs keep more than 100 of
+every hour's requests spent, the schedule never builds, and only
 pushes and manual runs rebuild the site. A scheduled run that builds nothing
 makes at most four requests besides that one (the head, its newest deployment,
 that deployment's status, and the workflow's runs on the head): at most 96 a

@@ -838,10 +838,10 @@ def test_every_event_but_the_schedule_builds_without_asking_github(tmp_path: Pat
             id="backing-off-after-recovering",
         ),
         # A build has all it may make, the limit less 100, only while it keeps 50 back; decide makes 4.
-        pytest.param(_github_after(remaining=954), True, id="full-allowance"),
-        pytest.param(_github_after(remaining=953), False, id="spent-hour"),
-        pytest.param(_github_after(remaining=14954, limit=15000), True, id="enterprise-full-allowance"),
-        pytest.param(_github_after(remaining=14953, limit=15000), False, id="enterprise-spent-hour"),
+        pytest.param(_github_after(remaining=900), True, id="full-allowance"),
+        pytest.param(_github_after(remaining=899), False, id="spent-hour"),
+        pytest.param(_github_after(remaining=14900, limit=15000), True, id="enterprise-full-allowance"),
+        pytest.param(_github_after(remaining=14899, limit=15000), False, id="enterprise-spent-hour"),
         pytest.param(_github_after(failed=(("schedule", 0.5, "timed_out"),)), False, id="timed-out"),
         pytest.param(_github_after(failed=(("push", 0.5, "startup_failure"),)), False, id="startup-failure"),
         pytest.param(_github_after(failed=(("push", 0.5, "cancelled"),)), True, id="cancelled"),
@@ -867,7 +867,7 @@ def test_a_scheduled_run_builds_the_head_until_it_has_a_complete_build(
     # GET /rate_limit costs nothing, and is asked first, so a spent hour makes no request fail.
     assert calls[0] == "rate_limit"
     hour = answers["rate_limit"]["resources"]["core"]
-    if hour["remaining"] < hour["limit"] - 46:
+    if hour["remaining"] < hour["limit"] - 100:
         assert calls == ["rate_limit"]
         assert done.stdout.startswith(f"::notice::Only {hour['remaining']} of the hour's {hour['limit']} GitHub API")
         return
@@ -882,12 +882,15 @@ def test_a_scheduled_run_builds_the_head_until_it_has_a_complete_build(
 
 
 def test_a_scheduled_run_builds_only_when_the_verifier_would_have_its_whole_allowance(tmp_path: Path) -> None:
-    """The verifier keeps _LEFT_AFTER of the hour's requests back; decide makes four before it."""
+    """The verifier has its whole ceiling while at most _RESERVED_REQUESTS - _LEFT_AFTER are spent when it
+    begins. Decide starts a build only with 50 of those to spare, for its own four requests and the other runs
+    of the hour during the Lean build, so a request or two elsewhere never turns a run past the ceiling red."""
 
     scaffold_project(tmp_path, title="Finite Flat")
     script = _step(tmp_path / ".github/workflows/blueprint-pages.yml", "decide", "Decide whether to build")
 
-    assert f"if (( remaining < limit - {approvals._LEFT_AFTER - 4} )); then" in script
+    assert "if (( remaining < limit - 100 )); then" in script
+    assert approvals._RESERVED_REQUESTS - approvals._LEFT_AFTER - 100 == 50
 
 
 def test_a_scheduled_run_of_a_head_main_has_moved_past_builds_nothing(tmp_path: Path) -> None:

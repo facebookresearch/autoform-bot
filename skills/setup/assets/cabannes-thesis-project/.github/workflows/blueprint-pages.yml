@@ -112,11 +112,13 @@ jobs:
             || unread "how many API requests are left this hour"
           read -r limit remaining <<< "$hour"
           [[ "$limit $remaining" =~ ^[0-9]+\ [0-9]+$ ]] || unread "how many API requests are left this hour"
-          # A build may make the hour's limit less 100, and only while it
+          # A build may make the hour's limit less 200, and only while it
           # keeps 50 of what is left for the rest of its run, so it has all
-          # of that only when at most 50 are spent; this run makes 4.
-          if (( remaining < limit - 46 )); then
-            skip "Only $remaining of the hour's $limit GitHub API requests are left, and a build has all it may make only while at most 50 are spent, 4 of them by this run"
+          # of that while at most 150 are spent when it begins. Starting one
+          # only while at most 100 are spent leaves 50 for this run's 4 and
+          # the other runs of the hour during the Lean build.
+          if (( remaining < limit - 100 )); then
+            skip "Only $remaining of the hour's $limit GitHub API requests are left, and a build starts only while at most 100 are spent"
           fi
           api="repos/$GITHUB_REPOSITORY"
           branch="${GITHUB_REF#refs/heads/}"

@@ -55,10 +55,13 @@ _UNCOVERED_SHOWN = 10
 # gate run beside it, and never more than the hour's limit less
 # _RESERVED_REQUESTS, so a build never takes the whole hour from the gate and
 # later pushes. The approvals a budget smaller than that ceiling leaves are
-# unchecked, since a run with the hour to itself may get further; the ones
-# the ceiling itself leaves are refused, since no run gets further.
+# unchecked, since a run with more of the hour left may get further; the ones
+# the ceiling itself leaves are refused, since no run gets further. A run has
+# the whole ceiling while at most _RESERVED_REQUESTS - _LEFT_AFTER of the
+# hour's requests are spent when it begins, room for the other runs of a busy
+# hour, so which of the two a run reaches never turns on a few requests.
 _GITHUB_TOKEN_HOURLY_LIMIT = 1000
-_RESERVED_REQUESTS = 100
+_RESERVED_REQUESTS = 200
 _LEFT_AFTER = 50
 # What the default branch's pull request rules must turn on: the parameter, the
 # name GitHub's ruleset settings show, and what goes wrong without it.
