@@ -343,7 +343,8 @@ class FakeGitHub:
         if parts[1] == "commits" and parts[3:] == ["pulls"]:
             return self._page([self.pulls[number] for number in self.associated.get(parts[2], [])], query)
         if parts[1:3] == ["rules", "branches"]:
-            return self._page(self.rules, query)
+            # None answers 404, as for a branch no rule applies to.
+            return None if self.rules is None else self._page(self.rules, query)
         if parts[1] == "rulesets" and len(parts) == 3:
             return self.rulesets.get(int(parts[2]))
         if parts[1:4] == ["git", "ref", "heads"]:

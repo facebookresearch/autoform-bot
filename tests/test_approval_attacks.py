@@ -697,6 +697,17 @@ def test_c2_without_a_ruleset_requiring_code_owners_an_unreviewed_owner_change_a
     _refused(root, github, _NO_RULESET)
 
 
+def test_rules_github_finds_nothing_for_read_as_no_ruleset(tmp_path: Path) -> None:
+    """GitHub may answer 404 for the rules of a branch no rule applies to; that refuses, not as a failed request."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    _approved(root, github)
+    github.rules = None  # type: ignore[assignment]
+
+    _refused(root, github, _NO_RULESET)
+
+
 @pytest.mark.parametrize("strategy", ["merge", "squash"])
 def test_c2_codeowners_that_own_no_codeowners_file_authenticate_nothing(tmp_path: Path, strategy: str) -> None:
     root = _project(tmp_path, "blueprint/ @alice\n")
