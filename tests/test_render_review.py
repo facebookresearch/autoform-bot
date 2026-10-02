@@ -419,6 +419,34 @@ def test_writer_refuses_tex_that_shows_nothing_or_overlaps(testimony: str, reaso
     assert reason in str(refused.value)
 
 
+_ROW_STAR = "a * right after TeX \\\\ is not allowed: MathJax reads it as part of the row break and does not show it; "
+_ROW_SPACING = "TeX row spacing after \\\\ is not allowed: it can draw rows over one another; remove the bracket after "
+
+
+@pytest.mark.parametrize(
+    ("testimony", "reason", "rewritten"),
+    [
+        (r"$\begin{pmatrix} 1 & 0 \\* & 1 \end{pmatrix}$", _ROW_STAR, r"$\begin{pmatrix} 1 & 0 \\ * & 1 \end{pmatrix}$"),
+        (r"$\begin{aligned} x &= 2 \\* 3 \end{aligned}$", _ROW_STAR, r"$\begin{aligned} x &= 2 \\ * 3 \end{aligned}$"),
+        (
+            r"$\begin{cases} 1 & x > 0 \\[4pt] 0 & \text{otherwise} \end{cases}$",
+            _ROW_SPACING,
+            r"$\begin{cases} 1 & x > 0 \\ 0 & \text{otherwise} \end{cases}$",
+        ),
+        (r"$\begin{aligned} a \\[0, 1] \end{aligned}$", _ROW_SPACING, r"$\begin{aligned} a \\ {}[0, 1] \end{aligned}$"),
+    ],
+)
+def test_what_tex_reads_right_after_a_row_break_is_refused_with_a_rewrite(
+    testimony: str, reason: str, rewritten: str
+) -> None:
+    r"""MathJax reads a star, then a bracket, right after ``\\`` as part of
+    the row break and shows neither; each message names a rewrite, which is
+    accepted."""
+
+    assert any(error.startswith(reason) for error in _testimony_errors(testimony))
+    assert _testimony_errors(rewritten) == ()
+
+
 def _matrix(rows: int, columns: int) -> str:
     """A matrix of ``a`` with ``rows`` row breaks and ``columns`` ``&`` in each row."""
 

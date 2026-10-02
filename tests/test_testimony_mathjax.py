@@ -6,9 +6,10 @@ a corpus with MathJax, configured as the site configures it (a fresh TeX
 input per formula, with the packages base, ams, and noundefined, and the
 CommonHTML output the site's ``tex-mml-chtml`` component uses), and check
 that every formula the model accepts MathJax sets without an error, drawing
-at least one symbol and every letter and digit written outside command and
-environment names, and keeping a script in its script. They also check the
-model's widths of spaces and its ranges of characters against MathJax's.
+at least one symbol and every ASCII letter, digit, and symbol written
+outside command and environment names, and keeping a script in its script.
+They also check the model's widths of spaces and its ranges of characters
+against MathJax's.
 
 They need Node.js, found on ``PATH`` or at ``/opt/homebrew/bin/node``, and an
 unpacked MathJax 3.2.2 ``es5`` directory, the one holding ``node-main.js``,
@@ -67,7 +68,8 @@ MathJax.init({
     const walk = (node) => {
       if (A.kind(node) === '#text') return;
       const c = (A.getAttribute(node, 'class') || '').match(/(?:^| )mjx-c([0-9A-F]+)(?: |$)/);
-      if (A.kind(node) === 'mjx-c' && c) drawn += String.fromCodePoint(parseInt(c[1], 16));
+      const stretched = A.kind(node) === 'mjx-stretchy-v' || A.kind(node) === 'mjx-stretchy-h';
+      if ((A.kind(node) === 'mjx-c' || stretched) && c) drawn += String.fromCodePoint(parseInt(c[1], 16));
       if (A.kind(node) === 'mjx-utext') drawn += A.textContent(node);
       for (const child of A.childNodes(node)) walk(child);
     };
@@ -176,24 +178,51 @@ def _corpus() -> list[str]:
         r"\qquad\qquad\qquad\qquad",
         r"\,",
         "{}",
+        r"\begin{pmatrix} 1 & 0 \\ * & 1 \end{pmatrix}",
+        r"a \\ * b",
     ]
     return formulas
 
 
-def _shown(tex: str) -> Counter[str]:
-    """The ASCII letters and digits written in ``tex`` outside command
-    names, environment names, and the layout an environment takes: its
-    vertical alignment, ``[t]``, ``[b]``, or ``[c]``, and its columns."""
+#: The ASCII characters TeX reads as structure, space, or a comment, and
+#: does not draw.
+_STRUCTURE = frozenset("{}^_&~#%$\\")
+#: The commands whose first argument is optional, in brackets, and those that
+#: take an optional star.
+_OPTIONAL = "|".join(re.escape(name) for name, entry in _TESTIMONY_TEX.items() if entry.arguments[:1] == "o")
+_STARRED = "|".join(re.escape(name) for name, entry in _TESTIMONY_TEX.items() if entry.arguments[:1] == "*")
+#: What MathJax draws for each ASCII character it does not draw as itself,
+#: once NFKD has split a double prime into two and a struck-out relation
+#: into the relation and the stroke. ``"`` is drawn as a double prime.
+_DRAWN_AS = str.maketrans({"\u2212": "-", "\u2217": "*", "\u2032": "'", "\u2035": "`", "\u27e8": "<", "\u27e9": ">"})
 
-    tex = re.sub(r"\\(?:begin|end)\s*\{[^{}]*\}(?:\s*\[\s*[tbc]?\s*\])?(?:\s*\{[lcr ]*\})?", " ", tex)
+
+def _printed(text: str) -> Counter[str]:
+    text = text.replace('"', "''")
+    return Counter(
+        character
+        for character in text
+        if character.isascii() and character.isprintable() and not character.isspace() and character not in _STRUCTURE
+    )
+
+
+def _shown(tex: str) -> Counter[str]:
+    """The ASCII letters, digits, and symbols written in ``tex`` outside
+    command names, environment names, the layout an environment takes (its
+    vertical alignment, ``[t]``, ``[b]``, or ``[c]``, and its columns), the
+    brackets of an optional argument, an optional star, and the empty
+    delimiter ``.``."""
+
+    tex = re.sub(r"\\(?:begin|end)\s*\{[^{}]*\}(?:\s*\[\s*[tbc]?\s*\])?(?:\s*\{[lcr |:]*\})?", " ", tex)
+    tex = re.sub(rf"({_OPTIONAL})\s*\[([^\[\]]*)\]", r"\1 \2 ", tex)
+    tex = re.sub(rf"({_STARRED})\s*\*", r"\1 ", tex)
+    tex = re.sub(r"\\(?:left|right|middle|[bB]igg?[lrm]?)\s*\.", " ", tex)
     tex = re.sub(r"\\[A-Za-z]+|\\.", " ", tex)
-    return Counter(character for character in tex if character.isascii() and character.isalnum())
+    return _printed(tex)
 
 
 def _drawn(drawn: str) -> Counter[str]:
-    return Counter(
-        character for character in unicodedata.normalize("NFKC", drawn) if character.isascii() and character.isalnum()
-    )
+    return _printed(unicodedata.normalize("NFKD", drawn).translate(_DRAWN_AS))
 
 
 def _top_level(mml: str) -> list[ElementTree.Element]:
@@ -262,6 +291,8 @@ def test_the_model_refuses_every_formula_found_to_differ(typeset: _Typeset) -> N
         r"\begin{array} a \end{array}",
         r"\pmb{\pmb{x}}",
         (r"\iff" + "".join(f" + a_{{{i}}}" for i in range(800)))[:5200],
+        r"\begin{pmatrix} 1 & 0 \\* & 1 \end{pmatrix}",
+        r"a \\* b",
     ]
 
     results = typeset(differing)

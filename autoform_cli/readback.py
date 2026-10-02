@@ -1391,8 +1391,9 @@ _TEX_PRIMES = frozenset({"'", "’"})
 _TEX_UNSCRIPTED = frozenset({"style", "not", "begin", "limits", "middle", "right", "end", "rows"})
 _TEX_ENVIRONMENT = re.compile(r"\s*\{([^{}\\]{0,64})\}")
 #: ``\\[<dimension>]`` spaces rows apart, or with a negative dimension draws
-#: one over another; MathJax reads the bracket only right after the ``\\``.
-_TEX_ROW_SPACING = re.compile(r"\*?\[")
+#: one over another; MathJax reads a star, then the bracket, only right after
+#: the ``\\``, and shows neither.
+_TEX_ROW_SPACING = re.compile(r"[*\[]")
 #: The escapes ``\text`` and its kin read, rather than show as typed.
 _TEX_TEXT_ESCAPE = re.compile(r"\\[${}\\]")
 _TEX_DOUBLE_INTEGRAL = re.compile(r"\\int\s*(?:\\!\s*){2,}\\int")
@@ -1655,10 +1656,16 @@ class _TexLayout:
             if alone or self.peek() not in _TEX_RELATIONS:
                 self.errors[_TEX_NOT] = None
         elif kind == "rows":
-            if _TEX_ROW_SPACING.match(self.tex, self.tokens[self.index - 1][0] + 2):
+            spacing = _TEX_ROW_SPACING.match(self.tex, self.tokens[self.index - 1][0] + 2)
+            if spacing and spacing.group() == "*":
                 self.errors[
-                    "TeX row spacing after \\\\ is not allowed: it can draw rows over one another; "
-                    "write {} before a bracket that starts a row"
+                    "a * right after TeX \\\\ is not allowed: MathJax reads it as part of the row break and does "
+                    "not show it; put a space between them"
+                ] = None
+            elif spacing:
+                self.errors[
+                    "TeX row spacing after \\\\ is not allowed: it can draw rows over one another; remove the "
+                    "bracket after \\\\, or write {} before a bracket that starts a row"
                 ] = None
             if context in {"formula", "environment", "substack"}:
                 self.row(rows)
