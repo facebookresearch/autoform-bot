@@ -94,10 +94,24 @@ _HUNK = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 _T = TypeVar("_T")
 
 
+def _printable(text: str) -> str:
+    """``text`` with each character that is not printable escaped as Python writes it, such as ``\\n``.
+
+    Reasons quote file names, refs, and GitHub's own answers, which a pull
+    request author can choose. A newline in one, printed to a CI log, could
+    start a line with ``::``, which GitHub Actions runs as a workflow command.
+    Every reason the verifier records and every ApprovalError message passes
+    through here.
+    """
+
+    return "".join(char if char.isprintable() else char.encode("unicode_escape").decode("ascii") for char in text)
+
+
 class ApprovalError(ValueError):
     """Approval evidence could not be gathered or its rules could not be read."""
 
     def __init__(self, message: str) -> None:
+        message = _printable(message)
         self.issues = (message,)
         super().__init__(message)
 
@@ -611,6 +625,12 @@ class GitHubReviewVerifier:
         )
 
     def verify(self, graph: Graph, approvals: Mapping[str, str]) -> dict[str, ApprovalAttestation]:
+        try:
+            return self._verify(graph, approvals)
+        finally:
+            self.reasons = {node_id: _printable(reason) for node_id, reason in self.reasons.items()}
+
+    def _verify(self, graph: Graph, approvals: Mapping[str, str]) -> dict[str, ApprovalAttestation]:
         self.reasons = {}
         if not approvals:
             return {}

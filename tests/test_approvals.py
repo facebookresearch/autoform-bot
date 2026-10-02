@@ -1289,6 +1289,37 @@ def test_a_failed_request_still_renders_the_site(
     assert "warning: basics/result is self-approved: GitHub API GET /rules/branches/main failed with HTTP 502" in capsys.readouterr().out
 
 
+def test_a_reason_never_starts_a_workflow_command_in_the_build_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A file name or an answer from GitHub may hold a newline, after which GitHub Actions runs `::` as a command."""
+
+    blueprint, github = _authenticated_review_project(tmp_path, monkeypatch)
+    forged = "notes\n::error::forged\r\u2028"
+    github.file_edits[3] = lambda entries: [*entries, {"filename": forged, "status": "added"}]
+    check = ["review", "check", str(blueprint), "--lean-root", str(tmp_path), "--authenticate", "github"]
+
+    assert main(check) == 0
+    code, _ = _render(tmp_path, blueprint)
+    assert code == 0
+    output = capsys.readouterr().out
+    assert output.count("#3 changes notes\\n::error::forged\\r\\u2028, not only articles") == 4
+    assert all(not line.lstrip().startswith("::") for line in output.splitlines())
+
+    answer = github.get
+
+    def forging(path: str, query: dict | None = None) -> object:
+        if path == "":
+            raise ApprovalError(f"GitHub API GET {path} failed with HTTP 502: {forged}")
+        return answer(path, query)
+
+    github.get = forging  # type: ignore[method-assign]
+    assert _render(tmp_path, blueprint)[0] == 1
+    output = capsys.readouterr().out
+    assert "failed with HTTP 502: notes\\n::error::forged\\r\\u2028\n" in output
+    assert all(not line.lstrip().startswith("::") for line in output.splitlines())
+
+
 def test_a_build_the_default_branch_has_moved_past_fails_before_writing_the_site(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
