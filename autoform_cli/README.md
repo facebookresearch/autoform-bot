@@ -960,36 +960,51 @@ request budget, or an undecidable CODEOWNERS rule, leaves that one approval
 self-approved, and `review check --authenticate github`, `render
 --authenticate github`, and the rendered label say why. When GitHub gave no
 usable answer (an HTTP error other than 404, a network failure, or malformed
-JSON), a list changed between its pages, or the budget ran out, any of which
-a later run may get past, `render` also lists the approval with the reason
-under `unchecked_approvals` in the site's `publication.json`; the Pages
-workflow deploys that site, then fails the run, so a site that understates its
-approvals never passes for a green build, and its hourly scheduled run builds
-the head again. A run may make 500 requests plus 10 per approval, at most 900.
-That bounds one run, not the hour: GitHub's limit of 1000 requests an hour for
-a workflow's `GITHUB_TOKEN` is shared by every run in the repository, so two
-full builds within an hour, or a build after many gate runs, can run out, and
-the approvals the refused requests leave are unchecked. The reason for an
-approval the budget left unchecked names the budget and the limit. The
-precondition costs one request for the repository, one for the default
+JSON), a list changed between its pages, or a budget below the ceiling ran
+out, any of which a later run may get past, `render` also lists the approval
+with the reason under `unchecked_approvals` in the site's `publication.json`;
+the Pages workflow deploys that site, then fails the run, so a site that
+understates its approvals never passes for a green build, and its hourly
+scheduled run builds the head again. A run first reads `GET /rate_limit`,
+which costs nothing, and may make what the hour has left less 50, which it
+keeps for the rest of its run (the deploy job) and a gate run beside it, but
+never more than the hour's limit less 100, which it keeps for the gate and
+later pushes. GitHub allows a workflow's `GITHUB_TOKEN` 1000 requests an hour
+in one repository, shared by every run there (15,000 on GitHub Enterprise
+Cloud), so the ceiling is 900 (14,900). Two full builds within an hour, or a
+build after many gate runs, start with less, and the approvals a spent budget
+below the ceiling leaves are unchecked, with a reason that names the budget
+and what the hour had left. When GitHub does not answer `GET /rate_limit`, a
+run takes the budget of a `GITHUB_TOKEN` with the hour to itself, 900, and
+what it leaves is unchecked too. The ceiling is the most any run gets, so the
+approvals that a run with all of it still leaves are a verdict, not a failure:
+they read self-approved with a reason naming the ceiling, are not listed as
+unchecked, and the run stays green, as does every later run while the
+approvals cost more than the ceiling. Approvals are checked in the order of
+their article ids, so the same ones stay past it. A project reaches the
+ceiling at about 100 approvals each recorded in its own pull request, fewer
+when lists need more than one page or other commits land between approval pull
+requests; approvals recorded in one pull request share most of their requests.
+The precondition costs one request for the repository, one for the default
 branch's head outside the gate, one per page of rules, one per ruleset with a
 pull request rule, one for GitHub's CODEOWNERS errors, and one permission
-lookup per individual owner it checks. Each approval then costs,
-per pull request: the commit's pull requests, those of each commit the walk
-to B passes (M's first parent, and each earlier commit of a rebased P), P's
-files, p at P's head, P's reviews, the approving reviewer's permission, P's
-commits, the pull requests of P's branch, P's events, and the runs on P's
-head, one request each plus one per extra page. Approvals recorded by the
-same pull request share them, and a permission is looked up once per login.
-In the gate, steps 1, 2, and 6 cost nothing, and P itself costs one request
-(`GET /repos/{owner}/{repo}/pulls/{number}`). Only a misconfigured
-environment (missing or malformed GitHub variables, or a blueprint outside
-the Git checkout), a checkout without full history, an unknown trusted ref,
-or, in `render`, a superseded build or a failed lookup of the default branch
-or its head stops the whole run. Apart from missing or malformed GitHub
-variables, which it reports before building anything, `review check` still
-prints its findings when authentication stops, with every approval
-self-approved and the error as the reason, and exits 2.
+lookup per individual owner it checks. Each approval then costs, per pull
+request: the commit's pull requests, those of each commit the walk to B passes
+(M's first parent, and each earlier commit of a rebased P), P's files, p at
+P's head, P's reviews, the approving reviewer's permission, P's commits, the
+pull requests of P's branch, P's events, and the runs on P's head, one request
+each plus one per extra page. Approvals recorded by the same pull request
+share them, and a permission is looked up once per login. In the gate, steps
+1, 2, and 6 cost nothing, and P itself costs one request (`GET
+/repos/{owner}/{repo}/pulls/{number}`). Only a misconfigured environment
+(missing or malformed GitHub variables, or a blueprint outside the Git
+checkout), a checkout without full history, an unknown trusted ref, or, in
+`render`, a superseded build or a failed lookup of the default branch or its
+head, including one the budget leaves no request for, stops the whole run.
+Apart from missing or malformed GitHub variables, which it reports before
+building anything, `review check` still prints its findings when
+authentication stops, with every approval self-approved and the error as the
+reason, and exits 2.
 
 Code owners come from the first of `.github/CODEOWNERS`, `CODEOWNERS`, and
 `docs/CODEOWNERS` that exists at a commit. P cannot name its own reviewer:
@@ -1100,8 +1115,8 @@ so no re-run of an older commit replaces the site. After deploying, the job
 fails the run when `publication.json` lists any `unchecked_approvals`.
 
 Some events start no Pages run: a dismissed review, a change of access, team,
-or rulesets, a verify run that finishes after the merge, a push with
-`[skip ci]` or by a workflow's `GITHUB_TOKEN`, and a run that failed or left
+or rulesets, a verify run that finishes after the merge, a push with `[skip
+ci]` or by a workflow's `GITHUB_TOKEN`, and a run that failed or left
 approvals unchecked, which nothing runs again. So the workflow also runs at 23
 minutes past every hour (`schedule`), off the top of the hour, when GitHub
 delays scheduled runs most. Its first job, `decide`, lets every event but the
@@ -1113,14 +1128,16 @@ with no failed run of the head after it, so a run that deployed and then
 failed on unchecked approvals does not count. After failed runs of the head it
 waits an hour, doubling with each failure up to a day; when the head's newest
 deployment is a success, only the runs that failed after it count, so failures
-the site has since recovered from never lengthen the wait. It first asks
-`GET /rate_limit`, which costs nothing, and builds only when that reports at
-least 904 of the hour's requests left: the most one verification makes, plus
-its own. A scheduled run that builds nothing makes at most four requests
-besides that one (the head, its newest deployment, that deployment's status,
-and the workflow's runs on the head): at most 96 a day, under 1%
-of the 24,000 the hourly limit allows. The daily rebuild is one full
-verification, at most 900 requests a day, and is what bounds how long a
+the site has since recovered from never lengthen the wait. It first asks `GET
+/rate_limit`, which costs nothing, and builds only when at most 46 of the
+hour's requests are spent, so that after its own four the verification has all
+it may make, the ceiling above; in a repository whose other runs keep more
+than 46 of every hour's requests spent, the schedule never builds, and only
+pushes and manual runs rebuild the site. A scheduled run that builds nothing
+makes at most four requests besides that one (the head, its newest deployment,
+that deployment's status, and the workflow's runs on the head): at most 96 a
+day, under 1% of the 24,000 the hourly limit allows. The daily rebuild is one
+full verification, at most the ceiling a day, and is what bounds how long a
 withdrawn approval stays on the site; rebuilding every hour could spend most
 of every hour's allowance, leaving pushes and the gate short. The `decide` job
 needs `actions: read` and `deployments: read` besides `contents: read`. When

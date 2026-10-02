@@ -142,6 +142,8 @@ class FakeGitHub:
         self.runs: list[dict] = []
         self.calls: list[tuple[str, dict]] = []
         self.file_edits: dict[int, object] = {}
+        # What GET /rate_limit says: the hour's limit and how many requests are left, or None for no answer.
+        self.hourly: tuple[int, int] | None = (1000, 1000)
         self.rules: list[dict] = [
             {
                 "type": "pull_request",
@@ -333,6 +335,9 @@ class FakeGitHub:
                 }
             )
         return listed
+
+    def rate_limit(self) -> tuple[int, int] | None:
+        return self.hourly
 
     def get(self, path: str, query: dict | None = None) -> object | None:
         query = dict(query or {})
@@ -730,7 +735,9 @@ def test_lookups_are_cached_and_the_request_budget_fails_closed(tmp_path: Path) 
     ]
 
     github.calls.clear()
-    statuses = _verify(root, github, max_requests=2)
+    # GitHub says 52 requests are left this hour, and a run leaves 50 of them.
+    github.hourly = (1000, 52)
+    statuses = _verify(root, github)
     assert len(github.calls) == 2
     assert not any(status.authenticated for status in statuses.values())
     assert all("budget of 2 GitHub API requests" in (status.reason or "") for status in statuses.values())
@@ -805,7 +812,8 @@ def test_a_budget_spent_after_the_setup_refuses_only_the_approvals_left(tmp_path
 
     # The setup with alice's permission, then the nine requests for #8, which "basics/other" sorts first to use.
     budget = len(_SETUP_CALLS) + 1 + 9
-    statuses = _verify(root, github, max_requests=budget)
+    github.hourly = (1000, budget + 50)
+    statuses = _verify(root, github)
 
     assert len(github.calls) == budget
     assert statuses["basics/other"].authenticated, statuses["basics/other"].reason
@@ -845,11 +853,13 @@ def test_only_an_approval_a_later_run_may_authenticate_is_unchecked(tmp_path: Pa
     github.get = answer  # type: ignore[method-assign]
     # The setup with alice's permission, then the nine requests for #8, which "basics/other" sorts first to use.
     budget = len(_SETUP_CALLS) + 1 + 9
-    verifier = _verified(root, github, max_requests=budget)
+    github.hourly = (1000, budget + 50)
+    verifier = _verified(root, github)
     assert list(verifier.reasons) == ["basics/result"]
     assert verifier.unchecked == verifier.reasons
     # Spent before the rules, past the head check, it leaves every approval for a later run.
-    assert sorted(_verified(root, github, max_requests=2).unchecked) == ["basics/other", "basics/result"]
+    github.hourly = (1000, 52)
+    assert sorted(_verified(root, github).unchecked) == ["basics/other", "basics/result"]
 
 
 @pytest.mark.parametrize("failure", ["HTTP 502", "HTTP 404"])
@@ -877,19 +887,74 @@ def test_a_head_lookup_that_fails_outside_a_publishing_run_leaves_every_approval
     assert verifier.unchecked == ({} if failure == "HTTP 404" else verifier.reasons)
 
 
-@pytest.mark.parametrize(("count", "budget"), [(1, 510), (2, 520), (40, 900), (1000, 900)])
-def test_the_request_budget_grows_with_the_approvals_and_keeps_one_run_under_the_hourly_limit(
-    tmp_path: Path, count: int, budget: int
+@pytest.mark.parametrize(
+    ("hourly", "budget"),
+    [
+        # A workflow's GITHUB_TOKEN may make 1000 requests an hour in one repository, and 15000 on Enterprise Cloud.
+        ((1000, 1000), 900),
+        ((1000, 950), 900),
+        ((1000, 949), 899),
+        ((1000, 30), 0),
+        ((15000, 15000), 14900),
+        # No answer: a workflow's GITHUB_TOKEN with the hour to itself, though a spent budget stays unchecked.
+        (None, 900),
+    ],
+)
+def test_the_request_budget_is_what_the_hour_has_left_and_leaves_some_of_it(
+    tmp_path: Path, hourly: tuple[int, int] | None, budget: int
 ) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
     github.rules = []
-    verifier = GitHubReviewVerifier(github, trusted_ref="HEAD")  # type: ignore[arg-type]
+    github.hourly = hourly
+    # Not publishing, so a budget too small for the head check refuses rather than stops the build.
+    verifier = GitHubReviewVerifier(github, trusted_ref="HEAD", publishing=False)  # type: ignore[arg-type]
 
-    verifier.verify(load_graph(root / "blueprint"), {f"node{index}": _HASH for index in range(count)})
+    verifier.verify(load_graph(root / "blueprint"), {f"node{index}": _HASH for index in range(3)})
 
-    # GitHub allows a workflow's GITHUB_TOKEN 1000 requests an hour in one repository.
-    assert verifier.budget == budget < 1000
+    assert verifier.budget == budget
+    assert verifier._at_ceiling() is (hourly is not None and hourly[1] >= hourly[0] - 50)
+
+
+def test_approvals_past_the_ceiling_of_a_run_with_the_hour_to_itself_are_refused_not_unchecked(
+    tmp_path: Path,
+) -> None:
+    """No run gets further, so leaving them unchecked would fail every run, and retry each one in vain."""
+
+    root = _project(tmp_path)
+    github = FakeGitHub(root)
+    head = _pull_approving(root, github)
+    github.review(7, "alice", "APPROVED", head)
+    _branch(root, "other")
+    _approve(root, "other", _OTHER_HASH)
+    _commit(root, "Approve the other article")
+    other_head = github.open_pull(8, "bob")
+    github.review(8, "alice", "APPROVED", other_head)
+    _land(root, github, 8)
+    # The setup with alice's permission, then the nine requests for #8, which "basics/other" sorts first to use.
+    budget = len(_SETUP_CALLS) + 1 + 9
+    # A token whose hourly limit leaves exactly that budget, with the whole hour left.
+    github.hourly = (budget + 100, budget + 100)
+
+    verifier = _verified(root, github)
+
+    assert list(verifier.reasons) == ["basics/result"]
+    assert verifier.reasons["basics/result"] == (
+        f"not checked: checking every approval needs more than the {budget} GitHub API requests a run may make "
+        f"(GitHub's limit of {budget + 100} an hour for this repository's token, less 100 kept for the gate and "
+        "later pushes), so the approvals past it stay self-approved; approvals recorded in one pull request "
+        "share most of their requests"
+    )
+    assert verifier.unchecked == {}
+    # A run that began with 51 of the hour's requests spent keeps 50 back and has one request fewer, so a
+    # later run might get further.
+    github.hourly = (budget + 100, budget + 49)
+    verifier = _verified(root, github)
+    assert verifier.unchecked == verifier.reasons
+    assert verifier.reasons["basics/result"].startswith(f"not checked: the budget of {budget - 1} GitHub API requests")
+    # No answer from GET /rate_limit: the budget of a GITHUB_TOKEN, and anything it leaves is unchecked.
+    github.hourly = None
+    assert _verified(root, github).unchecked == {}
 
 
 def test_an_attestation_for_another_hash_is_discarded(tmp_path: Path) -> None:
@@ -1070,6 +1135,45 @@ def test_the_client_refuses_an_oversized_response(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(ApprovalError, match="returned more than 32 bytes"):
         GitHubClient("secret", "owner/project").get("/pulls/1/reviews")
+
+
+@pytest.mark.parametrize(
+    ("answer", "hourly"),
+    [
+        (b'{"resources": {"core": {"limit": 1000, "remaining": 987}}}', (1000, 987)),
+        (b'{"resources": {"core": {"limit": 1000}}}', None),
+        (b'{"resources": {"core": {"limit": 1000, "remaining": "987"}}}', None),
+        (b'{"resources": {"core": {"limit": 1000, "remaining": true}}}', None),
+        (b"[]", None),
+        (b"not json", None),
+        # GitHub Enterprise Server with rate limiting turned off.
+        (urllib.error.HTTPError("", 404, "Not Found", {}, io.BytesIO(b"Rate limiting is not enabled.")), None),  # type: ignore[arg-type]
+        (urllib.error.URLError("timed out"), None),
+    ],
+)
+def test_the_client_reads_how_many_requests_are_left_and_nothing_else(
+    monkeypatch: pytest.MonkeyPatch, answer: bytes | Exception, hourly: tuple[int, int] | None
+) -> None:
+    requests: list[object] = []
+
+    class Response(io.BytesIO):
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self.close()
+
+    def urlopen(request: object, timeout: float) -> object:
+        requests.append(request)
+        if isinstance(answer, Exception):
+            raise answer
+        return Response(answer)
+
+    monkeypatch.setattr(approvals.urllib.request, "urlopen", urlopen)
+
+    assert GitHubClient("secret", "owner/project", api_url="https://github.example/api/v3/").rate_limit() == hourly
+    assert requests[0].full_url == "https://github.example/api/v3/rate_limit"  # type: ignore[attr-defined]
+    assert requests[0].unredirected_hdrs == {"Authorization": "Bearer secret"}  # type: ignore[attr-defined]
 
 
 # What every verification on the default branch reads first: the repository, the branch's head, its

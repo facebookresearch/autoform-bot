@@ -53,8 +53,8 @@ jobs:
   # failed run of it since, or when that build is a day old, to pick up what
   # changes without a push. After failed runs of the head (when its newest
   # deployment succeeded, only those since) it waits an hour, doubling with
-  # each one up to a day. It builds only when this hour has the 900
-  # requests a run may make left, and asks how many first. A scheduled run
+  # each one up to a day. It builds only when this hour has every request
+  # a build may make left, and asks how many first. A scheduled run
   # that builds nothing makes at most four requests besides that free one,
   # and when GitHub does not answer one it ends green with a warning.
   decide:
@@ -105,10 +105,15 @@ jobs:
           }
           # Free, and the limit is shared by every run in the repository. Asked
           # first, so a spent hour makes no request fail.
-          remaining="$(gh api rate_limit --jq .resources.core.remaining)" || unread "how many API requests are left this hour"
-          [[ "$remaining" =~ ^[0-9]+$ ]] || unread "how many API requests are left this hour"
-          if (( remaining < 904 )); then
-            skip "Only $remaining GitHub API requests are left this hour, fewer than the 900 a build may make and the 4 this run asks first"
+          hour="$(gh api rate_limit --jq '.resources.core | "\(.limit) \(.remaining)"')" \
+            || unread "how many API requests are left this hour"
+          read -r limit remaining <<< "$hour"
+          [[ "$limit $remaining" =~ ^[0-9]+\ [0-9]+$ ]] || unread "how many API requests are left this hour"
+          # A build may make the hour's limit less 100, and only while it
+          # keeps 50 of what is left for the rest of its run, so it has all
+          # of that only when at most 50 are spent; this run makes 4.
+          if (( remaining < limit - 46 )); then
+            skip "Only $remaining of the hour's $limit GitHub API requests are left, and a build has all it may make only while at most 50 are spent, 4 of them by this run"
           fi
           api="repos/$GITHUB_REPOSITORY"
           branch="${GITHUB_REF#refs/heads/}"

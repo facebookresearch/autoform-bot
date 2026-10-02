@@ -49,16 +49,17 @@ _MAX_PULL_FILES = 3000
 _MAX_CODEOWNERS_BYTES = 3_000_000
 _UNCOVERED_SHOWN = 10
 # GitHub allows a workflow's GITHUB_TOKEN 1000 API requests an hour in one
-# repository, shared by every run there. A run may make _BASE_REQUESTS,
-# enough for one rebase merge of _MAX_PULL_COMMITS commits, and
-# _REQUESTS_PER_APPROVAL more for each approval, about what an approval
-# recorded in its own pull request needs, but never more than _MAX_REQUESTS.
-# That bounds one run, not the hour: two full builds in an hour can run out,
-# and the approvals the refused requests leave are unchecked.
+# repository (15000 on GitHub Enterprise Cloud), shared by every run there.
+# GET /rate_limit says which, and how many are left, without counting. A run
+# may make what is left but _LEFT_AFTER, for the rest of its own run and a
+# gate run beside it, and never more than the hour's limit less
+# _RESERVED_REQUESTS, so a build never takes the whole hour from the gate and
+# later pushes. The approvals a budget smaller than that ceiling leaves are
+# unchecked, since a run with the hour to itself may get further; the ones
+# the ceiling itself leaves are refused, since no run gets further.
 _GITHUB_TOKEN_HOURLY_LIMIT = 1000
-_BASE_REQUESTS = 500
-_REQUESTS_PER_APPROVAL = 10
-_MAX_REQUESTS = 900
+_RESERVED_REQUESTS = 100
+_LEFT_AFTER = 50
 # What the default branch's pull request rules must turn on: the parameter, the
 # name GitHub's ruleset settings show, and what goes wrong without it.
 _REVIEW_SETTINGS = (
@@ -503,6 +504,31 @@ class GitHubClient:
         except (UnicodeError, json.JSONDecodeError) as exc:
             raise ApprovalError(f"GitHub API GET {path} returned malformed JSON") from exc
 
+    def rate_limit(self) -> tuple[int, int] | None:
+        """This token's hourly limit of core API requests and how many are left, or None if GitHub does not say.
+
+        GET /rate_limit does not count against the limit.
+        """
+
+        request = urllib.request.Request(
+            f"{self.api_url}/rate_limit",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "autoform-review-authentication",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        request.add_unredirected_header("Authorization", f"Bearer {self.token}")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                core = json.loads(response.read(_MAX_RESPONSE_BYTES))["resources"]["core"]
+            limit, remaining = core["limit"], core["remaining"]
+        except (urllib.error.URLError, OSError, UnicodeError, ValueError, KeyError, TypeError):
+            return None
+        if not all(type(count) is int and count >= 0 for count in (limit, remaining)):
+            return None
+        return limit, remaining
+
 
 class _BudgetSpent(Exception):
     pass
@@ -573,6 +599,9 @@ class GitHubReviewVerifier:
     spent request budget, or undecidable ownership, leaves that one approval
     self-approved and says why in ``reasons``; a failed request or a spent
     budget, which a later run may get past, also puts it in ``unchecked``.
+    A budget is the requests left this hour less ``_LEFT_AFTER``, at most the
+    hour's limit less ``_RESERVED_REQUESTS``; spending that ceiling is a
+    verdict, not a failure, since no run gets further.
     """
 
     method = GITHUB_REVIEW_METHOD
@@ -585,7 +614,6 @@ class GitHubReviewVerifier:
         pull_request: int | None = None,
         verify_workflow: str = DEFAULT_VERIFY_WORKFLOW,
         web_url: str | None = None,
-        max_requests: int | None = None,
         publishing: bool = True,
     ) -> None:
         self.client = client
@@ -594,8 +622,9 @@ class GitHubReviewVerifier:
         self.publishing = publishing
         self.verify_workflow = verify_workflow
         self.web_url = (web_url or _web_url(getattr(client, "api_url", DEFAULT_GITHUB_API_URL))).rstrip("/")
-        self.max_requests = max_requests
         self.budget = 0
+        # The hour's limit and how many requests were left when the run began, if GitHub said.
+        self.hourly: tuple[int, int] | None = None
         self.requests = 0
         self.reasons: dict[str, str] = {}
         self.unchecked: dict[str, str] = {}
@@ -658,11 +687,11 @@ class GitHubReviewVerifier:
         trusted = _commit_id(root, self.trusted_ref)
         blueprint = _relative_path(graph.blueprint_dir, root)
         self._blueprint = "" if blueprint == "." else blueprint
-        self.budget = (
-            min(_MAX_REQUESTS, _BASE_REQUESTS + _REQUESTS_PER_APPROVAL * len(approvals))
-            if self.max_requests is None
-            else self.max_requests
-        )
+        self.hourly = self.client.rate_limit()
+        # Unless GitHub says otherwise, the limit of a workflow's GITHUB_TOKEN, all of it left: past
+        # that budget the approvals are unchecked, not refused.
+        limit, remaining = self.hourly or (_GITHUB_TOKEN_HOURLY_LIMIT, _GITHUB_TOKEN_HOURLY_LIMIT)
+        self.budget = max(0, min(limit - _RESERVED_REQUESTS, remaining - _LEFT_AFTER))
         try:
             self._check_protection(root, trusted)
         except HeadCheckError:
@@ -674,7 +703,8 @@ class GitHubReviewVerifier:
             return {}
         except _BudgetSpent:
             self.reasons = dict.fromkeys(sorted(approvals), self._not_checked())
-            self.unchecked = dict(self.reasons)
+            if not self._at_ceiling():
+                self.unchecked = dict(self.reasons)
             return {}
         attestations: dict[str, ApprovalAttestation] = {}
         for node_id, review_hash in sorted(approvals.items()):
@@ -688,15 +718,34 @@ class GitHubReviewVerifier:
                 if isinstance(exc, _Unanswered):
                     self.unchecked[node_id] = str(exc)
             except _BudgetSpent:
-                self.reasons[node_id] = self.unchecked[node_id] = self._not_checked()
+                self.reasons[node_id] = self._not_checked()
+                if not self._at_ceiling():
+                    self.unchecked[node_id] = self.reasons[node_id]
         return attestations
 
+    def _at_ceiling(self) -> bool:
+        """Whether this run had the most requests any run may make, so a later one gets no further."""
+
+        return self.hourly is not None and self.budget == self.hourly[0] - _RESERVED_REQUESTS
+
     def _not_checked(self) -> str:
+        if self.hourly is None:
+            return (
+                f"not checked: the budget of {self.budget} GitHub API requests was spent, and GitHub did not say "
+                "how many of the hour's requests were left; a later run may check it"
+            )
+        limit, remaining = self.hourly
+        if self._at_ceiling():
+            return (
+                f"not checked: checking every approval needs more than the {self.budget} GitHub API requests a run "
+                f"may make (GitHub's limit of {limit} an hour for this repository's token, less "
+                f"{_RESERVED_REQUESTS} kept for the gate and later pushes), so the approvals past it stay "
+                "self-approved; approvals recorded in one pull request share most of their requests"
+            )
         return (
-            f"not checked: the budget of {self.budget} GitHub API requests was spent; a run's budget grows with "
-            f"its approvals up to {_MAX_REQUESTS}, under GitHub's limit of {_GITHUB_TOKEN_HOURLY_LIMIT} requests "
-            "an hour for a workflow's GITHUB_TOKEN, which every run in the repository shares, and approvals "
-            "recorded in one pull request share most of their requests"
+            f"not checked: the budget of {self.budget} GitHub API requests was spent; {remaining} of the hour's "
+            f"{limit} were left when this run began, and it keeps {_LEFT_AFTER} for the rest of the run, so a "
+            "later run with more of the hour left may check it"
         )
 
     def _verify_one(
@@ -732,7 +781,7 @@ class GitHubReviewVerifier:
             except _BudgetSpent:
                 # Keep what the earlier candidates were refused for.
                 reasons.append(self._not_checked())
-                unanswered = True
+                unanswered = unanswered or not self._at_ceiling()
                 break
         # A candidate that could not be checked may be the one a later run authenticates.
         raise (_Unanswered if unanswered else _Refused)("; ".join(dict.fromkeys(reasons)))
@@ -794,7 +843,8 @@ class GitHubReviewVerifier:
             message = f"cannot tell whether {self.trusted_ref} is the head of the default branch on GitHub: {why}"
             if self.publishing:
                 raise HeadCheckError(message) from exc
-            raise (_Unanswered if isinstance(exc, (_Unanswered, _BudgetSpent)) else ApprovalError)(message) from exc
+            unanswered = isinstance(exc, _Unanswered) or (isinstance(exc, _BudgetSpent) and not self._at_ceiling())
+            raise (_Unanswered if unanswered else ApprovalError)(message) from exc
         if head != trusted:
             reason = (
                 f"{self.trusted_ref} is {trusted[:12]}, not {head[:12]}, the head of {default} on GitHub; "

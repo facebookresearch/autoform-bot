@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from autoform_cli import approvals
 from autoform_cli import scaffold as scaffold_module
 from autoform_cli.coverage import load_coverage
 from autoform_cli.graph import load_graph
@@ -659,6 +660,7 @@ def _github_after(
     failed: tuple[tuple[str, float] | tuple[str, float, str], ...] = (),
     deployed: tuple[str, float] | None = None,
     remaining: int = 1000,
+    limit: int = 1000,
     head: str = "a" * 40,
 ) -> dict[str, object]:
     """GitHub's answers when runs of the head failed ``failed`` = ((event, hours ago), ...)
@@ -677,7 +679,7 @@ def _github_after(
         _MAIN: {"object": {"sha": head}},
         _RUNS: {"workflow_runs": runs},
         _DEPLOYMENTS: [] if deployed is None else [{"id": 7}],
-        "rate_limit": {"resources": {"core": {"remaining": remaining}}},
+        "rate_limit": {"resources": {"core": {"limit": limit, "remaining": remaining}}},
     }
     if deployed is not None:
         answers[f"{_DEPLOYMENTS}/7/statuses"] = [{"state": deployed[0], "created_at": ago(deployed[1])}]
@@ -835,7 +837,11 @@ def test_every_event_but_the_schedule_builds_without_asking_github(tmp_path: Pat
             False,
             id="backing-off-after-recovering",
         ),
-        pytest.param(_github_after(remaining=903), False, id="spent-hour"),
+        # A build has all it may make, the limit less 100, only while it keeps 50 back; decide makes 4.
+        pytest.param(_github_after(remaining=954), True, id="full-allowance"),
+        pytest.param(_github_after(remaining=953), False, id="spent-hour"),
+        pytest.param(_github_after(remaining=14954, limit=15000), True, id="enterprise-full-allowance"),
+        pytest.param(_github_after(remaining=14953, limit=15000), False, id="enterprise-spent-hour"),
         pytest.param(_github_after(failed=(("schedule", 0.5, "timed_out"),)), False, id="timed-out"),
         pytest.param(_github_after(failed=(("push", 0.5, "startup_failure"),)), False, id="startup-failure"),
         pytest.param(_github_after(failed=(("push", 0.5, "cancelled"),)), True, id="cancelled"),
@@ -860,10 +866,10 @@ def test_a_scheduled_run_builds_the_head_until_it_has_a_complete_build(
     head = "a" * 40
     # GET /rate_limit costs nothing, and is asked first, so a spent hour makes no request fail.
     assert calls[0] == "rate_limit"
-    remaining = answers["rate_limit"]["resources"]["core"]["remaining"]
-    if remaining < 904:
+    hour = answers["rate_limit"]["resources"]["core"]
+    if hour["remaining"] < hour["limit"] - 46:
         assert calls == ["rate_limit"]
-        assert done.stdout.startswith(f"::notice::Only {remaining} GitHub API requests are left this hour")
+        assert done.stdout.startswith(f"::notice::Only {hour['remaining']} of the hour's {hour['limit']} GitHub API")
         return
     statuses = [f"{_DEPLOYMENTS}/7/statuses?per_page=1"] if f"{_DEPLOYMENTS}/7/statuses" in answers else []
     assert calls[1:] == [
@@ -873,6 +879,15 @@ def test_a_scheduled_run_builds_the_head_until_it_has_a_complete_build(
         f"{_RUNS}?branch=main&head_sha={head}&status=completed&per_page=100",
     ]
     assert ("::notice::Building" in done.stdout) is build
+
+
+def test_a_scheduled_run_builds_only_when_the_verifier_would_have_its_whole_allowance(tmp_path: Path) -> None:
+    """The verifier keeps _LEFT_AFTER of the hour's requests back; decide makes four before it."""
+
+    scaffold_project(tmp_path, title="Finite Flat")
+    script = _step(tmp_path / ".github/workflows/blueprint-pages.yml", "decide", "Decide whether to build")
+
+    assert f"if (( remaining < limit - {approvals._LEFT_AFTER - 4} )); then" in script
 
 
 def test_a_scheduled_run_of_a_head_main_has_moved_past_builds_nothing(tmp_path: Path) -> None:
