@@ -1697,6 +1697,7 @@ class _TexLayout:
 
     def group(self, context: str) -> None:
         rows = _TexRows(self.glyphs, self.glyphs, self.spacing, []) if context == "substack" else None
+        self.new_atom()
         if self.read_list(context, rows) is None:
             self.errors[_TEX_BRACES] = None
         if rows is not None:

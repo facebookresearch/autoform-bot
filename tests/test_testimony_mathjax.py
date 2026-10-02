@@ -293,6 +293,8 @@ def test_the_model_refuses_every_formula_found_to_differ(typeset: _Typeset) -> N
         (r"\iff" + "".join(f" + a_{{{i}}}" for i in range(800)))[:5200],
         r"\begin{pmatrix} 1 & 0 \\* & 1 \end{pmatrix}",
         r"a \\* b",
+        r"\sum{\limits} x",
+        r"\sum^{\limits}x",
     ]
 
     results = typeset(differing)
