@@ -522,6 +522,69 @@ def test_pages_deploys_only_a_build_of_the_default_branch_head(
         assert "::error::" in done.stdout or "HTTP 502" in done.stderr
 
 
+
+@pytest.mark.parametrize("merged", [True, False], ids=["merge-commit", "linear"])
+def test_the_gate_takes_its_base_only_from_the_merge_commit_of_the_pull_request(tmp_path: Path, merged: bool) -> None:
+    """In any other checkout HEAD^1 is just the commit before, which would make the gate trust the wrong base."""
+
+    scaffold_project(tmp_path / "project", title="Finite Flat")
+    script = _step(
+        tmp_path / "project/.github/workflows/autoform-review-gate.yml", "authenticate", "Authenticate changed approvals"
+    )
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    identity = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com"}
+    identity |= {"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+
+    def git(*args: str) -> str:
+        done = subprocess.run(
+            ["git", *args], cwd=checkout, env={**os.environ, **identity}, capture_output=True, text=True, check=True
+        )
+        return done.stdout.strip()
+
+    git("init", "--quiet", "--initial-branch=main")
+    git("commit", "--quiet", "--allow-empty", "-m", "Start")
+    git("checkout", "--quiet", "-b", "topic")
+    git("commit", "--quiet", "--allow-empty", "-m", "Change")
+    if merged:
+        git("checkout", "--quiet", "main")
+        git("commit", "--quiet", "--allow-empty", "-m", "Move main")
+        git("merge", "--quiet", "--no-ff", "--no-edit", "topic")
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "uvx").write_text('#!/bin/bash\nprintf \'%s\\n\' "$@" > "$UVX_ARGS"\n', encoding="utf-8")
+    (stub / "uvx").chmod(0o755)
+    called = tmp_path / "uvx-args"
+
+    done = subprocess.run(
+        ["bash", "-c", script],
+        cwd=checkout,
+        env={
+            "PATH": f"{stub}{os.pathsep}{os.environ['PATH']}",
+            "HOME": str(tmp_path),
+            "PR_NUMBER": "7",
+            "AUTOFORM_SOURCE": "https://example.com/autoform.git",
+            "AUTOFORM_REF": "0" * 40,
+            "UVX_ARGS": str(called),
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    if merged:
+        base = git("rev-parse", "HEAD^1")
+        assert done.returncode == 0, done.stderr
+        assert called.read_text(encoding="utf-8").splitlines() == [
+            "--from", f"git+https://example.com/autoform.git@{'0' * 40}", "autoform", "review", "authenticate",
+            "blueprint", "--github", "--pr", "7", "--since", base, "--trusted-ref", base,
+        ]
+    else:
+        assert done.returncode == 2
+        assert "error: the checkout is not the merge commit of #7, so its base is unknown" in done.stderr
+        assert not called.exists()
+
 def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:
     scaffold_project(
         tmp_path,
