@@ -109,16 +109,21 @@ _TEX_COMMENT = re.compile(r"(?<!\\)(?:\\\\)*%")
 
 #: Characters that render as nothing, or reorder the text around them, so a
 #: card could say more or other than a reader sees. Unicode's general
-#: categories catch most (controls, format characters such as zero-width
-#: spaces and bidirectional overrides, separators, private-use and unassigned
-#: code points). Spaces other than the ASCII one are blank too, and a browser
-#: does not collapse them, so a run of them pushes text aside or off the card.
-#: Letters and digits of the right-to-left bidirectional classes reorder the
-#: characters around them. The rest are listed by code point: the
-#: Default_Ignorable_Code_Point ranges of Unicode 17.0, which renderers show as
-#: nothing and Python's unicodedata does not expose, and blank letters and
-#: symbols outside them.
-_HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cn", "Cs", "Zl", "Zp"})
+#: categories, in the Unicode data of the Python that runs the check
+#: (``unicodedata.unidata_version``), catch most: controls, format characters
+#: such as zero-width spaces and bidirectional overrides, separators, and
+#: private-use code points. Spaces other than the ASCII one are blank too, and
+#: a browser does not collapse them, so a run of them pushes text aside or off
+#: the card. Letters and digits of the right-to-left bidirectional classes
+#: reorder the characters around them. The rest are listed by code point: the
+#: Default_Ignorable_Code_Point ranges, copied from Unicode 17.0's
+#: DerivedCoreProperties.txt because unicodedata does not expose that property,
+#: which renderers show as nothing whether or not a code point in them is
+#: assigned, and blank letters and symbols outside them. Code points this
+#: Python's Unicode data leaves unassigned (category Cn) are refused apart, by
+#: :func:`_unassigned_characters`: whether one is visible depends on the
+#: Unicode version of the reader's fonts, not on anything this check knows.
+_HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cs", "Zl", "Zp"})
 _HIDDEN_BIDI_CLASSES = frozenset({"R", "AL", "AN"})
 _DEFAULT_IGNORABLE = (
     (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F),
@@ -2148,6 +2153,12 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     hidden = _hidden_characters(text + "".join(document.itertext()))
     if hidden:
         errors.append("invisible or reordering characters are not allowed: " + _named(hidden))
+    unassigned = _unassigned_characters(text + "".join(document.itertext()))
+    if unassigned:
+        errors.append(
+            f"characters unassigned in this Python's Unicode data, version {unicodedata.unidata_version}, are not "
+            "allowed: " + _named(unassigned)
+        )
     # Inline elements end where the marks after them begin, so the marks of
     # adjacent ones fall on one character. Marks are counted on the canonical
     # decomposition, where a letter composed in advance carries its own.
@@ -3234,6 +3245,18 @@ def _hidden_characters(text: str) -> list[str]:
         ):
             name = unicodedata.name(character, "unnamed")
             found[f"U+{ord(character):04X} {name}"] = None
+    return list(found)
+
+
+def _unassigned_characters(text: str) -> list[str]:
+    """Name each distinct code point in ``text`` that this Python's Unicode
+    data leaves unassigned, other than those :data:`_HIDDEN_CODE_POINTS`
+    refuses as invisible whatever their category."""
+
+    found: dict[str, None] = {}
+    for character in text:
+        if unicodedata.category(character) == "Cn" and ord(character) not in _HIDDEN_CODE_POINTS:
+            found[f"U+{ord(character):04X}"] = None
     return list(found)
 
 

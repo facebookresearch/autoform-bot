@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import time
 import tracemalloc
+import unicodedata
 
 import html5lib
 import markdown as markdown_renderer
@@ -1404,13 +1405,27 @@ def test_a_fence_header_with_a_second_class_is_refused_as_an_attribute(header: s
 
 #: The first and last code point of each Default_Ignorable_Code_Point range in
 #: Unicode 17.0's DerivedCoreProperties.txt, and blank or hidden characters of
-#: other kinds: a blank Braille pattern, private use, unassigned, and the line
-#: and paragraph separators.
+#: other kinds: a blank Braille pattern, private use, and the line and
+#: paragraph separators.
 _INVISIBLE = (
     0x00AD, 0x034F, 0x061C, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x180B, 0x180F, 0x200B, 0x200F, 0x202A, 0x202E, 0x2060,
     0x206F, 0x3164, 0xFE00, 0xFE0F, 0xFEFF, 0xFFA0, 0xFFF0, 0xFFF8, 0x1BCA0, 0x1BCA3, 0x1D173, 0x1D17A, 0xE0000,
-    0xE0100, 0xE0FFF, 0x2800, 0xE000, 0x0378, 0x2028, 0x2029,
+    0xE0100, 0xE0FFF, 0x2800, 0xE000, 0x2028, 0x2029,
 )
+
+
+@pytest.mark.parametrize("code", [0x0378, 0x0380, 0x2FFFD])
+def test_unassigned_code_points_are_refused_as_unassigned_in_this_pythons_unicode_data(code: int) -> None:
+    """Whether an unassigned code point shows depends on the Unicode version
+    of the reader's fonts, so it is refused as unassigned in the Unicode data
+    of the Python that checks it, which the message names, not as invisible."""
+
+    errors = _testimony_errors(f"The claim x{chr(code)} holds.")
+
+    assert errors == (
+        f"characters unassigned in this Python's Unicode data, version {unicodedata.unidata_version}, are not "
+        f"allowed: U+{code:04X}",
+    )
 
 
 @pytest.mark.parametrize("code", _INVISIBLE, ids=[f"U+{code:04X}" for code in _INVISIBLE])
