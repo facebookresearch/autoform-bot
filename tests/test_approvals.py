@@ -1292,6 +1292,19 @@ def test_the_gate_requires_authentication_only_for_added_or_changed_approvals(
     # The gate asks nothing about merges or Actions runs.
     assert not any(path.startswith(("/commits/", "/actions/")) for path, _ in github.calls)
 
+    # A review list GitHub did not answer needs a retry, not another review.
+    answer = github.get
+
+    def failing(path: str, query: dict | None = None) -> object:
+        if path == "/pulls/7/reviews":
+            raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
+        return answer(path, query)
+
+    github.get = failing  # type: ignore[method-assign]
+    assert _gate(root, base) == 1
+    captured = capsys.readouterr()
+    assert f"error: 1 approval added or changed since {base} is self-approved; each line above says why\n" in captured.err
+
 
 def test_the_gate_counts_only_reviews_of_its_own_pull_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -1839,4 +1852,5 @@ def test_authenticate_without_pr_in_a_pull_request_run_names_pr(
     output = capsys.readouterr()
     assert ("hint: this is a pull request run; pass --pr with its number" in output.err) is hinted
     assert "the head of main on GitHub; approvals are authenticated only at the head of the default branch)" in output.out
-    assert "error: 1 approval added or changed since" in output.err
+    # No code owner approval would get past that, so the summary does not ask for one.
+    assert f"error: 1 approval added or changed since {base} is self-approved; each line above says why\n" in output.err

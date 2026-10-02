@@ -1020,11 +1020,18 @@ def _review_authenticate(args: argparse.Namespace) -> int:
             print(f"{node_id}: unchanged since {args.since} · {review_hash}")
     unauthenticated = [item for item in statuses.values() if not item.authenticated]
     if args.since is not None and unauthenticated:
+        # Without --pr an approval is also refused when the checkout is not the default branch's head, and an
+        # unanswered request needs only a retry, so only a gate GitHub answered in full names the usual fix.
+        if args.pr is not None and not verifier.unchecked:
+            fix = (
+                "an individual code owner with write access who is not the pull request's author must approve "
+                "its final head commit"
+            )
+        else:
+            fix = "each line above says why"
         print(
             f"error: {len(unauthenticated)} approval{'s' if len(unauthenticated) != 1 else ''} added or changed "
-            f"since {args.since} {'are' if len(unauthenticated) != 1 else 'is'} self-approved; "
-            "an individual code owner with write access who is not the pull request's author must approve "
-            "its final head commit",
+            f"since {args.since} {'are' if len(unauthenticated) != 1 else 'is'} self-approved; {fix}",
             file=sys.stderr,
         )
         return 1
