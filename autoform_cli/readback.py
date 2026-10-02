@@ -2329,7 +2329,20 @@ def _github_hint(site: list[tuple[str, str, int]], github: list[tuple[str, str, 
     def next_block(tokens: list[tuple[str, str, int]]) -> str:
         return next((value for kind, value, _ in tokens[at:] if kind == "block" and value[:2] != "</"), "")
 
+    def quotes(tokens: list[tuple[str, str, int]]) -> list[str]:
+        """The block quotes opened and closed before the next thing shown,
+        text or a code block."""
+        ends = []
+        for kind, value, _ in tokens[at:]:
+            if kind not in {"block", "break"} or value.startswith("<pre"):
+                break
+            if value.startswith(("<blockquote", "</blockquote")):
+                ends.append(value)
+        return ends
+
     in_table = opened(site, "table") or opened(github, "table")
+    if site[:1] == [("block", "<pre></pre>", 1)] and github[:1] != site[:1]:
+        return "the site reads a first line of four spaces or a tab as an empty code block; drop the blank first line"
     if "\t" in other[1] and "\t" not in one[1]:
         return "the site reads a tab in a formula or in code as spaces, and GitHub keeps it; write spaces for tabs"
     if one[0] == "math" and other in {("text", "("), ("text", "[")}:
@@ -2372,7 +2385,7 @@ def _github_hint(site: list[tuple[str, str, int]], github: list[tuple[str, str, 
         )
     if "<input>" in values:
         return "GitHub shows [ ], [x], or [X] that starts a list item as a checkbox; write \\[x] there"
-    if "<br>" in values:
+    if "<br>" in values or one == ("text", "\\") and at + 1 < len(site) and site[at + 1][2] > site[at][2]:
         return "GitHub reads a backslash at the end of a line as a line break; drop it"
     if next_block(github).startswith("<table") and one[0] == "text":
         return "GitHub reads a table right after a line of text; put a blank line before a table"
@@ -2380,6 +2393,26 @@ def _github_hint(site: list[tuple[str, str, int]], github: list[tuple[str, str, 
         return (
             "GitHub reads a table only when each cell of its delimiter row holds a -, with as many cells as the "
             "header; write the row as |---|---|"
+        )
+    if next_block(github).startswith("<table") and not next_block(site).startswith("<table"):
+        return (
+            "GitHub reads a table wherever a line is followed by a row of -, :, and | with as many cells, "
+            "whether or not either row starts or ends with |; write | at both ends of each row of a table, and "
+            "\\| for a | that is text"
+        )
+    if "<hr>" in values | {next_block(site), next_block(github)}:
+        return (
+            "GitHub reads a line of three or more *, -, or _, spaced or not, as a rule, in a list item too; write a "
+            "rule as *** after a blank line, and \\ before the first character of a line of text that is one"
+        )
+    in_quote = opened(site, "blockquote") or opened(github, "blockquote")
+    if quotes(site) != quotes(github) or (
+        in_quote and one[0] == other[0] == "text" and (">" in one[1]) != (">" in other[1])
+    ):
+        return (
+            "GitHub ends a block quote at a blank line, and at a line that does not start with > unless it carries "
+            "on a line of text in the quote; start each line of a block quote, blank ones too, with > where the "
+            "quote's first > is, and put a line of text between two block quotes"
         )
     if in_table:
         return (
@@ -2408,17 +2441,20 @@ def _github_hint(site: list[tuple[str, str, int]], github: list[tuple[str, str, 
             "GitHub nests a list or paragraph under an item when it is indented as far as the item's text, and "
             "the site at four spaces; indent nested lists and an item's further paragraphs four spaces"
         )
-    if any(value.startswith("<pre>") for value in values) or "code" in {one[0], other[0]}:
+    if any(value.startswith("<pre>") for value in values | {next_block(site), next_block(github)}) or "code" in {
+        one[0],
+        other[0],
+    }:
         return (
             "GitHub ends a code block at any fence at least as long as the one that opens it, or else at the end "
             "of the testimony, and the site only at a fence like the opening one; close each code block with the "
             "fence it opens with, starting where that one does, and nothing after it"
         )
-    if values & {"<em>", "</em>", "<strong>", "</strong>"}:
-        return "GitHub and the site read * and _ apart here; write \\* or \\_ for the character itself"
     if one[1] == "\\" and at + 1 < len(site) and site[at + 1][:2] == other:
         return f"GitHub hides a backslash before any punctuation, and the site only before some; drop the one before {other[1]}"
-    return "put a blank line before lists, tables, and code, and indent nested lists four spaces"
+    if values & {"<em>", "</em>", "<strong>", "</strong>"} or one[0] == other[0] == "text" and values & {"*", "_"}:
+        return "GitHub and the site read * and _ apart here; write \\* or \\_ for the character itself"
+    return "no rewrite is known for this difference; write the line so that GitHub shows what the site shows"
 
 
 def _github_html(text: str) -> str:
@@ -2489,7 +2525,7 @@ def _github_formulas(document: object, lines: list[str]) -> list[str]:
                     continue
                 before, after = part[index - 1 : index], part[index + 1 : index + 2]
                 if any(space.isspace() and space not in " \t" for space in before + after):
-                    doubt(line + number, "a space other than a plain one next to a dollar sign")
+                    doubt(line + number, "a space other than a plain one next to a dollar sign", "write a plain space")
                 if (
                     opener is not None
                     and index > opener + 1

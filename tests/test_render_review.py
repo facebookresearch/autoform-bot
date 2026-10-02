@@ -20,6 +20,7 @@ from autoform_cli.readback import (
     TESTIMONY_MAX_RENDERED_BYTES,
     Readback,
     _github_formulas,
+    _github_hint,
     _github_html,
     _shown,
     _testimony_errors,
@@ -1579,6 +1580,8 @@ _NESTING = "indent nested lists and an item's further paragraphs four spaces"
 _ONE_LINE = "keep each formula in a line of text on one line"
 _PLACE = "with no letter, digit, _, or \\ just before it"
 _FENCE = "close each code block with the fence it opens with, starting where that one does, and nothing after it"
+_RULE = "write a rule as *** after a blank line, and \\ before the first character of a line of text that is one"
+_QUOTE = "start each line of a block quote, blank ones too, with > where the quote's first > is, and put a line of text between two block quotes"
 _LIST = "write \\-, \\+, \\*, or 1\\. where a line of text starts with one"
 _TILDE = "write a space for a ~ that keeps words together, \\sim in a formula, or ~ in code"
 
@@ -1650,6 +1653,26 @@ _TILDE = "write a space for a ~ that keeps words together, \\sim in a formula, o
         ("W0 **a **b** c** W1", "write \\* or \\_ for the character itself", "W0 **a \\*\\*b\\*\\* c** W1"),
         ("A 50\\% share.", "drop the one before %", "A 50% share."),
         ("Its value \\$x$ is typed.", "write dollar signs meant as typed in code, as `$x$`", "Its value `$x$` is typed."),
+        ("\t\nThe map is open.", "drop the blank first line", "The map is open."),
+        ("    \nThe map is open.", "drop the blank first line", "The map is open."),
+        ("a | b\n|---|---|", "write | at both ends of each row of a table, and \\| for a | that is text", "| a | b |\n|---|---|"),
+        ("x\n---|", "write | at both ends of each row of a table, and \\| for a | that is text", "x\n---\\|"),
+        ("- The map\n    ***", _RULE, "- The map\n\n    ***"),
+        ("- The map\n    ***", _RULE, "- The map\n    \\***"),
+        ("The map is open.\n---   -", _RULE, "The map is open.\n\n***"),
+        ("The map is open.\n---   -", _RULE, "The map is open.\n\\---   -"),
+        ("> The map\t\n\t\\\nis open.", "drop it", "> The map\t\n\t\nis open."),
+        ("The claim:\n```\nx", _FENCE, "The claim:\n```\nx\n```"),
+        (">\nThe map is open.", _QUOTE, ">\n> The map is open."),
+        ("> The map is open.\n\n> It is closed.", _QUOTE, "> The map is open.\n>\n> It is closed."),
+        ("- > The map is open.\n> It is closed.", _QUOTE, "- > The map is open.\n  > It is closed."),
+        ("- > The map is open.\n    > It is closed.", _QUOTE, "- > The map is open.\n  > It is closed."),
+        ("> The map\n```lean\nx\n```", _QUOTE, "> The map\n> ```lean\n> x\n> ```"),
+        (
+            "1. > The map is open.\n> It is closed.\n> > So is its image.",
+            _QUOTE,
+            "1. > The map is open.\n   > It is closed.\n   > > So is its image.",
+        ),
     ],
 )
 def test_a_github_reading_that_differs_is_refused_with_a_hint_that_fixes_it(
@@ -1662,6 +1685,16 @@ def test_a_github_reading_that_differs_is_refused_with_a_hint_that_fixes_it(
 
     assert any(error.startswith(_VIEWER) and error.endswith(hint) for error in _testimony_errors(testimony))
     assert _testimony_errors(rewritten) == ()
+
+
+def test_a_github_reading_no_hint_covers_says_no_rewrite_is_known() -> None:
+    """A difference no hint above names gets no advice that may be wrong,
+    only the two readings and the goal. Inputs searched at random reached no
+    such difference, so the readings here are made up."""
+
+    hint = _github_hint([("text", "a", 1)], [("text", "b", 1)], 0)
+
+    assert hint == "no rewrite is known for this difference; write the line so that GitHub shows what the site shows"
 
 
 def _github_reading(testimony: str) -> tuple[str, list[str]]:
@@ -1878,6 +1911,11 @@ _DOUBT = "formulas GitHub may read otherwise are not allowed: "
         ("W0\n\n> ```math\n> d\n> ```", "on line 3, a math fence other than ```math alone", "W0\n\n```math\nd\n```"),
         ("~~~math\ng\n~~~", "on line 1, a math fence other than ```math alone", "```math\ng\n```"),
         ("```math extra\ne\n```", "on line 1, a math fence other than ```math alone", "```math\ne\n```"),
+        (
+            "The value $x$\xa0is positive.",
+            "on line 1, a space other than a plain one next to a dollar sign; write a plain space",
+            "The value $x$ is positive.",
+        ),
     ],
 )
 def test_a_formula_github_may_read_otherwise_is_refused_with_advice_that_fixes_it(
