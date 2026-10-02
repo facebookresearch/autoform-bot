@@ -511,6 +511,14 @@ _HEAD_CHECK = "Check that this attempt built the default branch's head"
             },
             False,
         ),
+        # A default branch with another name deploys its own head.
+        (
+            {
+                _REPOSITORY: {"default_branch": "trunk"},
+                f"{_REPOSITORY}/git/ref/heads/trunk": {"object": {"sha": "a" * 40}},
+            },
+            True,
+        ),
         # A failed lookup, or an answer that names no commit, deploys nothing.
         ({_MAIN: {"object": {"sha": "a" * 40}}}, False),
         ({_REPOSITORY: {"default_branch": "main"}}, False),
@@ -529,6 +537,14 @@ def test_pages_deploys_only_a_build_of_the_default_branch_head(
     deploy = pages.split("\n  deploy:\n")[1]
     assert deploy.index(f"- name: {_HEAD_CHECK}\n") < deploy.index("uses: actions/deploy-pages@")
     assert "      contents: read\n" in deploy.split("    steps:\n")[0]
+    # Nothing skips the check or lets the deploy go on after it fails, and the deploy depends on nothing else.
+    yaml = pytest.importorskip("yaml")
+    job = yaml.safe_load(pages)["jobs"]["deploy"]
+    assert job["if"] == "needs.decide.outputs.publish == 'true'"
+    steps = {step["name"]: step for step in job["steps"]}
+    assert set(steps[_HEAD_CHECK]) == {"name", "env", "run"}
+    assert set(steps["Configure GitHub Pages"]) == {"name", "uses"}
+    assert set(steps["Deploy"]) == {"name", "id", "uses", "with"}
 
     done, _, _ = _run_step(
         tmp_path,
