@@ -2895,10 +2895,10 @@ def _publish_card(directory: int, path: Path, content: str, *, expected_card_has
     holds the old complete card until it holds the new one. Each flush uses
     ``F_FULLFSYNC`` where the platform has it (macOS), whose plain ``fsync``
     can leave the data in the drive's cache. A failure or interruption before
-    the rename removes the staging file. If removing it also fails, or a
-    second interruption lands while it is removed, the file is left, and so
-    it is after a crash, SIGTERM, or SIGKILL; the loader never reads it as a
-    card.
+    the rename removes the staging file. If removing it also fails, the file
+    is left and named, by the error or, after an interruption, a warning. A
+    second interruption while it is removed, a crash, SIGTERM, or SIGKILL
+    can leave it unnamed; the loader never reads it as a card.
     """
 
     data = content.encode("utf-8")
@@ -2938,6 +2938,16 @@ def _publish_card(directory: int, path: Path, content: str, *, expected_card_has
     except OSError as exc:
         leftover = "" if left is None else f"; its temporary file {path.with_name(left)} could not be removed"
         raise ValueError(f"cannot publish read-back: {path}: {exc}{leftover}") from exc
+    except BaseException:
+        # An interruption carries no message to add the file to.
+        if left is not None:
+            warnings.warn(
+                f"read-back {path} was not published, and its temporary file {path.with_name(left)} "
+                "could not be removed",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+        raise
     try:
         _flush(directory)
     except OSError as exc:

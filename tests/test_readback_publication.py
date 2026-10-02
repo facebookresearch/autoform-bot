@@ -1214,6 +1214,32 @@ def test_an_interruption_as_the_staging_file_is_created_leaves_no_file(tmp_path:
     assert path.read_bytes() == original
 
 
+def test_a_staging_file_an_interruption_leaves_behind_is_named_in_a_warning(tmp_path: Path, monkeypatch) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    card = _prepared(blueprint, "Replacement.", expected)
+
+    def interrupt(*args) -> int:
+        raise KeyboardInterrupt
+
+    def fail_unlink(name: str, *, dir_fd: int | None = None) -> None:
+        raise OSError(errno.EIO, "injected input/output error")
+
+    patched = _Os()
+    patched.write, patched.unlink = interrupt, fail_unlink
+    patched.supports_dir_fd = os.supports_dir_fd | {fail_unlink}
+    monkeypatch.setattr(readback, "os", patched)
+
+    # The interrupt has no message to name the file in, so a warning does.
+    with pytest.warns(RuntimeWarning) as warned, pytest.raises(KeyboardInterrupt):
+        publish_readback(card)
+    (left,) = _staged_names(path.parent)
+    assert [str(warning.message) for warning in warned] == [
+        f"read-back {path} was not published, and its temporary file {path.with_name(left)} could not be removed"
+    ]
+    assert path.read_bytes() == original
+
+
 def test_an_interruption_as_any_step_of_a_write_returns_leaves_no_lock_or_staging_file(tmp_path: Path) -> None:
     fcntl = pytest.importorskip("fcntl")
     module = readback.__file__

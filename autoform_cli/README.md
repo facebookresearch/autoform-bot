@@ -526,10 +526,11 @@ directory a first card's write makes on the way is flushed into its parent as
 it is made. At every moment the card's name holds
 either the old complete card (nothing, for a first card) or the new one. A
 failure or interrupt before the rename removes the temporary file and leaves
-the card as it was. If removing it also fails, which the error then names, or a
-second interrupt lands while it is removed, the file is left; a crash, SIGTERM,
-or SIGKILL can leave it too. It is a `.autoform-readback-*.tmp` file beside the
-card, which the loader never reads as a card and the blueprint `.gitignore`
+the card as it was. If removing it also fails, the file is left, and the error
+names it, or after an interrupt a warning does. A second interrupt that lands
+while it is removed can leave it too, as can a crash, SIGTERM, or SIGKILL. It
+is a `.autoform-readback-*.tmp` file beside the card, which the loader never
+reads as a card and the blueprint `.gitignore`
 that `autoform init` writes ignores. If only a flush of a directory fails, the
 card is still published and the write warns. The contract covers Autoform's
 writers only: while a write runs, any other change in `readbacks/<article>/` is
