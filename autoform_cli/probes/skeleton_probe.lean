@@ -351,7 +351,7 @@ def packetOptions (opts : Options) : Options :=
 
 def signatureOf (c : Name) : CommandElabM String := do
   let sig ← liftTermElabM <| withOptions packetOptions (PrettyPrinter.ppSignature c)
-  return sig.fmt.pretty 100
+  return sig.fmt.pretty' (← getOptions)
 
 /-- The raw signature, bypassing project notation, unexpanders, and custom
 delaborators. Project syntax can print `HMul.hMul a b` as `a + b`; this form
@@ -359,7 +359,7 @@ cannot. -/
 def rawSignatureOf (c : Name) : CommandElabM String := do
   let sig ← liftTermElabM <|
     withOptions (fun opts => (packetOptions opts).setBool `pp.raw true) (PrettyPrinter.ppSignature c)
-  return sig.fmt.pretty 100
+  return sig.fmt.pretty' (← getOptions)
 
 /-- First node of syntax kind `k` inside `stx`, depth-first. -/
 partial def findKind? (stx : Syntax) (k : SyntaxNodeKind) : Option Syntax :=

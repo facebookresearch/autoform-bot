@@ -94,6 +94,11 @@ _CORE_MODULE_ROOTS = ("Init", "Lean", "Std", "Lake")
 _SHADOWED_CORE_MODULE = re.compile(
     r"object file '[^']*' of module ((?:" + "|".join(_CORE_MODULE_ROOTS) + r")(?:\.\S+)?) does not exist"
 )
+#: Every constant the helper declares is in the `AutoformSkeleton` namespace,
+#: so a project constant there makes the probe's import of the helper fail.
+_HELPER_COLLISION = re.compile(
+    r"import «?" + re.escape(_PROBE_HELPER_MODULE) + r"»? failed, environment already contains '([^']*)' from (\S+)"
+)
 
 #: Bounds each probe process; extraction runs one per root module.
 DEFAULT_PROBE_TIMEOUT = 600.0
@@ -2028,8 +2033,16 @@ def run_probe(
             ) from exc
         output = _read_probe_records(records) if result.returncode == 0 else ""
     if result.returncode != 0:
-        detail = _stable_detail((result.stderr or result.stdout).strip(), lean_root, Path(scratch))
+        detail = _stable_detail((result.stderr or result.stdout).strip(), lean_root, Path(scratch), helper)
         _raise_if_core_module_shadowed(detail)
+        collision = _HELPER_COLLISION.search(detail)
+        if collision:
+            raise SkeletonError(
+                [
+                    f"module {collision.group(2)} declares {collision.group(1)}, but the AutoformSkeleton "
+                    f"namespace is reserved by the skeleton probe's helper; rename that declaration\n{detail}"
+                ]
+            )
         raise SkeletonError([f"the skeleton probe failed; is the project built with `lake build`?\n{detail}"])
     return output or result.stdout
 

@@ -1985,6 +1985,29 @@ def _answer_records(modules: tuple[str, ...], command: list[str], env: dict[str,
     return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
 
+def test_a_probe_failure_reason_hides_the_helper_directory(tmp_path: Path, monkeypatch) -> None:
+    # The helper is compiled into the extraction's scratch directory, which
+    # is on the probe's search path; a reason that lists it must not change
+    # from one run to the next.
+    project = _project(tmp_path)
+
+    def answer(modules, command, env):
+        entries = "\n".join(env["LEAN_PATH"].split(os.pathsep))
+        return subprocess.CompletedProcess(
+            command, 1, stdout="", stderr=f"error: unknown module prefix 'Bogus'\nsearch path entries:\n{entries}"
+        )
+
+    _fake_lake(monkeypatch, project, answer)
+
+    report = extract_skeletons(
+        _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"}), lean_root=project
+    )
+
+    (issue,) = report.unresolved
+    assert "<scratch>" in issue.reason
+    assert "autoform-skeleton-" not in issue.reason
+
+
 def test_a_custom_runner_cannot_be_given_a_timeout_it_would_ignore(tmp_path: Path) -> None:
     project = _project(tmp_path)
     blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
@@ -3346,6 +3369,53 @@ def test_a_token_that_can_swallow_a_comment_opener_withholds_the_source(tmp_path
     assert trusted.source_withheld
     assert "author meant" not in declaration.blind_text()
     assert "-- source not shown" in declaration.blind_text()
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_signatures_print_at_the_format_width_check_uses(tmp_path: Path) -> None:
+    # 115 characters: `#check` keeps it on one line at the default
+    # `format.width` of 120.
+    project = _built_module(
+        tmp_path,
+        "PktWide",
+        "namespace Skel.PktWide\n"
+        "theorem wide (alpha beta gamma delta : Nat) (h : alpha + beta = gamma + delta) :\n"
+        "    gamma + delta = gamma + delta := rfl\n"
+        "end Skel.PktWide\n",
+    )
+    blueprint = _blueprint(tmp_path, lean={"wide": "Skel.PktWide.wide"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    (declaration,) = report.nodes[0].declarations
+    assert declaration.signature == (
+        "Skel.PktWide.wide (alpha beta gamma delta : Nat) (h : alpha + beta = gamma + delta) : gamma + delta = gamma + delta"
+    )
+    assert max(len(line) for line in declaration.raw_signature.splitlines()) > 100
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_project_constant_in_the_helper_namespace_is_named_as_the_cause(tmp_path: Path) -> None:
+    project = _built_module(
+        tmp_path,
+        "PktColl",
+        "namespace AutoformSkeleton\n"
+        "def main : Nat := 1\n"
+        "end AutoformSkeleton\n"
+        "namespace Skel.PktColl\n"
+        "theorem coll_root : True := trivial\n"
+        "end Skel.PktColl\n",
+    )
+    blueprint = _blueprint(tmp_path, lean={"coll": "Skel.PktColl.coll_root"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    (issue,) = report.unresolved
+    assert issue.reason.startswith(
+        "probe of module Skel.PktColl failed: module Skel.PktColl declares AutoformSkeleton.main, "
+        "but the AutoformSkeleton namespace is reserved by the skeleton probe's helper"
+    )
+    assert "lake build" not in issue.reason
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")

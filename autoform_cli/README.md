@@ -305,7 +305,11 @@ helper module and makes one fully qualified call, with no `open` or
 helpers are compiled once per extraction, with the project's toolchain and no
 project module in scope, into a temporary module named
 `autoform-skeleton-helper`; a project, dependency, or `LEAN_PATH` module of
-that name stops the extraction. A declaration's packet reads as it does to a
+that name stops the extraction. Every constant the helper declares is in the
+`AutoformSkeleton` namespace, which is reserved as well: when a module
+declares a constant there that the helper also declares, its probe cannot
+import the helper, and its targets are unresolved with a reason that names the
+constant. A declaration's packet reads as it does to a
 file that imports its module, whichever other articles are extracted with it.
 That environment has the module's global notation, instances, and
 attributes, including any the module declares after the declaration; it lacks
