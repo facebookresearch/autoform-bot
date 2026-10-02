@@ -2970,9 +2970,12 @@ def _flush(descriptor: int) -> None:
         try:
             fcntl.fcntl(descriptor, full_fsync)
             return
-        except OSError:
+        except OSError as exc:
             # Not every file system takes it; a plain fsync is the next best.
-            pass
+            # Any other failure, such as an I/O error, is the flush's, and a
+            # plain fsync that only reaches the drive's cache would hide it.
+            if exc.errno not in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL):
+                raise
     os.fsync(descriptor)
 
 

@@ -521,8 +521,9 @@ read-only directory. Otherwise the write stages the card in a new temporary
 file, flushes it to disk, renames it over the card's name in one step, and
 flushes the directory. On macOS, where a plain `fsync` can leave data in the
 drive's cache, each flush is `F_FULLFSYNC`, falling back to `fsync` on a file
-system that refuses it. Each directory a first card's write makes on the way is
-flushed into its parent as it is made. At every moment the card's name holds
+system that does not support it; any other error from it fails the flush. Each
+directory a first card's write makes on the way is flushed into its parent as
+it is made. At every moment the card's name holds
 either the old complete card (nothing, for a first card) or the new one. A
 failure or interrupt before the rename removes the temporary file and leaves
 the card as it was. If removing it also fails, which the error then names, or a

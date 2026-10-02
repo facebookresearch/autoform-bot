@@ -993,8 +993,8 @@ def test_every_card_is_left_readable_by_all_and_writable_by_its_owner_whatever_t
     assert first == stat.S_IMODE(path.stat().st_mode) == 0o644
 
 
-@pytest.mark.parametrize("full_fsync", ["works", "is refused"])
-def test_each_flush_uses_full_fsync_where_the_platform_has_it_and_fsync_where_it_fails(
+@pytest.mark.parametrize("full_fsync", ["works", "ENOTSUP", "EOPNOTSUPP", "ENOTTY", "EINVAL"])
+def test_each_flush_uses_full_fsync_where_the_platform_has_it_and_fsync_where_it_is_not_supported(
     tmp_path: Path, monkeypatch, full_fsync: str
 ) -> None:
     blueprint, path, expected = _filed(tmp_path)
@@ -1002,8 +1002,9 @@ def test_each_flush_uses_full_fsync_where_the_platform_has_it_and_fsync_where_it
     flushed: list[tuple[str, str]] = []
 
     def full(descriptor: int) -> int:
-        if full_fsync == "is refused":
-            raise OSError(errno.ENOTSUP, os.strerror(errno.ENOTSUP))
+        if full_fsync != "works":
+            refusal = getattr(errno, full_fsync)
+            raise OSError(refusal, os.strerror(refusal))
         flushed.append(("F_FULLFSYNC", _kind(descriptor)))
         return 0
 
@@ -1020,6 +1021,32 @@ def test_each_flush_uses_full_fsync_where_the_platform_has_it_and_fsync_where_it
     assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
     call = "F_FULLFSYNC" if full_fsync == "works" else "fsync"
     assert flushed == [(call, "card"), (call, "directory")]
+
+
+def test_an_io_error_from_full_fsync_fails_the_flush_rather_than_falling_back_to_fsync(
+    tmp_path: Path, monkeypatch
+) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    fsyncs: list[str] = []
+
+    def full(descriptor: int) -> int:
+        raise OSError(errno.EIO, os.strerror(errno.EIO))
+
+    def plain(descriptor: int) -> None:
+        fsyncs.append(_kind(descriptor))
+
+    _with_full_fsync(monkeypatch, full)
+    patched = _Os()
+    patched.fsync = plain
+    monkeypatch.setattr(readback, "os", patched)
+
+    # A plain fsync would succeed into the drive's cache and hide the error.
+    with pytest.raises(ValueError) as refused:
+        _file_card(blueprint, "Replacement.", expected_card_hash=expected)
+    assert str(refused.value) == f"cannot publish read-back: {path}: [Errno {errno.EIO}] {os.strerror(errno.EIO)}"
+    assert fsyncs == []
+    assert path.read_bytes() == original and _staged_names(path.parent) == []
 
 
 def test_a_first_card_flushes_each_directory_it_makes_into_its_parent(tmp_path: Path, monkeypatch) -> None:
