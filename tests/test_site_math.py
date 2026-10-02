@@ -635,10 +635,10 @@ _HARNESS = r"""
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const [scriptPath, firstPath, secondPath, project, override, changed, startup] = process.argv.slice(2);
+const [scriptPath, firstPath, secondPath, project, override, changed, startup, mode] = process.argv.slice(2);
 const report = {
   injected: [], errors: [], passes: [], inventory: [], version: null, base: null, load: null, menus: null,
-  startup: null,
+  startup: null, resets: [],
 };
 global.window = globalThis;
 let contentLoaded = null;
@@ -651,6 +651,28 @@ global.document = {
 console.error = (...args) => report.errors.push(args.map(String).join(" "));
 let shown = null;
 global.document$ = {subscribe: (listener) => { shown = listener; }};
+
+// A MathJax listed in mkdocs.yml before the script, which has started by the
+// time the script runs, and would typeset the whole page as it is.
+if (mode === "early") {
+  global.MathJax = {loader: {load: ["input/tex", "output/chtml"]}, startup: {document: fs.readFileSync(firstPath, "utf8")}};
+  const page = global.document;
+  delete global.document;
+  const early = require(path.join(process.env.AUTOFORM_MATHJAX_DIR, "es5", "node-main.js"));
+  const started = global.MathJax;
+  global.document = page;
+  (0, eval)(fs.readFileSync(scriptPath, "utf8"));
+  delete global.document;
+  early.init({}).then(() => started.startup.promise).then(() => {
+    report.version = started.version;
+    report.startup = {math: Array.from(started.startup.document.math).length, subscribed: shown !== null};
+  }).catch((error) => {
+    report.errors.push("harness: " + error.stack);
+  }).finally(() => {
+    process.stdout.write(JSON.stringify(report));
+  });
+  return;
+}
 
 (0, eval)(fs.readFileSync(scriptPath, "utf8"));
 report.base = MathJax.loader.paths.mathjax;
@@ -667,12 +689,40 @@ MathJax.startup.ready = () => {
   const original = MathJax._.mathjax.mathjax.document;
   MathJax._.mathjax.mathjax.document = function (root, options) {
     const doc = original.call(this, root, options);
-    if (changed !== "none" || startup !== "quiet") doc.menu = new Menu(doc);
+    if (changed !== "none" || startup !== "quiet" || mode === "retry") doc.menu = new Menu(doc);
     if (first === null) first = doc;
     else docs.push(doc);
+    // The page's document stops once, as a document does while a component
+    // one of its formulas needs is loading, and meanwhile a reader picks
+    // another renderer, which the menu loads.
+    if (mode === "retry" && docs.length === 1 && report.passes.length === 0) {
+      const render = doc.render;
+      let stopped = false;
+      doc.render = function () {
+        if (!stopped) {
+          stopped = true;
+          Menu.loadingPromises.set("output/svg", new Promise((resolve) => setTimeout(() => {
+            Menu.loadingPromises.delete("output/svg");
+            made = docs.length;
+            resolve();
+          }, 40)));
+          MathJax._.util.Retries.retryAfter(new Promise((resolve) => setTimeout(resolve, 20)));
+        }
+        return render.call(this);
+      };
+    }
     return doc;
   };
   MathJax.startup.defaultReady();
+  // When the renderer forgets what it kept, by the documents of the pass made by then.
+  if (mode === "spy") {
+    const output = MathJax.startup.output;
+    const reset = output.reset;
+    output.reset = function () {
+      report.resets.push(docs.length);
+      return reset.apply(this, arguments);
+    };
+  }
   if (startup === "renders") first.render();
   if (startup === "loads") {
     Menu.loadingPromises.set("output/svg", new Promise((resolve) => setTimeout(() => {
@@ -859,12 +909,13 @@ def _node_report(
     override: str = "none",
     changed: str = "none",
     startup: str = "quiet",
+    mode: str = "none",
 ) -> dict:
     files = {"harness.js": _HARNESS, "mathjax.js": script, "first.html": first, "second.html": second}
     for name, text in files.items():
         (tmp_path / name).write_text(text, encoding="utf-8")
     done = subprocess.run(
-        ["node", "harness.js", "mathjax.js", "first.html", "second.html", project, override, changed, startup],
+        ["node", "harness.js", "mathjax.js", "first.html", "second.html", project, override, changed, startup, mode],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -961,6 +1012,76 @@ def test_the_rendered_configuration_refuses_another_release(tmp_path: Path) -> N
         "autoform: this page loaded MathJax 3.2.2, but javascripts/mathjax.js was written for 3.2.1; formulas "
         "are left as typed. Load MathJax only through javascripts/mathjax.js in mkdocs.yml."
     ]
+
+
+def _node_script(tmp_path: Path, macros: str | None = None) -> str:
+    """The script render wrote for a vault, or a skip without node and MathJax."""
+
+    if shutil.which("node") is None or not os.environ.get("AUTOFORM_MATHJAX_DIR"):
+        pytest.skip("needs node and AUTOFORM_MATHJAX_DIR, an unpacked mathjax package")
+    return (_render(_vault(tmp_path / "vault", macros=macros)) / "javascripts/mathjax.js").read_text(encoding="utf-8")
+
+
+def test_each_document_is_made_once_the_one_before_it_is_finished(tmp_path: Path) -> None:
+    """A menu can start loading while a document waits, and no document is
+    made while a menu is loading, so the next is made only after both."""
+
+    report = _node_report(tmp_path, _node_script(tmp_path, json.dumps(_MACROS)), "new", mode="retry")
+
+    assert report["errors"] == []
+    # Only the page's document had been made when the load finished.
+    assert report["startup"]["made"] == 1
+    page, c1, c2 = report["passes"][0]
+    articles = page["math"][2]["mml"]
+    assert "merror" not in articles
+    assert 'mathvariant="bold-italic"' in articles
+    assert 'notation="updiagonalstrike"' in articles
+    assert 'mathvariant="double-struck"' in articles
+    assert "<mo>&gt;</mo>" in page["math"][1]["mml"]
+    assert _LEQ in c1["math"][0]["mml"]
+    for command in ("\\boldsymbol", "\\cancel", "\\coloneqq", "\\RR"):
+        assert f'<mtext mathcolor="red">{command}</mtext>' in c2["math"][1]["mml"]
+
+
+def test_no_class_makes_the_page_input_read_a_card(tmp_path: Path) -> None:
+    """A document made outside MathJax's startup reads an element of class
+    mathjax_process wherever it is unless told otherwise, inside a card too."""
+
+    page = (
+        '<html><head></head><body><article><p id="a1"><span class="arithmatex">\\(a\\)</span></p>'
+        '<div class="bp-readback bp-readback-current" id="c1"><p><span class="mathjax_process">\\(b \\leq c\\)'
+        '</span> <span class="arithmatex">\\(d\\)</span></p></div></article></body></html>'
+    )
+
+    report = _node_report(tmp_path, _node_script(tmp_path), "new", first=page, second=page)
+
+    assert report["errors"] == []
+    article, card = report["passes"][0]
+    assert [math["tex"] for math in article["math"]] == ["a"]
+    assert [math["tex"] for math in card["math"]] == ["d"]
+
+
+def test_the_renderer_forgets_the_last_page_before_each_pass(tmp_path: Path) -> None:
+    report = _node_report(tmp_path, _node_script(tmp_path), "new", mode="spy")
+
+    assert report["errors"] == []
+    assert len(report["passes"]) == 2
+    # Once a pass, before its first document is made.
+    assert report["resets"] == [0, 0]
+
+
+def test_a_mathjax_started_before_the_script_typesets_nothing(tmp_path: Path) -> None:
+    """A MathJax listed before the script started without the site's
+    configuration and would typeset the cards with the articles' input."""
+
+    report = _node_report(tmp_path, _node_script(tmp_path), "new", mode="early")
+
+    assert report["errors"] == [
+        "autoform: MathJax was loaded before javascripts/mathjax.js; formulas are left as typed. Load MathJax "
+        "only through javascripts/mathjax.js in mkdocs.yml."
+    ]
+    assert report["version"] == "3.2.2"
+    assert report["startup"] == {"math": 0, "subscribed": False}
 
 
 def test_no_formula_gives_its_output_a_class_style_id_or_link(tmp_path: Path) -> None:
