@@ -1701,7 +1701,11 @@ def test_a_missing_later_page_fails_closed(tmp_path: Path) -> None:
 
     github.get = lost  # type: ignore[method-assign]
 
-    _refused(root, github, "GitHub API GET /pulls/7/reviews found no page 2, so the list is incomplete")
+    reason = "GitHub API GET /pulls/7/reviews found no page 2, so the list is incomplete"
+    _refused(root, github, reason)
+    # A list that changed between its pages is no answer: the approval is unchecked, so the run fails and is retried.
+    unchecked = _verified(root, github).unchecked
+    assert list(unchecked) == ["basics/result"] and reason in unchecked["basics/result"]
 
 
 @pytest.mark.parametrize("listing", ["/pulls/7/commits", "/issues/7/events"])

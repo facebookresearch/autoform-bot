@@ -1401,6 +1401,25 @@ def test_a_reason_never_starts_a_workflow_command_in_the_build_log(
     assert all(not line.lstrip().startswith("::") for line in output.splitlines())
 
 
+@pytest.mark.parametrize(
+    ("char", "escaped"),
+    [
+        # Bidi overrides and isolates reorder a file name on screen; zero-width characters hide one.
+        ("\u202e", "\\u202e"),
+        ("\u2066", "\\u2066"),
+        ("\u200b", "\\u200b"),
+        # A terminal escape sequence, a C1 line break, NUL, and a tab.
+        ("\x1b", "\\x1b"),
+        ("\x85", "\\x85"),
+        ("\x00", "\\x00"),
+        ("\t", "\\t"),
+    ],
+    ids=["rlo", "lri", "zwsp", "esc", "nel", "nul", "tab"],
+)
+def test_a_reason_escapes_every_character_that_is_not_printable(char: str, escaped: str) -> None:
+    assert approvals._printable(f"notes{char}.md") == f"notes{escaped}.md"
+
+
 def test_a_build_the_default_branch_has_moved_past_fails_before_writing_the_site(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
