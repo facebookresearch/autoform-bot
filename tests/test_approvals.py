@@ -1367,6 +1367,18 @@ def test_the_gate_requires_authentication_only_for_added_or_changed_approvals(
     captured = capsys.readouterr()
     assert f"error: 1 approval added or changed since {base} is self-approved; each line above says why\n" in captured.err
 
+    # Nor does a review list too large to read, which every run is refused the same way.
+    def oversized(path: str, query: dict | None = None) -> object:
+        if path == "/pulls/7/reviews":
+            raise ApprovalError(f"GitHub API GET {path} returned more than 8388608 bytes")
+        return answer(path, query)
+
+    github.get = oversized  # type: ignore[method-assign]
+    assert _gate(root, base) == 1
+    captured = capsys.readouterr()
+    assert "returned more than 8388608 bytes" in captured.out
+    assert f"error: 1 approval added or changed since {base} is self-approved; each line above says why\n" in captured.err
+
 
 def test_the_gate_counts_only_reviews_of_its_own_pull_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

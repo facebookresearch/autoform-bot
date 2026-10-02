@@ -573,6 +573,10 @@ class _Refused(Exception):
     """One approval is not authenticated, for the stated reason."""
 
 
+class _Unapproved(_Refused):
+    """No review of the pull request is a code owner's approval that counts, which a new one may fix."""
+
+
 class GitHubReviewVerifier:
     """Authenticate approvals from the pull request that recorded them.
 
@@ -661,6 +665,8 @@ class GitHubReviewVerifier:
         self.requests = 0
         self.reasons: dict[str, str] = {}
         self.unchecked: dict[str, str] = {}
+        # The approvals refused only because no review of the pull request counts.
+        self.unapproved: set[str] = set()
         self._cache: dict[tuple[object, ...], object] = {}
         self._blueprint = ""
 
@@ -710,6 +716,7 @@ class GitHubReviewVerifier:
     def _verify(self, graph: Graph, approvals: Mapping[str, str]) -> dict[str, ApprovalAttestation]:
         self.reasons = {}
         self.unchecked = {}
+        self.unapproved = set()
         if not approvals:
             return {}
         # Only a checkout that cannot answer at all stops here; everything
@@ -750,6 +757,8 @@ class GitHubReviewVerifier:
                 self.reasons[node_id] = str(exc)
                 if isinstance(exc, _Unanswered):
                     self.unchecked[node_id] = str(exc)
+                if isinstance(exc, _Unapproved):
+                    self.unapproved.add(node_id)
             except _BudgetSpent:
                 self.reasons[node_id] = self._not_checked()
                 if not self._at_ceiling():
@@ -1292,7 +1301,7 @@ class GitHubReviewVerifier:
                 return login, review
         if not latest:
             notes.append(f"#{number} has no review")
-        raise _Refused("; ".join(notes) or f"#{number} has no approving review by a code owner of {path}")
+        raise _Unapproved("; ".join(notes) or f"#{number} has no approving review by a code owner of {path}")
 
     # 6. That the hash was current where it was approved.
 
