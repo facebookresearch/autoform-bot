@@ -224,6 +224,9 @@ class Readback:
     #: Intrinsic format and identity failures. A malformed card is evidence for
     #: nothing, even when one of its hashes happens to match a declaration.
     validation_errors: tuple[str, ...] = ()
+    #: Whether the file at the card's path could not be read as a card at all;
+    #: ``validation_errors`` then says why.
+    unreadable: bool = False
 
     @property
     def valid(self) -> bool:
@@ -248,9 +251,15 @@ class Readback:
         *,
         article_id: str | None = None,
     ) -> tuple[str, ...]:
-        """Return intrinsic errors and, when given, mismatches with a declaration."""
+        """Return intrinsic errors and, when given, mismatches with a declaration.
+
+        A card that could not be read has only the reason: every other check
+        would restate that none of its fields were read.
+        """
 
         errors = list(self.validation_errors)
+        if self.unreadable:
+            return tuple(dict.fromkeys(errors))
         if not isinstance(self.article_id, str) or ARTICLE_ID_PATTERN.fullmatch(self.article_id) is None:
             errors.append("card has no valid article_id")
         if not isinstance(self.declaration, str) or not self.declaration:
@@ -401,6 +410,7 @@ def load_readbacks(blueprint: str | Path) -> dict[tuple[str, str], Readback]:
                     path=path,
                     file_hash=None if raw is None else _card_hash(raw),
                     validation_errors=(unreadable,),
+                    unreadable=True,
                 ),
             )
             continue

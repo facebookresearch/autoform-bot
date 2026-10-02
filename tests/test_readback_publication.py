@@ -602,7 +602,8 @@ def test_a_card_that_cannot_be_read_is_reported(tmp_path: Path, monkeypatch, fai
     finally:
         path.chmod(0o644)
         path.parent.chmod(0o755)
-    assert reason in loaded.validate()
+    # The reason alone, not every field it left unread.
+    assert loaded.validate() == (reason,)
     assert loaded.file_hash is None
     assert _staged_names(path.parent) == []
 
@@ -707,7 +708,7 @@ def test_a_long_named_card_that_cannot_be_read_is_reported_once_for_its_declarat
         _report(declaration), load_readbacks(blueprint), article_ids={"basics/sup-unique": _ARTICLE_ID}
     )
     assert [(finding.declaration, finding.code) for finding in findings] == [(declaration.name, "readback-invalid")]
-    assert reason in findings[0].reason
+    assert findings[0].reason == f"read-back for {declaration.name} is not valid: {reason}"
 
 
 # --------------------------------------------------------------------------- #

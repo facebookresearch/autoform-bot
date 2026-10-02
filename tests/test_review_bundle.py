@@ -497,9 +497,10 @@ def test_a_long_named_card_that_is_not_utf8_is_one_invalid_card_not_a_missing_ca
 
     findings = [item for item in review_findings(graph, bundle, report) if item.code.startswith("readback-")]
     assert [(item.node_id, item.code) for item in findings] == [("basics/result", "readback-invalid")]
-    assert "card is not UTF-8 text" in findings[0].reason
+    assert findings[0].reason == f"read-back for {name} is invalid: card is not UTF-8 text"
     disclosure = _review_disclosure(graph.nodes["basics/result"], report, bundle, load_readbacks(blueprint), {})
-    assert "bp-readback-invalid" in disclosure and "card is not UTF-8 text" in disclosure
+    assert "bp-readback-invalid" in disclosure
+    assert '<span class="bp-readback-status">invalid · card is not UTF-8 text</span>' in disclosure
     assert "No read-back filed" not in disclosure
 
 

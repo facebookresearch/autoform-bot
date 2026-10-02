@@ -891,18 +891,20 @@ def _article_readback_findings(
             continue
         errors: list[str] = []
         errors.extend(card.validate())
-        if card.article_id != article.article_id:
-            errors.append("card identity does not match the prepared article_id")
-        if card.declaration != declaration.name:
-            errors.append("declaration metadata does not match the card path")
-        if card.skeleton_hash != declaration.skeleton_hash:
-            errors.append("skeleton hash does not match the prepared declaration")
-        if card.packet_hash != declaration.packet_hash:
-            errors.append("packet hash does not match the prepared declaration")
-        if card.shown_hash != declaration.packet_hash:
-            errors.append("displayed packet is missing or differs from the prepared declaration")
-        if getattr(card, "shown_text", None) != declaration.packet:
-            errors.append("displayed packet bytes differ from the prepared declaration")
+        # A card that could not be read is reported by that reason alone.
+        if not card.unreadable:
+            if card.article_id != article.article_id:
+                errors.append("card identity does not match the prepared article_id")
+            if card.declaration != declaration.name:
+                errors.append("declaration metadata does not match the card path")
+            if card.skeleton_hash != declaration.skeleton_hash:
+                errors.append("skeleton hash does not match the prepared declaration")
+            if card.packet_hash != declaration.packet_hash:
+                errors.append("packet hash does not match the prepared declaration")
+            if card.shown_hash != declaration.packet_hash:
+                errors.append("displayed packet is missing or differs from the prepared declaration")
+            if getattr(card, "shown_text", None) != declaration.packet:
+                errors.append("displayed packet bytes differ from the prepared declaration")
         if errors:
             findings.append(
                 ReviewFinding(
