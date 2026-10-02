@@ -67,6 +67,17 @@ _GENERATED_FILES = frozenset(
         PUBLICATION_MANIFEST,
     }
 )
+#: The files a vault may publish as they are, besides its Markdown pages.
+#: A browser shows these, or offers to save them, and runs nothing in them.
+#: An HTML page, an SVG, a script, a stylesheet or anything a host may serve
+#: as one would be the site's own markup, so the rest are refused by suffix.
+_STATIC_SUFFIXES = frozenset(
+    {
+        ".avif", ".bmp", ".gif", ".ico", ".jpeg", ".jpg", ".png", ".webp",
+        ".pdf",
+        ".bib", ".csv", ".json", ".lean", ".tex", ".txt",
+    }
+)
 _LOCAL_ONLY_NAMES = frozenset(
     {
         ".autoform",
@@ -394,6 +405,8 @@ def _publication(
             articles[node.path.resolve()] = text
 
     files: dict[Path, str | bytes] = {}
+    # Render writes its own file where a vault's copy of one of these would go.
+    written_over = set(_site_paths(graph))
     for source in sorted(snapshot.files):
         relative = source.relative_to(blueprint)
         # Source notes leave the site entirely once readers can reach them in
@@ -418,8 +431,17 @@ def _publication(
             text, found = published(written, source, destination / relative, ())
             issues.extend(f"{relative.as_posix()}: {issue}" for issue in found)
             files[source] = text
-        else:
+        elif relative.as_posix() in written_over:
+            continue
+        elif source.suffix.lower() in _STATIC_SUFFIXES:
             files[source] = snapshot.files[source]
+        else:
+            issues.append(
+                f"{relative.as_posix()}: the site publishes no {source.suffix.lower() or 'extensionless'} "
+                "file, since a browser could run it as the site's own page; write it as Markdown, "
+                "save it as an image (PNG, JPEG, GIF, WebP), a PDF or plain text, "
+                "or keep it outside blueprint/"
+            )
     issues.extend(_in_the_way(blueprint, graph, snapshot))
     script, script_issues = mathjax_script(
         snapshot.files.get(blueprint / MATHJAX_SCRIPT), snapshot.files.get(blueprint / TEX_MACROS)

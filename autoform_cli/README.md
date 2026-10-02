@@ -1316,6 +1316,17 @@ directory, symlink, or special file at any of these paths, at
 goes, is refused by `check` and `render` with the path it is at, before
 anything is written.
 
+Besides its Markdown pages, a vault publishes only files a browser shows or
+offers to save and runs nothing in: images (`.png`, `.jpg`, `.jpeg`, `.gif`,
+`.webp`, `.avif`, `.bmp`, `.ico`), `.pdf`, and plain-text `.txt`, `.csv`,
+`.json`, `.bib`, `.tex`, and `.lean` files, whatever the case of the suffix.
+Render copies them into the site as they are. Any other file under
+`blueprint/`, such as an `.html` page, an `.svg`, a script, or a stylesheet,
+would be the site's own markup once a reader followed a link to it, so
+`check` and `render` refuse it by its path: write it as Markdown, save it as
+an image, a PDF, or plain text, or keep it outside `blueprint/`. A copy of one
+of the files render writes, listed above, is not published; render's own is.
+
 The site's Markdown reads `` $`...`$ `` and a ```` ```math ```` fence with
 autoform's own extension, which `mkdocs.yml` lists under
 `markdown_extensions` as `autoform_cli.markdown:FormulaExtension`, with a

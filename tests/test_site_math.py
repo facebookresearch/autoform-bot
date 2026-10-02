@@ -914,6 +914,60 @@ def test_a_statement_after_a_paragraph_is_a_box_of_its_own(tmp_path: Path) -> No
     assert '<div class="bp-thmcontent">\n<p>The base object.</p>\n</div>' in published
 
 
+@pytest.mark.parametrize(
+    ("relative", "content"),
+    [
+        ("help.html", b"<script>alert(document.cookie)</script>"),
+        ("figures/plot.svg", b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'),
+        ("sw.js", b"self.addEventListener('fetch', () => {});"),
+        ("figures/page.XHTML", b"<html xmlns='http://www.w3.org/1999/xhtml'><script>1</script></html>"),
+        ("stylesheets/extra.css", b".af-status { display: none }"),
+        ("LICENSE", b"<script>1</script>"),
+    ],
+)
+def test_a_file_a_browser_could_run_is_not_published(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], relative: str, content: bytes
+) -> None:
+    """Render copies a vault's other files into the site as they are, so an
+    HTML page, an SVG or a script there would be the site's own markup the
+    moment a reader followed a link to it. Check refuses any file not of a
+    kind a browser only shows, by its path, and render publishes nothing."""
+
+    blueprint = _vault(tmp_path)
+    (blueprint / relative).parent.mkdir(parents=True, exist_ok=True)
+    (blueprint / relative).write_bytes(content)
+
+    assert main(["check", str(blueprint)]) == 1
+    assert f"{relative}: the site publishes no " in capsys.readouterr().out
+    with pytest.raises(PublicationError, match=re.escape(relative)):
+        _render(blueprint)
+
+
+def test_an_image_or_a_document_is_published_as_it_is(tmp_path: Path) -> None:
+    """A figure, a PDF, a bibliography, plain text, and a copy of an asset
+    render writes over still pass."""
+
+    blueprint = _vault(tmp_path)
+    (blueprint / "stylesheets").mkdir()
+    (blueprint / "stylesheets/blueprint.css").write_text(".af-status { display: none }", encoding="utf-8")
+    kept = {
+        "figures/plot.PNG": b"\x89PNG\r\n\x1a\n",
+        "figures/photo.jpeg": b"\xff\xd8\xff",
+        "paper.pdf": b"%PDF-1.7\n",
+        "refs.bib": b"@book{x, title={X}}\n",
+        "notes.txt": b"plain\n",
+    }
+    for relative, content in kept.items():
+        (blueprint / relative).parent.mkdir(parents=True, exist_ok=True)
+        (blueprint / relative).write_bytes(content)
+
+    assert main(["check", str(blueprint)]) == 0
+    site = _render(blueprint)
+    for relative, content in kept.items():
+        assert (site / relative).read_bytes() == content
+    assert "display: none" not in (site / "stylesheets/blueprint.css").read_text(encoding="utf-8")
+
+
 def test_check_judges_the_text_render_publishes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check judges each page as render writes it, with its links moved, so
     what render publishes is what check saw."""
