@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import html
 import re
+import xml.etree.ElementTree as etree
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -35,7 +36,66 @@ from urllib.parse import unquote, urlsplit
 
 import html5lib
 import markdown as pymarkdown
+from markdown.extensions import Extension
+from markdown.inlinepatterns import BACKTICK_RE, BacktickInlineProcessor
+from markdown.util import AtomicString
 from pymdownx.superfences import fence_div_format
+
+#: The class pymdownx.arithmatex gives each formula it finds in the site's
+#: Markdown. The page's MathJax reads these elements and no other text, and
+#: check judges the TeX in them, so the two read the same formulas.
+FORMULA_CLASS = "arithmatex"
+
+
+class CodeFormula(BacktickInlineProcessor):
+    """Python-Markdown's code spans, and a formula written as code between
+    dollar signs, ``$`...`$``, the form GitHub also reads as a formula with
+    the code as its TeX, so that neither reads escapes or emphasis in it. The
+    code is read as CommonMark reads a code span, line breaks as spaces and
+    one space trimmed from each end, and a dollar sign after a letter, digit,
+    underscore, or backslash opens no formula, as on GitHub."""
+
+    def handleMatch(self, m: re.Match[str], data: str) -> tuple[etree.Element | str, int, int]:  # type: ignore[override]
+        start, end = m.start(0), m.end(0)
+        if not (
+            m.group(3)
+            and data[start - 1 : start] == "$" == data[end : end + 1]
+            and not re.match(r"[A-Za-z0-9_\\]", data[max(start - 2, 0) : start - 1])
+        ):
+            return super().handleMatch(m, data)
+        code = m.group(3).replace("\n", " ")
+        if len(code) > 2 and code[0] == code[-1] == " " and code.strip(" "):
+            code = code[1:-1]
+        formula = etree.Element("span", {"class": FORMULA_CLASS})
+        formula.text = AtomicString(f"\\({code}\\)")
+        return formula, start - 1, end + 1
+
+
+class FormulaExtension(Extension):
+    """The formulas GitHub reads with their TeX as written, ``$`...`$`` in a
+    line, as :class:`CodeFormula` reads it; a ```` ```math ```` fence is the
+    displayed one, which :func:`formula_fence` writes. The site's Markdown,
+    the cards', and check's reading of both register them from here, so all
+    three take the same spans for formulas."""
+
+    def extendMarkdown(self, md: pymarkdown.Markdown) -> None:
+        md.inlinePatterns.register(CodeFormula(BACKTICK_RE), "backtick", 190)
+
+
+def displayed_formula(source: str, tag: str) -> str:
+    """A ```` ```math ```` block, which GitHub shows as a displayed formula
+    with the block's text as its TeX: a display formula for MathJax, in a
+    ``tag`` element, with nothing of the fence's braces."""
+
+    return f'<{tag} class="{FORMULA_CLASS}">\\[\n' + html.escape(source, quote=False) + f"\n\\]</{tag}>"
+
+
+def formula_fence(source: str, *args: object, **kwargs: object) -> str:
+    """The site's ```` ```math ```` fence: :func:`displayed_formula` in the
+    ``<div>`` pymdownx.arithmatex gives a ``$$`` block."""
+
+    return displayed_formula(source, "div")
+
 
 #: The Markdown extensions the generated `mkdocs.yml` enables, and their
 #: settings. Anchor prediction builds a real converter from these, so the site's
@@ -48,11 +108,8 @@ SITE_EXTENSIONS: tuple[str, ...] = (
     "tables",
     "pymdownx.arithmatex",
     "pymdownx.superfences",
+    "autoform_cli.markdown:FormulaExtension",
 )
-#: The class pymdownx.arithmatex gives each formula it finds in the site's
-#: Markdown. The page's MathJax reads these elements and no other text, and
-#: check judges the TeX in them, so the two read the same formulas.
-FORMULA_CLASS = "arithmatex"
 #: The class of the element a ```mermaid fence becomes in the site's
 #: Markdown, which check refuses in an article.
 DIAGRAM_CLASS = "mermaid"
@@ -62,6 +119,7 @@ SITE_EXTENSION_CONFIGS: dict[str, dict[str, object]] = {
     "pymdownx.superfences": {
         "custom_fences": [
             {"name": "mermaid", "class": DIAGRAM_CLASS, "format": fence_div_format},
+            {"name": "math", "class": FORMULA_CLASS, "format": formula_fence},
         ]
     },
 }

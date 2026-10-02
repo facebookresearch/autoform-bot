@@ -402,6 +402,9 @@ jobs:
           unchecked="$(jq '.unchecked_approvals // {} | length' site-src/publication.json)"
           echo "unchecked=$unchecked" >> "$GITHUB_OUTPUT"
 
+      # mkdocs.yml reads formulas with autoform's Markdown extension, the
+      # one check reads articles with, so autoform is installed here too, from
+      # the ref that rendered the site.
       - name: Build the Markdown site
         run: >-
           uvx --from mkdocs==1.6.1
@@ -409,6 +412,7 @@ jobs:
           --with mkdocs-literate-nav==0.6.2
           --with markdown==3.10.3
           --with pymdown-extensions==11.0.1
+          --with "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           mkdocs build --strict
 
       # Named for this attempt: deploy-pages takes the one artifact of the

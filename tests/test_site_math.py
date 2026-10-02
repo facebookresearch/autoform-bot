@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.__main__ import main
-from autoform_cli.markdown import statement_and_notes
+from autoform_cli.markdown import site_converter, statement_and_notes
 from autoform_cli.readback import publishable_article
 from autoform_cli.render import PublicationError, render_site
 from autoform_cli.scaffold import scaffold_project
@@ -440,6 +440,9 @@ def test_a_file_where_render_needs_a_folder_is_refused(
         ("$\\require{mhchem}$", "\\require"),
         ("$\\gdef\\x{1}$ and $\\global\\edef\\y{2}$", "\\gdef, \\global, \\edef"),
         ("$\\mathtoolsset{showonlyrefs}$", "\\mathtoolsset"),
+        # The forms GitHub keeps the TeX of are formulas on the site too.
+        ("$`\\def\\x{1}`$ is code to GitHub's Markdown.", "\\def"),
+        ("```math\n\\gdef\\x{1} \\label{one}\n```", "\\gdef, \\label"),
     ],
 )
 def test_tex_that_changes_other_formulas_is_refused(article: str, commands: str) -> None:
@@ -448,7 +451,7 @@ def test_tex_that_changes_other_formulas_is_refused(article: str, commands: str)
 
     errors = publishable_article(article)[1]
     # Each is refused on the line it is on.
-    line = "line 2" if article.startswith("$$\n") else "line 1"
+    line = "line 2" if article.startswith(("$$\n", "```math\n")) else "line 1"
 
     assert errors == (
         f"{line}: TeX commands that change other formulas are not allowed: {commands}; define notation in "
@@ -462,6 +465,8 @@ def test_tex_that_changes_other_formulas_is_refused(article: str, commands: str)
         "$\\mmlToken{mi}[mathcolor=#31A24C]{\\checkmark}$ approved",
         "$$\n\\mmlToken{mtext}[mathbackground=white]{x}\n$$",
         "Here \\(\\mmlToken{mo}{+}\\) is live.",
+        "$`\\mmlToken{mi}[mathcolor=red]{x}`$ approved",
+        "```math\n\\mmlToken{mo}{+}\n```",
     ],
 )
 def test_tex_that_sets_what_a_symbol_looks_like_is_refused(article: str) -> None:
@@ -471,7 +476,7 @@ def test_tex_that_sets_what_a_symbol_looks_like_is_refused(article: str) -> None
     links it could set, but not its colors."""
 
     errors = publishable_article(article)[1]
-    line = "line 2" if article.startswith("$$\n") else "line 1"
+    line = "line 2" if article.startswith(("$$\n", "```math\n")) else "line 1"
 
     assert errors == (
         f"{line}: TeX commands that set what a symbol looks like are not allowed: \\mmlToken; write the symbol "
@@ -507,6 +512,9 @@ _LOOKS = "TeX commands that set what a symbol looks like are not allowed: "
         # Nor is a longer command that starts with its name.
         ("Prose names \\defined.\n\nThen $\\def\\x{1}$.", f"error: top: line 13: {_CHANGES}\\def; define"),
         ("First.\n\nThen <b>bold</b>.", "error: top: line 13: raw HTML is not allowed: <b>, </b>;"),
+        # A formula written as code is a formula, not code.
+        ("Write `\\def` in code.\n\nThen $`\\def\\x{1}`$.", f"error: top: line 13: {_CHANGES}\\def; define"),
+        ("First.\n\n```math\n\\mmlToken{mi}{x}\n```", f"error: top: line 14: {_LOOKS}\\mmlToken; write"),
     ],
 )
 def test_a_refusal_names_the_article_and_the_line(
@@ -533,6 +541,46 @@ def test_a_refusal_in_a_chapter_names_the_chapter_and_the_line(
 
     assert main(["check", str(blueprint)]) == 1
     assert f"error: roadmap: line {line}: {_LOOKS}\\mmlToken;" in capsys.readouterr().out
+
+
+# The forms GitHub shows as formulas with their TeX as written.
+_PROTECTED = "Inline $`a \\leq b`$, and displayed:\n\n```math\n\\sum_{i<n} i\n```"
+_PROTECTED_HTML = ('<span class="arithmatex">\\(a \\leq b\\)</span>', '<div class="arithmatex">\\[\n\\sum_{i&lt;n} i\n\\]</div>')
+
+
+def test_the_protected_formula_forms_are_formulas_on_the_site(tmp_path: Path) -> None:
+    """GitHub shows $`...`$ and a ```math fence as formulas, and the site's
+    Markdown, which mkdocs.yml configures as check does, reads them so too,
+    rather than as a dollar sign and code, and a code block."""
+
+    text, errors = publishable_article(_PROTECTED)
+    reading = site_converter().convert(text)
+
+    assert errors == ()
+    assert all(formula in reading for formula in _PROTECTED_HTML)
+    assert "<code" not in reading
+    blueprint = _vault(tmp_path)
+    _with_article(blueprint, _PROTECTED)
+    assert main(["check", str(blueprint)]) == 0
+    pages = [page.read_text(encoding="utf-8") for page in _render(blueprint).rglob("*.md")]
+    (page,) = [page for page in pages if "a \\leq b" in page]
+    assert all(formula in site_converter().convert(page) for formula in _PROTECTED_HTML)
+
+
+def test_the_protected_formula_forms_are_typeset(tmp_path: Path) -> None:
+    """MathJax, run on the script render wrote, typesets both, as it does
+    every other formula of an article."""
+
+    reading = site_converter().convert(publishable_article(_PROTECTED)[0])
+    page = f"<html><head></head><body><article>{reading}</article></body></html>"
+
+    report = _node_report(tmp_path, _node_script(tmp_path), "new", first=page, second=page)
+
+    assert report["errors"] == []
+    (article,) = report["passes"][0]
+    assert [math["tex"] for math in article["math"]] == ["a \\leq b", "\n\\sum_{i<n} i\n"]
+    assert _LEQ in article["math"][0]["mml"]
+    assert all("merror" not in math["mml"] for math in article["math"])
 
 
 @pytest.mark.parametrize(

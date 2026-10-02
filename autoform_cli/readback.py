@@ -49,9 +49,7 @@ import markdown as markdown_renderer
 from markdown.blockprocessors import HashHeaderProcessor
 from markdown.extensions.attr_list import get_attrs_and_remainder
 from markdown.extensions.tables import TableProcessor
-from markdown.inlinepatterns import BACKTICK_RE, BacktickInlineProcessor
 from markdown.treeprocessors import Treeprocessor
-from markdown.util import AtomicString
 
 try:
     import fcntl
@@ -65,7 +63,9 @@ from .markdown import (
     SITE_EXTENSION_CONFIGS,
     SITE_EXTENSIONS,
     INLINE_CODE,
+    FormulaExtension,
     content_lines,
+    displayed_formula,
     published_lines,
     published_markdown,
 )
@@ -1025,36 +1025,12 @@ class _HashHeading(HashHeaderProcessor):
     RE = re.compile(r"(?:^|\n)(?P<level>#{1,6})(?=[ \t\n]|$)(?P<header>(?:\\.|[^\\])*?)#*(?:\n|$)")
 
 
-class _CodeFormula(BacktickInlineProcessor):
-    """Python-Markdown's code spans, and a formula written as code between
-    dollar signs, ``$`...`$``, the form GitHub also reads as a formula with
-    the code as its TeX, so that neither reads escapes or emphasis in it. The
-    code is read as CommonMark reads a code span, line breaks as spaces and
-    one space trimmed from each end, and a dollar sign after a letter, digit,
-    underscore, or backslash opens no formula, as on GitHub."""
-
-    def handleMatch(self, m: re.Match[str], data: str) -> tuple[etree.Element | str, int, int]:  # type: ignore[override]
-        start, end = m.start(0), m.end(0)
-        if not (
-            m.group(3)
-            and data[start - 1 : start] == "$" == data[end : end + 1]
-            and not re.match(r"[A-Za-z0-9_\\]", data[max(start - 2, 0) : start - 1])
-        ):
-            return super().handleMatch(m, data)
-        code = m.group(3).replace("\n", " ")
-        if len(code) > 2 and code[0] == code[-1] == " " and code.strip(" "):
-            code = code[1:-1]
-        formula = etree.Element("span", {"class": "arithmatex"})
-        formula.text = AtomicString(f"\\({code}\\)")
-        return formula, start - 1, end + 1
-
-
 def _formula_fence(source: str, *args: object, **kwargs: object) -> str:
     """A ```` ```math ```` block, which GitHub shows as a displayed formula
     with the block's text as its TeX: a display formula for MathJax, in the
     ``<p>`` the renderer gives every other one."""
 
-    return '<p class="arithmatex">\\[\n' + html.escape(source, quote=False) + "\n\\]</p>"
+    return displayed_formula(source, "p")
 
 
 class _TableCellLimit(Exception):
@@ -1100,7 +1076,7 @@ def _testimony_converter() -> markdown_renderer.Markdown:
     ``<div>``, the one element the site's page could take for its own."""
 
     converter = markdown_renderer.Markdown(
-        extensions=["tables", "pymdownx.arithmatex", "pymdownx.highlight", "pymdownx.superfences"],
+        extensions=["tables", "pymdownx.arithmatex", "pymdownx.highlight", "pymdownx.superfences", FormulaExtension()],
         extension_configs={
             "pymdownx.arithmatex": {"generic": True, "block_tag": "p"},
             "pymdownx.highlight": {"use_pygments": False},
@@ -1110,7 +1086,6 @@ def _testimony_converter() -> markdown_renderer.Markdown:
         },
     )
     converter.preprocessors.deregister("html_block")
-    converter.inlinePatterns.register(_CodeFormula(BACKTICK_RE), "backtick", 190)
     converter.parser.blockprocessors.register(_HashHeading(converter.parser), "hashheader", 70)
     table = converter.parser.blockprocessors["table"]
     converter.parser.blockprocessors.register(_CountedTable(converter.parser, table.config), "table", 75)
@@ -3055,10 +3030,18 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
 
 def _lines_naming(text: str, patterns: list[re.Pattern[str]]) -> str:
     """A ``line N: `` or ``lines N, M: `` prefix naming the lines of ``text``
-    one of ``patterns`` matches: outside code and comments first, and
-    anywhere when that finds none; empty when no line has one."""
+    one of ``patterns`` matches: outside code and comments first, a formula
+    written as code, ``$`...`$``, counting as outside, and anywhere when that
+    finds none; empty when no line has one."""
 
-    shown = [INLINE_CODE.sub("", line) for line in content_lines(text)]
+    def outside(line: str) -> str:
+        def kept(code: re.Match[str]) -> str:
+            formula = line[code.start() - 1 : code.start()] == "$" == line[code.end() : code.end() + 1]
+            return code.group() if formula else ""
+
+        return INLINE_CODE.sub(kept, line)
+
+    shown = [outside(line) for line in content_lines(text)]
     for lines in (shown, text.splitlines()):
         numbers = [str(number) for number, line in enumerate(lines, start=1) if any(p.search(line) for p in patterns)]
         if numbers:

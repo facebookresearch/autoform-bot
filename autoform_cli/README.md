@@ -1278,7 +1278,9 @@ publishes beside it, so an edit made during a render reaches neither. Each read-
 of its own that knows only base, ams, and noundefined, so nothing an article,
 another card, or the project's macros define reaches it. These inputs read
 only the formulas the site's Markdown marks, such as `$...$` or `$$...$$` in an
-article, which are the formulas `check` judges. Text the site prints as typed,
+article, or `` $`...`$ `` and a ```` ```math ```` fence, the forms GitHub
+also shows as formulas. These are the formulas `check` judges, each under the
+same TeX refusals. Text the site prints as typed,
 such as a statement's title in its heading, a `discussion:` value, the lead on
 the home page, the navigation, and a table of contents, is shown as typed,
 TeX and all. A setting changed in
@@ -1313,6 +1315,15 @@ directory, symlink, or special file at any of these paths, at
 `progress.md` it keeps out of the site, or a file where one of their folders
 goes, is refused by `check` and `render` with the path it is at, before
 anything is written.
+
+The site's Markdown reads `` $`...`$ `` and a ```` ```math ```` fence with
+autoform's own extension, which `mkdocs.yml` lists under
+`markdown_extensions` as `autoform_cli.markdown:FormulaExtension`, with a
+`math` fence formatted by `autoform_cli.markdown.formula_fence`; the Pages
+workflow installs autoform for the build. A project scaffolded before then
+shows both as code until its `mkdocs.yml` and
+`.github/workflows/blueprint-pages.yml` get those lines from `autoform init`'s
+templates; `check` judges their TeX either way.
 
 ## Validation
 

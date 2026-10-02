@@ -83,7 +83,7 @@ def test_the_extension_config_matches_the_scaffolded_mkdocs_yml() -> None:
     block = template[template.index("markdown_extensions:") :]
     block = block[: block.index("\nextra_css:")]
 
-    declared = set(re.findall(r"^  - ([\w.]+):?(?:\s+#.*)?$", block, re.MULTILINE))
+    declared = set(re.findall(r"^  - ([\w.]+(?::\w+)?):?(?:\s+#.*)?$", block, re.MULTILINE))
 
     assert declared == set(SITE_EXTENSIONS)
     # Settings that change heading IDs have to agree too, not just the names.
@@ -91,6 +91,12 @@ def test_the_extension_config_matches_the_scaffolded_mkdocs_yml() -> None:
     assert SITE_EXTENSION_CONFIGS["toc"] == {"toc_depth": "2-3"}
     assert "generic: true" in block
     assert SITE_EXTENSION_CONFIGS["pymdownx.arithmatex"] == {"generic": True}
+    # So do the fences, which the protected formula form is one of.
+    fences = re.findall(r"- name: (\w+)\n +class: (\w+)\n +format: !!python/name:([\w.]+)\.(\w+)\n", block)
+    assert [
+        (fence["name"], fence["class"], fence["format"].__module__, fence["format"].__name__)
+        for fence in SITE_EXTENSION_CONFIGS["pymdownx.superfences"]["custom_fences"]  # type: ignore[index]
+    ] == fences
 
 
 @pytest.mark.parametrize(
@@ -112,6 +118,10 @@ def test_the_renderer_pins_match_the_pages_build(workflow: str) -> None:
         pins = re.findall(rf'^    "{re.escape(package)}==([^"]+)",$', pyproject, re.MULTILINE)
         assert len(pins) >= 1 and len(set(pins)) == 1, (package, pins)
         assert re.findall(rf"--with {re.escape(package)}==(\S+)", pages) == pins[:1]
+    # The site's Markdown reads formulas with autoform's own extension.
+    build = pages[pages.index("- name: Build the Markdown site") :]
+    build = build[: build.index("\n\n")]
+    assert '--with "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in build
 
 
 def test_frontmatter_cannot_contribute_anchors(tmp_path: Path) -> None:
