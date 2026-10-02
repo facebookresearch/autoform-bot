@@ -224,7 +224,7 @@ def _write_page(
     navigation: str = "",
     extra: str = "",
 ) -> Path:
-    diagram = mermaid.render_view_diagram(view, links=dict(links), include_classdefs=False)
+    diagram = mermaid.published_graph(mermaid.render_view_diagram(view, links=dict(links), include_classdefs=False))
     sections = [
         "---",
         "kind: graph",

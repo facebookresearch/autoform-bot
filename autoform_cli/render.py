@@ -150,8 +150,11 @@ def _mermaid_script() -> str:
     go in as ``classDef`` at render time, which means owning the render call
     and repeating it on a theme switch.
 
-    Loose security is what enables the ``click`` links; the diagram is
-    generated from the project's own blueprint, so nothing third-party is in it.
+    Loose security is what enables the ``click`` links, and it also runs a
+    click's ``call`` as script and draws a label's markup. So the script draws
+    only the graphs render writes, of class :data:`~autoform_cli.mermaid.GRAPH_CLASS`
+    in raw HTML no article may hold, whose labels are escaped; a Mermaid block
+    the page got anywhere else is left as typed.
     """
     classdefs = json.dumps(
         {scheme: mermaid.classdef_lines(dark=scheme == "dark") for scheme in ("light", "dark")},
@@ -178,7 +181,7 @@ def _mermaid_script() -> str:
 
   var counter = 0;
   var blocks = Array.prototype.map.call(
-    document.querySelectorAll(".mermaid"),
+    document.querySelectorAll("div.{mermaid.GRAPH_CLASS}"),
     function (element) {{ return {{ element: element, source: element.textContent }}; }}
   );
 
@@ -1255,7 +1258,7 @@ def _render_landing_page(
                 '<span class="bp-map-hint">Select a chapter to open its dependencies</span>',
                 "</div>",
                 "",
-                mermaid.render_view_diagram(project, links=links, include_classdefs=False),
+                mermaid.published_graph(mermaid.render_view_diagram(project, links=links, include_classdefs=False)),
                 "",
                 f'<div class="bp-map-legend" markdown="1">\n\n{breakdown}\n\n</div>'
                 if breakdown

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.lean import _normalize_remote
-from autoform_cli.markdown import statement_and_notes
+from autoform_cli.markdown import site_converter, statement_and_notes
 from autoform_cli.render import PUBLICATION_MANIFEST, PublicationError, render_site
 from autoform_cli.status import STATES
 
@@ -118,7 +118,7 @@ def test_a_graph_page_hides_its_legend_behind_an_icon(tmp_path: Path) -> None:
     assert 'class="bp-legend-icon"' in page
     # The legend itself is still there, just not laid out on the page.
     assert 'class="bp-legend-grid"' in page
-    assert page.index("bp-legend-icon") < page.index("```mermaid")
+    assert page.index("bp-legend-icon") < page.index('<div class="mermaid bp-graph">')
     assert "<button" in page and 'aria-describedby="bp-legend-note"' in page
     assert ".bp-legend-tip:focus-within .bp-legend-note" in css
 
@@ -528,6 +528,84 @@ def test_the_generated_script_is_valid_javascript(tmp_path: Path) -> None:
     result = subprocess.run([node, "--check", str(script)], capture_output=True, text=True)
 
     assert result.returncode == 0, result.stderr
+
+
+def test_render_marks_each_graph_it_draws(tmp_path: Path) -> None:
+    """Render writes each graph as raw HTML of a class only it gives, which
+    no article can write, and the site converts it as written."""
+
+    _render(tmp_path)
+    out = tmp_path / "out"
+
+    for name in ("README.md", "dependencies.md", "dependencies/full.md", "dependencies/chapters/roadmap.md"):
+        page = (out / name).read_text(encoding="utf-8")
+        assert "```mermaid" not in page, name
+        assert page.count('<div class="mermaid bp-graph">graph LR\n') == 1, name
+        published = site_converter().convert(page)
+        start = published.index('<div class="mermaid bp-graph">graph LR\n')
+        assert "click n0 " in published[start : published.index("</div>", start)], name
+    page = (out / "dependencies/nodes/top.md").read_text(encoding="utf-8")
+    assert "  n0 --&gt; n1" in page
+
+
+_MERMAID_HARNESS = r"""
+const fs = require("fs");
+const calls = {initialize: [], render: []};
+function element(classes, text) { return {tagName: "DIV", classes: classes, textContent: text, innerHTML: ""}; }
+const elements = [
+  element(["mermaid", "bp-graph"], "graph LR\n  n0"),
+  element(["mermaid"], 'flowchart LR\n  A\n  click A call eval("document.title=1")'),
+  element(["mermaid", "highlight"], "graph LR\n  B"),
+];
+function matches(e, selector) {
+  var parts = selector.split(".");
+  return (parts[0] === "" || parts[0].toUpperCase() === e.tagName) &&
+    parts.slice(1).every(function (name) { return e.classes.indexOf(name) >= 0; });
+}
+global.document = {
+  readyState: "complete",
+  body: {getAttribute: function () { return null; }},
+  querySelectorAll: function (selector) {
+    return elements.filter(function (e) { return matches(e, selector); });
+  },
+};
+global.MutationObserver = function () { this.observe = function () {}; };
+global.mermaid = {
+  initialize: function (config) { calls.initialize.push(config); },
+  render: function (id, source) {
+    calls.render.push(source);
+    return Promise.resolve({svg: "<svg>" + id + "</svg>"});
+  },
+};
+eval(fs.readFileSync(process.argv[2], "utf8"));
+setTimeout(function () {
+  console.log(JSON.stringify({calls: calls, drawn: elements.map(function (e) { return e.innerHTML; })}));
+}, 0);
+"""
+
+
+def test_the_script_draws_only_the_graphs_render_marked(tmp_path: Path) -> None:
+    """Loose security, which the graphs' links need, runs a click's call as
+    script, so a Mermaid block the page got anywhere else is left as typed."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not available")
+    _render(tmp_path)
+    harness = tmp_path / "harness.js"
+    harness.write_text(_MERMAID_HARNESS, encoding="utf-8")
+
+    result = subprocess.run(
+        [node, str(harness), str(tmp_path / "out/javascripts/blueprint-mermaid.js")],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    report = json.loads(result.stdout)
+
+    assert report["drawn"] == ["<svg>bp-graph-0</svg>", "", ""]
+    assert [source.split("\n")[:2] for source in report["calls"]["render"]] == [["graph LR", "  n0"]]
+    assert {config["securityLevel"] for config in report["calls"]["initialize"]} == {"loose"}
 
 
 @pytest.mark.parametrize("destination", ("same", "child", "parent"))

@@ -53,12 +53,15 @@ SITE_EXTENSIONS: tuple[str, ...] = (
 #: Markdown. The page's MathJax reads these elements and no other text, and
 #: check judges the TeX in them, so the two read the same formulas.
 FORMULA_CLASS = "arithmatex"
+#: The class of the element a ```mermaid fence becomes in the site's
+#: Markdown, which check refuses in an article.
+DIAGRAM_CLASS = "mermaid"
 SITE_EXTENSION_CONFIGS: dict[str, dict[str, object]] = {
     "toc": {"toc_depth": "2-3"},
     "pymdownx.arithmatex": {"generic": True},
     "pymdownx.superfences": {
         "custom_fences": [
-            {"name": "mermaid", "class": "mermaid", "format": fence_div_format},
+            {"name": "mermaid", "class": DIAGRAM_CLASS, "format": fence_div_format},
         ]
     },
 }
@@ -752,6 +755,7 @@ def _is_within(path: Path, directory: Path) -> bool:
 
 __all__ = [
     "DEPENDENCY_SECTIONS",
+    "DIAGRAM_CLASS",
     "EXTERNAL_SCHEMES",
     "FENCE",
     "FENCE_CLOSE",

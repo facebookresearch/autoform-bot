@@ -229,7 +229,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
         assert linked.is_file(), href
 
     graph_page = (site / "dependencies.md").read_text(encoding="utf-8")
-    assert "```mermaid" in graph_page
+    assert '<div class="mermaid bp-graph">' in graph_page
     assert "graph_view: project" in graph_page
     assert '"dependencies/chapters/infimum-loss.html"' in graph_page
     assert '"dependencies/chapters/full-supervision.html"' in graph_page

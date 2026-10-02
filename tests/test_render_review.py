@@ -194,7 +194,7 @@ def test_attribute_lists_are_shown_as_typed(testimony: str, tmp_path: Path) -> N
 
     assert "{" in rendered
     assert re.findall(r"<[a-z]+\s[^>]*>", rendered) == []
-    assert 'querySelectorAll(".mermaid")' in _mermaid_script()
+    assert 'querySelectorAll("div.bp-graph")' in _mermaid_script()
     assert "{" in published
     tags = re.findall(r"<[a-z]+\s[^>]*>", published)
     assert {name for tag in tags for name in re.findall(r"\s([^\s=>]+)=", tag)} == {"class"}
@@ -1368,9 +1368,9 @@ def test_links_and_images_are_refused_by_name(testimony: str) -> None:
     "header", ["{.lean .mermaid}", "{.lean .x}", "{.lean .language-x}", "{.lean .bp-readback-current}"]
 )
 def test_a_fence_header_with_a_second_class_is_refused_as_an_attribute(header: str) -> None:
-    """The site's diagram script picks out every element of class mermaid, and
-    its styles others, so no class from a fence header passes as part of a
-    language."""
+    """The site's diagram script draws the elements of its graphs' classes,
+    and its styles others, so no class from a fence header passes as part of
+    a language."""
 
     errors = _testimony_errors(f"Read back.\n\n```{header}\ngraph TD\nA-->B\n```\n")
 

@@ -1167,8 +1167,13 @@ icon when a `lean:` declaration resolves to a repository permalink. Its
 `dependencies.md` entry point rolls dependencies through the article hierarchy,
 with links to declaration maps, one-hop local contexts, and the complete DAG.
 Every graph article returns to the book, and every formal statement links to
-its local context. Point `mkdocs.yml` at `docs_dir: site-src` and enable
-`md_in_html` plus a `pymdownx.superfences` mermaid fence; see the [repository
+its local context. Each graph is written as raw HTML of class `bp-graph`,
+which no article may hold, and `javascripts/blueprint-mermaid.js` draws those
+elements and no other Mermaid. A title is shown in a graph as typed, and a
+link, made from file and folder names, is percent-encoded, so a name can
+neither end Mermaid's string nor make the link a `javascript:` URL. Point
+`mkdocs.yml` at `docs_dir: site-src` and enable `md_in_html` plus a
+`pymdownx.superfences` mermaid fence; see the [repository
 example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 
 `render` also writes `javascripts/mathjax.js`, the site's MathJax
@@ -1235,7 +1240,11 @@ refused with the line it is on, since it could make an article's text look
 like a card, a status mark, or an approval label. The braces of a code fence
 may only name its language, as in ```` ```{.lean} ````, and options such as
 `title` or `linenums`; a class, an id, or another attribute there lands on the
-code block and is refused the same way. The id starts with a letter,
+code block and is refused the same way. A Mermaid diagram, such as a
+```` ```mermaid ```` fence, is refused with its line too: the site draws only
+the dependency graphs `render` writes, with the loose security their links
+need, which would also run a click's `call` as script. Show a diagram's source
+in a ```` ```text ```` fence instead. The id starts with a letter,
 uses letters, digits, `-`, and `_`, is at most 64 characters, does not start
 with `bp-`, `autoform`, `mjx-`, `mermaid`, `md-`, or `__`, and is not an id
 the site gives one of its own elements on that page, such as a statement's

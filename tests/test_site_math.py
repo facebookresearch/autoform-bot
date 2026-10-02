@@ -576,7 +576,7 @@ _FENCE_RULE = 'a code fence may only name its language, as in "```lean" or "```{
         ('```text {style="position:fixed;inset:0;z-index:1000"}\nx\n```', '{style="position:fixed;inset:0;z-index:1000"}'),
         ("``` { .lean #anchor }\nx\n```", "{ .lean #anchor }"),
         ("- item\n\n    ```{.text .bp-mark}\n    x\n    ```", "{.text .bp-mark}"),
-        ("> ~~~{.text .mermaid .bp-graph}\n> graph LR\n> ~~~", "{.text .mermaid .bp-graph}"),
+        ("> ~~~{.text .bp-graph}\n> graph LR\n> ~~~", "{.text .bp-graph}"),
     ],
 )
 def test_a_fence_header_that_sets_more_than_a_language_is_refused(article: str, shown: str) -> None:
@@ -597,6 +597,58 @@ def test_a_fence_header_that_sets_more_than_a_language_is_refused(article: str, 
 )
 def test_a_fence_header_that_names_a_language_is_accepted(article: str) -> None:
     assert publishable_article(f"# Top\n\n{article}\n")[1] == ()
+
+
+_DIAGRAM_RULE = (
+    "Mermaid diagrams are not allowed: the site draws only the dependency graphs autoform render makes; "
+    "show a diagram's source in a ```text fence instead"
+)
+
+
+@pytest.mark.parametrize(
+    ("article", "line"),
+    [
+        ('```mermaid\nflowchart LR\n  A["Read the card below"]\n  click A call eval("document.title=1")\n```', 3),
+        ("``` {.mermaid}\ngraph LR\n```", 3),
+        ("~~~mermaid\ngraph LR\n~~~", 3),
+        ("- item\n\n    ```mermaid\n    graph LR\n    ```", 5),
+        ("> ```mermaid\n> graph LR\n> ```", 3),
+    ],
+)
+def test_a_mermaid_diagram_in_an_article_is_refused(article: str, line: int) -> None:
+    """Mermaid with the loose security the site's graphs need runs a click's
+    call as script and draws a label's markup, so an article cannot add a
+    diagram."""
+
+    assert publishable_article(f"# Top\n\n{article}\n")[1] == (f"line {line}: {_DIAGRAM_RULE}",)
+
+
+def test_a_fence_that_imitates_a_graph_render_drew_is_refused() -> None:
+    """The site's diagram script draws an element of class mermaid and the
+    class render marks its graphs with."""
+
+    errors = publishable_article("# Top\n\n```{.text .mermaid .bp-graph}\ngraph LR\n```\n")[1]
+
+    assert errors == (
+        f"line 3: attribute list {{.text .mermaid .bp-graph}} is not allowed: {_FENCE_RULE}",
+        f"line 3: {_DIAGRAM_RULE}",
+    )
+
+
+@pytest.mark.parametrize("article", ["```text\ngraph LR\n  A --> B\n```", "Render draws the `mermaid` graphs."])
+def test_mermaid_shown_as_code_is_accepted(article: str) -> None:
+    assert publishable_article(f"# Top\n\n{article}\n")[1] == ()
+
+
+def test_check_and_render_refuse_a_mermaid_diagram(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    blueprint = _vault(tmp_path)
+    _with_article(blueprint, "The main result.\n\n```mermaid\ngraph LR\n  A --> B\n```")
+    message = f"top: line 13: {_DIAGRAM_RULE}"
+
+    assert main(["check", str(blueprint)]) == 1
+    assert f"error: {message}\n" in capsys.readouterr().out
+    with pytest.raises(PublicationError, match=re.escape(message)):
+        _render(blueprint)
 
 
 @pytest.mark.parametrize(

@@ -60,6 +60,7 @@ except ImportError:  # pragma: no cover - Windows, which cannot publish cards
 
 from .graph import ARTICLE_ID_PATTERN
 from .markdown import (
+    DIAGRAM_CLASS,
     FORMULA_CLASS,
     SITE_EXTENSION_CONFIGS,
     SITE_EXTENSIONS,
@@ -2866,6 +2867,14 @@ _SITE_ID_PREFIXES = ("bp-", "autoform", "mjx-", "mermaid", "md-", "__")
 
 #: An attribute list as written, around what the site's converter reads.
 _ATTRIBUTE_LIST = r"\{{:?[ ]*{}[ ]*\}}"
+#: The line that opens a fence the site's Markdown makes a Mermaid diagram
+#: of: after indentation and blockquote markers, a fence whose language is
+#: mermaid, written alone or as a class in its braces.
+_MERMAID_DIAGRAM = re.compile(r"^[ \t>]*(?:`{3,}|~{3,})[ \t]*(?:\.?mermaid(?=[ \t]|$)|\{[^}\n]*\.mermaid(?=[ \t}]))")
+_DIAGRAM_ERROR = (
+    "Mermaid diagrams are not allowed: the site draws only the dependency graphs autoform render makes; "
+    "show a diagram's source in a ```text fence instead"
+)
 
 
 def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, tuple[str, ...]]:
@@ -2898,11 +2907,16 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
     page, or be drawn as a diagram. The id may not look like the site's own, or
     be one of ``reserved``, the ids the site gives its own elements on the
     article's page.
+
+    And it is refused for a Mermaid diagram. The site draws only the graphs
+    render writes, with the loose security their links need, which would also
+    run a diagram's ``click ... call`` as script and draw its labels' markup.
     """
 
     visible = published_lines(_COMPLETE_HTML_COMMENT.sub("", text))
     errors: list[str] = []
     attributes: list[tuple[str, str, list[tuple[str, str]]]] = []
+    diagrams = False
     for source, markdown in published_markdown(visible):
         rendered, passed, assigned = _rendered_article(markdown)
         reading = _RenderedText()
@@ -2926,7 +2940,11 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
             )
         errors.extend(found)
         attributes.extend(assigned)
+        diagrams = diagrams or reading.diagrams > 0
     errors.extend(_attribute_errors(text, attributes, frozenset(reserved)))
+    if diagrams:
+        lines = [number for number, line in enumerate(text.splitlines(), start=1) if _MERMAID_DIAGRAM.match(line)]
+        errors.extend([f"line {number}: {_DIAGRAM_ERROR}" for number in lines] or [_DIAGRAM_ERROR])
     return visible, tuple(dict.fromkeys(errors))
 
 
@@ -3068,11 +3086,16 @@ class _RenderedText(HTMLParser):
         self._open: list[str] = []
         # The tags open since a formula began, its own first.
         self._formula: list[str] = []
+        # How many elements the site's diagram script could draw.
+        self.diagrams = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._end_string(tag)
-        if self._formula or FORMULA_CLASS in (dict(attrs).get("class") or "").split():
+        classes = (dict(attrs).get("class") or "").split()
+        if self._formula or FORMULA_CLASS in classes:
             self._formula.append(tag)
+        if DIAGRAM_CLASS in classes:
+            self.diagrams += 1
         if tag in self._SKIPPED:
             if tag in {"code", "pre"} and not self._in_code():
                 self.code.append("")
