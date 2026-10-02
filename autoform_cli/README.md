@@ -959,15 +959,16 @@ of a list included, and a 404 for any list but the branch's rules), a spent
 request budget, or an undecidable CODEOWNERS rule, leaves that one approval
 self-approved, and `review check --authenticate github`, `render
 --authenticate github`, and the rendered label say why. When GitHub gave no
-usable answer (a server error, a rate limit, which is a 429 or a 403 with
-GitHub's rate-limit headers, a timeout, a network failure, or malformed JSON),
+usable answer (a server error, a rate limit, which is a 429 or a 403 that
+GitHub's rate-limit headers or its message mark as one, a timeout, a network
+failure, or malformed JSON),
 a list changed between its pages, or a budget below the ceiling ran out, any
 of which a later run may get past, `render` also lists the approval with the
 reason under `unchecked_approvals` in the site's `publication.json`; the Pages
 workflow deploys that site, then fails the run, so a site that understates its
 approvals never passes for a green build, and its hourly scheduled run builds
-the head again. Any other HTTP error, such as a 401, a 403 without those
-headers, a 410, or a 422, and an answer over 8 MiB come back the same on every
+the head again. Any other HTTP error, such as a 401, any other 403, a 410,
+or a 422, and an answer over 8 MiB come back the same on every
 run, so they refuse the approval: it reads self-approved with the error as the
 reason, is not listed as unchecked, and the run stays green. A token that
 lacks a permission the verifier needs therefore labels approvals

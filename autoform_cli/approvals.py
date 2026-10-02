@@ -499,7 +499,7 @@ class GitHubClient:
                 return None
             detail = exc.read(500).decode("utf-8", "replace").strip()
             message = f"GitHub API GET {endpoint} failed with HTTP {exc.code}: {detail}"
-            if exc.code >= 500 or exc.code in (408, 429) or (exc.code == 403 and _rate_limited(exc.headers)):
+            if exc.code >= 500 or exc.code in (408, 429) or (exc.code == 403 and _rate_limited(exc.headers, detail)):
                 raise GitHubUnavailable(message) from exc
             # Any other 4xx answers the same way on every run.
             raise ApprovalError(message) from exc
@@ -539,9 +539,15 @@ class GitHubClient:
         return limit, remaining
 
 
-def _rate_limited(headers: object) -> bool:
-    """Whether a 403 is GitHub's primary or secondary rate limit, which it marks with these headers."""
+def _rate_limited(headers: object, detail: str) -> bool:
+    """Whether a 403 is GitHub's primary or secondary rate limit.
 
+    GitHub may mark one with these headers, and a secondary limit may come with neither, but its message
+    always says it is a rate limit.
+    """
+
+    if "rate limit" in detail.lower():
+        return True
     get = getattr(headers, "get", None)
     if get is None:
         return False

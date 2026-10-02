@@ -1193,6 +1193,27 @@ def test_the_client_reads_how_many_requests_are_left_and_nothing_else(
         (urllib.error.HTTPError("", 403, "error", {"x-ratelimit-remaining": "0"}, io.BytesIO(b"")), True),  # type: ignore[arg-type]
         (urllib.error.HTTPError("", 403, "error", {"retry-after": "60"}, io.BytesIO(b"")), True),  # type: ignore[arg-type]
         (urllib.error.HTTPError("", 403, "error", {"x-ratelimit-remaining": "12"}, io.BytesIO(b"")), False),  # type: ignore[arg-type]
+        # A secondary limit may carry neither header, but GitHub's message says what it is.
+        (
+            urllib.error.HTTPError(
+                "",
+                403,
+                "error",
+                {"x-ratelimit-remaining": "812"},  # type: ignore[arg-type]
+                io.BytesIO(b'{"message": "You have exceeded a secondary rate limit. Please wait a few minutes."}'),
+            ),
+            True,
+        ),
+        (
+            urllib.error.HTTPError(
+                "",
+                403,
+                "error",
+                {"x-ratelimit-remaining": "12"},  # type: ignore[arg-type]
+                io.BytesIO(b'{"message": "Resource not accessible by integration"}'),
+            ),
+            False,
+        ),
         (urllib.error.HTTPError("", 401, "error", {}, io.BytesIO(b"")), False),  # type: ignore[arg-type]
         (urllib.error.HTTPError("", 410, "error", {}, io.BytesIO(b"")), False),  # type: ignore[arg-type]
         (urllib.error.HTTPError("", 422, "error", {}, io.BytesIO(b"")), False),  # type: ignore[arg-type]
