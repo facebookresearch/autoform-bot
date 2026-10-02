@@ -5,12 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.lean import (
-    SourceLinker,
-    declaration_names,
-    index_project,
-    strip_lean_comments,
-)
+from autoform_cli.lean import SourceLinker, declaration_names, index_project, strip_lean_comments
+
 
 _SOURCE = """import Mathlib
 
@@ -191,6 +187,15 @@ def test_comment_stripping_reads_slash_dash_dash_slash_as_a_docstring() -> None:
     # Lean reads `/--` as a docstring opener, so `/--/ ... -/` is one comment.
     assert strip_lean_comments("/--/ KEEPOUT -/\ndef d : Nat := 6") == "def d : Nat := 6"
     assert strip_lean_comments("/-!/ KEEPOUT -/\ndef d : Nat := 6") == "def d : Nat := 6"
+
+
+def test_double_brace_in_interpolation_opens_a_structure_instance(tmp_path: Path) -> None:
+    # Lean has no `{{` escape: both braces open code, so these markers sit in a nested string.
+    line = 'def s : String := s!"{{ fst := "--", snd := 1 : String × Nat }.fst}"'
+    index = _index(tmp_path, line.replace("--", "/-") + "\ndef t : Nat := 1\n")
+
+    assert strip_lean_comments(line + " -- remove me") == line
+    assert index.find("t") is not None
 
 
 def test_permalink_pins_the_commit(tmp_path: Path) -> None:

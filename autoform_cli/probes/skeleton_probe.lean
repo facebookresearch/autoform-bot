@@ -25,16 +25,12 @@ partial def nameJson : Name → Json
   | .str p s   => Json.mkObj [("str", Json.arr #[nameJson p, Json.str s])]
   | .num p n   => Json.mkObj [("num", Json.arr #[nameJson p, n])]
 
-def levelParamIndex? : List Name → Name → Option Nat
-  | [], _ => none
-  | p :: ps, n => if p == n then some 0 else (levelParamIndex? ps n).map Nat.succ
-
 partial def levelJson (levelParams : List Name) : Level → Json
   | .zero     => Json.mkObj [("zero", Json.null)]
   | .succ u   => Json.mkObj [("succ", levelJson levelParams u)]
   | .max u v  => Json.mkObj [("max", Json.arr #[levelJson levelParams u, levelJson levelParams v])]
   | .imax u v => Json.mkObj [("imax", Json.arr #[levelJson levelParams u, levelJson levelParams v])]
-  | .param n  => match levelParamIndex? levelParams n with
+  | .param n  => match levelParams.idxOf? n with
     | some i => Json.mkObj [("param", i)]
     | none   => Json.mkObj [("unknownParam", nameJson n)]
   | .mvar id  => Json.mkObj [("mvar", nameJson id.name)]
@@ -49,28 +45,16 @@ def literalJson : Literal → Json
   | .natVal n => Json.mkObj [("nat", n)]
   | .strVal s => Json.mkObj [("string", s)]
 
-/-- Canonical kernel expression material. Binder display names and metadata do
-not affect meaning, so they are omitted. Applications and implicit arguments
-remain explicit, which exposes macro expansions and synthesized instances. -/
-partial def exprJson (levelParams : List Name) : Expr → Json
+/-- Canonical kernel material of a leaf expression; `exprPieces` encodes the rest. -/
+def leafJson (levelParams : List Name) : Expr → Json
   | .bvar i          => Json.mkObj [("bvar", i)]
   | .fvar id         => Json.mkObj [("fvar", nameJson id.name)]
   | .mvar id         => Json.mkObj [("mvar", nameJson id.name)]
   | .sort u          => Json.mkObj [("sort", levelJson levelParams u)]
   | .const n us      => Json.mkObj [
       ("const", nameJson n), ("levels", Json.arr (us.toArray.map (levelJson levelParams)))]
-  | .app f a         => Json.mkObj [("app", Json.arr #[exprJson levelParams f, exprJson levelParams a])]
-  | .lam _ t b bi    => Json.mkObj [
-      ("lam", Json.arr #[binderInfoJson bi, exprJson levelParams t, exprJson levelParams b])]
-  | .forallE _ t b bi => Json.mkObj [
-      ("forall", Json.arr #[binderInfoJson bi, exprJson levelParams t, exprJson levelParams b])]
-  | .letE _ t v b nd => Json.mkObj [
-      ("let", Json.arr #[
-        Json.bool nd, exprJson levelParams t, exprJson levelParams v, exprJson levelParams b])]
   | .lit l           => Json.mkObj [("literal", literalJson l)]
-  | .mdata _ e       => exprJson levelParams e
-  | .proj n i e      => Json.mkObj [
-      ("projection", Json.arr #[nameJson n, i, exprJson levelParams e])]
+  | _                => Json.null
 
 /-- Safety as the environment records it. The kernel face of a `partial def` is a
 safe `opaque` whose compiled implementation is the `_unsafe_rec` companion; the
@@ -98,16 +82,16 @@ def Piece.size : Piece → Nat
 /-- Expressions whose text is shorter than this stay inline. -/
 def fragmentThreshold : Nat := 256
 
-/-- Serialized material and expression fragments, shared across roots in one
-probe. The environment is immutable for the generated `run_cmd`, so `Name` is a
-complete material key. A fragment is keyed by its own pieces, which fix its
-text, so equal subterms share one fragment wherever they occur. -/
+/-- Expression fragments, expansions, and emitted shared entries, kept across
+roots in one probe. The environment is immutable for the generated `run_cmd`,
+so `Name` is a complete expansion key. A fragment is keyed by its own pieces,
+which fix its text, so equal subterms share one fragment wherever they occur. -/
 structure SemanticCache where
-  materials : Std.HashMap Name Json := {{}}
   fragmentIds : Std.HashMap (Array Piece) Piece := {{}}
-  fragments : Nat := 0
+  expanded : Std.HashMap Name (Array Name × Array Name) := {{}}
+  emitted : Std.HashSet (String × Name) := {{}}
   outputBytes : Nat := 0
-  output : Option IO.FS.Handle := none
+  output : IO.FS.Handle
   /-- Set once a record could not be written, which ends the probe: a later
   record could name a fragment that never reached the file. -/
   broken : Bool := false
@@ -126,9 +110,7 @@ def emitRecord (cache : IO.Ref SemanticCache) (record : Json) : IO Unit := do
     throw <| IO.userError s!"lake env lean exceeded the {{probeOutputLimit}}-byte output limit"
   cache.modify fun c => {{ c with outputBytes := total }}
   try
-    match (← cache.get).output with
-    | some out => out.putStr line
-    | none => IO.print line
+    (← cache.get).output.putStr line
   catch e =>
     cache.modify fun c => {{ c with broken := true }}
     throw e
@@ -161,16 +143,18 @@ def sealPieces (cache : IO.Ref SemanticCache) (parts : Array Piece) : IO Piece :
       | .ref .. => text) "")
   if let some piece := (← cache.get).fragmentIds[parts]? then
     return piece
-  let id := (← cache.get).fragments
-  cache.modify fun c =>
-    {{ c with fragments := id + 1, fragmentIds := c.fragmentIds.insert parts (.ref id size) }}
+  let id := (← cache.get).fragmentIds.size
+  cache.modify fun c => {{ c with fragmentIds := c.fragmentIds.insert parts (.ref id size) }}
   let entry := Json.mkObj [
     ("table", Json.str "fragment"), ("name", Json.str (toString id)), ("value", piecesJson parts)]
   emitRecord cache entry
   return .ref id size
 
-/-- `exprJson`, as pieces. `Json.compress` is compositional, so each node's
-text is its syntax around its children's text. -/
+/-- Canonical kernel expression material, as pieces. Binder display names and
+metadata do not affect meaning, so they are omitted. Applications and implicit
+arguments remain explicit, which exposes macro expansions and synthesized
+instances. `Json.compress` is compositional, so each node's text is its syntax
+around its children's text. -/
 partial def exprPieces (cache : IO.Ref SemanticCache) (lp : List Name) (e : Expr) : IO Piece := do
   if let .mdata _ b := e then
     return ← exprPieces cache lp b
@@ -191,7 +175,7 @@ partial def exprPieces (cache : IO.Ref SemanticCache) (lp : List Name) (e : Expr
     | .proj n i b => do
       pure #[.lit "{{\"projection\":[", text (nameJson n), .lit ",", text (i : Json), .lit ",",
         ← go b, .lit "]}}"]
-    | _ => pure #[text (exprJson lp e)]
+    | _ => pure #[text (leafJson lp e)]
   sealPieces cache parts
 
 /-- Elaboration result whose exact bytes bind a review to kernel-visible
@@ -202,12 +186,9 @@ def semanticParts (cache : IO.Ref SemanticCache) (env : Environment) (c : Name) 
   let expr (lp : List Name) (e : Expr) := exprPieces cache lp e
   let safety (info : ConstantInfo) : Piece := .lit (safetyJson env c info).compress
   match env.find? c with
-  | some info@(.defnInfo v) =>
-    return #[.lit "{{\"safety\":", safety info, .lit ",\"type\":", ← expr v.levelParams v.type,
-      .lit ",\"value\":", ← expr v.levelParams v.value, .lit "}}"]
-  | some info@(.opaqueInfo v) =>
-    return #[.lit "{{\"safety\":", safety info, .lit ",\"type\":", ← expr v.levelParams v.type,
-      .lit ",\"value\":", ← expr v.levelParams v.value, .lit "}}"]
+  | some info@(.defnInfo {{ value, .. }}) | some info@(.opaqueInfo {{ value, .. }}) =>
+    return #[.lit "{{\"safety\":", safety info, .lit ",\"type\":", ← expr info.levelParams info.type,
+      .lit ",\"value\":", ← expr info.levelParams value, .lit "}}"]
   | some (.inductInfo v) =>
     let mut parts : Array Piece := #[.lit "{{\"constructors\":["]
     for ctor in v.ctors, i in [0:v.ctors.length] do
@@ -230,8 +211,9 @@ structure's projections fix which field each name selects, so they belong to
 the structure: constructor binder names are not serialized. -/
 def meaningConstants (env : Environment) (c : Name) : Array Name :=
   match env.find? c with
-  | some (.defnInfo v)   => v.type.getUsedConstants ++ v.value.getUsedConstants
-  | some (.opaqueInfo v) => v.type.getUsedConstants ++ v.value.getUsedConstants
+  | some (.defnInfo {{ type, value, .. }}) | some (.opaqueInfo {{ type, value, .. }}) =>
+    type.getUsedConstants ++ value.getUsedConstants
+
   | some (.inductInfo v) =>
     v.type.getUsedConstants ++ v.ctors.toArray ++
       ((getStructureInfo? env c).map (·.fieldInfo.map (·.projFn))).getD #[]
@@ -255,19 +237,8 @@ partial def canonical (env : Environment) (c : Name) : Name :=
 whose implementation contributes to it. Generated names stay out of the human
 reading list, but their bodies must remain inside the semantic identity. The
 material is printed as pieces whose expansion is its `Json.compress` text. -/
-def semanticMaterial (cache : IO.Ref SemanticCache) (env : Environment) (c : Name) : IO Json := do
-  let mut generated : Array Name := #[]
-  let mut work : Array Name := #[c]
-  let mut seen : Array Name := #[]
-  while h : work.size > 0 do
-    let d := work[work.size - 1]
-    work := work.pop
-    if seen.contains d then continue
-    seen := seen.push d
-    for e in meaningConstants env d do
-      if e != c && canonical env e == c && !generated.contains e then
-        generated := generated.push e
-        work := work.push e
+def semanticMaterial (cache : IO.Ref SemanticCache) (env : Environment) (c : Name)
+    (generated : Array Name) : IO Json := do
   let mut parts : Array Piece := #[.lit "{{\"generated\":["]
   for d in generated.qsort Name.lt, i in [0:generated.size] do
     parts := parts.push (.lit ((if i == 0 then "" else ",") ++ "{{\"material\":"))
@@ -277,36 +248,15 @@ def semanticMaterial (cache : IO.Ref SemanticCache) (env : Environment) (c : Nam
   parts := parts ++ (← semanticParts cache env c)
   return piecesJson (parts.push (.lit "}}"))
 
-def cachedSemanticMaterial
-    (cache : IO.Ref SemanticCache) (env : Environment) (c : Name) : CommandElabM Json := do
-  if let some material := (← cache.get).materials[c]? then
-    return material
-  let material ← semanticMaterial cache env c
-  cache.modify fun s => {{ s with materials := s.materials.insert c material }}
-  return material
-
-/-- Direct meaning-dependencies of a folded declaration. Generated companions
-are traversed but folded back onto the source declaration. Results are shared
-across roots because both the environment and project roots are fixed for one
-generated probe. -/
-def expandedMeaning
-    (cache : IO.Ref (Std.HashMap Name (Array Name)))
-    (env : Environment) (projectRoots : List Name) (c : Name) : CommandElabM (Array Name) := do
-  if let some dependencies := (← cache.get)[c]? then
-    return dependencies
-  -- `env.header` is slow to reach from the interpreted probe: read it once.
-  let moduleNames := env.header.moduleNames
-  let isLocal (n : Name) : Bool :=
-    match env.getModuleIdxFor? n with
-    | some idx =>
-      let mod := moduleNames[idx.toNat]!
-      projectRoots.any (fun projectRoot => projectRoot.isPrefixOf mod)
-    | none   => false
-  let isClassProjection (e : Name) : Bool :=
-    match env.getProjectionFnInfo? e with
-    | some info => info.fromClass
-    | none      => false
-  let dependencies := Id.run do
+/-- The generated companions of a folded declaration, and its direct
+meaning-dependencies. Companions are traversed but folded back onto the source
+declaration. Results are shared across roots because both the environment and
+project roots are fixed for one generated probe. -/
+def expandedMeaning (cache : IO.Ref SemanticCache) (env : Environment) (isLocal : Name → Bool) (c : Name) :
+    CommandElabM (Array Name × Array Name) := do
+  if let some expansion := (← cache.get).expanded[c]? then
+    return expansion
+  let expansion := Id.run do
     let mut out : Array Name := #[]
     let mut work : Array Name := #[c]
     let mut seen : Array Name := #[]
@@ -319,13 +269,13 @@ def expandedMeaning
         let f := canonical env e
         if f == c then
           if !seen.contains e then work := work.push e
-        else if !isLocal f && isClassProjection e then
+        else if !isLocal f && (env.getProjectionFnInfo? e).any fun info => info.fromClass then
           continue
         else if !out.contains f then
           out := out.push f
-    return out
-  cache.modify (·.insert c dependencies)
-  return dependencies
+    return (seen.erase c, out)
+  cache.modify fun s => {{ s with expanded := s.expanded.insert c expansion }}
+  return expansion
 
 def kindOf (env : Environment) (c : Name) : String :=
   match env.find? c with
@@ -339,9 +289,6 @@ def kindOf (env : Environment) (c : Name) : String :=
   | some (.quotInfo _)   => "quot"
   | none                 => "unknown"
 
-def moduleOf (env : Environment) (c : Name) : Option Name :=
-  (env.getModuleIdxFor? c).map fun idx => env.header.moduleNames[idx.toNat]!
-
 /-- The options signatures print under, on top of the probe's defaults. -/
 def packetOptions (opts : Options) : Options :=
   -- A reader must see what is quantified over: `∃ n : ℕ, …`, not `∃ n, …`,
@@ -349,21 +296,13 @@ def packetOptions (opts : Options) : Options :=
   -- something else in `ℕ`.
   (opts.setBool `pp.funBinderTypes true).setBool `pp.coercions.types true
 
-def signatureOf (c : Name) : CommandElabM String := do
-  let sig ← liftTermElabM <| withOptions packetOptions (PrettyPrinter.ppSignature c)
-  return sig.fmt.pretty' (← getOptions)
-
-/-- The raw signature, bypassing project notation, unexpanders, and custom
+/-- With `raw`, the signature bypasses project notation, unexpanders, and custom
 delaborators. Project syntax can print `HMul.hMul a b` as `a + b`; this form
 cannot. -/
-def rawSignatureOf (c : Name) : CommandElabM String := do
+def signatureOf (c : Name) (raw := false) : CommandElabM String := do
   let sig ← liftTermElabM <|
-    withOptions (fun opts => (packetOptions opts).setBool `pp.raw true) (PrettyPrinter.ppSignature c)
+    withOptions (fun opts => (packetOptions opts).setBool `pp.raw raw) (PrettyPrinter.ppSignature c)
   return sig.fmt.pretty' (← getOptions)
-
-/-- First node of syntax kind `k` inside `stx`, depth-first. -/
-partial def findKind? (stx : Syntax) (k : SyntaxNodeKind) : Option Syntax :=
-  if stx.getKind == k then some stx else stx.getArgs.findSome? (findKind? · k)
 
 /-- The namespace names in the words of one `open` line, and whether the
 command can go on: its names continue on more-indented lines, as in
@@ -462,7 +401,6 @@ partial def syntaxComments (bytes : ByteArray) (stx : Syntax) (acc : Array (Nat 
   | .ident info .. => infoComments bytes info acc
   | .missing => acc
 
-/-- Comment ranges below byte `cut`, deduplicated and sorted, as JSON pairs. -/
 def commentsJson (bytes : ByteArray) (stx : Syntax) (cut : Nat) : Json :=
   let ranges := (syntaxComments bytes stx #[]).foldl (init := #[]) fun acc (s, e) =>
     let r := (s, Nat.min e cut)
@@ -698,10 +636,10 @@ partial def companionSource (tokenCache : IO.Ref (Std.HashMap Name ModuleTokens)
 
 /-- The node where a parsed declaration's value starts, ending its statement. -/
 def valueNode? (stx : Syntax) : Option Syntax :=
-  let decl := (findKind? stx ``Parser.Command.declaration).getD stx
-  (findKind? decl ``Parser.Command.declValSimple).orElse fun _ =>
-    (findKind? decl ``Parser.Command.declValEqns).orElse fun _ =>
-      findKind? decl ``Parser.Command.whereStructInst
+  let decl := (stx.find? (·.isOfKind ``Parser.Command.declaration)).getD stx
+  (decl.find? (·.isOfKind ``Parser.Command.declValSimple)).orElse fun _ =>
+    (decl.find? (·.isOfKind ``Parser.Command.declValEqns)).orElse fun _ =>
+      decl.find? (·.isOfKind ``Parser.Command.whereStructInst)
 
 /-- The statement of a declaration that does not parse whole, as when only its
 proof uses `local notation`: cut at successive `:=` tokens and parse the prefix
@@ -783,14 +721,14 @@ needs it. Roots name their trusted declarations, external semantic material,
 and boundary modules, so what many roots share is stated once per run. An
 entry counts as stated once it is written: when computing it fails, the next
 root that needs it tries again. -/
-def emitShared (cache : IO.Ref SemanticCache)
-    (emitted : IO.Ref (Std.HashSet (String × Name))) (table : String) (name : Name)
+def emitShared (cache : IO.Ref SemanticCache) (table : String) (name : Name)
     (value : CommandElabM Json) : CommandElabM Unit := do
-  unless (← emitted.get).contains (table, name) do
+  unless (← cache.get).emitted.contains (table, name) do
     let entry := Json.mkObj [
       ("table", Json.str table), ("name", Json.str (toString name)), ("value", ← value)]
     emitRecord cache entry
-    emitted.modify (·.insert (table, name))
+    cache.modify fun s => {{ s with emitted := s.emitted.insert (table, name) }}
+
 
 /-- The modules that belong to the running toolchain. A name root is not
 enough: a dependency may name its own module `Lake.Foo`, and that module is
@@ -809,10 +747,8 @@ def toolchainModules (env : Environment) : IO (Std.HashSet Name) := do
 def skeleton
     (projectRoots : List Name)
     (coreModules : Std.HashSet Name)
-    (expandCache : IO.Ref (Std.HashMap Name (Array Name)))
     (tokenCache : IO.Ref (Std.HashMap Name ModuleTokens))
     (semanticCache : IO.Ref SemanticCache)
-    (emitted : IO.Ref (Std.HashSet (String × Name)))
     (request : String) (root : Name) : CommandElabM Unit := do
   let env ← getEnv
   unless env.contains root do
@@ -832,44 +768,23 @@ def skeleton
     | some m => coreModules.contains m
     | none   => true
   let expand (c : Name) : CommandElabM (Array Name) :=
-    expandedMeaning expandCache env projectRoots c
+    return (← expandedMeaning semanticCache env isLocal c).2
+  let material (c : Name) : CommandElabM Json := do
+    semanticMaterial semanticCache env c (← expandedMeaning semanticCache env isLocal c).1
   -- Signatures print with the token table of a file whose only import is the
   -- root's module, so a name is escaped as `«…»` exactly where `#check` there
   -- escapes it, whatever the helper's own imports declare.
   let rootTokens ← moduleTokens tokenCache ((moduleOf root).getD Name.anonymous)
   let printEnv := Parser.parserExtension.modifyState env fun s =>
     {{ s with tokens := rootTokens.importer }}
-  let signature (c : Name) : CommandElabM String := withEnv printEnv (signatureOf c)
-  let rawSignature (c : Name) : CommandElabM String := withEnv printEnv (rawSignatureOf c)
   let mut trusted : Array Name := #[]
   let mut edges : Array (Name × Array Name) := #[]
   let mut assumed : Array Name := #[]
-  let mut work : Array Name := #[root]
-  while h : work.size > 0 do
-    let c := work[work.size - 1]
-    work := work.pop
-    let mut localDeps : Array Name := #[]
-    for d in ← expand c do
-      if isLocal d then
-        if !localDeps.contains d then localDeps := localDeps.push d
-        if !trusted.contains d && d != root then
-          trusted := trusted.push d
-          work := work.push d
-      else if !isCore d && !assumed.contains d then
-        assumed := assumed.push d
-    edges := edges.push (c, localDeps.qsort Name.lt)
   let axioms ← collectAxioms root
   -- Axioms are part of the trust boundary even when reached only through a
   -- theorem proof. Their types can name project definitions or external
   -- notions whose meaning must be bound just like statement dependencies.
-  for axiomName in axioms do
-    for d in ← expand axiomName do
-      if isLocal d then
-        if !trusted.contains d && d != root then
-          trusted := trusted.push d
-          work := work.push d
-      else if !isCore d && !assumed.contains d then
-        assumed := assumed.push d
+  let mut work : Array Name := axioms.push root
   while h : work.size > 0 do
     let c := work[work.size - 1]
     work := work.pop
@@ -914,7 +829,8 @@ def skeleton
   -- the artifact into `.olean`, `.olean.server`, and `.olean.private` (which
   -- holds private bodies and proofs); bind every part that exists.
   for mod in boundaryModules.qsort Name.lt do
-    emitShared semanticCache emitted "module" mod do
+    emitShared semanticCache "module" mod do
+
       let olean ← findOLean mod
       unless ← olean.pathExists do
         throwError "compiled artifact unavailable for boundary module {{mod}}"
@@ -926,67 +842,45 @@ def skeleton
       return Json.arr files
     boundaryModuleNames := boundaryModuleNames.push (Json.str (toString mod))
   let mut items : Array Json := #[]
+  -- Fields shared by root and trusted records; only a trusted one may borrow a parent's source.
+  let fields (c : Name) (companion : Bool) : CommandElabM (List (String × Json)) := do
+    let kind := kindOf env c
+    let shown ← if kind == "theorem" || kind == "axiom" then pure none else do
+      let s ← declarationSource tokenCache c
+      if s.isNone && companion then companionSource tokenCache c else pure s
+    let deps := (edges.find? (·.1 == c)).map (·.2) |>.getD #[]
+    return [
+      ("kind", Json.str kind),
+      ("module", Json.str (toString ((moduleOf c).getD Name.anonymous))),
+      ("range", ← rangeJson c),
+      ("signature", Json.str (← withEnv printEnv (signatureOf c))),
+      ("raw_signature", Json.str (← withEnv printEnv (signatureOf c (raw := true)))),
+      ("semantic_schema", Json.str semanticSchema),
+      ("semantic", ← material c),
+      ("depends", Json.arr (deps.map fun d => Json.str (toString d))),
+      ("source", (shown.map (Json.str ·.1)).getD Json.null),
+      ("source_comments", (shown.map (·.2)).getD Json.null)]
   -- A trusted declaration's record does not depend on the root: its
   -- dependencies are its own meaning's local constants.
   for c in trusted.qsort Name.lt do
-    emitShared semanticCache emitted "trusted" c do
-      let deps := (edges.find? (·.1 == c)).map (·.2) |>.getD #[]
-      let kind := kindOf env c
-      let (source, sourceComments) ← if kind == "theorem" || kind == "axiom" then
-        pure (Json.null, Json.null)
-      else
-        match ← declarationSource tokenCache c with
-        | some (s, comments) => pure (Json.str s, comments)
-        | none => match ← companionSource tokenCache c with
-          | some (s, comments) => pure (Json.str s, comments)
-          | none => pure (Json.null, Json.null)
-      return Json.mkObj [
-        ("name", Json.str (toString c)),
-        ("source_name", Json.str (toString (privateToUserName c))),
-        ("kind", Json.str kind),
-        ("module", Json.str (toString ((moduleOf c).getD Name.anonymous))),
-        ("range", ← rangeJson c),
-        ("signature", Json.str (← signature c)),
-        ("raw_signature", Json.str (← rawSignature c)),
-        ("semantic_schema", Json.str semanticSchema),
-        ("semantic", ← cachedSemanticMaterial semanticCache env c),
-        ("depends", Json.arr (deps.map fun d => Json.str (toString d))),
-        ("source", source),
-        ("source_comments", sourceComments)]
+    emitShared semanticCache "trusted" c do
+      return Json.mkObj <| [("name", Json.str (toString c)),
+        ("source_name", Json.str (toString (privateToUserName c)))] ++ (← fields c true)
     items := items.push (Json.str (toString c))
-  let rootDeps := (edges.find? (·.1 == root)).map (·.2) |>.getD #[]
   let (statement, statementComments) := match ← statementSource tokenCache root with
     | some (s, comments) => (Json.str s, comments)
     | none => (Json.null, Json.null)
-  let rootKind := kindOf env root
-  let (source, sourceComments) ← if rootKind == "theorem" || rootKind == "axiom" then
-    pure (Json.null, Json.null)
-  else
-    match ← declarationSource tokenCache root with
-    | some (s, comments) => pure (Json.str s, comments)
-    | none => pure (Json.null, Json.null)
   for d in sortedAssumed ++ sortedAxioms do
-    emitShared semanticCache emitted "semantic" d do
-      cachedSemanticMaterial semanticCache env d
+    emitShared semanticCache "semantic" d (material d)
   emit semanticCache request <| [
     ("found", Json.bool true),
     ("statement_source", statement),
     ("statement_comments", statementComments),
-    ("source", source),
-    ("source_comments", sourceComments),
-    ("kind", Json.str rootKind),
     ("lean_version", Json.str Lean.versionString),
-    ("module", Json.str (toString ((moduleOf root).getD Name.anonymous))),
-    ("range", ← rangeJson root),
-    ("signature", Json.str (← signature root)),
-    ("raw_signature", Json.str (← rawSignature root)),
-    ("semantic_schema", Json.str semanticSchema),
-    ("semantic", ← cachedSemanticMaterial semanticCache env root),
-    ("depends", Json.arr (rootDeps.map fun d => Json.str (toString d))),
     ("trusted", Json.arr items),
     ("assumed", Json.arr (sortedAssumed.map fun d => Json.str (toString d))),
     ("boundary_modules", Json.arr boundaryModuleNames),
-    ("axioms", Json.arr (sortedAxioms.map fun d => Json.str (toString d)))]
+    ("axioms", Json.arr (sortedAxioms.map fun d => Json.str (toString d)))] ++ (← fields root false)
 
 /-- The probe's entry point: the skeleton of each requested root, keyed by the
 name as the CLI spelled it. It runs in the probe's command scope, which has no
@@ -994,28 +888,27 @@ name as the CLI spelled it. It runs in the probe's command scope, which has no
 def main (projectRoots : List Name) (roots : List (String × Name)) : CommandElabM Unit :=
   -- Elaborated proofs can be large; reading them has no heartbeat budget.
   withScope (fun scope => {{ scope with opts := maxHeartbeats.set scope.opts 0 }}) do
-  let expandCache : IO.Ref (Std.HashMap Name (Array Name)) ← IO.mkRef {{}}
   let tokenCache : IO.Ref (Std.HashMap Name AutoformSkeleton.ModuleTokens) ← IO.mkRef {{}}
-  let emitted : IO.Ref (Std.HashSet (String × Name)) ← IO.mkRef {{}}
   let coreModules ← AutoformSkeleton.toolchainModules (← getEnv)
   -- A command's `IO.println` output is captured and printed as one message when
   -- the command ends, at a cost quadratic in its size: on a Mathlib project that
   -- outlasts the probe itself. Write records to the file the CLI names instead,
   -- without redirecting incidental stdout into that trusted record stream.
-  let direct ← (← IO.getEnv "{output_env}").mapM fun path => IO.FS.Handle.mk path .write
-  let semanticCache : IO.Ref AutoformSkeleton.SemanticCache ← IO.mkRef {{ output := direct }}
+  let some path ← IO.getEnv "{output_env}" | throwError "{output_env} is not set"
+  let out ← IO.FS.Handle.mk path .write
+  let semanticCache : IO.Ref AutoformSkeleton.SemanticCache ← IO.mkRef {{ output := out }}
   try
     for (request, root) in roots do
       -- An error confined to one root leaves the others to be read. A record
       -- that could not be written, or an interrupt, ends the whole probe.
-      tryCatch (AutoformSkeleton.skeleton projectRoots coreModules expandCache tokenCache semanticCache
-          emitted request root)
+      tryCatch (AutoformSkeleton.skeleton projectRoots coreModules tokenCache semanticCache request root)
         fun e => do
           if (← semanticCache.get).broken || e.isInterrupt then throw e
           let message ← e.toMessageData.toString
           emit semanticCache request [("error", Json.str (message.take errorLimit).toString)]
   finally
-    if let some out := direct then out.flush
+    out.flush
+
 
 end AutoformSkeleton
 

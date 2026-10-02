@@ -34,7 +34,7 @@ _IGNORED_DIRECTORIES = frozenset({".lake", ".git", "lake-packages", "build"})
 #: A packet tree still being staged beside its destination, which has no
 #: manifest until it is complete, or ever if its writer was killed.
 _OUTPUT_STAGE = re.compile(r"\A\..+\.autoform-stage-[0-9a-f]{16}\Z")
-#: Schemas of the skeleton command's packet and passage manifests.
+#: Known schemas of the skeleton command's packet and passage manifests.
 PACKET_SCHEMA = "autoform-skeleton-packets/v2"
 PASSAGE_SCHEMA = "autoform-skeleton-passages/v2"
 REVIEW_PACKET_SCHEMA = "autoform-review-packets/v1"
@@ -176,219 +176,104 @@ def _scan(text: str, relative: Path) -> list[Declaration]:
     return found
 
 
+_NAME_TOKEN = re.compile(r"(?:«[^«»]*»|[^\s:(){}\[\]⦃⦄,«»])+")
+
+
 def _name_token(text: str) -> str | None:
     """Read one possibly guillemet-quoted Lean identifier from ``text``."""
 
-    quoted = False
-    for index, character in enumerate(text):
-        if character == "«":
-            if quoted:
-                return None
-            quoted = True
-        elif character == "»":
-            if not quoted:
-                return None
-            quoted = False
-        elif not quoted and (character.isspace() or character in ":(){}[]⦃⦄,"):
-            return text[:index] or None
-    return None if quoted else text or None
+    match = _NAME_TOKEN.match(text)
+    return match.group() if match and text[match.end() : match.end() + 1] not in ("«", "»") else None
 
 
-def _raw_string_close(text: str, index: int) -> str | None:
-    """Return the closing delimiter when ``text[index:]`` starts a raw string."""
-
-    if text[index : index + 1] != "r":
-        return None
-    cursor = index + 1
-    while text[cursor : cursor + 1] == "#":
-        cursor += 1
-    if text[cursor : cursor + 1] != '"':
-        return None
-    return '"' + "#" * (cursor - index - 1)
-
-
-@dataclass(slots=True)
-class _LexContext:
-    kind: str
-    close: str = ""
-    interpolated: bool = False
-    escaped: bool = False
-    depth: int = 0
-
-
-def _interpolated_quote(text: str, index: int) -> bool:
-    """Whether the quote at ``index`` starts an interpolated string macro."""
-
-    if index < 2 or text[index - 1] != "!":
-        return False
-    cursor = index - 2
-    if not (text[cursor].isalnum() or text[cursor] == "_"):
-        return False
-    while cursor >= 0 and (text[cursor].isalnum() or text[cursor] in {"_", "'"}):
-        cursor -= 1
-    return cursor < index - 2
-
-
-def _starts_char_literal(text: str, index: int) -> bool:
-    """Distinguish a character literal from the apostrophe in a Lean name."""
-
-    if index > 0 and (text[index - 1].isalnum() or text[index - 1] in {"_", "'"}):
-        return False
-    escaped = False
-    for character in text[index + 1 :]:
-        if character == "\n":
-            return False
-        if not escaped and character == "'":
-            return True
-        if escaped:
-            escaped = False
-        elif character == "\\":
-            escaped = True
-    return False
+_RAW_OPEN = re.compile(r'r(#*)"')
+_CHAR_LITERAL = re.compile(r"'(?:\\.|[^'\\\n])*'")
 
 
 def _without_lean_comments(text: str) -> str:
-    """Remove nested Lean comments without treating string contents as comments.
-
-    Newlines inside comments are retained so declaration line numbers remain
-    coordinates into the original file.
-    """
+    """Remove nested Lean comments, keeping strings intact and newlines in place."""
 
     out: list[str] = []
+    stack: list[list] = []  # [closer, interpolated] for a string, [None, depth] for `{…}` in `s!"…"`
     index = 0
-    block_depth = 0
-    contexts = [_LexContext("code")]
     while index < len(text):
-        pair = text[index : index + 2]
-        if block_depth:
-            if pair == "-/":
-                block_depth -= 1
+        top = stack[-1] if stack else None
+        char = text[index]
+        if top is not None and top[0] is not None:
+            close, interpolated = top
+            if text.startswith(close, index):
+                out.append(close)
+                index += len(close)
+                stack.pop()
+                continue
+            if close in {'"', "'"} and char == "\\":
+                out.append(text[index : index + 2])
                 index += 2
                 continue
-            if pair == "/-":
-                block_depth += 1
-                index += 2
-                continue
-            if text[index] == "\n":
-                out.append("\n")
-            index += 1
-            continue
-        context = contexts[-1]
-        if context.kind == "string":
-            if not context.escaped and text.startswith(context.close, index):
-                out.append(context.close)
-                index += len(context.close)
-                contexts.pop()
-                continue
-            char = text[index]
-            if context.interpolated and not context.escaped and char == "{":
-                if text[index : index + 2] == "{{":
-                    out.append("{{")
-                    index += 2
-                    continue
-                out.append(char)
-                index += 1
-                contexts.append(_LexContext("interpolation", depth=1))
-                continue
+            if interpolated and char == "{":
+                stack.append([None, 1])
             out.append(char)
             index += 1
-            if context.close in {'"', "'"}:
-                if context.escaped:
-                    context.escaped = False
-                elif char == "\\":
-                    context.escaped = True
             continue
-        raw_close = _raw_string_close(text, index)
-        if raw_close is not None:
-            prefix_length = len(raw_close) + 1
-            out.append(text[index : index + prefix_length])
-            index += prefix_length
-            contexts.append(_LexContext("string", close=raw_close))
-            continue
-        if text[index] == '"':
-            out.append('"')
-            index += 1
-            contexts.append(
-                _LexContext(
-                    "string",
-                    close='"',
-                    interpolated=_interpolated_quote(text, index - 1),
-                )
-            )
-            continue
-        if text[index] == "«":
-            out.append("«")
-            index += 1
-            contexts.append(_LexContext("string", close="»"))
-            continue
-        if text[index] == "'" and _starts_char_literal(text, index):
-            out.append("'")
-            index += 1
-            contexts.append(_LexContext("string", close="'"))
-            continue
-        if pair == "--":
+        if text.startswith("--", index):
             newline = text.find("\n", index + 2)
             if newline < 0:
                 break
             out.append("\n")
             index = newline + 1
             continue
-        if pair == "/-":
-            block_depth = 1
+        if text.startswith("/-", index):
+            # `/--` and `/-!` open a docstring whose body starts after the marker.
+            depth, index = 1, index + (3 if text[index + 2 : index + 3] in {"-", "!"} else 2)
             out.append(" ")
-            # `/--` and `/-!` open a docstring whose body starts after the
-            # marker, so `/--/ text -/` is closed only by the final `-/`.
-            index += 3 if text[index + 2 : index + 3] in {"-", "!"} else 2
-            continue
-        if context.kind == "interpolation":
-            if text[index] == "{":
-                context.depth += 1
-            elif text[index] == "}":
-                context.depth -= 1
-                if context.depth == 0:
-                    out.append("}")
-                    index += 1
-                    contexts.pop()
+            while index < len(text) and depth:
+                pair = text[index : index + 2]
+                if pair in {"-/", "/-"}:
+                    depth += 1 if pair == "/-" else -1
+                    index += 2
                     continue
-        out.append(text[index])
+                if text[index] == "\n":
+                    out.append("\n")
+                index += 1
+            continue
+        raw = _RAW_OPEN.match(text, index)
+        if raw:
+            out.append(raw.group())
+            index = raw.end()
+            stack.append(['"' + raw.group(1), False])
+            continue
+        previous = text[index - 1] if index else " "
+        if char == '"':
+            interpolated = previous == "!" and index >= 2 and (text[index - 2].isalnum() or text[index - 2] == "_")
+            stack.append(['"', interpolated])
+        elif char == "«":
+            stack.append(["»", False])
+        elif char == "'" and not (previous.isalnum() or previous in "_'") and _CHAR_LITERAL.match(text, index):
+            stack.append(["'", False])
+        elif top is not None and char in "{}":
+            top[1] += 1 if char == "{" else -1
+            if top[1] == 0:
+                stack.pop()
+        out.append(char)
         index += 1
     return "".join(out)
 
 
 def strip_lean_comments(text: str) -> str:
-    """Remove every line and block comment, docstrings included, from Lean source.
+    """Remove every line and block comment, docstrings included, from Lean source."""
 
-    Blank lines left behind are dropped, so the result is what the kernel sees
-    and nothing an author wrote for a reader.
-    """
+    return "\n".join(
+        line.rstrip() for line in _without_lean_comments(text).splitlines() if line.strip()
+    )
 
-    kept: list[str] = []
-    for line in _without_lean_comments(text).splitlines():
-        if line.strip():
-            kept.append(line.rstrip())
-    return "\n".join(kept)
+
+_DECLARATION_NAME = re.compile(r"(?:«[^»]*(?:»|$)|[^\s,«])+")
 
 
 def declaration_names(lean: str) -> list[str]:
     """Split a ``lean:`` frontmatter value into individual declaration names."""
 
-    names: list[str] = []
-    current: list[str] = []
-    quoted = False
-    for character in lean:
-        if character == "«":
-            quoted = True
-        elif character == "»":
-            quoted = False
-        if not quoted and (character == "," or character.isspace()):
-            if current:
-                names.append("".join(current))
-                current = []
-        else:
-            current.append(character)
-    if current:
-        names.append("".join(current))
-    return names
+    return _DECLARATION_NAME.findall(lean)
 
 
 @dataclass(frozen=True, slots=True)

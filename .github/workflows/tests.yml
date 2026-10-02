@@ -26,7 +26,7 @@ jobs:
       - run: make check-example
 
   real-lean:
-    name: real Lean (pinned v4.32.2)
+    name: real Lean (fixture toolchain)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -38,11 +38,6 @@ jobs:
           enable-cache: true
       - name: Install locked development environment
         run: timeout --signal=TERM --kill-after=30s 3m uv sync --frozen --extra dev --extra repl
-      - name: Verify the fixture's Lean pin
-        run: |
-          set -euo pipefail
-          test "$(tr -d '\r\n' < tests/fixtures/skeleton-project/lean-toolchain)" = \
-            "leanprover/lean4:v4.32.2"
       - name: Install pinned Elan
         run: |
           set -euo pipefail
@@ -54,14 +49,11 @@ jobs:
           tar xzf elan.tar.gz
           ./elan-init -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-      - name: Install and verify pinned Lean
+      - name: Install the fixture's Lean toolchain
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=30s 10m elan toolchain install leanprover/lean4:v4.32.2
-          version="$(timeout --signal=TERM --kill-after=10s 30s \
-            elan run leanprover/lean4:v4.32.2 lean --version)"
-          printf '%s\n' "$version"
-          grep -Fq "Lean (version 4.32.2" <<<"$version"
+          timeout --signal=TERM --kill-after=30s 10m \
+            elan toolchain install "$(tr -d '\r\n' < tests/fixtures/skeleton-project/lean-toolchain)"
           command -v lake
       - name: Run the skeleton suite against real Lean
         run: timeout --signal=TERM --kill-after=30s 25m uv run pytest -q tests/test_skeleton.py

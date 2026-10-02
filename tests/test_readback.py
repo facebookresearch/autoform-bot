@@ -165,7 +165,7 @@ def test_the_semantic_hash_ignores_presentation_and_the_evidence_hash_does_not()
 
 def test_a_multi_declaration_article_hashes_all_of_them() -> None:
     first = _declaration()
-    second = DeclarationSkeleton(**{**{name: getattr(first, name) for name in first.__slots__}, "name": "Skel.other"})
+    second = replace(first, name="Skel.other")
     node = NodeSkeleton(node_id="basics/pair", article_path="roadmap/basics/pair.md", declarations=(first, second))
 
     assert node.hash not in {first.hash, second.hash}
@@ -365,9 +365,7 @@ def test_testimony_for_a_declaration_the_blueprint_dropped_is_reported(tmp_path:
         text="Fine.",
         packet_text=declaration.blind_text(),
     )
-    renamed = DeclarationSkeleton(
-        **{**{name: getattr(_declaration(), name) for name in _declaration().__slots__}, "name": "Skel.sup_unique'"}
-    )
+    renamed = replace(_declaration(), name="Skel.sup_unique'")
 
     findings = readback_findings(
         _report(renamed),
