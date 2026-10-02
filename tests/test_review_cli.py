@@ -828,8 +828,8 @@ def test_a_stale_expected_hash_is_refused_before_lean_runs(
 def test_a_batch_interrupted_while_publishing_says_what_it_filed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every check runs before the first card is written. Only a concurrent
-    writer can stop the batch midway, and running it again finishes it."""
+    """Every check runs before the first card is written. A concurrent writer
+    can still stop the batch midway, and running it again finishes it."""
 
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
     records = json.loads(manifest.read_text(encoding="utf-8"))["records"]

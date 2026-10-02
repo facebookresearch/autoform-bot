@@ -687,9 +687,10 @@ blueprint is then reloaded, and nothing is filed if a selected article changed
 while Lean ran or the reloaded blueprint is not the one the extraction saw.
 Every card is built and checked before the first is written,
 so one bad record stops the batch. Publishing then goes card by card, each
-under its own compare-and-swap; only a concurrent writer can stop it midway,
-the command says how many cards it filed, and because filing identical content
-is a no-op, running the same batch again completes it.
+under its own compare-and-swap; a concurrent writer or a failed write (a full
+disk, or an I/O or permission error) can stop it midway. The command says how
+many cards it filed, and because filing identical content is a no-op, running
+the same batch again once the cause is cleared completes it.
 
 `review check`, `audit`, and `render` re-extract the
 current Lean evidence and reject unresolved, partial, foreign, or stale
