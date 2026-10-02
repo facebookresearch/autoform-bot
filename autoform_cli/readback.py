@@ -341,9 +341,10 @@ def readback_path(blueprint: Path, article_id: str, declaration: str) -> Path:
 def readback_keys(article_id: str, declaration: str) -> tuple[tuple[str, str], ...]:
     """The keys :func:`load_readbacks` may file a declaration's card under.
 
-    A card is keyed by its Lean name, but a card whose filename is too long
-    to hold the name, and whose bytes cannot be read, records no name either;
-    it is keyed by its filename's stem.
+    A card is keyed by the Lean name its filename spells. A name too long for
+    a filename is spelled only by a digest, which the name the card records
+    must match; a card whose bytes cannot be read, or whose recorded name
+    does not match, is keyed by its filename's stem.
     """
 
     try:
@@ -407,7 +408,16 @@ def load_readbacks(blueprint: str | Path) -> dict[tuple[str, str], Readback]:
         recorded_article_id = metadata.get("article_id")
         recorded_declaration = metadata.get("declaration")
         filename_declaration = _declaration_from_filename(relative.name)
-        declaration = filename_declaration or recorded_declaration or relative.stem
+        if filename_declaration is None and recorded_declaration:
+            # A long name's filename is a digest, which only the recorded name can match.
+            try:
+                if declaration_filename(recorded_declaration, suffix=".md") == relative.name:
+                    filename_declaration = recorded_declaration
+            except ValueError:
+                pass
+        # Keyed by the path, so a card recording another name is reported for
+        # the declaration whose card the writer would find there.
+        declaration = filename_declaration or relative.stem
         errors = list(frontmatter_errors)
         article_id = path_article_id or recorded_article_id or relative.parent.as_posix()
         if recorded_article_id is not None and not ARTICLE_ID_PATTERN.fullmatch(recorded_article_id):

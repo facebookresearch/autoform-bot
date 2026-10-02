@@ -480,6 +480,38 @@ def test_incomplete_or_misidentified_cards_are_explicitly_invalid(
     assert expected_reason in finding.reason
 
 
+@pytest.mark.parametrize("recorded", ["Skel.other", "Skel." + "β" * 40])
+def test_a_long_named_card_recording_another_declaration_is_invalid_for_the_one_its_path_names(
+    tmp_path: Path, recorded: str
+) -> None:
+    blueprint = _blueprint(tmp_path)
+    declaration = replace(_declaration(), name="Skel." + "α" * 40)
+    path = _file_card(blueprint, "Fine.", declaration=declaration)
+    # Too long to spell in a filename, so the path names it only by a digest.
+    assert path.name.startswith("declaration--")
+    card = path.read_text(encoding="utf-8")
+    path.write_text(card.replace(f'declaration: "{declaration.name}"', f'declaration: "{recorded}"'), encoding="utf-8")
+
+    findings = readback_findings(
+        _report(declaration), load_readbacks(blueprint), article_ids={"basics/sup-unique": _ARTICLE_ID}
+    )
+    # As for a short name: invalid for the declaration the writer would find it under, not missing.
+    assert [(finding.declaration, finding.code) for finding in findings] == [(declaration.name, "readback-invalid")]
+    assert f"frontmatter declaration {recorded!r} does not match the card path" in findings[0].reason
+
+
+def test_a_card_copied_to_a_long_named_card_path_leaves_the_card_it_copies_valid(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    path = _file_card(blueprint, "Fine.")
+    stray = readback_path(blueprint, _ARTICLE_ID, "Skel." + "α" * 40)
+    stray.write_bytes(path.read_bytes())
+
+    loaded = load_readbacks(blueprint)
+    assert loaded[(_ARTICLE_ID, "Skel.sup_unique")].valid
+    (orphan,) = readback_findings(_report(), loaded, article_ids={"basics/sup-unique": _ARTICLE_ID})
+    assert (orphan.code, orphan.declaration) == ("readback-orphaned", stray.stem)
+
+
 def test_card_body_rejects_interstitial_content(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     declaration = _declaration()
