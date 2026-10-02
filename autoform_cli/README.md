@@ -764,19 +764,20 @@ unless code owner review guards all of them at R, the trusted ref
 
 - **Current head.** Without `--pr`, R is the head of the default branch on
   GitHub now, as `GET /repos/{owner}/{repo}/git/ref/heads/{branch}` reports
-  it. The rulesets and permissions below are read as they are now, so a
-  build of an older commit, such as a re-run of an old Pages run, would pair
-  them with that commit's CODEOWNERS and bring back approvals a newer
-  CODEOWNERS withdrew. Only a build of the current head authenticates; one
-  the branch has moved past stops with a `superseded build` error instead of
-  labelling anything, and so does one whose default branch or its head
-  cannot be read, since labelling every approval self-approved would let a
-  failed lookup downgrade the site. Whatever the review settings, the generated Pages
+  it. The rulesets and permissions below are read as they are now, so a build
+  of an older commit, such as a re-run of an old Pages run, would pair them
+  with that commit's CODEOWNERS and bring back approvals a newer CODEOWNERS
+  withdrew. Only a build of the current head authenticates; one the branch has
+  moved past stops with a `superseded build` error instead of labelling
+  anything, and so does one whose default branch or its head cannot be read,
+  since labelling every approval self-approved would let a failed lookup
+  downgrade the site. Whatever the review settings, the generated Pages
   workflow's `deploy` job makes the same check before it deploys, so a build
   the branch has moved past never replaces the site. That workflow builds
-  every push to the default branch, and a pull request's runs cannot cancel
-  a pending one, so the build of the newer head publishes the site. The gate
-  below trusts its base commit instead.
+  every push to the default branch, and neither a pull request's runs nor a
+  newer run of the branch, such as a re-run of an old one, can cancel a
+  pending one (`queue: max`), so the build of the newer head publishes the
+  site. The gate below trusts its base commit instead.
 - **Ruleset.** The active rulesets on the default branch, as
   `GET /repos/{owner}/{repo}/rules/branches/{branch}` reports them, have pull
   request rules that turn on *Require review from Code Owners*

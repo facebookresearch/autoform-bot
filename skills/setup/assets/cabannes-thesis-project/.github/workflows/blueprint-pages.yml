@@ -24,11 +24,15 @@ env:
   AUTOFORM_REF: "43097b2c07e68df899d6b8bca7849d091c294754"
 
 # Pushes to main and dispatches on main share one group, so their builds
-# deploy in order; every other ref, such as a pull request's
-# refs/pull/N/merge, has its own, so it never cancels a pending main build.
+# run one at a time, in order. queue: max keeps every pending run: by default
+# a newly queued run, such as a re-run of an old one, cancels the pending
+# run, which may be the only build of the current head. Every other ref,
+# such as a pull request's refs/pull/N/merge, has its own group, so it never
+# cancels a pending main build.
 concurrency:
   group: blueprint-pages-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   # Builds the Lean project, which runs the project's own build code, and

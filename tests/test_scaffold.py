@@ -375,8 +375,9 @@ def test_the_approval_gate_runs_apart_from_the_lean_build(tmp_path: Path) -> Non
     # Pages reads the verify run and builds every push to main, so a change to CODEOWNERS relabels the site.
     assert "actions: read" in pages
     assert "  push:\n    branches: [main]\n  pull_request:\n" in pages
-    # A pull request's runs never cancel a pending main build.
-    assert "  group: blueprint-pages-${{ github.ref }}\n  cancel-in-progress: false\n" in pages
+    # A pull request's runs never cancel a pending main build, and neither does a newer run of main, such as
+    # a re-run of an old one: the pending run may be the only build of the current head.
+    assert "  group: blueprint-pages-${{ github.ref }}\n  cancel-in-progress: false\n  queue: max\n" in pages
 
 
 def test_pages_authenticates_approvals_in_a_job_that_never_builds_the_project(
