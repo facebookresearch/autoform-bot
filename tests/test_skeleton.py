@@ -2055,22 +2055,37 @@ def test_a_root_lean_declares_in_another_module_is_unresolved(tmp_path: Path) ->
     assert issue.reason == "Lean declares it in module Skel.Defs, not in Skel.Main where its source was found"
 
 
-def test_a_root_two_sources_declare_names_both_when_lean_disagrees(tmp_path: Path) -> None:
+@pytest.mark.parametrize("passage", ["found", "broken"])
+def test_a_root_several_files_declare_fails_closed_naming_every_file(tmp_path: Path, passage: str) -> None:
+    # Lean accepts a private declaration beside a public one of the same name
+    # in another module, and two unrelated modules may each declare it; the
+    # lexical index cannot tell which one a probe would bind.
     project = _project(tmp_path)
-    for module in ("Adup", "Bdup"):
+    for module, prefix, value in (("Cdup", "", "2 = 2"), ("Adup", "private ", "True"), ("Bdup", "", "1 = 1")):
         (project / "Skel" / f"{module}.lean").write_text(
-            "namespace Skel\ntheorem dup : True := trivial\nend Skel\n", encoding="utf-8"
+            f"namespace Skel\n{prefix}theorem dup : {value} := sorry\nend Skel\n", encoding="utf-8"
         )
     blueprint = _blueprint(tmp_path, lean={"dup": "Skel.dup"})
-    output = _probe_lines({**_fake_found_record(), "root": "Skel.dup", "module": "Skel.Bdup"})
+    if passage == "broken":
+        article = blueprint / "roadmap" / "basics" / "dup.md"
+        article.write_text(
+            article.read_text(encoding="utf-8").replace(
+                "## Depends on", "## Sources\n\n- [book](../../sources/missing.tex#L1-L1)\n\n## Depends on"
+            ),
+            encoding="utf-8",
+        )
+    probes: list[str] = []
 
-    report = extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
+    def runner(probe: str, root: Path) -> str:
+        probes.append(probe)
+        return _probe_lines({**_fake_found_record(), "root": "Skel.dup", "module": "Skel.Adup"})
 
+    report = extract_skeletons(blueprint, lean_root=project, runner=runner)
+
+    assert probes == [] and report.nodes[0].declarations == ()
     (issue,) = report.unresolved
-    assert issue.reason == (
-        "Lean declares it in module Skel.Bdup, not in Skel.Adup where its source was found; "
-        "the sources also declare it in Skel.Bdup"
-    )
+    assert issue.reason.endswith("several source files declare it: Skel/Adup.lean, Skel/Bdup.lean, Skel/Cdup.lean")
+    assert issue.reason.startswith("source locator ") == (passage == "broken")
 
 
 def test_an_error_on_one_root_leaves_the_rest_of_its_module_resolved(tmp_path: Path) -> None:

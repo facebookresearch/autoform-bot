@@ -343,7 +343,10 @@ exits nonzero when a `lean:` name is absent from the sources or from the built
 environment, or reaches a refused declaration; that name is unresolved for its article only, other articles still extract, and it writes nothing into the vault.
 Each name is probed in the module whose source the lexical index finds it in,
 reading each file only up to `#exit`; a name Lean declares in another module
-is unresolved too, and when several files declare it the reason names them.
+is unresolved too. A name that several indexed files declare, even when all
+but one of them declare it `private`, is unresolved without a probe, because
+the index cannot tell which one Lean binds, and every reason given for it
+names each of those files in sorted order.
 A probe that fails on its own (a nonzero exit, a timeout, or malformed or
 ambiguous records) likewise leaves only its module's targets unresolved, with
 the reason, and an error the probe meets while reading one declaration leaves

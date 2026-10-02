@@ -2913,10 +2913,24 @@ def extract_graph_skeletons(
     roots: dict[str, str] = {}
     for node, names in selected:
         for name in names:
-            if node.id in broken_passages:
-                unresolved.append(UnresolvedTarget(node.id, name, broken_passages[node.id]))
-                continue
             location = index.find(name)
+            # The lexical index cannot tell which of several declarations Lean
+            # binds a name to (one may be private, or in a file no target
+            # builds), so a name more than one file declares fails closed and
+            # every reason given for it names all of them.
+            several = (
+                None
+                if location is None or name not in index.elsewhere
+                else "several source files declare it: "
+                + ", ".join(sorted(path.as_posix() for path in (location.path, *index.elsewhere[name])))
+            )
+            if node.id in broken_passages:
+                reason = broken_passages[node.id]
+                unresolved.append(UnresolvedTarget(node.id, name, reason if several is None else f"{reason}; {several}"))
+                continue
+            if several is not None:
+                unresolved.append(UnresolvedTarget(node.id, name, several))
+                continue
             module = None if location is None else module_of(lean_root / location.path, libraries)
             if location is None:
                 unresolved.append(
@@ -2998,11 +3012,6 @@ def extract_graph_skeletons(
                 # The packet was printed in the environment of the module its
                 # source was found in, which is not the one Lean declares it in.
                 reason = f"Lean declares it in module {record.get('module')}, not in {module} where its source was found"
-                others = [
-                    module_of(lean_root / path, libraries) or path.as_posix() for path in index.elsewhere.get(name, ())
-                ]
-                if others:
-                    reason += f"; the sources also declare it in {', '.join(others)}"
                 unresolved.append(UnresolvedTarget(node.id, name, reason))
                 continue
             issue = _probe_record_issue(record)
