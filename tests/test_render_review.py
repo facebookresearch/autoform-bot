@@ -1741,6 +1741,18 @@ _TILDE = "write a space for a ~ that keeps words together, \\sim in a formula, o
         ("W0\n\n```lean\ntheorem x : True\n  ```", _FENCE, "W0\n\n```lean\ntheorem x : True\n```"),
         ("W0 **a **b** c** W1", "write \\* or \\_ for the character itself", "W0 **a \\*\\*b\\*\\* c** W1"),
         ("A 50\\% share.", "drop the one before %", "A 50% share."),
+        (
+            "W0 **a **b** c** W1\n\n```lean\nx\n```",
+            "write \\* or \\_ for the character itself",
+            "W0 **a \\*\\*b\\*\\* c** W1\n\n```lean\nx\n```",
+        ),
+        ("A 50\\% share.\n\n```lean\nx\n```", "drop the one before %", "A 50% share.\n\n```lean\nx\n```"),
+        (
+            "W0 **a **b** c** W1\n\n***\n\nW2",
+            "write \\* or \\_ for the character itself",
+            "W0 **a \\*\\*b\\*\\* c** W1\n\n***\n\nW2",
+        ),
+        ("A 50\\% share.\n\n***\n\nW2", "drop the one before %", "A 50% share.\n\n***\n\nW2"),
         ("Its value \\$x$ is typed.", "write dollar signs meant as typed in code, as `$x$`", "Its value `$x$` is typed."),
         ("\t\nThe map is open.", "drop the blank first line", "The map is open."),
         ("    \nThe map is open.", "drop the blank first line", "The map is open."),

@@ -2375,7 +2375,14 @@ def _github_hint(site: list[tuple[str, str, int]], github: list[tuple[str, str, 
         return sum(value.startswith(f"<{tag}") for value in before) > before.count(f"</{tag}>")
 
     def next_block(tokens: list[tuple[str, str, int]]) -> str:
-        return next((value for kind, value, _ in tokens[at:] if kind == "block" and value[:2] != "</"), "")
+        """The block that opens at token ``at``, or after it before anything
+        more is shown: the block where the two part, not one further on."""
+        for index, (kind, value, _) in enumerate(tokens[at:], at):
+            if kind == "block" and value[:2] != "</":
+                return value
+            if index > at and kind not in {"block", "break", "mark"}:
+                break
+        return ""
 
     def quotes(tokens: list[tuple[str, str, int]]) -> list[str]:
         """The block quotes opened and closed before the next thing shown,
