@@ -769,10 +769,12 @@ unless code owner review guards all of them at R, the trusted ref
   them with that commit's CODEOWNERS and bring back approvals a newer
   CODEOWNERS withdrew. Only a build of the current head authenticates; one
   the branch has moved past stops with a `superseded build` error instead of
-  labelling anything, so the generated Pages workflow deploys nothing from
-  it. That workflow builds every push to the default branch, and a pull
-  request's runs cannot cancel a pending one, so the build of the newer head
-  publishes the site. The gate below trusts its base commit instead.
+  labelling anything. Whatever the review settings, the generated Pages
+  workflow's `deploy` job makes the same check before it deploys, so a build
+  the branch has moved past never replaces the site. That workflow builds
+  every push to the default branch, and a pull request's runs cannot cancel
+  a pending one, so the build of the newer head publishes the site. The gate
+  below trusts its base commit instead.
 - **Ruleset.** The active rulesets on the default branch, as
   `GET /repos/{owner}/{repo}/rules/branches/{branch}` reports them, have pull
   request rules that turn on *Require review from Code Owners*
@@ -1003,7 +1005,12 @@ which statements are current, never who approved them. Authentication reads
 only the `build` job's checkout and the GitHub API. MkDocs still runs
 `mkdocs.yml` and `theme/` in that job, which is why the precondition requires
 them to have a code owner, and both jobs install uv with its cache disabled,
-so nothing the `lean` job writes is restored into the `build` job.
+so nothing the `lean` job writes is restored into the `build` job. Its
+`deploy` job, which needs only `contents: read` besides the Pages
+permissions, first asks GitHub for the head of the default branch and fails
+unless it is the commit the run built, with or without statement review, so
+a re-run of an old run, or a build the branch moved past while it ran, never
+replaces the site; a failed lookup fails the job too.
 
 When `--output`, `--packets`, and `--passages` are combined, all three outputs
 are staged before publication and a failed commit restores the previous set.

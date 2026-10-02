@@ -1,9 +1,10 @@
 name: Blueprint Pages
 
 on:
-  # Every push to main builds, whatever it changes: a build of a commit main
-  # has moved past fails before it deploys, so only the build of the newest
-  # head can publish the site.
+  # Every push to main builds, whatever it changes, so a change to CODEOWNERS
+  # relabels the site. The deploy job refuses any build but one of the current
+  # head of the default branch, so a build main has moved past never
+  # publishes.
   push:
     branches: [main]
   pull_request:
@@ -190,8 +191,9 @@ jobs:
       # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
       # and permalinks into the Lean code at this exact commit.
       #
-      # A build of a commit main has moved past fails here, so it never
-      # deploys. An approval reads "approved by @user" only when rulesets on
+      # When it authenticates approvals, a build of a commit main has moved
+      # past fails here; the deploy job's head check refuses one either way.
+      # An approval reads "approved by @user" only when rulesets on
       # the default branch that this job's token cannot bypass require code
       # owner review, dismiss stale approvals, and require approval of the
       # last push, CODEOWNERS, which GitHub reads without error, gives every
@@ -244,12 +246,33 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      # The head check reads the repository and its default branch.
+      contents: read
       pages: write
       id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # Whatever the review settings, only a build of the current head of the
+      # default branch replaces the site: a re-run of an older run, or a build
+      # main moved past while it ran, fails here, and so does a failed lookup.
+      - name: Check that the build is of the default branch's head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch="$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
+          head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --jq .object.sha)"
+          if [[ ! "$head" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::GitHub did not name the head of the default branch, so nothing is deployed"
+            exit 1
+          fi
+          if [[ "$head" != "$GITHUB_SHA" ]]; then
+            echo "::error::This build is of $GITHUB_SHA, but the default branch is at $head, so it does not replace the site"
+            exit 1
+          fi
+
       - name: Configure GitHub Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 

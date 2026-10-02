@@ -404,6 +404,123 @@ def test_pages_authenticates_approvals_in_a_job_that_never_builds_the_project(
     assert pages.count("enable-cache: false") == 2
 
 
+# Answers ``gh api PATH [--jq FILTER]`` from $GH_STUB/<PATH up to any query,
+# with every other character than a letter or digit made _>.json, and records
+# each PATH in $GH_STUB/calls. A path with no answer fails, as a failed request.
+_GH_STUB = r"""#!/bin/bash
+set -u
+[ "$1" = api ] || { echo "unexpected: gh $*" >&2; exit 99; }
+path=$2
+shift 2
+filter=.
+while [ $# -gt 0 ]; do
+  case $1 in
+    --jq) filter=$2; shift 2 ;;
+    *) echo "unexpected gh argument: $1" >&2; exit 99 ;;
+  esac
+done
+printf '%s\n' "$path" >> "$GH_STUB/calls"
+answer="$GH_STUB/$(printf '%s' "${path%%\?*}" | tr -c 'A-Za-z0-9' '_').json"
+[ -f "$answer" ] || { echo "gh: HTTP 502 for $path" >&2; exit 1; }
+exec jq -r "$filter" "$answer"
+"""
+
+
+def _step(workflow: Path, job: str, name: str) -> str:
+    """The script of the step called ``name`` in ``job`` of ``workflow``."""
+
+    yaml = pytest.importorskip("yaml")
+    steps = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"][job]["steps"]
+    scripts = [step["run"] for step in steps if step.get("name") == name]
+    assert len(scripts) == 1, f"{job} has {len(scripts)} steps called {name!r}"
+    return scripts[0]
+
+
+def _run_step(
+    tmp_path: Path, script: str, answers: dict[str, object], **env: str
+) -> tuple[subprocess.CompletedProcess[str], list[str], dict[str, str]]:
+    """Run a step's script with ``gh api`` answering from ``answers``.
+
+    Returns the finished process, the paths it asked GitHub for, and what it
+    wrote to $GITHUB_OUTPUT.
+    """
+
+    if shutil.which("jq") is None:
+        pytest.skip("the workflow steps filter GitHub's answers with jq")
+    stub = tmp_path / "gh-stub"
+    stub.mkdir()
+    gh = stub / "gh"
+    gh.write_text(_GH_STUB, encoding="utf-8")
+    gh.chmod(0o755)
+    for path, answer in answers.items():
+        (stub / (re.sub(r"[^A-Za-z0-9]", "_", path) + ".json")).write_text(json.dumps(answer), encoding="utf-8")
+    output = tmp_path / "github-output"
+    output.touch()
+    done = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            "PATH": f"{stub}{os.pathsep}{os.path.dirname(shutil.which('jq') or '')}{os.pathsep}/usr/bin:/bin",
+            "GH_STUB": str(stub),
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_REPOSITORY": "owner/project",
+            **env,
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    calls_file = stub / "calls"
+    calls = calls_file.read_text(encoding="utf-8").splitlines() if calls_file.exists() else []
+    outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+    return done, calls, outputs
+
+
+_REPOSITORY = "repos/owner/project"
+_MAIN = f"{_REPOSITORY}/git/ref/heads/main"
+
+
+@pytest.mark.parametrize(
+    ("answers", "deploys"),
+    [
+        ({_REPOSITORY: {"default_branch": "main"}, _MAIN: {"object": {"sha": "a" * 40}}}, True),
+        # main has moved on, as when an old run is re-run.
+        ({_REPOSITORY: {"default_branch": "main"}, _MAIN: {"object": {"sha": "b" * 40}}}, False),
+        # The default branch is not the branch this run built.
+        (
+            {
+                _REPOSITORY: {"default_branch": "trunk"},
+                f"{_REPOSITORY}/git/ref/heads/trunk": {"object": {"sha": "b" * 40}},
+            },
+            False,
+        ),
+        # A failed lookup, or an answer that names no commit, deploys nothing.
+        ({_MAIN: {"object": {"sha": "a" * 40}}}, False),
+        ({_REPOSITORY: {"default_branch": "main"}}, False),
+        ({_REPOSITORY: {"default_branch": "main"}, _MAIN: {"object": {}}}, False),
+    ],
+)
+def test_pages_deploys_only_a_build_of_the_default_branch_head(
+    tmp_path: Path, answers: dict[str, object], deploys: bool
+) -> None:
+    """The check runs before the deploy, whatever the review settings, so
+    nothing but a build of the current head replaces the site."""
+
+    scaffold_project(tmp_path / "project", title="Finite Flat")
+    workflow = tmp_path / "project/.github/workflows/blueprint-pages.yml"
+    pages = workflow.read_text(encoding="utf-8")
+    deploy = pages.split("\n  deploy:\n")[1]
+    name = "Check that the build is of the default branch's head"
+    assert deploy.index(f"- name: {name}\n") < deploy.index("uses: actions/deploy-pages@")
+    assert "      contents: read\n" in deploy.split("    steps:\n")[0]
+
+    done, _, _ = _run_step(tmp_path, _step(workflow, "deploy", name), answers, GITHUB_SHA="a" * 40)
+
+    assert (done.returncode == 0) is deploys, done.stderr
+    if not deploys:
+        assert "::error::" in done.stdout or "HTTP 502" in done.stderr
+
+
 def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:
     scaffold_project(
         tmp_path,
