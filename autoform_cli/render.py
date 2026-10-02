@@ -1508,6 +1508,25 @@ def _as_published(href: str) -> str:
     return href
 
 
+#: What a fragment render writes into a link destination may hold as it is,
+#: besides letters, digits, and ``-._~``: delimiters a URL gives a meaning and
+#: Markdown and HTML give none, and ``%``, which the author's own encoding
+#: starts with. Anything else is percent-encoded.
+_FRAGMENT_SAFE = "/%:?=@!+,;"
+#: The same for a whole URL render writes, which may also hold its fragment.
+_URL_SAFE = _FRAGMENT_SAFE + "#"
+
+
+def _destination(path: str, separator: str = "", fragment: str = "") -> str:
+    """A link destination for the file ``path``, named as on disk, and its
+    ``fragment``: the path with every character but ``/`` and the unreserved
+    ones percent-encoded, and the fragment with every one outside
+    :data:`_FRAGMENT_SAFE`, so the destination ends no link, opens no tag,
+    and starts no formula, whatever the path was decoded from."""
+
+    return quote(path, safe="/") + separator + quote(fragment, safe=_FRAGMENT_SAFE)
+
+
 def _rewrite_links(
     text: str,
     *,
@@ -1530,7 +1549,12 @@ def _rewrite_links(
     anchored = _anchored_links(targets, page, extension=".md")
 
     def moved_target(raw: str) -> str | None:
-        """Where *raw* should point once published, or None to leave it alone."""
+        """Where *raw* should point once published, or None to leave it alone.
+
+        The path is resolved decoded, as the file system names it, so it is
+        encoded again before it is written back: the text was checked with
+        the destination as written, and a decoded ``)`` or ``<`` would end
+        the link and start markup nobody checked."""
         bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
         path, separator, fragment = bare.partition("#")
         if not path or urlsplit(path).scheme or path.startswith("/"):
@@ -1538,17 +1562,19 @@ def _rewrite_links(
         candidate = (source_dir / unquote(path)).resolve()
         node_id = node_sources.get(candidate)
         if node_id is not None:
-            href = anchored[node_id]
+            href, anchor_separator, anchor = anchored[node_id].partition("#")
             if not targets[node_id][1] and separator:
-                href = f"{'' if href == '#' else href}#{fragment}"
-            return href
+                anchor_separator, anchor = separator, fragment
+            return _destination(href, anchor_separator, anchor)
         if not _is_within(candidate, blueprint):
             return None
         relative = candidate.relative_to(blueprint)
         if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
-            return f"{_source_href(sources_base, relative.parts[1:])}{separator}{fragment}"
+            return quote(_source_href(sources_base, relative.parts[1:]), safe=_URL_SAFE) + _destination(
+                "", separator, fragment
+            )
         published = destination / relative
-        return f"{mermaid.relative_link(published, page, candidate.suffix)}{separator}{fragment}"
+        return _destination(mermaid.relative_link(published, page, candidate.suffix), separator, fragment)
 
     def replace(match: re.Match[str]) -> str:
         href = moved_target(match.group("target"))

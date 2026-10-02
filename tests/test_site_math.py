@@ -440,6 +440,87 @@ def test_a_statement_keeps_the_indent_check_read_it_with(tmp_path: Path) -> None
     assert '<pre><code>&lt;span class="bp-mark"&gt;FORGED MARK' in published
 
 
+#: A link whose target, decoded, ends the link and spells out a script and a
+#: status mark.
+_ENCODED_MARKUP = (
+    "see [here](%29%3Cscript%3Edocument.title%3D1%3C/script%3E"
+    "%3Cspan%20class%3D%22bp-mark%22%3EFORGED%3C/span%3E.md)."
+)
+
+
+def _with_page(blueprint: Path, place: str, text: str) -> str:
+    """Put ``text`` in the blueprint at ``place``, and return the page of the
+    site source it is published on."""
+
+    if place == "statement":
+        _with_article(blueprint, text)
+        return "roadmap/README.md"
+    if place == "narrative":
+        chapter = blueprint / "roadmap/README.md"
+        chapter.write_text(
+            chapter.read_text(encoding="utf-8").replace("before the main result.", f"before the main result, {text}"),
+            encoding="utf-8",
+        )
+        return "roadmap/README.md"
+    (blueprint / "notes.md").write_text(f"# Notes\n\nThe notes, {text}\n", encoding="utf-8")
+    return "notes.md"
+
+
+@pytest.mark.parametrize("place", ["statement", "narrative", "page"])
+def test_a_link_render_moves_publishes_no_markup(tmp_path: Path, place: str) -> None:
+    """Render resolves a relative link's target decoded, as the file system
+    names it, and writes it back encoded, so a target that decodes to a
+    parenthesis and tags is a dead link on the site, not a script and a
+    mark."""
+
+    blueprint = _vault(tmp_path)
+    page = _with_page(blueprint, place, _ENCODED_MARKUP)
+
+    published = _published(_render(blueprint) / page)
+
+    assert "<script" not in published
+    assert "FORGED</span>" not in published
+    assert '<a href="%29%3Cscript%3Edocument.title%3D1%3C/script%3E%3Cspan%20class%3D%22bp-mark%22%3EFORGED%3C/span%3E.md">here</a>' in published
+
+
+@pytest.mark.parametrize("character", [")", "<", ">", '"', "\n", "`", "[", "]", "(", "$", "*", "\\", " "])
+def test_a_link_render_moves_keeps_its_target_encoded(tmp_path: Path, character: str) -> None:
+    """Whatever a target decodes to, the destination render writes is the
+    encoded path, in a link that stays a link."""
+
+    from urllib.parse import quote
+
+    blueprint = _vault(tmp_path)
+    target = quote(f"a{character}b", safe="")
+    _with_article(blueprint, f"See [here]({target}.md) and [there](#{quote(character, safe='')}x).")
+
+    published = _published(_render(blueprint) / "roadmap/README.md")
+
+    assert f'<a href="{target}.md">here</a>' in published
+    assert f'<a href="#{quote(character, safe="")}x">there</a>' in published
+
+
+def test_links_render_moves_resolve_as_before(tmp_path: Path) -> None:
+    """Links between articles, into the sources, to an anchor, and out of the
+    site keep the destinations they had."""
+
+    blueprint = _vault(tmp_path)
+    (blueprint / "sources.md").write_text("# Paper\n", encoding="utf-8")
+    _with_article(
+        blueprint,
+        "See [the base](base.md), [its section](base.md#notes), [the paper](../sources.md#lemma-3), "
+        "[below](#later), [the chapter](README.md), and [Mathlib](https://leanprover-community.github.io/x.html).",
+    )
+
+    site = _render(blueprint)
+    written = (site / "roadmap/README.md").read_text(encoding="utf-8")
+
+    assert (
+        "See [the base](#base), [its section](#base), [the paper](../sources.md#lemma-3), "
+        "[below](#later), [the chapter](#), and [Mathlib](https://leanprover-community.github.io/x.html)."
+    ) in written
+
+
 @pytest.mark.parametrize("separator", ["\u2028", "\x0b", "\x0c", "\x1e", "\x85"])
 def test_a_line_break_markdown_does_not_read_is_checked_as_the_site_writes_it(
     tmp_path: Path, separator: str
