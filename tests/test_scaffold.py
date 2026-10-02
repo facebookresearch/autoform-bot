@@ -640,18 +640,22 @@ _DEPLOYMENTS = f"{_REPOSITORY}/deployments"
 
 def _github_after(
     *,
-    failed: tuple[tuple[str, float], ...] = (),
+    failed: tuple[tuple[str, float] | tuple[str, float, str], ...] = (),
     deployed: tuple[str, float] | None = None,
     remaining: int = 1000,
     head: str = "a" * 40,
 ) -> dict[str, object]:
     """GitHub's answers when runs of the head failed ``failed`` = ((event, hours ago), ...)
-    and its newest deployment ended ``deployed`` = (state, hours ago)."""
+    and its newest deployment ended ``deployed`` = (state, hours ago). A run
+    may name another conclusion than failure as a third item."""
 
     def ago(hours: float) -> str:
         return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    runs = [{"event": event, "conclusion": "failure", "updated_at": ago(hours)} for event, hours in failed]
+    runs = [
+        {"event": run[0], "conclusion": run[2] if len(run) > 2 else "failure", "updated_at": ago(run[1])}
+        for run in failed
+    ]
     runs.append({"event": "push", "conclusion": "success", "updated_at": ago(0.1)})
     answers: dict[str, object] = {
         _MAIN: {"object": {"sha": head}},
@@ -816,6 +820,15 @@ def test_every_event_but_the_schedule_builds_without_asking_github(tmp_path: Pat
             id="backing-off-after-recovering",
         ),
         pytest.param(_github_after(remaining=903), False, id="spent-hour"),
+        pytest.param(_github_after(failed=(("schedule", 0.5, "timed_out"),)), False, id="timed-out"),
+        pytest.param(_github_after(failed=(("push", 0.5, "startup_failure"),)), False, id="startup-failure"),
+        pytest.param(_github_after(failed=(("push", 0.5, "cancelled"),)), True, id="cancelled"),
+        pytest.param(_github_after(deployed=("error", 1)), True, id="deploy-error"),
+        pytest.param(_github_after(deployed=("in_progress", 1)), True, id="deploy-in-progress"),
+        pytest.param(_github_after(deployed=("inactive", 1)), True, id="deploy-inactive"),
+        # 3600 << 52 is negative in bash, and 3600 << 63 is 0: the shift is capped, so the wait stays a day.
+        pytest.param(_github_after(failed=(("schedule", 23),) * 53), False, id="backing-off-a-day-53"),
+        pytest.param(_github_after(failed=(("schedule", 23),) * 64), False, id="backing-off-a-day-64"),
     ],
 )
 def test_a_scheduled_run_builds_the_head_until_it_has_a_complete_build(
