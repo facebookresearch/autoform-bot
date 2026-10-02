@@ -49,6 +49,10 @@ SITE_EXTENSIONS: tuple[str, ...] = (
     "pymdownx.arithmatex",
     "pymdownx.superfences",
 )
+#: The class pymdownx.arithmatex gives each formula it finds in the site's
+#: Markdown. The page's MathJax reads these elements and no other text, and
+#: check judges the TeX in them, so the two read the same formulas.
+FORMULA_CLASS = "arithmatex"
 SITE_EXTENSION_CONFIGS: dict[str, dict[str, object]] = {
     "toc": {"toc_depth": "2-3"},
     "pymdownx.arithmatex": {"generic": True},
@@ -751,6 +755,7 @@ __all__ = [
     "EXTERNAL_SCHEMES",
     "FENCE",
     "FENCE_CLOSE",
+    "FORMULA_CLASS",
     "HEADING",
     "HTML_COMMENT",
     "INLINE_CODE",

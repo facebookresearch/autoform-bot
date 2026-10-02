@@ -270,7 +270,7 @@ def test_something_other_than_a_file_where_the_site_has_one_is_refused(
     ("article", "commands"),
     [
         ("$\\DeclareMathOperator{\\leq}{>}$, so $a \\leq b$.", "\\DeclareMathOperator"),
-        ("Here \\\\(\\\\newcommand{\\\\RR}{\\\\mathbb{R}}\\\\) is live.", "\\newcommand"),
+        ("Here \\(\\newcommand{\\RR}{\\mathbb{R}}\\) is live.", "\\newcommand"),
         ("$$\n\\def\\x{1} \\let\\y\\x\n$$", "\\def, \\let"),
         ("$\\DeclarePairedDelimiter\\abs{\\lvert}{\\rvert}$", "\\DeclarePairedDelimiter"),
         ("$\\newtagform{p}{(}{)} \\usetagform{p}$", "\\newtagform, \\usetagform"),
@@ -297,7 +297,7 @@ def test_tex_that_changes_other_formulas_is_refused(article: str, commands: str)
     [
         "$\\mmlToken{mi}[mathcolor=#31A24C]{\\checkmark}$ approved",
         "$$\n\\mmlToken{mtext}[mathbackground=white]{x}\n$$",
-        "Here \\\\(\\\\mmlToken{mo}{+}\\\\) is live.",
+        "Here \\(\\mmlToken{mo}{+}\\) is live.",
     ],
 )
 def test_tex_that_sets_what_a_symbol_looks_like_is_refused(article: str) -> None:
@@ -327,6 +327,10 @@ def test_render_refuses_a_definition_in_an_article(tmp_path: Path) -> None:
     "article",
     [
         "Write `\\newcommand` in a project's macros file instead, and `\\mmlToken` nowhere.",
+        "Prose that names \\newcommand, \\label{x}, or \\mmlToken outside a formula is shown as typed.",
+        "After $a \\leq b$ ends, prose that names \\newcommand is shown as typed.",
+        # An escaped delimiter is a character, and what follows it no formula.
+        "Here \\\\(\\\\newcommand{\\\\RR}{\\\\mathbb{R}}\\\\) and \\\\(\\\\mmlToken{mo}{+}\\\\) are shown as typed.",
         "```latex\n\\def\\x{1}\n\\DeclareMathOperator{\\rank}{rank}\n```",
         "$\\left( x \\right) \\leqq y$, $\\operatorname{rank} A$, and $\\lvert x \\rvert$.",
     ],
@@ -804,9 +808,16 @@ class Menu {
 Menu.loadingPromises = new Map();
 Menu.explorer = false;
 
+// The card a document reads, by its id, or what stands for the articles.
+function cardOf(doc, articles) {
+  const element = doc.options.elements && doc.options.elements[0];
+  const adaptor = MathJax.startup.adaptor;
+  return element && adaptor.hasClass(element, "bp-readback") ? adaptor.getAttribute(element, "id") : articles;
+}
+
 function describe() {
   return docs.map((doc) => {
-    const card = doc.options.elements ? MathJax.startup.adaptor.getAttribute(doc.options.elements[0], "id") : null;
+    const card = cardOf(doc, null);
     return {
       card,
       output: doc.outputJax.name,
@@ -842,7 +853,7 @@ main.init({}).then(async () => {
     const group = docs.slice();
     const inputs = group.map((doc) => doc.inputJax[0]);
     const counts = group.map((doc) => Array.from(doc.math).length);
-    const card = (doc) => (doc.options.elements ? MathJax.startup.adaptor.getAttribute(doc.options.elements[0], "id") : "page");
+    const card = (doc) => cardOf(doc, "page");
     const menu = group.find((doc) => card(doc) === changed).menu;
     menu.menu.pool.lookup("renderer").setValue("SVG");
     menu.menu.pool.lookup("assistiveMml").setValue(false);
@@ -883,7 +894,7 @@ main.init({}).then(async () => {
 _FIRST_PAGE = r"""<html><head></head><body><article>
 <p id="a1"><span class="arithmatex">\(\DeclareMathOperator{\leq}{>}\)</span> <span class="arithmatex">\(a \leq b\)</span></p>
 <p id="a2"><span class="arithmatex">\(\boldsymbol{x} \cancel{y} \coloneqq \RR \norm{v}\)</span></p>
-<p id="a3"><span class="arithmatex">\(\label{shared} \nothere\)</span> $p \leq q$</p>
+<p id="a3"><span class="arithmatex">\(\label{shared} \nothere\)</span> <span class="arithmatex">\(p \leq q\)</span></p>
 <div class="bp-readback bp-readback-current" id="c1"><div class="bp-readback-title">Read-back $\leq$</div><p><span class="arithmatex">\(a \leq b\)</span> \(raw \leq\) $dollar$</p><p class="arithmatex">\[\DeclareMathOperator{\leq}{>} \label{shared} c \leq d\]</p></div>
 <div class="bp-readback bp-readback-current" id="c2"><p><span class="arithmatex">\(e \leq f \label{shared}\)</span> <span class="arithmatex">\(\boldsymbol{x} \cancel{y} \coloneqq \RR\)</span></p></div>
 </article></body></html>
@@ -1082,6 +1093,68 @@ def test_a_mathjax_started_before_the_script_typesets_nothing(tmp_path: Path) ->
     ]
     assert report["version"] == "3.2.2"
     assert report["startup"] == {"math": 0, "subscribed": False}
+
+
+# Text a page shows outside the formulas its Markdown marked: navigation, a
+# table of contents, a lead, a title, and a graph's source, as the site
+# prints them, each with TeX check never judged as a formula.
+_UNMARKED = r"""<html><head></head><body>
+<nav class="md-nav"><a href="#top">\(\DeclareMathOperator{\leq}{>}\) $\gdef\x{1}$</a></nav>
+<div class="md-sidebar"><ul><li>$\label{toc}$</li></ul></div>
+<article>
+<div class="bp-hero"><p class="bp-hero-lead">Lead $\DeclareMathOperator{\leq}{>}$</p></div>
+<div class="bp-thmwrapper"><div class="bp-thmheading"><span class="bp-thmtitle">Top `$\DeclareMathOperator{\leq}{>}$`</span></div>
+<div class="mermaid">graph TD; a["$\label{m}$"]</div>
+<p><span class="arithmatex">\(a \leq b\)</span></p>
+</div></article></body></html>
+"""
+
+
+def test_the_page_input_reads_only_the_formulas_markdown_marked(tmp_path: Path) -> None:
+    """Check judges the formulas the site's Markdown marks in an article, so
+    those are all the page's input reads."""
+
+    report = _node_report(tmp_path, _node_script(tmp_path), "new", first=_UNMARKED, second=_UNMARKED)
+
+    assert report["errors"] == []
+    for (page,) in report["passes"]:
+        assert [math["tex"] for math in page["math"]] == ["a \\leq b"]
+        assert _LEQ in page["math"][0]["mml"]
+
+
+def test_a_title_or_discussion_shown_as_typed_is_not_typeset(tmp_path: Path) -> None:
+    """Check reads a title and a discussion value as Markdown, where backticks
+    make code, but the site prints them as typed, backticks and all."""
+
+    blueprint = _vault(tmp_path / "vault")
+    top = blueprint / "roadmap/top.md"
+    top.write_text(
+        top.read_text(encoding="utf-8")
+        .replace("# Top", "# Top `$\\DeclareMathOperator{\\leq}{>}$`")
+        .replace("discussion: 42", "discussion: `$\\label{x} \\DeclareMathOperator{\\leq}{>}$`"),
+        encoding="utf-8",
+    )
+    chapter = blueprint / "roadmap/README.md"
+    chapter.write_text(
+        chapter.read_text(encoding="utf-8").replace("main result.", "main result, where $a \\leq b$."),
+        encoding="utf-8",
+    )
+    assert main(["check", str(blueprint)]) == 0
+    site = _render(blueprint)
+    published = _published(site / "roadmap/README.md")
+    assert "Top `$\\DeclareMathOperator{\\leq}{&gt;}$`" in published
+    assert "`$\\label{x} \\DeclareMathOperator{\\leq}{&gt;}$`" in published
+    page = f"<html><head></head><body><article>{published}</article></body></html>"
+    if shutil.which("node") is None or not os.environ.get("AUTOFORM_MATHJAX_DIR"):
+        pytest.skip("needs node and AUTOFORM_MATHJAX_DIR, an unpacked mathjax package")
+    script = (site / "javascripts/mathjax.js").read_text(encoding="utf-8")
+
+    report = _node_report(tmp_path, script, "new", first=page, second=page)
+
+    assert report["errors"] == []
+    articles = report["passes"][0][0]
+    assert [math["tex"] for math in articles["math"]] == ["a \\leq b"]
+    assert _LEQ in articles["math"][0]["mml"]
 
 
 def test_no_formula_gives_its_output_a_class_style_id_or_link(tmp_path: Path) -> None:

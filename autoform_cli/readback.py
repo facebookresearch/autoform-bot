@@ -59,7 +59,14 @@ except ImportError:  # pragma: no cover - Windows, which cannot publish cards
     fcntl = None  # type: ignore[assignment]
 
 from .graph import ARTICLE_ID_PATTERN
-from .markdown import SITE_EXTENSION_CONFIGS, SITE_EXTENSIONS, content_lines, published_lines, published_markdown
+from .markdown import (
+    FORMULA_CLASS,
+    SITE_EXTENSION_CONFIGS,
+    SITE_EXTENSIONS,
+    content_lines,
+    published_lines,
+    published_markdown,
+)
 from .mathjax import TEX_MACROS, attribute_commands, stateful_commands
 from .skeleton import (
     DeclarationSkeleton,
@@ -2879,10 +2886,11 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
     gives it, so the text checked is the text published.
 
     It is refused, too, for a TeX command that changes formulas other than
-    its own, wherever the page's MathJax would read it. The articles on a
-    page are typeset with one TeX input, so a definition in one would change
-    what the others show. So is ``\\mmlToken``, which colors a symbol as the
-    formula says, like the site's marks.
+    its own in a formula the site's Markdown marks, which is all the page's
+    MathJax reads. The articles on a page are typeset with one TeX input, so
+    a definition in one would change what the others show. So is
+    ``\\mmlToken``, which colors a symbol as the formula says, like the
+    site's marks.
 
     And it is refused for an attribute list that does anything but give a
     heading an id, which could make its text look like a card, a mark, or an
@@ -3022,8 +3030,9 @@ def _rendered_article(text: str) -> tuple[str, list[str], list[tuple[str, str, l
 
 class _RenderedText(HTMLParser):
     """The text of a rendered article: each piece of code, which shows as
-    typed, and the text the page's MathJax reads, which is the rest outside
-    the elements it skips.
+    typed, and the text the page's MathJax reads, which is the text of the
+    formulas the site's Markdown marked, by :data:`FORMULA_CLASS`, outside
+    the elements MathJax skips.
 
     MathJax reads text a string at a time, and an element ends one, apart
     from ``<wbr>`` and comments; ``<br>`` stands in it for a line break. So a
@@ -3037,9 +3046,13 @@ class _RenderedText(HTMLParser):
         self.code: list[str] = []
         self.text: list[str] = []
         self._open: list[str] = []
+        # The tags open since a formula began, its own first.
+        self._formula: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._end_string(tag)
+        if self._formula or FORMULA_CLASS in (dict(attrs).get("class") or "").split():
+            self._formula.append(tag)
         if tag in self._SKIPPED:
             if tag in {"code", "pre"} and not self._in_code():
                 self.code.append("")
@@ -3049,10 +3062,13 @@ class _RenderedText(HTMLParser):
         self._end_string(tag)
         if tag in self._open:
             del self._open[len(self._open) - 1 - self._open[::-1].index(tag) :]
+        if tag in self._formula:
+            del self._formula[len(self._formula) - 1 - self._formula[::-1].index(tag) :]
 
     def handle_data(self, data: str) -> None:
         if not self._open:
-            self.text.append(data)
+            if self._formula:
+                self.text.append(data)
         elif self._in_code():
             self.code[-1] += data
 
