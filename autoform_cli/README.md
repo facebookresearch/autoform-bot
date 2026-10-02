@@ -779,7 +779,9 @@ unless code owner review guards all of them at R, the trusted ref
   builds every push to the default branch, and neither a pull request's runs
   nor a newer run of the branch, such as a re-run of an old one, can cancel a
   pending one (`queue: max`), so the build of the newer head publishes the
-  site. The gate below trusts its base commit instead.
+  site. A head that starts no run of its own, such as one pushed with
+  `[skip ci]` or by a workflow's `GITHUB_TOKEN`, is built by the workflow's
+  hourly scheduled run. The gate below trusts its base commit instead.
 - **Ruleset.** The active rulesets on the default branch, as
   `GET /repos/{owner}/{repo}/rules/branches/{branch}` reports them, have pull
   request rules that turn on *Require review from Code Owners*
@@ -907,7 +909,8 @@ JSON), a list changed between its pages, or the budget ran out, any of which
 a later run may get past, `render` also lists the approval with the reason
 under `unchecked_approvals` in the site's `publication.json`; the Pages workflow
 deploys that site, then fails the run, so a site that understates its
-approvals never passes for a green build. A run may make 500
+approvals never passes for a green build, and its hourly scheduled run builds
+the head again. A run may make 500
 requests plus 10 per approval, at most 900. That bounds one run, not the
 hour: GitHub's limit of 1000 requests an hour for a workflow's `GITHUB_TOKEN`
 is shared by every run in the repository, so two full builds within an hour,
@@ -967,9 +970,11 @@ To withdraw an approval, dismiss the reviewer's review on P: their latest
 verdict is then no longer an approval, and the next Pages build reads
 self-approved. Removing the reviewer from CODEOWNERS or revoking their write
 access withdraws every approval they gave. A CODEOWNERS change is a push, so
-its own build relabels the site; a dismissal, or a change of access, team, or
-ruleset, starts no build, so run the Pages workflow by hand
-(`workflow_dispatch`) after one.
+its own build relabels the site. A dismissal, or a change of access, team, or
+ruleset, starts no build: the Pages workflow's scheduled run rebuilds the
+site a day after its last build, so the change shows within about a day and
+an hour, or later if GitHub delays scheduled runs. To show it at once, run
+the Pages workflow by hand (`workflow_dispatch`).
 
 Residual limits. Code owner review is checked at R as it is now, not as it
 was when each pull request merged. A team GitHub enforces is trusted as a
@@ -980,7 +985,8 @@ tests the head merged into the base as it was then, not the merge that
 landed. A review's `author_association` can understate a writer's access,
 for example for a private organization member, which reads self-approved.
 Pages decides when it builds: a review dismissed after the merge, or a verify
-run that finishes after it, shows at the next Pages build. Older commits are
+run that finishes after it, shows at the next Pages build, which the schedule
+starts a day after the last at the latest. Older commits are
 read with the current frontmatter parser, so a schema change refuses rather
 than guesses. Signed SSH or GPG approvals (issue #49) are planned as a second
 verifier behind the same interface.
@@ -1030,6 +1036,35 @@ unless it is the commit the run built, with or without statement review, so
 a re-run of an old run, or a build the branch moved past while it ran, never
 replaces the site; a failed lookup fails the job too. After deploying, it
 fails the run when `publication.json` lists any `unchecked_approvals`.
+
+Some events start no Pages run: a dismissed review, a change of access, team,
+or rulesets, a verify run that finishes after the merge, a push with
+`[skip ci]` or by a workflow's `GITHUB_TOKEN`, and a run that failed or left
+approvals unchecked, which nothing runs again. So the workflow also runs at 23
+minutes past every hour (`schedule`), off the top of the hour, when GitHub
+delays scheduled runs most. Its first job, `decide`, lets every event but the
+schedule build. A scheduled run builds nothing unless the commit it was
+scheduled for is still the head of the default branch, and then builds it only
+when the site has no complete build of it, or when that build is a day old. A
+complete build is a deployment of the head whose newest status is a success,
+with no failed run of the head after it, so a run that deployed and then
+failed on unchecked approvals does not count. After failed runs of the head it
+waits an hour, doubling with each failure up to a day, and it builds only when
+`GET /rate_limit`, which costs nothing, reports at least 900 of the hour's
+requests left, the most one verification makes. A scheduled run that builds
+nothing makes at most four requests (the head, the workflow's runs on it, its
+newest deployment, and that deployment's status): at most 96 a day, under 1%
+of the 24,000 the hourly limit allows. The daily rebuild is one full
+verification, at most 900 requests a day, and is what bounds how long a
+withdrawn approval stays on the site; rebuilding every hour could spend most
+of every hour's allowance, leaving pushes and the gate short. The `decide` job
+needs `actions: read` and `deployments: read` besides `contents: read`. When
+it cannot read GitHub's answers it fails its run, which counts as a failed run
+of the head, so it can start an extra rebuild once the backoff has passed. A
+head whose build fails every time, such as one whose Lean does not compile, is
+retried once a day after its first few failures. In a public repository GitHub
+disables a schedule after 60 days without activity; re-enable the workflow
+from the Actions tab.
 
 When `--output`, `--packets`, and `--passages` are combined, all three outputs
 are staged before publication and a failed commit restores the previous set.

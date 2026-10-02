@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -588,6 +589,143 @@ def test_pages_fails_after_deploying_a_site_whose_approvals_could_not_be_checked
     )
     assert failed.returncode == 1
     assert failed.stdout.startswith("::error::The site is deployed, but 2 approvals could not be checked")
+
+
+_HOUR = 3600
+_RUNS = f"{_REPOSITORY}/actions/workflows/blueprint-pages.yml/runs"
+_DEPLOYMENTS = f"{_REPOSITORY}/deployments"
+
+
+def _github_after(
+    *,
+    failed: tuple[tuple[str, float], ...] = (),
+    deployed: tuple[str, float] | None = None,
+    remaining: int = 1000,
+    head: str = "a" * 40,
+) -> dict[str, object]:
+    """GitHub's answers when runs of the head failed ``failed`` = ((event, hours ago), ...)
+    and its newest deployment ended ``deployed`` = (state, hours ago)."""
+
+    def ago(hours: float) -> str:
+        return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    runs = [{"event": event, "conclusion": "failure", "updated_at": ago(hours)} for event, hours in failed]
+    runs.append({"event": "push", "conclusion": "success", "updated_at": ago(0.1)})
+    answers: dict[str, object] = {
+        _MAIN: {"object": {"sha": head}},
+        _RUNS: {"workflow_runs": runs},
+        _DEPLOYMENTS: [] if deployed is None else [{"id": 7}],
+        "rate_limit": {"resources": {"core": {"remaining": remaining}}},
+    }
+    if deployed is not None:
+        answers[f"{_DEPLOYMENTS}/7/statuses"] = [{"state": deployed[0], "created_at": ago(deployed[1])}]
+    return answers
+
+
+def _decide(tmp_path: Path, answers: dict[str, object], event: str = "schedule"):
+    scaffold_project(tmp_path / "project", title="Finite Flat")
+    script = _step(tmp_path / "project/.github/workflows/blueprint-pages.yml", "decide", "Decide whether to build")
+    return _run_step(
+        tmp_path, script, answers, GITHUB_EVENT_NAME=event, GITHUB_REF="refs/heads/main", GITHUB_SHA="a" * 40
+    )
+
+
+def test_pages_runs_every_hour_and_builds_only_what_decide_asks_for(tmp_path: Path) -> None:
+    yaml = pytest.importorskip("yaml")
+    scaffold_project(tmp_path, title="Finite Flat")
+    pages = yaml.safe_load((tmp_path / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8"))
+    # YAML 1.1 reads the key "on" as true.
+    assert pages[True]["schedule"] == [{"cron": "23 * * * *"}]
+    decide = pages["jobs"]["decide"]
+    assert decide["permissions"] == {"contents": "read", "actions": "read", "deployments": "read"}
+    assert decide["outputs"] == {"build": "${{ steps.decide.outputs.build }}"}
+    assert pages["jobs"]["lean"]["needs"] == "decide"
+    assert pages["jobs"]["lean"]["if"] == "needs.decide.outputs.build == 'true'"
+    # The build and deploy jobs need the lean job, so they skip with it.
+    assert pages["jobs"]["build"]["needs"] == "lean" and pages["jobs"]["deploy"]["needs"] == "build"
+
+
+@pytest.mark.parametrize("event", ["push", "pull_request", "workflow_dispatch"])
+def test_every_event_but_the_schedule_builds_without_asking_github(tmp_path: Path, event: str) -> None:
+    done, calls, outputs = _decide(tmp_path, {}, event)
+
+    assert done.returncode == 0, done.stderr
+    assert (outputs, calls) == ({"build": "true"}, [])
+
+
+@pytest.mark.parametrize(
+    ("answers", "build"),
+    [
+        pytest.param(_github_after(), True, id="never-built"),
+        pytest.param(_github_after(deployed=("success", 1)), False, id="complete"),
+        pytest.param(_github_after(deployed=("success", 25)), True, id="a-day-old"),
+        pytest.param(_github_after(deployed=("success", 25), remaining=899), False, id="a-day-old-short-of-requests"),
+        pytest.param(_github_after(deployed=("failure", 1)), True, id="deploy-failed"),
+        pytest.param(_github_after(deployed=("success", 3), failed=(("push", 2),)), True, id="failed-after-deploying"),
+        pytest.param(
+            _github_after(deployed=("success", 3), failed=(("push", 2),), remaining=10),
+            False,
+            id="failed-after-deploying-short-of-requests",
+        ),
+        pytest.param(_github_after(deployed=("success", 1), failed=(("push", 2),)), False, id="failed-before"),
+        pytest.param(_github_after(deployed=("success", 3), failed=(("pull_request", 2),)), False, id="pull-request"),
+        # Three failures wait 4h after the last.
+        pytest.param(_github_after(failed=(("push", 5), ("schedule", 4), ("schedule", 3))), False, id="backing-off"),
+        pytest.param(_github_after(failed=(("push", 7), ("schedule", 6), ("schedule", 5))), True, id="backed-off"),
+        # However many failures, a day at most.
+        pytest.param(_github_after(failed=(("schedule", 23),) * 10), False, id="backing-off-a-day"),
+        pytest.param(_github_after(failed=(("schedule", 25),) * 10), True, id="backed-off-a-day"),
+    ],
+)
+def test_a_scheduled_run_builds_the_head_until_it_has_a_complete_build(
+    tmp_path: Path, answers: dict[str, object], build: bool
+) -> None:
+    """Without it, nothing builds the head again after a failed run, and a
+    dismissed review, which starts no run, never reaches the site."""
+
+    done, calls, outputs = _decide(tmp_path, answers)
+
+    assert done.returncode == 0, done.stderr
+    assert outputs == {"build": "true" if build else "false"}
+    head = "a" * 40
+    counted = [call for call in calls if call != "rate_limit"]
+    assert counted[:3] == [
+        _MAIN,
+        f"{_RUNS}?branch=main&head_sha={head}&status=completed&per_page=100",
+        f"{_DEPLOYMENTS}?environment=github-pages&sha={head}&per_page=1",
+    ]
+    assert counted[3:] == ([f"{_DEPLOYMENTS}/7/statuses?per_page=1"] if f"{_DEPLOYMENTS}/7/statuses" in answers else [])
+    # GET /rate_limit costs nothing, and is asked only before a build.
+    assert ("rate_limit" in calls) is (build or answers["rate_limit"] != {"resources": {"core": {"remaining": 1000}}})
+    assert ("::notice::Building" in done.stdout) is build
+
+
+def test_a_scheduled_run_of_a_head_main_has_moved_past_builds_nothing(tmp_path: Path) -> None:
+    done, calls, outputs = _decide(tmp_path, _github_after(head="b" * 40))
+
+    assert done.returncode == 0, done.stderr
+    assert (outputs, calls) == ({"build": "false"}, [_MAIN])
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {_RUNS: None},
+        # Never put into a path: the stub answers it, as GitHub might.
+        {_DEPLOYMENTS: [{"id": "7 8"}], f"{_DEPLOYMENTS}/7 8/statuses": [{"state": "success"}]},
+        {"rate_limit": {"resources": {"core": {}}}},
+    ],
+    ids=["failed-lookup", "malformed-deployment", "no-remaining-count"],
+)
+def test_a_scheduled_run_that_cannot_decide_fails(tmp_path: Path, broken: dict[str, object]) -> None:
+    answers = {**_github_after(), **broken}
+    answers = {path: answer for path, answer in answers.items() if answer is not None}
+
+    done, calls, outputs = _decide(tmp_path, answers)
+
+    assert done.returncode != 0
+    assert "build" not in outputs
+    assert not any("/7 8/" in call for call in calls)
 
 
 @pytest.mark.parametrize("merged", [True, False], ids=["merge-commit", "linear"])

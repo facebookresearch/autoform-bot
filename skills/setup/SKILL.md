@@ -81,8 +81,10 @@ it adds; and `blueprint-pages.yml`, which validates the DAG and its `lean:`
 declarations, renders the blueprint, builds MkDocs, and deploys GitHub Pages.
 Pages builds Lean and extracts the statement skeletons in one job, then labels
 approvals and builds the site in a second job that never runs Lake and takes
-only the skeleton report from the first. Pass `--autoform-ref` to pin them at
-an immutable commit.
+only the skeleton report from the first. Pages also runs every hour on a
+schedule, and rebuilds the default branch's head only when the site has no
+complete build of it or that build is a day old. Pass `--autoform-ref` to pin
+them at an immutable commit.
 
 Approvals read "approved by" only when the default branch has rulesets, none
 the workflow token can bypass, requiring code owner review, dismissing stale
