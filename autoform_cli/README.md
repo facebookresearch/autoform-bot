@@ -1081,10 +1081,18 @@ only the `build` job's checkout and the GitHub API. MkDocs still runs
 them to have a code owner, and both jobs install uv with its cache disabled,
 so nothing the `lean` job writes is restored into the `build` job. Its
 `deploy` job, which needs only `contents: read` besides the Pages
-permissions, first asks GitHub for the head of the default branch and fails
-unless it is the commit the run built, with or without statement review, so
-a re-run of an old run, or a build the branch moved past while it ran, never
-replaces the site; a failed lookup fails the job too. After deploying, it
+permissions, first fails unless the `build` job ran in its own attempt
+(`github.run_attempt`), then asks GitHub for the head of the default branch
+and fails unless it is the commit the run built, with or without statement
+review; a failed lookup fails the job too. The Pages artifact is named for
+the attempt that uploaded it (`github-pages-N`), and the job deploys only the
+one named for its own attempt. So a re-run of the `deploy` job alone, or
+"Re-run failed jobs" after a green `build` job, both of which keep the
+earlier attempt's render, never replaces the site, even while the commit is
+still the head: that render can show an approval withdrawn since. A full
+re-run, or a re-run of the `build` job (GitHub re-runs a job's dependents
+with it), renders afresh and deploys only if its commit is still the head,
+so no re-run of an older commit replaces the site. After deploying, the job
 fails the run when `publication.json` lists any `unchecked_approvals`.
 
 Some events start no Pages run: a dismissed review, a change of access, team,

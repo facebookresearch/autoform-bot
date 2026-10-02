@@ -493,6 +493,9 @@ _REPOSITORY = "repos/owner/project"
 _MAIN = f"{_REPOSITORY}/git/ref/heads/main"
 
 
+_HEAD_CHECK = "Check that this attempt built the default branch's head"
+
+
 @pytest.mark.parametrize(
     ("answers", "deploys"),
     [
@@ -523,15 +526,54 @@ def test_pages_deploys_only_a_build_of_the_default_branch_head(
     workflow = tmp_path / "project/.github/workflows/blueprint-pages.yml"
     pages = workflow.read_text(encoding="utf-8")
     deploy = pages.split("\n  deploy:\n")[1]
-    name = "Check that the build is of the default branch's head"
-    assert deploy.index(f"- name: {name}\n") < deploy.index("uses: actions/deploy-pages@")
+    assert deploy.index(f"- name: {_HEAD_CHECK}\n") < deploy.index("uses: actions/deploy-pages@")
     assert "      contents: read\n" in deploy.split("    steps:\n")[0]
 
-    done, _, _ = _run_step(tmp_path, _step(workflow, "deploy", name), answers, GITHUB_SHA="a" * 40)
+    done, _, _ = _run_step(
+        tmp_path,
+        _step(workflow, "deploy", _HEAD_CHECK),
+        answers,
+        GITHUB_SHA="a" * 40,
+        GITHUB_RUN_ATTEMPT="1",
+        BUILT_IN_ATTEMPT="1",
+    )
 
     assert (done.returncode == 0) is deploys, done.stderr
     if not deploys:
         assert "::error::" in done.stdout or "HTTP 502" in done.stderr
+
+
+@pytest.mark.parametrize("built_in", ["1", ""], ids=["earlier-attempt", "no-build-output"])
+def test_pages_deploys_only_the_site_its_own_attempt_rendered(tmp_path: Path, built_in: str) -> None:
+    """A re-run of the deploy job alone, or of failed jobs after a green build, keeps the earlier
+    attempt's build; its artifact holds an older render of the head, which may show a withdrawn
+    approval, so it never replaces the site, even while its commit is still the head."""
+
+    yaml = pytest.importorskip("yaml")
+    scaffold_project(tmp_path / "project", title="Finite Flat")
+    workflow = tmp_path / "project/.github/workflows/blueprint-pages.yml"
+    jobs = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]
+    assert jobs["build"]["outputs"]["attempt"] == "${{ github.run_attempt }}"
+    head_check = next(step for step in jobs["deploy"]["steps"] if step.get("name") == _HEAD_CHECK)
+    assert head_check["env"]["BUILT_IN_ATTEMPT"] == "${{ needs.build.outputs.attempt }}"
+    # Each attempt uploads and deploys only an artifact named for itself, so it never finds an earlier one.
+    upload = next(step for step in jobs["build"]["steps"] if step.get("name") == "Upload Pages artifact")
+    deploy = next(step for step in jobs["deploy"]["steps"] if step.get("name") == "Deploy")
+    assert upload["with"]["name"] == deploy["with"]["artifact_name"] == "github-pages-${{ github.run_attempt }}"
+
+    answers = {_REPOSITORY: {"default_branch": "main"}, _MAIN: {"object": {"sha": "a" * 40}}}
+    done, calls, _ = _run_step(
+        tmp_path,
+        _step(workflow, "deploy", _HEAD_CHECK),
+        answers,
+        GITHUB_SHA="a" * 40,
+        GITHUB_RUN_ATTEMPT="2",
+        BUILT_IN_ATTEMPT=built_in,
+    )
+
+    assert done.returncode == 1
+    assert done.stdout.startswith(f"::error::This is attempt 2, but the site was rendered in attempt {built_in or 'none'}")
+    assert calls == []
 
 
 @pytest.mark.parametrize(
@@ -553,7 +595,7 @@ def test_pages_fails_after_deploying_a_site_whose_approvals_could_not_be_checked
     workflow = tmp_path / "project/.github/workflows/blueprint-pages.yml"
     jobs = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]
     assert [step["id"] for step in jobs["build"]["steps"] if step.get("name") == "Render the blueprint"] == ["render"]
-    assert jobs["build"]["outputs"] == {"unchecked": "${{ steps.render.outputs.unchecked }}"}
+    assert jobs["build"]["outputs"]["unchecked"] == "${{ steps.render.outputs.unchecked }}"
     name = "Fail when approvals could not be checked"
     names = [step.get("name") for step in jobs["deploy"]["steps"]]
     assert names.index(name) == len(names) - 1 and names[-2] == "Deploy"
