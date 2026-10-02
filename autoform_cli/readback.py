@@ -2333,7 +2333,10 @@ def _testimony_limit_errors(text: str) -> tuple[str, ...]:
         )
     brackets = text.count("[")
     if brackets > TESTIMONY_MAX_BRACKETS:
-        errors.append(f"testimony has {brackets} opening brackets, over the limit of {TESTIMONY_MAX_BRACKETS}")
+        errors.append(
+            f"testimony has {brackets} opening brackets, over the limit of {TESTIMONY_MAX_BRACKETS}; in a formula "
+            "write \\lbrack and \\rbrack for [ and ]"
+        )
     nesting = max((_NESTING_PREFIX.match(line.expandtabs(4)).end() for line in lines), default=0)
     if nesting > TESTIMONY_MAX_NESTING:
         errors.append(

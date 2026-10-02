@@ -976,6 +976,17 @@ def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
     assert any(limit in error for error in _testimony_errors(testimony))
 
 
+def test_brackets_over_the_limit_are_refused_with_a_rewrite_that_is_accepted() -> None:
+    sentence = r"For $t \in [0, k]$ we have $\mathbb{E}[X_k] \le \Pr[X_k > t] + k$. "
+    rewritten = sentence.replace("[", r"\lbrack ").replace("]", r"\rbrack")
+
+    assert any(
+        r"over the limit of 64; in a formula write \lbrack and \rbrack for [ and ]" in error
+        for error in _testimony_errors(sentence * 22)
+    )
+    assert _testimony_errors(rewritten * 22) == ()
+
+
 @pytest.mark.parametrize(
     ("at_limit", "over", "reason"),
     [
@@ -984,7 +995,11 @@ def test_testimony_over_a_limit_is_refused_before_it_is_parsed(
         ("$a$ " * 512, "$a$ " * 512 + "\\$", "testimony has 1025 math delimiters, over the limit of 1024"),
         ("`a` " * 256, "`a` " * 256 + "\\`", "testimony has 513 backticks, over the limit of 512"),
         ("`" * 16 + "a" + "`" * 16, "`" * 17 + "a" + "`" * 17, "testimony has a run of 17 backticks, over the limit of 16"),
-        ("[a] " * 64, "[a] " * 65, "testimony has 65 opening brackets, over the limit of 64"),
+        (
+            "[a] " * 64,
+            "[a] " * 65,
+            r"testimony has 65 opening brackets, over the limit of 64; in a formula write \lbrack and \rbrack for [ and ]",
+        ),
         ("> " * 32 + "a", "> " * 32 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
         (">\t" * 16 + "a", ">\t" * 16 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
         (" _a" * 256, " _a" * 257, "testimony has 257 underscores that start a word, over the limit of 256"),
@@ -1383,7 +1398,10 @@ def test_a_card_over_a_limit_is_invalid_without_being_parsed(
     card = load_readbacks(tmp_path)[("af_0123456789abcdef01234567", _declaration().name)]
 
     assert not card.valid
-    assert f"testimony has 8000 opening brackets, over the limit of {TESTIMONY_MAX_BRACKETS}" in card.validation_errors
+    assert (
+        f"testimony has 8000 opening brackets, over the limit of {TESTIMONY_MAX_BRACKETS}; in a formula write "
+        "\\lbrack and \\rbrack for [ and ]"
+    ) in card.validation_errors
 
 
 def test_card_frontmatter_round_trips_quoted_names_and_models(tmp_path: Path) -> None:

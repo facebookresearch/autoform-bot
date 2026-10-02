@@ -84,7 +84,8 @@ Any other command is refused by name, including `\phantom`, `\rlap`, `\kern`,
 `\quad`, or `~`: one formula may space 8 em in all, as much as 8 `\quad`, and
 a read-back 64 em. Never write two `\!` in a row. Do not write `%`; write `\%`
 for a percent sign. A read-back that breaks this is rejected, however faithful
-it is. Keep it to a few kilobytes: a read-back over 32 KiB is refused unread.
+it is. Keep it to a few kilobytes: a read-back over 32 KiB, or with more than
+64 `[`, is refused unread; in a formula `\lbrack` and `\rbrack` do not count.
 
 ## Return only testimony
 
