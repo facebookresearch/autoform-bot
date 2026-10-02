@@ -3,8 +3,9 @@ name: roadmap
 description: >-
   Build, continue, inspect, or visualize a source-grounded mathematical roadmap
   and theorem DAG in an existing Autoform Markdown blueprint. Use for source
-  research, scope, coverage, milestones, and roadmap articles; do not create
-  repository infrastructure or prove Lean declarations.
+  research, repository-wide inventories of existing and planned mathematics,
+  scope, coverage, milestones, and roadmap articles; do not create repository
+  infrastructure or prove Lean declarations.
 ---
 
 # Build an Autoform roadmap
@@ -41,6 +42,29 @@ record assumptions. Ask one concise question only after inspection cannot
 identify or access the source, or when incompatible scope choices remain and
 choosing one would discard accepted work.
 
+## Inventory existing project mathematics
+
+When the adopted boundary is a repository, library, global wiki, or other
+existing codebase, project-owned Lean is a primary mathematical source rather
+than implementation prior art to omit. Before planning future work:
+
+- inventory every in-scope tracked module and public mathematical declaration,
+  plus declaration-like wishlist or conjecture entries and adopted planning
+  sources;
+- state explicitly how private helpers, tests, generated code, aggregate import
+  roots, and imported dependencies are treated;
+- reconcile each in-scope declaration to a roadmap article, an exact grouped
+  ledger, or an evidenced coverage disposition; and
+- record each module and declaration name, together with any separate literary
+  provenance, under `blueprint/sources/`.
+
+A future-work slice never stands in for a repository-wide inventory. Keep
+existing, wishlist, conjectural, and planned mathematics in the same book and
+DAG. `DECOMPOSED` means represented by roadmap articles, not unfinished, so it
+may describe mathematics whose Lean implementation is already complete. A
+checked local declaration is valid grounding for repository documentation; do
+not invent an external citation or historical-source claim.
+
 ## Ground and decompose
 
 Inspect the repository and existing vault before writing. Preserve accepted
@@ -61,28 +85,40 @@ to shorten the run. Because `coverage.complete` only checks declared rows,
 compare the table with the source structure yourself.
 
 Write milestone pages under `blueprint/roadmap/` by mathematical significance,
-then one fine article per coherent unit with one unique main result. Ground each
-statement and proof sketch in the source. Put genuine statement prerequisites
-under `## Depends on` and proof-only prerequisites under `## Proof depends on`.
-Assert formalization or `mathlib: true` only after exact verification. For a
-large source, divide independent sections among available agents while
-retaining one owner for global coverage and dependency consistency.
+then one fine article per coherent unit with one unique main result. For an
+existing repository, coherent grouping is allowed only when the exact ledger
+still reconciles every public declaration. Do not turn existing formalization
+into fictional future work. Ground each statement and proof sketch in the
+source. Put genuine statement prerequisites under `## Depends on` and
+proof-only prerequisites under `## Proof depends on`.
 
-Reconcile every affected source and milestone page, the coverage contract,
-`blueprint/README.md`, and the repository `README.md`.
+Assert `statement: formalized`, `proof: formalized`, or `mathlib: true` only
+after exact verification. Definitions, structures, classes, instances, and
+inductives have no separate proof obligation. A theorem or lemma receives
+`proof: formalized` only when its proof is complete and contains no placeholder
+or proof-wanted mechanism. An axiom or wanted declaration is not a proof; a
+definition of a conjecture proposition formalizes its representation, not the
+conjecture. Hand deeper trust and axiom review to Agent Review.
+
+For a large source, divide independent sections among available agents while
+retaining one owner for global coverage, status semantics, and dependency
+consistency. Reconcile every affected source and milestone page, the coverage
+contract, `blueprint/README.md`, and the repository `README.md`.
 
 ## Finish
 
 After the final edit, use the CLI reference to run `autoform check` and
-`autoform audit`, refresh the Mermaid graph, and resolve every finding introduced
-by this work or inside the adopted boundary. Report unrelated pre-existing
-findings instead of silently widening scope. Commit the vault and refreshed
-graph only after this final validation; pushing is outward-facing and requires
-a user request.
+`autoform audit`, refresh the bounded vault graph, and resolve every finding
+introduced by this work or inside the adopted boundary. Report unrelated
+pre-existing findings instead of silently widening scope. Commit the vault and
+refreshed graph only after this final validation; pushing is outward-facing and
+requires a user request.
 
 Finish only when the adopted boundary has no `MAPPED` rows, every `DECOMPOSED`
-area links to a source-grounded fine DAG, affected pages and the graph agree,
-and the latest commit contains every change from the pass. Do not stop after
-discovery, a coarse proposal, one chapter, or unchanged validation. Report the
-material delta, evidence, remaining explicit blockers, and next execution
-frontier. Mark an active Goal complete only after these conditions hold.
+area links to a source-grounded fine DAG or exact catalog ledger, affected pages
+and the graph agree, and the latest commit contains every change from the pass.
+Do not stop after discovery, a coarse proposal, one chapter, or unchanged
+validation. Report the material delta, evidence, existing/formalized versus
+wishlist/conjectural/planned counts, declaration-reconciliation gaps, remaining
+explicit blockers, and the next execution frontier. Mark an active Goal
+complete only after these conditions hold.
