@@ -907,6 +907,35 @@ def test_a_staging_file_that_cannot_be_removed_is_left_once_the_rename_fails(tmp
     assert replace_file is os.replace and unlink is os.unlink
 
 
+def test_a_staging_file_that_could_not_be_created_is_not_named_as_left_behind(tmp_path: Path, monkeypatch) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    open_ = os.open
+    removals: list[str] = []
+
+    # On a read-only mount Linux refuses both the create and the removal of a
+    # name that is not there with EROFS.
+    def read_only_open(name, flags, *args, **kwargs):
+        if flags & os.O_CREAT:
+            raise OSError(errno.EROFS, os.strerror(errno.EROFS))
+        return open_(name, flags, *args, **kwargs)
+
+    def read_only_unlink(name: str, *, dir_fd: int | None = None) -> None:
+        removals.append(name)
+        raise OSError(errno.EROFS, os.strerror(errno.EROFS))
+
+    patched = _Os()
+    patched.open, patched.unlink = read_only_open, read_only_unlink
+    patched.supports_dir_fd = os.supports_dir_fd | {read_only_open, read_only_unlink}
+    monkeypatch.setattr(readback, "os", patched)
+
+    with pytest.raises(ValueError) as refused:
+        _file_card(blueprint, "Replacement.", expected_card_hash=expected)
+    assert str(refused.value) == f"cannot publish read-back: {path}: [Errno {errno.EROFS}] {os.strerror(errno.EROFS)}"
+    assert removals == []
+    assert path.read_bytes() == original and _staged_names(path.parent) == []
+
+
 def test_a_directory_that_cannot_be_flushed_after_the_rename_is_a_warning(tmp_path: Path, monkeypatch) -> None:
     blueprint, path, expected = _filed(tmp_path)
     _without_full_fsync(monkeypatch)

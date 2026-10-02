@@ -2917,8 +2917,9 @@ def _publish_card(directory: int, path: Path, content: str, *, expected_card_has
                 descriptor = os.open(
                     staged_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory
                 )
-            except FileExistsError:
-                # Not this write's file, so not this write's to remove.
+            except OSError:
+                # A failed exclusive create makes no file, and a name already
+                # taken is not this write's file, so there is nothing to remove.
                 staged_name = None
                 raise
             try:
