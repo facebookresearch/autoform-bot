@@ -830,8 +830,11 @@ def test_a_blueprint_removed_before_publication_is_refused(tmp_path: Path) -> No
     blueprint.rename(tmp_path / "moved")
 
     for attempt in (lambda: readback_conflicts([card]), lambda: publish_readback(card)):
-        with pytest.raises(ValueError, match="cannot safely open blueprint directory"):
+        with pytest.raises(ValueError) as refused:
             attempt()
+        assert str(refused.value) == (
+            f"cannot safely open blueprint directory: {card.blueprint}: {os.strerror(errno.ENOENT)}"
+        )
     assert not blueprint.exists()
 
 
