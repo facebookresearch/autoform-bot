@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -18,6 +17,7 @@ from autoform_cli.markdown import statement_and_notes
 from autoform_cli.readback import publishable_article
 from autoform_cli.render import PublicationError, render_site
 from autoform_cli.scaffold import scaffold_project
+from tests.mathjax_package import NODE, mathjax_package
 from tests.test_render import _project
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -1036,8 +1036,9 @@ def _node_report(
     for name, text in files.items():
         (tmp_path / name).write_text(text, encoding="utf-8")
     done = subprocess.run(
-        ["node", "harness.js", "mathjax.js", "first.html", "second.html", project, override, changed, startup, mode],
+        [NODE, "harness.js", "mathjax.js", "first.html", "second.html", project, override, changed, startup, mode],
         cwd=tmp_path,
+        env=dict(os.environ, AUTOFORM_MATHJAX_DIR=str(mathjax_package())),
         capture_output=True,
         text=True,
         timeout=120,
@@ -1054,9 +1055,7 @@ def test_the_rendered_configuration_typesets_each_card_alone(tmp_path: Path, pro
     and as a project scaffolded with the bundle in mkdocs.yml loads it, and
     with a project script after it that assigns a configuration of its own."""
 
-    mathjax = os.environ.get("AUTOFORM_MATHJAX_DIR")
-    if shutil.which("node") is None or not mathjax:
-        pytest.skip("needs node and AUTOFORM_MATHJAX_DIR, an unpacked mathjax package")
+    mathjax = mathjax_package()
     blueprint = _vault(tmp_path / "vault", macros=json.dumps(_MACROS))
     script = (_render(blueprint) / "javascripts/mathjax.js").read_text(encoding="utf-8")
     # The release tested is the release the site loads.
@@ -1121,9 +1120,7 @@ def test_the_rendered_configuration_typesets_each_card_alone(tmp_path: Path, pro
 
 
 def test_the_rendered_configuration_refuses_another_release(tmp_path: Path) -> None:
-    mathjax = os.environ.get("AUTOFORM_MATHJAX_DIR")
-    if shutil.which("node") is None or not mathjax:
-        pytest.skip("needs node and AUTOFORM_MATHJAX_DIR, an unpacked mathjax package")
+    mathjax_package()
     script = (_render(_vault(tmp_path / "vault")) / "javascripts/mathjax.js").read_text(encoding="utf-8")
 
     report = _node_report(tmp_path, script.replace('"version": "3.2.2"', '"version": "3.2.1"'), "old")
@@ -1138,8 +1135,7 @@ def test_the_rendered_configuration_refuses_another_release(tmp_path: Path) -> N
 def _node_script(tmp_path: Path, macros: str | None = None) -> str:
     """The script render wrote for a vault, or a skip without node and MathJax."""
 
-    if shutil.which("node") is None or not os.environ.get("AUTOFORM_MATHJAX_DIR"):
-        pytest.skip("needs node and AUTOFORM_MATHJAX_DIR, an unpacked mathjax package")
+    mathjax_package()
     return (_render(_vault(tmp_path / "vault", macros=macros)) / "javascripts/mathjax.js").read_text(encoding="utf-8")
 
 
@@ -1255,8 +1251,7 @@ def test_a_title_or_discussion_shown_as_typed_is_not_typeset(tmp_path: Path) -> 
     assert "Top `$\\DeclareMathOperator{\\leq}{&gt;}$`" in published
     assert "`$\\label{x} \\DeclareMathOperator{\\leq}{&gt;}$`" in published
     page = f"<html><head></head><body><article>{published}</article></body></html>"
-    if shutil.which("node") is None or not os.environ.get("AUTOFORM_MATHJAX_DIR"):
-        pytest.skip("needs node and AUTOFORM_MATHJAX_DIR, an unpacked mathjax package")
+    mathjax_package()
     script = (site / "javascripts/mathjax.js").read_text(encoding="utf-8")
 
     report = _node_report(tmp_path, script, "new", first=page, second=page)
@@ -1274,9 +1269,7 @@ def test_no_formula_gives_its_output_a_class_style_id_or_link(tmp_path: Path) ->
     MathJax gives a document made outside its startup the filter's defaults,
     which pass classes that start with mjx-, colors and margins, and links."""
 
-    mathjax = os.environ.get("AUTOFORM_MATHJAX_DIR")
-    if shutil.which("node") is None or not mathjax:
-        pytest.skip("needs node and AUTOFORM_MATHJAX_DIR, an unpacked mathjax package")
+    mathjax_package()
     script = (_render(_vault(tmp_path / "vault")) / "javascripts/mathjax.js").read_text(encoding="utf-8")
     token = (
         "\\mmlToken{mi}[style='margin-top:-60em;color:red',class='mjx-x',href='https://evil.example/',"
@@ -1319,9 +1312,7 @@ def test_project_macros_cannot_join_into_a_command(tmp_path: Path) -> None:
     single backslash joins the text after it into one command, so it is
     refused; what is left spells nothing new, as MathJax itself shows."""
 
-    mathjax = os.environ.get("AUTOFORM_MATHJAX_DIR")
-    if shutil.which("node") is None or not mathjax:
-        pytest.skip("needs node and AUTOFORM_MATHJAX_DIR, an unpacked mathjax package")
+    mathjax_package()
     from autoform_cli.mathjax import _script
 
     accepted = {"op": ["#1eclareMathOperator", 1], "opt": ["#1eclareMathOperator", 1, "x"], "nl": "\\\\"}
@@ -1356,9 +1347,7 @@ def test_a_menu_setting_changes_every_formula_on_the_page(tmp_path: Path, change
     the explorer a screen reader uses too, which remakes the document of the
     menu that loads it, and each card keeps its own TeX input."""
 
-    mathjax = os.environ.get("AUTOFORM_MATHJAX_DIR")
-    if shutil.which("node") is None or not mathjax:
-        pytest.skip("needs node and AUTOFORM_MATHJAX_DIR, an unpacked mathjax package")
+    mathjax_package()
     script = (_render(_vault(tmp_path / "vault")) / "javascripts/mathjax.js").read_text(encoding="utf-8")
 
     report = _node_report(tmp_path, script, "new", changed=changed)
@@ -1383,9 +1372,7 @@ def test_the_document_mathjax_starts_with_holds_no_formula(tmp_path: Path) -> No
     nothing, so every formula is read by a pass, with a new input, and its
     menu shares the reader's settings."""
 
-    mathjax = os.environ.get("AUTOFORM_MATHJAX_DIR")
-    if shutil.which("node") is None or not mathjax:
-        pytest.skip("needs node and AUTOFORM_MATHJAX_DIR, an unpacked mathjax package")
+    mathjax_package()
     script = (_render(_vault(tmp_path / "vault")) / "javascripts/mathjax.js").read_text(encoding="utf-8")
 
     report = _node_report(tmp_path, script, "new", startup="renders")
@@ -1402,9 +1389,7 @@ def test_no_document_is_made_while_a_menu_is_loading(tmp_path: Path) -> None:
     it has loaded, so the documents of a pass wait for the load the first
     menu starts for a saved setting."""
 
-    mathjax = os.environ.get("AUTOFORM_MATHJAX_DIR")
-    if shutil.which("node") is None or not mathjax:
-        pytest.skip("needs node and AUTOFORM_MATHJAX_DIR, an unpacked mathjax package")
+    mathjax_package()
     script = (_render(_vault(tmp_path / "vault")) / "javascripts/mathjax.js").read_text(encoding="utf-8")
 
     report = _node_report(tmp_path, script, "new", startup="loads")

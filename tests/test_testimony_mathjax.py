@@ -11,21 +11,17 @@ outside command and environment names, and keeping a script in its script.
 They also check the model's widths of spaces and its ranges of characters
 against MathJax's.
 
-They need Node.js, found on ``PATH`` or at ``/opt/homebrew/bin/node``, and an
-unpacked MathJax 3.2.2 ``es5`` directory, the one holding ``node-main.js``,
-named by the environment variable ``AUTOFORM_MATHJAX_DIR``; without either
-they are skipped. MathJax is not part of the repository. To run them::
+They need Node.js and an unpacked MathJax 3.2.2 package, found as
+``tests/mathjax_package.py`` describes. To run them::
 
-    AUTOFORM_MATHJAX_DIR=/path/to/MathJax-3.2.2/es5 pytest tests/test_testimony_mathjax.py
+    AUTOFORM_MATHJAX_DIR=/path/to/MathJax-3.2.2 pytest tests/test_testimony_mathjax.py
 """
 
 from collections import Counter
 from collections.abc import Callable
 import json
 import os
-from pathlib import Path
 import re
-import shutil
 import subprocess
 import unicodedata
 from xml.etree import ElementTree
@@ -39,6 +35,7 @@ from autoform_cli.readback import (
     _TEX_ENVIRONMENTS,
     _TexLayout,
 )
+from tests.mathjax_package import NODE, mathjax_package
 
 _TYPESET = r"""
 const path = process.env.AUTOFORM_MATHJAX_DIR;
@@ -85,19 +82,14 @@ _Typeset = Callable[[list[str]], list[dict]]
 
 @pytest.fixture(scope="module")
 def typeset(tmp_path_factory: pytest.TempPathFactory) -> _Typeset:
-    node = shutil.which("node") or shutil.which("node", path="/opt/homebrew/bin")
-    directory = os.environ.get("AUTOFORM_MATHJAX_DIR", "")
-    if node is None:
-        pytest.skip("Node.js is not installed")
-    if not directory or not (Path(directory) / "node-main.js").is_file():
-        pytest.skip("AUTOFORM_MATHJAX_DIR does not name a MathJax 3.2.2 es5 directory")
+    directory = str(mathjax_package() / "es5")
     script = tmp_path_factory.mktemp("mathjax") / "typeset.js"
     script.write_text(_TYPESET, encoding="utf-8")
 
     def run(texs: list[str]) -> list[dict]:
         environment = dict(os.environ, AUTOFORM_MATHJAX_DIR=directory)
         done = subprocess.run(
-            [node, str(script)], input=json.dumps(texs), capture_output=True, text=True, env=environment, check=False
+            [NODE, str(script)], input=json.dumps(texs), capture_output=True, text=True, env=environment, check=False
         )
         assert done.returncode == 0, done.stderr[-2000:]
         return json.loads(done.stdout)
