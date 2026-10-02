@@ -60,7 +60,7 @@ except ImportError:  # pragma: no cover - Windows, which cannot publish cards
 
 from .graph import ARTICLE_ID_PATTERN
 from .markdown import SITE_EXTENSION_CONFIGS, SITE_EXTENSIONS, content_lines, published_lines, published_markdown
-from .mathjax import TEX_MACROS, stateful_commands
+from .mathjax import TEX_MACROS, attribute_commands, stateful_commands
 from .skeleton import (
     DeclarationSkeleton,
     SkeletonReport,
@@ -2881,7 +2881,8 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
     It is refused, too, for a TeX command that changes formulas other than
     its own, wherever the page's MathJax would read it. The articles on a
     page are typeset with one TeX input, so a definition in one would change
-    what the others show.
+    what the others show. So is ``\\mmlToken``, which colors a symbol as the
+    formula says, like the site's marks.
 
     And it is refused for an attribute list that does anything but give a
     heading an id, which could make its text look like a card, a mark, or an
@@ -2907,6 +2908,12 @@ def publishable_article(text: str, reserved: Iterable[str] = ()) -> tuple[str, t
             found.append(
                 "TeX commands that change other formulas are not allowed: " + ", ".join(commands)
                 + f"; define notation in the vault's {TEX_MACROS} instead, and put a command you only name in code"
+            )
+        commands = attribute_commands("".join(reading.text))
+        if commands:
+            found.append(
+                "TeX commands that set what a symbol looks like are not allowed: " + ", ".join(commands)
+                + "; write the symbol itself, and put a command you only name in code"
             )
         errors.extend(found)
         attributes.extend(assigned)

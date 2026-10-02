@@ -186,6 +186,7 @@ _LONE = (
         ('{"f": ["#1", true]}', "\\f must be a body, [body, arguments], or [body, arguments, default]"),
         ('{"f": "\\\\DeclareMathOperator{\\\\leq}{>}"}', "\\f uses \\DeclareMathOperator, which would change"),
         ('{"f": ["#1", 1, "\\\\label{x}"]}', "\\f uses \\label, which would change other formulas"),
+        ('{"g": ["\\\\mmlToken{mi}[mathcolor=#1]{x}", 1]}', "\\g uses \\mmlToken, which sets a symbol's color"),
         ('{"bs": "\\\\"}', _LONE.format("bs")),
         ('{"bs": "a\\\\\\\\\\\\"}', _LONE.format("bs")),
         ('{"L": ["#1label", 1, "\\\\"]}', _LONE.format("L")),
@@ -276,6 +277,7 @@ def test_something_other_than_a_file_where_the_site_has_one_is_refused(
         ("$x = 1 \\label{one}$", "\\label"),
         ("$\\require{mhchem}$", "\\require"),
         ("$\\gdef\\x{1}$ and $\\global\\edef\\y{2}$", "\\gdef, \\global, \\edef"),
+        ("$\\mathtoolsset{showonlyrefs}$", "\\mathtoolsset"),
     ],
 )
 def test_tex_that_changes_other_formulas_is_refused(article: str, commands: str) -> None:
@@ -287,6 +289,28 @@ def test_tex_that_changes_other_formulas_is_refused(article: str, commands: str)
     assert errors == (
         f"TeX commands that change other formulas are not allowed: {commands}; define notation in "
         "the vault's tex-macros.json instead, and put a command you only name in code",
+    )
+
+
+@pytest.mark.parametrize(
+    "article",
+    [
+        "$\\mmlToken{mi}[mathcolor=#31A24C]{\\checkmark}$ approved",
+        "$$\n\\mmlToken{mtext}[mathbackground=white]{x}\n$$",
+        "Here \\\\(\\\\mmlToken{mo}{+}\\\\) is live.",
+    ],
+)
+def test_tex_that_sets_what_a_symbol_looks_like_is_refused(article: str) -> None:
+    """Base's \\mmlToken gives a symbol the color, background, and other
+    attributes a formula writes, so an article could color a symbol like the
+    site's status marks. The site's filter drops the classes, styles, ids, and
+    links it could set, but not its colors."""
+
+    errors = publishable_article(article)[1]
+
+    assert errors == (
+        "TeX commands that set what a symbol looks like are not allowed: \\mmlToken; write the symbol itself, "
+        "and put a command you only name in code",
     )
 
 
@@ -302,7 +326,7 @@ def test_render_refuses_a_definition_in_an_article(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "article",
     [
-        "Write `\\newcommand` in a project's macros file instead.",
+        "Write `\\newcommand` in a project's macros file instead, and `\\mmlToken` nowhere.",
         "```latex\n\\def\\x{1}\n\\DeclareMathOperator{\\rank}{rank}\n```",
         "$\\left( x \\right) \\leqq y$, $\\operatorname{rank} A$, and $\\lvert x \\rvert$.",
     ],
@@ -937,6 +961,38 @@ def test_the_rendered_configuration_refuses_another_release(tmp_path: Path) -> N
         "autoform: this page loaded MathJax 3.2.2, but javascripts/mathjax.js was written for 3.2.1; formulas "
         "are left as typed. Load MathJax only through javascripts/mathjax.js in mkdocs.yml."
     ]
+
+
+def test_no_formula_gives_its_output_a_class_style_id_or_link(tmp_path: Path) -> None:
+    """Base's \\mmlToken sets any attribute a formula writes. Check refuses it
+    in articles, and the testimony validator in cards, but each document's
+    filter is what keeps the attributes off the page if one gets through:
+    MathJax gives a document made outside its startup the filter's defaults,
+    which pass classes that start with mjx-, colors and margins, and links."""
+
+    mathjax = os.environ.get("AUTOFORM_MATHJAX_DIR")
+    if shutil.which("node") is None or not mathjax:
+        pytest.skip("needs node and AUTOFORM_MATHJAX_DIR, an unpacked mathjax package")
+    script = (_render(_vault(tmp_path / "vault")) / "javascripts/mathjax.js").read_text(encoding="utf-8")
+    token = (
+        "\\mmlToken{mi}[style='margin-top:-60em;color:red',class='mjx-x',href='https://evil.example/',"
+        "id='mjx-x']{x}"
+    )
+    page = (
+        f'<html><head></head><body><article><p><span class="arithmatex">\\({token}\\)</span></p>'
+        f'<div class="bp-readback bp-readback-current" id="c1"><p><span class="arithmatex">\\({token}\\)'
+        "</span></p></div></article></body></html>"
+    )
+
+    report = _node_report(tmp_path, script, "new", first=page, second=page)
+
+    assert report["errors"] == []
+    article, card = report["passes"][0]
+    assert card["card"] == "c1"
+    for document in (article, card):
+        assert len(document["math"]) == 1
+        mml = document["math"][0]["mml"]
+        assert "<mi>x</mi>" in mml, mml
 
 
 def _articles(*formulas: str) -> str:

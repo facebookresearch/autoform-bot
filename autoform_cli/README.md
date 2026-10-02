@@ -1220,8 +1220,10 @@ typed, such as the `&D;` in `R&D;`. Since every article on a page is typeset
 with one TeX input, it refuses as well a TeX command that changes formulas
 other than its own wherever MathJax would read it: a definition such as
 `\newcommand`, `\def`, `\let`, or `\DeclareMathOperator`, `\require`, a tag
-form, or a `\label`. Put the project's notation in `blueprint/tex-macros.json`,
-which `check` validates too, and write a command you only mention in code.
+form, or a `\label`. It refuses `\mmlToken` too, which colors a symbol as the
+formula says, like the site's status marks. Put the project's notation in
+`blueprint/tex-macros.json`, which `check` validates too, and write a command you
+only mention in code.
 An attribute list may only give a heading an id, as in `## Title {#title}`;
 any class, style, or other attribute, and an id on anything but a heading, is
 refused with the line it is on, since it could make an article's text look
