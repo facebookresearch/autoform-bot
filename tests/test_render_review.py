@@ -364,6 +364,7 @@ def test_writer_refuses_tex_outside_the_allowlist_by_name(testimony: str, comman
         r"$\begin{split} a &= b \\ &= c \end{split}$",
         r"$\begin{align} a &= b \end{align}$ and $\begin{gather*} c \end{gather*}$",
         r"$\begin{aligned} \begin{align*} a \end{align*} \end{aligned}$",
+        r"$\begin{equation} e^{i\pi} + 1 = 0 \end{equation}$ and $\frac{\begin{equation*} a \\ b \end{equation*}}{c}$",
     ],
 )
 def test_tex_mathjax_sets_and_the_model_follows_is_allowlisted(testimony: str) -> None:
@@ -378,12 +379,17 @@ def test_tex_mathjax_sets_and_the_model_follows_is_allowlisted(testimony: str) -
     [
         (
             r"$\begin{align} a \end{align} \begin{gather} b \end{gather}$",
-            "more than one TeX align or gather environment in a formula is not allowed",
+            "more than one TeX align, gather, or equation environment in a formula is not allowed",
         ),
         (
             r"$\begin{align} a \begin{align*} b \end{align*} \end{align}$",
-            "more than one TeX align or gather environment in a formula is not allowed",
+            "more than one TeX align, gather, or equation environment in a formula is not allowed",
         ),
+        (
+            r"$\begin{equation} a \end{equation} \begin{equation*} b \end{equation*}$",
+            "more than one TeX align, gather, or equation environment in a formula is not allowed",
+        ),
+        (r"$\begin{equation} a & b \end{equation}$", r"TeX & and \\ are allowed only between the cells and rows"),
         (r"$\begin{array}{|c|} a \end{array}$", r"TeX \begin{array} is allowed only with its columns as l, c, and r"),
         (r"$\begin{array} a \end{array}$", r"TeX \begin{array} is allowed only with its columns as l, c, and r"),
         (r"$\begin{array}{c@{x}c} a & b \end{array}$", r"TeX \begin{array} is allowed only with its columns"),
@@ -391,11 +397,57 @@ def test_tex_mathjax_sets_and_the_model_follows_is_allowlisted(testimony: str) -
     ],
 )
 def test_tex_environments_mathjax_sets_differently_are_refused(testimony: str, reason: str) -> None:
-    r"""A second ``align`` or ``gather`` gets an error in place of the
-    formula; ``array`` takes its first argument as its columns, drawing ``|``
-    as a rule and dropping what else it does not know."""
+    r"""A second ``align``, ``gather``, or ``equation`` gets an error in
+    place of the formula, as does ``&`` in ``equation``; ``array`` takes its
+    first argument as its columns, drawing ``|`` as a rule and dropping what
+    else it does not know."""
 
     assert any(reason in error for error in _testimony_errors(testimony))
+
+
+@pytest.mark.parametrize(
+    ("testimony", "replacement", "rewritten"),
+    [
+        (
+            r"$\begin{multline} a + b \\ = c \end{multline}$",
+            r"write \begin{gathered} for \begin{multline}",
+            r"$\begin{gathered} a + b \\ = c \end{gathered}$",
+        ),
+        (
+            r"$\begin{alignat}{2} a &= b &\quad c &= d \end{alignat}$",
+            r"write \begin{aligned}, without the column count, for \begin{alignat}",
+            r"$\begin{aligned} a &= b &\quad c &= d \end{aligned}$",
+        ),
+        (
+            r"$\begin{alignedat}{1} a &= b \end{alignedat}$",
+            r"write \begin{aligned}, without the column count, for \begin{alignedat}",
+            r"$\begin{aligned} a &= b \end{aligned}$",
+        ),
+        (
+            r"$\begin{flalign} a &= b \end{flalign}$",
+            "write one of the environments allowed: equation, align, gather, aligned, gathered, split, cases",
+            r"$\begin{align} a &= b \end{align}$",
+        ),
+        (
+            r"$\begin{align} \begin{equation} a = b \end{equation} \end{align}$",
+            "leave out the equation environment",
+            r"$\begin{align} a = b \end{align}$",
+        ),
+        (
+            r"$\begin{gather} \begin{gather*} a \\ b \end{gather*} \end{gather}$",
+            "write aligned or gathered",
+            r"$\begin{gather} \begin{gathered} a \\ b \end{gathered} \end{gather}$",
+        ),
+    ],
+)
+def test_tex_environments_outside_what_is_allowed_are_refused_with_a_replacement(
+    testimony: str, replacement: str, rewritten: str
+) -> None:
+    """MathJax 3.2.2 sets each of these, and the message names what to
+    write in its place, which is accepted."""
+
+    assert any(replacement in error for error in _testimony_errors(testimony))
+    assert _testimony_errors(rewritten) == ()
 
 
 @pytest.mark.parametrize(

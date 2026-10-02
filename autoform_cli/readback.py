@@ -1320,18 +1320,28 @@ _TESTIMONY_TEX: dict[str, _Tex] = {
     r"\begin": _Tex("begin", ""),
     r"\end": _Tex("end", ""),
 }
-#: Environments testimony may use, all of them rows of cells.
+#: Environments testimony may use, all of them rows of cells but ``equation``,
+#: which sets what it holds as a formula does.
 _TEX_ENVIRONMENTS = frozenset(
     {"cases", "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix", "smallmatrix", "array"}
-    | {"aligned", "gathered", "split", "align", "align*", "gather", "gather*"}
+    | {"aligned", "gathered", "split", "align", "align*", "gather", "gather*", "equation", "equation*"}
 )
+#: What to write for environments outside the allowlist that MathJax sets the
+#: way one inside it does.
+_TEX_INSTEAD = {
+    r"\begin{multline}": r"\begin{gathered}",
+    r"\begin{multline*}": r"\begin{gathered}",
+    r"\begin{alignat}": r"\begin{aligned}, without the column count,",
+    r"\begin{alignat*}": r"\begin{aligned}, without the column count,",
+    r"\begin{alignedat}": r"\begin{aligned}, without the column count,",
+}
 #: The environments MathJax 3.2.2 reads a bracket after, for where their rows
 #: sit: it applies ``[t]``, ``[b]``, or ``[c]`` and shows nothing else written
 #: there.
 _TEX_ALIGNABLE = frozenset({"aligned", "gathered", "array"})
 #: The environments MathJax 3.2.2 sets once in a formula: a second, even one
 #: nested in the first, gets an error in place of the formula.
-_TEX_EQUATIONS = frozenset({"align", "align*", "gather", "gather*"})
+_TEX_EQUATIONS = frozenset({"align", "align*", "gather", "gather*", "equation", "equation*"})
 #: The columns ``\begin{array}`` may take. MathJax draws ``|`` and ``:`` as
 #: rules between columns and drops any other character without showing it.
 _TEX_ARRAY_COLUMNS = re.compile(r"\s*\{ *[lcr][lcr ]{0,31}\}")
@@ -1390,7 +1400,7 @@ _TEX_MAX_EMPTY_CELLS = 16
 _TEX_MIN_RUN = -3
 _TEX_TOKEN = re.compile(r"\\(?:[A-Za-z]+|.)?|\s+|.", re.DOTALL)
 #: Which token closes each kind of list :class:`_TexLayout` reads.
-_TEX_CLOSERS = {"group": "}", "substack": "}", "left": r"\right", "environment": r"\end"}
+_TEX_CLOSERS = {"group": "}", "substack": "}", "left": r"\right", "environment": r"\end", "equation": r"\end"}
 #: What cannot start a script, and the commands MathJax will not take as one.
 _TEX_NOT_SCRIPTS = frozenset({"}", "&", "^", "_", "'", "’"})
 #: The two characters MathJax sets as a prime.
@@ -1528,8 +1538,18 @@ class _TexLayout:
     def messages(self) -> list[str]:
         """What every formula read so far holds that is not allowed."""
 
+        instead = [f"{_TEX_INSTEAD[name]} for {name}" for name in sorted(self.unlisted) if name in _TEX_INSTEAD]
+        if any(name.startswith("\\begin") and name not in _TEX_INSTEAD for name in self.unlisted):
+            instead.append(
+                "one of the environments allowed: equation, align, gather, aligned, gathered, split, cases, array, "
+                "or a matrix"
+            )
         named = [
-            ("TeX outside the read-back allowlist is not allowed: ", self.unlisted, ""),
+            (
+                "TeX outside the read-back allowlist is not allowed: ",
+                self.unlisted,
+                "; write " + "; ".join(instead) if instead else "",
+            ),
             ("TeX arguments that show nothing are not allowed: ", self.empty, ""),
             ("TeX commands missing an argument are not allowed: ", self.missing, ""),
             ("TeX delimiters MathJax does not accept are not allowed after: ", self.delimiters, ""),
@@ -1683,7 +1703,7 @@ class _TexLayout:
                     "TeX row spacing after \\\\ is not allowed: it can draw rows over one another; remove the "
                     "bracket after \\\\, or write {} before a bracket that starts a row"
                 ] = None
-            if context in {"formula", "environment", "substack"}:
+            if context in {"formula", "environment", "substack", "equation"}:
                 self.row(rows)
             else:
                 self.errors[_TEX_MISPLACED] = None
@@ -1867,10 +1887,15 @@ class _TexLayout:
         if name in _TEX_EQUATIONS:
             if self.equation:
                 self.errors[
-                    "more than one TeX align or gather environment in a formula is not allowed: MathJax refuses "
-                    "the formula; write aligned or gathered"
+                    "more than one TeX align, gather, or equation environment in a formula is not allowed: MathJax "
+                    "refuses the formula; write aligned or gathered, or leave out the equation environment"
                 ] = None
             self.equation = True
+        if name in {"equation", "equation*"}:
+            self.new_atom()
+            if self.read_list("equation", None) is None or self.environment_name(r"\end") != name:
+                self.errors[_TEX_UNBALANCED_ENVIRONMENT] = None
+            return
         if name in _TEX_ALIGNABLE:
             self.alignment(name)
         if name == "array":

@@ -180,6 +180,8 @@ def _corpus() -> list[str]:
         "{}",
         r"\begin{pmatrix} 1 & 0 \\ * & 1 \end{pmatrix}",
         r"a \\ * b",
+        r"\begin{equation}[x] a \\ b \end{equation} + \frac{c}{d}",
+        r"\frac{\begin{equation*} c \\ \end{equation*}}{d}",
     ]
     return formulas
 
@@ -295,6 +297,8 @@ def test_the_model_refuses_every_formula_found_to_differ(typeset: _Typeset) -> N
         r"a \\* b",
         r"\sum{\limits} x",
         r"\sum^{\limits}x",
+        r"\begin{align} \begin{equation} a \end{equation} \end{align}",
+        r"\begin{equation} a & b \end{equation}",
     ]
 
     results = typeset(differing)

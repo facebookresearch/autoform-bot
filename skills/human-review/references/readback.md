@@ -77,14 +77,14 @@ characters such as zero-width spaces, or stack more than two accents above or
 below one letter. In formulas use standard notation only: letters, symbols,
 relations, operators, arrows, delimiters, `\frac`, `\sqrt`, accents, the fonts
 `\mathbb`, `\mathcal`, `\mathfrak`, `\mathscr`, `\mathrm`, `\mathbf`, and
-`\mathsf`, `\operatorname` and `\text` with visible content, and the `cases`,
-`aligned`, `gathered`, `array`, and matrix environments. Any other command is
-refused by name, including `\phantom`, `\rlap`, `\kern`, `\color`, `\tag`,
-`\large`, and macro definitions. Space with `\,`, `\;`, `\quad`, or `~`: one
-formula may space 8 em in all, as much as 8 `\quad`, and a read-back 64 em.
-Never write two `\!` in a row. Do not write `%`; write `\%` for a percent
-sign. A read-back that breaks this is rejected, however faithful it is. Keep
-it to a few kilobytes: a read-back over 32 KiB is refused unread.
+`\mathsf`, `\operatorname` and `\text` with visible content, and the
+`equation`, `cases`, `aligned`, `gathered`, `array`, and matrix environments.
+Any other command is refused by name, including `\phantom`, `\rlap`, `\kern`,
+`\color`, `\tag`, `\large`, and macro definitions. Space with `\,`, `\;`,
+`\quad`, or `~`: one formula may space 8 em in all, as much as 8 `\quad`, and
+a read-back 64 em. Never write two `\!` in a row. Do not write `%`; write `\%`
+for a percent sign. A read-back that breaks this is rejected, however faithful
+it is. Keep it to a few kilobytes: a read-back over 32 KiB is refused unread.
 
 ## Return only testimony
 
