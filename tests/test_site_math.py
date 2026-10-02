@@ -693,9 +693,11 @@ def test_a_heading_id_is_published(tmp_path: Path) -> None:
     assert '<h6 id="a-remark">Remark</h6>' in _published(_render(blueprint) / "roadmap/README.md")
 
 
-def test_every_formula_paints_inside_its_own_box(tmp_path: Path) -> None:
-    """No formula can cover a card, a mark, or other text, and a wide one
-    scrolls with what holds it rather than being cut off at the window."""
+def test_every_formula_paints_inside_its_own_band(tmp_path: Path) -> None:
+    """No formula can cover a card, a mark, a label, another line, or a side
+    column, with either renderer and any theme; a lap keeps the ink beside its
+    box inside the block that holds it; and a wide display or card scrolls,
+    with a shade at the edge, rather than being cut off."""
 
     css = (_render(_vault(tmp_path)) / "stylesheets/blueprint.css").read_text(encoding="utf-8")
     rules = {
@@ -703,11 +705,29 @@ def test_every_formula_paints_inside_its_own_box(tmp_path: Path) -> None:
         for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL))
     }
 
-    assert "contain: paint" in rules['.md-typeset mjx-container[jax="CHTML"]']
-    inline = rules['.md-typeset mjx-container[jax="CHTML"]:not([display="true"])']
-    assert "display: inline-block" in inline
-    assert "min-width: max-content" in rules['.md-typeset mjx-container[jax="CHTML"][display="true"]']
+    # Containment is not the CHTML renderer's or Material's alone.
+    for selector in rules:
+        if "mjx-container" in selector:
+            assert "jax=" not in selector and ".md-typeset" not in selector, selector
+    every = rules["mjx-container"]
+    assert "overflow-y: clip !important" in every
+    assert "overflow-x: visible !important" in every
+    assert "position: relative !important" in every
+    assert "contain:" not in every
+    assert "display: inline-block" in rules['mjx-container:not([display="true"])']
+    assert "padding-block: 0.5em" in rules[':root mjx-container[jax][display="true"]']
+    assert "overflow-x: auto" in rules["div.arithmatex"]
+    # Across, ink stops at the edge of the block an article formula is in; a
+    # card's blocks are left to scroll with it.
+    block = rules[":is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *)"]
+    assert "overflow-x: clip" in block and "overflow-y" not in block
     assert "overflow-x: auto" in rules[".bp-readback"]
+    shade = rules[".bp-readback, .bp-readback div.arithmatex"]
+    assert shade.count(" local") == 2 and shade.count(" scroll") == 2
+    # The covers, and the card under them, are the color of the review panel a
+    # card sits in, which in Material's dark scheme is not the page's.
+    assert shade.count("var(--md-admonition-bg-color, var(--bp-page))") == 3
+    assert "overflow-wrap: anywhere" in rules[".bp-review summary"]
 
 
 # Runs javascripts/mathjax.js in node against a local MathJax, as a page would,

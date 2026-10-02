@@ -1199,8 +1199,17 @@ TeX and all. A setting changed in
 any formula's MathJax menu, such as the renderer or the explorer a screen
 reader uses, applies to every formula on the page and on the pages shown after
 it, while each card keeps its own TeX input. Every formula paints
-only within its own box, so no article formula can cover a card or a status
-mark, and a card formula too wide for the page scrolls inside its card.
+only within its own band, the height of its line, and across only within
+the paragraph, heading, list, or table cell that holds it, with either
+renderer the menu offers and with any theme. So no article formula can cover
+a card, a status mark, a label, another line, or the navigation beside the
+text. Inside that block a formula paints as TeX sets it, so the text `\rlap`,
+`\llap`, and the mathtools laps put beside a formula is kept, while an inline
+formula wider than its paragraph is cut at the paragraph's edge; write a
+formula that wide as a display, which scrolls on its own when it is too wide
+for the page. A card too wide for the page scrolls inside its card, and a
+shade at its edge shows there is more that way. A card's approval label wraps
+on a narrow screen instead of running off it.
 
 A project scaffolded before `render` wrote that file keeps a
 `blueprint/javascripts/mathjax.js` and lists the MathJax bundle in `mkdocs.yml`

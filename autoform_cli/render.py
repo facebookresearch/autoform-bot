@@ -2176,6 +2176,8 @@ def _stylesheet() -> str:
   --bp-rule: #CED0D4;
   --bp-surface: #FFFFFF;
   --bp-sunken: #F0F2F5;
+  --bp-page: #FFFFFF;
+  --bp-scroll-shade: rgba(5, 5, 5, 0.22);
   --bp-link: #0064E0;
   --bp-link-hover: #0082FB;
   --bp-blue: #0064E0;
@@ -2190,6 +2192,8 @@ def _stylesheet() -> str:
   --bp-rule: #3E4042;
   --bp-surface: #242526;
   --bp-sunken: #1C1D1F;
+  --bp-page: #18191A;
+  --bp-scroll-shade: rgba(228, 230, 235, 0.3);
   --bp-link: #2D88FF;
   --bp-link-hover: #7FB8FF;
   --bp-blue: #2D88FF;
@@ -2669,6 +2673,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-review summary {{
   width: fit-content;
+  overflow-wrap: anywhere;
   cursor: pointer;
   color: var(--bp-link);
   user-select: none;
@@ -2699,6 +2704,19 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   border-left: 3px solid #0064E0;
   overflow-x: auto;
 }}
+/* A card, or a formula in it, too wide for the page scrolls, and a shade at
+   an edge shows there is more that way: the shades stay at the edges, and a
+   cover in the color of the review panel the card sits in, which scrolls with
+   the content, hides each one at the end it has reached. Overlay scrollbars
+   show nothing at rest. */
+.bp-readback, .bp-readback div.arithmatex {{
+  background:
+    linear-gradient(to right, var(--md-admonition-bg-color, var(--bp-page)) 40%, transparent) left / 1.5rem 100% no-repeat local,
+    linear-gradient(to left, var(--md-admonition-bg-color, var(--bp-page)) 40%, transparent) right / 1.5rem 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, var(--bp-scroll-shade), transparent) left / 0.6rem 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--bp-scroll-shade), transparent) right / 0.6rem 100% no-repeat scroll;
+  background-color: var(--md-admonition-bg-color, var(--bp-page));
+}}
 .bp-readback-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
 .bp-readback-status {{ font-weight: 400; color: var(--bp-muted); }}
 .bp-readback-stale {{ border-left-color: #B77900; }}
@@ -2706,23 +2724,37 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-readback-altered {{ border-left-color: #B77900; }}
 .bp-readback-invalid {{ border-left-color: #B42318; }}
 .bp-readback-missing {{ border-left-color: var(--bp-rule); font-style: italic; }}
-/* A formula paints only within its own box, and the slack around it its glyphs
-   need, so no formula an article writes can cover a card, a mark, or the text
-   beside it. Containment needs a box, so inline formulas become inline blocks,
-   whose baseline is still their text's. A display formula is as wide as it is
-   written, so a wide one scrolls with what holds it instead of being cut off.
-   The slack is padding a negative margin gives back, and the selectors outrank
-   MathJax's own sheet, which is added after this one. */
-.md-typeset mjx-container[jax="CHTML"] {{ contain: paint; }}
-.md-typeset mjx-container[jax="CHTML"]:not([display="true"]) {{
-  display: inline-block;
-  padding: 0.3em 0.15em;
-  margin: -0.3em -0.15em;
+/* A formula paints only within its own band: the height of its box and the
+   slack above and below it its glyphs need. Across, it paints as TeX sets
+   it, so the ink \\rlap, \\llap, and the mathtools laps put beside their box
+   is kept, but only inside the block that holds it: an inline formula's
+   paragraph, heading, list, or table cell, and a display's own block, which
+   scrolls when the display is wide. So no formula an article writes can
+   cover a card, a mark, a label, another line, or the columns beside the
+   page's text, whichever renderer the MathJax menu has chosen and whatever
+   the theme. A card scrolls instead, so nothing in it is cut. Clipping needs
+   a box, so inline formulas become inline blocks, whose baseline is still
+   their text's, and every formula is the containing block of what it
+   positions. The slack is padding a negative margin gives back, and the
+   display selector outranks MathJax's own sheets, which are added after this
+   one. */
+mjx-container {{
+  overflow-x: visible !important;
+  overflow-y: clip !important;
+  position: relative !important;
 }}
-.md-typeset mjx-container[jax="CHTML"][display="true"] {{
-  min-width: max-content;
+mjx-container:not([display="true"]) {{
+  display: inline-block;
+  padding-block: 0.3em;
+  margin-block: -0.3em;
+}}
+:root mjx-container[jax][display="true"] {{
   padding-block: 0.5em;
   margin-block: 0.5em;
+}}
+div.arithmatex {{ overflow-x: auto; }}
+:is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *) {{
+  overflow-x: clip;
 }}
 .bp-row {{ display: flex; gap: 0.75rem; }}
 .bp-key {{
