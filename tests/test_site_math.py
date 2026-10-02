@@ -781,6 +781,20 @@ def test_links_render_moves_resolve_as_before(tmp_path: Path) -> None:
     ) in written
 
 
+def test_a_link_render_moves_keeps_its_query(tmp_path: Path) -> None:
+    """A query is no part of the file's name: render moves the path and
+    keeps the query, so the link still names the file, and the strict build
+    finds it."""
+
+    blueprint = _vault(tmp_path)
+    (blueprint / "sources.md").write_text("# Paper\n", encoding="utf-8")
+    _with_article(blueprint, "See [the paper](../sources.md?plain=1#lemma-3) and [as text](../sources.md?plain=1).")
+
+    written = (_render(blueprint) / "roadmap/README.md").read_text(encoding="utf-8")
+
+    assert "See [the paper](../sources.md?plain=1#lemma-3) and [as text](../sources.md?plain=1)." in written
+
+
 def test_check_judges_the_text_render_publishes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Check judges each page as render writes it, with its links moved, so
     what render publishes is what check saw."""
