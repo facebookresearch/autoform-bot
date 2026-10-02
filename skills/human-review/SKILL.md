@@ -112,9 +112,12 @@ tree.
    withdraw an approval, dismiss the review. A dismissal starts no Pages
    build, so the site reads self-approved only after the next one; the Pages
    workflow's hourly schedule rebuilds a day after the last build, so that is
-   within about a day and an hour. Run the Pages workflow by hand
-   (`workflow_dispatch`) to show it at once. The `autoform-review-gate.yml`
-   check on the pull request is early feedback; the Pages label decides. The
+   within about a day and an hour when the rebuild succeeds, and later when it
+   fails, when the repository's other runs use most of each hour's API
+   requests, or when GitHub delays the schedule. Run the Pages workflow by
+   hand (`workflow_dispatch`) to show it at once. The
+   `autoform-review-gate.yml` check on the pull request is early feedback; the
+   Pages label decides. The
    [CLI reference](../../autoform_cli/README.md#commands) states the full rule. When
    the person does not approve, record `revise` with their reason and hand the
    change to Roadmap or Orchestrate.

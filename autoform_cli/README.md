@@ -1055,10 +1055,15 @@ verdict is then no longer an approval, and the next Pages build reads
 self-approved. Removing the reviewer from CODEOWNERS or revoking their write
 access withdraws every approval they gave. A CODEOWNERS change is a push, so
 its own build relabels the site. A dismissal, or a change of access, team, or
-ruleset, starts no build: the Pages workflow's scheduled run rebuilds the
-site a day after its last build, so the change shows within about a day and
-an hour, or later if GitHub delays scheduled runs. To show it at once, run
-the Pages workflow by hand (`workflow_dispatch`).
+ruleset, starts no build: the Pages workflow's scheduled run rebuilds the site
+a day after its last build, so the change shows within about a day and an hour
+when that rebuild succeeds. It shows later when the rebuild fails, since each
+failure delays the next try by an hour, then two, four, and so on up to a day;
+when the repository's other runs keep more than 46 of each hour's API requests
+spent, in which case the schedule never builds; and when GitHub delays
+scheduled runs, or disables them in a public repository after 60 days without
+activity. To show it at once, run the Pages workflow by hand
+(`workflow_dispatch`).
 
 Residual limits. Code owner review is checked at R as it is now, not as it
 was when each pull request merged. A team GitHub enforces is trusted as a
@@ -1070,10 +1075,10 @@ landed. A review's `author_association` can understate a writer's access,
 for example for a private organization member, which reads self-approved.
 Pages decides when it builds: a review dismissed after the merge, or a verify
 run that finishes after it, shows at the next Pages build, which the schedule
-starts a day after the last at the latest. Older commits are
-read with the current frontmatter parser, so a schema change refuses rather
-than guesses. Signed SSH or GPG approvals (issue #49) are planned as a second
-verifier behind the same interface.
+starts a day after the last unless one of the delays above holds it back.
+Older commits are read with the current frontmatter parser, so a schema change
+refuses rather than guesses. Signed SSH or GPG approvals (issue #49) are
+planned as a second verifier behind the same interface.
 
 `review authenticate` needs no Lean. It lists every recorded approval with its
 status and does not judge whether approvals are current. With `--since REF` it
