@@ -53,3 +53,9 @@ dependency links as the pattern, not the thesis mathematics or the incomplete
 scope. A user-requested staged pass may stop at a named slice; an ordinary
 complete pass continues until its adopted boundary satisfies Roadmap's finish
 contract.
+
+Existing and planned mathematics coexist in one book here: the supporting Lean
+declarations carry checked formalization status while source targets remain
+planned. For a repository-wide catalog, generalize that pattern by inventorying
+all in-scope project declarations rather than selecting only the future-work
+slice.

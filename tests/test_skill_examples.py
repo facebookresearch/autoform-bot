@@ -638,6 +638,44 @@ def test_roadmap_reconciles_the_pages_setup_wrote(repo_root: Path) -> None:
         assert required in roadmap, f"Roadmap never reconciles {required}"
 
 
+def test_roadmap_repository_scope_inventories_existing_lean(repo_root: Path) -> None:
+    """A global blueprint is a catalog, not merely a future-work backlog.
+
+    A consumer asked for one wiki covering all mathematics in an established
+    Lean repository. The old workflow treated local implementations as prior
+    art, produced only prospective roadmaps, and therefore rendered 0% despite
+    extensive existing code.
+    """
+
+    roadmap_path = repo_root / "skills" / "roadmap" / "SKILL.md"
+    roadmap = roadmap_path.read_text(encoding="utf-8")
+    normalized = " ".join(roadmap.split())
+    metadata = (
+        repo_root / "skills" / "roadmap" / "agents" / "openai.yaml"
+    ).read_text(encoding="utf-8")
+    example = (
+        repo_root / "skills" / "roadmap" / "references" / "cabannes-thesis-roadmap.md"
+    ).read_text(encoding="utf-8")
+
+    for required in (
+        "repository-wide catalog",
+        "project-owned Lean is a primary mathematical source",
+        "inventory every in-scope tracked module and public mathematical declaration",
+        "future-work slice cannot stand in for a repository-wide inventory",
+        "`DECOMPOSED` means represented by roadmap articles, not unfinished",
+        "record exact compiled names in `lean`",
+        "`proof: formalized` for a theorem or lemma only after checking that its proof is complete",
+        "An axiom or wanted placeholder does not justify a formalized proof",
+        "a definition of a conjecture proposition formalizes its statement representation",
+        "`mathlib: true` only for an exact verified upstream result",
+    ):
+        assert required in normalized
+
+    assert "internal/runbooks/planning.md" not in roadmap
+    assert "existing formalized Lean" in metadata
+    assert "Existing and planned mathematics coexist in one book" in example
+
+
 def test_roadmap_commits_so_the_published_site_can_catch_up(repo_root: Path) -> None:
     """CI publishes from the repository, not from a working tree.
 
