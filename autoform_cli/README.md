@@ -1299,10 +1299,14 @@ with its own, and the script finds MathJax already loaded and checks its
 version instead of loading it. A copy edited since is refused, since the edits
 would be lost; move its macros to `tex-macros.json` and delete it.
 `render` writes `stylesheets/blueprint.css`, `javascripts/blueprint-mermaid.js`,
-and `assets/autoform.svg` over the vault's copies the same way. A directory,
-symlink, or special file at any of these paths, at `tex-macros.json`, or a file
-where one of their folders goes, is refused by `check` and `render` with the
-path it is at.
+and `assets/autoform.svg` over the vault's copies the same way, and writes
+`SUMMARY.md`, `structure.md`, `publication.json`, the `dependencies.md` and
+`dependencies/` graph pages, and the chapter pages it consolidates. A
+directory, symlink, or special file at any of these paths, at
+`tex-macros.json`, or at the stale `dependencies.html`, `graph.html`, or
+`progress.md` it keeps out of the site, or a file where one of their folders
+goes, is refused by `check` and `render` with the path it is at, before
+anything is written.
 
 ## Validation
 

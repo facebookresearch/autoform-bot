@@ -29,6 +29,46 @@ from .status import NodeStatus
 NodeLinks = Callable[[Path], Mapping[str, str]]
 
 
+def graph_page_paths(graph: Graph) -> tuple[str, ...]:
+    """Every page :func:`write_graph_pages` writes for ``graph``, relative to
+    the site's root."""
+
+    root = Path("/")
+    project_page, full_page, chapter_pages, scope_pages, focus_pages = _pages(graph, root)
+    pages = {project_page, full_page, *chapter_pages.values(), *scope_pages.values(), *focus_pages.values()}
+    return tuple(sorted(page.relative_to(root).as_posix() for page in pages))
+
+
+def _pages(
+    graph: Graph, destination: Path
+) -> tuple[Path, Path, dict[str, Path], dict[str, Path], dict[str, Path]]:
+    """The project, full, chapter, scope, and focus pages for ``graph``
+    under ``destination``."""
+
+    groups = group_nodes(graph)
+    project_page = destination / "dependencies.md"
+    full_page = destination / "dependencies/full.md"
+    chapter_pages = {group: destination / "dependencies/chapters" / f"{group or 'roadmap'}.md" for group in groups}
+    containers = [node_id for node_id in graph.nodes if graph.children(node_id)]
+    scope_pages = {
+        node_id: (
+            project_page
+            if node_id == "roadmap"
+            else chapter_pages[node_id]
+            if node_id in chapter_pages
+            else destination / "dependencies/scopes" / f"{node_id}.md"
+        )
+        for node_id in containers
+    }
+    scope_pages["roadmap"] = project_page
+    focus_pages = {
+        node_id: destination / "dependencies/nodes" / f"{node_id}.md"
+        for node_ids in groups.values()
+        for node_id in node_ids
+    }
+    return project_page, full_page, chapter_pages, scope_pages, focus_pages
+
+
 def write_graph_pages(
     graph: Graph,
     statuses: dict[str, NodeStatus],
@@ -45,23 +85,9 @@ def write_graph_pages(
     destination = Path(destination).resolve()
     groups = group_nodes(graph)
     local_views = focus_views(graph, statuses)
-    project_page = destination / "dependencies.md"
-    full_page = destination / "dependencies/full.md"
-    chapter_pages = {group: destination / "dependencies/chapters" / f"{group or 'roadmap'}.md" for group in groups}
+    project_page, full_page, chapter_pages, scope_pages, focus_pages = _pages(graph, destination)
     containers = [node_id for node_id in graph.nodes if graph.children(node_id)]
-    scope_pages = {
-        node_id: (
-            project_page
-            if node_id == "roadmap"
-            else chapter_pages[node_id]
-            if node_id in chapter_pages
-            else destination / "dependencies/scopes" / f"{node_id}.md"
-        )
-        for node_id in containers
-    }
-    scope_pages["roadmap"] = project_page
     article_groups = {node_id: group for group, node_ids in groups.items() for node_id in node_ids}
-    focus_pages = {node_id: destination / "dependencies/nodes" / f"{node_id}.md" for node_id in article_groups}
     written: list[Path] = []
 
     project = project_view(graph, statuses)
@@ -277,4 +303,4 @@ def _markdown_document_link(href: str) -> str:
     return f"{document.as_posix()}{separator}{fragment}"
 
 
-__all__ = ["focus_page_path", "write_graph_pages"]
+__all__ = ["focus_page_path", "graph_page_paths", "write_graph_pages"]

@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -263,6 +264,107 @@ def test_something_other_than_a_file_where_the_site_has_one_is_refused(
     assert main(["check", str(blueprint)]) == 1
     assert reason in capsys.readouterr().out
     with pytest.raises(PublicationError):
+        _render(blueprint)
+
+
+#: Every file render writes for the test vault that is not one of the
+#: vault's own, and the legacy derived views it keeps out of the site.
+_WRITTEN_BY_RENDER = (
+    "SUMMARY.md",
+    "assets/autoform.svg",
+    "dependencies.html",
+    "dependencies.md",
+    "dependencies/chapters/roadmap.md",
+    "dependencies/full.md",
+    "dependencies/nodes/base.md",
+    "dependencies/nodes/top.md",
+    "graph.html",
+    "javascripts/blueprint-mermaid.js",
+    "javascripts/mathjax.js",
+    "progress.md",
+    "publication.json",
+    "structure.md",
+    "stylesheets/blueprint.css",
+)
+
+
+def test_the_guarded_paths_are_every_file_render_writes(tmp_path: Path) -> None:
+    blueprint = _vault(tmp_path)
+
+    site = _render(blueprint)
+
+    written = {
+        path.relative_to(site).as_posix()
+        for path in site.rglob("*")
+        if path.is_file() and not (blueprint / path.relative_to(site)).is_file()
+    }
+    assert written <= set(_WRITTEN_BY_RENDER)
+
+
+@pytest.mark.parametrize(("make", "kind"), [(_directory_with_a_file, "a directory"), (_symlink, "a symlink"), (_fifo, "a special file")])
+@pytest.mark.parametrize("relative", _WRITTEN_BY_RENDER)
+def test_something_other_than_a_file_where_render_writes_one_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], relative: str, make, kind: str
+) -> None:
+    """One rule covers every file render writes: a directory, symlink, or
+    special file there is named by check, and render refuses it before
+    writing rather than stopping half way with an OSError."""
+
+    blueprint = _vault(tmp_path)
+    make(blueprint / relative)
+    reason = f"{relative}: is {kind}, where autoform render writes a file; remove it"
+
+    assert main(["check", str(blueprint)]) == 1
+    assert reason in capsys.readouterr().out
+    # Capture refuses a symlink or special file it would publish first.
+    with pytest.raises(PublicationError):
+        _render(blueprint)
+
+
+@pytest.mark.parametrize(
+    ("make", "reason"),
+    [
+        (_directory_with_a_file, "dependencies.md: is a directory, where autoform render writes a file; remove it"),
+        (_file, "dependencies: is a file, where autoform render needs a folder for dependencies/"),
+    ],
+    ids=["directory", "file"],
+)
+def test_what_render_captured_in_the_way_is_refused_once_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make, reason: str
+) -> None:
+    """Render copies what it captured, so a directory or file it captured in
+    the way of a page it writes is refused even when the disk no longer has
+    it by the time the paths are checked."""
+
+    import autoform_cli.render as render_module
+
+    blueprint = _vault(tmp_path)
+    blocking = blueprint / reason.split(":")[0]
+    make(blocking)
+    capture = render_module._capture_publication
+
+    def capture_then_remove(*args, **kwargs):
+        snapshot = capture(*args, **kwargs)
+        shutil.rmtree(blocking) if blocking.is_dir() else blocking.unlink()
+        return snapshot
+
+    monkeypatch.setattr(render_module, "_capture_publication", capture_then_remove)
+
+    with pytest.raises(PublicationError, match=re.escape(reason)):
+        _render(blueprint)
+
+
+@pytest.mark.parametrize("folder", ["dependencies", "dependencies/nodes", "javascripts", "stylesheets", "assets"])
+def test_a_file_where_render_needs_a_folder_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], folder: str
+) -> None:
+    blueprint = _vault(tmp_path)
+    _file(blueprint / folder)
+    reason = f"{folder}: is a file, where autoform render needs a folder for {folder}/"
+
+    assert main(["check", str(blueprint)]) == 1
+    assert reason in capsys.readouterr().out
+    with pytest.raises(PublicationError, match=re.escape(reason)):
         _render(blueprint)
 
 

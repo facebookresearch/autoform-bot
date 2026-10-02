@@ -177,12 +177,8 @@ def _tex_macros(path: Path) -> tuple[dict[str, object], list[str]]:
     check nor the article's sees: ``\\`` and then ``label`` is ``\\label``.
     """
 
-    blocked = in_the_way(path.parent, path.name)
-    if blocked is not None:
-        return {}, [
-            f"{TEX_MACROS}: is {blocked[1]}, where autoform reads the project's macros from a file; remove it"
-        ]
-    if not path.is_file():
+    # Anything else at that path is refused with the files render writes.
+    if not path.is_file() or in_the_way(path.parent, path.name) is not None:
         return {}, []
     try:
         macros = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_names)

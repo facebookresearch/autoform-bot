@@ -29,7 +29,7 @@ from .lean import SourceLinker, build_linker, declaration_names, detect_ref, det
 from .markdown import content_lines as _content_lines
 from .markdown import NOTES_BOX, PAGE_SUFFIXES, STATEMENT_BOX, boxed, statement_and_notes
 from .markdown import outside_fences as _outside_fences
-from .mathjax import MATHJAX_SCRIPT, in_the_way, mathjax_script
+from .mathjax import MATHJAX_SCRIPT, TEX_MACROS, in_the_way, mathjax_script
 from .readback import READBACKS_DIR, Readback, load_readbacks, publishable_article, readback_for, render_testimony
 from .review import ReviewBundle, ReviewError, ReviewDeclaration, validate_review_bundle
 from .skeleton import DeclarationSkeleton, SkeletonReport
@@ -257,7 +257,7 @@ def publication_issues(graph: Graph, blueprint: Path, *, lean_root: str | Path |
     try:
         snapshot = _capture_publication(blueprint, graph)
     except PublicationError as exc:
-        return _blocked_assets(blueprint) + mathjax_script(blueprint)[1] + list(exc.issues)
+        return _in_the_way(blueprint, graph, None) + mathjax_script(blueprint)[1] + list(exc.issues)
     repo_root = Path(lean_root).expanduser().resolve() if lean_root is not None else blueprint.parent
     sources_base = _sources_base(blueprint, repo_root, detect_repository_url(repo_root), detect_ref(repo_root))
     return _publication(graph, blueprint, snapshot, destination=blueprint, sources_base=sources_base).issues
@@ -391,24 +391,66 @@ def _publication(
             files[source] = text
         else:
             files[source] = snapshot.files[source]
-    issues.extend(_blocked_assets(blueprint))
+    issues.extend(_in_the_way(blueprint, graph, snapshot))
     issues.extend(mathjax_script(blueprint)[1])
     return _Publication(groups, targets, node_sources, files, statements, issues)
 
 
-def _blocked_assets(blueprint: Path) -> list[str]:
-    """Anything but a file where render writes one of the site's assets."""
+def _site_paths(graph: Graph) -> tuple[str, ...]:
+    """Every file render writes into the site for ``graph`` other than the
+    blueprint's own, relative to the site's root: the derived pages, the
+    publication manifest, and the site's assets."""
 
+    return tuple(
+        sorted(
+            {
+                *_GENERATED_FILES,
+                STRUCTURE_PAGE,
+                "SUMMARY.md",
+                *(_group_page(group).as_posix() for group in _group_nodes(graph)),
+                *graph_pages.graph_page_paths(graph),
+                *_ASSETS,
+            }
+        )
+    )
+
+
+def _in_the_way(blueprint: Path, graph: Graph, snapshot: BlueprintSnapshot | None) -> list[str]:
+    """Anything but a file where render writes one of :func:`_site_paths`,
+    or reads the project's macros from: a directory, symlink, or special
+    file there, or a file where one of its folders goes.
+
+    Render copies the captured files into the site and then writes these
+    over them, so a captured file below one of these paths, or at one of
+    its folders, would stop the build half written; ``snapshot`` names
+    those. The rest is looked up on the disk, since capture skips or
+    refuses it.
+    """
+
+    captured = {source.relative_to(blueprint).as_posix() for source in snapshot.files} if snapshot else set()
+    folders = {"/".join(parts[:end]) for parts in (path.split("/") for path in captured) for end in range(1, len(parts))}
     blocked: dict[str, str] = {}
-    for relative in _ASSETS:
+    for relative in (*_site_paths(graph), TEX_MACROS):
         found = in_the_way(blueprint, relative)
-        if found is not None and found[0] not in blocked:
-            where, kind = found
-            blocked[where] = (
-                f"{where}: is {kind}, where autoform render writes a file; remove it"
-                if where == relative
-                else f"{where}: is {kind}, where autoform render needs a folder for {relative}; remove it"
+        if found is None and relative in folders:
+            found = relative, "a directory"
+        if found is None:
+            parts = relative.split("/")
+            found = next(
+                (("/".join(parts[:end]), "a file") for end in range(1, len(parts)) if "/".join(parts[:end]) in captured),
+                None,
             )
+        if found is None or found[0] in blocked:
+            continue
+        where, kind = found
+        purpose = (
+            "reads the project's macros from a file"
+            if relative == TEX_MACROS
+            else "writes a file"
+            if where == relative
+            else f"needs a folder for {relative}"
+        )
+        blocked[where] = f"{where}: is {kind}, where autoform {'' if relative == TEX_MACROS else 'render '}{purpose}; remove it"
     return list(blocked.values())
 
 
