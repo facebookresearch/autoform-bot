@@ -213,7 +213,6 @@ def meaningConstants (env : Environment) (c : Name) : Array Name :=
   match env.find? c with
   | some (.defnInfo {{ type, value, .. }}) | some (.opaqueInfo {{ type, value, .. }}) =>
     type.getUsedConstants ++ value.getUsedConstants
-
   | some (.inductInfo v) =>
     v.type.getUsedConstants ++ v.ctors.toArray ++
       ((getStructureInfo? env c).map (·.fieldInfo.map (·.projFn))).getD #[]
@@ -729,7 +728,6 @@ def emitShared (cache : IO.Ref SemanticCache) (table : String) (name : Name)
     emitRecord cache entry
     cache.modify fun s => {{ s with emitted := s.emitted.insert (table, name) }}
 
-
 /-- The modules that belong to the running toolchain. A name root is not
 enough: a dependency may name its own module `Lake.Foo`, and that module is
 external like any other. A module is core only when its root is a toolchain
@@ -830,7 +828,6 @@ def skeleton
   -- holds private bodies and proofs); bind every part that exists.
   for mod in boundaryModules.qsort Name.lt do
     emitShared semanticCache "module" mod do
-
       let olean ← findOLean mod
       unless ← olean.pathExists do
         throwError "compiled artifact unavailable for boundary module {{mod}}"
@@ -908,7 +905,6 @@ def main (projectRoots : List Name) (roots : List (String × Name)) : CommandEla
           emit semanticCache request [("error", Json.str (message.take errorLimit).toString)]
   finally
     out.flush
-
 
 end AutoformSkeleton
 

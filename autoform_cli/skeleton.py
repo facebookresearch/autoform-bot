@@ -458,7 +458,6 @@ class SkeletonReport:
         """
 
         if self.selection not in ("all", "filtered"):
-
             return "has an invalid selection mode"
         target_ids = tuple(node_id for node_id, _ in self.targets)
         if tuple(sorted(set(target_ids))) != target_ids or not all(
