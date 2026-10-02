@@ -1268,7 +1268,9 @@ mathtools, and the project's macros from `blueprint/tex-macros.json`, written
 as MathJax's `tex.macros` is: a name maps to a body, `[body, arguments]`, or
 `[body, arguments, default]`. A body or default may not end in a single
 backslash, since MathJax would join it to the text after it into one command,
-as `\` and `label` make `\label`. Each read-back card is typeset with a TeX input
+as `\` and `label` make `\label`. `check` and `render` judge and build the
+script from the copy of `tex-macros.json` that `render` reads once and
+publishes beside it, so an edit made during a render reaches neither. Each read-back card is typeset with a TeX input
 of its own that knows only base, ams, and noundefined, so nothing an article,
 another card, or the project's macros define reaches it. These inputs read
 only the formulas the site's Markdown marks, such as `$...$` or `$$...$$` in an

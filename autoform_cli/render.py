@@ -257,7 +257,7 @@ def publication_issues(graph: Graph, blueprint: Path, *, lean_root: str | Path |
     try:
         snapshot = _capture_publication(blueprint, graph)
     except PublicationError as exc:
-        return _in_the_way(blueprint, graph, None) + mathjax_script(blueprint)[1] + list(exc.issues)
+        return _in_the_way(blueprint, graph, None) + list(exc.issues)
     repo_root = Path(lean_root).expanduser().resolve() if lean_root is not None else blueprint.parent
     sources_base = _sources_base(blueprint, repo_root, detect_repository_url(repo_root), detect_ref(repo_root))
     return _publication(graph, blueprint, snapshot, destination=blueprint, sources_base=sources_base).issues
@@ -278,6 +278,9 @@ class _Publication:
     #: Each formalizable leaf's statement and the sections after it, as
     #: published in its box on its chapter's page.
     statements: dict[str, tuple[str, str]]
+    #: The site's ``javascripts/mathjax.js``, built from the captured
+    #: ``tex-macros.json`` the site publishes.
+    script: str
     issues: list[str]
 
 
@@ -392,8 +395,11 @@ def _publication(
         else:
             files[source] = snapshot.files[source]
     issues.extend(_in_the_way(blueprint, graph, snapshot))
-    issues.extend(mathjax_script(blueprint)[1])
-    return _Publication(groups, targets, node_sources, files, statements, issues)
+    script, script_issues = mathjax_script(
+        snapshot.files.get(blueprint / MATHJAX_SCRIPT), snapshot.files.get(blueprint / TEX_MACROS)
+    )
+    issues.extend(script_issues)
+    return _Publication(groups, targets, node_sources, files, statements, script, issues)
 
 
 def _site_paths(graph: Graph) -> tuple[str, ...]:
@@ -560,8 +566,6 @@ def render_site(
     site = _publication(graph, blueprint, snapshot, destination=destination, sources_base=sources_base)
     if site.issues:
         raise PublicationError(site.issues)
-    # The site's MathJax configuration is written here, never kept from the vault.
-    math_script = mathjax_script(blueprint)[0]
     statuses = status.derive(graph)
     numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
@@ -699,7 +703,8 @@ def render_site(
     for relative, contents in (
         (STYLESHEET, _stylesheet()),
         (MERMAID_SCRIPT, _mermaid_script()),
-        (MATHJAX_SCRIPT, math_script),
+        # Written here, never kept from the vault.
+        (MATHJAX_SCRIPT, site.script),
         (LOGO, _logo()),
     ):
         asset = destination / relative

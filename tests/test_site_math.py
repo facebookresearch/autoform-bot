@@ -170,6 +170,66 @@ def test_project_macros_reach_article_formulas_only(tmp_path: Path) -> None:
     assert "macros" not in settings["card"]
 
 
+def _changed_after_capture(monkeypatch: pytest.MonkeyPatch, path: Path, later: str) -> None:
+    """Make the next capture of the blueprint rewrite ``path`` as ``later``
+    once it has read it."""
+
+    import autoform_cli.render as render_module
+
+    capture = render_module._capture_publication
+
+    def capture_then_change(*args, **kwargs):
+        snapshot = capture(*args, **kwargs)
+        path.write_text(later, encoding="utf-8")
+        return snapshot
+
+    monkeypatch.setattr(render_module, "_capture_publication", capture_then_change)
+
+
+@pytest.mark.parametrize("later", ["{", json.dumps({"CC": "\\mathbb{C}"})], ids=["invalid", "different"])
+def test_the_script_has_the_macros_the_site_publishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, later: str
+) -> None:
+    """The script is built from the tex-macros.json render captured and
+    publishes, so a later change to the file reaches neither."""
+
+    blueprint = _vault(tmp_path, macros=json.dumps(_MACROS))
+    _changed_after_capture(monkeypatch, blueprint / "tex-macros.json", later)
+
+    site = _render(blueprint)
+
+    published = json.loads((site / "tex-macros.json").read_text(encoding="utf-8"))
+    assert published == _MACROS
+    assert _settings((site / "javascripts/mathjax.js").read_text(encoding="utf-8"))["page"]["macros"] == published
+
+
+@pytest.mark.parametrize("later", ["{", json.dumps({"CC": "\\mathbb{C}"})], ids=["invalid", "different"])
+def test_check_judges_the_macros_it_captured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], later: str
+) -> None:
+    blueprint = _vault(tmp_path, macros=json.dumps(_MACROS))
+    _changed_after_capture(monkeypatch, blueprint / "tex-macros.json", later)
+
+    assert main(["check", str(blueprint)]) == 0, capsys.readouterr().out
+
+
+def test_macros_made_valid_after_capture_are_still_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Invalid macros captured are refused even if the file is fixed before
+    the script is built, so the site never publishes a script without the
+    macros beside a tex-macros.json that has none."""
+
+    blueprint = _vault(tmp_path, macros="{")
+    _changed_after_capture(monkeypatch, blueprint / "tex-macros.json", json.dumps(_MACROS))
+
+    assert main(["check", str(blueprint)]) == 1
+    assert "tex-macros.json: not valid JSON" in capsys.readouterr().out
+    (blueprint / "tex-macros.json").write_text("{", encoding="utf-8")
+    with pytest.raises(PublicationError, match="tex-macros.json: not valid JSON"):
+        _render(blueprint)
+
+
 _LONE = (
     "tex-macros.json: \\{} ends a body or default in a single backslash, which would join the text after it "
     "into one command; double it or remove it"

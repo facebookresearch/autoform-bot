@@ -137,28 +137,31 @@ def in_the_way(blueprint: Path, relative: str) -> tuple[str, str] | None:
     return None
 
 
-def mathjax_script(blueprint_dir: str | Path) -> tuple[str, list[str]]:
-    """The ``javascripts/mathjax.js`` the site gets for the vault at
-    ``blueprint_dir``, and what refuses it: an invalid ``tex-macros.json``, or
-    an edited copy of the configuration the vault used to keep."""
+def mathjax_script(kept: bytes | None, macros: bytes | None) -> tuple[str, list[str]]:
+    """The ``javascripts/mathjax.js`` the site gets for a vault, and what
+    refuses it: an invalid ``tex-macros.json``, or an edited copy of the
+    configuration the vault used to keep.
 
-    blueprint = Path(blueprint_dir)
+    ``kept`` and ``macros`` are the bytes render captured at those two paths,
+    ``None`` where it captured none, so the script is built from the
+    ``tex-macros.json`` the site publishes beside it.
+    """
+
     issues: list[str] = []
-    kept = blueprint / MATHJAX_SCRIPT
-    # Anything else at that path is refused with the site's other assets.
-    if kept.is_file() and in_the_way(blueprint, MATHJAX_SCRIPT) is None:
-        digest = hashlib.sha256(kept.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    if kept is not None:
+        digest = hashlib.sha256(kept.replace(b"\r\n", b"\n")).hexdigest()
         if digest not in _SHIPPED_CONFIGURATIONS:
             issues.append(
                 f"{MATHJAX_SCRIPT}: autoform render writes the site's MathJax configuration, so the "
                 f"edits in this copy would be lost; move any tex.macros to {TEX_MACROS} and delete it"
             )
-    macros, macro_issues = _tex_macros(blueprint / TEX_MACROS)
-    return _script(macros), issues + macro_issues
+    parsed, macro_issues = _tex_macros(macros)
+    return _script(parsed), issues + macro_issues
 
 
-def _tex_macros(path: Path) -> tuple[dict[str, object], list[str]]:
-    """The macros in ``path``, which need not exist, and what is wrong with them.
+def _tex_macros(data: bytes | None) -> tuple[dict[str, object], list[str]]:
+    """The macros in ``data``, a ``tex-macros.json``'s bytes or ``None`` when
+    there is none, and what is wrong with them.
 
     Each maps a name of letters to a body, to ``[body, arguments]``, or to
     ``[body, arguments, default]``, as MathJax's ``tex.macros`` does. A body
@@ -177,11 +180,10 @@ def _tex_macros(path: Path) -> tuple[dict[str, object], list[str]]:
     check nor the article's sees: ``\\`` and then ``label`` is ``\\label``.
     """
 
-    # Anything else at that path is refused with the files render writes.
-    if not path.is_file() or in_the_way(path.parent, path.name) is not None:
+    if data is None:
         return {}, []
     try:
-        macros = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_names)
+        macros = json.loads(data.decode("utf-8"), object_pairs_hook=_unique_names)
     except (UnicodeDecodeError, ValueError) as exc:
         return {}, [f"{TEX_MACROS}: not valid JSON: {exc}"]
     if not isinstance(macros, dict):
