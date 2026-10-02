@@ -468,8 +468,10 @@ The loader rejects missing or unknown fields, altered packets, identity
 mismatches, and malformed or empty testimony. Testimony must show a reader
 everything it says: invisible and reordering characters (zero-width spaces,
 bidirectional overrides, Unicode's default-ignorable characters, spaces other
-than the ASCII space, right-to-left letters and digits), more than four
-combining marks on one character or more than two above or below it, a
+than the ASCII space, right-to-left letters and digits), code points the
+Unicode data of the Python running the check leaves unassigned, named with
+that data's version, more than four combining marks on one character or
+more than two above or below it, a
 combining mark with no character before it, TeX comments, and raw HTML are
 rejected. Testimony
 is rendered once, by a Markdown renderer that reads no HTML, and the site shows
@@ -509,9 +511,12 @@ other than `l`, `c`, and `r` with one `|` or `:` between two of them, and a
 bracket after `aligned`, `gathered`, or `array` other than `[t]`, `[b]`, or
 `[c]`. So are
 arguments that show nothing (`\mathrm{}`, `\hat{\displaystyle}`), space
-between two symbols that adds up to less than one negative thin space, and
-row spacing after `\\`. A formula may hold at most 2,048 characters, 8 em of
-space, 9 `&` in a row, 16 `\\` in an environment and 32 in all, 16 empty
+between two symbols that adds up to less than one negative thin space,
+negative space at the start or end of a formula, which slides it over what
+sits beside it, row spacing after `\\`, and a `*` right after `\\`, which
+MathJax reads as part of the row break and does not show. A formula may
+hold at most 2,048 characters, 8 em of space, 9 `&` in a row, 16 `\\` in an
+environment and 32 in all, 16 empty
 cells, and no empty row, nested at most 16 deep with scripts 8 deep; a
 testimony may hold at most 64 em of space, the space in the rows of an
 environment counted once per column.

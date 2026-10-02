@@ -1349,6 +1349,17 @@ def test_the_read_back_guide_states_the_rules_the_validator_applies() -> None:
         ("start a list item with `[x]`", "- [x] is", "- \\[x] is"),
         ("write `~` in text", "By Theorem~3 and Lemma~4.", "By Theorem 3 and Lemma 4."),
         ("write a backslash before punctuation only where", "A 50\\% share.", "A 50% share."),
+        (
+            "In a formula in a table cell write `\\vert` for `|` and `\\Vert` for `\\|`",
+            "| a |\n|---|\n| $x \\| y$ |",
+            "| a |\n|---|\n| $x \\vert y \\Vert z$ |",
+        ),
+        ("or `\\!` at the start or end of a formula", "Let $`\\!x`$ hold.", "Let $`x\\!y`$ hold."),
+        (
+            "put a space between `\\\\` and a `*` after it",
+            "$`\\begin{aligned}a\\\\*b\\end{aligned}`$",
+            "$`\\begin{aligned}a\\\\ *b\\end{aligned}`$",
+        ),
     ):
         assert rule in guide, rule
         assert _testimony_errors(bad) and not _testimony_errors(good), (rule, _testimony_errors(good))

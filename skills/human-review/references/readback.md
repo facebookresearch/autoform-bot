@@ -72,8 +72,10 @@ list, table, and code block, and a line of text between a bulleted and a
 numbered list. Indent a nested list four spaces, and number every list from 1.
 Give every table row as many cells as the header and every cell of the
 delimiter row a `-`; write `\|` for a pipe in a table cell, and keep code
-that holds a pipe out of tables. Close a code block with the fence that opens
-it, at the same indent. Do not end a line with a backslash, start a list item
+that holds a pipe out of tables. In a formula in a table cell write `\vert`
+for `|` and `\Vert` for `\|`: GitHub splits the row at a pipe even there.
+Close a code block with the fence that opens it, at the same indent. Do not
+end a line with a backslash, start a list item
 with `[x]` or `[ ]`, write `~` in text, or open a block quote with `[!NOTE]`
 or the like, and write a backslash before punctuation only where Markdown
 would read it otherwise, as in `\*`: GitHub hides the backslash before any
@@ -104,8 +106,10 @@ relations, operators, arrows, delimiters, `\frac`, `\sqrt`, accents, the fonts
 Any other command is refused by name, including `\phantom`, `\rlap`, `\kern`,
 `\color`, `\tag`, `\large`, and macro definitions. Space with `\,`, `\;`,
 `\quad`, or `~`: one formula may space 8 em in all, as much as 8 `\quad`, and
-a read-back 64 em. Never write two `\!` in a row. In a formula write `\%` for
-a percent sign, never `%`. A read-back that breaks this is rejected, however faithful
+a read-back 64 em. Never write two `\!` in a row, or `\!` at the start or end
+of a formula, and put a space between `\\` and a `*` after it. In a formula
+write `\%` for a percent sign, never `%`. A read-back that breaks this is
+rejected, however faithful
 it is. Keep it to a few kilobytes: a read-back over 32 KiB, or with more than
 64 `[`, is refused unread; in a formula `\lbrack` and `\rbrack` do not count.
 
