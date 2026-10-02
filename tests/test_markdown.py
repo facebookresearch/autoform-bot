@@ -124,6 +124,18 @@ def test_the_renderer_pins_match_the_pages_build(workflow: str) -> None:
     assert '--with "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in build
 
 
+def test_the_documented_site_build_installs_autoform() -> None:
+    """The README's build command, like the workflow's, installs autoform,
+    whose Markdown extension mkdocs.yml loads."""
+
+    readme = (Path(__file__).resolve().parents[1] / "autoform_cli/README.md").read_text(encoding="utf-8")
+    builds = re.findall(r"^uv run --with mkdocs .*?mkdocs build --strict$", readme, re.MULTILINE | re.DOTALL)
+
+    assert builds
+    for command in builds:
+        assert '--with "<AUTOFORM_PLUGIN_ROOT>"' in command, command
+
+
 def test_frontmatter_cannot_contribute_anchors(tmp_path: Path) -> None:
     # MkDocs strips frontmatter before Markdown sees it, so a setext-looking
     # closing delimiter must not turn a YAML key into a heading.

@@ -137,8 +137,11 @@ uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform-visualize blueprint
 uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform render blueprint \
   --output site-src --lean-root . --require-declarations
 uv run --with mkdocs --with mkdocs-material --with mkdocs-literate-nav \
-  --with pymdown-extensions mkdocs build --strict
+  --with pymdown-extensions --with "<AUTOFORM_PLUGIN_ROOT>" mkdocs build --strict
 ```
+
+The build needs autoform too: `mkdocs.yml` reads formulas with its Markdown
+extension, `autoform_cli.markdown:FormulaExtension`.
 
 Drop `--require-declarations` when reviewing work in progress, where a
 statement may name a Lean declaration that does not exist yet.
