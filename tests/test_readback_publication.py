@@ -1025,22 +1025,37 @@ def test_each_flush_uses_full_fsync_where_the_platform_has_it_and_fsync_where_it
 def test_a_first_card_flushes_each_directory_it_makes_into_its_parent(tmp_path: Path, monkeypatch) -> None:
     blueprint = _blueprint(tmp_path)
     _without_full_fsync(monkeypatch)
-    fsync = os.fsync
-    flushed: list[tuple[int, int]] = []
+    fsync, mkdir = os.fsync, os.mkdir
+    steps: list[tuple[str, object]] = []
 
-    def recorded(descriptor: int) -> None:
+    def flushed(descriptor: int) -> None:
         fsync(descriptor)
         found = os.fstat(descriptor)
-        flushed.append((found.st_dev, found.st_ino))
+        steps.append(("flush", (found.st_dev, found.st_ino)))
+
+    def made(name: str, mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+        mkdir(name, mode, dir_fd=dir_fd)
+        steps.append(("mkdir", name))
 
     patched = _Os()
-    patched.fsync = recorded
+    patched.fsync, patched.mkdir = flushed, made
+    patched.supports_dir_fd = os.supports_dir_fd | {made}
     monkeypatch.setattr(readback, "os", patched)
 
     path = _file_card(blueprint, "First.")
-    identities = [(found.st_dev, found.st_ino) for found in map(os.stat, (blueprint, path.parent.parent, path))]
-    # Each new directory's name, then the card, then the card's name.
-    assert flushed == [*identities, (os.stat(path.parent).st_dev, os.stat(path.parent).st_ino)]
+    parent, readbacks, card, directory = (
+        (found.st_dev, found.st_ino) for found in map(os.stat, (blueprint, path.parent.parent, path, path.parent))
+    )
+    # Each new directory's name is flushed into its parent once it is made;
+    # then the card, then the card's name.
+    assert steps == [
+        ("mkdir", "readbacks"),
+        ("flush", parent),
+        ("mkdir", _ARTICLE_ID),
+        ("flush", readbacks),
+        ("flush", card),
+        ("flush", directory),
+    ]
 
 
 def test_a_directory_made_for_a_first_card_that_cannot_be_flushed_into_its_parent_is_a_warning(
