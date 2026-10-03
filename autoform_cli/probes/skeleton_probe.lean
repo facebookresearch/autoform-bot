@@ -629,21 +629,25 @@ def agreement {{α : Type}} [BEq α] (results : Array (Except Unit (Option α)))
   let some first := parsed[0]? | return none
   return some (if parsed.all (· == first) then some first else none)
 
-/-- The inputs a statement is parsed from: the source, then each prefix that
-ends before a `:=` with `:= sorry` as its value. -/
-def statementInputs (snippet : String) : Array String := Id.run do
+/-- Texts that hold a text of at most `window + 1` characters exactly when an
+input a statement is parsed from does. Those inputs are the source, then each
+prefix that ends before a `:=` with `:= sorry` as its value; each prefix is
+part of the source, so only text across its seam with `:= sorry` is new, and
+the texts are as long in total as the source and the seams. -/
+def statementInputs (window : Nat) (snippet : String) : Array String := Id.run do
   let mut inputs := #[snippet]
   let mut written := ""
   for part in (snippet.splitOn ":=").dropLast do
     written := written ++ part
-    inputs := inputs.push (written ++ ":= sorry")
+    inputs := inputs.push ((written.takeEnd window).toString ++ ":= sorry")
     written := written ++ ":="
   return inputs
 
 /-- Capture a declaration from the same source snapshot the probe inspects,
-with every parser state it may have been parsed with, given the inputs it
-will be parsed from. The surrounding source-tree guard rejects concurrent
-edits. Each state is the module's first-line state, the scoped entries of a
+with every parser state it may have been parsed with. `inputs window source`
+gives texts that hold each text of at most `window + 1` characters exactly
+when an input the source will be parsed from does. The surrounding
+source-tree guard rejects concurrent edits. Each state is the module's first-line state, the scoped entries of a
 set of namespaces, and the module's own entries up to a point, of which
 those in a namespace only when it is in the set:
 - An own entry comes no earlier than the point its bound proves.
@@ -652,7 +656,7 @@ those in a namespace only when it is in the set:
 - An entry matters only if `entryKeys` says the inputs can feel it, so only
   points just after such an entry, and namespaces holding one, are tried. -/
 def declarationSnippet (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref SemanticCache) (c : Name)
-    (inputs : String → Array String) : CommandElabM (Option Snippet) := do
+    (inputs : Nat → String → Array String) : CommandElabM (Option Snippet) := do
   let env ← getEnv
   let some r ← findDeclarationRanges? c | return none
   let some idx := env.getModuleIdxFor? c | return none
@@ -664,7 +668,12 @@ def declarationSnippet (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref Sem
   let column := r.range.pos.column
   let g ← moduleGrammar cache semanticCache mod
   let some base := g.base | return some {{ text := snippet, column, grammars := #[], namespaces := #[] }}
-  let inputs := inputs snippet
+  -- One character less than the longest text an entry can need.
+  let longest (w : Nat) (e : Parser.ParserExtension.Entry) : Nat :=
+    (entryKeys base.tokens e).getD [] |>.foldl (fun w k => Nat.max w k.length) w
+  let window := g.imported.foldl (fun w (_, e) => longest w e) 1
+  let window := g.own.foldl (fun w e => longest w (entryOf e)) window - 1
+  let inputs := inputs window snippet
   let matters (e : Parser.ParserExtension.Entry) : Bool :=
     match entryKeys base.tokens e with
     | none => true
@@ -708,7 +717,7 @@ state under which it parses agrees on them; the caller then decides whether
 the source can be shown. -/
 def declarationSource (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref SemanticCache) (c : Name) :
     CommandElabM (Option (String × Json)) := do
-  let some s ← declarationSnippet cache semanticCache c (#[·]) | return none
+  let some s ← declarationSnippet cache semanticCache c (fun _ text => #[text]) | return none
   let comments := s.grammars.map fun env =>
     (parseCommand env s.column s.namespaces s.text).map fun parsed =>
       parsed.map fun (stx, bytes) => commentsJson bytes stx s.column s.text.utf8ByteSize

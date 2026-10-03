@@ -3493,6 +3493,37 @@ def test_the_probe_rebuilds_each_modules_grammar_once(tmp_path: Path) -> None:
     for item in trusted.values():
         assert item["source"] is not None and item["source_comments"], item["name"]
 
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_long_proof_does_not_make_the_statement_check_quadratic(tmp_path: Path) -> None:
+    # The statement is parsed from the source and from each prefix ending
+    # before a `:=`. Checking each of ManyTok's scoped tokens against every
+    # such prefix of a 1500-`:=` proof takes hours; checking it against the
+    # source and the seams with `:= sorry` takes seconds.
+    project = _project(tmp_path)
+    (project / "Skel" / "ManyTok.lean").write_text(
+        "import Lean\n"
+        "namespace Many\n"
+        "run_cmd for i in [0:10000] do\n"
+        '  Lean.Parser.parserExtension.add (.token s!"@@{i}@@") (kind := .scoped)\n'
+        "end Many\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "LongProof.lean").write_text(
+        "import Skel.ManyTok\n"
+        "theorem Skel.longRoot (n : Nat) : n = n := by\n"
+        + "  have h : n + 1 = n + 1 := rfl\n" * 1500
+        + "  rfl\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.LongProof")
+    roots = ("Skel.longRoot",)
+    probe = render_probe(imports=("Skel.LongProof",), roots=roots, project_roots=("Skel",))
+
+    output = run_probe(probe, project, timeout=600)
+
+    records = parse_probe_output(output, expected_roots=roots)
+    assert records["Skel.longRoot"]["statement_source"] == "theorem Skel.longRoot (n : Nat) : n = n"
+
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_tokens_only_the_probes_own_imports_declare_do_not_withhold_a_source(tmp_path: Path) -> None:
