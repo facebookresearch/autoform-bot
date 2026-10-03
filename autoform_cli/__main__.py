@@ -20,6 +20,7 @@ from .doctor import diagnose_project
 from .graph import GraphValidationError, load_graph
 from .lean import build_linker, declaration_names
 from .project import ProjectCatalogError, inspect_project, load_release_catalog
+from .provenance import ProvenanceError, resolve_plugin_provenance
 from .render import PublicationError, render_site
 from .scaffold import ScaffoldError, scaffold_project
 from .skeleton import (
@@ -44,12 +45,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     init.add_argument(
         "--autoform-source",
         default="",
-        help="Autoform Git source the generated workflows install from (default: this checkout's origin)",
+        help="Autoform Git source for generated workflows (default: recorded installation source)",
     )
     init.add_argument(
         "--autoform-ref",
         default="",
-        help="immutable ref the workflows pin (default: this checkout's HEAD commit)",
+        help="full commit SHA for generated workflows (default: recorded installed commit)",
     )
     init.add_argument("--force", action="store_true", help="overwrite files that already exist")
     init.add_argument("--json", action="store_true", help="write stable machine-readable output")
@@ -85,6 +86,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "versions", help="list bundled known-good Lean and Mathlib releases"
     )
     project_versions.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    project_provenance = project_subparsers.add_parser(
+        "provenance",
+        help="read Autoform's recorded immutable source and commit",
+    )
+    project_provenance.add_argument(
+        "--json", action="store_true", help="write stable machine-readable output"
+    )
+
     claim = subparsers.add_parser("claim", help="coordinate temporary node ownership through Git refs")
     claim_subparsers = claim.add_subparsers(dest="claim_command", required=True)
     for operation in ("acquire", "renew", "release"):
@@ -217,6 +226,18 @@ def _init(args: argparse.Namespace) -> int:
             force=args.force,
         )
     except ScaffoldError as error:
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "error": {"code": "scaffold-invalid", "message": str(error)},
+                        "ok": False,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            return 2
         for issue in error.issues:
             print(f"error: {issue}", file=sys.stderr)
         return 2
@@ -229,21 +250,9 @@ def _init(args: argparse.Namespace) -> int:
     for path in result.written:
         print(f"  + {path}")
     for path in result.skipped:
-        note = "no Autoform ref to pin" if result.unpinned and ".github" in path else "exists, left alone"
-        print(f"  = {path} ({note})")
+        print(f"  = {path} (exists, left alone)")
     print("Next: describe the project in blueprint/README.md, then add chapters "
           "as roadmap/<chapter>/README.md.")
-    if result.unpinned:
-        # Flush first: stdout is block-buffered when piped, so without this the
-        # warning jumps ahead of the file list it is explaining.
-        sys.stdout.flush()
-        print(
-            "\nCI was not written: generated workflows install Autoform from a Git\n"
-            "ref, and this Autoform is not running from a checkout, so there is\n"
-            "nothing to pin. Re-run with the commit to add them:\n"
-            "  autoform init --autoform-ref <40-char-sha>",
-            file=sys.stderr,
-        )
     return 0
 
 
@@ -313,6 +322,12 @@ def _doctor(args: argparse.Namespace) -> int:
 
 
 def _project(args: argparse.Namespace) -> int:
+    if args.project_command == "provenance":
+        try:
+            result = resolve_plugin_provenance()
+        except ProvenanceError as error:
+            return _print_provenance_error(args, error)
+        return _print_provenance_result(args, result)
     try:
         catalog = load_release_catalog()
     except ProjectCatalogError as error:
@@ -337,6 +352,32 @@ def _project(args: argparse.Namespace) -> int:
     else:
         _print_project_inspection(result)
     return 0 if result.ok else 1
+
+
+def _print_provenance_result(args: argparse.Namespace, result) -> int:
+    if args.json:
+        print(json.dumps(result.as_dict(), sort_keys=True, separators=(",", ":")))
+    else:
+        print(f"Source: {result.source}")
+        print(f"Revision: {result.revision}")
+    return 0
+
+
+def _print_provenance_error(args: argparse.Namespace, error) -> int:
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "error": {"code": error.code, "message": error.message},
+                    "ok": False,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(f"error[{error.code}]: {error.message}", file=sys.stderr)
+    return 1
 
 
 def _print_project_inspection(result) -> None:

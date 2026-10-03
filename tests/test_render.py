@@ -1111,17 +1111,28 @@ def test_angle_bracket_reference_destinations_with_spaces_are_rewritten(tmp_path
     assert "<../sources/paper note.md>" not in chapter
 
 
-def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path) -> None:
+def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The roadmap landing page is not a formalization target.
 
     Counting every childless article made a freshly scaffolded vault claim
     "0 of 1 targets complete, 1 ready now", so the site described work before any
     had been planned.
     """
-    from autoform_cli.scaffold import scaffold_project
+    from autoform_cli import scaffold
+
+    templates = Path(scaffold.__file__).resolve().parent / "templates"
+    snapshot = tuple(
+        (path.relative_to(templates).as_posix(), path.read_bytes(), 0o644)
+        for path in sorted(templates.rglob("*"))
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+    )
+    monkeypatch.setattr(scaffold, "fetch_template_snapshot", lambda source, revision: snapshot)
 
     project = tmp_path / "project"
-    scaffold_project(project, title="Empty")
+    scaffold.scaffold_project(project, title="Empty", autoform_ref="1" * 40)
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out)

@@ -359,14 +359,16 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "https://github.com/facebookresearch/autoform-bot" in theme
     assert '<a href="{{ config.repo_url }}">Formalization source</a>.' in theme
     workflow = (example / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8")
-    assert "autoform check blueprint --lean-root ." in workflow
-    assert "autoform render blueprint" in workflow
+    assert '"$AUTOFORM_DIR" check blueprint --lean-root .' in workflow
+    assert '"$AUTOFORM_DIR" render blueprint' in workflow
+    assert 'runpy.run_module("autoform_cli",run_name="__main__")' in workflow
     assert "--require-declarations" in workflow
     assert "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128" in workflow
     assert "@main" not in workflow
 
     verify = (example / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
-    assert "autoform check blueprint" in verify
+    assert '"$AUTOFORM_DIR" check blueprint' in verify
+    assert 'runpy.run_module("autoform_cli",run_name="__main__")' in verify
     assert 'lake clean "$root_package"' in verify
     assert "lake build" in verify
     assert "Reject kernel-check bypass options" in verify
@@ -522,6 +524,25 @@ def test_roadmap_skill_commits_the_final_checked_pass(repo_root: Path) -> None:
         assert required in normalized
 
 
+def test_setup_skill_uses_recorded_identity_and_authenticated_templates(repo_root: Path) -> None:
+    setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    normalized = " ".join(setup.split())
+
+    assert "autoform project provenance --json" in setup
+    assert "--autoform-source <RECORDED_HTTPS_GIT_SOURCE>" in setup
+    assert "--autoform-ref <RECORDED_40_CHAR_SHA>" in setup
+    assert "authenticated bytes" in setup
+    assert "exits nonzero before writing anything" in normalized
+    assert "identity lookup as file integrity attestation" in normalized
+    assert "authorization to contact that HTTPS host" in normalized
+    assert "plain directory copy" not in setup
+    assert "scripts/workspace_inspector.py" not in setup
+    assert "scripts/make_project.sh" not in setup
+    assert "autoform project provenance --json" in readme
+    assert "--autoform-ref <full-commit-sha>" not in readme
+
+
 def test_setup_skill_offers_opt_in_zulip_project_sync(repo_root: Path) -> None:
     setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
     roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")
@@ -653,8 +674,8 @@ def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None
     """The executable example differs only by its concrete immutable pin."""
 
     substitutions = {
-        "{{AUTOFORM_SOURCE_YAML}}": '"https://github.com/VivienCabannes/autoform-bot.git"',
-        "{{AUTOFORM_REF_YAML}}": '"43097b2c07e68df899d6b8bca7849d091c294754"',
+        "{{AUTOFORM_SOURCE_YAML}}": '"https://github.com/facebookresearch/autoform-bot.git"',
+        "{{AUTOFORM_REF_YAML}}": '"45ca2ecff4c86c0cbcf82c3471dac27ebb956a89"',
     }
     template_dir = repo_root / "autoform_cli/templates/github/workflows"
     example_dir = repo_root / _EXAMPLE / ".github/workflows"

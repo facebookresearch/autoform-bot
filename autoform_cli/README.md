@@ -128,8 +128,15 @@ autoform init . --title "Finite Flat Group Schemes" \
   --repository-url https://github.com/owner/repo
 ```
 
-Pass `--autoform-ref <sha>` to pin the generated workflows at an immutable
-commit, `--force` to overwrite, and `--json` for machine-readable output.
+When neither provenance flag is supplied, `init` reads the source and commit
+recorded by the checkout or plugin host. It fetches only that commit's bounded
+`autoform_cli/templates/` subtree, then writes the vault and generated workflows
+from those authenticated bytes. To override that
+pair, pass both `--autoform-source <https-git-url>` and `--autoform-ref <sha>`.
+A ref supplied alone is resolved against the canonical repository. Use
+`--force` to overwrite and `--json` for machine-readable output. If no immutable
+identity is recorded, or the exact remote template snapshot cannot be fetched,
+`init` exits nonzero before writing anything.
 
 Inspect a Lean project and list Autoform's bundled known-good release pairs:
 
@@ -137,6 +144,7 @@ Inspect a Lean project and list Autoform's bundled known-good release pairs:
 autoform project inspect .
 autoform project inspect path/inside/project --json
 autoform project versions --json
+autoform project provenance --json
 ```
 
 `project inspect` reads the nearest enclosing project's decision files without
@@ -188,6 +196,19 @@ A missing or legacy manifest can therefore be a warning with `ok: true` and an
 oversized decision file that Lake and the inspection need to consult is an
 error with `ok: false`. Target and package options outside the report are left
 to Lake.
+
+`project provenance` is a local identity lookup, not self-attestation. It reads
+the origin and HEAD of a clean plugin-root checkout, a bounded Codex installer
+record, a bounded Claude installation record plus its marketplace checkout, or
+an installer-provided `.autoform-provenance.json` sidecar. Every record present
+must name the same credential-free HTTPS source and full commit SHA. It does not
+fetch the repository or inspect unrelated host files. A recorded or explicit
+source authorizes `init` to contact that HTTPS host; identity agreement does not
+establish that the publisher is trustworthy.
+
+Generated CI checks out the recorded commit, installs only hashed wheels from
+its committed `uv.lock`, and runs that source without building the Autoform
+package or resolving its build requirements.
 
 Publishing a project runs four steps in order: validate, write the Mermaid
 graph into the vault, render the site source, then strict-build the site.

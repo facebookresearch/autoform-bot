@@ -55,6 +55,11 @@ or run its commands.
 | Prepare a person-led review | `/autoform:human-review` | `$human-review` |
 | Run an independent agent review | `/autoform:agent-review` | `$agent-review` |
 
+During setup, the skill runs `autoform project provenance --json` and uses
+`autoform init` to create the vault and site. Generated workflows and templates
+come only from the exact recorded source commit. Full installed-tree comparison
+can remain a separate, optional audit rather than a setup prerequisite.
+
 For example: “Build a complete roadmap for Sections 2–4 of `paper.pdf`.” Keep
 the source in the repository or provide an accessible path. Roadmap treats
 coarse planning as an internal checkpoint unless staged review was requested;
@@ -94,6 +99,7 @@ plugin development and debugging, not as a required user workflow.
 | Command | Purpose |
 | --- | --- |
 | `autoform init` | Scaffold the blueprint and site; add CI when immutably pinned. |
+| `autoform project provenance` | Read the immutable source and commit recorded by Git or the plugin host. |
 | `autoform check` | Validate Markdown structure and dependencies. |
 | `autoform audit` | Audit completeness and checked facts. |
 | `autoform doctor` | Diagnose the local blueprint contract. |

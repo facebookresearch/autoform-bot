@@ -13,14 +13,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import stat
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
 
-_TEMPLATES = Path(__file__).resolve().parent / "templates"
+from .provenance import ProvenanceError, normalize_git_source, resolve_plugin_provenance
+from .remote_templates import TemplateSnapshot, TemplateSnapshotError, fetch_template_snapshot
 
 #: Template paths whose leading dot is dropped on disk so packaging tools and
 #: ignore rules do not swallow them.
@@ -32,173 +30,32 @@ _DOTTED = {
 
 DEFAULT_AUTOFORM_SOURCE = "https://github.com/facebookresearch/autoform-bot.git"
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
-_SOURCE_HOST = re.compile(
-    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
-    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-)
-_SOURCE_PATH_PART = re.compile(r"[A-Za-z0-9._~-]+")
-_GITHUB_SCP_SOURCE = re.compile(
-    r"git@github\.com:(?P<path>[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)+)"
-)
 _TEMPLATE_PLACEHOLDER = re.compile(r"\{\{(?P<name>[A-Z][A-Z0-9_]*)\}\}")
-
-#: Where `claude plugin install` records the marketplace each plugin came from.
-_PLUGIN_REGISTRY = Path.home() / ".claude" / "plugins" / "known_marketplaces.json"
-
-
-def _here() -> Path:
-    """The Autoform directory this CLI is running out of."""
-
-    return Path(__file__).resolve().parent.parent
-
-
-def _git(*args: str, root: Path | None = None) -> str | None:
-    """Read a value from an Autoform checkout, defaulting to this one."""
-
-    try:
-        done = subprocess.run(
-            ["git", "-C", str(root or _here()), *args],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    value = done.stdout.strip()
-    return value if done.returncode == 0 and value else None
-
-
-def _checkout_root(directory: Path) -> Path | None:
-    """*directory* if it is itself the root of a Git checkout, otherwise ``None``.
-
-    ``git -C`` searches upwards, so asking an installed copy for "its" origin
-    answers with whatever repository happens to enclose it. Autoform installed
-    into a project's own virtualenv sits under that project, so the plain
-    question pins the project's CI to the project, at the project's HEAD --
-    a pin that is both wrong and confidently specific.
-    """
-
-    top = _git("rev-parse", "--show-toplevel", root=directory)
-    if top is None:
-        return None
-    return directory if Path(top).resolve() == directory.resolve() else None
-
-
-def _marketplace_checkout() -> Path | None:
-    """The checkout an installed plugin copy was made from, if it is on disk.
-
-    `claude plugin install` copies into
-    ``~/.claude/plugins/cache/<marketplace>/<plugin>/<version>`` from a
-    marketplace it keeps as a real Git checkout, and records where in
-    ``known_marketplaces.json``. That checkout is this code's actual provenance,
-    so reading it is not the guess :func:`plugin_pin` refuses to make.
-
-    Returns ``None`` on anything unexpected: not running from a plugin cache, no
-    registry, no such marketplace, or a location that is not a checkout of
-    Autoform. A wrong answer here is worse than no answer.
-    """
-
-    parts = _here().parts
-    try:
-        cache = len(parts) - 1 - parts[::-1].index("cache")
-    except ValueError:
-        return None
-    if cache + 1 >= len(parts):
-        return None
-    try:
-        registry = json.loads(_PLUGIN_REGISTRY.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    entry = registry.get(parts[cache + 1]) if isinstance(registry, dict) else None
-    location = entry.get("installLocation") if isinstance(entry, dict) else None
-    if not isinstance(location, str) or not location:
-        return None
-    checkout = Path(location).expanduser()
-    # Insist it is a checkout of *this* project, and is itself the root of one
-    # rather than a directory sitting somewhere inside an unrelated repository.
-    if not (checkout / "autoform_cli" / "scaffold.py").is_file():
-        return None
-    return _checkout_root(checkout)
 
 
 def _normalize_autoform_source(source: str, *, allow_github_scp: bool = False) -> str | None:
-    """Return a safe, credential-free HTTPS Git source or ``None``.
+    """Compatibility wrapper for explicit workflow-source validation."""
 
-    Generated workflows persist this value and pass it to a shell. Keep the
-    accepted language deliberately small instead of attempting to quote every
-    URL or Git transport syntax. The one non-URL form is GitHub's SCP-style
-    origin, which is normalized only when reading local checkout provenance.
-    """
-
-    if not source or source != source.strip():
-        return None
-    if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in source):
-        return None
-    if allow_github_scp:
-        scp = _GITHUB_SCP_SOURCE.fullmatch(source)
-        if scp is not None:
-            path = scp.group("path")
-            source = f"https://github.com/{path if path.endswith('.git') else f'{path}.git'}"
-    try:
-        parsed = urlsplit(source)
-        port = parsed.port
-    except ValueError:
-        return None
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or port is not None
-        or parsed.query
-        or parsed.fragment
-        or parsed.netloc.lower() != parsed.hostname.lower()
-        or not _SOURCE_HOST.fullmatch(parsed.hostname)
-    ):
-        return None
-    parts = parsed.path.split("/")
-    if (
-        len(parts) < 2
-        or parts[0]
-        or any(part in {"", ".", ".."} for part in parts[1:])
-        or any(_SOURCE_PATH_PART.fullmatch(part) is None for part in parts[1:])
-        or not parts[-1].endswith(".git")
-        or parts[-1] == ".git"
-    ):
-        return None
-    return source
+    return normalize_git_source(source, allow_github_scp=allow_github_scp)
 
 
 def plugin_pin() -> tuple[str, str]:
-    """The Autoform source and commit generated CI should install, if knowable.
+    """Return recorded all-or-nothing provenance for legacy callers."""
 
-    Read from the Autoform checkout this CLI runs out of, or, when there is none
-    because `claude plugin install` copied the directory without its `.git`,
-    from the marketplace checkout that copy was made from. Both are records of
-    where this code came from rather than assumptions about it, and both must be
-    the root of a checkout: a directory that merely sits inside somebody else's
-    repository answers questions about that repository.
+    from .provenance import plugin_pin as recorded_plugin_pin
 
-    Returns empty strings when neither is available. An earlier version fell
-    back to `facebookresearch/autoform-bot@main` instead. That commit predates
-    `autoform_cli` entirely, so every project scaffolded through the plugin got
-    CI that installed a build with no `autoform` command and failed at the first
-    step, with nothing in the workflow to explain why. A wrong pin is worse than
-    no pin: guessing here is what made the failure silent.
-    """
+    return recorded_plugin_pin()
 
-    root = _checkout_root(_here()) or _marketplace_checkout()
-    if root is None:
-        return "", ""
-    source = _git("remote", "get-url", "origin", root=root)
-    ref = _git("rev-parse", "HEAD", root=root)
-    if not source or not source.endswith(".git"):
-        source = f"{source}.git" if source else ""
-    safe_source = _normalize_autoform_source(source, allow_github_scp=True)
-    if safe_source is None or not ref or not _FULL_SHA.fullmatch(ref):
-        return "", ""
-    return safe_source, ref
+
+def _recorded_template_snapshot() -> tuple[str, str, TemplateSnapshot]:
+    """Fetch templates from exactly the source and commit recorded by the host."""
+
+    recorded = resolve_plugin_provenance()
+    return (
+        recorded.source,
+        recorded.revision,
+        fetch_template_snapshot(recorded.source, recorded.revision),
+    )
 
 
 class ScaffoldError(ValueError):
@@ -216,14 +73,12 @@ class ScaffoldResult:
     project: str
     written: tuple[str, ...]
     skipped: tuple[str, ...]
-    unpinned: bool = False
 
     def as_dict(self) -> dict[str, object]:
         return {
             "project": self.project,
             "written": list(self.written),
             "skipped": list(self.skipped),
-            "unpinned": self.unpinned,
         }
 
 
@@ -347,23 +202,29 @@ def scaffold_project(
     if issues:
         raise ScaffoldError(issues)
 
-    pinned_source, pinned_ref = plugin_pin()
-    safe_pinned_source = _normalize_autoform_source(pinned_source, allow_github_scp=True)
-    if safe_pinned_source is None or not _FULL_SHA.fullmatch(pinned_ref.lower()):
-        pinned_source, pinned_ref = "", ""
+    if given_source or given_ref:
+        source = given_source or DEFAULT_AUTOFORM_SOURCE
+        ref = given_ref
+        if not ref:
+            raise ScaffoldError(
+                ["--autoform-source requires --autoform-ref with a full 40-character commit sha"]
+            )
+        try:
+            template_snapshot = fetch_template_snapshot(source, ref)
+        except TemplateSnapshotError as error:
+            raise ScaffoldError(["recorded Autoform templates could not be fetched safely"]) from error
     else:
-        pinned_source, pinned_ref = safe_pinned_source, pinned_ref.lower()
-    source = given_source or pinned_source or DEFAULT_AUTOFORM_SOURCE
-    # A ref identifies a commit in one repository. Naming a different source
-    # while inheriting this checkout's HEAD produces `git+other.git@our-sha`,
-    # which does not resolve there, so an explicit source carries its own ref
-    # or none at all.
-    ref = given_ref or ("" if given_source else pinned_ref)
-    # CI installs Autoform from a Git ref. Where Autoform lives is a fixed fact
-    # worth defaulting; which commit is not, and a guessed one publishes a
-    # project whose first CI step fails for a reason no file in it explains. So
-    # the ref alone decides: without one the workflows are skipped and reported.
-    unpinned = not ref
+        try:
+            source, ref, template_snapshot = _recorded_template_snapshot()
+        except (ProvenanceError, TemplateSnapshotError) as error:
+            raise ScaffoldError(
+                [
+                    "no usable immutable Autoform source and commit are recorded; "
+                    "supply both --autoform-source and --autoform-ref"
+                ]
+            ) from error
+    if _normalize_autoform_source(source) != source or _FULL_SHA.fullmatch(ref) is None:
+        raise ScaffoldError(["the recorded Autoform identity is invalid"])
     substitutions = {
         "PROJECT_TITLE_YAML": _yaml_scalar(title.strip()),
         "REPO_URL_YAML": _yaml_scalar(repository_url.strip()),
@@ -377,43 +238,45 @@ def scaffold_project(
 
     written: list[str] = []
     skipped: list[str] = []
-    for template in sorted(_TEMPLATES.rglob("*")):
-        relative_path = template.relative_to(_TEMPLATES)
-        if (
-            not template.is_file()
-            or "__pycache__" in relative_path.parts
-            or template.suffix == ".pyc"
-        ):
-            continue
-        relative = relative_path.as_posix()
-        if unpinned and relative.startswith("github/"):
-            skipped.append(_destination(relative))
-            continue
-        destination = root / _destination(relative)
+    planned: list[tuple[Path, bytes, int, str]] = []
+    for relative, template_content, template_mode in template_snapshot:
+        destination_relative = _destination(relative)
+        destination = root / destination_relative
         # Confine every write, not just the root. Reject links outright before
         # checking whether the destination should be skipped: `exists()` is
         # false for a dangling symlink, but opening that path still follows the
         # link and can create a file outside the project.
         probe = root
-        for part in Path(_destination(relative)).parts:
+        for part in Path(destination_relative).parts:
             probe = probe / part
             if probe.is_symlink() or (probe.exists() and not _within(probe, root)):
                 raise ScaffoldError(
                     [f"refusing to write outside the project through a link: {probe}"]
                 )
-        if destination.exists() and not force:
-            skipped.append(_destination(relative))
-            continue
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if template.suffix in {".js", ".html"} or relative.endswith("gitignore"):
-            content = template.read_bytes()
+            if probe != destination and probe.exists() and not probe.is_dir():
+                raise ScaffoldError([f"project path component is not a directory: {probe}"])
+        if destination.exists():
+            if not destination.is_file():
+                raise ScaffoldError([f"template destination is not a regular file: {destination}"])
+            if not force:
+                skipped.append(destination_relative)
+                continue
+        if Path(relative).suffix in {".js", ".html"} or relative.endswith("gitignore"):
+            content = template_content
         else:
-            rendered = _render(template.read_text(encoding="utf-8"), substitutions)
+            try:
+                rendered = _render(template_content.decode("utf-8"), substitutions)
+            except UnicodeDecodeError as error:
+                raise ScaffoldError([f"template is not valid UTF-8: {relative}"]) from error
             content = rendered.encode("utf-8")
-        _atomic_write(destination, content, mode=stat.S_IMODE(template.stat().st_mode))
-        written.append(_destination(relative))
+        planned.append((destination, content, template_mode, destination_relative))
 
-    return ScaffoldResult(title.strip(), tuple(written), tuple(skipped), unpinned)
+    for destination, content, template_mode, destination_relative in planned:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(destination, content, mode=template_mode)
+        written.append(destination_relative)
+
+    return ScaffoldResult(title.strip(), tuple(written), tuple(skipped))
 
 
 __all__ = [

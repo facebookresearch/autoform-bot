@@ -11,7 +11,9 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,6 +23,10 @@ from autoform_cli.coverage import load_coverage
 from autoform_cli.graph import load_graph
 from autoform_cli.scaffold import ScaffoldError, scaffold_project
 
+_TEMPLATES = Path(scaffold_module.__file__).resolve().parent / "templates"
+_REAL_RECORDED_TEMPLATE_SNAPSHOT = scaffold_module._recorded_template_snapshot
+_SOURCE = "https://example.test/autoform.git"
+_REVISION = "0" * 40
 _EXPECTED = {
     ".github/autoform_audit.py",
     ".github/workflows/autoform-verify.yml",
@@ -38,26 +44,56 @@ _EXPECTED = {
 }
 
 
-def test_scaffold_ignores_python_cache_artifacts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def _template_snapshot() -> tuple[tuple[str, bytes, int], ...]:
+    return tuple(
+        (
+            path.relative_to(_TEMPLATES).as_posix(),
+            path.read_bytes(),
+            stat.S_IMODE(path.stat().st_mode),
+        )
+        for path in sorted(_TEMPLATES.rglob("*"))
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+    )
+
+
+@pytest.fixture(autouse=True)
+def _disable_live_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = _template_snapshot()
+    monkeypatch.setattr(
+        scaffold_module,
+        "_recorded_template_snapshot",
+        lambda: (_SOURCE, _REVISION, snapshot),
+    )
+    monkeypatch.setattr(
+        scaffold_module,
+        "fetch_template_snapshot",
+        lambda source, revision: snapshot,
+    )
+
+
+def test_unpinned_scaffolding_fails_before_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    templates = tmp_path / "templates"
-    shutil.copytree(scaffold_module._TEMPLATES, templates)
-    cache = templates / "github/__pycache__"
-    cache.mkdir(exist_ok=True)
-    (cache / "autoform_audit.cpython-test.pyc").write_bytes(b"\x00binary cache")
-    monkeypatch.setattr(scaffold_module, "_TEMPLATES", templates)
+    monkeypatch.setattr(
+        scaffold_module,
+        "_recorded_template_snapshot",
+        lambda: (_ for _ in ()).throw(scaffold_module.ProvenanceError("unavailable")),
+    )
 
-    project = tmp_path / "project"
-    result = scaffold_project(project, title="Cache-safe")
+    with pytest.raises(ScaffoldError, match="no usable immutable"):
+        scaffold_project(tmp_path, title="Unpinned")
 
-    assert ".github/autoform_audit.py" in result.written
-    assert not (project / ".github/__pycache__").exists()
-    assert all("__pycache__" not in path and not path.endswith(".pyc") for path in result.written)
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_scaffold_writes_the_whole_vault(tmp_path: Path) -> None:
-    result = scaffold_project(tmp_path, title="Finite Flat", repository_url="https://example.test/repo")
+    result = scaffold_project(
+        tmp_path,
+        title="Finite Flat",
+        repository_url="https://example.test/repo",
+        autoform_ref="0" * 40,
+    )
 
     assert set(result.written) == _EXPECTED
     assert result.skipped == ()
@@ -120,7 +156,16 @@ def test_substitutions_reach_the_site_config(tmp_path: Path) -> None:
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
     assert 'AUTOFORM_SOURCE: "https://example.test/autoform.git"' in verify
     assert f'AUTOFORM_REF: "{"0" * 40}"' in verify
-    assert '"git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in verify
+    assert 'UV_PROJECT_ENVIRONMENT="$AUTOFORM_ENV"' in verify
+    assert "uv sync --no-config --locked" in verify
+    assert "--no-install-project --no-build" in verify
+    assert "--no-cache --no-python-downloads" in verify
+    assert '--python "$host_python"' in verify
+    assert '--project "$AUTOFORM_DIR"' in verify
+    assert 'runpy.run_module("autoform_cli",run_name="__main__")' in verify
+    assert '"$AUTOFORM_DIR" check blueprint' in verify
+    assert "uv run" not in verify
+    assert "uvx --from" not in verify
     assert "python3 .github/autoform_audit.py" in verify
 
 
@@ -203,11 +248,43 @@ def test_refuses_a_symlinked_target(tmp_path: Path) -> None:
 def test_cli_reports_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from autoform_cli.__main__ import main
 
-    assert main(["init", str(tmp_path), "--title", "Finite Flat", "--json"]) == 0
+    assert main(
+        [
+            "init",
+            str(tmp_path),
+            "--title",
+            "Finite Flat",
+            "--autoform-ref",
+            "0" * 40,
+            "--json",
+        ]
+    ) == 0
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["project"] == "Finite Flat"
     assert set(payload["written"]) == _EXPECTED
+
+
+def test_cli_fails_closed_when_provenance_is_unavailable(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from autoform_cli.__main__ import main
+
+    monkeypatch.setattr(
+        scaffold_module,
+        "_recorded_template_snapshot",
+        lambda: (_ for _ in ()).throw(scaffold_module.ProvenanceError("unavailable")),
+    )
+
+    assert main(["init", str(tmp_path), "--title", "Unpinned", "--json"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "scaffold-invalid"
+    assert "no usable immutable" in payload["error"]["message"]
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_roadmap_readme_teaches_the_chapter_shape(tmp_path: Path) -> None:
@@ -295,29 +372,214 @@ def test_scaffolded_theme_defers_navigation_to_the_book(tmp_path: Path) -> None:
     assert "name: material" in mkdocs
 
 
-def test_generated_ci_pins_the_checkout_that_scaffolded_it(tmp_path: Path) -> None:
-    """A floating ref installs an Autoform that may not have this CLI.
-
-    `facebookresearch/autoform-bot@main` predates `autoform_cli` entirely, so
-    defaulting to it meant every scaffolded project's first CI run installed a
-    build with no `autoform` command. The pin now comes from the checkout doing
-    the scaffolding, which is immutable and known-good by construction.
-    """
-
-    from autoform_cli.scaffold import plugin_pin
+def test_generated_ci_uses_recorded_plugin_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = "https://example.test/autoform.git"
+    ref = "1" * 40
+    snapshot = _template_snapshot()
+    monkeypatch.setattr(
+        scaffold_module,
+        "_recorded_template_snapshot",
+        lambda: (source, ref, snapshot),
+    )
 
     scaffold_project(tmp_path, title="Finite Flat")
-    source, ref = plugin_pin()
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
 
     assert f"AUTOFORM_SOURCE: {json.dumps(source)}" in verify
     assert f"AUTOFORM_REF: {json.dumps(ref)}" in verify
-    assert '"git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in verify
-    assert re.fullmatch(r"[0-9a-f]{40}", ref), "the pin must be an immutable commit"
+    assert 'UV_PROJECT_ENVIRONMENT="$AUTOFORM_ENV"' in verify
+    assert "uv sync --no-config --locked" in verify
+    assert "--no-install-project --no-build" in verify
+    assert "--no-cache --no-python-downloads" in verify
+    assert '--python "$host_python"' in verify
+    assert '--project "$AUTOFORM_DIR"' in verify
+    assert 'runpy.run_module("autoform_cli",run_name="__main__")' in verify
+    assert '"$AUTOFORM_DIR" check blueprint' in verify
+    assert "uv run" not in verify
+    assert "uvx --from" not in verify
     assert "@main" not in verify
 
 
-def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:
+def test_generated_workflows_install_the_verified_lock(tmp_path: Path) -> None:
+    scaffold_project(
+        tmp_path,
+        title="Finite Flat",
+        autoform_source="https://example.test/autoform.git",
+        autoform_ref="1" * 40,
+    )
+
+    for name in ("autoform-verify.yml", "blueprint-pages.yml"):
+        workflow = (tmp_path / ".github/workflows" / name).read_text(encoding="utf-8")
+        assert "safe_git -C" in workflow
+        assert "fetch --depth=1 --no-tags" in workflow
+        assert '--no-recurse-submodules origin "$AUTOFORM_REF"' in workflow
+        assert 'test "$resolved" = "$AUTOFORM_REF"' in workflow
+        assert "persist-credentials: false" in workflow
+        assert "runs-on: ubuntu-24.04" in workflow
+        assert "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1" in workflow
+        assert 'python-version: "3.13.14"' in workflow
+        assert "env -i PATH=" in workflow
+        assert "GIT_ATTR_NOSYSTEM=1" in workflow
+        assert "GIT_CONFIG_NOSYSTEM=1" in workflow
+        assert 'test ! -e "$AUTOFORM_DIR/.venv"' in workflow
+        assert 'cd "$RUNNER_TEMP"' in workflow
+        assert "PYTHONNOUSERSITE=1" in workflow
+        assert 'UV_PROJECT_ENVIRONMENT="$AUTOFORM_ENV"' in workflow
+        assert "uv sync --no-config --locked" in workflow
+        assert "--no-install-project --no-build" in workflow
+        assert "--no-cache --no-python-downloads" in workflow
+        assert 'runpy.run_module("autoform_cli",run_name="__main__")' in workflow
+        assert '"$AUTOFORM_ENV/bin/python" -I -c' in workflow
+        assert "uv run" not in workflow
+        assert "uvx --from" not in workflow
+
+
+def test_locked_dependency_sync_does_not_build_the_project(tmp_path: Path) -> None:
+    uv = shutil.which("uv")
+    assert uv is not None
+    project = tmp_path / "project"
+    project.mkdir()
+    marker = project / "backend-imported"
+    (project / "build_backend.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({os.fspath(marker)!r}).write_text('executed')\n",
+        encoding="utf-8",
+    )
+    (project / "pyproject.toml").write_text(
+        "[build-system]\n"
+        "requires = []\n"
+        'build-backend = "build_backend"\n'
+        'backend-path = ["."]\n'
+        "[project]\n"
+        'name = "unsafe-root"\n'
+        'version = "0.1.0"\n'
+        'requires-python = ">=3.10"\n',
+        encoding="utf-8",
+    )
+    locked = subprocess.run(
+        [uv, "lock", "--offline", "--project", os.fspath(project)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert locked.returncode == 0, locked.stderr
+    assert not marker.exists()
+
+    environment = tmp_path / "environment"
+    completed = subprocess.run(
+        [
+            uv,
+            "sync",
+            "--no-config",
+            "--locked",
+            "--no-install-project",
+            "--no-build",
+            "--no-cache",
+            "--offline",
+            "--no-python-downloads",
+            "--python",
+            sys.executable,
+            "--project",
+            os.fspath(project),
+        ],
+        env={**os.environ, "UV_PROJECT_ENVIRONMENT": os.fspath(environment)},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert not marker.exists()
+    environment_python = (
+        environment / "Scripts/python.exe"
+        if os.name == "nt"
+        else environment / "bin/python"
+    )
+    assert environment_python.is_file()
+
+
+def test_scaffold_writes_the_authenticated_remote_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entries = list(_template_snapshot())
+    static_index = next(
+        index
+        for index, (relative, _, _) in enumerate(entries)
+        if relative == "blueprint/javascripts/mathjax.js"
+    )
+    relative, _, mode = entries[static_index]
+    entries[static_index] = (relative, b"authenticated remote bytes\n", mode)
+    source = "https://example.test/autoform.git"
+    ref = "1" * 40
+    monkeypatch.setattr(
+        scaffold_module,
+        "_recorded_template_snapshot",
+        lambda: (source, ref, tuple(entries)),
+    )
+
+    scaffold_project(tmp_path / "project", title="Finite Flat")
+
+    written = tmp_path / "project/blueprint/javascripts/mathjax.js"
+    assert written.read_bytes() == b"authenticated remote bytes\n"
+
+
+def test_recorded_template_snapshot_fetches_the_exact_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from autoform_cli import provenance
+
+    source = "https://example.test/autoform.git"
+    ref = "1" * 40
+    snapshot = (("README.md", b"authenticated\n", 0o644),)
+    monkeypatch.setattr(
+        scaffold_module,
+        "resolve_plugin_provenance",
+        lambda: provenance.PluginProvenance(source, ref),
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fetch(found_source: str, found_ref: str):
+        calls.append((found_source, found_ref))
+        return snapshot
+
+    monkeypatch.setattr(
+        scaffold_module,
+        "fetch_template_snapshot",
+        fetch,
+    )
+
+    assert _REAL_RECORDED_TEMPLATE_SNAPSHOT() == (source, ref, snapshot)
+    assert calls == [(source, ref)]
+
+
+def test_scaffold_pin_delegates_to_recorded_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from autoform_cli import provenance
+
+    expected = ("https://example.test/autoform.git", "1" * 40)
+    monkeypatch.setattr(provenance, "plugin_pin", lambda: expected)
+
+    assert scaffold_module.plugin_pin() == expected
+
+
+def test_explicit_pin_overrides_without_discovering_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        scaffold_module,
+        "_recorded_template_snapshot",
+        lambda: pytest.fail("explicit provenance must not trigger discovery"),
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fetch(source: str, revision: str):
+        calls.append((source, revision))
+        return _template_snapshot()
+
+    monkeypatch.setattr(scaffold_module, "fetch_template_snapshot", fetch)
     scaffold_project(
         tmp_path,
         title="Finite Flat",
@@ -328,45 +590,37 @@ def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
     assert 'AUTOFORM_SOURCE: "https://example.test/autoform.git"' in verify
     assert f'AUTOFORM_REF: "{"1" * 40}"' in verify
+    assert calls == [("https://example.test/autoform.git", "1" * 40)]
 
 
-def test_no_ci_rather_than_a_guessed_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A wrong pin is worse than no pin, because it fails silently.
+def test_template_fetch_failure_happens_before_any_project_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(source: str, revision: str):
+        raise scaffold_module.TemplateSnapshotError("unavailable")
 
-    Installed as a plugin, Autoform is a directory copy with no `.git`, so
-    `plugin_pin` has nothing to read. It used to fall back to
-    `facebookresearch/autoform-bot@main`, a commit predating the CLI, and every
-    project scaffolded that way got CI that died at the first step.
-    """
+    monkeypatch.setattr(scaffold_module, "fetch_template_snapshot", unavailable)
+
+    with pytest.raises(ScaffoldError, match="could not be fetched safely"):
+        scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_ref_alone_restores_ci_without_discovering_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ref-only override explicitly targets the canonical repository."""
     from autoform_cli import scaffold as scaffold_module
 
-    monkeypatch.setattr(scaffold_module, "plugin_pin", lambda: ("", ""))
-    result = scaffold_module.scaffold_project(tmp_path, title="Finite Flat")
+    monkeypatch.setattr(
+        scaffold_module,
+        "_recorded_template_snapshot",
+        lambda: pytest.fail("an explicit ref must not trigger provenance discovery"),
+    )
+    scaffold_module.scaffold_project(tmp_path, title="Finite Flat", autoform_ref="2" * 40)
 
-    assert result.unpinned is True
-    assert not (tmp_path / ".github/workflows/autoform-verify.yml").exists()
-    assert not (tmp_path / ".github/workflows/blueprint-pages.yml").exists()
-    assert not (tmp_path / ".github/autoform_audit.py").exists()
-    assert ".github/autoform_audit.py" in result.skipped
-    assert ".github/workflows/autoform-verify.yml" in result.skipped
-    # Everything a project needs to be authored still lands.
-    assert (tmp_path / "blueprint/roadmap/README.md").is_file()
-    assert (tmp_path / "mkdocs.yml").is_file()
-
-
-def test_a_ref_alone_restores_ci(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The commit is the unguessable half; the repository has a sane default.
-
-    Setup tells the agent to pass `--autoform-ref`. If the source had to be
-    supplied too, following that instruction would still yield no CI, and the
-    fail-closed behaviour would be indistinguishable from a broken flag.
-    """
-    from autoform_cli import scaffold as scaffold_module
-
-    monkeypatch.setattr(scaffold_module, "plugin_pin", lambda: ("", ""))
-    result = scaffold_module.scaffold_project(tmp_path, title="Finite Flat", autoform_ref="2" * 40)
-
-    assert result.unpinned is False
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
     assert f"AUTOFORM_SOURCE: {json.dumps(scaffold_module.DEFAULT_AUTOFORM_SOURCE)}" in verify
     assert f'AUTOFORM_REF: "{"2" * 40}"' in verify
@@ -383,7 +637,11 @@ def test_a_mutable_ref_is_refused(ref: str, tmp_path: Path, monkeypatch: pytest.
     """
     from autoform_cli import scaffold as scaffold_module
 
-    monkeypatch.setattr(scaffold_module, "plugin_pin", lambda: ("", ""))
+    monkeypatch.setattr(
+        scaffold_module,
+        "_recorded_template_snapshot",
+        lambda: pytest.fail("invalid input must not trigger provenance discovery"),
+    )
     with pytest.raises(scaffold_module.ScaffoldError) as caught:
         scaffold_module.scaffold_project(tmp_path, title="Finite Flat", autoform_ref=ref)
 
@@ -397,7 +655,11 @@ def test_an_explicit_source_overrides_the_default(
 ) -> None:
     from autoform_cli import scaffold as scaffold_module
 
-    monkeypatch.setattr(scaffold_module, "plugin_pin", lambda: ("", ""))
+    monkeypatch.setattr(
+        scaffold_module,
+        "_recorded_template_snapshot",
+        lambda: pytest.fail("an explicit source must not trigger provenance discovery"),
+    )
     scaffold_module.scaffold_project(
         tmp_path,
         title="Finite Flat",
@@ -408,7 +670,11 @@ def test_an_explicit_source_overrides_the_default(
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
     assert "AUTOFORM_SOURCE: \"https://example.test/autoform.git\"" in verify
     assert f"AUTOFORM_REF: \"{'2' * 40}\"" in verify
-    assert '"git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in verify
+    assert "--no-install-project --no-build" in verify
+    assert "--no-cache --no-python-downloads" in verify
+    assert 'runpy.run_module("autoform_cli",run_name="__main__")' in verify
+    assert '"$AUTOFORM_DIR" check blueprint' in verify
+    assert "uvx --from" not in verify
 
 
 @pytest.mark.parametrize(
@@ -456,132 +722,16 @@ def test_an_unsafe_plugin_pin_fails_closed_without_persisting_credentials(
     from autoform_cli import scaffold as scaffold_module
 
     secret_source = "https://token:secret@example.test/autoform.git"
-    monkeypatch.setattr(scaffold_module, "plugin_pin", lambda: (secret_source, "2" * 40))
-
-    result = scaffold_module.scaffold_project(tmp_path, title="Finite Flat")
-
-    assert result.unpinned is True
-    assert not (tmp_path / ".github").exists()
-    assert secret_source not in "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in tmp_path.rglob("*")
-        if path.is_file()
+    monkeypatch.setattr(
+        scaffold_module,
+        "_recorded_template_snapshot",
+        lambda: (secret_source, "2" * 40, _template_snapshot()),
     )
 
+    with pytest.raises(ScaffoldError, match="recorded Autoform identity"):
+        scaffold_module.scaffold_project(tmp_path, title="Finite Flat")
 
-def test_plugin_pin_is_empty_outside_a_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
-    from autoform_cli import scaffold as scaffold_module
-
-    monkeypatch.setattr(scaffold_module, "_git", lambda *args, **kwargs: None)
-    monkeypatch.setattr(scaffold_module, "_marketplace_checkout", lambda: None)
-    assert scaffold_module.plugin_pin() == ("", "")
-
-
-def _repository(path: Path, remote: str) -> str:
-    """Make *path* a real one-commit checkout and return its HEAD sha."""
-    path.mkdir(parents=True, exist_ok=True)
-    run = ["git", "-c", "user.email=t@test", "-c", "user.name=Test"]
-    subprocess.run([*run, "init", "-q"], cwd=path, check=True)
-    subprocess.run([*run, "remote", "add", "origin", remote], cwd=path, check=True)
-    subprocess.run([*run, "commit", "-q", "--allow-empty", "-m", "first"], cwd=path, check=True)
-    done = subprocess.run(
-        [*run, "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=True
-    )
-    return done.stdout.strip()
-
-
-def _fake_plugin_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str]:
-    """Lay out a plugin cache copy and the real checkout it was copied from."""
-    from autoform_cli import scaffold as scaffold_module
-
-    checkout = tmp_path / "src" / "autoform-bot"
-    (checkout / "autoform_cli").mkdir(parents=True)
-    (checkout / "autoform_cli" / "scaffold.py").write_text("", encoding="utf-8")
-    head = _repository(checkout, "git@github.com:owner/autoform-bot.git")
-
-    copied = tmp_path / ".claude/plugins/cache/autoform/autoform/0.5.0/autoform_cli"
-    copied.mkdir(parents=True)
-    monkeypatch.setattr(scaffold_module, "_here", lambda: copied.parent)
-
-    registry = tmp_path / "known_marketplaces.json"
-    registry.write_text(
-        json.dumps({"autoform": {"installLocation": str(checkout)}}), encoding="utf-8"
-    )
-    monkeypatch.setattr(scaffold_module, "_PLUGIN_REGISTRY", registry)
-    return checkout, head
-
-
-def test_an_installed_plugin_pins_from_the_marketplace_checkout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The copy has no `.git`, but the checkout it was copied from does.
-
-    Without this, `init` under a plugin can only fail closed, and the operator
-    is asked for a commit that nothing on their machine reports. That is a real
-    provenance record, not the guess `plugin_pin` refuses to make.
-    """
-    from autoform_cli import scaffold as scaffold_module
-
-    _, head = _fake_plugin_install(tmp_path, monkeypatch)
-
-    assert scaffold_module.plugin_pin() == (
-        "https://github.com/owner/autoform-bot.git",
-        head,
-    )
-
-
-def test_an_unrelated_marketplace_checkout_is_not_trusted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A location that is not Autoform would pin CI to somebody else's repo."""
-    from autoform_cli import scaffold as scaffold_module
-
-    checkout, _ = _fake_plugin_install(tmp_path, monkeypatch)
-    (checkout / "autoform_cli" / "scaffold.py").unlink()
-
-    assert scaffold_module._marketplace_checkout() is None
-    assert scaffold_module.plugin_pin() == ("", "")
-
-
-def test_a_copy_inside_an_unrelated_repository_is_not_its_provenance(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`git -C` searches upwards, and the answer it finds is confidently wrong.
-
-    Installed into a project's own virtualenv, Autoform sits under that
-    project's checkout. Asking for "its" origin and HEAD then describes the
-    project, so its CI would be pinned to install the project instead of
-    Autoform, at a sha that moves with every commit the author makes.
-    """
-    from autoform_cli import scaffold as scaffold_module
-
-    project = tmp_path / "their-project"
-    _repository(project, "https://github.com/someone/their-project.git")
-    installed = project / ".venv/lib/python3.12/site-packages"
-    installed.mkdir(parents=True)
-    monkeypatch.setattr(scaffold_module, "_here", lambda: installed)
-    monkeypatch.setattr(scaffold_module, "_PLUGIN_REGISTRY", tmp_path / "absent.json")
-
-    assert scaffold_module._checkout_root(installed) is None
-    assert scaffold_module.plugin_pin() == ("", "")
-
-
-def test_a_branch_in_the_marketplace_checkout_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Whatever the provenance says, only a full sha may reach the workflows."""
-    from autoform_cli import scaffold as scaffold_module
-
-    checkout, _ = _fake_plugin_install(tmp_path, monkeypatch)
-
-    def fake_git(*args: str, root: Path | None = None) -> str | None:
-        if args[:2] == ("rev-parse", "--show-toplevel"):
-            return str(checkout)
-        return "https://example.test/a.git" if args[0] == "remote" else "main"
-
-    monkeypatch.setattr(scaffold_module, "_git", fake_git)
-
-    assert scaffold_module.plugin_pin() == ("", "")
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_symlinked_subdirectory_cannot_redirect_the_scaffold(tmp_path: Path) -> None:
@@ -620,6 +770,22 @@ def test_a_dangling_destination_symlink_cannot_redirect_the_scaffold(tmp_path: P
     assert not outside.exists()
 
 
+def test_invalid_late_destination_is_rejected_before_any_template_write(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    invalid = project / ".github/workflows/blueprint-pages.yml"
+    invalid.mkdir(parents=True)
+
+    with pytest.raises(ScaffoldError, match="not a regular file"):
+        scaffold_project(project, title="Probe")
+
+    assert not (project / "README.md").exists()
+    assert set(project.rglob("*")) == {
+        project / ".github",
+        project / ".github/workflows",
+        invalid,
+    }
+
+
 def test_a_title_with_a_colon_stays_one_yaml_key(tmp_path: Path) -> None:
     """`site_name: Algebra: Foundations` is a nested mapping, not a title."""
     from autoform_cli import scaffold as scaffold_module
@@ -650,14 +816,16 @@ def test_a_source_without_a_ref_does_not_borrow_this_checkouts_commit(
     from autoform_cli import scaffold as scaffold_module
 
     monkeypatch.setattr(
-        scaffold_module, "plugin_pin", lambda: ("https://example.test/ours.git", "1" * 40)
+        scaffold_module,
+        "_recorded_template_snapshot",
+        lambda: pytest.fail("an explicit source must not trigger provenance discovery"),
     )
-    result = scaffold_module.scaffold_project(
-        tmp_path, title="Probe", autoform_source="https://example.test/other.git"
-    )
+    with pytest.raises(ScaffoldError, match="requires --autoform-ref"):
+        scaffold_module.scaffold_project(
+            tmp_path, title="Probe", autoform_source="https://example.test/other.git"
+        )
 
-    assert result.unpinned is True
-    assert not (tmp_path / ".github/workflows/autoform-verify.yml").exists()
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_source_with_its_own_ref_is_honoured(tmp_path: Path) -> None:
@@ -695,8 +863,7 @@ def test_control_characters_in_yaml_values_are_escaped(tmp_path: Path) -> None:
 def test_an_uppercase_ref_is_accepted(tmp_path: Path) -> None:
     """Git prints shas lowercase but resolves them either way; a sha copied
     from a web UI is valid input rather than a mistake."""
-    result = scaffold_project(tmp_path, title="Probe", autoform_ref="A" * 40)
+    scaffold_project(tmp_path, title="Probe", autoform_ref="A" * 40)
 
-    assert result.unpinned is False
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
     assert f'AUTOFORM_REF: "{"a" * 40}"' in verify
