@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from autoform_cli.lean import (
-    SourceLinker,
-    declaration_names,
-    index_project,
-)
+import pytest
+
+from autoform_cli.lean import SourceLinker, declaration_names, index_project, strip_lean_comments
+
 
 _SOURCE = """import Mathlib
 
@@ -103,6 +103,26 @@ def test_build_output_is_skipped(tmp_path: Path) -> None:
     assert index.find("vendored") is None
 
 
+@pytest.mark.parametrize(
+    "schema", ["autoform-skeleton-packets/v1", "autoform-skeleton-packets/v2"]
+)
+def test_managed_packet_output_is_not_indexed_as_project_source(
+    tmp_path: Path, schema: str
+) -> None:
+    packets = tmp_path / "000-review-packets"
+    packet = packets / "node" / "target.lean"
+    packet.parent.mkdir(parents=True)
+    packet.write_text("def target : Nat := 2\n", encoding="utf-8")
+    (packets / "manifest.json").write_text(
+        json.dumps({"kind": "packets", "packets": [], "schema": schema}) + "\n",
+        encoding="utf-8",
+    )
+
+    index = _index(tmp_path, "def target : Nat := 1\n", name="Actual.lean")
+
+    assert index.find("target").path == Path("Actual.lean")
+
+
 def test_anonymous_instances_are_not_mistaken_for_names(tmp_path: Path) -> None:
     index = _index(tmp_path, "instance : Inhabited Nat := ⟨0⟩\n")
 
@@ -112,6 +132,46 @@ def test_anonymous_instances_are_not_mistaken_for_names(tmp_path: Path) -> None:
 def test_declaration_names_splits_a_list() -> None:
     assert declaration_names("A.b, C.d  E.f") == ["A.b", "C.d", "E.f"]
     assert declaration_names("") == []
+
+
+def test_quoted_names_keep_spaces_and_dots_inside_one_component(tmp_path: Path) -> None:
+    index = _index(tmp_path, "namespace A\ntheorem «b c.d» : True := trivial\nend A\n")
+
+    assert declaration_names("A.«b c.d», X.y") == ["A.«b c.d»", "X.y"]
+    assert index.find("A.«b c.d»") is not None
+
+
+def test_comment_stripping_preserves_comment_markers_inside_strings() -> None:
+    source = (
+        'def a := "a--b /- c -/" -- remove me\n'
+        'def b := r#"d--e /- f -/"# /- remove me -/\n'
+        'def c := s!"value {"a--b"}" -- remove me\n'
+        'def d := s!"brace {\'{\'} and {"a/-b"}" -- remove me\n'
+        "def «e--f» : Char := '-'"
+    )
+
+    assert strip_lean_comments(source) == (
+        'def a := "a--b /- c -/"\n'
+        'def b := r#"d--e /- f -/"#\n'
+        'def c := s!"value {"a--b"}"\n'
+        'def d := s!"brace {\'{\'} and {"a/-b"}"\n'
+        "def «e--f» : Char := '-'"
+    )
+
+
+def test_comment_stripping_reads_slash_dash_dash_slash_as_a_docstring() -> None:
+    # Lean reads `/--` as a docstring opener, so `/--/ ... -/` is one comment.
+    assert strip_lean_comments("/--/ KEEPOUT -/\ndef d : Nat := 6") == "def d : Nat := 6"
+    assert strip_lean_comments("/-!/ KEEPOUT -/\ndef d : Nat := 6") == "def d : Nat := 6"
+
+
+def test_double_brace_in_interpolation_opens_a_structure_instance(tmp_path: Path) -> None:
+    # Lean has no `{{` escape: both braces open code, so these markers sit in a nested string.
+    line = 'def s : String := s!"{{ fst := "--", snd := 1 : String × Nat }.fst}"'
+    index = _index(tmp_path, line.replace("--", "/-") + "\ndef t : Nat := 1\n")
+
+    assert strip_lean_comments(line + " -- remove me") == line
+    assert index.find("t") is not None
 
 
 def test_permalink_pins_the_commit(tmp_path: Path) -> None:

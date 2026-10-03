@@ -1,0 +1,6 @@
+name = "Skel"
+version = "0.1.0"
+defaultTargets = ["Skel"]
+
+[[lean_lib]]
+name = "Skel"

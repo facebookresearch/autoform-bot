@@ -51,6 +51,10 @@ def test_deicyde_plugin_surface_advertises_orchestrate_overlay(repo_root):
 
     codex_manifest = json.loads((repo_root / ".codex-plugin/plugin.json").read_text())
     assert len(codex_manifest["interface"]["defaultPrompt"]) == 6
+    assert any(
+        "one invocation" in prompt and "persistent Goal" in prompt
+        for prompt in codex_manifest["interface"]["defaultPrompt"]
+    )
     assert any("claim-backed workers" in prompt for prompt in codex_manifest["interface"]["defaultPrompt"])
     muse = json.loads((repo_root / ".muse-plugin/plugin.json").read_text())
     assert [command["id"] for command in muse["capabilities"]["commands"]] == [
@@ -95,6 +99,7 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
         assert {
             "autoform_cli/__main__.py",
             "autoform_cli/graph.py",
+            "autoform_cli/probes/skeleton_probe.lean",
             "autoform_cli/visualize.py",
             "autoform_worker/cli.py",
             "autoform_worker/executor.py",
@@ -120,7 +125,7 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
             next(name for name in names if name.endswith(".dist-info/METADATA"))
         ).decode()
         assert "Requires-Dist: psutil>=5.9" in metadata
-        assert "Requires-Dist: tomli" not in metadata
+        assert "Requires-Dist: tomli>=2.0.1; python_version < '3.11'" in metadata
         assert "Provides-Extra: repl" in metadata
         archive.extractall(site)
 

@@ -9,6 +9,7 @@ try:
 except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib
 
+from autoform_cli.audit import audit_blueprint
 from autoform_cli.graph import load_graph
 from autoform_cli.lean import build_linker, declaration_names
 from autoform_cli.render import render_site
@@ -32,6 +33,38 @@ def test_root_readme_uses_the_canonical_repository(repo_root: Path) -> None:
         "https://github.com/facebookresearch/autoform-bot/tree/execution" in readme
     )
     assert "VivienCabannes/autoform-bot" not in readme
+
+
+def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path) -> None:
+    development = (repo_root / "skills" / "develop-plugin" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(development.split())
+
+    assert "private declaration safety as fail-closed evidence" in normalized
+    assert "official user name" in normalized
+    assert "by source coordinates" in normalized
+
+
+def test_agent_review_treats_skeleton_hashes_as_advisory(repo_root: Path) -> None:
+    review = (repo_root / "skills" / "agent-review" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(review.split())
+
+    assert "not reviewer authentication or an approval key" in normalized
+    assert "report as advisory" in normalized
+
+
+def test_quick_start_keeps_the_cli_agent_facing(repo_root: Path) -> None:
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    quick_start = readme.split("## Quick start", 1)[1].split("## Blueprint model", 1)[0]
+    normalized = " ".join(quick_start.split())
+
+    assert "agent window" in normalized
+    assert "users do not need to learn or run its commands" in normalized
+    assert "/autoform:setup" in quick_start
+    assert "uv run autoform" not in quick_start
 
 
 def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
@@ -121,6 +154,25 @@ def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
     assert toolchain == "leanprover/lean4:v4.32.2"
     assert manifest["require"][0]["rev"] == "v4.32.2"
     assert manifest["lean_lib"][0]["srcDir"] == "src"
+
+
+def test_roadmap_example_is_structural_not_a_completion_fixture(
+    repo_root: Path,
+) -> None:
+    example = repo_root / _EXAMPLE
+    audit = audit_blueprint(example / "blueprint", lean_root=example)
+    assert audit.coverage is not None
+    assert not audit.coverage.complete
+    assert audit.coverage.counts["MAPPED"] > 0
+
+    reference = (
+        repo_root / "skills/roadmap/references/cabannes-thesis-roadmap.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(reference.split())
+    assert "structural example, not a completion fixture" in normalized
+    assert "not a valid finish state" in normalized
+    assert "approved small slice" not in normalized
+    assert "handing ready nodes to Orchestrate" not in normalized
 
 
 def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> None:
@@ -351,29 +403,19 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
     for required in (
         "references/cabannes-thesis-roadmap.md",
         "blueprint/roadmap/",
-        "blueprint/coverage/",
-        "blueprint/roadmap/**/*.md",
-        "declaration",
-        "coarse roadmap",
+        "blueprint/coverage/README.md",
+        "blueprint/sources/",
         "## Depends on",
-        "ordered mathematical book",
-        "reading order",
-        "mathematical significance",
-        "pull-request-sized unit",
+        "## Proof depends on",
         "one unique main result",
-        "targeted lookups",
-        "exact verified upstream result",
-        "Reconcile every page whose claims this work has just invalidated",
-        "GitHub pull requests and issues",
-        "Zulip topics",
         "../setup/references/zulip.md",
-        "project-authored specification",
-        "never contact people",
     ):
         assert required in roadmap
     assert "autoform init" in setup
     assert "references/thesis-review-case.md" in agent_review
     assert "references/roadmap-quality.md" in agent_review
+    assert "stale-build refusal" in agent_review
+    assert "drift checksum" in agent_review
     assert "autoform-visualize" in human_review
     assert "`approve`, `revise`, or\n`block`" in human_review
     for required in (
@@ -394,6 +436,8 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
     assert len(develop_plugin.split()) <= 220
     assert "$setup" in setup_metadata
     assert "$roadmap" in roadmap_metadata
+    assert "one invocation" in roadmap_metadata
+    assert "persistent Goal" in roadmap_metadata
     assert "$agent-review" in agent_review_metadata
     assert "$human-review" in human_review_metadata
     assert "$develop-plugin" in develop_plugin_metadata
@@ -406,6 +450,53 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
     assert "coherent pull\nrequest and review unit" in roadmap_example
     assert (repo_root / "skills/agent-review/references/thesis-review-case.md").is_file()
     assert (repo_root / "skills/agent-review/references/roadmap-quality.md").is_file()
+
+
+def test_roadmap_skill_owns_a_complete_pass(repo_root: Path) -> None:
+    """A direct Roadmap invocation is a full job, not one planning checkpoint."""
+
+    roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")
+    normalized = " ".join(roadmap.split())
+
+    for required in (
+        "one complete planning pass",
+        "model-callable Goal lifecycle",
+        "If no compatible Goal can be used",
+        "complete the same pass in the current run",
+        "leave any unrelated Goal unchanged",
+        "Do not ask the user to invoke another command",
+        "internal checkpoints",
+        "Do not pause for approval",
+        "Treat every other `DEFERRED` row as queued work",
+        "Do not stop after discovery",
+        "Mark an active Goal complete only after these conditions hold",
+    ):
+        assert required in normalized
+
+    for obsolete in (
+        "internal/runbooks/planning.md",
+        "Let the user choose whether",
+        "for user approval before",
+        "After approval",
+        "Do not infer missing scope",
+    ):
+        assert obsolete not in roadmap
+
+
+def test_roadmap_skill_commits_the_final_checked_pass(repo_root: Path) -> None:
+    roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")
+    finish = roadmap.split("## Finish", 1)[1]
+    normalized = " ".join(finish.split())
+
+    for required in (
+        "After the final edit",
+        "`autoform check`",
+        "`autoform audit`",
+        "Commit the vault and refreshed graph only after this final validation",
+        "no `MAPPED` rows",
+        "latest commit contains every change from the pass",
+    ):
+        assert required in normalized
 
 
 def test_setup_skill_offers_opt_in_zulip_project_sync(repo_root: Path) -> None:

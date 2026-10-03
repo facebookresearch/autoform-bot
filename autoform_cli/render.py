@@ -645,20 +645,21 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
         for node in graph.nodes.values()
         if graph.children(node.id) or not node.formalizable
     }
-
-    def visit(source: Path) -> None:
-        source = source.resolve()
+    pending = [blueprint / "README.md"]
+    while pending:
+        source = pending.pop().resolve()
         try:
             relative = source.relative_to(blueprint)
         except ValueError:
-            return
+            continue
         output = (destination / relative).resolve()
         if output.is_file() and output not in seen_outputs:
             seen_outputs.add(output)
             ordered.append(output)
         if source in visited_sources or not source.is_file():
-            return
+            continue
         visited_sources.add(source)
+        linked_sources: list[Path] = []
 
         def collect(line: str) -> str:
             for match in _MARKDOWN_LINK.finditer(line):
@@ -680,12 +681,11 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
                     continue
                 if candidate not in book_sources:
                     continue
-                visit(candidate)
+                linked_sources.append(candidate)
             return line
 
         _outside_fences(source.read_text(encoding="utf-8"), collect)
-
-    visit(blueprint / "README.md")
+        pending.extend(reversed(linked_sources))
     return ordered
 
 

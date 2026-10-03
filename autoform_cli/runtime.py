@@ -247,6 +247,7 @@ def build_runtime_graph(
     _reject_roadmap_symlinks(blueprint)
     node_ids = set(graph.nodes)
     article_paths: dict[str, str] = {}
+    seen_article_paths: set[str] = set()
     revision_paths: dict[str, str] = {}
     article_bytes: dict[str, bytes] = {}
 
@@ -282,8 +283,9 @@ def build_runtime_graph(
             issues.append(f"{node.id}: article cannot be read")
             continue
         article_path = relative_project.as_posix()
-        if article_path in article_paths.values():
+        if article_path in seen_article_paths:
             issues.append(f"{node.id}: article path is duplicated")
+        seen_article_paths.add(article_path)
         article_paths[node.id] = article_path
         revision_paths[node.id] = relative_blueprint.as_posix()
         article_bytes[node.id] = content
@@ -306,6 +308,7 @@ def build_runtime_graph(
             raise RuntimeProjectionError(["Lean root does not exist or is not a directory"])
         lean_index = index_project(root)
 
+    parents = {node.parent for node in graph.nodes.values() if node.parent is not None}
     runtime_nodes: list[RuntimeNode] = []
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
@@ -316,7 +319,6 @@ def build_runtime_graph(
             and can_state
             and all(statuses[dependency].proved for dependency in node.proof_dependencies)
         )
-        children = graph.children(node_id)
         lean_targets: list[RuntimeLeanTarget] = []
         for name in declaration_names(node.lean or ""):
             declaration = lean_index.find(name) if lean_index is not None else None
@@ -334,7 +336,7 @@ def build_runtime_graph(
                 depth=node.depth,
                 declaration=node.declaration,
                 formalizable=node.formalizable,
-                dispatchable=node.formalizable and not children,
+                dispatchable=node.formalizable and node_id not in parents,
                 statement_dependencies=node.statement_dependencies,
                 proof_dependencies=node.proof_dependencies,
                 dependencies=node.dependencies,
@@ -393,7 +395,11 @@ def _reject_roadmap_symlinks(blueprint: Path) -> None:
 
 def _ordered_union(first: tuple[str, ...], second: tuple[str, ...]) -> tuple[str, ...]:
     values = list(first)
-    values.extend(value for value in second if value not in values)
+    seen = set(values)
+    for value in second:
+        if value not in seen:
+            values.append(value)
+            seen.add(value)
     return tuple(values)
 
 
@@ -437,17 +443,45 @@ def _is_portable_relative_path(value: str) -> bool:
 
 
 def _validate_depths(graph: Graph, issues: list[str]) -> None:
+    resolved: dict[str, int] = {}
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
-        seen: set[str] = set()
-        parent = node.parent
-        depth = 0
-        while parent is not None:
-            if parent in seen or parent not in graph.nodes:
-                break
-            seen.add(parent)
-            depth += 1
-            parent = graph.nodes[parent].parent
+        if node_id not in resolved:
+            trail: list[str] = []
+            seen: set[str] = set()
+            current = node_id
+            valid = True
+            while current not in resolved:
+                if current in seen or current not in graph.nodes:
+                    valid = False
+                    break
+                seen.add(current)
+                trail.append(current)
+                parent = graph.nodes[current].parent
+                if parent is None:
+                    depth = -1
+                    break
+                current = parent
+            else:
+                depth = resolved[current]
+
+            if valid:
+                for candidate in reversed(trail):
+                    depth += 1
+                    resolved[candidate] = depth
+
+        if node_id in resolved:
+            depth = resolved[node_id]
+        else:
+            seen = set()
+            parent = node.parent
+            depth = 0
+            while parent is not None:
+                if parent in seen or parent not in graph.nodes:
+                    break
+                seen.add(parent)
+                depth += 1
+                parent = graph.nodes[parent].parent
         if node.depth != depth:
             issues.append(f"{node.id}: depth does not match the parent chain")
 
@@ -467,6 +501,9 @@ def _source_revision(article_paths: dict[str, str], article_bytes: dict[str, byt
 def _validate_runtime(runtime: RuntimeGraph) -> None:
     issues: list[str] = []
     nodes = {node.id: node for node in runtime.nodes}
+    parents_with_children = {
+        node.parent for node in runtime.nodes if node.parent is not None
+    }
     if len(nodes) != len(runtime.nodes):
         issues.append("runtime node ids are not unique")
     for node in runtime.nodes:
@@ -476,7 +513,7 @@ def _validate_runtime(runtime: RuntimeGraph) -> None:
             issues.append(f"{node.id}: runtime dependency union is inconsistent")
         if any(dependency not in nodes for dependency in node.dependencies):
             issues.append(f"{node.id}: runtime dependency does not resolve")
-        has_children = any(other.parent == node.id for other in runtime.nodes)
+        has_children = node.id in parents_with_children
         if node.dispatchable and (not node.formalizable or has_children):
             issues.append(f"{node.id}: dispatchable node is not a formalizable leaf")
         if Path(node.article_path).is_absolute() or PureWindowsPath(node.article_path).is_absolute():
