@@ -6,7 +6,7 @@ setup:
 	uv sync --extra dev --extra repl
 
 test:
-	PYTHONDONTWRITEBYTECODE=1 uv run pytest -q
+	uv run pytest -q
 
 lint:
 	uv run ruff check autoform_cli servers tests

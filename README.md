@@ -56,8 +56,9 @@ or run its commands.
 | Run an independent agent review | `/autoform:agent-review` | `$agent-review` |
 
 During setup, the skill runs `autoform project provenance --json` and uses
-`autoform init` to create the vault and site. Generated workflows are written
-only after Autoform's source and full commit have been verified.
+`autoform init` to create the vault and site. Generated workflows and templates
+come only from the exact recorded source commit. Full installed-tree comparison
+is available separately through `autoform project verify-install`.
 
 For example: “Build a complete roadmap for Sections 2–4 of `paper.pdf`.” Keep
 the source in the repository or provide an accessible path. Roadmap treats
@@ -98,6 +99,8 @@ plugin development and debugging, not as a required user workflow.
 | Command | Purpose |
 | --- | --- |
 | `autoform init` | Scaffold the blueprint and site; add CI when immutably pinned. |
+| `autoform project provenance` | Read the immutable source and commit recorded by Git or the plugin host. |
+| `autoform project verify-install` | Optionally compare the complete installation with its recorded commit. |
 | `autoform check` | Validate Markdown structure and dependencies. |
 | `autoform audit` | Audit completeness and checked facts. |
 | `autoform doctor` | Diagnose the local blueprint contract. |

@@ -508,14 +508,14 @@ def test_roadmap_skill_owns_a_complete_pass(repo_root: Path) -> None:
         assert obsolete not in roadmap
 
 
-def test_develop_plugin_prevents_unverifiable_test_bytecode(repo_root: Path) -> None:
+def test_optional_install_verification_does_not_shape_normal_test_runs(repo_root: Path) -> None:
     skill = (repo_root / "skills/develop-plugin/SKILL.md").read_text(encoding="utf-8")
     makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
     workflow = (repo_root / ".github/workflows/tests.yml").read_text(encoding="utf-8")
 
-    assert "Never attest pytest\nassertion-rewrite caches" in skill
-    assert "PYTHONDONTWRITEBYTECODE=1 uv run pytest -q" in makefile
-    assert 'PYTHONDONTWRITEBYTECODE: "1"' in workflow
+    assert "PYTHONDONTWRITEBYTECODE" not in skill
+    assert "PYTHONDONTWRITEBYTECODE" not in makefile
+    assert "PYTHONDONTWRITEBYTECODE" not in workflow
 
 
 def test_roadmap_skill_commits_the_final_checked_pass(repo_root: Path) -> None:
@@ -534,19 +534,23 @@ def test_roadmap_skill_commits_the_final_checked_pass(repo_root: Path) -> None:
         assert required in normalized
 
 
-def test_setup_skill_uses_verified_plugin_provenance(repo_root: Path) -> None:
+def test_setup_skill_uses_recorded_identity_and_authenticated_templates(repo_root: Path) -> None:
     setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    normalized = " ".join(setup.split())
 
     assert "autoform project provenance --json" in setup
-    assert "--autoform-source <VERIFIED_HTTPS_GIT_SOURCE>" in setup
-    assert "--autoform-ref <VERIFIED_40_CHAR_SHA>" in setup
-    assert "template capture and installed-tree verification" in setup
-    assert "require POSIX descriptor" in setup
+    assert "autoform project verify-install --json" in setup
+    assert "--autoform-source <RECORDED_HTTPS_GIT_SOURCE>" in setup
+    assert "--autoform-ref <RECORDED_40_CHAR_SHA>" in setup
+    assert "authenticated bytes" in setup
+    assert "exits nonzero before writing anything" in normalized
+    assert "identity lookup as file integrity attestation" in normalized
     assert "plain directory copy" not in setup
     assert "scripts/workspace_inspector.py" not in setup
     assert "scripts/make_project.sh" not in setup
     assert "autoform project provenance --json" in readme
+    assert "autoform project verify-install" in readme
     assert "--autoform-ref <full-commit-sha>" not in readme
 
 

@@ -128,17 +128,15 @@ autoform init . --title "Finite Flat Group Schemes" \
   --repository-url https://github.com/owner/repo
 ```
 
-When neither provenance flag is supplied, `init` verifies the installed plugin
-and pins the generated workflows to its source and commit. To override that
+When neither provenance flag is supplied, `init` reads the source and commit
+recorded by the checkout or plugin host. It fetches only that commit's bounded
+`autoform_cli/templates/` subtree, then writes the vault and generated workflows
+from those authenticated bytes. To override that
 pair, pass both `--autoform-source <https-git-url>` and `--autoform-ref <sha>`.
 A ref supplied alone is resolved against the canonical repository. Use
-`--force` to overwrite and `--json` for machine-readable output. If provenance
-cannot be verified, authoring files are still written but CI is omitted,
-`unpinned` is true, and the command exits nonzero so automation cannot mistake
-the incomplete scaffold for success.
-Local template capture uses retained no-follow directory descriptors, so
-`init` currently fails closed on platforms without the required POSIX APIs,
-including Windows.
+`--force` to overwrite and `--json` for machine-readable output. If no immutable
+identity is recorded, or the exact remote template snapshot cannot be fetched,
+`init` exits nonzero before writing anything.
 
 Inspect a Lean project and list Autoform's bundled known-good release pairs:
 
@@ -147,6 +145,7 @@ autoform project inspect .
 autoform project inspect path/inside/project --json
 autoform project versions --json
 autoform project provenance --json
+autoform project verify-install --json
 ```
 
 `project inspect` reads the nearest enclosing project's decision files without
@@ -199,26 +198,25 @@ oversized decision file that Lake and the inspection need to consult is an
 error with `ok: false`. Target and package options outside the report are left
 to Lake.
 
-`project provenance` is the online step. It reads an exact plugin-root checkout,
-a bounded Codex installer record, or bounded Claude installation and marketplace
-records. It fetches the recorded commit and compares the complete installed
-tracked tree with that commit, allowing only exact host metadata recorded by the
-Claude registry. It reports a credential-free HTTPS source
-and full SHA only after all checks pass. Secure installed-tree comparison
-requires POSIX directory-descriptor and no-follow support; unsupported
-platforms, including Windows, return `project-provenance-unavailable`. A plain
-wheel cannot infer provenance. Installers must preserve the tracked tree;
-untracked files outside the exact cache/build-state allowlist fail closed. The
-repository test commands suppress bytecode writes; remove any pre-existing
-pytest assertion-rewrite cache before attesting a checkout. The
-decoded comparison is bounded to 20,000 entries and 64 MiB. Git cannot report
-promised blob sizes before transfer, so selected-object transfer is bounded by
-the shared 60-second deadline; file and aggregate limits are enforced while Git
-decodes those objects. The command attests only the installed file
-contents observed during that invocation. Files can change between individual
-reads or after the command returns. Generated CI does not consume live installed
-bytes: it checks out that exact commit, installs only hashed wheels from its
-verified `uv.lock`, and runs the verified source without building the Autoform
+`project provenance` is a local identity lookup, not self-attestation. It reads
+the origin and HEAD of a clean plugin-root checkout, a bounded Codex installer
+record, a bounded Claude installation record plus its marketplace checkout, or
+an installer-provided `.autoform-provenance.json` sidecar. Every record present
+must name the same credential-free HTTPS source and full commit SHA. It does not
+fetch the repository or inspect unrelated host files.
+
+`project verify-install` is the optional heavyweight audit. It fetches the
+recorded commit, compares the complete installed tracked tree and file modes,
+validates accepted host metadata and bytecode, and applies bounded package and
+lock policy. This diagnostic requires POSIX descriptor APIs and network access;
+ordinary setup does not. Running plugin code cannot provide an external trust
+root, so this command is useful for accidental drift and packaging audits, not
+as a substitute for signed installation metadata. Run it against a clean
+installation; executable pytest assertion-rewrite caches are intentionally
+rejected and should be removed before this optional audit.
+
+Generated CI checks out the recorded commit, installs only hashed wheels from
+its committed `uv.lock`, and runs that source without building the Autoform
 package or resolving its build requirements.
 
 Publishing a project runs four steps in order: validate, write the Mermaid

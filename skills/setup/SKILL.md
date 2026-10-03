@@ -48,22 +48,22 @@ a book with no chapters. `init` never overwrites an existing file, so it is
 also the repair path; it reports what it left alone. See the
 [CLI reference](../../autoform_cli/README.md#commands) for its flags.
 
-Before writing, run `autoform project provenance --json`. This online check
-verifies the plugin checkout or its Codex or Claude installation record against
-the recorded remote commit. With neither provenance flag supplied, `init`
-repeats that verification and pins generated workflows to the verified source
-and commit. The workflows check out that commit and run Autoform through its
-verified `uv.lock`. If verification fails, `init` writes no CI rather than
-guessing and exits nonzero after writing the local authoring files. Treat that
-as an incomplete setup, not success. Secure `init` template capture and installed-tree verification
-require POSIX descriptor and no-follow support; unsupported platforms fail
-closed.
+Before writing, run `autoform project provenance --json`. This local lookup
+reads the immutable source and commit recorded by a clean checkout or by the
+Codex or Claude plugin host. With neither provenance flag supplied, `init`
+fetches only that commit's bounded template subtree and writes the complete
+vault and workflows from those authenticated bytes. The workflows check out the
+same commit and run Autoform through its committed `uv.lock`. If no immutable
+identity is recorded or the exact templates cannot be fetched, `init` exits
+nonzero before writing anything. Do not treat the identity lookup as file
+integrity attestation; `autoform project verify-install --json` is the optional
+full installed-tree diagnostic.
 
 For an explicit override, pass both
-`--autoform-source <VERIFIED_HTTPS_GIT_SOURCE>` and
-`--autoform-ref <VERIFIED_40_CHAR_SHA>`. A ref alone targets the canonical
+`--autoform-source <RECORDED_HTTPS_GIT_SOURCE>` and
+`--autoform-ref <RECORDED_40_CHAR_SHA>`. A ref alone targets the canonical
 Autoform repository. Never invent either value; branches, tags, abbreviated
-SHAs, credential-bearing URLs, and unverifiable installs are not provenance.
+SHAs, and credential-bearing URLs are not immutable provenance.
 
 The two workflows it writes are `autoform-verify.yml`, which validates the
 Markdown DAG, builds Lean, rejects unfinished or unsafe proofs, and audits

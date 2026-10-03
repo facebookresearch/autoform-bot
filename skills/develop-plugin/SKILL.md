@@ -25,10 +25,7 @@ and references; demonstrate outcomes without special-casing them.
 Keep plugin and formalization roots distinct. Agents can infer routine details;
 keep skills to non-obvious constraints and fragile domain steps.
 
-Run tests with `PYTHONDONTWRITEBYTECODE=1`. Never attest pytest
-assertion-rewrite caches; remove them and rerun instead.
-
-Normally run:
+Run focused checks, then normally run:
 
 ```bash
 make lint
@@ -38,6 +35,6 @@ make check-example
 
 Run `lake build` when example Lean results change. Validate edited skills and
 the manifest with skill-creator and plugin-creator. Use cachebuster and reinstall
-only to test installed discovery in a new thread.
+only to test installed discovery in a new thread. Report outcome and checks.
 Treat rewritten private declaration safety as fail-closed evidence: correlate
 the official user name to its lexical declaration by source coordinates.
