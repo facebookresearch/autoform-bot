@@ -626,6 +626,13 @@ had there from what the environment does record, once per module:
   active whether or not the file names the namespace: `namespace` and `open`
   activate it, and a macro or elaborator can run them on syntax it builds.
   The probe tries each subset of those namespaces.
+A state adds the scoped entries of its namespaces before the module's own
+entries, where Lean interleaves them as `open` and `namespace` run. The
+order cannot change the result: the token table and the node kinds are
+sets; Lean's longest-match parse keeps every alternative that ties, whatever
+the order of the parsers, which decides only the order of a choice node's
+alternatives; and the probe takes comment ranges from every alternative and
+leaves a statement unknown when a choice node holds its value.
 The probe parses the source under every state these choices allow, leaving
 out entries that cannot change the parse (a token that does not occur in the
 text, a parser none of whose first tokens occurs in it), and keeps the
@@ -646,12 +653,14 @@ does not make the article unresolved. What the probe cannot prove, and so
 can get wrong, showing code as a comment or a comment as code: `local`
 syntax, which Lean records nowhere; a metaprogram that changes the parser
 state without recording an entry, records a parser entry naming a
-declaration made later in the module, or gives a declaration a range
-outside the command that made it; a parser that reads the environment, the
-options, the current namespace or the `open`s beyond the parser state, or
-input past the declaration's end; an initializer that changes the builtin
-grammar; and a source with CRLF line ends, whose offsets the probe takes
-from the text as Lean stores it.
+declaration made later in the module, records a second entry for a declared
+category (Lean keeps the first it adds, and `declare_syntax_cat` refuses a
+declared category), or gives a declaration a range outside the command that
+made it; a parser that reads the environment, the options, the current
+namespace or the `open`s beyond the parser state, or input past the
+declaration's end; an initializer that changes the builtin grammar; and a
+source with CRLF line ends, whose offsets the probe takes from the text as
+Lean stores it.
 
 Every item's signature is also printed raw, bypassing project notation,
 unexpanders, and custom delaborators, so an `infixl " + " => HMul.hMul` cannot

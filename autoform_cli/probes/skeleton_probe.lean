@@ -742,10 +742,26 @@ partial def companionSource (cache : IO.Ref GrammarCache) (semanticCache : IO.Re
   if kind == "theorem" || kind == "axiom" then return none
   declarationSource cache semanticCache shown
 
-/-- The node where a parsed declaration's value starts, ending its statement. -/
-def valueNode? (stx : Syntax) : Option Syntax :=
+/-- The node kinds `valueNode?` looks for. -/
+def valueKinds : List SyntaxNodeKind := [``Parser.Command.declaration, ``Parser.Command.declValSimple,
+  ``Parser.Command.declValEqns, ``Parser.Command.whereStructInst]
+
+/-- Whether an alternative of a choice node in `stx` holds a node `valueNode?`
+looks for. -/
+partial def choiceHoldsValue (stx : Syntax) : Bool :=
+  if stx.isOfKind choiceKind then
+    stx.getArgs.any fun alt => (alt.find? fun n => valueKinds.any n.isOfKind).isSome
+  else stx.getArgs.any choiceHoldsValue
+
+/-- The node where a parsed declaration's value starts, ending its statement;
+an error when a choice node holds one. A choice node's alternatives come in
+the order Lean added their parsers, which the probe does not rebuild for
+scoped and own entries, so which alternative a search reaches first is
+unknown. -/
+def valueNode? (stx : Syntax) : Except Unit (Option Syntax) := do
+  if choiceHoldsValue stx then throw ()
   let decl := (stx.find? (·.isOfKind ``Parser.Command.declaration)).getD stx
-  (decl.find? (·.isOfKind ``Parser.Command.declValSimple)).orElse fun _ =>
+  return (decl.find? (·.isOfKind ``Parser.Command.declValSimple)).orElse fun _ =>
     (decl.find? (·.isOfKind ``Parser.Command.declValEqns)).orElse fun _ =>
       decl.find? (·.isOfKind ``Parser.Command.whereStructInst)
 
@@ -761,7 +777,7 @@ def statementPrefix? (env : Environment) (column : Nat) (namespaces : Array Name
   for part in (snippet.splitOn ":=").dropLast do
     written := written ++ part
     if let some (stx, bytes) ← parseCommand env column namespaces (written ++ ":= sorry") then
-      if let some v := valueNode? stx then
+      if let some v := (← valueNode? stx) then
         if let some pos := v.getPos? then
           if Nat.ble (pos.byteIdx - column) written.utf8ByteSize then
             let statementBytes := snippet.toUTF8.extract 0 (pos.byteIdx - column)
@@ -799,7 +815,7 @@ def statementSource (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref Semant
     | .ok none => if typeDecl then return none else cut
     | .ok (some (stx, bytes)) =>
       if typeDecl then return some (shown snippet.trimAsciiEnd.toString stx bytes)
-      match valueNode? stx with
+      match ← valueNode? stx with
       | none =>
         return some (if kind == "axiom" || kind == "opaque" then shown snippet.trimAsciiEnd.toString stx bytes
           else none)

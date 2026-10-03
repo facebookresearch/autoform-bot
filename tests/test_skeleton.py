@@ -3497,6 +3497,39 @@ def test_an_open_inside_a_source_withholds_only_what_follows_it(tmp_path: Path) 
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_choice_node_holding_the_value_leaves_the_statement_unknown(tmp_path: Path) -> None:
+    # `thmB` and the builtin `theorem` both parse all of `Skel.amb`, so the
+    # parse is a choice node, whose alternatives come in the order Lean added
+    # their parsers, the last first: Lean elaborated `thmB` (`Skel.viaB`
+    # exists), whose value starts after `let y`, not at the first `:=`. The
+    # probe does not rebuild that order for scoped and own entries, so a
+    # choice node holding a value leaves the statement unknown.
+    project = _project(tmp_path)
+    (project / "Skel" / "ChUse.lean").write_text(
+        "import Lean\n"
+        "open Lean Parser Command\n"
+        'syntax (name := thmB) "theorem " ident " : " term " := " "let " ident declVal : command\n'
+        "open Elab Command in\n"
+        "@[command_elab thmB] def elabB : CommandElab := fun stx => do\n"
+        "  elabCommand (← `(theorem $(⟨stx[1]⟩):ident : $(⟨stx[3]⟩) := by trivial))\n"
+        "  elabCommand (← `(def $(mkIdent `Skel.viaB) : Nat := 0))\n"
+        "theorem Skel.amb : True := let y := 0\n"
+        "  trivial\n"
+        "example : Skel.viaB = 0 := rfl\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.ChUse")
+    blueprint = _blueprint(tmp_path, lean={"amb": "Skel.amb"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    amb = report.node("basics/amb")
+    assert amb is not None
+    assert amb.declarations[0].statement is None
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_the_probe_rebuilds_each_modules_grammar_once(tmp_path: Path) -> None:
     # Two roots in CacheA trust declarations of CacheA and CacheB. Each
     # module's grammar is rebuilt once per probe, however many sources and
