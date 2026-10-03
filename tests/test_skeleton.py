@@ -1223,6 +1223,36 @@ def test_custom_runner_rejects_sources_changed_during_probe(tmp_path: Path) -> N
         extract_skeletons(blueprint, lean_root=project, runner=changing_runner)
 
 
+@pytest.mark.parametrize("failure_call", (1, 2))
+def test_extraction_translates_source_index_io_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_call: int
+) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    real_index_project = index_project
+    calls = 0
+
+    def fail_index(root: Path):
+        nonlocal calls
+        calls += 1
+        if calls == failure_call:
+            raise OSError(f"private host detail: {root}")
+        return real_index_project(root)
+
+    monkeypatch.setattr("autoform_cli.skeleton.index_project", fail_index)
+
+    with pytest.raises(SkeletonError) as error:
+        extract_skeletons(
+            blueprint,
+            lean_root=project,
+            runner=lambda probe, root: _fake_probe_output(),
+        )
+
+    assert error.value.issues == ("Lean sources could not be indexed",)
+    assert str(tmp_path) not in str(error.value)
+    assert calls == failure_call
+
+
 def test_extraction_rejects_configuration_changed_while_reading_libraries(tmp_path: Path, monkeypatch) -> None:
     # An edit reverted before the final check would otherwise select libraries silently.
     project = _project(tmp_path)

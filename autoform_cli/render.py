@@ -270,7 +270,10 @@ def render_site(
     # <repo>/docs/blueprint would otherwise be described as <repo>/blueprint,
     # and every generated permalink would 404.
     repo_root = Path(lean_root).expanduser().resolve() if lean_root is not None else blueprint.parent
-    linker = build_linker(repo_root, repository_url=repository_url, ref=ref)
+    try:
+        linker = build_linker(repo_root, repository_url=repository_url, ref=ref)
+    except OSError as error:
+        raise PublicationError(["Lean sources could not be indexed"]) from error
     numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
     sources_base = _sources_base(blueprint, repo_root, linker)

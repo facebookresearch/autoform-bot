@@ -306,7 +306,10 @@ def build_runtime_graph(
         root = Path(lean_root).expanduser().resolve()
         if not root.is_dir():
             raise RuntimeProjectionError(["Lean root does not exist or is not a directory"])
-        lean_index = index_project(root)
+        try:
+            lean_index = index_project(root)
+        except OSError as error:
+            raise RuntimeProjectionError(["Lean sources could not be indexed"]) from error
 
     parents = {node.parent for node in graph.nodes.values() if node.parent is not None}
     runtime_nodes: list[RuntimeNode] = []

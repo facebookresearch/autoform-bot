@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+import autoform_cli.audit as audit_module
 from autoform_cli.audit import audit_blueprint
 
 
@@ -449,6 +452,68 @@ def test_audit_reports_nodes_that_are_large_outliers_for_their_project(tmp_path:
             )
         ]
     }
+
+
+def test_audit_measures_source_spans_from_the_captured_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    spans = {f"Project.small{index}": 6 for index in range(5)}
+    spans["Project.big"] = 420
+    for name in spans:
+        _article(
+            blueprint,
+            f"{name.rsplit('.', 1)[-1]}.md",
+            declaration="theorem",
+            statement="formalized",
+            proof="formalized",
+            lean=name,
+        )
+    lean_root = _lean_project(tmp_path, spans)
+    real_index_project = audit_module.index_project
+
+    def index_then_mutate(root: Path):
+        index = real_index_project(root)
+        (root / "big.lean").write_text(
+            "theorem Project.big : True := trivial\n", encoding="utf-8"
+        )
+        return index
+
+    monkeypatch.setattr(audit_module, "index_project", index_then_mutate)
+
+    findings = _finding_map(blueprint, lean_root=lean_root)
+
+    assert findings["roadmap/big.md"] == [
+        (
+            "node-too-large",
+            "node's Lean declarations span 420 lines against this project's "
+            "6-line median; split it into pull-request-sized nodes",
+        )
+    ]
+
+
+def test_audit_reports_source_index_io_failure_without_host_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "result.md", declaration="theorem", lean="Project.result")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+
+    def fail_index(root: Path):
+        raise OSError(f"private host detail: {root}")
+
+    monkeypatch.setattr(audit_module, "index_project", fail_index)
+
+    result = audit_blueprint(blueprint, lean_root=lean_root)
+
+    assert [(finding.article_path, finding.code, finding.reason) for finding in result.findings] == [
+        (".", "unreadable-lean-sources", "Lean sources could not be indexed")
+    ]
+    assert str(tmp_path) not in result.to_json()
 
 
 def test_audit_measures_node_size_against_the_project_rather_than_a_fixed_limit(

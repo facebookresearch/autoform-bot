@@ -662,6 +662,23 @@ def test_refuses_overlapping_source_and_output(tmp_path: Path, destination: str)
         render_site(blueprint, output)
 
 
+def test_render_translates_source_index_io_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+
+    def fail_linker(root: Path, **kwargs: object):
+        raise OSError(f"private host detail: {root}")
+
+    monkeypatch.setattr("autoform_cli.render.build_linker", fail_linker)
+
+    with pytest.raises(PublicationError) as error:
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert error.value.issues == ("Lean sources could not be indexed",)
+    assert str(tmp_path) not in str(error.value)
+
+
 def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path) -> None:
     project = _project(tmp_path)
     outputs = [tmp_path / "first", tmp_path / "second"]

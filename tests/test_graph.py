@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from autoform_cli.__main__ import main
 from autoform_cli.graph import (
     GraphValidationError,
     load_graph,
@@ -339,6 +340,24 @@ def test_check_cli_reports_validation_errors(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "error: bad: missing H1 title" in result.stdout
+
+
+def test_check_cli_reports_source_index_io_failure_before_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n", lean="Project.base")
+
+    def fail_linker(root: Path):
+        raise OSError(f"private host detail: {root}")
+
+    monkeypatch.setattr("autoform_cli.__main__.build_linker", fail_linker)
+
+    assert main(["check", str(blueprint), "--lean-root", str(tmp_path)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == "error: Lean sources could not be indexed\n"
+    assert captured.err == ""
+    assert str(tmp_path) not in captured.out
 
 
 def test_a_chapter_directory_with_no_chapter_page_is_refused(tmp_path: Path) -> None:

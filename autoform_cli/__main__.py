@@ -255,16 +255,23 @@ def _check(args: argparse.Namespace) -> int:
             print(f"error: {issue}")
         return 1
 
+    linker = None
+    if args.lean_root is not None:
+        try:
+            linker = build_linker(args.lean_root)
+        except OSError:
+            print("error: Lean sources could not be indexed")
+            return 1
+
     statuses = status.derive(graph)
     summary = " · ".join(f"{count} {state.label}" for state, count in status.summarize(statuses))
     print(f"OK: {len(graph.nodes)} articles, {graph.edge_count} dependencies")
     if summary:
         print(f"    {summary}")
 
-    if args.lean_root is None:
+    if linker is None:
         return 0
 
-    linker = build_linker(args.lean_root)
     missing = [
         f"{node.id}: declaration not found in {args.lean_root}: {name}"
         for node in graph.nodes.values()

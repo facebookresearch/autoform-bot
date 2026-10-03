@@ -363,7 +363,16 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
         ]
 
     findings: list[AuditFinding] = []
-    index = index_project(root)
+    try:
+        index = index_project(root)
+    except OSError:
+        return [
+            AuditFinding(
+                ".",
+                "unreadable-lean-sources",
+                "Lean sources could not be indexed",
+            )
+        ]
     spans = _source_spans(index)
     sizes: dict[str, int] = {}
     for node_id in sorted(graph.nodes):
@@ -425,7 +434,7 @@ def _source_spans(index: SourceIndex) -> dict[str, int]:
     tails: dict[Path, int] = {}
     for path, lines in starts.items():
         lines.sort()
-        tails[path] = _line_count(index.root / path)
+        tails[path] = index.line_counts.get(path, 0)
 
     spans: dict[str, int] = {}
     for declaration in index.declarations.values():
@@ -434,13 +443,6 @@ def _source_spans(index: SourceIndex) -> dict[str, int]:
         end = lines[following] - 1 if following < len(lines) else tails[declaration.path]
         spans[declaration.name] = max(1, end - declaration.line + 1)
     return spans
-
-
-def _line_count(path: Path) -> int:
-    try:
-        return len(path.read_text(encoding="utf-8").splitlines())
-    except (OSError, UnicodeError):
-        return 0
 
 
 def _size_findings(graph: Graph, sizes: dict[str, int]) -> list[AuditFinding]:

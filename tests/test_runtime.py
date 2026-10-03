@@ -254,6 +254,23 @@ def test_rejects_nonportable_authored_file_paths(tmp_path: Path) -> None:
     assert str(tmp_path) not in str(error.value)
 
 
+def test_runtime_translates_source_index_io_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+
+    def fail_index(root: Path):
+        raise OSError(f"private host detail: {root}")
+
+    monkeypatch.setattr("autoform_cli.runtime.index_project", fail_index)
+
+    with pytest.raises(RuntimeProjectionError) as error:
+        load_runtime_graph(project, lean_root=project)
+
+    assert error.value.issues == ("Lean sources could not be indexed",)
+    assert str(tmp_path) not in str(error.value)
+
+
 def test_adapter_rejects_inconsistent_hand_built_graph_without_host_paths(tmp_path: Path) -> None:
     project = _project(tmp_path)
     canonical = load_graph(project / "blueprint")
