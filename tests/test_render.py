@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.lean import _normalize_remote
+from autoform_cli.lean import _normalize_remote, detect_ref, detect_repository_url
 from autoform_cli.render import PUBLICATION_MANIFEST, PublicationError, render_site
 from autoform_cli.status import STATES
 
@@ -840,6 +840,55 @@ def test_render_omits_benign_hidden_files(tmp_path: Path) -> None:
 )
 def test_git_remotes_normalize_to_web_urls(remote: str, expected: str | None) -> None:
     assert _normalize_remote(remote) == expected
+
+
+def _git_project(path: Path, *, remote: str | None = None) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
+    (path / "README.md").write_text("project\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True)
+    if remote:
+        subprocess.run(["git", "remote", "add", "origin", remote], cwd=path, check=True)
+    return path
+
+
+def test_codespaces_repository_is_not_used_outside_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codespaces sets GITHUB_REPOSITORY without GITHUB_ACTIONS.
+
+    Linking against that value points at the codespace's repository, not this
+    project. Outside Actions, use the project's remote, or nothing.
+    """
+    monkeypatch.setenv("GITHUB_REPOSITORY", "codespace/owner")
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    bare = _git_project(tmp_path / "bare")
+    assert detect_repository_url(bare) is None
+
+    hosted = _git_project(tmp_path / "hosted", remote="git@github.com:project/repo.git")
+    assert detect_repository_url(hosted) == "https://github.com/project/repo"
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    assert detect_repository_url(hosted) == "https://github.com/codespace/owner"
+
+
+def test_actions_sha_is_ignored_outside_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _git_project(tmp_path / "project")
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=project, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    monkeypatch.setenv("GITHUB_SHA", "a" * 40)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    assert detect_ref(project) == head
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    assert detect_ref(project) == "a" * 40
 
 
 def _with_source_notes(tmp_path: Path) -> Path:
