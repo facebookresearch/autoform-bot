@@ -606,7 +606,7 @@ intent into it. Lean's parser, not a separate lexer, locates those comments, and
 shown only when the probe can prove it reads the source as Lean read it when
 compiling the file, apart from the residual cases listed below. Where a
 comment starts depends on the parser state in force at the declaration: with
-`++"` a token, `x ++" -- y "` holds a string, and without it a comment. Lean
+`++"` a token, `x ++" -- y "` holds a comment, and without it a string. Lean
 does not record that state, so the probe rebuilds every state Lean could have
 had there from what the environment does record, once per module:
 - The state at the module's first line holds the builtin grammar and the
@@ -645,9 +645,10 @@ a category (Lean resolved that name in the current namespace and under the
 `open`s in force, which the probe's parse does not have), or when there are
 more than 256 states, a source that may hold a comment is withheld.
 Substring rules against one table, which withhold whenever a doubtful token
-occurs in the text, were set aside because they can only guess which
-occurrences change the lexing, while parsing decides that with Lean's own
-parser under every state the environment leaves open. A withheld source
+occurs in the text, were set aside because they withhold every such source,
+even where the token cannot change the parse; parsing under every state the
+environment leaves open withholds only where the states disagree, and the
+substring test serves only to leave out entries. A withheld source
 leaves the declaration's signatures and kernel material in the packet and
 does not make the article unresolved. What the probe cannot prove, and so
 can get wrong, showing code as a comment or a comment as code: `local`

@@ -373,7 +373,7 @@ def commentsJson (bytes : ByteArray) (stx : Syntax) (offset cut : Nat) : Json :=
 
 /-! Grammars. Lean parses a declaration with the parser state in effect where
 it is written, and that state decides what is a comment: with `++"` a token,
-`x ++" -- y "` holds a string; without it, a comment. Lean does not record the
+`x ++" -- y "` holds a comment; without it, a string. Lean does not record the
 state, so the probe rebuilds, from the final environment, every state Lean
 could have had there, up to entries that cannot change how the source parses.
 A state under which the source does not parse is then one Lean did not have;

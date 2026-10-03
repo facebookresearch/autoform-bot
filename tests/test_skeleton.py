@@ -3231,10 +3231,11 @@ def test_a_source_shows_only_comments_every_possible_token_table_agrees_on(tmp_p
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_a_token_registered_without_a_placeable_declaration_withholds_the_source(tmp_path: Path) -> None:
     # Both modules make `!"` a token before their sources, so Lean read the
-    # `-- SECRET_…` text there as part of a string. AttrUse registers a parser
-    # declared in another module; RawUse writes the token and a parser entry
-    # naming that module's parser itself. Neither declaration is in the module,
-    # so its position bounds nothing there, and the token may be active.
+    # `-- SECRET_…` text there as a comment, which a parse without the token
+    # reads as code in a string. AttrUse registers a parser declared in
+    # another module; RawUse writes the token and a parser entry naming that
+    # module's parser itself. Neither declaration is in the module, so its
+    # position bounds nothing there, and the token may be active.
     project = _project(tmp_path)
     parser = (
         "import Lean\n"
