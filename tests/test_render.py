@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -73,14 +74,53 @@ def _project(tmp_path: Path) -> Path:
     return project
 
 
+def _commit_project(repository: Path) -> str:
+    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+    subprocess.run(["git", "add", "--all"], cwd=repository, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Autoform Test",
+            "-c",
+            "user.email=autoform@example.invalid",
+            "commit",
+            "-q",
+            "--no-gpg-sign",
+            "-m",
+            "test fixture",
+        ],
+        cwd=repository,
+        check=True,
+    )
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _git_head(repository: Path) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def _render(tmp_path: Path, **kwargs):
     project = _project(tmp_path)
+    ref = _commit_project(project)
     report = render_site(
         project / "blueprint",
         tmp_path / "out",
         lean_root=project,
         repository_url="https://github.com/owner/repo",
-        ref="cafe1234",
+        ref=ref,
         **kwargs,
     )
     return project, report
@@ -338,10 +378,11 @@ def test_authored_slots_override_dependency_order_for_book_flow(tmp_path: Path) 
 
 
 def test_cross_references_point_at_anchors_on_the_chapter(tmp_path: Path) -> None:
-    _render(tmp_path)
+    project, _report = _render(tmp_path)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
 
-    assert "https://github.com/owner/repo/blob/cafe1234/Project/Basic.lean#L5" in page
+    ref = _git_head(project)
+    assert f"https://github.com/owner/repo/blob/{ref}/Project/Basic.lean#L5" in page
     assert '<a class="bp-code-link"' in page
     assert 'aria-label="View Project.top in Lean source"' in page
     assert '<svg class="bp-code-icon"' in page
@@ -718,6 +759,7 @@ def test_render_translates_source_index_io_failure(
 
 def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path) -> None:
     project = _project(tmp_path)
+    ref = _commit_project(project)
     outputs = [tmp_path / "first", tmp_path / "second"]
     for output in outputs:
         render_site(
@@ -725,7 +767,7 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path
             output,
             lean_root=project,
             repository_url="https://github.com/owner/repo",
-            ref="a" * 40,
+            ref=ref,
         )
 
     def files(root: Path) -> dict[str, bytes]:
@@ -750,7 +792,7 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path
         "dependencies": 1,
         "directories": manifest["directories"],
         "files": manifest["files"],
-        "git_ref": "a" * 40,
+        "git_ref": ref,
         "lean_source_revision": manifest["lean_source_revision"],
         "nodes": 3,
         "schema": "autoform-publication/v2",
@@ -1230,6 +1272,48 @@ def test_source_change_during_stage_sync_aborts_before_publication(
     assert not output.exists()
 
 
+def test_workspace_open_failure_removes_the_empty_private_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+
+    def fail_open(*_args, **_kwargs):
+        raise OSError(errno.EMFILE, "injected descriptor exhaustion")
+
+    monkeypatch.setattr(render_module, "_open_workspace_directory", fail_open)
+
+    with pytest.raises(OSError, match="descriptor exhaustion"):
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
+def test_partial_stage_write_failure_removes_the_inventoried_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    original_write = render_module.os.write
+    failed = False
+
+    def fail_after_partial_write(descriptor: int, data) -> int:
+        nonlocal failed
+        if not failed and data:
+            failed = True
+            original_write(descriptor, data[:1])
+            raise OSError(errno.ENOSPC, "injected full filesystem")
+        return original_write(descriptor, data)
+
+    monkeypatch.setattr(render_module.os, "write", fail_after_partial_write)
+
+    with pytest.raises(OSError, match="full filesystem"):
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert failed
+    assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
 def test_workspace_path_substitution_is_not_deleted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1566,6 +1650,7 @@ def test_in_repo_staging_never_supplies_lean_source_links(tmp_path: Path) -> Non
         article.read_text(encoding="utf-8").replace("lean: Project.top", "lean: BlueprintProof"),
         encoding="utf-8",
     )
+    ref = _commit_project(project)
 
     links = []
     for name in ("aaa-output", "zzz-output"):
@@ -1575,16 +1660,19 @@ def test_in_repo_staging_never_supplies_lean_source_links(tmp_path: Path) -> Non
             output,
             lean_root=project,
             repository_url="https://github.com/owner/repo",
-            ref="abc",
+            ref=ref,
         )
         page = (output / "roadmap/README.md").read_text(encoding="utf-8")
-        match = re.search(r"https://github.com/owner/repo/blob/abc/[^)]+proofs\.lean#L1", page)
+        match = re.search(
+            rf"https://github.com/owner/repo/blob/{ref}/[^)]+proofs\.lean#L1",
+            page,
+        )
         assert match is not None
         links.append(match.group())
 
     assert links == [
-        "https://github.com/owner/repo/blob/abc/blueprint/proofs.lean#L1",
-        "https://github.com/owner/repo/blob/abc/blueprint/proofs.lean#L1",
+        f"https://github.com/owner/repo/blob/{ref}/blueprint/proofs.lean#L1",
+        f"https://github.com/owner/repo/blob/{ref}/blueprint/proofs.lean#L1",
     ]
 
 
@@ -1984,6 +2072,7 @@ def test_source_notes_leave_the_site_for_the_repository(tmp_path: Path) -> None:
     site links to it in the repository.
     """
     project = _with_source_notes(tmp_path)
+    ref = _commit_project(project)
     out = tmp_path / "out"
 
     render_site(
@@ -1991,11 +2080,11 @@ def test_source_notes_leave_the_site_for_the_repository(tmp_path: Path) -> None:
         out,
         lean_root=project,
         repository_url="https://github.com/owner/repo",
-        ref="cafe1234",
+        ref=ref,
     )
 
     assert not (out / "sources").exists()
-    expected = "https://github.com/owner/repo/blob/cafe1234/blueprint/sources/paper.md#lemma-3"
+    expected = f"https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.md#lemma-3"
     assert expected in (out / "roadmap/README.md").read_text(encoding="utf-8")
 
 
@@ -2017,6 +2106,148 @@ def test_source_notes_stay_published_when_there_is_nowhere_to_send_readers(
     assert "github.com" not in (out / "roadmap/README.md").read_text(encoding="utf-8")
 
 
+def test_repository_links_use_the_verified_commit_not_a_mutable_ref(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    commit = _commit_project(project)
+    output = tmp_path / "out"
+
+    render_site(
+        project / "blueprint",
+        output,
+        lean_root=project,
+        repository_url="https://github.com/owner/repo",
+        ref="HEAD",
+    )
+
+    manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    chapter = (output / "roadmap/README.md").read_text(encoding="utf-8")
+    assert manifest["git_ref"] == commit
+    assert f"/blob/{commit}/Project/Basic.lean#L5" in chapter
+    assert "/blob/HEAD/" not in chapter
+
+
+def test_dirty_lean_snapshot_does_not_borrow_the_clean_commit_ref(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    commit = _commit_project(project)
+    lean = project / "Project/Basic.lean"
+    lean.write_text(
+        lean.read_text(encoding="utf-8").replace(
+            "theorem top",
+            "\n\n\n\ntheorem top",
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "out"
+
+    report = render_site(
+        project / "blueprint",
+        output,
+        lean_root=project,
+        repository_url="https://github.com/owner/repo",
+        ref=commit,
+    )
+
+    chapter = (output / "roadmap/README.md").read_text(encoding="utf-8")
+    manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert "/blob/" not in chapter
+    assert "Project/Basic.lean" in chapter
+    assert manifest["git_ref"] is None
+    assert report.warnings == [
+        "repository links were omitted because the captured blueprint and Lean "
+        "inputs do not match one verified local Git commit"
+    ]
+
+
+def test_untracked_source_note_stays_published_instead_of_linking_to_a_404(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap/README.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8")
+        + "\nUntracked [source](../sources/untracked.md).\n",
+        encoding="utf-8",
+    )
+    commit = _commit_project(project)
+    source = project / "blueprint/sources/untracked.md"
+    source.parent.mkdir()
+    source.write_text("# Local source note\n", encoding="utf-8")
+    output = tmp_path / "out"
+
+    report = render_site(
+        project / "blueprint",
+        output,
+        lean_root=project,
+        repository_url="https://github.com/owner/repo",
+        ref=commit,
+    )
+
+    chapter = (output / "roadmap/README.md").read_text(encoding="utf-8")
+    assert (output / "sources/untracked.md").read_bytes() == source.read_bytes()
+    assert "../sources/untracked.md" in chapter
+    assert f"/blob/{commit}/blueprint/sources/untracked.md" not in chapter
+    assert report.warnings
+
+
+def test_ref_change_after_capture_cannot_label_old_bytes_with_the_new_ref(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    old_commit = _commit_project(project)
+    lean = project / "Project/Basic.lean"
+    lean.write_text(
+        lean.read_text(encoding="utf-8").replace("theorem top", "\n\ntheorem top"),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "--all"], cwd=project, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Autoform Test",
+            "-c",
+            "user.email=autoform@example.invalid",
+            "commit",
+            "-q",
+            "--no-gpg-sign",
+            "-m",
+            "new source generation",
+        ],
+        cwd=project,
+        check=True,
+    )
+    new_commit = _git_head(project)
+    subprocess.run(["git", "reset", "--hard", "-q", old_commit], cwd=project, check=True)
+
+    def advance_ref(_root: Path) -> str:
+        subprocess.run(
+            ["git", "update-ref", "HEAD", new_commit],
+            cwd=project,
+            check=True,
+        )
+        return new_commit
+
+    monkeypatch.setattr(render_module, "detect_ref", advance_ref)
+    output = tmp_path / "out"
+    report = render_site(
+        project / "blueprint",
+        output,
+        lean_root=project,
+        repository_url="https://github.com/owner/repo",
+    )
+
+    chapter = (output / "roadmap/README.md").read_text(encoding="utf-8")
+    manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert f"/blob/{new_commit}/" not in chapter
+    assert manifest["git_ref"] is None
+    assert report.warnings
+
+
 def test_permalinks_are_relative_to_the_repository_not_the_vaults_parent(
     tmp_path: Path,
 ) -> None:
@@ -2028,6 +2259,7 @@ def test_permalinks_are_relative_to_the_repository_not_the_vaults_parent(
     project = repo / "docs"
     project.mkdir(parents=True)
     inner = _project(project)  # writes into <repo>/docs/project/blueprint
+    ref = _commit_project(repo)
     out = tmp_path / "out"
 
     render_site(
@@ -2035,12 +2267,12 @@ def test_permalinks_are_relative_to_the_repository_not_the_vaults_parent(
         out,
         lean_root=repo,
         repository_url="https://github.com/owner/repo",
-        ref="cafe1234",
+        ref=ref,
     )
 
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
-    assert "blob/cafe1234/docs/project/blueprint/roadmap/top.md" in chapter
-    assert "blob/cafe1234/blueprint/roadmap/top.md" not in chapter
+    assert f"blob/{ref}/docs/project/blueprint/roadmap/top.md" in chapter
+    assert f"blob/{ref}/blueprint/roadmap/top.md" not in chapter
 
 
 def test_markdown_source_permalink_quotes_the_original_repository_path(
@@ -2048,6 +2280,7 @@ def test_markdown_source_permalink_quotes_the_original_repository_path(
 ) -> None:
     repository = tmp_path / "repo"
     project = _project(repository / "docs with spaces")
+    ref = _commit_project(repository)
     out = tmp_path / "out"
 
     render_site(
@@ -2055,12 +2288,12 @@ def test_markdown_source_permalink_quotes_the_original_repository_path(
         out,
         lean_root=repository,
         repository_url="https://github.com/owner/repo",
-        ref="cafe1234",
+        ref=ref,
     )
 
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
     assert (
-        "blob/cafe1234/docs%20with%20spaces/project/blueprint/roadmap/top.md"
+        f"blob/{ref}/docs%20with%20spaces/project/blueprint/roadmap/top.md"
         in chapter
     )
     assert ".autoform-publication-" not in chapter
@@ -2083,6 +2316,7 @@ def test_reference_style_links_are_rewritten_with_the_inline_ones(tmp_path: Path
         "[paper]: ../sources/paper.md\n",
         encoding="utf-8",
     )
+    ref = _commit_project(project)
     out = tmp_path / "out"
 
     render_site(
@@ -2090,11 +2324,11 @@ def test_reference_style_links_are_rewritten_with_the_inline_ones(tmp_path: Path
         out,
         lean_root=project,
         repository_url="https://github.com/owner/repo",
-        ref="cafe1234",
+        ref=ref,
     )
 
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
-    expected = "[paper]: https://github.com/owner/repo/blob/cafe1234/blueprint/sources/paper.md"
+    expected = f"[paper]: https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.md"
     assert expected in chapter
     assert "[paper]: ../sources/paper.md" not in chapter
 
@@ -2111,6 +2345,7 @@ def test_angle_bracket_reference_destinations_with_spaces_are_rewritten(tmp_path
         + '\nGrounded in [Paper][paper].\n\n[paper]: <../sources/paper note.md> "Source note"\n',
         encoding="utf-8",
     )
+    ref = _commit_project(project)
     out = tmp_path / "out"
 
     render_site(
@@ -2118,12 +2353,12 @@ def test_angle_bracket_reference_destinations_with_spaces_are_rewritten(tmp_path
         out,
         lean_root=project,
         repository_url="https://github.com/owner/repo",
-        ref="cafe1234",
+        ref=ref,
     )
 
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
     assert (
-        '[paper]: https://github.com/owner/repo/blob/cafe1234/blueprint/sources/paper%20note.md "Source note"'
+        f'[paper]: https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper%20note.md "Source note"'
         in chapter
     )
     assert "<../sources/paper note.md>" not in chapter
@@ -2386,6 +2621,37 @@ def test_nested_authored_page_named_like_generated_output_is_published(
     assert "Authored dependencies" in chapter
 
 
+@pytest.mark.parametrize(
+    "alias",
+    (
+        "Dependencies.md",
+        "Dependencies.html",
+        "Graph.html",
+        "Progress.md",
+        "Structure.md",
+        "Publication.json",
+    ),
+)
+def test_root_case_alias_of_generated_output_is_rejected(
+    tmp_path: Path,
+    alias: str,
+) -> None:
+    project = _project(tmp_path)
+    authored = project / "blueprint" / alias
+    authored.write_text("# Authored page\n", encoding="utf-8")
+    output = tmp_path / "out"
+
+    with pytest.raises(
+        PublicationError,
+        match="noncanonical generated publication filename",
+    ):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert authored.read_text(encoding="utf-8") == "# Authored page\n"
+    assert not output.exists()
+    assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
 def test_output_must_have_an_ordinary_final_component(tmp_path: Path) -> None:
     project = _project(tmp_path)
 
@@ -2510,8 +2776,8 @@ def test_git_remote_a_b_a_change_cannot_change_published_links(
     for variable in ("GITHUB_REPOSITORY", "GITHUB_SERVER_URL"):
         monkeypatch.delenv(variable, raising=False)
     project = _project(tmp_path)
+    ref = _commit_project(project)
     output = tmp_path / "out"
-    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
     subprocess.run(
         ["git", "config", "remote.origin.url", "https://github.com/correct/source.git"],
         cwd=project,
@@ -2541,7 +2807,7 @@ def test_git_remote_a_b_a_change_cannot_change_published_links(
             )
 
     monkeypatch.setattr(render_module, "build_linker", expose_transient_remote)
-    render_site(project / "blueprint", output, lean_root=project, ref="abc123")
+    render_site(project / "blueprint", output, lean_root=project, ref=ref)
 
     page = (output / "roadmap/README.md").read_text(encoding="utf-8")
     assert "github.com/correct/source" in page
@@ -2966,6 +3232,7 @@ def test_replacement_parent_swap_never_overwrites_the_replacement_parent(
 
 def test_explicit_symlink_lean_root_is_canonicalized_once(tmp_path: Path) -> None:
     project = _project(tmp_path)
+    ref = _commit_project(project)
     alias = tmp_path / "project-alias"
     alias.symlink_to(project, target_is_directory=True)
     output = tmp_path / "out"
@@ -2975,16 +3242,17 @@ def test_explicit_symlink_lean_root_is_canonicalized_once(tmp_path: Path) -> Non
         output,
         lean_root=alias,
         repository_url="https://github.com/owner/repo",
-        ref="abc",
+        ref=ref,
     )
 
     assert report.linked == 2
     chapter = (output / "roadmap/README.md").read_text(encoding="utf-8")
-    assert "/blob/abc/blueprint/roadmap/top.md" in chapter
+    assert f"/blob/{ref}/blueprint/roadmap/top.md" in chapter
 
 
 def test_explicit_macos_var_alias_lean_root_is_canonicalized(tmp_path: Path) -> None:
     project = _project(tmp_path)
+    ref = _commit_project(project)
     physical = str(project)
     if not physical.startswith("/private/var/"):
         pytest.skip("macOS /var alias is unavailable")
@@ -2997,7 +3265,7 @@ def test_explicit_macos_var_alias_lean_root_is_canonicalized(tmp_path: Path) -> 
         tmp_path / "out",
         lean_root=alias,
         repository_url="https://github.com/owner/repo",
-        ref="abc",
+        ref=ref,
     )
 
     assert report.linked == 2
@@ -3103,6 +3371,43 @@ def test_output_parent_loss_after_verified_commit_is_uncertain(
     assert workspace.name in str(error.value)
     assert str(workspace) not in str(error.value)
     assert (moved_parent / "out/publication.json").is_file()
+    assert (publication_parent / "sentinel").read_text(encoding="utf-8") == "keep\n"
+
+
+def test_output_parent_swap_during_cleanup_cannot_return_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    publication_parent = tmp_path / "publication-parent"
+    publication_parent.mkdir()
+    output = publication_parent / "out"
+    replacement_parent = tmp_path / "replacement-parent"
+    replacement_parent.mkdir()
+    (replacement_parent / "sentinel").write_text("keep\n", encoding="utf-8")
+    moved_parent = tmp_path / "moved-output-parent"
+    original = render_module._remove_owned_workspace
+    swapped = False
+
+    def cleanup_then_swap(*args, **kwargs):
+        nonlocal swapped
+        cleaned = original(*args, **kwargs)
+        assert cleaned
+        publication_parent.rename(moved_parent)
+        replacement_parent.rename(publication_parent)
+        swapped = True
+        return cleaned
+
+    monkeypatch.setattr(render_module, "_remove_owned_workspace", cleanup_then_swap)
+
+    with pytest.raises(PublicationError, match="output location is uncertain") as error:
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert swapped
+    assert "workspace cleanup completed" in str(error.value)
+    assert not output.exists()
+    assert (moved_parent / "out/publication.json").is_file()
+    assert not list(moved_parent.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
     assert (publication_parent / "sentinel").read_text(encoding="utf-8") == "keep\n"
 
 

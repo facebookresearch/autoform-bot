@@ -776,6 +776,11 @@ lock immediately before the atomic rename. That check is the publication
 linearization point; later source edits belong to the next render. Generated
 v1/v2 publication trees and private staging directories are never indexed as
 Lean source.
+Repository links are emitted only when those captured blueprint and Lean bytes
+match one locally available Git commit. Mutable ref names are recorded as that
+commit's full object ID. For dirty, untracked, or otherwise unverifiable inputs,
+the render remains local, keeps source notes in the site, records no Git ref,
+and reports a warning instead of producing a stale or missing link.
 An older v2 publication without the Lean-source hash is not eligible for
 automatic replacement; remove it explicitly or choose an empty output
 directory.
@@ -1155,5 +1160,6 @@ path back into the live destination. If it cannot verify the final state or
 durability, it preserves the private workspace instead of deleting a potentially
 unique generation. It reports an exact recovery path only while the bound output
 parent is still addressable. Losing that parent path after commit is an uncertain
-publication error. Other post-verification cleanup refusals leave the published
-site in place and return the retained workspace as a warning.
+publication error; the parent is checked again after workspace cleanup before
+success is returned. Other post-verification cleanup refusals leave the
+published site in place and return the retained workspace as a warning.

@@ -18,6 +18,7 @@ import os
 import re
 import secrets
 import stat
+import subprocess
 import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -83,6 +84,7 @@ _PUBLICATION_MAX_DEPTH = 128
 _PUBLICATION_MAX_FILE_BYTES = 256 * 1024 * 1024
 _PUBLICATION_MAX_TOTAL_BYTES = 512 * 1024 * 1024
 _PUBLICATION_MANIFEST_MAX_BYTES = 8 * 1024 * 1024
+_GIT_TREE_MAX_BYTES = 64 * 1024 * 1024
 _PUBLICATION_CAPTURE_LIMITS = TreeCaptureLimits(
     max_entries=_PUBLICATION_MAX_ENTRIES,
     max_depth=_PUBLICATION_MAX_DEPTH,
@@ -118,7 +120,17 @@ _LOCAL_ONLY_NAMES = frozenset(
 def _is_generated_path(relative: PurePosixPath | Path) -> bool:
     """Generated views occupy only the publication root."""
 
-    return len(relative.parts) == 1 and relative.name.casefold() in _GENERATED_FILES
+    return len(relative.parts) == 1 and relative.name in _GENERATED_FILES
+
+
+def _is_noncanonical_generated_path(relative: PurePosixPath | Path) -> bool:
+    """Recognize a portable alias without silently treating it as generated."""
+
+    return (
+        len(relative.parts) == 1
+        and relative.name not in _GENERATED_FILES
+        and relative.name.casefold() in _GENERATED_FILES
+    )
 
 
 def _publication_snapshot_descends(relative: PurePosixPath) -> bool:
@@ -629,15 +641,9 @@ def _render_in_bound_output_parent(
     source_revision = _source_revision(captured_blueprint)
     graph, coverage = _load_publication_contract(captured_blueprint)
     source_generation_revision = source_snapshot.generation_revision
-    workspace, workspace_identity = _create_workspace(
-        destination.parent,
-        output_parent,
-    )
-    workspace_descriptor = _open_workspace_directory(
-        output_parent,
-        workspace.name,
-        workspace_identity,
-    )
+    workspace: Path | None = None
+    workspace_identity: tuple[int, int] | None = None
+    workspace_descriptor: int | None = None
     remove_workspace = True
     publication_succeeded = False
     commit_state = _PublicationCommitState()
@@ -650,6 +656,15 @@ def _render_in_bound_output_parent(
     lean_sources: BoundProjectSources | None = None
     active_failure: BaseException | None = None
     try:
+        workspace, workspace_identity = _create_workspace(
+            destination.parent,
+            output_parent,
+        )
+        workspace_descriptor = _open_workspace_directory(
+            output_parent,
+            workspace.name,
+            workspace_identity,
+        )
         _require_output_parent(output_parent, "before destination inspection")
         expected_destination = _inspect_destination_at(
             output_parent.descriptor,
@@ -674,15 +689,31 @@ def _render_in_bound_output_parent(
         lean_source_revision = lean_snapshot.revision
         lean_generation_revision = lean_snapshot.generation_revision
         resolved_repository_url = repository_url or detect_repository_url(repo_root)
-        resolved_ref = ref or detect_ref(repo_root)
-        linker = build_linker(
-            repo_root,
-            repository_url=resolved_repository_url,
-            ref=resolved_ref,
-            exclude_roots=lean_exclusions,
-            source_index=lean_snapshot.index,
-            detect_missing=False,
+        requested_ref = ref or detect_ref(repo_root)
+        resolved_ref = (
+            _verified_repository_ref(
+                repo_root,
+                requested_ref,
+                blueprint=captured_blueprint,
+                lean_snapshot=lean_snapshot,
+            )
+            if resolved_repository_url and requested_ref
+            else None
         )
+        repository_links_omitted = bool(
+            resolved_repository_url and requested_ref and resolved_ref is None
+        )
+        try:
+            linker = build_linker(
+                repo_root,
+                repository_url=resolved_repository_url,
+                ref=resolved_ref,
+                exclude_roots=lean_exclusions,
+                source_index=lean_snapshot.index,
+                detect_missing=False,
+            )
+        except (OSError, ValueError) as error:
+            raise PublicationError(["Lean sources could not be indexed"]) from error
 
         initial_files: dict[PurePosixPath, bytes] = {}
         if not clean and expected_destination.kind == "owned":
@@ -701,6 +732,11 @@ def _render_in_bound_output_parent(
             lean_source_revision=lean_source_revision,
             initial_files=initial_files,
         )
+        if repository_links_omitted:
+            report.warnings.append(
+                "repository links were omitted because the captured blueprint "
+                "and Lean inputs do not match one verified local Git commit"
+            )
         stage = workspace / "site"
         stage_descriptor, stage_identity = _create_stage_directory(
             workspace_descriptor,
@@ -710,10 +746,10 @@ def _render_in_bound_output_parent(
         try:
             _sync_tree_descriptor(stage_descriptor)
         except (OSError, PublicationError) as error:
-            raise _PublicationRecoveryError(
+            raise PublicationError(
                 [
-                    "publication stage integrity failed; workspace retained "
-                    f"{_workspace_recovery_location(workspace, output_parent)}"
+                    "publication stage integrity failed before commit; "
+                    "previous site was preserved"
                 ]
             ) from error
 
@@ -778,6 +814,22 @@ def _render_in_bound_output_parent(
         try:
             if commit_state.attempted and not commit_state.verified:
                 remove_workspace = False
+            if (
+                remove_workspace
+                and not commit_state.attempted
+                and stage_identity is not None
+                and stage_cleanup_inventory is None
+                and stage_descriptor is not None
+            ):
+                try:
+                    stage_cleanup_inventory = _cleanup_inventory_descriptor(
+                        stage_descriptor
+                    )
+                except (OSError, PublicationError):
+                    # A changed or unreadable partial stage is not safe to
+                    # delete. The ordinary write/open failures that created a
+                    # stable partial tree are inventoried and removed below.
+                    pass
             expected_children: dict[
                 str,
                 dict[tuple[int, int], _CleanupInventory],
@@ -799,28 +851,51 @@ def _render_in_bound_output_parent(
                     }
             parent_changed = not _output_parent_is_current(output_parent)
             cleaned = False
-            if remove_workspace and not parent_changed:
+            if (
+                remove_workspace
+                and not parent_changed
+                and workspace is not None
+                and workspace_identity is not None
+            ):
                 cleaned = _remove_owned_workspace(
                     workspace,
                     workspace_identity,
                     expected_children=expected_children,
                     parent_binding=output_parent,
                 )
-            if remove_workspace and parent_changed and commit_state.verified:
+            # Cleanup itself performs filesystem operations through the
+            # retained parent. Its pathname can still be exchanged while that
+            # work runs, so a pre-cleanup sample cannot justify success.
+            parent_changed = parent_changed or not _output_parent_is_current(
+                output_parent
+            )
+            if (
+                remove_workspace
+                and workspace is not None
+                and parent_changed
+                and commit_state.verified
+            ):
+                recovery_state = (
+                    "workspace cleanup completed in the original output-parent "
+                    "generation"
+                    if cleaned
+                    else f"workspace {workspace.name} remains in the original "
+                    "output-parent generation"
+                )
                 raise _PublicationRecoveryError(
                     [
                         "publication commit was verified in its bound output parent, "
                         "but that parent path changed afterward; output location is "
-                        f"uncertain and workspace {workspace.name} remains in the "
-                        "original output-parent generation"
+                        f"uncertain and {recovery_state}"
                     ]
                 )
-            if remove_workspace and not cleaned:
+            if remove_workspace and workspace is not None and not cleaned:
                 issue = (
                     (
                         "output parent changed; publication workspace "
-                        f"{workspace.name} was retained in the original output-parent "
-                        f"generation created at {workspace.parent}"
+                        f"{workspace.name} was retained in the original "
+                        "output-parent generation created at "
+                        f"{workspace.parent}"
                     )
                     if parent_changed
                     else (
@@ -847,10 +922,11 @@ def _render_in_bound_output_parent(
                     os.close(stage_descriptor)
                 except OSError:
                     pass
-            try:
-                os.close(workspace_descriptor)
-            except OSError:
-                pass
+            if workspace_descriptor is not None:
+                try:
+                    os.close(workspace_descriptor)
+                except OSError:
+                    pass
             if lean_sources is not None:
                 lean_sources.close()
 
@@ -881,7 +957,11 @@ def _build_publication_plan(
     # and every generated permalink would 404.
     numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
-    sources_base = _sources_base(blueprint.root, repo_root, linker)
+    sources_base = (
+        _sources_base(blueprint.root, repo_root, linker)
+        if PurePosixPath(SOURCES_DIR) in blueprint.directories
+        else None
+    )
 
     report = RenderReport(output_dir=destination)
     node_paths = {_lexical_path(node.path): node for node in graph.nodes.values()}
@@ -1421,30 +1501,67 @@ def _open_workspace_directory(
         os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
         dir_fd=parent_binding.descriptor,
     )
-    if _descriptor_identity(descriptor) != expected_identity:
+    try:
+        if _descriptor_identity(descriptor) != expected_identity:
+            raise PublicationError(["publication workspace changed before staging"])
+        return descriptor
+    except BaseException:
         os.close(descriptor)
-        raise PublicationError(["publication workspace changed before staging"])
-    return descriptor
+        raise
 
 
 def _create_stage_directory(workspace_descriptor: int) -> tuple[int, tuple[int, int]]:
+    created_identity: tuple[int, int] | None = None
+    descriptor: int | None = None
     try:
         os.mkdir("site", mode=0o700, dir_fd=workspace_descriptor)
         metadata = os.stat("site", dir_fd=workspace_descriptor, follow_symlinks=False)
+        created_identity = metadata.st_dev, metadata.st_ino
         descriptor = os.open(
             "site",
             os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
             dir_fd=workspace_descriptor,
         )
-        try:
-            identity = _descriptor_identity(descriptor)
-            if identity != (metadata.st_dev, metadata.st_ino):
-                raise PublicationError(["publication stage changed during creation"])
-            return descriptor, identity
-        except BaseException:
-            os.close(descriptor)
-            raise
+        identity = _descriptor_identity(descriptor)
+        if identity != created_identity:
+            raise PublicationError(["publication stage changed during creation"])
+        return descriptor, identity
     except BaseException:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if created_identity is not None:
+            try:
+                current = os.stat(
+                    "site",
+                    dir_fd=workspace_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    stat.S_ISDIR(current.st_mode)
+                    and (current.st_dev, current.st_ino) == created_identity
+                ):
+                    cleanup_descriptor = os.open(
+                        "site",
+                        os.O_RDONLY
+                        | os.O_CLOEXEC
+                        | os.O_DIRECTORY
+                        | os.O_NOFOLLOW,
+                        dir_fd=workspace_descriptor,
+                    )
+                    try:
+                        if (
+                            _descriptor_identity(cleanup_descriptor)
+                            == created_identity
+                            and _directory_names_match(cleanup_descriptor, ())
+                        ):
+                            os.rmdir("site", dir_fd=workspace_descriptor)
+                    finally:
+                        os.close(cleanup_descriptor)
+            except OSError:
+                pass
         raise
 
 
@@ -2174,6 +2291,142 @@ def _capture_bound_lean_source_snapshot(
         raise PublicationError(["could not capture a stable Lean source revision"]) from error
 
 
+def _verified_repository_ref(
+    repo_root: Path,
+    requested_ref: str,
+    *,
+    blueprint: _CapturedBlueprint,
+    lean_snapshot: IndexedSourceSnapshot,
+) -> str | None:
+    """Return an immutable commit only when it contains the captured inputs.
+
+    Source locations and vault links are derived from in-memory snapshots. A
+    Git URL is truthful only if the exact bytes used for those derivations are
+    blobs in the named commit; a stable dirty tree or an untracked note must
+    therefore fall back to local publication rather than borrow ``HEAD``.
+    """
+
+    resolved = _run_git(
+        repo_root,
+        (
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            f"{requested_ref}^{{commit}}",
+        ),
+        max_bytes=1024,
+    )
+    if resolved is None:
+        return None
+    commit = resolved.strip().decode("ascii", errors="ignore")
+    algorithm = {40: "sha1", 64: "sha256"}.get(len(commit))
+    if algorithm is None or re.fullmatch(r"[0-9a-f]+", commit) is None:
+        return None
+
+    captured: dict[str, bytes] = {}
+    required_directories: set[str] = set()
+
+    def add(path: Path, data: bytes) -> bool:
+        try:
+            relative = _lexical_path(path).relative_to(repo_root)
+        except ValueError:
+            return False
+        relative_text = relative.as_posix()
+        if not relative_text or relative_text == "." or "\x00" in relative_text:
+            return False
+        previous = captured.setdefault(relative_text, data)
+        return previous == data
+
+    for relative, data in blueprint.files.items():
+        if not add(blueprint.path(relative), data):
+            return None
+    for relative, data in lean_snapshot.source_files:
+        if not add(lean_snapshot.index.root / relative, data):
+            return None
+
+    sources_relative = PurePosixPath(SOURCES_DIR)
+    if sources_relative in blueprint.directories:
+        try:
+            repository_sources = blueprint.path(sources_relative).relative_to(repo_root)
+        except ValueError:
+            return None
+        required_directories.add(repository_sources.as_posix())
+
+    top_level = sorted(
+        {
+            PurePosixPath(path).parts[0]
+            for path in (*captured, *required_directories)
+        }
+    )
+    tree: dict[bytes, tuple[bytes, bytes, bytes]] = {}
+    for component in top_level:
+        listing = _run_git(
+            repo_root,
+            (
+                "ls-tree",
+                "-rtz",
+                "--full-tree",
+                commit,
+                "--",
+                f":(literal){component}",
+            ),
+            max_bytes=_GIT_TREE_MAX_BYTES,
+        )
+        if listing is None:
+            return None
+        for record in listing.split(b"\0"):
+            if not record:
+                continue
+            try:
+                metadata, path = record.split(b"\t", 1)
+                mode, kind, object_id = metadata.split()
+            except ValueError:
+                return None
+            tree[path] = mode, kind, object_id
+
+    for relative, data in captured.items():
+        entry = tree.get(os.fsencode(relative))
+        if entry is None:
+            return None
+        mode, kind, object_id = entry
+        if kind != b"blob" or mode not in {b"100644", b"100755"}:
+            return None
+        digest = hashlib.new(algorithm)
+        digest.update(f"blob {len(data)}\0".encode("ascii"))
+        digest.update(data)
+        if digest.hexdigest().encode("ascii") != object_id:
+            return None
+    for relative in required_directories:
+        entry = tree.get(os.fsencode(relative))
+        if entry is None or entry[:2] != (b"040000", b"tree"):
+            return None
+    return commit
+
+
+def _run_git(
+    root: Path,
+    arguments: tuple[str, ...],
+    *,
+    max_bytes: int,
+) -> bytes | None:
+    """Run one read-only Git query with bounded accepted output and time."""
+
+    try:
+        result = subprocess.run(
+            ("git", *arguments),
+            cwd=root,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0 or len(result.stdout) > max_bytes:
+        return None
+    return result.stdout
+
+
 def _require_bound_lean_source_revision(
     sources: BoundProjectSources,
     expected_generation: str,
@@ -2560,6 +2813,13 @@ def _validate_publication_snapshot(snapshot: TreeSnapshot) -> None:
         relative = PurePosixPath(raw_relative)
         folded_parts = {part.casefold() for part in relative.parts}
         name = relative.name.casefold()
+        if _is_noncanonical_generated_path(relative):
+            issues.append(
+                "refusing noncanonical generated publication filename: "
+                f"{raw_relative}; use the exact generated spelling "
+                f"{relative.name.casefold()}"
+            )
+            continue
         if (
             folded_parts.intersection(_LOCAL_ONLY_NAMES)
             or name == ".env"

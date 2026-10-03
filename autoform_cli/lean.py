@@ -591,8 +591,8 @@ def _indexed_source_snapshot(
         if _path_is_within_roots(relative, ignored_roots):
             continue
         relative_path = Path(relative.as_posix())
-        _update_source_digest(digest, relative_path, data)
         source_files.append((relative_path, data))
+        _update_source_digest(digest, relative_path, data)
         try:
             text = data.decode("utf-8")
         except UnicodeError:
