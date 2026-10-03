@@ -3366,6 +3366,41 @@ def test_a_scoped_token_an_open_may_activate_withholds_the_source(tmp_path: Path
         assert item.source is None and item.source_withheld, item.name
     assert "SECRET" not in node.blind_text()
 
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_namespace_a_macro_opens_withholds_a_source_its_token_changes(tmp_path: Path) -> None:
+    # `enable_q` expands to `open Leak`, which activates the scoped `!"`
+    # token, so Lean read the `-- SECRET_MAC "` text as a comment, and the
+    # `example` holds only because it did. MacUse never names `Leak`.
+    project = _project(tmp_path)
+    (project / "Skel" / "MacTok.lean").write_text(
+        "namespace Leak\n"
+        'scoped infixl:65 " !\\" " => fun (a _b : String) => a\n'
+        "end Leak\n"
+        'macro "enable_q" : command => `(open Leak)\n',
+        encoding="utf-8",
+    )
+    (project / "Skel" / "MacUse.lean").write_text(
+        "import Skel.MacTok\n"
+        "enable_q\n"
+        'def Skel.macLeak : String := "a" !" -- SECRET_MAC "\n'
+        '  "b"\n'
+        'example : Skel.macLeak = "a" := rfl\n'
+        "theorem Skel.macRoot (h : Skel.macLeak = Skel.macLeak) : True := trivial\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.MacUse")
+    blueprint = _blueprint(tmp_path, lean={"mac": "Skel.macRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    node = report.node("basics/mac")
+    assert node is not None
+    (item,) = node.declarations[0].trusted
+    assert item.name == "Skel.macLeak"
+    assert item.source is None and item.source_withheld
+    assert "SECRET" not in node.blind_text()
+
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_the_probe_rebuilds_each_modules_grammar_once(tmp_path: Path) -> None:

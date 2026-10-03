@@ -622,10 +622,10 @@ had there from what the environment does record, once per module:
   entries written for such a parser, a parser declared in another module, a
   later `attribute [term_parser]`, or a token added by a metaprogram may have
   been added anywhere before that point.
-- A namespace's scoped entries, imported or the module's own, count as
-  possibly active only when the file's text above the declaration contains
-  the namespace's last component, since `namespace` and `open` name what they
-  activate; the probe tries each subset of those namespaces.
+- A namespace's scoped entries, imported or the module's own, may be
+  active whether or not the file names the namespace: `namespace` and `open`
+  activate it, and a macro or elaborator can run them on syntax it builds.
+  The probe tries each subset of those namespaces.
 The probe parses the source under every state these choices allow, leaving
 out entries that cannot change the parse (a token that does not occur in the
 text, a parser none of whose first tokens occurs in it), and keeps the
@@ -643,9 +643,8 @@ the packet and does not make the article unresolved. What the probe cannot
 prove, and so can get wrong, showing code as a comment or a comment as
 code: `local` syntax, which Lean records nowhere; a metaprogram that changes
 the parser state without recording an entry, records a parser entry naming
-a declaration made later in the module, activates a namespace without the
-file naming it, or gives a declaration a range outside the command that
-made it; a parser that reads the environment or options beyond the parser
+a declaration made later in the module, or gives a declaration a range
+outside the command that made it; a parser that reads the environment or options beyond the parser
 state, or input past the declaration's end; an initializer that changes the
 builtin grammar; and a source with CRLF line ends, whose offsets the probe
 takes from the text as Lean stores it.
