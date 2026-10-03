@@ -3448,6 +3448,53 @@ def test_a_quotation_naming_a_parser_withholds_the_source(tmp_path: Path) -> Non
     assert cat.source_comments == (_comment_range(cat.source, "--", None),)
     assert "SECRET" not in node.blind_text()
 
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_an_open_inside_a_source_withholds_only_what_follows_it(tmp_path: Path) -> None:
+    # An `open … in` changes how Lean reads the text after it, which the
+    # probe's parse cannot follow. In `innerLeak` it activates `!"`, so Lean
+    # read the `-- SECRET_INNER "` text as a comment; a parse with `Leak`
+    # active from the start fails on `#[[1]]`, so only the inner open does.
+    # A statement before the open is still cut: `oin` keeps its statement,
+    # while `instmt`, with the open inside its statement, does not.
+    project = _project(tmp_path)
+    (project / "Skel" / "OinTok.lean").write_text(
+        "namespace Leak\n"
+        'scoped infixl:65 " +++ " => Nat.add\n'
+        'scoped infixl:65 " !\\" " => fun (a _b : String) => a\n'
+        'scoped notation "#[[" => (0 : Nat)\n'
+        "end Leak\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "OinUse.lean").write_text(
+        "import Skel.OinTok\n"
+        'def Skel.innerLeak : String := if #[[1]].size = 1 then (open Leak in "a" !" -- SECRET_INNER "\n'
+        '  "b") else ""\n'
+        'example : Skel.innerLeak = "a" := rfl\n'
+        "open Leak\n"
+        "theorem Skel.oin : 1 +++ 2 = 3 := by open Leak in rfl\n"
+        "theorem Skel.instmt : (open Leak in 1 +++ 2) = 3 := rfl\n"
+        "theorem Skel.oinRoot (h : Skel.innerLeak = Skel.innerLeak) : True := trivial\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.OinUse")
+    blueprint = _blueprint(tmp_path, lean={"oin": "Skel.oin", "instmt": "Skel.instmt", "inner": "Skel.oinRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    oin = report.node("basics/oin")
+    assert oin is not None
+    assert oin.declarations[0].statement == "theorem Skel.oin : 1 +++ 2 = 3"
+    instmt = report.node("basics/instmt")
+    assert instmt is not None
+    assert instmt.declarations[0].statement is None
+    inner = report.node("basics/inner")
+    assert inner is not None
+    (item,) = inner.declarations[0].trusted
+    assert item.name == "Skel.innerLeak"
+    assert item.source is None and item.source_withheld
+    assert "SECRET" not in inner.blind_text()
+
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_the_probe_rebuilds_each_modules_grammar_once(tmp_path: Path) -> None:

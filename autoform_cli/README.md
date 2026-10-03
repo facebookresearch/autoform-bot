@@ -664,7 +664,9 @@ states the meaning without notation.
 Each theorem's packet also carries the statement *as written*, cut before a
 `:=` value or a structure-style `where` value by Lean's parser under the
 parser states its source is parsed under, and only where they agree. A proof Lean
-cannot parse, for example one using `local notation`, does not stop those cuts.
+cannot parse, for example one using `local notation`, does not stop those cuts,
+nor does an `open` or quotation inside the proof that leaves the rest of the
+source withheld.
 The statement sits beside the elaborated signature: the printed form shows
 binders that `variable` and `include` inject and the type every cast lands in;
 the written form shows what the pretty-printer elides. Equation-style forms

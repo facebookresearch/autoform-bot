@@ -750,8 +750,9 @@ def valueNode? (stx : Syntax) : Option Syntax :=
       decl.find? (·.isOfKind ``Parser.Command.whereStructInst)
 
 /-- The statement of a declaration that does not parse whole, as when only its
-proof uses `local notation`: cut at successive `:=` tokens and parse the prefix
-with `:= sorry` as its value. The parsed value's start is the real statement
+proof uses `local notation`, or whose parse is unknown past the statement, as
+when its proof holds an `open … in`: cut at successive `:=` tokens and parse
+the prefix with `:= sorry` as its value. The parsed value's start is the real statement
 boundary. A cut inside a structure-style proof therefore recovers its preceding
 `where`; one inside the statement (`let x := …`) does not parse as a command. -/
 def statementPrefix? (env : Environment) (column : Nat) (namespaces : Array Name) (snippet : String) :
@@ -787,12 +788,16 @@ def statementSource (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref Semant
   -- One state's statement: `none` when the source does not parse under it,
   -- `some none` when it parses with no statement to cut.
   let statement (penv : Environment) : Except Unit (Option (Option (String × Json))) := do
-    match ← parseCommand penv s.column s.namespaces snippet with
-    | none =>
-      if typeDecl then return none
+    let cut : Except Unit (Option (Option (String × Json))) := do
       return (← statementPrefix? penv s.column s.namespaces snippet).map fun (written, stx, bytes) =>
         shown written.trimAsciiEnd.toString stx bytes
-    | some (stx, bytes) =>
+    match parseCommand penv s.column s.namespaces snippet with
+    -- An `open` or quotation that leaves the parse unknown changes only the
+    -- text after it, so a cut before it stands; `statementPrefix?` leaves the
+    -- statement unknown when one lies inside it.
+    | .error () => if typeDecl then throw () else cut
+    | .ok none => if typeDecl then return none else cut
+    | .ok (some (stx, bytes)) =>
       if typeDecl then return some (shown snippet.trimAsciiEnd.toString stx bytes)
       match valueNode? stx with
       | none =>
