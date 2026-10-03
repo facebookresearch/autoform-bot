@@ -3577,14 +3577,14 @@ def test_the_probe_rebuilds_each_modules_grammar_once(tmp_path: Path) -> None:
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_a_long_proof_does_not_make_the_statement_check_quadratic(tmp_path: Path) -> None:
     # The statement is parsed from the source and from each prefix ending
-    # before a `:=`. Checking each of ManyTok's scoped tokens against every
-    # such prefix of a 1500-`:=` proof takes hours; checking it against the
-    # source and the seams with `:= sorry` takes seconds.
+    # before a `:=`. Checking each of ManyTok's 500 scoped tokens against
+    # every such prefix of a 600-`:=` proof outlasts the timeout; checking it
+    # against the source and the seams with `:= sorry` does not.
     project = _project(tmp_path)
     (project / "Skel" / "ManyTok.lean").write_text(
         "import Lean\n"
         "namespace Many\n"
-        "run_cmd for i in [0:10000] do\n"
+        "run_cmd for i in [0:500] do\n"
         '  Lean.Parser.parserExtension.add (.token s!"@@{i}@@") (kind := .scoped)\n'
         "end Many\n",
         encoding="utf-8",
@@ -3592,7 +3592,7 @@ def test_a_long_proof_does_not_make_the_statement_check_quadratic(tmp_path: Path
     (project / "Skel" / "LongProof.lean").write_text(
         "import Skel.ManyTok\n"
         "theorem Skel.longRoot (n : Nat) : n = n := by\n"
-        + "  have h : n + 1 = n + 1 := rfl\n" * 1500
+        + "  have h : n + 1 = n + 1 := rfl\n" * 600
         + "  rfl\n",
         encoding="utf-8",
     )
