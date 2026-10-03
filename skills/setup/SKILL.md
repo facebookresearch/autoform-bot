@@ -31,13 +31,28 @@ package, check the current matching stable Lean/Mathlib release, update branch
 and immutable workflow pins, and merge rather than overwrite. Its populated
 thesis notes illustrate later skills; Setup does not reproduce that mathematics.
 
-For a new repository, first create a standard Lean/Lake project using the
-recommended pair reported by `autoform project versions --json`. For a new or
-incomplete Autoform installation inside that repository:
+For a new repository, require a target directory that does not already exist.
+Have the user select a release from `autoform project versions`, then create the
+complete local project atomically:
 
-- create or repair a buildable Lean project with matching `lean-toolchain` and
-  Mathlib revisions; and
-- write the blueprint vault, site configuration, and CI with `autoform init`.
+```bash
+autoform project provenance --json
+autoform project new <TARGET> --package <UpperCamelCaseName> --release <RELEASE_ID> \
+  --autoform-source <VERIFIED_SOURCE> --autoform-ref <VERIFIED_REVISION>
+```
+
+The catalog is a bundled known-good allowlist, not an automatic selection
+mechanism. `project new` writes matching `lean-toolchain` and Mathlib revisions,
+the Lean shell, and the Autoform vault without running Git, Lake, Lean, or
+network operations; it never overwrites an existing target. It fails closed on
+platforms without the required POSIX filesystem operations, including Windows.
+Omit both provenance flags if verification is unavailable; the command then
+omits CI workflows. Do not invent version pairs, sources, or revisions, and do
+not copy the populated example as a project generator.
+
+For an incomplete existing repository, preserve its authored configuration and
+use `autoform init` only for the Autoform vault/site overlay until the dedicated
+repair command is available.
 
 `autoform init` is the whole vault: `blueprint/` with its landing page,
 `roadmap/README.md`, `coverage/`, and `sources/`, plus `mkdocs.yml`, the theme

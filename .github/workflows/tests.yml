@@ -31,7 +31,7 @@ jobs:
   real-lean:
     name: real Lean (fixture toolchain)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -58,6 +58,16 @@ jobs:
           timeout --signal=TERM --kill-after=30s 10m \
             elan toolchain install "$(tr -d '\r\n' < tests/fixtures/skeleton-project/lean-toolchain)"
           command -v lake
+      - name: Build a project from the bundled creation release
+        run: |
+          set -euo pipefail
+          generated_project="$RUNNER_TEMP/autoform-created-project"
+          uv run autoform project new "$generated_project" \
+            --package GeneratedProject \
+            --release lean-v4.32.2-mathlib-v4.32.2
+          cd "$generated_project"
+          timeout --signal=TERM --kill-after=30s 20m lake exe cache get
+          timeout --signal=TERM --kill-after=30s 10m lake build
       - name: Run the skeleton suite against real Lean
         run: timeout --signal=TERM --kill-after=30s 25m uv run pytest -q tests/test_skeleton.py
         env:

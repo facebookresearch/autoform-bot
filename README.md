@@ -97,6 +97,8 @@ plugin development and debugging, not as a required user workflow.
 
 | Command | Purpose |
 | --- | --- |
+| `autoform project new` | Atomically create a compatible Lean and Autoform project. |
+| `autoform project inspect` | Inspect local project configuration without executing it. |
 | `autoform init` | Scaffold the blueprint and site; add CI when immutably pinned. |
 | `autoform check` | Validate Markdown structure and dependencies. |
 | `autoform audit` | Audit completeness and checked facts. |
