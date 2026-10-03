@@ -54,7 +54,8 @@ the recorded remote commit. With neither provenance flag supplied, `init`
 repeats that verification and pins generated workflows to the verified source
 and commit. The workflows check out that commit and run Autoform through its
 verified `uv.lock`. If verification fails, `init` writes no CI rather than
-guessing. Secure `init` template capture and installed-tree verification
+guessing and exits nonzero after writing the local authoring files. Treat that
+as an incomplete setup, not success. Secure `init` template capture and installed-tree verification
 require POSIX descriptor and no-follow support; unsupported platforms fail
 closed.
 

@@ -508,6 +508,16 @@ def test_roadmap_skill_owns_a_complete_pass(repo_root: Path) -> None:
         assert obsolete not in roadmap
 
 
+def test_develop_plugin_prevents_unverifiable_test_bytecode(repo_root: Path) -> None:
+    skill = (repo_root / "skills/develop-plugin/SKILL.md").read_text(encoding="utf-8")
+    makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
+    workflow = (repo_root / ".github/workflows/tests.yml").read_text(encoding="utf-8")
+
+    assert "Never attest pytest\nassertion-rewrite caches" in skill
+    assert "PYTHONDONTWRITEBYTECODE=1 uv run pytest -q" in makefile
+    assert 'PYTHONDONTWRITEBYTECODE: "1"' in workflow
+
+
 def test_roadmap_skill_commits_the_final_checked_pass(repo_root: Path) -> None:
     roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")
     finish = roadmap.split("## Finish", 1)[1]

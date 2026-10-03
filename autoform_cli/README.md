@@ -132,7 +132,10 @@ When neither provenance flag is supplied, `init` verifies the installed plugin
 and pins the generated workflows to its source and commit. To override that
 pair, pass both `--autoform-source <https-git-url>` and `--autoform-ref <sha>`.
 A ref supplied alone is resolved against the canonical repository. Use
-`--force` to overwrite and `--json` for machine-readable output.
+`--force` to overwrite and `--json` for machine-readable output. If provenance
+cannot be verified, authoring files are still written but CI is omitted,
+`unpinned` is true, and the command exits nonzero so automation cannot mistake
+the incomplete scaffold for success.
 Local template capture uses retained no-follow directory descriptors, so
 `init` currently fails closed on platforms without the required POSIX APIs,
 including Windows.
@@ -186,6 +189,8 @@ requires POSIX directory-descriptor and no-follow support; unsupported
 platforms, including Windows, return `project-provenance-unavailable`. A plain
 wheel cannot infer provenance. Installers must preserve the tracked tree;
 untracked files outside the exact cache/build-state allowlist fail closed. The
+repository test commands suppress bytecode writes; remove any pre-existing
+pytest assertion-rewrite cache before attesting a checkout. The
 decoded comparison is bounded to 20,000 entries and 64 MiB. Git cannot report
 promised blob sizes before transfer, so selected-object transfer is bounded by
 the shared 60-second deadline; file and aggregate limits are enforced while Git

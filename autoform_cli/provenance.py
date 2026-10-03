@@ -55,11 +55,11 @@ _SOURCE_PATH_PART = re.compile(r"[A-Za-z0-9._~-]+")
 _GITHUB_SCP_SOURCE = re.compile(
     r"git@github\.com:(?P<path>[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)+)"
 )
-_BYTECODE_NAME = re.compile(
-    r"(?P<stem>.+?)\.(?P<tag>[A-Za-z0-9_-]+)"
-    r"(?:\.opt-(?P<optimization>[A-Za-z0-9]+))?\.pyc"
-)
 _LOCK_HASH = re.compile(r"sha256:[0-9a-f]{64}")
+_PYTEST_CACHE_DIAGNOSTIC = (
+    "The installed Autoform tree contains pytest assertion-rewrite bytecode; "
+    "remove its __pycache__ directory or rerun tests with PYTHONDONTWRITEBYTECODE=1."
+)
 
 # These roots and files are required in every supported Autoform source tree.
 # Provenance comparison covers every tracked blob; these names additionally
@@ -109,9 +109,18 @@ _CLAUDE_REWRITTEN_MANIFESTS = frozenset(
     {".claude-plugin/plugin.json", ".muse-plugin/plugin.json"}
 )
 _CLAUDE_BUILD_COMMIT = "BUILD_COMMIT"
-_CLAUDE_BASE_VERSION = re.compile(
-    r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+_SEMVER_NUMBER = r"(?:0|[1-9][0-9]*)"
+_SEMVER_PRERELEASE_IDENTIFIER = (
+    r"(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
 )
+_CLAUDE_BASE_VERSION = re.compile(
+    rf"{_SEMVER_NUMBER}\.{_SEMVER_NUMBER}\.{_SEMVER_NUMBER}"
+    rf"(?:-{_SEMVER_PRERELEASE_IDENTIFIER}(?:\.{_SEMVER_PRERELEASE_IDENTIFIER})*)?"
+)
+_SEMVER_BUILD_METADATA = re.compile(r"[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*")
+_CLAUDE_HOST_DIRECTORY = ".claude"
+_CLAUDE_HOST_FILES = frozenset({"settings.local.json"})
+_MAX_HOST_FILE_BYTES = 64 * 1024
 
 # These are host- or tool-owned state rather than source.  The exact list is
 # deliberately local; arbitrary gitignored paths are not automatically trusted.
@@ -1651,7 +1660,6 @@ def _validate_current_bytecode(
     source_relative: str,
     source: _ActualEntry,
     expected_source: bytes,
-    optimization: int,
 ) -> None:
     content = cached.content
     if len(content) < 16 or content[:4] != importlib.util.MAGIC_NUMBER:
@@ -1681,7 +1689,7 @@ def _validate_current_bytecode(
                 cfile=os.fspath(temporary_cache),
                 dfile=os.fspath(source_path),
                 doraise=True,
-                optimize=optimization,
+                optimize=-1,
                 invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH,
             )
             expected_payload = temporary_cache.read_bytes()[16:]
@@ -1691,44 +1699,95 @@ def _validate_current_bytecode(
         raise ProvenanceError("The installed bytecode cache does not match its source.")
 
 
+def _import_cache_source(root: Path, cached: _CachedBytecode) -> str | None:
+    """Map an importlib-recognized cache name back to its lexical source."""
+
+    cache_path = root.joinpath(
+        *PurePosixPath(cached.parent).parts,
+        "__pycache__",
+        cached.name,
+    )
+    try:
+        source_path = Path(importlib.util.source_from_cache(os.fspath(cache_path)))
+        relative = source_path.relative_to(root).as_posix()
+    except (ValueError, OSError):
+        return None
+    expected_parent = PurePosixPath(cached.parent)
+    relative_path = PurePosixPath(relative)
+    if (
+        relative_path.parent != expected_parent
+        or relative_path.suffix != ".py"
+        or relative_path.name in {"", ".py"}
+    ):
+        raise ProvenanceError("The installed bytecode cache is invalid.")
+    return relative
+
+
+def _is_pytest_rewrite_cache(name: str) -> bool:
+    """Whether *name* carries pytest's executable assertion-rewrite marker."""
+
+    folded = name.casefold()
+    return folded.endswith(".pyc") and "-pytest-" in folded
+
+
+def _is_current_import_cache(
+    root: Path,
+    cached: _CachedBytecode,
+    source_path: Path,
+) -> bool:
+    """Whether *cached* is the exact cache path importlib selects right now."""
+
+    try:
+        expected = Path(importlib.util.cache_from_source(os.fspath(source_path)))
+    except (NotImplementedError, ValueError) as error:
+        raise ProvenanceError("The installed bytecode cache cannot be verified.") from error
+    candidate = root.joinpath(
+        *PurePosixPath(cached.parent).parts,
+        "__pycache__",
+        cached.name,
+    )
+    if candidate == expected:
+        return True
+    if candidate.parent == expected.parent and candidate.name.casefold() == expected.name.casefold():
+        raise ProvenanceError("The installed bytecode cache is invalid.")
+    return False
+
+
 def _validate_bytecode(
     root: Path,
     bytecode: list[_CachedBytecode],
     actual: dict[str, _ActualEntry],
     expected: dict[str, _ManifestEntry],
 ) -> None:
-    current_tag = sys.implementation.cache_tag
-    if not current_tag:
+    if not sys.implementation.cache_tag:
         raise ProvenanceError("The installed bytecode cache cannot be verified.")
     for cached in bytecode:
-        match = _BYTECODE_NAME.fullmatch(cached.name)
-        if match is None:
+        source_relative = _import_cache_source(root, cached)
+        if source_relative is not None:
+            source_path = root.joinpath(*PurePosixPath(source_relative).parts)
+            if _is_current_import_cache(root, cached, source_path):
+                expected_entry = expected.get(source_relative)
+                actual_entry = actual.get(source_relative)
+                if expected_entry is None or actual_entry is None:
+                    raise ProvenanceError(
+                        "The installed bytecode cache has no verified source."
+                    )
+                _validate_current_bytecode(
+                    root,
+                    cached,
+                    source_relative,
+                    actual_entry,
+                    expected_entry.content,
+                )
+                continue
+        if _is_pytest_rewrite_cache(cached.name):
+            raise ProvenanceError(_PYTEST_CACHE_DIAGNOSTIC)
+        if source_relative is None:
             raise ProvenanceError("The installed bytecode cache is invalid.")
-        source_relative = PurePosixPath(cached.parent, f"{match.group('stem')}.py").as_posix()
-        expected_entry = expected.get(source_relative)
-        actual_entry = actual.get(source_relative)
-        if expected_entry is None or actual_entry is None:
+        if expected.get(source_relative) is None or actual.get(source_relative) is None:
             raise ProvenanceError("The installed bytecode cache has no verified source.")
-        tag = match.group("tag")
-        if tag.casefold() == current_tag.casefold() and tag != current_tag:
-            raise ProvenanceError("The installed bytecode cache is invalid.")
-        if tag != current_tag:
-            continue
-        raw_optimization = match.group("optimization")
-        if raw_optimization is None:
-            optimization = 0
-        elif raw_optimization in {"1", "2"}:
-            optimization = int(raw_optimization)
-        else:
-            raise ProvenanceError("The installed bytecode cache is invalid.")
-        _validate_current_bytecode(
-            root,
-            cached,
-            source_relative,
-            actual_entry,
-            expected_entry.content,
-            optimization,
-        )
+        # A syntactically canonical cache for another interpreter cannot be
+        # selected by this interpreter. Its source still had to verify.
 
 
 def _derived_entry_kind(relative: str) -> str | None:
@@ -1773,6 +1832,46 @@ def _looks_importable(relative: str) -> bool:
     return any(name.endswith(suffix) for suffix in _IMPORTABLE_SUFFIXES)
 
 
+def _require_claude_host_state(
+    descriptor: int,
+    name: str,
+    relative: str,
+    counter: list[int],
+) -> bool:
+    """Validate Claude's one bounded project-local host-state surface."""
+
+    if relative != _CLAUDE_HOST_DIRECTORY:
+        return False
+    message = "The installed Autoform derived state is invalid."
+    try:
+        before = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    except OSError as error:
+        raise ProvenanceError(message) from error
+    if not stat.S_ISDIR(before.st_mode):
+        raise ProvenanceError(message)
+    child = _open_child_directory(descriptor, name, before)
+    try:
+        names = _safe_names(child, counter)
+        if not set(names).issubset(_CLAUDE_HOST_FILES):
+            raise ProvenanceError(message)
+        for child_name in names:
+            child_relative = f"{relative}/{child_name}"
+            if _looks_importable(child_relative):
+                raise ProvenanceError(message)
+            read = _read_bounded_regular(
+                child,
+                child_name,
+                limit=_MAX_HOST_FILE_BYTES,
+                message=message,
+            )
+            if read is None or read[1].st_mode & 0o111:
+                raise ProvenanceError(message)
+        _require_child_identity(descriptor, name, child)
+    finally:
+        os.close(child)
+    return True
+
+
 def _scan_for_unverified_entries(
     descriptor: int,
     prefix: str,
@@ -1806,6 +1905,8 @@ def _scan_for_unverified_entries(
             raise ProvenanceError(
                 "The installed Autoform tree contains an unverified plugin surface."
             )
+        if _require_claude_host_state(descriptor, name, relative, counter):
+            continue
         if _require_derived_entry(descriptor, name, relative):
             continue
         raise ProvenanceError(
@@ -1839,6 +1940,16 @@ def _json_type_exact(left: object, right: object) -> bool:
     return True
 
 
+def _valid_claude_overlay_version(base_version: str, installed_version: str) -> bool:
+    """Require the source SemVer plus nonempty, portable build metadata."""
+
+    prefix = f"{base_version}+"
+    if not installed_version.startswith(prefix):
+        return False
+    build_metadata = installed_version[len(prefix) :]
+    return _SEMVER_BUILD_METADATA.fullmatch(build_metadata) is not None
+
+
 def _validate_claude_overlay(
     root_descriptor: int,
     layout: _SourceLayout,
@@ -1870,9 +1981,9 @@ def _validate_claude_overlay(
     if len(base_versions) != 1:
         raise ProvenanceError(message)
     base_version = next(iter(base_versions))
-    installed_version = f"{base_version}+deicyde.{candidate.revision[:7]}"
+    installed_version = candidate.installed_version
     if (
-        candidate.installed_version != installed_version
+        not _valid_claude_overlay_version(base_version, installed_version)
         or candidate.cache_version != installed_version.replace("+", "-", 1)
     ):
         raise ProvenanceError(message)

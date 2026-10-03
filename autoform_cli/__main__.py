@@ -232,7 +232,7 @@ def _init(args: argparse.Namespace) -> int:
 
     if args.json:
         print(json.dumps(result.as_dict(), sort_keys=True, separators=(",", ":")))
-        return 0
+        return 1 if result.unpinned else 0
 
     print(f"{target}: {len(result.written)} files written")
     for path in result.written:
@@ -253,7 +253,7 @@ def _init(args: argparse.Namespace) -> int:
             "  autoform init --autoform-source <https-git-url> --autoform-ref <40-char-sha>",
             file=sys.stderr,
         )
-    return 0
+    return 1 if result.unpinned else 0
 
 
 def _check(args: argparse.Namespace) -> int:

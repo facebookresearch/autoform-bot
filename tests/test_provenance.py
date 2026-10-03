@@ -360,6 +360,45 @@ def test_verifies_exact_claude_host_metadata_transform(
     )
 
 
+def test_verifies_a_safe_nonpersonal_claude_build_label(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    installed, revision, _ = _claude_transformed_install(
+        tmp_path,
+        monkeypatch,
+        registry_version="0.5.0+publisher.preview-1",
+    )
+
+    assert provenance.verify_plugin_provenance(installed) == provenance.PluginProvenance(
+        _SOURCE, revision
+    )
+
+
+@pytest.mark.parametrize(
+    "installed_version",
+    [
+        "0.5.0",
+        "0.5.1+publisher",
+        "0.5.0+bad..label",
+        "0.5.0+bad_label",
+        "0.5.0+é",
+    ],
+)
+def test_rejects_non_semver_or_non_overlay_claude_build_labels(
+    installed_version: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    installed, _, _ = _claude_transformed_install(
+        tmp_path,
+        monkeypatch,
+        registry_version=installed_version,
+    )
+
+    with pytest.raises(provenance.ProvenanceError):
+        provenance.verify_plugin_provenance(installed)
+
+
 @pytest.mark.parametrize(
     "tamper",
     [
@@ -373,7 +412,7 @@ def test_verifies_exact_claude_host_metadata_transform(
         "missing-registry-sha",
         "duplicate-registry",
         "duplicate-empty-registry",
-        "cachebuster-label",
+        "unsafe-build-label",
         "type-confusion",
         "nonfinite",
     ],
@@ -382,14 +421,19 @@ def test_rejects_invalid_claude_host_metadata_transform(
     tamper: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    registry_version = "0.5.0+wrong" if tamper == "registry-version" else None
     installed, _, layout = _claude_transformed_install(
         tmp_path,
         monkeypatch,
-        registry_version=registry_version,
     )
     manifest = installed / ".claude-plugin/plugin.json"
-    if tamper == "manifest-field":
+    if tamper == "registry-version":
+        registry = Path(provenance._CLAUDE_PLUGIN_REGISTRY)
+        registry_payload = json.loads(registry.read_text(encoding="utf-8"))
+        registry_payload["plugins"]["autoform@market"][0]["version"] = (
+            "0.5.0+different.label"
+        )
+        registry.write_text(json.dumps(registry_payload), encoding="utf-8")
+    elif tamper == "manifest-field":
         payload = json.loads(manifest.read_text(encoding="utf-8"))
         payload["description"] = "tampered"
         manifest.write_text(json.dumps(payload) + "\n", encoding="utf-8")
@@ -434,11 +478,11 @@ def test_rejects_invalid_claude_host_metadata_transform(
                 {"installPath": str(installed)}
             )
         registry.write_text(json.dumps(registry_payload), encoding="utf-8")
-    elif tamper == "cachebuster-label":
+    elif tamper == "unsafe-build-label":
         registry = Path(provenance._CLAUDE_PLUGIN_REGISTRY)
         registry_payload = json.loads(registry.read_text(encoding="utf-8"))
         entry = registry_payload["plugins"]["autoform@market"][0]
-        evil_version = entry["version"].replace("+deicyde.", "+evil.")
+        evil_version = entry["version"].replace("+deicyde.", "+evil_label.")
         moved = installed.with_name(evil_version.replace("+", "-", 1))
         installed.rename(moved)
         entry["version"] = evil_version
@@ -930,7 +974,59 @@ def test_untracked_claude_host_configuration_is_rejected(
     (root / ".claude/settings.json").write_text("{}\n", encoding="utf-8")
     _mock_fetch(monkeypatch, layout)
 
-    with pytest.raises(provenance.ProvenanceError, match="unverified"):
+    with pytest.raises(provenance.ProvenanceError, match="derived state"):
+        provenance.verify_plugin_provenance(root)
+
+
+def test_exact_bounded_claude_host_state_is_derived(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    (root / ".claude").mkdir()
+    (root / ".claude/settings.local.json").write_text("{}\n", encoding="utf-8")
+    _mock_fetch(monkeypatch, layout)
+
+    assert provenance.verify_plugin_provenance(root).revision == _REVISION
+
+
+@pytest.mark.parametrize("change", ["extra", "alias", "directory", "executable", "link"])
+def test_claude_host_state_does_not_create_an_unchecked_namespace(
+    change: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    host = root / ".claude"
+    host.mkdir()
+    settings = host / "settings.local.json"
+    if change == "extra":
+        settings.write_text("{}\n", encoding="utf-8")
+        (host / "commands.json").write_text("{}\n", encoding="utf-8")
+    elif change == "alias":
+        (host / "Settings.local.json").write_text("{}\n", encoding="utf-8")
+    elif change == "directory":
+        settings.mkdir()
+    elif change == "executable":
+        settings.write_text("{}\n", encoding="utf-8")
+        settings.chmod(0o755)
+    else:
+        outside = tmp_path / "outside.json"
+        outside.write_text("{}\n", encoding="utf-8")
+        settings.symlink_to(outside)
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="derived state"):
+        provenance.verify_plugin_provenance(root)
+
+
+def test_claude_host_state_is_size_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    (root / ".claude").mkdir()
+    (root / ".claude/settings.local.json").write_bytes(b"123456789")
+    monkeypatch.setattr(provenance, "_MAX_HOST_FILE_BYTES", 8)
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="derived state"):
         provenance.verify_plugin_provenance(root)
 
 
@@ -1078,17 +1174,12 @@ def test_tracked_sitecustomize_package_is_compared(
         provenance.verify_plugin_provenance(installed)
 
 
-@pytest.mark.parametrize("optimization", [0, 1, 2])
 def test_current_interpreter_bytecode_is_accepted_only_when_it_matches_source(
-    optimization: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, layout = _installed_copy(tmp_path)
     source = root / "autoform_cli/__init__.py"
-    cached = Path(
-        py_compile.compile(
-            os.fspath(source), doraise=True, optimize=optimization
-        )
-    )
+    cached = Path(py_compile.compile(os.fspath(source), doraise=True, optimize=-1))
     _mock_fetch(monkeypatch, layout)
 
     assert provenance.verify_plugin_provenance(root).revision == _REVISION
@@ -1099,11 +1190,125 @@ def test_current_interpreter_bytecode_is_accepted_only_when_it_matches_source(
         os.fspath(source),
         "exec",
         dont_inherit=True,
-        optimize=optimization,
+        optimize=-1,
     )
     cached.write_bytes(content[:16] + marshal.dumps(malicious))
     with pytest.raises(provenance.ProvenanceError, match="bytecode cache"):
         provenance.verify_plugin_provenance(root)
+
+
+def test_current_optimization_level_three_cache_is_validated(tmp_path: Path) -> None:
+    script = r'''
+import marshal
+import os
+import py_compile
+import sys
+from pathlib import Path
+
+from autoform_cli import provenance
+
+assert sys.flags.optimize == 3
+root = Path(sys.argv[1]).resolve()
+source = root / "pkg/module.py"
+source.parent.mkdir(parents=True)
+content = b"VALUE = 1\n"
+source.write_bytes(content)
+cached = Path(py_compile.compile(os.fspath(source), doraise=True, optimize=-1))
+assert ".opt-3.pyc" in cached.name
+metadata = source.stat()
+actual = provenance._ActualEntry(
+    mode=0o100644,
+    content=content,
+    size=metadata.st_size,
+    mtime_ns=metadata.st_mtime_ns,
+)
+expected = provenance._ManifestEntry(mode=0o100644, content=content)
+
+def validate() -> None:
+    bytecode = provenance._CachedBytecode("pkg", cached.name, cached.read_bytes())
+    provenance._validate_bytecode(
+        root,
+        [bytecode],
+        {"pkg/module.py": actual},
+        {"pkg/module.py": expected},
+    )
+
+validate()
+original = cached.read_bytes()
+malicious = compile(
+    b"VALUE = 9\n",
+    os.fspath(source),
+    "exec",
+    dont_inherit=True,
+    optimize=-1,
+)
+cached.write_bytes(original[:16] + marshal.dumps(malicious))
+try:
+    validate()
+except provenance.ProvenanceError:
+    pass
+else:
+    raise AssertionError("current opt-3 cache was not validated")
+'''
+    completed = subprocess.run(
+        [sys.executable, "-OOO", "-c", script, os.fspath(tmp_path / "opt3")],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_external_pycache_prefix_keeps_same_named_in_tree_cache_noncurrent(
+    tmp_path: Path,
+) -> None:
+    script = r'''
+import importlib.util
+import os
+import sys
+from pathlib import Path
+
+from autoform_cli import provenance
+
+root = Path(sys.argv[1]).resolve()
+source = root / "pkg/module.py"
+source.parent.mkdir(parents=True)
+content = b"VALUE = 1\n"
+source.write_bytes(content)
+selected = Path(importlib.util.cache_from_source(os.fspath(source)))
+candidate = source.parent / "__pycache__" / selected.name
+candidate.parent.mkdir()
+candidate.write_bytes(b"not the interpreter-selected cache")
+assert selected.parent != candidate.parent
+metadata = source.stat()
+cached = provenance._CachedBytecode("pkg", candidate.name, candidate.read_bytes())
+actual = provenance._ActualEntry(
+    mode=0o100644,
+    content=content,
+    size=metadata.st_size,
+    mtime_ns=metadata.st_mtime_ns,
+)
+expected = provenance._ManifestEntry(mode=0o100644, content=content)
+assert not provenance._is_current_import_cache(root, cached, source)
+provenance._validate_bytecode(
+    root,
+    [cached],
+    {"pkg/module.py": actual},
+    {"pkg/module.py": expected},
+)
+'''
+    environment = os.environ.copy()
+    environment["PYTHONPYCACHEPREFIX"] = os.fspath(tmp_path / "external-cache")
+    completed = subprocess.run(
+        [sys.executable, "-c", script, os.fspath(tmp_path / "tree")],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_current_interpreter_bytecode_tag_case_alias_is_rejected(
@@ -1119,6 +1324,136 @@ def test_current_interpreter_bytecode_tag_case_alias_is_rejected(
     _mock_fetch(monkeypatch, layout)
 
     with pytest.raises(provenance.ProvenanceError, match="bytecode cache"):
+        provenance.verify_plugin_provenance(root)
+
+
+def test_pytest_rewrite_cache_is_rejected_with_cleanup_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    cache = root / "autoform_cli/__pycache__"
+    cache.mkdir()
+    tag = sys.implementation.cache_tag
+    assert tag is not None
+    (cache / f"__init__.{tag}-pytest-9.1.0.pyc").write_bytes(
+        b"pytest assertion rewrite cache"
+    )
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(
+        provenance.ProvenanceError,
+        match="pytest assertion-rewrite bytecode.*PYTHONDONTWRITEBYTECODE=1",
+    ):
+        provenance.verify_plugin_provenance(root)
+
+
+def test_standard_cache_for_a_pytest_named_source_is_still_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_tree = tmp_path / "source"
+    _write_plugin(source_tree)
+    named_source = source_tree / "autoform_cli/helper-pytest-case.py"
+    named_source.write_text("VALUE = 1\n", encoding="utf-8")
+    layout = _layout(source_tree)
+    root = tmp_path / "installed"
+    shutil.copytree(source_tree, root)
+    _write_record(root)
+    cached = Path(
+        py_compile.compile(
+            os.fspath(root / "autoform_cli/helper-pytest-case.py"),
+            doraise=True,
+            optimize=-1,
+        )
+    )
+    _mock_fetch(monkeypatch, layout)
+
+    assert "-pytest-" in cached.name
+    assert provenance.verify_plugin_provenance(root).revision == _REVISION
+
+
+def test_pytest_rewrite_cache_is_rejected_before_source_inference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    cache = root / "autoform_cli/__pycache__"
+    cache.mkdir()
+    tag = sys.implementation.cache_tag
+    assert tag is not None
+    (cache / f"ghost.{tag}-pytest-9.1.0.pyc").write_bytes(b"cache")
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="pytest assertion-rewrite"):
+        provenance.verify_plugin_provenance(root)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "__init__.{tag}-PyTest-9.1.0.pyc",
+        "__init__.{tag}-pytest-9..1.pyc",
+    ],
+)
+def test_pytest_cache_aliases_and_malformed_names_are_rejected(
+    name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    cache = root / "autoform_cli/__pycache__"
+    cache.mkdir()
+    tag = sys.implementation.cache_tag
+    assert tag is not None
+    (cache / name.format(tag=tag)).write_bytes(b"cache")
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="pytest assertion-rewrite"):
+        provenance.verify_plugin_provenance(root)
+
+
+def test_importable_bytecode_without_verified_source_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    cache = root / "autoform_cli/__pycache__"
+    cache.mkdir()
+    tag = sys.implementation.cache_tag
+    assert tag is not None
+    (cache / f"ghost.{tag}.pyc").write_bytes(b"loadable cache")
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="no verified source"):
+        provenance.verify_plugin_provenance(root)
+
+
+def test_pytest_cache_must_be_bounded_and_regular(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    cache = root / "autoform_cli/__pycache__"
+    cache.mkdir()
+    tag = sys.implementation.cache_tag
+    assert tag is not None
+    rewritten = cache / f"__init__.{tag}-pytest-9.1.0.pyc"
+    rewritten.write_bytes(b"x" * 1025)
+    monkeypatch.setattr(provenance, "_MAX_SHIPPED_FILE_BYTES", 1024)
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError):
+        provenance.verify_plugin_provenance(root)
+
+
+def test_pytest_cache_link_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, layout = _installed_copy(tmp_path)
+    cache = root / "autoform_cli/__pycache__"
+    cache.mkdir()
+    tag = sys.implementation.cache_tag
+    assert tag is not None
+    (cache / f"__init__.{tag}-pytest-9.1.0.pyc").symlink_to(
+        root / "autoform_cli/__init__.py"
+    )
+    _mock_fetch(monkeypatch, layout)
+
+    with pytest.raises(provenance.ProvenanceError, match="bytecode cache is invalid"):
         provenance.verify_plugin_provenance(root)
 
 

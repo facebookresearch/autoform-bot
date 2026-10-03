@@ -262,6 +262,19 @@ def test_cli_reports_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     assert set(payload["written"]) == _EXPECTED
 
 
+def test_cli_fails_closed_when_provenance_is_unavailable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from autoform_cli.__main__ import main
+
+    assert main(["init", str(tmp_path), "--title", "Unpinned", "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["unpinned"] is True
+    assert ".github/autoform_audit.py" in payload["skipped"]
+    assert not (tmp_path / ".github").exists()
+
+
 def test_roadmap_readme_teaches_the_chapter_shape(tmp_path: Path) -> None:
     """The exact mistake this command exists to prevent must be named in it."""
 
