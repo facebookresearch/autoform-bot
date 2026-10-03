@@ -13,7 +13,9 @@ dependencies = [
     "fastmcp>=3.4.5,<4",
     "packaging>=24,<27",
     "psutil>=5.9",
-    "tomli>=2.0.1; python_version < '3.11'",
+    # Lake 4.32 reads TOML 1.0. Tomli 2.4 enables TOML 1.1 syntax, so use the
+    # same pinned 1.0 parser on every supported Python version.
+    "tomli>=2.3.1,<2.4",
     # The blueprint checks predict what the generated MkDocs site publishes.
     # Anchor prediction runs the configured renderer itself rather than
     # approximating it, so these are runtime requirements, not build extras.
@@ -59,4 +61,3 @@ constraint-dependencies = [
     "cryptography<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "cryptography>=49; sys_platform != 'darwin' or platform_machine != 'x86_64'",
 ]
-
