@@ -8,10 +8,18 @@ from pathlib import Path
 
 import pytest
 
+from autoform_cli.coverage import COVERAGE_DISPOSITIONS
+from autoform_cli.graph import load_graph
 from autoform_cli.lean import _normalize_remote
 from autoform_cli.markdown import site_converter, statement_and_notes
-from autoform_cli.render import PUBLICATION_MANIFEST, PublicationError, render_site
-from autoform_cli.status import STATES
+from autoform_cli.render import (
+    PUBLICATION_MANIFEST,
+    PublicationError,
+    _COVERAGE_SUMMARY_ORDER,
+    _completion_percentage,
+    render_site,
+)
+from autoform_cli.status import STATES, derive
 
 
 def _project(tmp_path: Path) -> Path:
@@ -345,11 +353,120 @@ def test_overview_carries_the_counts_without_a_separate_progress_page(tmp_path: 
     # The landing page leads with the figures; a chapter keeps the compact strip.
     assert overview.index("bp-hero-title") < overview.index("bp-hero-figures")
     assert 'class="bp-figure-value"' in overview
+    assert '<div class="bp-figure-label">Scoped roadmap</div>' in overview
+    assert "2 of 2 targets complete" in overview
+    assert "Declared source coverage:" in overview
+    assert "1 mapped" in overview
+    assert 'href="coverage/index.html"' in overview
+    assert '<div class="bp-hero-bar" aria-hidden="true">' in overview
+    assert 'role="img"' not in overview
+    assert "items settled" not in overview
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert "1 definition · 1 result" in chapter
-    # No page to send the reader to, so no link out of the summary.
+    # Progress stays on the landing page; the only summary link explains scope.
     assert "bp-progress-link" not in overview
     assert not (tmp_path / "out/progress.md").exists()
+
+
+def test_statement_only_theorems_never_count_as_complete(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    blocker = roadmap / "blocker.md"
+    blocker.write_text(
+        "---\ndeclaration: theorem\nstatement: formalized\n---\n\n# Blocker\n",
+        encoding="utf-8",
+    )
+    top = roadmap / "top.md"
+    top.write_text(
+        "---\ndeclaration: theorem\nstatement: formalized\nlean: Project.top\n---\n\n"
+        "# Top\n\nThe main result.\n\n"
+        "## Depends on\n\n- [Base](base.md)\n\n"
+        "## Proof depends on\n\n- [Blocker](blocker.md)\n",
+        encoding="utf-8",
+    )
+
+    statuses = derive(load_graph(project / "blueprint"))
+    assert statuses["blocker"].key == "can_prove"
+    assert statuses["top"].key == "stated"
+
+    render_site(project / "blueprint", tmp_path / "blocked", lean_root=project)
+    blocked = (tmp_path / "blocked/README.md").read_text(encoding="utf-8")
+    assert "1 of 3 targets complete" in blocked
+
+    blocker.write_text(
+        "---\ndeclaration: theorem\nstatement: formalized\nproof: formalized\n---\n\n"
+        "# Blocker\n",
+        encoding="utf-8",
+    )
+    statuses = derive(load_graph(project / "blueprint"))
+    assert statuses["top"].key == "can_prove"
+
+    render_site(project / "blueprint", tmp_path / "ready", lean_root=project)
+    ready = (tmp_path / "ready/README.md").read_text(encoding="utf-8")
+    assert "2 of 3 targets complete" in ready
+
+
+def test_completion_requires_every_dependency_to_be_fully_proved(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/base.md").write_text(
+        "---\n---\n\n# Base\n\nAn unfinished prerequisite.\n",
+        encoding="utf-8",
+    )
+
+    statuses = derive(load_graph(project / "blueprint"))
+    assert statuses["top"].proved
+    assert not statuses["top"].fully_proved
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    assert "0 of 1 target complete" in overview
+    assert '<div class="bp-figure-value">0%</div>' in overview
+
+
+def test_definitions_and_mathlib_marked_targets_count_as_complete(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/upstream.md").write_text(
+        "---\ndeclaration: theorem\nmathlib: true\n"
+        "mathlib_declaration: Nat.add_comm\n"
+        "mathlib_file: Mathlib/Data/Nat/Basic.lean\n"
+        "---\n\n# Upstream\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    assert "3 of 3 targets complete" in overview
+    assert '<div class="bp-figure-value">100%</div>' in overview
+
+
+def test_completion_percentage_reserves_100_for_complete_work() -> None:
+    assert _completion_percentage(0, 200) == 0
+    assert _completion_percentage(1, 200) == 1
+    assert _completion_percentage(199, 200) == 99
+    assert _completion_percentage(200, 200) == 100
+    assert _completion_percentage(0, 0) == 0
+
+
+def test_coverage_summary_tracks_every_canonical_disposition() -> None:
+    assert set(_COVERAGE_SUMMARY_ORDER) == set(COVERAGE_DISPOSITIONS)
+    assert len(_COVERAGE_SUMMARY_ORDER) == len(COVERAGE_DISPOSITIONS)
+    assert _COVERAGE_SUMMARY_ORDER[0] == "DECOMPOSED"
+
+
+def test_single_target_uses_singular_completion_copy(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/top.md").write_text(
+        "---\n---\n\n# Top\n\nNarrative context rather than a Lean target.\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    assert "1 of 1 target complete" in overview
+    assert "1 of 1 targets complete" not in overview
 
 
 def test_the_landing_page_is_the_hero_and_the_map_and_nothing_else(tmp_path: Path) -> None:
@@ -414,10 +531,10 @@ def test_links_naming_a_node_file_follow_it_onto_the_chapter(tmp_path: Path) -> 
 def test_coverage_is_reachable_once_the_landing_page_stops_listing_it(
     tmp_path: Path,
 ) -> None:
-    """Dropping the authored body would otherwise strand the coverage contract.
+    """Dropping the authored body must not strand the coverage contract.
 
-    Nothing else linked it: it is not a chapter, so the book order never picks
-    it up, and the landing page's prose was its only route.
+    It is not a chapter, so it needs explicit routes from both the hero's scope
+    summary and the generated Book navigation.
     """
     project = _project(tmp_path)
     coverage = project / "blueprint" / "coverage"
@@ -430,7 +547,9 @@ def test_coverage_is_reachable_once_the_landing_page_stops_listing_it(
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     nav = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
+    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
     assert "[Coverage](coverage/README.md)" in nav
+    assert 'href="coverage/index.html"' in overview
 
 
 def test_a_hoisted_body_keeps_its_other_links_working(tmp_path: Path) -> None:
@@ -1099,7 +1218,7 @@ def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path
     """The roadmap landing page is not a formalization target.
 
     Counting every childless article made a freshly scaffolded vault claim
-    "0 of 1 items settled, 1 ready now", so the site described work before any
+    "0 of 1 targets complete, 1 ready now", so the site described work before any
     had been planned.
     """
     from autoform_cli.scaffold import scaffold_project
@@ -1111,7 +1230,9 @@ def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path
     render_site(project / "blueprint", out)
 
     overview = (out / "README.md").read_text(encoding="utf-8")
-    assert "0 of 0 items settled" in overview
+    assert "0 of 0 targets complete" in overview
+    assert "items settled" not in overview
+    assert '<div class="bp-figure-value">0%</div>' in overview
     assert '<div class="bp-figure-value">0</div>' in overview
 
 

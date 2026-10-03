@@ -50,6 +50,14 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
 
     codex_manifest = json.loads((repo_root / ".codex-plugin/plugin.json").read_text())
     assert len(codex_manifest["interface"]["defaultPrompt"]) == 5
+    assert any(
+        "one invocation" in prompt and "persistent Goal" in prompt
+        for prompt in codex_manifest["interface"]["defaultPrompt"]
+    )
+    assert not any(
+        "claim-backed workers" in prompt
+        for prompt in codex_manifest["interface"]["defaultPrompt"]
+    )
     muse = json.loads((repo_root / ".muse-plugin/plugin.json").read_text())
     assert [command["id"] for command in muse["capabilities"]["commands"]] == [
         "setup",
@@ -94,6 +102,7 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
             "autoform_cli/graph.py",
             "autoform_cli/probes/skeleton_probe.lean",
             "autoform_cli/visualize.py",
+            "autoform_cli/project/releases.json",
             "servers/lean_client.py",
             "servers/lean_runtime.py",
             "servers/lsp/server.py",
@@ -155,3 +164,48 @@ finally:
             text=True,
         )
     assert probe.returncode == 0, probe.stderr
+
+    environment = tmp_path / "wheel-venv"
+    created = subprocess.run(
+        ["uv", "venv", "--python", sys.executable, str(environment)],
+        capture_output=True,
+        text=True,
+    )
+    assert created.returncode == 0, created.stderr
+    python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    installed = subprocess.run(
+        ["uv", "pip", "install", "--python", str(python), str(wheel)],
+        capture_output=True,
+        text=True,
+    )
+    assert installed.returncode == 0, installed.stderr
+    command = environment / ("Scripts/autoform.exe" if sys.platform == "win32" else "bin/autoform")
+    outside = tmp_path / "outside"
+    project = outside / "project"
+    project.mkdir(parents=True)
+    (project / "lakefile.toml").write_text(
+        'name = "WheelProject"\n'
+        '[[require]]\nname = "mathlib"\n'
+        'git = "https://github.com/leanprover-community/mathlib4.git"\n'
+        'rev = "v4.32.2"\n',
+        encoding="utf-8",
+    )
+    (project / "lean-toolchain").write_text(
+        "leanprover/lean4:v4.32.2\n", encoding="utf-8"
+    )
+    versions = subprocess.run(
+        [str(command), "project", "versions", "--json"],
+        cwd=outside,
+        capture_output=True,
+        text=True,
+    )
+    assert versions.returncode == 0, versions.stderr
+    assert json.loads(versions.stdout)["schema"] == "autoform-project-release-catalog/v1"
+    inspection = subprocess.run(
+        [str(command), "project", "inspect", str(project), "--json"],
+        cwd=outside,
+        capture_output=True,
+        text=True,
+    )
+    assert inspection.returncode == 0, inspection.stderr
+    assert json.loads(inspection.stdout)["lake"]["name"] == "WheelProject"

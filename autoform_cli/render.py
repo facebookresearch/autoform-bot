@@ -23,7 +23,7 @@ from markdown.extensions.toc import slugify
 
 from . import graph_pages, graph_views, mermaid, status
 from .approvals import ApprovalStatus, ApprovalVerifier, approval_statuses, current_approvals
-from .coverage import CoverageSummary, load_coverage
+from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage
 from .graph import Graph, Node, load_graph
 from .lean import SourceLinker, build_linker, declaration_names, detect_ref, detect_repository_url
 from .markdown import content_lines as _content_lines
@@ -673,6 +673,7 @@ def render_site(
                 overview.read_text(encoding="utf-8"),
                 graph=graph,
                 statuses=statuses,
+                coverage=coverage,
                 groups=groups,
                 group_pages=group_pages,
                 page=overview,
@@ -1346,6 +1347,7 @@ def _render_landing_page(
     *,
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
+    coverage: CoverageSummary,
     groups: dict[str, list[str]],
     group_pages: dict[str, Path],
     page: Path,
@@ -1376,7 +1378,16 @@ def _render_landing_page(
         "",
         '<div class="bp-landing" markdown="1">',
         "",
-        _render_hero(title, body, graph, statuses),
+        _render_hero(
+            title,
+            body,
+            graph,
+            statuses,
+            coverage=coverage,
+            coverage_href=_as_published(
+                mermaid.relative_link(destination / coverage.source_path, page, ".html")
+            ),
+        ),
         "",
         _next_target(
             graph,
@@ -1429,25 +1440,29 @@ def _render_landing_page(
         )
     elif breakdown:
         parts.extend(["", "## Status breakdown", "", breakdown])
-    # The authored body is a contents list and links to the roadmap, the
-    # coverage notes and the dependency view. The tabs are all three, so
-    # repeating them here only pushes the map up the page for nothing. Its
+    # The authored body is a contents list and links to the roadmap, coverage
+    # contract and dependency view. The hero retains a compact coverage summary;
+    # repeating the full list here would only push the map down the page. Its
     # opening sentence is already the hero's lead.
     parts.append("</div>")
     return "\n".join(part for part in parts if part is not None).rstrip() + "\n"
 
 
-#: States that count as finished work for the headline percentage.
-_SETTLED_STATES = frozenset({"mathlib", "fully_proved", "proved", "defined", "stated"})
 #: States a contributor could pick up today.
 _ACTIONABLE_STATES = frozenset({"can_prove", "can_state"})
+# Presentation starts with work expanded into the roadmap, then follows the
+# parser's canonical order. Deriving this tuple keeps newly added dispositions
+# visible instead of silently dropping them from the landing page.
+_COVERAGE_SUMMARY_ORDER = tuple(
+    sorted(COVERAGE_DISPOSITIONS, key=lambda disposition: disposition != "DECOMPOSED")
+)
 
 
 def _is_countable(graph: Graph, node_id: str) -> bool:
     """Whether *node_id* is a formalization target the dashboards should count.
 
     A leaf, and a leaf that declares something. Counting every leaf made a
-    freshly scaffolded vault report "0 of 1 items settled, 1 ready now": the
+    freshly scaffolded vault report "0 of 1 targets complete, 1 ready now": the
     roadmap landing page has no children yet, so it counted as an unstarted
     result, and the site claimed work existed before any had been planned.
     """
@@ -1459,11 +1474,35 @@ def _countable(graph: Graph) -> list[str]:
     return [node_id for node_id in graph.nodes if _is_countable(graph, node_id)]
 
 
+def _completion_percentage(done: int, total: int) -> int:
+    """Round progress while reserving both endpoints for the exact endpoints."""
+
+    if not total or not done:
+        return 0
+    if done == total:
+        return 100
+    return max(1, min(99, round(100 * done / total)))
+
+
+def _coverage_summary(coverage: CoverageSummary) -> str:
+    """Describe declared source dispositions without inventing a percentage."""
+
+    counts = coverage.counts
+    return " · ".join(
+        f"{counts[disposition]} {disposition.casefold()}"
+        for disposition in _COVERAGE_SUMMARY_ORDER
+        if counts[disposition]
+    )
+
+
 def _render_hero(
     title: str,
     body: str,
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
+    *,
+    coverage: CoverageSummary,
+    coverage_href: str,
 ) -> str:
     """Open with the project's name, its one-line claim, and where it stands.
 
@@ -1474,17 +1513,19 @@ def _render_hero(
     """
     leaves = _countable(graph)
     selected = {node_id: statuses[node_id] for node_id in leaves}
-    done = sum(
-        count for state, count in status.summarize(selected) if state.key in _SETTLED_STATES
-    )
+    # A target is complete only when it and every prerequisite are proved.
+    # ``proved`` alone covers its own proof, definition body, or authored
+    # Mathlib marker; ``fully_proved`` also closes the dependency chain.
+    done = sum(node_status.fully_proved for node_status in selected.values())
     actionable = sum(
         count for state, count in status.summarize(selected) if state.key in _ACTIONABLE_STATES
     )
     total = len(leaves)
-    share = round(100 * done / total) if total else 0
+    share = _completion_percentage(done, total)
+    target_label = "target" if total == 1 else "targets"
 
     figures = [
-        ("Formalized", f"{share}%", f"{done} of {total} items settled"),
+        ("Scoped roadmap", f"{share}%", f"{done} of {total} {target_label} complete"),
         ("Ready now", str(actionable), "unblocked, waiting for an author"),
         ("Chapters", str(len(graph_views.group_nodes(graph))), "top-level milestones"),
     ]
@@ -1494,6 +1535,14 @@ def _render_hero(
         f'<div class="bp-figure-note">{html.escape(note)}</div></div>'
         for label, value, note in figures
     )
+    coverage_line = (
+        '<div class="bp-hero-coverage">'
+        '<span class="bp-hero-coverage-label">Declared source coverage:</span> '
+        f'<span class="bp-hero-coverage-counts">{html.escape(_coverage_summary(coverage))}</span> '
+        f'<a class="bp-hero-coverage-link" href="{html.escape(coverage_href, quote=True)}">'
+        "View coverage contract</a>"
+        "</div>"
+    )
     lead = _lead_sentence(body)
     return (
         '<div class="bp-hero">'
@@ -1502,10 +1551,10 @@ def _render_hero(
         f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
         + (f'<p class="bp-hero-lead">{lead}</p>' if lead else "")
         + f'<div class="bp-hero-figures">{stats}</div>'
-        f'<div class="bp-hero-bar" role="img" '
-        f'aria-label="{share}% of items formalized">'
+        f'<div class="bp-hero-bar" aria-hidden="true">'
         f'<span style="width: {share}%"></span></div>'
-        "</div>"
+        + coverage_line
+        + "</div>"
     )
 
 
@@ -2549,6 +2598,23 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   overflow: hidden;
 }}
 .bp-hero-bar > span {{ display: block; height: 100%; background: var(--bp-sweep); }}
+
+.bp-hero-coverage {{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.65rem;
+  margin-top: 0.75rem;
+  font-size: 0.72rem;
+  color: var(--bp-muted);
+}}
+.bp-hero-coverage-label {{ font-weight: 700; color: var(--bp-fg); }}
+.bp-hero-coverage-link {{
+  margin-left: auto;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}}
 
 /* The map is the page's subject, so it gets a panel of its own and the
    legend rides with it instead of becoming a section further down. */

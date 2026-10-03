@@ -4,6 +4,10 @@ The Autoform CLI validates, visualizes, and publishes the multilevel dependency
 graph embedded in `blueprint/roadmap/`. The Markdown book is the graph: no
 separate authored or generated graph file exists.
 
+This is an agent-facing interface. Normal project work starts from Autoform's
+skills in the user's preferred agent window; those agents invoke these commands
+as needed.
+
 ## Articles and containment
 
 Every Markdown file below `blueprint/roadmap/` is an article node. A
@@ -127,6 +131,29 @@ autoform init . --title "Finite Flat Group Schemes" \
 
 Pass `--autoform-ref <sha>` to pin the generated workflows at an immutable
 commit, `--force` to overwrite, and `--json` for machine-readable output.
+
+Inspect a Lean project and list Autoform's bundled known-good release pairs:
+
+```bash
+autoform project inspect .
+autoform project inspect path/inside/project --json
+autoform project versions --json
+```
+
+`project inspect` reads the nearest enclosing project's `lean-toolchain`,
+`lake-manifest.json`, and `lakefile.toml` without running Lake, Lean, Git, or
+the network. Compatibility is decided by the toolchain and the Mathlib commit
+the manifest locks, which is what `lake build` uses: `supported` when that pair
+is in the bundled catalog, `unlisted` when it is not, and `indeterminate` when
+either is unknown (no manifest, no Mathlib, a path-based Mathlib, or any file
+error). A `.lake/package-overrides.json` entry for Mathlib replaces the
+manifest's, and a `lakefile.toml` that requests a different Mathlib than the
+lock gets a `lake-manifest-stale` warning. `lakefile.lean` takes precedence, as
+in Lake, but is never evaluated, so its projects stay `indeterminate`. As in
+elan, only the trimmed first line of `lean-toolchain` counts.
+
+`project versions` lists the bundled catalog of known-good Lean and Mathlib
+pairs. It is an allowlist, not a resolver.
 
 Publishing a project runs four steps in order: validate, write the Mermaid
 graph into the vault, render the site source, then strict-build the site.

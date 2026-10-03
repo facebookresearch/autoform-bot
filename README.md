@@ -44,32 +44,22 @@ manifest is included, but Muse installation is not covered here.
 
 ## Quick start
 
-Work from an existing Lean repository. First scaffold the blueprint and site
-configuration from an Autoform checkout:
+Work from an existing Lean repository and use the host skills from its agent
+window. The skills invoke Autoform's CLI themselves; users do not need to learn
+or run its commands.
 
-```bash
-uv run autoform init /path/to/lean-project \
-  --autoform-ref <full-commit-sha>
-```
-
-This creates `blueprint/`, `mkdocs.yml`, and `requirements-docs.txt`. GitHub
-workflows are created only when Autoform has an immutable commit pin. The Setup
-skill can inspect and repair this infrastructure, but its new-project Lean
-bootstrap helper is not packaged on `main`; start from an existing Lean project
-and use `autoform init` for the blueprint and publication files.
-
-Next use the host skills from the Lean project:
-
-| Goal | Claude Code | Codex |
+| Task | Claude Code | Codex |
 | --- | --- | --- |
+| Set up the blueprint and publication files | `/autoform:setup` | `$setup` |
 | Build a source-grounded roadmap | `/autoform:roadmap` | `$roadmap` |
 | Prepare a person-led review | `/autoform:human-review` | `$human-review` |
 | Run an independent agent review | `/autoform:agent-review` | `$agent-review` |
 
-For example: “Build a roadmap for Sections 2–4 of `paper.pdf`; confirm the scope
-and completion criteria before writing articles.” Keep the source in the
-repository or provide an accessible path. Human and agent review are
-alternatives; review the roadmap before treating it as an execution plan.
+For example: “Build a complete roadmap for Sections 2–4 of `paper.pdf`.” Keep
+the source in the repository or provide an accessible path. Roadmap treats
+coarse planning as an internal checkpoint unless staged review was requested;
+when possible, the skill uses a compatible model-callable Goal itself. Human
+and agent review remain available before execution.
 
 ## Blueprint model
 
@@ -96,7 +86,10 @@ Markdown is the source of truth; Mermaid graphs and MkDocs pages are derived
 views. See the [blueprint format and CLI reference](autoform_cli/README.md) for
 complete frontmatter, hierarchy, status, and validation rules.
 
-## CLI and publication
+## Agent-facing CLI and publication
+
+Skills use these commands to make and verify changes. They are documented for
+plugin development and debugging, not as a required user workflow.
 
 | Command | Purpose |
 | --- | --- |

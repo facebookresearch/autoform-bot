@@ -1,4 +1,4 @@
 interface:
   display_name: "Build Autoform Roadmap"
   short_description: "Build source-grounded Lean roadmap vaults"
-  default_prompt: "Use $roadmap to turn my mathematical sources into an Autoform roadmap of pull-request-sized formalization units."
+  default_prompt: "Use $roadmap to complete and validate my source-grounded Autoform roadmap in one invocation, using a compatible native persistent Goal when possible."

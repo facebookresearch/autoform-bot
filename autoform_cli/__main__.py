@@ -28,6 +28,7 @@ from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_k
 from .doctor import diagnose_project
 from .graph import Graph, GraphValidationError, load_graph
 from .lean import build_linker, declaration_names
+from .project import ProjectCatalogError, inspect_project, load_release_catalog
 from .readback import (
     PreparedReadback,
     Readback,
@@ -112,6 +113,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     doctor.add_argument("--lean-root", type=Path, help="Lean project to resolve local targets against")
     doctor.add_argument("--json", action="store_true", help="write stable machine-readable output")
 
+    project = subparsers.add_parser("project", help="inspect local project configuration and releases")
+    project_subparsers = project.add_subparsers(dest="project_command", required=True)
+    project_inspect = project_subparsers.add_parser(
+        "inspect", help="inspect a project without running Lake, Git, or network operations"
+    )
+    project_inspect.add_argument(
+        "target", nargs="?", default=".", help="a path inside the project (default: current directory)"
+    )
+    project_inspect.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    project_versions = project_subparsers.add_parser(
+        "versions", help="list bundled known-good Lean and Mathlib releases"
+    )
+    project_versions.add_argument("--json", action="store_true", help="write stable machine-readable output")
     claim = subparsers.add_parser("claim", help="coordinate temporary node ownership through Git refs")
     claim_subparsers = claim.add_subparsers(dest="claim_command", required=True)
     for operation in ("acquire", "renew", "release"):
@@ -321,6 +335,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _audit(args)
     if args.command == "doctor":
         return _doctor(args)
+    if args.command == "project":
+        return _project(args)
     if args.command == "claim":
         return _claim(args)
     if args.command == "migrate":
@@ -491,6 +507,65 @@ def _doctor(args: argparse.Namespace) -> int:
             marker = "PASS" if check.ok else "FAIL"
             print(f"{marker}: {check.name}: {check.detail}")
     return 0 if result.clean else 1
+
+
+def _project(args: argparse.Namespace) -> int:
+    try:
+        catalog = load_release_catalog()
+    except ProjectCatalogError as error:
+        if args.json:
+            print(json.dumps({"error": {"code": "project-catalog-invalid", "message": str(error)}, "ok": False}))
+        else:
+            print(f"error: {error}", file=sys.stderr)
+        return 1
+    if args.project_command == "versions":
+        if args.json:
+            print(catalog.to_json())
+            return 0
+        print("Known-good Lean/Mathlib releases:")
+        for release in catalog.releases:
+            print(f"  {release.id}{' [recommended]' if release.recommended else ''}")
+            print(f"    Lean: {release.lean_toolchain}")
+            print(f"    Mathlib: {release.mathlib_rev} @ {release.mathlib_commit} ({release.mathlib_git})")
+        return 0
+    result = inspect_project(args.target, catalog=catalog)
+    if args.json:
+        print(result.to_json())
+    else:
+        _print_project_inspection(result)
+    return 0 if result.ok else 1
+
+
+def _print_project_inspection(result) -> None:
+    if result.project_root is not None:
+        print(f"Project root: {_human_text(result.project_root)}")
+    if result.lake is not None:
+        version = f" {result.lake.version}" if result.lake.version else ""
+        print(f"Lake: {_human_text((result.lake.name or 'unknown package') + version)} ({result.lake.config})")
+        for target in result.lake.targets:
+            print(f"  {target.kind} {_human_text(target.name)}")
+    if result.lean_toolchain is not None:
+        print(f"Lean: {_human_text(result.lean_toolchain)}")
+    if result.mathlib is not None:
+        mathlib = result.mathlib
+        where = mathlib.dir if mathlib.type == "path" else f"{mathlib.input_rev} @ {mathlib.rev} ({mathlib.url})"
+        print(f"Mathlib: {_human_text(where)} [{mathlib.source}]")
+    if result.autoform_paths:
+        print(f"Autoform: {', '.join(result.autoform_paths)}")
+    release = f" ({result.compatibility.release})" if result.compatibility.release else ""
+    print(f"Compatibility: {result.compatibility.status}{release}")
+    for diagnostic in result.diagnostics:
+        location = f" {diagnostic.path}" if diagnostic.path else ""
+        print(f"{diagnostic.severity}[{diagnostic.code}]{location}: {diagnostic.message}", file=sys.stderr)
+
+
+def _human_text(value: object) -> str:
+    """Escape nonprintable characters so project files cannot forge report lines."""
+
+    return "".join(
+        character if character.isprintable() else character.encode("unicode_escape").decode("ascii")
+        for character in str(value)
+    )
 
 
 def _claim(args: argparse.Namespace) -> int:

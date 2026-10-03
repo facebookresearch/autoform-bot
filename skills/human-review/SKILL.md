@@ -26,16 +26,27 @@ rather than a reason to refuse to render.
 Stop on structural failures and present them before asking for mathematical
 judgment. For vault review, point the user to `blueprint/README.md`, coverage,
 chapter pages, and `blueprint/dependencies.md` in Obsidian. For browser review,
-serve the built site over localhost and provide the overview, progress, project
-graph, relevant chapter graph, and node-neighborhood links.
+serve the built site over localhost and provide the overview, including its
+progress summary, plus the project graph, relevant chapter graph, and
+node-neighborhood links.
 
 Guide the review from coarse to fine: declared scope and exclusions, milestone
-book, progress summary, cross-chapter graph, chapter graph, then individual node
-and Lean-source links. Record each human decision as `approve`, `revise`, or
+book, landing-page progress summary, cross-chapter graph, chapter graph, then
+individual node and Lean-source links. Record each human decision as `approve`, `revise`, or
 `block`, with the exact page or node and rationale. Separate validator output
 from the person's judgment. Do not silently apply requested revisions: hand
 mathematical-plan changes to Roadmap, Lean implementation changes to
 Orchestrate, and autonomous rubric scoring to Agent Review.
+
+Treat the landing page's `Scoped roadmap` percentage as completion among
+formalizable leaf targets that are fully proved, including every dependency
+recursively. This requires proofs for theorems and bodies for definitions. A
+target marked `mathlib: true` follows the authored status contract; the marker
+is an author assertion, not audit verification that the declaration is in
+Mathlib. Treat the percentage never as whole-source completion. Read the
+adjacent declared source coverage and its linked coverage contract before
+making scope claims. A statement-only theorem remains incomplete whether it is
+blocked or ready to prove.
 
 ## Review formalized statements through prepared evidence and read-backs
 
