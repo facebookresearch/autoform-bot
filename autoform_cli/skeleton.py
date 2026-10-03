@@ -1780,10 +1780,13 @@ def parse_probe_output(
 
 
 #: What a probe table entry's value must be: a trusted declaration's record,
-#: an external constant's semantic material, a module's compiled files, or a
-#: fragment of semantic material. Material is a list of text pieces and
+#: an external constant's semantic material, a module's compiled files, a
+#: fragment of semantic material, or the number of parser entries of a module
+#: whose grammar the probe rebuilt. Material is a list of text pieces and
 #: fragment numbers, which expands to its text.
-_PROBE_TABLES: dict[str, type] = {"fragment": list, "module": list, "semantic": list, "trusted": dict}
+_PROBE_TABLES: dict[str, type] = {
+    "fragment": list, "grammar": int, "module": list, "semantic": list, "trusted": dict
+}
 
 
 def _expand_probe_material(tables: dict[str, dict[str, object]]) -> Callable[[object, str], str]:
