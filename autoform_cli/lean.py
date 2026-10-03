@@ -290,18 +290,32 @@ def build_linker(
 
 
 def detect_repository_url(root: str | Path) -> str | None:
-    """Find the project's web URL from the CI environment or the git remote."""
-    repository = os.environ.get("GITHUB_REPOSITORY")
-    if repository:
-        server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
-        return f"{server.rstrip('/')}/{repository}"
+    """Find the project's web URL from Actions or the git remote.
+
+    Codespaces also sets ``GITHUB_REPOSITORY``, to the repository the codespace
+    was opened from. That is not this project, so those variables are trusted
+    only when ``GITHUB_ACTIONS`` is ``true``.
+    """
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        repository = os.environ.get("GITHUB_REPOSITORY")
+        if repository:
+            server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+            return f"{server.rstrip('/')}/{repository}"
     remote = _git(root, "config", "--get", "remote.origin.url")
     return _normalize_remote(remote) if remote else None
 
 
 def detect_ref(root: str | Path) -> str | None:
-    """Prefer the exact commit so links keep pointing at the reviewed code."""
-    return os.environ.get("GITHUB_SHA") or _git(root, "rev-parse", "HEAD")
+    """Prefer the exact commit so links keep pointing at the reviewed code.
+
+    ``GITHUB_SHA`` is the Actions checkout, not the project HEAD. Codespaces
+    does not set it, but other environments can, so it is used only in Actions.
+    """
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        sha = os.environ.get("GITHUB_SHA")
+        if sha:
+            return sha
+    return _git(root, "rev-parse", "HEAD")
 
 
 def _normalize_remote(remote: str) -> str | None:
