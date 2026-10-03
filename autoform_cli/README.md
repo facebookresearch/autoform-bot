@@ -617,11 +617,11 @@ had there from what the environment does record, once per module:
 - Lean keeps a module's own parser entries in the order its commands added
   them, and parsed the declaration with some prefix of them. An entry naming
   a parser declared in the same module was added after that declaration
-  began, and so were the token and kind entries its attribute wrote just
-  before it; the prefix stops before the first entry so placed at or after
-  the declaration's start. Nothing places any other entry: a parser declared
-  in another module, a later `attribute [term_parser]`, or a token added by a
-  metaprogram may have been added anywhere before that point.
+  began; the prefix stops before the first entry so placed at or after the
+  declaration's start. Nothing places any other entry: the token and kind
+  entries written for such a parser, a parser declared in another module, a
+  later `attribute [term_parser]`, or a token added by a metaprogram may have
+  been added anywhere before that point.
 - A namespace's scoped entries, imported or the module's own, count as
   possibly active only when the file's text above the declaration contains
   the namespace's last component, since `namespace` and `open` name what they

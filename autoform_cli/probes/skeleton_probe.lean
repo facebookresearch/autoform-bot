@@ -482,37 +482,11 @@ def compiledImports (env : Environment) (modIdx : ModuleIdx) : Std.HashSet Name 
         work := work.push (i.module, everything || (all && i.importAll))
   return loaded.fold (init := {{}}) fun set m _ => set.insert m
 
-/-- Where the entries `ParserAttribute.add` writes for the parser entry at `i`
-begin: one token entry per token of the parser, in order and in the parser
-entry's scope, then one global kind entry per node kind, just before it.
-`none` when the entries before `i` are not exactly those. -/
-def attributeBlock (own : Array GrammarEntry) (i : Nat) (tokens : List String)
-    (kinds : Parser.SyntaxNodeKindSet) : Option Nat := Id.run do
-  let k := kinds.foldl (fun n _ _ => n + 1) 0
-  let t := tokens.length
-  if i < k + t then return none
-  let mut seen : NameSet := {{}}
-  for j in [i - k:i] do
-    match own[j]! with
-    | .global (.kind n) =>
-      if kinds.contains n && !seen.contains n then seen := seen.insert n else return none
-    | _ => return none
-  let start := i - k - t
-  let mut j := start
-  for tk in tokens do
-    match own[j]!, own[i]! with
-    | .global (.token s), .global _ => if s != tk then return none
-    | .scoped ns (.token s), .scoped ns' _ => if s != tk || ns != ns' then return none
-    | _, _ => return none
-    j := j + 1
-  return some start
-
 /-- The parser states `mod` can have had, as far as the environment shows. A
 module's entries are kept in the order Lean added them: global and scoped
 entries are added only on the main thread, as commands run. A parser entry
 naming a parser declared in the module comes after that declaration began,
-since the parser must exist; so do the entries `ParserAttribute.add` wrote
-for it just before. -/
+since the parser must exist. -/
 def moduleGrammar (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref SemanticCache) (mod : Name) :
     CommandElabM ModuleGrammar := do
   if let some known := (← cache.get).modules.get? mod then return known
@@ -559,12 +533,10 @@ def moduleGrammar (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref Semantic
       if let .global (.token tk) := e then importer := importer.insert tk tk
     let mut bound : Array (Option Position) := own.map fun _ => none
     for h : i in [0:own.size] do
-      if let .parser _ declName _ p _ := entryOf own[i] then
+      if let .parser _ declName _ _ _ := entryOf own[i] then
         if env.getModuleIdxFor? declName == some modIdx then
           if let some r ← findDeclarationRanges? declName then
             bound := bound.set! i (some r.range.pos)
-            if let some start := attributeBlock own i (p.info.collectTokens []) (p.info.collectKinds {{}}) then
-              for j in [start:i] do bound := bound.set! j (some r.range.pos)
     let mut after := #[]
     let mut latest : Option Position := none
     for b in bound do

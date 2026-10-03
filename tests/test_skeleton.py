@@ -3286,6 +3286,44 @@ def test_a_token_registered_without_a_placeable_declaration_withholds_the_source
         assert item.source is None and item.source_withheld, name
         assert "SECRET" not in node.blind_text()
 
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_metaprogram_token_before_a_later_parser_entry_withholds_the_source(tmp_path: Path) -> None:
+    # A metaprogram makes `!"` a token before `tieLeak`, so Lean read the
+    # `-- SECRET_TIE "` text there as a comment, and the `example` holds only
+    # because it did. The parser entry written later names `lateP`, declared
+    # after `tieLeak`, and writes no token of its own. Its position bounds that
+    # entry alone, not the earlier token, which may be active at `tieLeak`.
+    project = _project(tmp_path)
+    (project / "Skel" / "TieLeak.lean").write_text(
+        "import Lean\n"
+        "open Lean Parser\n"
+        "namespace Skel\n"
+        'syntax (name := nrBang) term:65 &" !\\" " term:66 : term\n'
+        "@[macro Skel.nrBang] def nrBangMacro : Macro := fun stx => pure stx[0]\n"
+        "end Skel\n"
+        'run_cmd Lean.Parser.parserExtension.add (.token "!\\"")\n'
+        'def Skel.tieLeak : String := "a" !" -- SECRET_TIE "\n'
+        '  "b"\n'
+        'example : Skel.tieLeak = "a" := rfl\n'
+        'def Skel.lateP : Parser := symbol " !\\" " >> termParser 66\n'
+        "run_cmd Lean.Parser.parserExtension.add (.parser `term ``Skel.lateP false "
+        '(Lean.Parser.symbol " !\\" " >> Lean.Parser.termParser 66) 0)\n'
+        "theorem Skel.tieRoot (h : Skel.tieLeak = Skel.tieLeak) : True := trivial\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.TieLeak")
+    blueprint = _blueprint(tmp_path, lean={"tie": "Skel.tieRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    node = report.node("basics/tie")
+    assert node is not None
+    (item,) = node.declarations[0].trusted
+    assert item.name == "Skel.tieLeak"
+    assert item.source is None and item.source_withheld
+    assert "SECRET" not in node.blind_text()
+
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_a_scoped_token_an_open_may_activate_withholds_the_source(tmp_path: Path) -> None:
