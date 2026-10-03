@@ -3402,6 +3402,53 @@ def test_a_namespace_a_macro_opens_withholds_a_source_its_token_changes(tmp_path
     assert "SECRET" not in node.blind_text()
 
 
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_quotation_naming_a_parser_withholds_the_source(tmp_path: Path) -> None:
+    # Inside `namespace Skel.Dq`, Lean resolves the `bar` of `` `(bar| …) `` to
+    # `Skel.Dq.bar` and reads the quotation with its `!"` token, so the
+    # `-- SECRET_DYNQ "` text was a comment, as the `run_cmd` checks. Resolved
+    # outside the namespace, `bar` is the root parser, under which that text
+    # is a string. A `term` quotation names a category, which resolves the
+    # same everywhere, and keeps its comment ranges.
+    project = _project(tmp_path)
+    (project / "Skel" / "DynQ.lean").write_text(
+        "import Lean\n"
+        "open Lean\n"
+        "namespace Skel.Dq\n"
+        'syntax bar := "!\\"" str\n'
+        "end Skel.Dq\n"
+        'syntax bar := "!" str str\n'
+        "namespace Skel.Dq\n"
+        'def leak : MacroM Syntax := `(bar| !" -- SECRET_DYNQ "\n'
+        '  "x")\n'
+        "def cat : MacroM Syntax := `(term| 1 + -- note cat\n"
+        "  2)\n"
+        "run_cmd do\n"
+        "  let s ← Lean.Elab.liftMacroM leak\n"
+        '  unless s.isOfKind `Skel.Dq.bar && s.getNumArgs == 2 do throwError "read as code"\n'
+        "end Skel.Dq\n"
+        "theorem Skel.dynRoot (h : Skel.Dq.leak = Skel.Dq.cat) : True := trivial\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.DynQ")
+    blueprint = _blueprint(tmp_path, lean={"dyn": "Skel.dynRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    node = report.node("basics/dyn")
+    assert node is not None
+    trusted = {item.name: item for item in node.declarations[0].trusted}
+    assert set(trusted) == {"Skel.Dq.leak", "Skel.Dq.cat"}
+    leak = trusted["Skel.Dq.leak"]
+    assert leak.source is None and leak.source_withheld
+    cat = trusted["Skel.Dq.cat"]
+    assert cat.source is not None and not cat.source_withheld
+    assert cat.source_comments == (_comment_range(cat.source, "--", None),)
+    assert "SECRET" not in node.blind_text()
+
+
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_the_probe_rebuilds_each_modules_grammar_once(tmp_path: Path) -> None:
     # Two roots in CacheA trust declarations of CacheA and CacheB. Each

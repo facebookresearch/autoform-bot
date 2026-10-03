@@ -633,21 +633,25 @@ comment ranges only when every state under which the source parses agrees on
 the text and on where each comment lies. Because the state Lean had is one of
 them, a state under which the source fails to parse is not it. Otherwise, or
 when no state parses the source, when it holds an `open` of one of those
-namespaces, or when there are more than 256 states, a source that may hold a
-comment is withheld. Substring rules against one table, which withhold
-whenever a doubtful token occurs in the text, were set aside because they
-can only guess which occurrences change the lexing, while parsing decides
-that with Lean's own parser under every state the environment leaves open. A
-withheld source leaves the declaration's signatures and kernel material in
-the packet and does not make the article unresolved. What the probe cannot
-prove, and so can get wrong, showing code as a comment or a comment as
-code: `local` syntax, which Lean records nowhere; a metaprogram that changes
-the parser state without recording an entry, records a parser entry naming
-a declaration made later in the module, or gives a declaration a range
-outside the command that made it; a parser that reads the environment or options beyond the parser
-state, or input past the declaration's end; an initializer that changes the
-builtin grammar; and a source with CRLF line ends, whose offsets the probe
-takes from the text as Lean stores it.
+namespaces or a quotation `` `(p| …) `` whose `p` names a parser rather than
+a category (Lean resolved that name in the current namespace and under the
+`open`s in force, which the probe's parse does not have), or when there are
+more than 256 states, a source that may hold a comment is withheld.
+Substring rules against one table, which withhold whenever a doubtful token
+occurs in the text, were set aside because they can only guess which
+occurrences change the lexing, while parsing decides that with Lean's own
+parser under every state the environment leaves open. A withheld source
+leaves the declaration's signatures and kernel material in the packet and
+does not make the article unresolved. What the probe cannot prove, and so
+can get wrong, showing code as a comment or a comment as code: `local`
+syntax, which Lean records nowhere; a metaprogram that changes the parser
+state without recording an entry, records a parser entry naming a
+declaration made later in the module, or gives a declaration a range
+outside the command that made it; a parser that reads the environment, the
+options, the current namespace or the `open`s beyond the parser state, or
+input past the declaration's end; an initializer that changes the builtin
+grammar; and a source with CRLF line ends, whose offsets the probe takes
+from the text as Lean stores it.
 
 Every item's signature is also printed raw, bypassing project notation,
 unexpanders, and custom delaborators, so an `infixl " + " => HMul.hMul` cannot

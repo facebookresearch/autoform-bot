@@ -583,6 +583,14 @@ partial def opensScoped (namespaces : Array Name) (stx : Syntax) : Bool :=
       namespaces.any fun q => n.isPrefixOf q.componentsRev) ||
     stx.getArgs.any (opensScoped namespaces)
 
+/-- Whether `stx` holds a quotation `` `(p| …) `` whose `p` is not a parser
+category. Lean resolved such a `p` in the current namespace and under the
+`open`s in force, which the probe's parse does not have, and read the
+quotation with the tokens of the parser it found. -/
+partial def quotesParser (env : Environment) (stx : Syntax) : Bool :=
+  (stx.isOfKind ``Parser.Term.dynamicQuot && !Parser.isParserCategory env stx[1].getId.eraseMacroScopes) ||
+    stx.getArgs.any (quotesParser env)
+
 /-- A declaration's source as the probe parses it. -/
 structure Snippet where
   text : String
@@ -597,7 +605,8 @@ structure Snippet where
 
 /-- Parse `input`, starting at `column`, as one command of the grammar in
 `env`: `none` when it does not parse, and an error when it opens one of
-`namespaces`, which leaves the parse unknown. -/
+`namespaces` or quotes with a parser it names, which leaves the parse
+unknown. -/
 def parseCommand (env : Environment) (column : Nat) (namespaces : Array Name) (input : String) :
     Except Unit (Option (Syntax × ByteArray)) :=
   let padded := "".pushn ' ' column ++ input
@@ -607,7 +616,8 @@ def parseCommand (env : Environment) (column : Nat) (namespaces : Array Name) (i
   let s := p.run ictx {{ env, options := {{}} }} tokens {{ Parser.mkParserState padded with pos := ⟨column⟩ }}
   if s.allErrors.isEmpty && ictx.atEnd s.pos then
     let stx := s.stxStack.back
-    if opensScoped namespaces stx then .error () else .ok (some (stx, padded.toUTF8))
+    if opensScoped namespaces stx || quotesParser env stx then .error ()
+    else .ok (some (stx, padded.toUTF8))
   else .ok none
 
 /-- The one result every grammar under which a source parses gives: `none`
