@@ -62,6 +62,11 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     assert "private declaration safety as fail-closed evidence" in normalized
     assert "official user name" in normalized
     assert "by source coordinates" in normalized
+    assert "regenerate `production_module_roots`" in normalized
+    assert "from Lake package configs" in normalized
+    assert "private creation bundle, catalog identity" in normalized
+    assert "complete `lake update` manifest" in normalized
+    assert "direct-Mathlib-only manifest is invalid" in normalized
 
 
 def test_agent_review_treats_skeleton_hashes_as_advisory(repo_root: Path) -> None:
@@ -83,6 +88,16 @@ def test_quick_start_keeps_the_cli_agent_facing(repo_root: Path) -> None:
     assert "users do not need to learn or run its commands" in normalized
     assert "/autoform:setup" in quick_start
     assert "uv run autoform" not in quick_start
+
+
+def test_setup_guidance_uses_the_offline_atomic_project_creator(repo_root: Path) -> None:
+    setup = (repo_root / "skills" / "setup" / "SKILL.md").read_text(encoding="utf-8")
+    normalized = " ".join(setup.split())
+
+    assert "autoform project new <TARGET>" in normalized
+    assert "never overwrites an existing target" in normalized
+    assert "without running Git, Lake, Lean, or network operations" in normalized
+    assert "fails closed" in normalized and "including Windows" in normalized
 
 
 def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
