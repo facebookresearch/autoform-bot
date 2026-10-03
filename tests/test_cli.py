@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+import autoform_cli.__main__ as cli
 from autoform_cli.__main__ import main
 from autoform_cli.runtime import load_runtime_graph
 
@@ -112,3 +115,74 @@ def test_audit_cli_reports_stable_json_and_failure(tmp_path: Path, capsys) -> No
             }
         ],
     }
+
+
+def _with_body(tmp_path: Path, body: str) -> Path:
+    blueprint = _clean_blueprint(tmp_path)
+    article = blueprint / "roadmap" / "result.md"
+    article.write_text(
+        article.read_text(encoding="utf-8").replace("A precise statement.\n", f"A precise statement.\n\n{body}\n"),
+        encoding="utf-8",
+    )
+    return blueprint
+
+
+@pytest.mark.parametrize(
+    ("body", "issue"),
+    [
+        ("<img/src=x onerror=alert(1)>", "raw HTML is not allowed: the site would publish"),
+        ("Some <span style='display:none'>hidden</span> text.", "raw HTML is not allowed: <span>"),
+        ("Fish &amp; chips.", "HTML character references are not allowed: &amp;"),
+        ("<!-- a note that never ends", "HTML comments are not allowed"),
+        ("<script>alert(1)</script>", "raw HTML is not allowed: <script>"),
+    ],
+)
+def test_check_refuses_raw_html_in_an_article(tmp_path: Path, capsys, body: str, issue: str) -> None:
+    blueprint = _with_body(tmp_path, body)
+
+    assert main(["check", str(blueprint)]) == 1
+    output = capsys.readouterr().out
+    assert f"error: result: line 9: {issue}" in output
+    assert "OK:" not in output
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<!-- a note to the authors -->",
+        "```lean\ntheorem lt : (1 : Nat) < 2 := by decide\n```",
+        "For $a < b$ and $b > c$.",
+    ],
+)
+def test_check_allows_comments_code_and_formulas(tmp_path: Path, capsys, body: str) -> None:
+    """Deliberate guard: what an article may still say."""
+
+    blueprint = _with_body(tmp_path, body)
+
+    assert main(["check", str(blueprint)]) == 0, capsys.readouterr().out
+
+
+def test_check_judges_the_articles_its_graph_loaded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """The verdict is about the articles the graph parsed; markup written after
+    the load is judged by the next check, never paired with the earlier parse."""
+
+    blueprint = _clean_blueprint(tmp_path)
+    article = blueprint / "roadmap" / "result.md"
+    load = cli.load_graph
+
+    def load_then_edit(*args: object, **kwargs: object) -> object:
+        graph = load(*args, **kwargs)
+        article.write_text(
+            article.read_text(encoding="utf-8").replace(
+                "A precise statement.\n", "A precise statement.\n\n<script>alert(1)</script>\n"
+            ),
+            encoding="utf-8",
+        )
+        return graph
+
+    monkeypatch.setattr(cli, "load_graph", load_then_edit)
+    assert main(["check", str(blueprint)]) == 0, capsys.readouterr().out
+    monkeypatch.undo()
+
+    assert main(["check", str(blueprint)]) == 1
+    assert "error: result: line 9: raw HTML is not allowed: <script>" in capsys.readouterr().out

@@ -9,7 +9,9 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,11 +32,17 @@ from autoform_cli.skeleton import (
     TrustedDeclaration,
     SkeletonError,
     UnresolvedTarget,
+    _CommandTimedOut,
+    _PROBE_POOL,
     _PROCESS_TERMINATION_GRACE,
+    _PROCESS_TOKEN_ENV,
+    _ProbeEnvironmentError,
+    _SignalGuard,
     _declaration,
     _install_output,
     _join_readers,
     _remove_output,
+    _run_module_probes,
     _rename_no_replace,
     _run_bounded_command,
     _replace_outputs,
@@ -45,7 +53,12 @@ from autoform_cli.skeleton import (
     _process_is_alive,
     _project_control_snapshot,
     _without_comments,
+    _probe_modules,
     _probe_record_issue,
+    _probe_workers,
+    _read_probe_records,
+    _remember_tagged_processes,
+    _render_probe_helper,
     extract_skeletons,
     format_report,
     lean_libraries,
@@ -240,6 +253,24 @@ def _fake_found_record() -> dict[str, object]:
     return parse_probe_output(_fake_probe_output())["Skel.observation_determined"]
 
 
+def _fake_default_probe(monkeypatch, probe) -> list[tuple[str, ...]]:
+    """Stand in for Lake and Lean behind the default runner.
+
+    ``probe(program, lean_root)`` answers each per-module probe. Returns the
+    module lists the hoisted Lake freshness check was asked about.
+    """
+
+    checks: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        "autoform_cli.skeleton._check_build_freshness", lambda root, modules, **kwargs: checks.append(modules)
+    )
+    monkeypatch.setattr(
+        "autoform_cli.skeleton._build_probe_helper", lambda root, directory, **kwargs: directory
+    )
+    monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda program, root, **kwargs: probe(program, root))
+    return checks
+
+
 def _fake_report(tmp_path: Path, output: str | None = None) -> SkeletonReport:
     """Extract the fixture's one-article blueprint against the fake (or given) probe output."""
 
@@ -267,14 +298,28 @@ def test_probe_spells_names_without_trusting_lean_to_parse_them() -> None:
         roots=("Skel.observation_determined",),
         project_roots=("Skel",),
     )
+    helper = _render_probe_helper()
 
-    assert probe.startswith("import Skel.Defs\nimport Skel.Main\n")
-    assert 'Name.str (Name.str (Name.anonymous) "Skel") "observation_determined"' in probe
-    assert f'"{PROBE_MARKER}' in probe
-    assert "def probeOutputLimit : Nat := 67108864" in probe
-    assert 'Name.str (Name.anonymous) "Init"' in probe
-    assert "info.fromClass" in probe
-    assert "privateToUserName c" in probe
+    assert probe.startswith("import Skel.Defs\nimport Skel.Main\nimport «autoform-skeleton-helper»\n")
+    assert 'Lean.Name.str (Lean.Name.str (Lean.Name.anonymous) "Skel") "observation_determined"' in probe
+    assert f'"{PROBE_MARKER}' in helper
+    assert "def probeOutputLimit : Nat := 67108864" in helper
+    assert 'Lean.Name.str (Lean.Name.anonymous) "Init"' in helper
+    assert "info.fromClass" in helper
+    assert "privateToUserName c" in helper
+
+
+def test_probe_elaborates_no_helper_under_the_project_imports() -> None:
+    probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
+
+    # Only this call elaborates with the project in scope, and it opens nothing.
+    assert probe.splitlines() == [
+        "import Skel.Main",
+        "import «autoform-skeleton-helper»",
+        'run_cmd AutoformSkeleton.main [Lean.Name.str (Lean.Name.anonymous) "Skel"] '
+        '[("Skel.x", Lean.Name.str (Lean.Name.str (Lean.Name.anonymous) "Skel") "x")]',
+    ]
+    assert "set_option" not in _render_probe_helper()
 
 
 def test_probe_transports_quoted_and_numeric_name_components_structurally() -> None:
@@ -285,8 +330,8 @@ def test_probe_transports_quoted_and_numeric_name_components_structurally() -> N
     )
 
     assert '"Skel.«quoted.name with space».2"' in probe
-    assert 'Name.str (Name.str (Name.anonymous) "Skel") "quoted.name with space"' in probe
-    assert "Name.num (Name.str" in probe
+    assert 'Lean.Name.str (Lean.Name.str (Lean.Name.anonymous) "Skel") "quoted.name with space"' in probe
+    assert "Lean.Name.num (Lean.Name.str" in probe
 
 
 def test_probe_refuses_to_render_nothing() -> None:
@@ -336,9 +381,9 @@ def test_probe_reports_a_failed_freshness_check_apart_from_stale_artifacts(
 
 
 def test_probe_semantic_schema_matches_the_python_reader() -> None:
-    probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
+    helper = _render_probe_helper()
 
-    assert re.findall(r'^def semanticSchema := "([^"]*)"$', probe, re.MULTILINE) == [SEMANTIC_SCHEMA]
+    assert re.findall(r'^def semanticSchema := "([^"]*)"$', helper, re.MULTILINE) == [SEMANTIC_SCHEMA]
 
 
 def _bounded(tmp_path: Path, program: str, **options: object) -> object:
@@ -406,14 +451,22 @@ def test_bounded_command_finds_a_descendant_that_escapes_its_process_group(
     tmp_path: Path,
 ) -> None:
     child_pid = tmp_path / "detached-child.pid"
+    staged_pid = tmp_path / "detached-child.pid.tmp"
+    # The child leaves the process group before it records its pid, and the
+    # parent exits only once that record exists, so the child has escaped by
+    # the time the command ends however slowly it starts.
     child_program = (
         "import os, pathlib, time; os.setsid(); "
-        f"pathlib.Path({str(child_pid)!r}).write_text(str(os.getpid())); time.sleep(30)"
+        f"pathlib.Path({str(staged_pid)!r}).write_text(str(os.getpid())); "
+        f"os.replace({str(staged_pid)!r}, {str(child_pid)!r}); time.sleep(30)"
     )
     parent_program = (
-        "import subprocess, sys; "
+        "import pathlib, subprocess, sys, time\n"
         f"subprocess.Popen([sys.executable, '-c', {child_program!r}], "
-        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)"
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "deadline = time.monotonic() + 5\n"
+        f"while not pathlib.Path({str(child_pid)!r}).exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.01)\n"
     )
 
     with pytest.raises(SkeletonError, match="descendant processes"):
@@ -505,6 +558,289 @@ def test_bounded_command_termination_signal_kills_the_process_group(
         survivors = [pid for pid in survivors if _pid_is_live(pid)]
         time.sleep(0.01)
     assert not survivors
+
+
+def _sleeping_probe(pids: Path) -> str:
+    """A command that records its pid and its child's, then outlives any test."""
+
+    return (
+        "import os, pathlib, subprocess, sys, time; "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+        f"pathlib.Path({str(pids)!r}).write_text(f'{{os.getpid()}} {{child.pid}}'); "
+        "time.sleep(60)"
+    )
+
+
+def _assert_no_survivors(pid_files: list[Path]) -> None:
+    deadline = time.monotonic() + 5
+    survivors = [int(pid) for path in pid_files if path.exists() for pid in path.read_text(encoding="utf-8").split()]
+    while survivors and time.monotonic() < deadline:
+        survivors = [pid for pid in survivors if _pid_is_live(pid)]
+        time.sleep(0.01)
+    assert not survivors
+
+
+def test_probe_pool_interruption_kills_every_workers_process_group(tmp_path: Path, monkeypatch) -> None:
+    pid_files = [tmp_path / "a.pids", tmp_path / "b.pids"]
+
+    def interrupt_once_both_run(*args, **kwargs):
+        deadline = time.monotonic() + 20
+        while not all(path.exists() and len(path.read_text(encoding="utf-8").split()) == 2 for path in pid_files):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        raise KeyboardInterrupt
+
+    def run(program: str, root: Path) -> str:
+        return _run_bounded_command([sys.executable, "-c", program], cwd=root, timeout=60, context="test probe").stdout
+
+    monkeypatch.setattr("autoform_cli.skeleton._probe_workers", lambda jobs: jobs)
+    monkeypatch.setattr("autoform_cli.skeleton.wait", interrupt_once_both_run)
+
+    with pytest.raises(KeyboardInterrupt):
+        _run_module_probes([("A", _sleeping_probe(pid_files[0])), ("B", _sleeping_probe(pid_files[1]))], run, tmp_path)
+
+    _assert_no_survivors(pid_files)
+
+
+def test_probe_pool_does_not_start_queued_probes_after_an_interrupt(tmp_path: Path, monkeypatch) -> None:
+    pid_files = [tmp_path / "a.pids", tmp_path / "b.pids"]
+
+    def interrupt_once_one_runs(*args, **kwargs):
+        deadline = time.monotonic() + 20
+        while not (pid_files[0].exists() and len(pid_files[0].read_text(encoding="utf-8").split()) == 2):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        raise KeyboardInterrupt
+
+    def run(program: str, root: Path) -> str:
+        return _run_bounded_command([sys.executable, "-c", program], cwd=root, timeout=60, context="test probe").stdout
+
+    monkeypatch.setattr("autoform_cli.skeleton._probe_workers", lambda jobs: 1)
+    monkeypatch.setattr("autoform_cli.skeleton.wait", interrupt_once_one_runs)
+
+    with pytest.raises(KeyboardInterrupt):
+        _run_module_probes([("A", _sleeping_probe(pid_files[0])), ("B", _sleeping_probe(pid_files[1]))], run, tmp_path)
+
+    assert not pid_files[1].exists()
+    _assert_no_survivors(pid_files)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
+@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM], ids=["int", "term"])
+def test_probe_pool_termination_signal_kills_every_workers_process_group(tmp_path: Path, signum: int) -> None:
+    pid_files = [tmp_path / "a.pids", tmp_path / "b.pids"]
+    driver = (
+        "import signal, sys; from pathlib import Path; "
+        "signal.signal(signal.SIGHUP, signal.SIG_DFL); "
+        "signal.signal(signal.SIGINT, signal.default_int_handler); "
+        "import autoform_cli.skeleton as skeleton; "
+        "skeleton._probe_workers = lambda jobs: jobs; "
+        "run = lambda program, root: skeleton._run_bounded_command("
+        "[sys.executable, '-c', program], cwd=root, timeout=60, context='test probe').stdout; "
+        "skeleton._run_module_probes(list(zip(('A', 'B'), sys.argv[1:])), run, Path.cwd())"
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    cli = subprocess.Popen(
+        [sys.executable, "-c", driver, *(_sleeping_probe(path) for path in pid_files)], cwd=tmp_path, env=env
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while not all(path.exists() and len(path.read_text(encoding="utf-8").split()) == 2 for path in pid_files):
+            assert time.monotonic() < deadline and cli.poll() is None
+            time.sleep(0.05)
+        os.kill(cli.pid, signum)
+        assert cli.wait(timeout=15) == -signum
+    finally:
+        if cli.poll() is None:
+            cli.kill()
+    _assert_no_survivors(pid_files)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
+def test_a_signal_as_the_probe_pool_starts_its_cleanup_does_not_skip_it(tmp_path: Path, monkeypatch) -> None:
+    # A worker fails with an error that is not a probe failure, and a SIGTERM
+    # lands as the pool first disarms its guard; the pool must still cancel
+    # and join every worker before the signal ends anything.
+    pid_file = tmp_path / "a.pids"
+    disarm = _SignalGuard.disarm
+    received: list[int] = []
+    joined: list[bool] = []
+
+    class Pool(ThreadPoolExecutor):
+        def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+            super().shutdown(wait=wait, cancel_futures=cancel_futures)
+            joined.append(wait)
+
+    def signal_on_first_disarm(self: _SignalGuard) -> None:
+        if self.armed and threading.current_thread() is threading.main_thread():
+            self._handle(signal.SIGTERM, None)
+        disarm(self)
+
+    def run(program: str, root: Path) -> str:
+        if program == "broken":
+            deadline = time.monotonic() + 20
+            while not (pid_file.exists() and len(pid_file.read_text(encoding="utf-8").split()) == 2):
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            raise RuntimeError("worker broke")
+        return _run_bounded_command([sys.executable, "-c", program], cwd=root, timeout=60, context="test probe").stdout
+
+    monkeypatch.setattr("autoform_cli.skeleton._probe_workers", lambda jobs: jobs)
+    monkeypatch.setattr("autoform_cli.skeleton._SignalGuard.disarm", signal_on_first_disarm)
+    monkeypatch.setattr("autoform_cli.skeleton.ThreadPoolExecutor", Pool)
+    before = set(threading.enumerate())
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: received.append(signum))
+    try:
+        with pytest.raises(SkeletonError, match="interrupted by SIGTERM"):
+            _run_module_probes([("A", _sleeping_probe(pid_file)), ("B", "broken")], run, tmp_path)
+        workers = [thread for thread in threading.enumerate() if thread not in before and thread.is_alive()]
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+    assert received == [signal.SIGTERM]
+    assert joined == [True]
+    assert workers == []
+    _assert_no_survivors([pid_file])
+
+
+_STALLING_LAKE = """\
+#!{python}
+import os, pathlib, subprocess, sys, time
+args = sys.argv[1:]
+phase = os.environ["FAKE_LAKE_PHASE"]
+
+
+def stall():
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    pathlib.Path(os.environ["FAKE_LAKE_PIDS"]).write_text(f"{{os.getpid()}} {{child.pid}}")
+    time.sleep(60)
+
+
+if args[:1] == ["--rehash"]:
+    sys.exit(0)
+if "-o" in args:
+    if phase == "helper":
+        stall()
+    pathlib.Path(args[args.index("-o") + 1]).write_bytes(b"")
+    sys.exit(0)
+stall()
+"""
+
+
+@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
+@pytest.mark.parametrize("signum", [signal.SIGTERM, getattr(signal, "SIGHUP", signal.SIGTERM)], ids=["term", "hup"])
+@pytest.mark.parametrize("phase", ["translate", "helper", "probe"])
+def test_a_termination_signal_during_extraction_removes_its_scratch(tmp_path: Path, phase: str, signum: int) -> None:
+    # Lake stalls while translating lakefile.lean, while building the probe
+    # helper, or while a probe runs; the signal must still remove every
+    # temporary directory the extraction made before it ends the process.
+    project = _project(tmp_path)
+    (project / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
+    if phase == "translate":
+        (project / "lakefile.toml").unlink()
+        (project / "lakefile.lean").write_text("import Lake\n", encoding="utf-8")
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "lake").write_text(_STALLING_LAKE.format(python=sys.executable), encoding="utf-8")
+    (bin_dir / "lake").chmod(0o755)
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    pid_file = tmp_path / "lake.pids"
+    driver = (
+        "import signal, sys; from pathlib import Path; "
+        "signal.signal(signal.SIGHUP, signal.SIG_DFL); "
+        "from autoform_cli.skeleton import extract_skeletons; "
+        "extract_skeletons(Path(sys.argv[1]), lean_root=Path(sys.argv[2]))"
+    )
+    env = os.environ.copy()
+    env.update(
+        PYTHONPATH=str(Path(__file__).resolve().parents[1]),
+        PATH=f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        TMPDIR=str(scratch),
+        FAKE_LAKE_PHASE=phase,
+        FAKE_LAKE_PIDS=str(pid_file),
+    )
+    cli = subprocess.Popen([sys.executable, "-c", driver, str(blueprint), str(project)], cwd=tmp_path, env=env)
+    try:
+        deadline = time.monotonic() + 30
+        while not pid_file.exists() or len(pid_file.read_text(encoding="utf-8").split()) < 2:
+            assert time.monotonic() < deadline and cli.poll() is None
+            time.sleep(0.05)
+        assert list(scratch.glob("autoform-skeleton-*"))
+        os.kill(cli.pid, signum)
+        assert cli.wait(timeout=15) == -signum
+    finally:
+        if cli.poll() is None:
+            cli.kill()
+    _assert_no_survivors([pid_file])
+    assert list(scratch.glob("autoform-skeleton-*")) == []
+
+
+def test_a_probe_cancelled_before_its_process_starts_never_starts_it(tmp_path: Path, monkeypatch) -> None:
+    # The pool is cancelled after a worker takes the probe and before it
+    # starts the process.
+    def run(program: str, root: Path) -> str:
+        _PROBE_POOL.cancelled.set()
+        return _run_bounded_command([sys.executable, "-c", program], cwd=root, timeout=60, context="test probe").stdout
+
+    def popen(*args, **kwargs):
+        raise AssertionError("a process started after the pool was cancelled")
+
+    monkeypatch.setattr("autoform_cli.skeleton.subprocess.Popen", popen)
+
+    (result,) = _run_module_probes([("A", "pass")], run, tmp_path).values()
+
+    assert isinstance(result, SkeletonError) and result.issues == ("test probe was cancelled",)
+
+
+def test_tagged_process_scan_skips_a_process_it_cannot_read(monkeypatch) -> None:
+    class Unreadable:
+        pid = 10**9 + 1
+
+        def environ(self) -> dict[str, str]:
+            raise SystemError("<built-in function proc_environ> returned a result with an exception set")
+
+    class Tagged:
+        pid = 10**9 + 2
+
+        def environ(self) -> dict[str, str]:
+            return {_PROCESS_TOKEN_ENV: "token"}
+
+        def create_time(self) -> float:
+            return 1.0
+
+    tagged = Tagged()
+    monkeypatch.setattr("autoform_cli.skeleton.psutil.process_iter", lambda: iter([Unreadable(), tagged]))
+    descendants: dict[tuple[int, float], object] = {}
+
+    _remember_tagged_processes("token", descendants, root_pid=1)  # type: ignore[arg-type]
+
+    assert descendants == {(tagged.pid, 1.0): tagged}
+
+
+def test_unreadable_probe_records_fail_only_that_probe(tmp_path: Path) -> None:
+    records = tmp_path / "records.out"
+    records.write_bytes(PROBE_MARKER.encode() + b"\xff\n")
+    with pytest.raises(SkeletonError, match="records are not valid UTF-8"):
+        _read_probe_records(records)
+    records.unlink()
+    records.mkdir()
+    with pytest.raises(SkeletonError, match="records could not be read"):
+        _read_probe_records(records)
+
+
+def test_probe_workers_follow_the_cpus_available_to_the_process(monkeypatch) -> None:
+    monkeypatch.setattr(os, "process_cpu_count", lambda: 3, raising=False)
+    assert _probe_workers(10) == 3
+    monkeypatch.delattr(os, "process_cpu_count")
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1}, raising=False)
+    assert _probe_workers(10) == 2
+    monkeypatch.delattr(os, "sched_getaffinity")
+    monkeypatch.setattr(os, "cpu_count", lambda: 64)
+    assert _probe_workers(10) == 8
+    assert _probe_workers(2) == 2
 
 
 def _pid_is_live(pid: int) -> bool:
@@ -603,6 +939,7 @@ def test_bounded_command_cleanup_reserves_time_and_reuses_final_deadline(
 def test_probe_freshness_and_execution_have_separate_budgets(tmp_path: Path, monkeypatch, probe: str) -> None:
     # On a Mathlib project the freshness check alone can take minutes, which
     # must not come out of the probe's own budget.
+    (tmp_path / "autoform-skeleton-helper.olean").write_bytes(b"")
     calls: list[float] = []
 
     def fake_run(command, **kwargs):
@@ -613,11 +950,12 @@ def test_probe_freshness_and_execution_have_separate_budgets(tmp_path: Path, mon
     monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
     monkeypatch.setattr("autoform_cli.skeleton.time.monotonic", lambda: next(times))
 
-    assert run_probe(probe, tmp_path, timeout=10, freshness_timeout=20) == "probe output"
+    assert run_probe(probe, tmp_path, timeout=10, freshness_timeout=20, helper=tmp_path) == "probe output"
     assert calls == [20, 9.0]
 
 
 def test_a_probe_timeout_names_the_flag_that_raises_it(tmp_path: Path, monkeypatch, probe: str) -> None:
+    (tmp_path / "autoform-skeleton-helper.olean").write_bytes(b"")
     bounded = _run_bounded_command
 
     def slow_probe(command, **kwargs):
@@ -627,13 +965,15 @@ def test_a_probe_timeout_names_the_flag_that_raises_it(tmp_path: Path, monkeypat
     monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", slow_probe)
 
     with pytest.raises(SkeletonError) as caught:
-        run_probe(probe, tmp_path, timeout=1)
+        run_probe(probe, tmp_path, timeout=1, helper=tmp_path)
     assert caught.value.issues == (
         "lake env lean timed out after 1 seconds; rerun with --timeout <seconds> for large projects",
     )
 
 
 def test_probe_records_file_is_held_to_the_output_limit(tmp_path: Path, monkeypatch, probe: str) -> None:
+    (tmp_path / "autoform-skeleton-helper.olean").write_bytes(b"")
+
     def flooding_probe(command, *, env, **kwargs):
         Path(env[PROBE_OUTPUT_ENV]).write_text("x" * 2048, encoding="utf-8")
         return subprocess.CompletedProcess(command, 0, "", "")
@@ -643,7 +983,7 @@ def test_probe_records_file_is_held_to_the_output_limit(tmp_path: Path, monkeypa
     monkeypatch.setattr("autoform_cli.skeleton.DEFAULT_PROBE_OUTPUT_LIMIT", 1024)
 
     with pytest.raises(SkeletonError, match="1024-byte output limit"):
-        run_probe(probe, tmp_path)
+        run_probe(probe, tmp_path, helper=tmp_path)
 
 
 def test_probe_requires_an_existing_lake_manifest(tmp_path: Path, monkeypatch) -> None:
@@ -678,6 +1018,17 @@ def test_parse_probe_output_rejects_wrong_types_duplicates_and_unrequested_roots
         parse_probe_output("\n".join([output, line]))
     with pytest.raises(SkeletonError, match="unrequested root"):
         parse_probe_output(output, expected_roots=("Skel.somewhere_else",))
+
+
+def test_parse_probe_output_keeps_an_error_the_probe_caught_on_one_root() -> None:
+    error = _record("Skel.ghost", error="unknown constant")
+    records = parse_probe_output("\n".join([_fake_probe_output(), error]))
+
+    assert records["Skel.ghost"] == {"root": "Skel.ghost", "error": "unknown constant"}
+    assert records["Skel.observation_determined"]["found"] is True
+    for bad in (_record("Skel.ghost", error=3), _record("Skel.ghost", error="x", found=False)):
+        with pytest.raises(SkeletonError, match="invalid error record for Skel.ghost"):
+            parse_probe_output(bad)
 
 
 def test_parse_probe_output_resolves_shared_entries_strictly() -> None:
@@ -829,11 +1180,11 @@ def test_unparsable_source_is_withheld_not_refused(tmp_path: Path) -> None:
     assert load_skeleton_report(path) == report
     # The flag cannot excuse source a report actually carries.
     data = json.loads(path.read_text(encoding="utf-8"))
-    data["trusted"][data["nodes"][0]["declarations"][0]["trusted"][2]]["source_withheld"] = True
+    data["trusted"]["Skel.Main"][data["nodes"][0]["declarations"][0]["trusted"][2]]["source_withheld"] = True
     _assert_load_rejects(path, data, "invalid withheld source flag")
     data = report.as_dict()
-    data["trusted"][eligible.name]["start_line"] = None
-    data["trusted"][eligible.name]["end_line"] = None
+    data["trusted"]["Skel.Main"][eligible.name]["start_line"] = None
+    data["trusted"]["Skel.Main"][eligible.name]["end_line"] = None
     _assert_load_rejects(path, data, "required source is missing")
 
 
@@ -884,21 +1235,51 @@ def test_lake_configuration_snapshot_uses_content_not_file_identity(
     tmp_path: Path, monkeypatch
 ) -> None:
     project = _project(tmp_path)
-    fstat = os.fstat
-    calls = 0
+    lakefile = project / "lakefile.toml"
+    open_file = os.open
+    saved = False
 
-    def unstable_file_identity(descriptor: int) -> os.stat_result:
-        nonlocal calls
-        calls += 1
-        values = list(fstat(descriptor))
-        values[1] += calls
-        return os.stat_result(values)
+    # An editor saves identical bytes between the two reads: a new file, the same content.
+    def save_identical_copy_after_first_open(path, flags, *args):
+        nonlocal saved
+        descriptor = open_file(path, flags, *args)
+        if Path(path) == lakefile and not saved:
+            saved = True
+            (tmp_path / "lakefile.copy").write_bytes(lakefile.read_bytes())
+            os.replace(tmp_path / "lakefile.copy", lakefile)
+        return descriptor
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.fstat", unstable_file_identity)
+    monkeypatch.setattr("autoform_cli.skeleton.os.open", save_identical_copy_after_first_open)
 
     (library,) = lean_libraries(project)
 
-    assert library.name == "Skel"
+    assert saved and library.name == "Skel"
+
+
+@pytest.mark.parametrize(
+    ("swap", "expected_error"),
+    [("symlink", "not a regular file"), ("file", "changed while it was read")],
+)
+def test_lake_configuration_snapshot_rejects_an_input_swapped_after_inspection(
+    tmp_path: Path, monkeypatch, swap: str, expected_error: str
+) -> None:
+    project = _project(tmp_path)
+    lakefile = project.resolve() / "lakefile.toml"
+    inspected = tmp_path / "inspected.toml"
+    inspected.write_bytes(lakefile.read_bytes())
+    if swap == "symlink":
+        lakefile.unlink()
+        lakefile.symlink_to(inspected)
+    lstat = Path.lstat
+
+    # The inspection sees a regular file; the open then meets what replaced it.
+    def inspect_before_swap(self: Path) -> os.stat_result:
+        return lstat(inspected) if self == lakefile else lstat(self)
+
+    monkeypatch.setattr(Path, "lstat", inspect_before_swap)
+
+    with pytest.raises(SkeletonError, match=expected_error):
+        lean_libraries(project)
 
 
 def test_project_control_snapshot_retains_only_fingerprints(tmp_path: Path) -> None:
@@ -1189,7 +1570,7 @@ def test_default_extraction_rejects_input_changed_during_probe(
         os.utime(path, ns=(later, later))
         return _fake_probe_output()
 
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", changing_probe)
+    _fake_default_probe(monkeypatch, changing_probe)
 
     with pytest.raises(SkeletonError, match=match):
         extract_skeletons(blueprint, lean_root=project)
@@ -1248,9 +1629,9 @@ def test_extraction_rejects_a_passage_changed_during_probe(tmp_path: Path, monke
         source.write_text("after\n", encoding="utf-8")
         return _fake_probe_output()
 
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", changing_probe)
+    _fake_default_probe(monkeypatch, changing_probe)
 
-    with pytest.raises(SkeletonError, match="source passage changed"):
+    with pytest.raises(SkeletonError, match="blueprint changed while skeletons were being extracted"):
         extract_skeletons(blueprint, lean_root=project)
 
 
@@ -1315,8 +1696,10 @@ def test_probe_comment_ranges_must_cover_comments(tmp_path: Path, ranges: object
     record = _fake_found_record()
     record["statement_comments"] = ranges
 
-    with pytest.raises(SkeletonError, match="invalid statement_comments"):
-        _fake_report(tmp_path, _probe_lines(record))
+    # A malformed record fails its module's probe, which leaves that module's roots unresolved.
+    (issue,) = _fake_report(tmp_path, _probe_lines(record)).unresolved
+    assert issue.reason.startswith("probe of module Skel.Main failed: ")
+    assert "invalid statement_comments" in issue.reason
 
 
 @pytest.mark.parametrize(
@@ -1330,6 +1713,8 @@ def test_probe_comment_ranges_must_cover_comments(tmp_path: Path, ranges: object
         ("../../sources/missing.tex#L1-L1", "names a missing file"),
         ("../../sources/binary.tex#L1-L1", "not readable UTF-8 text"),
         ("../../../outside.tex#L1-L1", "points outside the blueprint"),
+        ("../../sources/chapter#L1-L1", "names something other than a regular file"),
+        ("../../sources/%00book.tex#L1-L1", "contains an invalid path"),
     ],
 )
 def test_extraction_reports_a_locator_that_names_no_passage(tmp_path: Path, link: str, why: str) -> None:
@@ -1337,6 +1722,7 @@ def test_extraction_reports_a_locator_that_names_no_passage(tmp_path: Path, link
     blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
     sources = blueprint / "sources"
     sources.mkdir()
+    (sources / "chapter").mkdir()
     (sources / "book.tex").write_text("one\ntwo\nthree\n", encoding="utf-8")
     (sources / "empty.tex").write_text("", encoding="utf-8")
     (sources / "binary.tex").write_bytes(b"\xff\xfe\n")
@@ -1355,6 +1741,31 @@ def test_extraction_reports_a_locator_that_names_no_passage(tmp_path: Path, link
     report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
     assert report.clean
     assert report.nodes[0].passage == "two\nthree"
+
+
+def test_markdown_locator_is_a_note_whatever_the_case_of_its_suffix(tmp_path: Path) -> None:
+    # Audit reads `NOTES.MD` as Markdown, so its fragment names a heading, not lines.
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    sources = blueprint / "sources"
+    sources.mkdir()
+    (sources / "NOTES.MD").write_text("# Notes\n", encoding="utf-8")
+    (sources / "book.tex").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    article = blueprint / "roadmap" / "basics" / "determined.md"
+    article.write_text(
+        article.read_text(encoding="utf-8").replace(
+            "## Depends on",
+            "## Sources\n\n- [notes](../../sources/NOTES.MD#L1-L1)\n"
+            "- [book](../../sources/book.tex#L2-L3)\n\n## Depends on",
+        ),
+        encoding="utf-8",
+    )
+
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
+
+    assert report.clean
+    assert report.nodes[0].passage == "two\nthree"
+    assert report.nodes[0].passage_locator == "sources/book.tex#L2-L3"
 
 
 def test_node_selection_rejects_unknown_articles(tmp_path: Path) -> None:
@@ -1426,6 +1837,315 @@ def test_report_distinguishes_full_and_filtered_blueprint_scope(tmp_path: Path) 
     assert full.to_json() != filtered.to_json()
 
 
+#: The fixture module that declares each root the per-module fake probe answers for.
+_FAKE_ROOT_MODULES = {
+    "Skel.observation_determined": "Skel.Main",
+    "Skel.supervision_nonAmbiguous": "Skel.Main",
+    "Skel.heavy_of_notation": "Skel.Uses",
+    "Skel.ScopedA.activatesScope": "Skel.ScopedA",
+}
+
+
+def _fake_module_probe(probe: str, lean_root: Path) -> str:
+    """Answer one per-module probe with a found record for each fixture root it names."""
+
+    modules = _probe_modules(probe)
+    lines: list[str] = []
+    for root, module in _FAKE_ROOT_MODULES.items():
+        if module in modules and f'"{root}"' in probe:
+            lines += _probe_lines({**_fake_found_record(), "root": root, "module": module}).splitlines()
+    return "\n".join(dict.fromkeys(lines))
+
+
+def test_each_probe_imports_only_its_roots_module(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(
+        tmp_path,
+        lean={
+            "determined": "Skel.observation_determined",
+            "notation": "Skel.heavy_of_notation",
+            "scoped": "Skel.ScopedA.activatesScope",
+        },
+    )
+    # An article whose passage cannot be read has no root to probe, so its module is not imported.
+    article = blueprint / "roadmap" / "basics" / "scoped.md"
+    article.write_text(
+        article.read_text(encoding="utf-8").replace(
+            "## Depends on", "## Sources\n\n- [book](sources/missing.txt#L1-L1)\n\n## Depends on"
+        ),
+        encoding="utf-8",
+    )
+    probes: list[str] = []
+    lock = threading.Lock()
+
+    def runner(probe: str, lean_root: Path) -> str:
+        with lock:
+            probes.append(probe)
+        return _fake_module_probe(probe, lean_root)
+
+    full = extract_skeletons(blueprint, lean_root=project, runner=runner)
+    full_probes = {_probe_modules(probe): probe for probe in probes}
+    probes.clear()
+    scoped = extract_skeletons(blueprint, lean_root=project, runner=runner, node_ids=("basics/determined",))
+
+    assert sorted(full_probes) == [("Skel.Main",), ("Skel.Uses",)]
+    assert '"Skel.heavy_of_notation"' in full_probes["Skel.Uses",]
+    assert '"Skel.heavy_of_notation"' not in full_probes["Skel.Main",]
+    # A subset selection renders the very same program for the module it keeps.
+    assert probes == [full_probes["Skel.Main",]]
+    assert scoped.node("basics/determined") == full.node("basics/determined")
+
+
+def _two_module_blueprint(tmp_path: Path) -> Path:
+    return _blueprint(
+        tmp_path, lean={"determined": "Skel.observation_determined", "notation": "Skel.heavy_of_notation"}
+    )
+
+
+def _fake_lake(monkeypatch, project: Path, answer) -> list[list[str]]:
+    """Run the default runner against a fake Lake; ``answer(modules, command, env)`` plays each probe.
+
+    Each probe is recorded as its command followed by the modules it imports.
+    """
+
+    (project / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
+    calls: list[list[str]] = []
+    lock = threading.Lock()
+
+    def fake_run(command, *, env=None, **kwargs):
+        if command[1] == "--rehash" or "-o" in command:
+            with lock:
+                calls.append(command)
+            if "-o" in command:
+                Path(command[command.index("-o") + 1]).write_bytes(b"")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        modules = _probe_modules(Path(command[-1]).read_text(encoding="utf-8"))
+        with lock:
+            calls.append([*command, *modules])
+        return answer(modules, command, env)
+
+    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
+    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
+    return calls
+
+
+def _answer_records(modules: tuple[str, ...], command: list[str], env: dict[str, str]):
+    probe = Path(command[-1]).read_text(encoding="utf-8")
+    Path(env[PROBE_OUTPUT_ENV]).write_text(_fake_module_probe(probe, Path.cwd()), encoding="utf-8")
+    return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+
+def test_a_probe_failure_reason_hides_the_helper_directory(tmp_path: Path, monkeypatch) -> None:
+    # The helper is compiled into the extraction's scratch directory, which
+    # is on the probe's search path; a reason that lists it must not change
+    # from one run to the next.
+    project = _project(tmp_path)
+
+    def answer(modules, command, env):
+        entries = "\n".join(env["LEAN_PATH"].split(os.pathsep))
+        return subprocess.CompletedProcess(
+            command, 1, stdout="", stderr=f"error: unknown module prefix 'Bogus'\nsearch path entries:\n{entries}"
+        )
+
+    _fake_lake(monkeypatch, project, answer)
+
+    report = extract_skeletons(
+        _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"}), lean_root=project
+    )
+
+    (issue,) = report.unresolved
+    assert "<scratch>" in issue.reason
+    assert "autoform-skeleton-" not in issue.reason
+
+
+def test_a_custom_runner_cannot_be_given_a_timeout_it_would_ignore(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+
+    with pytest.raises(ValueError, match="a custom runner bounds its own"):
+        extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: "", timeout=5)
+
+
+def test_lake_freshness_is_checked_once_before_one_probe_per_module(tmp_path: Path, monkeypatch) -> None:
+    project = _project(tmp_path)
+    calls = _fake_lake(monkeypatch, project, _answer_records)
+
+    report = extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project)
+
+    assert report.clean
+    assert calls[0] == ["/bin/lake", "--rehash", "--no-build", "build", "Skel.Main", "Skel.Uses"]
+    # The helpers are built once, after the freshness check and before any probe.
+    assert calls[1][1:4] == ["env", "lean", f"--root={Path(calls[1][-1]).parent}"]
+    assert calls[1][-1].endswith("/autoform-skeleton-helper.lean")
+    assert all(command[1:3] == ["env", "lean"] and "-o" not in command for command in calls[2:])
+    assert sorted(command[4:] for command in calls[2:]) == [["Skel.Main"], ["Skel.Uses"]]
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout", "malformed"])
+def test_a_failed_module_probe_leaves_only_its_roots_unresolved(
+    tmp_path: Path, monkeypatch, failure: str
+) -> None:
+    project = _project(tmp_path)
+
+    def answer(modules, command, env):
+        if "Skel.Uses" not in modules:
+            return _answer_records(modules, command, env)
+        if failure == "timeout":
+            raise _CommandTimedOut(["lake env lean timed out after 1 seconds"])
+        if failure == "malformed":
+            Path(env[PROBE_OUTPUT_ENV]).write_text(
+                "\n".join([_record("Skel.heavy_of_notation", found=False)] * 2), encoding="utf-8"
+            )
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="error: Skel.Uses broke")
+
+    _fake_lake(monkeypatch, project, answer)
+
+    report = extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project)
+
+    determined, notation = report.nodes
+    assert determined.complete and [d.name for d in determined.declarations] == ["Skel.observation_determined"]
+    assert not notation.complete and notation.declarations == ()
+    (issue,) = report.unresolved
+    assert (issue.node_id, issue.declaration) == ("basics/notation", "Skel.heavy_of_notation")
+    assert issue.reason.startswith("probe of module Skel.Uses failed: ")
+    assert {
+        "exit": "error: Skel.Uses broke",
+        "timeout": "rerun with --timeout <seconds>",
+        "malformed": "duplicate records for Skel.heavy_of_notation",
+    }[failure] in issue.reason
+
+
+def test_a_root_lean_declares_in_another_module_is_unresolved(tmp_path: Path) -> None:
+    # Its packet was printed where its source was found, not where Lean declares it.
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    output = _probe_lines({**_fake_found_record(), "module": "Skel.Defs"})
+
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
+
+    (issue,) = report.unresolved
+    assert issue.reason == "Lean declares it in module Skel.Defs, not in Skel.Main where its source was found"
+
+
+@pytest.mark.parametrize("passage", ["found", "broken"])
+def test_a_root_several_files_declare_fails_closed_naming_every_file(tmp_path: Path, passage: str) -> None:
+    # Lean accepts a private declaration beside a public one of the same name
+    # in another module, and two unrelated modules may each declare it; the
+    # lexical index cannot tell which one a probe would bind.
+    project = _project(tmp_path)
+    for module, prefix, value in (("Cdup", "", "2 = 2"), ("Adup", "private ", "True"), ("Bdup", "", "1 = 1")):
+        (project / "Skel" / f"{module}.lean").write_text(
+            f"namespace Skel\n{prefix}theorem dup : {value} := sorry\nend Skel\n", encoding="utf-8"
+        )
+    blueprint = _blueprint(tmp_path, lean={"dup": "Skel.dup"})
+    if passage == "broken":
+        article = blueprint / "roadmap" / "basics" / "dup.md"
+        article.write_text(
+            article.read_text(encoding="utf-8").replace(
+                "## Depends on", "## Sources\n\n- [book](../../sources/missing.tex#L1-L1)\n\n## Depends on"
+            ),
+            encoding="utf-8",
+        )
+    probes: list[str] = []
+
+    def runner(probe: str, root: Path) -> str:
+        probes.append(probe)
+        return _probe_lines({**_fake_found_record(), "root": "Skel.dup", "module": "Skel.Adup"})
+
+    report = extract_skeletons(blueprint, lean_root=project, runner=runner)
+
+    assert probes == [] and report.nodes[0].declarations == ()
+    (issue,) = report.unresolved
+    assert issue.reason.endswith("several source files declare it: Skel/Adup.lean, Skel/Bdup.lean, Skel/Cdup.lean")
+    assert issue.reason.startswith("source locator ") == (passage == "broken")
+
+
+def test_an_error_on_one_root_leaves_the_rest_of_its_module_resolved(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(
+        tmp_path, lean={"determined": "Skel.observation_determined", "supervision": "Skel.supervision_nonAmbiguous"}
+    )
+    error = f"unknown declaration in {project / 'Skel' / 'Main.lean'}"
+    output = "\n".join([_probe_lines(_fake_found_record()), _record("Skel.supervision_nonAmbiguous", error=error)])
+
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
+
+    nodes = {node.node_id: node for node in report.nodes}
+    assert nodes["basics/determined"].complete
+    assert not nodes["basics/supervision"].complete
+    (issue,) = report.unresolved
+    assert (issue.node_id, issue.declaration) == ("basics/supervision", "Skel.supervision_nonAmbiguous")
+    assert issue.reason == "the probe failed on this declaration: unknown declaration in Skel/Main.lean"
+
+
+def test_a_failed_probes_reason_reads_the_same_on_every_run(tmp_path: Path, monkeypatch) -> None:
+    project = _project(tmp_path)
+
+    def answer(modules, command, env):
+        if "Skel.Uses" not in modules:
+            return _answer_records(modules, command, env)
+        # Lean names the probe's temporary file and the project's own paths.
+        stderr = (
+            f"{command[-1]}:3:0: error: unknown module prefix\n"
+            f"{project / 'Skel' / 'Uses.lean'}:1:0: note: imported here\n" + "trace line\n" * 500
+        )
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr=stderr)
+
+    _fake_lake(monkeypatch, project, answer)
+    blueprint = _two_module_blueprint(tmp_path)
+    written = []
+    for name in ("first.json", "second.json"):
+        report = extract_skeletons(blueprint, lean_root=project)
+        written.append(write_skeleton_report(report, tmp_path / name).read_bytes())
+
+    assert written[0] == written[1]
+    (issue,) = report.unresolved
+    assert "<scratch>/AutoformSkeletonProbe.lean:3:0: error" in issue.reason
+    assert "\nSkel/Uses.lean:1:0: note" in issue.reason and str(tmp_path) not in issue.reason
+    assert len(issue.reason) <= 2000 and issue.reason.endswith(" more characters]")
+
+
+def test_a_failure_every_probe_would_share_stops_the_extraction(tmp_path: Path, monkeypatch) -> None:
+    project = _project(tmp_path)
+
+    def answer(modules, command, env):
+        if "Skel.Uses" not in modules:
+            return _answer_records(modules, command, env)
+        olean = project / ".lake" / "packages" / "dep" / "Std" / "Vendor.olean"
+        stderr = f"error: object file '{olean}' of module Std.Vendor does not exist"
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr=stderr)
+
+    _fake_lake(monkeypatch, project, answer)
+
+    with pytest.raises(SkeletonError, match="hides the toolchain's own `Std`"):
+        extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project)
+
+    # Without its compiled helpers no probe can run.
+    probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
+    (tmp_path / "helper").mkdir()
+    with pytest.raises(_ProbeEnvironmentError, match="helpers are missing"):
+        run_probe(probe, project, helper=tmp_path / "helper", check_freshness=False)
+
+
+def test_environmental_failures_still_abort_a_per_module_extraction(tmp_path: Path, monkeypatch) -> None:
+    # Labelled guard: stale artifacts concern every module, so nothing is probed.
+    project = _project(tmp_path)
+    calls = _fake_lake(monkeypatch, project, _answer_records)
+
+    def stale(command, **kwargs):
+        calls.append(command)
+        if command[1] == "--rehash":
+            return subprocess.CompletedProcess(command, 3, stdout="target is out-of-date", stderr="")
+        raise AssertionError("a probe ran after a failed freshness check")
+
+    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", stale)
+
+    with pytest.raises(SkeletonError, match="build artifacts are stale"):
+        extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project)
+    assert calls == [["/bin/lake", "--rehash", "--no-build", "build", "Skel.Main", "Skel.Uses"]]
+
+
 def test_report_is_identical_across_checkout_roots(tmp_path: Path) -> None:
     first, second = (_fake_report(tmp_path / name) for name in ("first", "second"))
 
@@ -1445,7 +2165,8 @@ def test_report_round_trips_through_json_deterministically(tmp_path: Path) -> No
     path.write_text(first, encoding="utf-8")
     assert load_skeleton_report(path) == report
 
-    for schema in ("autoform-skeleton/v1", "autoform-skeleton/v2", "autoform-skeleton/v3"):
+    _assert_load_rejects(path, {"schema": "something-else"})
+    for schema in ("autoform-skeleton/v1", "autoform-skeleton/v2", "autoform-skeleton/v3", "autoform-skeleton/v4"):
         legacy = report.as_dict()
         legacy["schema"] = schema
         _assert_load_rejects(path, legacy)
@@ -1482,14 +2203,16 @@ def test_report_states_shared_material_once(tmp_path: Path) -> None:
 
     first = report.to_json()
     data = json.loads(first)
-    assert sorted(data["trusted"]) == ["Skel.Eligible", "Skel.NonAmbiguous", "Skel.Observation"]
-    assert list(data["semantics"]) == ["Mathlib.Fake", "sorryAx"]
+    assert list(data["trusted"]) == ["Skel.Main"]
+    assert sorted(data["trusted"]["Skel.Main"]) == ["Skel.Eligible", "Skel.NonAmbiguous", "Skel.Observation"]
+    assert list(data["semantics"]) == ["Skel.Main"]
+    assert list(data["semantics"]["Skel.Main"]) == ["Mathlib.Fake", "sorryAx"]
     assert list(data["boundary_modules"]) == ["Mathlib.Fake"]
     for node in data["nodes"]:
         (declaration,) = node["declarations"]
         assert declaration["trusted"] == ["Skel.Eligible", "Skel.NonAmbiguous", "Skel.Observation"]
         assert declaration["boundary_modules"] == ["Mathlib.Fake"]
-    source = data["trusted"]["Skel.Eligible"]["source"]
+    source = data["trusted"]["Skel.Main"]["Skel.Eligible"]["source"]
     assert first.count(json.dumps(source, ensure_ascii=False)) == 1
     path = tmp_path / "skeleton.json"
     path.write_text(first, encoding="utf-8")
@@ -1497,16 +2220,136 @@ def test_report_states_shared_material_once(tmp_path: Path) -> None:
 
     for table, name in (("trusted", "Skel.Eligible"), ("semantics", "sorryAx"), ("boundary_modules", "Mathlib.Fake")):
         payload = json.loads(first)
-        payload[table]["Skel.Unused"] = payload[table][name]
+        entries = payload[table]["Skel.Main"] if table in {"trusted", "semantics"} else payload[table]
+        entries["Skel.Unused"] = entries[name]
         if table == "trusted":
-            payload[table]["Skel.Unused"] = dict(payload[table][name], name="Skel.Unused")
+            entries["Skel.Unused"] = dict(entries[name], name="Skel.Unused")
         _assert_load_rejects(path, payload, "not a canonical")
-        del payload[table]["Skel.Unused"], payload[table][name]
+        del entries["Skel.Unused"], entries[name]
         _assert_load_rejects(path, payload, "mismatched")
 
     payload = json.loads(first)
-    payload["trusted"]["Skel.Eligible"]["name"] = "Skel.NonAmbiguous"
+    payload["trusted"]["Skel.Main"]["Skel.Eligible"]["name"] = "Skel.NonAmbiguous"
     _assert_load_rejects(path, payload, "mismatched shared trusted declaration")
+
+
+def _two_module_report(tmp_path: Path) -> str:
+    project = _project(tmp_path)
+    report = extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project, runner=_fake_module_probe)
+    assert report.clean
+    return report.to_json()
+
+
+def test_report_keys_trusted_declarations_by_root_module(tmp_path: Path) -> None:
+    first = _two_module_report(tmp_path)
+    data = json.loads(first)
+    path = tmp_path / "skeleton.json"
+
+    # The same trusted declaration is stated once per root module, as each module prints it.
+    assert list(data["trusted"]) == ["Skel.Main", "Skel.Uses"]
+    assert data["trusted"]["Skel.Main"] == data["trusted"]["Skel.Uses"]
+    path.write_text(first, encoding="utf-8")
+    loaded = load_skeleton_report(path)
+    assert loaded.to_json() == first
+
+    # A declaration may name only trusted entries printed for its own root module.
+    payload = json.loads(first)
+    del payload["trusted"]["Skel.Uses"]
+    _assert_load_rejects(path, payload, "mismatched trusted declarations for Skel.heavy_of_notation")
+
+    payload = json.loads(first)
+    payload["trusted"]["Skel.Other"] = payload["trusted"]["Skel.Main"]
+    _assert_load_rejects(path, payload, "not a canonical")
+
+    payload = json.loads(first)
+    payload["trusted"]["Skel.Other"] = {}
+    _assert_load_rejects(path, payload, "malformed shared trusted table for root module Skel.Other")
+
+    payload = json.loads(first)
+    payload["trusted"] = payload["trusted"]["Skel.Main"]
+    _assert_load_rejects(path, payload)
+
+
+def _divergent_module_probe(probe: str, lean_root: Path) -> str:
+    """Answer like ``_fake_module_probe``, but ``Skel.Uses`` sees other constants under the same names."""
+
+    modules = _probe_modules(probe)
+    lines: list[str] = []
+    for root, module in _FAKE_ROOT_MODULES.items():
+        if module in modules and f'"{root}"' in probe:
+            record = {**_fake_found_record(), "root": root, "module": module}
+            if module == "Skel.Uses":
+                other = _semantic({"type": {"bvar": 0}})
+                record["assumed_semantics"] = [["Mathlib.Fake", other]]
+                record["axiom_semantics"] = [["sorryAx", other]]
+            lines += _probe_lines(record).splitlines()
+    return "\n".join(dict.fromkeys(lines))
+
+
+def test_report_keys_semantic_material_by_root_module(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    report = extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project, runner=_divergent_module_probe)
+    assert report.clean
+    first = report.to_json()
+    data = json.loads(first)
+    path = tmp_path / "skeleton.json"
+
+    # Two root modules whose imports declare different constants under one name each keep their own.
+    assert list(data["semantics"]) == ["Skel.Main", "Skel.Uses"]
+    for name in ("Mathlib.Fake", "sorryAx"):
+        assert data["semantics"]["Skel.Main"][name] != data["semantics"]["Skel.Uses"][name]
+    path.write_text(first, encoding="utf-8")
+    assert load_skeleton_report(path) == report
+
+    # A declaration may name only the material read in its own root module.
+    payload = json.loads(first)
+    payload["semantics"]["Skel.Uses"] = payload["semantics"]["Skel.Main"]
+    _assert_load_rejects(path, payload, "not a canonical")
+
+    payload = json.loads(first)
+    del payload["semantics"]["Skel.Uses"]
+    _assert_load_rejects(path, payload, "mismatched assumption semantics for Skel.heavy_of_notation")
+
+    payload = json.loads(first)
+    payload["semantics"]["Skel.Other"] = {}
+    _assert_load_rejects(path, payload, "malformed shared semantics table for root module Skel.Other")
+
+
+def test_cli_reports_conflicting_shared_material_as_an_error(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    project = _project(tmp_path)
+    blueprint = _two_module_blueprint(tmp_path)
+
+    def probe(program: str, lean_root: Path) -> str:
+        # The two probes disagree about the compiled files of one boundary module.
+        output = _fake_module_probe(program, lean_root)
+        if _probe_modules(program) == ("Skel.Uses",):
+            output = output.replace("Skel/Defs.lean", "Skel/Main.lean")
+        return output
+
+    _fake_default_probe(monkeypatch, probe)
+    output = tmp_path / "skeleton.json"
+
+    assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--output", str(output)]) == 2
+
+    assert "error: conflicting module identity for Mathlib.Fake in one skeleton report" in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_report_loader_rejects_a_v4_report_with_a_clear_message(tmp_path: Path) -> None:
+    payload = json.loads(_two_module_report(tmp_path))
+    payload["schema"] = "autoform-skeleton/v4"
+    payload["trusted"] = payload["trusted"]["Skel.Main"]
+    path = tmp_path / "skeleton.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SkeletonError) as refused:
+        load_skeleton_report(path)
+
+    assert "is an autoform-skeleton/v4 report; this version reads only autoform-skeleton/v5 reports" in str(
+        refused.value
+    )
 
 
 def test_report_loader_rejects_scope_tampering(tmp_path: Path) -> None:
@@ -1532,6 +2375,45 @@ def test_report_loader_rejects_scope_tampering(tmp_path: Path) -> None:
     payload = report.as_dict()
     payload["targets"][0]["declarations"].append("Skel.observation_determined")
     _assert_load_rejects(path, payload, "duplicate target declarations")
+
+
+_INCOHERENT_REPORTS = {
+    "has an invalid selection mode": lambda report: replace(report, selection="partial"),
+    "contains an invalid target set": lambda report: replace(report, targets=report.targets[::-1]),
+    "contains an invalid skeleton article selection": lambda report: replace(
+        report, selected_nodes=report.selected_nodes[::-1], nodes=report.nodes[::-1]
+    ),
+    "contains an incomplete all-article selection": lambda report: replace(
+        report, selected_nodes=report.selected_nodes[:1], nodes=report.nodes[:1]
+    ),
+    "contains an empty filtered article selection": lambda report: replace(
+        report, selection="filtered", selected_nodes=(), nodes=()
+    ),
+    "contains duplicate skeleton article ids": lambda report: replace(
+        report, nodes=(report.nodes[0], report.nodes[0])
+    ),
+    "does not contain exactly its selected articles": lambda report: replace(
+        report, targets=(), selected_nodes=()
+    ),
+    "contains an untargeted declaration for basics/determined": lambda report: replace(
+        report, targets=(("basics/determined", ("Skel.other",)), *report.targets[1:])
+    ),
+    "contains mismatched unresolved declarations": lambda report: replace(
+        report,
+        unresolved=(UnresolvedTarget("basics/determined", "Skel.observation_determined", "missing"),),
+    ),
+}
+
+
+@pytest.mark.parametrize("issue", sorted(_INCOHERENT_REPORTS))
+def test_an_incoherent_report_cannot_be_constructed(tmp_path: Path, issue: str) -> None:
+    project = _project(tmp_path)
+    report = extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project, runner=_fake_module_probe)
+    assert report.clean and [node.node_id for node in report.nodes] == ["basics/determined", "basics/notation"]
+
+    # dataclasses.replace runs the same checks as the loader, so no copy escapes them.
+    with pytest.raises(SkeletonError, match=f"skeleton report {re.escape(issue)}"):
+        _INCOHERENT_REPORTS[issue](report)
 
 
 def test_report_loader_rejects_mismatched_hashes_and_trust_identities(tmp_path: Path) -> None:
@@ -1562,7 +2444,7 @@ def test_report_loader_rejects_mismatched_hashes_and_trust_identities(tmp_path: 
     _assert_load_rejects(path, payload, "mismatched assumption semantics")
 
     payload = report.as_dict()
-    trusted = payload["trusted"][payload["nodes"][0]["declarations"][0]["trusted"][0]]
+    trusted = payload["trusted"]["Skel.Main"][payload["nodes"][0]["declarations"][0]["trusted"][0]]
     trusted["kind"] = "theorem"
     trusted["semantic"] = _semantic({"type": {"sort": {"zero": None}}})
     _assert_load_rejects(path, payload, "proof-bearing source is forbidden")
@@ -1591,7 +2473,7 @@ def _cli(tmp_path: Path, monkeypatch, *arguments: object) -> int:
 
     _project(tmp_path)
     _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
+    _fake_default_probe(monkeypatch, lambda probe, root: _fake_probe_output())
     command = ["skeleton", tmp_path / "blueprint", "--lean-root", tmp_path / "project", *arguments]
     return main([str(argument) for argument in command])
 
@@ -1602,7 +2484,7 @@ def test_cli_writes_the_artifact_and_fails_on_unresolved_names(tmp_path: Path, c
         tmp_path,
         lean={"determined": "Skel.observation_determined", "phantom": "Skel.doesNotExist"},
     )
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
+    _fake_default_probe(monkeypatch, lambda probe, root: _fake_probe_output())
     output = tmp_path / "out" / "skeleton.json"
 
     assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--output", str(output)]) == 1
@@ -1621,16 +2503,26 @@ def test_cli_writes_the_artifact_and_fails_on_unresolved_names(tmp_path: Path, c
 def test_cli_sets_the_probe_timeout(tmp_path: Path, capsys, monkeypatch) -> None:
     project = _project(tmp_path)
     blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
-    timeouts: list[float] = []
+    calls: list[dict[str, object]] = []
 
-    def fake_run_probe(probe: str, root: Path, *, timeout: float) -> str:
-        timeouts.append(timeout)
+    def fake_run_probe(probe: str, root: Path, **kwargs: object) -> str:
+        calls.append(kwargs)
         return _fake_probe_output()
 
-    monkeypatch.setattr("autoform_cli.__main__.run_probe", fake_run_probe)
+    def fake_build_helper(root: Path, directory: Path, **kwargs: object) -> Path:
+        calls.append(kwargs)
+        return directory
+
+    monkeypatch.setattr("autoform_cli.skeleton._check_build_freshness", lambda root, modules, **kwargs: None)
+    monkeypatch.setattr("autoform_cli.skeleton._build_probe_helper", fake_build_helper)
+    monkeypatch.setattr("autoform_cli.skeleton.run_probe", fake_run_probe)
     command = ["skeleton", str(blueprint), "--lean-root", str(project), "--json"]
     assert main([*command, "--timeout", "1800"]) == 0
-    assert timeouts == [1800.0]
+    # The timeout bounds the helper build and the probe; Lake's freshness check
+    # already ran for all of them.
+    helper = calls[1].pop("helper")
+    assert calls == [{"timeout": 1800.0}, {"timeout": 1800.0, "check_freshness": False}]
+    assert isinstance(helper, Path) and helper.name.startswith("autoform-skeleton-")
     for bad in ("0", "-5", "inf", "nan", "soon"):
         with pytest.raises(SystemExit):
             main([*command, "--timeout", bad])
@@ -1748,7 +2640,7 @@ def test_cli_does_not_publish_packets_when_report_staging_fails(
     passages = tmp_path / "passages"
     output = tmp_path / "skeleton.json"
 
-    def fail_report_stage(report: SkeletonReport, destination: Path):
+    def fail_report_stage(report: SkeletonReport, destination: Path, stages: list[Path]):
         raise OSError("simulated report staging failure")
 
     monkeypatch.setattr("autoform_cli.skeleton._stage_report_output", fail_report_stage)
@@ -1793,7 +2685,7 @@ def test_cli_rolls_back_packet_trees_and_report_when_interrupted_after_report_in
 ) -> None:
     project = _project(tmp_path)
     blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
+    _fake_default_probe(monkeypatch, lambda probe, root: _fake_probe_output())
     packets = tmp_path / "packets"
     passages = tmp_path / "passages"
     output = tmp_path / "skeleton.json"
@@ -2012,7 +2904,7 @@ def test_the_probe_reads_a_built_project(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_probe_records_bypass_the_command_capture_and_other_output(tmp_path: Path) -> None:
+def test_probe_records_bypass_the_command_capture_and_other_output(tmp_path: Path, monkeypatch) -> None:
     # Lean holds a command's `IO.println` output until the command ends, then
     # prints it at a cost quadratic in its size. A probe that leaves before its
     # command ends shows whether its records went past that capture, and a large
@@ -2022,12 +2914,17 @@ def test_probe_records_bypass_the_command_capture_and_other_output(tmp_path: Pat
     probe = render_probe(
         imports=("Skel.Main",), roots=("Skel.observation_determined",), project_roots=("Skel",)
     )
-    loop = next(line for line in probe.splitlines() if "AutoformSkeleton.skeleton projectRoots" in line)
-    leave = "    (← IO.getStdout).flush\n    let _ : Unit ← IO.Process.exit 0"
+    helper = _render_probe_helper()
+    # The probe leaves once every root's records are written.
+    loop_end = "  finally\n    out.flush\n"
+    assert helper.count(loop_end) == 1
+    leave = "    (← IO.getStdout).flush\n    let _ : Unit ← IO.Process.exit 0\n"
     noise = "#eval IO.println (String.mk (List.replicate 3000000 'x'))\n\n"
-    command = "set_option maxHeartbeats 0 in\nrun_cmd"
+    command = "run_cmd AutoformSkeleton.main"
     assert command in probe
-    probe = probe.replace(loop, f"{loop}\n{leave}").replace(command, f"{noise}{command}")
+    helper = helper.replace(loop_end, f"{leave}{loop_end}")
+    probe = probe.replace(command, f"{noise}{command}")
+    monkeypatch.setattr("autoform_cli.skeleton._render_probe_helper", lambda: helper)
 
     records = parse_probe_output(run_probe(probe, project), expected_roots=("Skel.observation_determined",))
 
@@ -2110,6 +3007,962 @@ def test_project_notation_cannot_disguise_the_statement(tmp_path: Path) -> None:
     assert "a + b" in (trusted.source or "")
     assert '"HMul"' in trusted.semantic and '"hMul"' in trusted.semantic
     assert f"-- canonical kernel material: {trusted.semantic}" in uses_disguised.blind_text()
+
+
+_PRINTING_MODULES = {
+    # Root-level names the probe's own helpers use.
+    "PktCollide": (
+        "inductive Expr where\n  | lit : Nat → Expr\n"
+        "def Name : Type := Nat\n"
+        "def Syntax : Type := Nat\n"
+        "def Json : Type := Nat\n"
+        "def Environment : Type := Nat\n"
+        "def Piece : Type := Nat\n"
+        "namespace Skel.PktCollide\n"
+        "def size : Expr → Nat := fun _ => 0\n"
+        "theorem size_lit : size (Expr.lit 1) = 0 := rfl\n"
+        "def zero : Name := (0 : Nat)\n"
+        "theorem zero_eq : zero = zero := rfl\n"
+        "end Skel.PktCollide\n"
+    ),
+    # Root-level names inside namespaces the helpers open.
+    "PktPrint": (
+        "inductive Term where\n  | var : Nat → Term\n"
+        "namespace Meta\ndef weight (n : Nat) : Nat := n + 1\nend Meta\n"
+        "namespace Skel.PktPrint\n"
+        "def ident (t : Term) : Term := t\n"
+        "theorem ident_var : ident (Term.var 1) = Term.var 1 := rfl\n"
+        "theorem weight_zero : Meta.weight 0 = 1 := rfl\n"
+        "end Skel.PktPrint\n"
+    ),
+}
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_signatures_print_as_in_a_file_that_imports_the_module(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    for module, source in _PRINTING_MODULES.items():
+        (project / "Skel" / f"{module}.lean").write_text(source, encoding="utf-8")
+    _build(project, *(f"Skel.{module}" for module in _PRINTING_MODULES))
+    blueprint = _blueprint(
+        tmp_path,
+        lean={
+            "sizes": "Skel.PktCollide.size_lit",
+            "zeros": "Skel.PktCollide.zero_eq",
+            "idents": "Skel.PktPrint.ident_var",
+            "weights": "Skel.PktPrint.weight_zero",
+        },
+    )
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean, report.unresolved
+    printed: dict[str, dict[str, str]] = {}
+    for node in report.nodes:
+        for declaration in node.declarations:
+            shown = printed.setdefault(declaration.module, {})
+            shown[declaration.name] = declaration.signature
+            shown.update((item.name, item.signature) for item in declaration.trusted)
+    assert set(printed) == {"Skel.PktCollide", "Skel.PktPrint"}
+    assert {"Expr", "Name", "Skel.PktCollide.size"} <= set(printed["Skel.PktCollide"])
+    assert {"Term", "Meta.weight", "Skel.PktPrint.ident"} <= set(printed["Skel.PktPrint"])
+    for module, signatures in printed.items():
+        check = tmp_path / f"check-{module}.lean"
+        check.write_text(
+            f"import {module}\n"
+            "set_option pp.funBinderTypes true\n"
+            "set_option pp.coercions.types true\n"
+            + "".join(f"#check {name}\n" for name in signatures),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["lake", "env", "lean", str(check)], cwd=project, capture_output=True, text=True, timeout=600, check=False
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stdout.splitlines() == list(signatures.values())
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_project_module_named_like_the_probe_helpers_stops_extraction(tmp_path: Path, monkeypatch) -> None:
+    project = _project(tmp_path)
+    _build(project, "Skel.Main")
+    shadow = tmp_path / "shadow"
+    shadow.mkdir()
+    (shadow / "autoform-skeleton-helper.olean").write_bytes(b"")
+    monkeypatch.setenv("LEAN_PATH", str(shadow))
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+
+    with pytest.raises(SkeletonError, match="already provides a module named «autoform-skeleton-helper»"):
+        extract_skeletons(blueprint, lean_root=project)
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_declaration_the_probe_cannot_print_leaves_its_module_resolved(tmp_path: Path) -> None:
+    project = _built_module(
+        tmp_path,
+        "PktRefuse",
+        "import Lean\n"
+        "open Lean PrettyPrinter Delaborator\n"
+        "namespace Skel.PktRefuse\n"
+        "def refused (n : Nat) : Nat := n\n"
+        '@[app_delab refused] def delabRefused : Delab := throwError "this delaborator refuses"\n'
+        "theorem bad : refused 1 = 1 := rfl\n"
+        "theorem good : 1 = 1 := rfl\n"
+        "end Skel.PktRefuse\n",
+    )
+    blueprint = _blueprint(tmp_path, lean={"bad": "Skel.PktRefuse.bad", "good": "Skel.PktRefuse.good"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    nodes = {node.node_id: node for node in report.nodes}
+    assert nodes["basics/good"].complete
+    (issue,) = report.unresolved
+    assert (issue.node_id, issue.declaration) == ("basics/bad", "Skel.PktRefuse.bad")
+    assert issue.reason == "the probe failed on this declaration: this delaborator refuses"
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_dead_copy_after_exit_does_not_move_a_declaration(tmp_path: Path) -> None:
+    # PktDead sorts first and, after `#exit`, repeats PktLive's theorem, which
+    # Lean never reads.
+    project = _project(tmp_path)
+    (project / "Skel" / "PktLive.lean").write_text(
+        "namespace Skel.PktLive\ntheorem rX : 5 = 5 := rfl\nend Skel.PktLive\n", encoding="utf-8"
+    )
+    (project / "Skel" / "PktDead.lean").write_text(
+        "import Skel.PktLive\n"
+        "namespace Skel.PktDead\ntheorem real : True := trivial\nend Skel.PktDead\n"
+        "#exit\n"
+        "namespace Skel.PktLive\ntheorem rX : 5 = 5 := rfl\nend Skel.PktLive\n",
+        encoding="utf-8",
+    )
+    build = subprocess.run(
+        ["lake", "build", "Skel.PktDead"], cwd=project, capture_output=True, text=True, timeout=600, check=False
+    )
+    assert build.returncode == 0, build.stdout + build.stderr
+    blueprint = _blueprint(tmp_path, lean={"live": "Skel.PktLive.rX"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    (declaration,) = report.nodes[0].declarations
+    assert (declaration.module, declaration.path) == ("Skel.PktLive", "Skel/PktLive.lean")
+
+
+def _comment_range(source: str, opener: str, closer: str | None = None) -> tuple[int, int]:
+    """The UTF-8 byte range from ``opener`` up to the end of the next ``closer``,
+    or up to the end of its line when there is no closer."""
+
+    data = source.encode()
+    start = data.index(opener.encode())
+    if closer is None:
+        return start, data.index(b"\n", start)
+    return start, data.index(closer.encode(), start) + len(closer.encode())
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_source_shows_only_comments_every_possible_token_table_agrees_on(tmp_path: Path) -> None:
+    # Each token below changes how the text before it lexes: `++"` and `++r`
+    # move a string's quotes, `+-` joins a comment opener's first `-`, and `+/`
+    # and `+/-` swallow a block comment's `/`. In PktLexAfter they are declared
+    # after the sources that contain them, so Lean read those as comments, and
+    # the probe, which proves the tokens absent there, shows the source without
+    # them. In PktLexBefore they may be active, so Lean may have read the same
+    # text as code, and the probe cannot tell; it shows none of it.
+    project = _project(tmp_path)
+    (project / "Skel" / "PktLexAfter.lean").write_text(
+        "namespace Skel.PktLexAfter\n"
+        'def leakQ : String := "a" ++" b " -- KEEPOUT_Q "\n'
+        '  ++ "c"\n'
+        'def leakR : String := "a" ++r"\\" -- KEEPOUT_R "\n'
+        '  ++ "z"\n'
+        "def joined (a b : Nat) : Nat := a +-- KEEPOUT_J\n"
+        "  b\n"
+        "def opened (a b : Nat) : Nat := a +/- KEEPOUT_O -/ b\n"
+        "theorem lexRoot (h : leakQ = leakR ∧ joined = opened) : True := trivial\n"
+        'infixl:65 " ++\\" " => fun (a _b : String) => a\n'
+        'infixl:65 " ++r " => fun (a _b : String) => a\n'
+        'infixl:65 " +- " => Nat.sub\n'
+        'infixl:65 " +/ " => Nat.sub\n'
+        "end Skel.PktLexAfter\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "PktLexBefore.lean").write_text(
+        "namespace Skel.PktLexBefore\n"
+        'infixl:65 " ++\\" " => fun (a _b : String) => a\n'
+        'infixl:65 " ++r " => fun (a _b : String) => a\n'
+        'infixl:65 " +- " => HSub.hSub\n'
+        'infixl:65 " +/- " => HAdd.hAdd\n'
+        'infixl:65 " -/ " => HSub.hSub\n'
+        'def leakQ (b : String → String) : String := "a" ++" b " -- CODE_Q "\n'
+        '  ++ "c"\n'
+        'def leakR : String := "a" ++r"\\" -- CODE_R "\n'
+        '  ++ "z"\n'
+        "def joined (a : Int) (code : Int → Int) : Int := a +-- code\n"
+        "  a\n"
+        "def opened (b : Nat) : Nat := 1 +/- b -/ 2\n"
+        "theorem lexRoot (h : leakQ = leakQ ∧ leakR = leakR ∧ joined = joined ∧ opened = opened) : True := trivial\n"
+        "end Skel.PktLexBefore\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.PktLexAfter", "Skel.PktLexBefore")
+    blueprint = _blueprint(
+        tmp_path, lean={"after": "Skel.PktLexAfter.lexRoot", "before": "Skel.PktLexBefore.lexRoot"}
+    )
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    after = report.node("basics/after")
+    assert after is not None
+    trusted = {item.name.rsplit(".", 1)[1]: item for item in after.declarations[0].trusted}
+    for name, opener, closer in [("leakQ", "--", None), ("leakR", "--", None), ("joined", "--", None),
+                                 ("opened", "/-", "-/")]:
+        item = trusted[name]
+        assert item.source is not None and not item.source_withheld, name
+        assert item.source_comments == (_comment_range(item.source, opener, closer),), name
+    assert "KEEPOUT" not in after.blind_text()
+    before = report.node("basics/before")
+    assert before is not None
+    for item in before.declarations[0].trusted:
+        assert item.source is None and item.source_withheld, item.name
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_token_registered_without_a_placeable_declaration_withholds_the_source(tmp_path: Path) -> None:
+    # Both modules make `!"` a token before their sources, so Lean read the
+    # `-- SECRET_…` text there as a comment, which a parse without the token
+    # reads as code in a string. AttrUse registers a parser declared in
+    # another module; RawUse writes the token and a parser entry naming that
+    # module's parser itself. Neither declaration is in the module, so its
+    # position bounds nothing there, and the token may be active.
+    project = _project(tmp_path)
+    parser = (
+        "import Lean\n"
+        "open Lean Parser\n"
+        "namespace Skel\n"
+        'syntax (name := bqKind) term:65 " ¡¡ " term:66 : term\n'
+        + "\n" * 40
+        + "{attr}def bangQuoteP : TrailingParser := "
+        'trailingNode `Skel.bqKind 65 0 (symbol " !\\" " >> termParser 66)\n'
+        "end Skel\n"
+    )
+    (project / "Skel" / "AttrDef.lean").write_text(
+        parser.format(attr="@[run_parser_attribute_hooks] "), encoding="utf-8"
+    )
+    (project / "Skel" / "AttrUse.lean").write_text(
+        "import Skel.AttrDef\n"
+        "attribute [term_parser] Skel.bangQuoteP\n"
+        "macro_rules | `($a ¡¡ $_b) => pure a\n"
+        'def Skel.attrLeak : String := "a" !" -- SECRET_ATTR "\n'
+        '  "b"\n'
+        "theorem Skel.attrRoot (h : Skel.attrLeak = Skel.attrLeak) : True := trivial\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "RawDef.lean").write_text(parser.format(attr=""), encoding="utf-8")
+    (project / "Skel" / "RawUse.lean").write_text(
+        "import Skel.RawDef\n"
+        "open Lean Elab Command\n"
+        'run_cmd do Lean.Parser.parserExtension.add (.token "!\\""); '
+        "Lean.Parser.parserExtension.add (.parser `term ``Skel.bangQuoteP false "
+        '(Lean.Parser.trailingNode `Skel.bqKind 65 0 (Lean.Parser.symbol " !\\" " >> '
+        "Lean.Parser.termParser 66)) 0)\n"
+        "macro_rules | `($a ¡¡ $_b) => pure a\n"
+        'def Skel.rawLeak : String := "a" !" -- SECRET_RAW "\n'
+        '  "b"\n'
+        "theorem Skel.rawRoot (h : Skel.rawLeak = Skel.rawLeak) : True := trivial\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.AttrUse", "Skel.RawUse")
+    blueprint = _blueprint(tmp_path, lean={"attr": "Skel.attrRoot", "raw": "Skel.rawRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    for node_id, name in [("basics/attr", "Skel.attrLeak"), ("basics/raw", "Skel.rawLeak")]:
+        node = report.node(node_id)
+        assert node is not None
+        (item,) = node.declarations[0].trusted
+        assert item.name == name
+        assert item.source is None and item.source_withheld, name
+        assert "SECRET" not in node.blind_text()
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_metaprogram_token_before_a_later_parser_entry_withholds_the_source(tmp_path: Path) -> None:
+    # A metaprogram makes `!"` a token before `tieLeak`, so Lean read the
+    # `-- SECRET_TIE "` text there as a comment, and the `example` holds only
+    # because it did. The parser entry written later names `lateP`, declared
+    # after `tieLeak`, and writes no token of its own. Its position bounds that
+    # entry alone, not the earlier token, which may be active at `tieLeak`.
+    project = _project(tmp_path)
+    (project / "Skel" / "TieLeak.lean").write_text(
+        "import Lean\n"
+        "open Lean Parser\n"
+        "namespace Skel\n"
+        'syntax (name := nrBang) term:65 &" !\\" " term:66 : term\n'
+        "@[macro Skel.nrBang] def nrBangMacro : Macro := fun stx => pure stx[0]\n"
+        "end Skel\n"
+        'run_cmd Lean.Parser.parserExtension.add (.token "!\\"")\n'
+        'def Skel.tieLeak : String := "a" !" -- SECRET_TIE "\n'
+        '  "b"\n'
+        'example : Skel.tieLeak = "a" := rfl\n'
+        'def Skel.lateP : Parser := symbol " !\\" " >> termParser 66\n'
+        "run_cmd Lean.Parser.parserExtension.add (.parser `term ``Skel.lateP false "
+        '(Lean.Parser.symbol " !\\" " >> Lean.Parser.termParser 66) 0)\n'
+        "theorem Skel.tieRoot (h : Skel.tieLeak = Skel.tieLeak) : True := trivial\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.TieLeak")
+    blueprint = _blueprint(tmp_path, lean={"tie": "Skel.tieRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    node = report.node("basics/tie")
+    assert node is not None
+    (item,) = node.declarations[0].trusted
+    assert item.name == "Skel.tieLeak"
+    assert item.source is None and item.source_withheld
+    assert "SECRET" not in node.blind_text()
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_scoped_token_an_open_may_activate_withholds_the_source(tmp_path: Path) -> None:
+    # `namespace Leak` activates `!"` for `scopeLeak`, whose `_root_` name
+    # lives outside `Leak`, and an `open` with `Leak` on its next line
+    # activates it for `tabLeak`. Read as code, the `-- SECRET_…` text is a
+    # string. A parse without the scoped parser fails on its token there, so
+    # the probe must not take that failure as evidence the token was absent.
+    project = _project(tmp_path)
+    (project / "Skel" / "ScopeTok.lean").write_text(
+        "namespace Leak\n"
+        'scoped infixl:65 " !\\" " => fun (a _b : String) => a\n'
+        "end Leak\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "ScopeUse.lean").write_text(
+        "import Skel.ScopeTok\n"
+        "namespace Leak\n"
+        'def _root_.Skel.scopeLeak : String := "a" !" -- SECRET_ROOTNS "\n'
+        '  "b"\n'
+        "end Leak\n"
+        "open\n"
+        "  Leak\n"
+        'def Skel.tabLeak : String := "a" !" -- SECRET_TAB "\n'
+        '  "b"\n'
+        "theorem Skel.scopeRoot (h : Skel.scopeLeak = Skel.tabLeak) : True := trivial\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.ScopeUse")
+    blueprint = _blueprint(tmp_path, lean={"scope": "Skel.scopeRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    node = report.node("basics/scope")
+    assert node is not None
+    trusted = {item.name: item for item in node.declarations[0].trusted}
+    assert set(trusted) == {"Skel.scopeLeak", "Skel.tabLeak"}
+    for item in trusted.values():
+        assert item.source is None and item.source_withheld, item.name
+    assert "SECRET" not in node.blind_text()
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_namespace_a_macro_opens_withholds_a_source_its_token_changes(tmp_path: Path) -> None:
+    # `enable_q` expands to `open Leak`, which activates the scoped `!"`
+    # token, so Lean read the `-- SECRET_MAC "` text as a comment, and the
+    # `example` holds only because it did. MacUse never names `Leak`.
+    project = _project(tmp_path)
+    (project / "Skel" / "MacTok.lean").write_text(
+        "namespace Leak\n"
+        'scoped infixl:65 " !\\" " => fun (a _b : String) => a\n'
+        "end Leak\n"
+        'macro "enable_q" : command => `(open Leak)\n',
+        encoding="utf-8",
+    )
+    (project / "Skel" / "MacUse.lean").write_text(
+        "import Skel.MacTok\n"
+        "enable_q\n"
+        'def Skel.macLeak : String := "a" !" -- SECRET_MAC "\n'
+        '  "b"\n'
+        'example : Skel.macLeak = "a" := rfl\n'
+        "theorem Skel.macRoot (h : Skel.macLeak = Skel.macLeak) : True := trivial\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.MacUse")
+    blueprint = _blueprint(tmp_path, lean={"mac": "Skel.macRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    node = report.node("basics/mac")
+    assert node is not None
+    (item,) = node.declarations[0].trusted
+    assert item.name == "Skel.macLeak"
+    assert item.source is None and item.source_withheld
+    assert "SECRET" not in node.blind_text()
+
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_quotation_naming_a_parser_withholds_the_source(tmp_path: Path) -> None:
+    # Inside `namespace Skel.Dq`, Lean resolves the `bar` of `` `(bar| …) `` to
+    # `Skel.Dq.bar` and reads the quotation with its `!"` token, so the
+    # `-- SECRET_DYNQ "` text was a comment, as the `run_cmd` checks. Resolved
+    # outside the namespace, `bar` is the root parser, under which that text
+    # is a string. A `term` quotation names a category, which resolves the
+    # same everywhere, and keeps its comment ranges.
+    project = _project(tmp_path)
+    (project / "Skel" / "DynQ.lean").write_text(
+        "import Lean\n"
+        "open Lean\n"
+        "namespace Skel.Dq\n"
+        'syntax bar := "!\\"" str\n'
+        "end Skel.Dq\n"
+        'syntax bar := "!" str str\n'
+        "namespace Skel.Dq\n"
+        'def leak : MacroM Syntax := `(bar| !" -- SECRET_DYNQ "\n'
+        '  "x")\n'
+        "def cat : MacroM Syntax := `(term| 1 + -- note cat\n"
+        "  2)\n"
+        "run_cmd do\n"
+        "  let s ← Lean.Elab.liftMacroM leak\n"
+        '  unless s.isOfKind `Skel.Dq.bar && s.getNumArgs == 2 do throwError "read as code"\n'
+        "end Skel.Dq\n"
+        "theorem Skel.dynRoot (h : Skel.Dq.leak = Skel.Dq.cat) : True := trivial\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.DynQ")
+    blueprint = _blueprint(tmp_path, lean={"dyn": "Skel.dynRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    node = report.node("basics/dyn")
+    assert node is not None
+    trusted = {item.name: item for item in node.declarations[0].trusted}
+    assert set(trusted) == {"Skel.Dq.leak", "Skel.Dq.cat"}
+    leak = trusted["Skel.Dq.leak"]
+    assert leak.source is None and leak.source_withheld
+    cat = trusted["Skel.Dq.cat"]
+    assert cat.source is not None and not cat.source_withheld
+    assert cat.source_comments == (_comment_range(cat.source, "--", None),)
+    assert "SECRET" not in node.blind_text()
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_an_open_inside_a_source_withholds_only_what_follows_it(tmp_path: Path) -> None:
+    # An `open … in` changes how Lean reads the text after it, which the
+    # probe's parse cannot follow. In `innerLeak` it activates `!"`, so Lean
+    # read the `-- SECRET_INNER "` text as a comment; a parse with `Leak`
+    # active from the start fails on `#[[1]]`, so only the inner open does.
+    # A statement before the open is still cut: `oin` keeps its statement,
+    # while `instmt`, with the open inside its statement, does not.
+    project = _project(tmp_path)
+    (project / "Skel" / "OinTok.lean").write_text(
+        "namespace Leak\n"
+        'scoped infixl:65 " +++ " => Nat.add\n'
+        'scoped infixl:65 " !\\" " => fun (a _b : String) => a\n'
+        'scoped notation "#[[" => (0 : Nat)\n'
+        "end Leak\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "OinUse.lean").write_text(
+        "import Skel.OinTok\n"
+        'def Skel.innerLeak : String := if #[[1]].size = 1 then (open Leak in "a" !" -- SECRET_INNER "\n'
+        '  "b") else ""\n'
+        'example : Skel.innerLeak = "a" := rfl\n'
+        "open Leak\n"
+        "theorem Skel.oin : 1 +++ 2 = 3 := by open Leak in rfl\n"
+        "theorem Skel.instmt : (open Leak in 1 +++ 2) = 3 := rfl\n"
+        "theorem Skel.oinRoot (h : Skel.innerLeak = Skel.innerLeak) : True := trivial\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.OinUse")
+    blueprint = _blueprint(tmp_path, lean={"oin": "Skel.oin", "instmt": "Skel.instmt", "inner": "Skel.oinRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    oin = report.node("basics/oin")
+    assert oin is not None
+    assert oin.declarations[0].statement == "theorem Skel.oin : 1 +++ 2 = 3"
+    instmt = report.node("basics/instmt")
+    assert instmt is not None
+    assert instmt.declarations[0].statement is None
+    inner = report.node("basics/inner")
+    assert inner is not None
+    (item,) = inner.declarations[0].trusted
+    assert item.name == "Skel.innerLeak"
+    assert item.source is None and item.source_withheld
+    assert "SECRET" not in inner.blind_text()
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_choice_node_holding_the_value_leaves_the_statement_unknown(tmp_path: Path) -> None:
+    # `thmB` and the builtin `theorem` both parse all of `Skel.amb`, so the
+    # parse is a choice node, whose alternatives come in the order Lean added
+    # their parsers, the last first: Lean elaborated `thmB` (`Skel.viaB`
+    # exists), whose value starts after `let y`, not at the first `:=`. The
+    # probe does not rebuild that order for scoped and own entries, so a
+    # choice node holding a value leaves the statement unknown.
+    project = _project(tmp_path)
+    (project / "Skel" / "ChUse.lean").write_text(
+        "import Lean\n"
+        "open Lean Parser Command\n"
+        'syntax (name := thmB) "theorem " ident " : " term " := " "let " ident declVal : command\n'
+        "open Elab Command in\n"
+        "@[command_elab thmB] def elabB : CommandElab := fun stx => do\n"
+        "  elabCommand (← `(theorem $(⟨stx[1]⟩):ident : $(⟨stx[3]⟩) := by trivial))\n"
+        "  elabCommand (← `(def $(mkIdent `Skel.viaB) : Nat := 0))\n"
+        "theorem Skel.amb : True := let y := 0\n"
+        "  trivial\n"
+        "example : Skel.viaB = 0 := rfl\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.ChUse")
+    blueprint = _blueprint(tmp_path, lean={"amb": "Skel.amb"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    amb = report.node("basics/amb")
+    assert amb is not None
+    assert amb.declarations[0].statement is None
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_the_probe_rebuilds_each_modules_grammar_once(tmp_path: Path) -> None:
+    # Two roots in CacheA trust declarations of CacheA and CacheB. Each
+    # module's grammar is rebuilt once per probe, however many sources and
+    # roots need it, and the probe says so once per module.
+    project = _project(tmp_path)
+    (project / "Skel" / "CacheB.lean").write_text(
+        "namespace Skel.CacheB\n"
+        "def b1 (n : Nat) : Nat := -- note b1\n"
+        "  n\n"
+        "end Skel.CacheB\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "CacheA.lean").write_text(
+        "import Skel.CacheB\n"
+        "namespace Skel.CacheA\n"
+        'infixl:65 " +++ " => Nat.add\n'
+        "def a1 (n : Nat) : Nat := -- note a1\n"
+        "  n +++ 1\n"
+        "def a2 (n : Nat) : Nat := -- note a2\n"
+        "  a1 n +++ Skel.CacheB.b1 n\n"
+        "theorem rootA (h : a2 0 = 1) : True := trivial\n"
+        "theorem rootB (h : a1 0 = Skel.CacheB.b1 1) : True := trivial\n"
+        "end Skel.CacheA\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.CacheA")
+    roots = ("Skel.CacheA.rootA", "Skel.CacheA.rootB")
+    probe = render_probe(imports=("Skel.CacheA",), roots=roots, project_roots=("Skel",))
+
+    output = run_probe(probe, project)
+
+    records = parse_probe_output(output, expected_roots=roots)
+    built = [
+        json.loads(line[len(PROBE_MARKER) :])["name"]
+        for line in output.splitlines()
+        if line.startswith(PROBE_MARKER) and '"table":"grammar"' in line
+    ]
+    assert sorted(built) == ["Skel.CacheA", "Skel.CacheB"]
+    trusted = {item["name"]: item for root in roots for item in records[root]["trusted"]}
+    assert set(trusted) == {"Skel.CacheA.a1", "Skel.CacheA.a2", "Skel.CacheB.b1"}
+    for item in trusted.values():
+        assert item["source"] is not None and item["source_comments"], item["name"]
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_long_proof_does_not_make_the_statement_check_quadratic(tmp_path: Path) -> None:
+    # The statement is parsed from the source and from each prefix ending
+    # before a `:=`. Checking each of ManyTok's 500 scoped tokens against
+    # every such prefix of a 600-`:=` proof outlasts the timeout; checking it
+    # against the source and the seams with `:= sorry` does not.
+    project = _project(tmp_path)
+    (project / "Skel" / "ManyTok.lean").write_text(
+        "import Lean\n"
+        "namespace Many\n"
+        "run_cmd for i in [0:500] do\n"
+        '  Lean.Parser.parserExtension.add (.token s!"@@{i}@@") (kind := .scoped)\n'
+        "end Many\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "LongProof.lean").write_text(
+        "import Skel.ManyTok\n"
+        "theorem Skel.longRoot (n : Nat) : n = n := by\n"
+        + "  have h : n + 1 = n + 1 := rfl\n" * 600
+        + "  rfl\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.LongProof")
+    roots = ("Skel.longRoot",)
+    probe = render_probe(imports=("Skel.LongProof",), roots=roots, project_roots=("Skel",))
+
+    output = run_probe(probe, project, timeout=600)
+
+    records = parse_probe_output(output, expected_roots=roots)
+    assert records["Skel.longRoot"]["statement_source"] == "theorem Skel.longRoot (n : Nat) : n = n"
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_tokens_only_the_probes_own_imports_declare_do_not_withhold_a_source(tmp_path: Path) -> None:
+    # `throwError` and `trace[` are tokens of the `Lean` modules the probe
+    # helper imports, not of HelperTokens, which imports nothing. Lean read
+    # them there as identifiers, and so must the probe.
+    project = _project(tmp_path)
+    (project / "Skel" / "HelperTokens.lean").write_text(
+        "namespace Skel.HelperTokens\n"
+        "def throwError (n : Nat) : Nat := -- note throwError\n"
+        "  n\n"
+        "def trace : Array Nat := #[1, 2]\n"
+        "def usesBoth : Nat := -- note usesBoth\n"
+        "  throwError trace[0]!\n"
+        "theorem helperRoot (h : usesBoth = throwError trace[1]!) : True := -- note proof\n"
+        "  trivial\n"
+        "end Skel.HelperTokens\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.HelperTokens")
+    blueprint = _blueprint(tmp_path, lean={"helper": "Skel.HelperTokens.helperRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    node = report.node("basics/helper")
+    assert node is not None
+    declaration = node.declarations[0]
+    assert declaration.statement == "theorem helperRoot (h : usesBoth = throwError trace[1]!) : True"
+    trusted = {item.name.rsplit(".", 1)[1]: item for item in declaration.trusted}
+    for name in ["throwError", "usesBoth"]:
+        item = trusted[name]
+        assert item.source is not None and not item.source_withheld, name
+        assert item.source_comments == (_comment_range(item.source, "--", None),), name
+    assert "note" not in node.blind_text()
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_sources_whose_tokens_are_provable_are_shown_without_comments(tmp_path: Path) -> None:
+    # `+--` is a token wherever `Skel.CommentToken` is imported. PktPrecDep does
+    # not import it, so there its text is a comment even under a root that
+    # does; PktPrec does, so there it is code. Notation the file declares
+    # above its use, and scoped notation in its namespace, lex the same with
+    # or without their tokens as far as comments go.
+    project = _project(tmp_path)
+    (project / "Skel" / "PktPrecDep.lean").write_text(
+        "namespace Skel.PktPrecDep\n"
+        "/-- KEEPOUT_DOC: reads like `a +-- b`, notation this file does not import. -/\n"
+        "def depDoc (a : Nat) : Nat := a +-- KEEPOUT_DEP\n"
+        "  0\n"
+        "end Skel.PktPrecDep\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "PktPrec.lean").write_text(
+        "import Skel.CommentToken\n"
+        "import Skel.PktPrecDep\n"
+        "namespace Skel.PktPrec\n"
+        'infixl:65 " ⊕⊕ " => Nat.add\n'
+        "/-- KEEPOUT_SAME -/\n"
+        "def sameModule (a b : Nat) : Nat := a ⊕⊕ b -- KEEPOUT_SAME_LINE\n"
+        "namespace A\n"
+        'scoped infixl:70 " ⊗⊗ " => Nat.mul\n'
+        "def scopedUse (a b : Nat) : Nat := a ⊗⊗ b /- KEEPOUT_SCOPED -/\n"
+        "end A\n"
+        "def imported (a b : Nat) : Nat := a +-- b\n"
+        "/-- KEEPOUT_FOO -/\n"
+        "theorem A.foo (h : Skel.PktPrecDep.depDoc 1 = 1) : A.scopedUse 1 2 = 2 := rfl\n"
+        "theorem precRoot (h : imported 2 3 = 6) : sameModule 1 2 = 3 := -- KEEPOUT_PROOF\n"
+        "  rfl\n"
+        "end Skel.PktPrec\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.PktPrec")
+    blueprint = _blueprint(tmp_path, lean={"foo": "Skel.PktPrec.A.foo", "prec": "Skel.PktPrec.precRoot"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    declarations = {d.name: d for node in report.nodes for d in node.declarations}
+    foo = declarations["Skel.PktPrec.A.foo"]
+    prec = declarations["Skel.PktPrec.precRoot"]
+    assert foo.statement == "/-- KEEPOUT_FOO -/\ntheorem A.foo (h : Skel.PktPrecDep.depDoc 1 = 1) : A.scopedUse 1 2 = 2"
+    assert prec.statement == "theorem precRoot (h : imported 2 3 = 6) : sameModule 1 2 = 3"
+    trusted = {item.name: item for d in (foo, prec) for item in d.trusted}
+    for name in ["Skel.PktPrecDep.depDoc", "Skel.PktPrec.sameModule", "Skel.PktPrec.A.scopedUse",
+                 "Skel.PktPrec.imported"]:
+        assert trusted[name].source is not None and not trusted[name].source_withheld, name
+    assert trusted["Skel.PktPrec.imported"].source_comments == ()
+    assert "def imported (a b : Nat) : Nat := a +-- b" in prec.blind_text()
+    assert "KEEPOUT" not in foo.blind_text() + prec.blind_text()
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_module_lexes_with_the_tokens_of_the_imports_lean_loads_for_it(tmp_path: Path) -> None:
+    # Under the module system Lean does not load what an import imports
+    # privately, so `+--` is not a token in ModUse, and the build proves it:
+    # read as code, `KEEPOUT_M` would be an unknown identifier. The probe,
+    # which imports everything, must not take the token as present there.
+    project = _project(tmp_path)
+    (project / "Skel" / "ModTok.lean").write_text(
+        'module\n\nnamespace Skel.ModTok\ninfixl:65 " +-- " => Nat.sub\nend Skel.ModTok\n', encoding="utf-8"
+    )
+    (project / "Skel" / "ModMid.lean").write_text(
+        "module\n\nimport Skel.ModTok\n\npublic section\nnamespace Skel.ModMid\ndef mid : Nat := 1\nend Skel.ModMid\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "ModUse.lean").write_text(
+        "module\n\npublic import Skel.ModMid\n\npublic section\nnamespace Skel.ModUse\n"
+        "def hidden (a b : Nat) : Nat := a +-- KEEPOUT_M\n  b\n"
+        "theorem modRoot (h : hidden 1 2 = 1) : True := trivial\n"
+        "end Skel.ModUse\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.ModUse")
+
+    report = extract_skeletons(_blueprint(tmp_path, lean={"mod": "Skel.ModUse.modRoot"}), lean_root=project)
+
+    assert report.clean
+    (root,) = [d for node in report.nodes for d in node.declarations]
+    (hidden,) = root.trusted
+    assert hidden.source is not None and not hidden.source_withheld
+    assert hidden.source_comments == (_comment_range(hidden.source, "--"),)
+    assert "KEEPOUT" not in root.blind_text()
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_signatures_escape_only_the_tokens_of_their_module(tmp_path: Path) -> None:
+    # `throwError` is a keyword once `Lean.Exception` is imported, as it is in
+    # the probe's helper, but not in a file whose only import is Skel.EscUse,
+    # where `#check` prints these binders bare.
+    project = _project(tmp_path)
+    (project / "Skel" / "EscUse.lean").write_text(
+        "namespace Skel.EscUse\n"
+        "def plain (throwError : Nat) : Nat := throwError\n"
+        "theorem useRoot (throwError : Nat) : plain throwError = throwError := rfl\n"
+        "end Skel.EscUse\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.EscUse")
+
+    report = extract_skeletons(_blueprint(tmp_path, lean={"use": "Skel.EscUse.useRoot"}), lean_root=project)
+
+    assert report.clean
+    (use,) = [d for node in report.nodes for d in node.declarations]
+    (plain,) = use.trusted
+    for text in (use.signature, use.raw_signature, plain.signature):
+        assert "throwError" in text and "«" not in text, text
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_signatures_print_at_the_format_width_check_uses(tmp_path: Path) -> None:
+    # 115 characters: `#check` keeps it on one line at the default
+    # `format.width` of 120.
+    project = _built_module(
+        tmp_path,
+        "PktWide",
+        "namespace Skel.PktWide\n"
+        "theorem wide (alpha beta gamma delta : Nat) (h : alpha + beta = gamma + delta) :\n"
+        "    gamma + delta = gamma + delta := rfl\n"
+        "end Skel.PktWide\n",
+    )
+    blueprint = _blueprint(tmp_path, lean={"wide": "Skel.PktWide.wide"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    (declaration,) = report.nodes[0].declarations
+    assert declaration.signature == (
+        "Skel.PktWide.wide (alpha beta gamma delta : Nat) (h : alpha + beta = gamma + delta) : gamma + delta = gamma + delta"
+    )
+    assert max(len(line) for line in declaration.raw_signature.splitlines()) > 100
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_project_constant_in_the_helper_namespace_is_named_as_the_cause(tmp_path: Path) -> None:
+    project = _built_module(
+        tmp_path,
+        "PktColl",
+        "namespace AutoformSkeleton\n"
+        "def main : Nat := 1\n"
+        "end AutoformSkeleton\n"
+        "namespace Skel.PktColl\n"
+        "theorem coll_root : True := trivial\n"
+        "end Skel.PktColl\n",
+    )
+    blueprint = _blueprint(tmp_path, lean={"coll": "Skel.PktColl.coll_root"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    (issue,) = report.unresolved
+    assert issue.reason.startswith(
+        "probe of module Skel.PktColl failed: module Skel.PktColl declares AutoformSkeleton.main, "
+        "but the AutoformSkeleton namespace is reserved by the skeleton probe's helper"
+    )
+    assert "lake build" not in issue.reason
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_node_selection_does_not_change_a_declarations_evidence(tmp_path: Path) -> None:
+    # Only the other article's module declares the notation. Each declaration
+    # is printed where its own module is imported, so neither selecting nor
+    # adding that article changes the packet `review record` re-extracts.
+    project = _project(tmp_path)
+    (project / "Skel" / "PktWrap.lean").write_text(
+        "namespace Skel.PktWrap\n"
+        "def wrap (n : Nat) : Nat := n\n"
+        "theorem wrap_two : wrap 2 = 2 := rfl\n"
+        "end Skel.PktWrap\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "PktWrapNotation.lean").write_text(
+        "import Skel.PktWrap\n"
+        "namespace Skel.PktWrap\n"
+        'notation "⟪" x "⟫" => wrap x\n'
+        "theorem wrap_three : wrap 3 = 3 := rfl\n"
+        "end Skel.PktWrap\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.PktWrap", "Skel.PktWrapNotation")
+    blueprint = _blueprint(
+        tmp_path, lean={"two": "Skel.PktWrap.wrap_two", "three": "Skel.PktWrap.wrap_three"}
+    )
+
+    full = extract_skeletons(blueprint, lean_root=project)
+    scoped = extract_skeletons(blueprint, lean_root=project, node_ids=("basics/two",))
+    alone = extract_skeletons(
+        _blueprint(tmp_path / "alone", lean={"two": "Skel.PktWrap.wrap_two"}), lean_root=project
+    )
+
+    assert full.clean and scoped.clean and alone.clean
+    (declaration,) = full.declarations("basics/two")
+    assert declaration.signature == "Skel.PktWrap.wrap_two : Skel.PktWrap.wrap 2 = 2"
+    assert scoped.node("basics/two") == full.node("basics/two")
+    assert alone.node("basics/two").review_hash == full.node("basics/two").review_hash
+    (three,) = full.declarations("basics/three")
+    assert three.signature == "Skel.PktWrap.wrap_three : ⟪3⟫ = 3"
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_an_unrelated_modules_attribute_does_not_change_a_trusted_declaration(tmp_path: Path) -> None:
+    # `attribute [instance]` in another article's module would make `natInh` an
+    # instance in a probe that imported both modules.
+    project = _project(tmp_path)
+    (project / "Skel" / "InstDef.lean").write_text(
+        "namespace Skel.InstDef\n"
+        "def natInh : Inhabited Nat := ⟨0⟩\n"
+        "theorem natInh_default : natInh.default = 0 := rfl\n"
+        "end Skel.InstDef\n",
+        encoding="utf-8",
+    )
+    (project / "Skel" / "InstAttr.lean").write_text(
+        "import Skel.InstDef\n"
+        "attribute [instance] Skel.InstDef.natInh\n"
+        "namespace Skel.InstAttr\n"
+        "theorem other : True := trivial\n"
+        "end Skel.InstAttr\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.InstDef", "Skel.InstAttr")
+
+    alone = extract_skeletons(
+        _blueprint(tmp_path / "alone", lean={"inst": "Skel.InstDef.natInh_default"}), lean_root=project
+    )
+    beside = extract_skeletons(
+        _blueprint(tmp_path / "beside", lean={"inst": "Skel.InstDef.natInh_default", "other": "Skel.InstAttr.other"}),
+        lean_root=project,
+    )
+
+    assert alone.clean and beside.clean
+    (before,) = alone.declarations("basics/inst")
+    (after,) = beside.declarations("basics/inst")
+    (trusted,) = after.trusted
+    assert trusted.name == "Skel.InstDef.natInh" and trusted.kind == "def"
+    assert after.trusted == before.trusted
+    assert after.hash == before.hash
+    assert beside.node("basics/inst").review_hash == alone.node("basics/inst").review_hash
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_trusted_declaration_reads_as_each_root_module_prints_it(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    modules = {
+        "PktWrap": "namespace Skel.PktWrap\ndef wrap (n : Nat) : Nat := n\nend Skel.PktWrap\n",
+        "PktWrapNotation": 'import Skel.PktWrap\nnamespace Skel.PktWrap\nnotation "⟪" x "⟫" => wrap x\nend Skel.PktWrap\n',
+        "PktWrapUser": "import Skel.PktWrap\nnamespace Skel.PktWrap\n"
+        "def needsTwo (h : wrap 2 = 2) : Nat := 0\n"
+        "theorem uses_needsTwo : needsTwo rfl = 0 := rfl\nend Skel.PktWrap\n",
+        "PktWrapUser2": "import Skel.PktWrapUser\nimport Skel.PktWrapNotation\nnamespace Skel.PktWrap\n"
+        "theorem uses_needsTwo' : needsTwo rfl = 0 := rfl\nend Skel.PktWrap\n",
+    }
+    for module, source in modules.items():
+        (project / "Skel" / f"{module}.lean").write_text(source, encoding="utf-8")
+    _build(project, "Skel.PktWrapUser", "Skel.PktWrapUser2")
+    blueprint = _blueprint(
+        tmp_path, lean={"u1": "Skel.PktWrap.uses_needsTwo", "u2": "Skel.PktWrap.uses_needsTwo'"}
+    )
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    (u1,) = report.declarations("basics/u1")
+    (u2,) = report.declarations("basics/u2")
+    (plain,) = (item for item in u1.trusted if item.name == "Skel.PktWrap.needsTwo")
+    (notated,) = (item for item in u2.trusted if item.name == "Skel.PktWrap.needsTwo")
+    assert "Skel.PktWrap.wrap 2 = 2" in plain.signature and "⟪2⟫ = 2" in notated.signature
+    assert plain.semantic == notated.semantic and plain.raw_signature == notated.raw_signature
+    data = report.as_dict()
+    assert {module: sorted(entries) for module, entries in data["trusted"].items()} == {
+        "Skel.PktWrapUser": ["Skel.PktWrap.needsTwo", "Skel.PktWrap.wrap"],
+        "Skel.PktWrapUser2": ["Skel.PktWrap.needsTwo", "Skel.PktWrap.wrap"],
+    }
+    path = tmp_path / "skeleton.json"
+    write_skeleton_report(report, path)
+    loaded = load_skeleton_report(path)
+    assert loaded == report
+    (reloaded,) = loaded.declarations("basics/u2")
+    assert notated in reloaded.trusted
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_two_root_modules_may_see_different_constants_under_one_name(tmp_path: Path, capsys) -> None:
+    project = _project(tmp_path)
+    lakefile = project / "lakefile.toml"
+    lakefile.write_text(
+        lakefile.read_text(encoding="utf-8") + '\n[[require]]\nname = "dep"\npath = "dep"\n', encoding="utf-8"
+    )
+    dep = project / "dep"
+    dep.mkdir()
+    shutil.copy(_FIXTURE / "lean-toolchain", dep / "lean-toolchain")
+    (dep / "lakefile.toml").write_text(
+        'name = "dep"\n\n[[lean_lib]]\nname = "Dep"\nroots = ["DepA", "DepB"]\n', encoding="utf-8"
+    )
+    (dep / "DepA.lean").write_text("namespace Ext\ndef collision : Nat := 1\nend Ext\n", encoding="utf-8")
+    (dep / "DepB.lean").write_text("namespace Ext\ndef collision : Int := 2\nend Ext\n", encoding="utf-8")
+    # Neither root module imports the other, so each may declare its own Shared.ax.
+    for module, dependency, value in (("UA", "DepA", 1), ("UB", "DepB", 2)):
+        (project / "Skel" / f"{module}.lean").write_text(
+            f"import {dependency}\nnamespace Shared\naxiom ax : {value} = {value}\nend Shared\n"
+            f"namespace Skel.{module}\n"
+            f"theorem {module.lower()} : Ext.collision = Ext.collision := (fun _ => rfl) Shared.ax\n"
+            f"end Skel.{module}\n",
+            encoding="utf-8",
+        )
+    _build(project, "Skel.UA", "Skel.UB")
+    blueprint = _blueprint(tmp_path, lean={"ua": "Skel.UA.ua", "ub": "Skel.UB.ub"})
+    output = tmp_path / "skeleton.json"
+
+    assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--output", str(output)]) == 0
+
+    assert "error:" not in capsys.readouterr().err
+    data = json.loads(output.read_text(encoding="utf-8"))
+    for name in ("Ext.collision", "Shared.ax"):
+        assert data["semantics"]["Skel.UA"][name] != data["semantics"]["Skel.UB"][name]
+    loaded = load_skeleton_report(output)
+    (ua,) = loaded.declarations("basics/ua")
+    (ub,) = loaded.declarations("basics/ub")
+    assert ua.assumed == ub.assumed == ("Ext.collision",)
+    assert dict(ua.assumed_semantics)["Ext.collision"] != dict(ub.assumed_semantics)["Ext.collision"]
+    assert dict(ua.axiom_semantics)["Shared.ax"] != dict(ub.axiom_semantics)["Shared.ax"]
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
@@ -2421,12 +4274,23 @@ def test_source_lean_cannot_read_outside_its_file_is_withheld(tmp_path: Path) ->
     blind = alone["Skel.Unparsed.usesBlindToken"]
     assert "+--" not in blind.blind_text() and not trusted(blind).source_withheld
 
-    # With `+--` in the probe's environment, the probe cannot tell whether that
-    # text is a comment in its file, so it shows no source containing it.
+    # `+--` comes from a module the root's own module does not import, so an
+    # article that uses it leaves this packet unchanged.
     roots["token"] = "Skel.usesCommentToken"
+    (project / "Skel" / "BlindTokenUse.lean").write_text(
+        "import Skel.Unparsed\nimport Skel.CommentToken\n\n"
+        "theorem Skel.usesBlindTokenWithToken : Skel.Unparsed.blindToken 2 3 = 2 := rfl\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.BlindTokenUse")
+    roots["tokenblind"] = "Skel.usesBlindTokenWithToken"
     with_token = extract(tmp_path / "with-token")
-    blind = with_token["Skel.Unparsed.usesBlindToken"]
-    assert trusted(blind).source_withheld and "+--" not in blind.blind_text()
+    assert with_token["Skel.Unparsed.usesBlindToken"] == blind
+    # Under a root whose module does import `+--`, blindToken's own file still
+    # does not, so its source reads as that file's lexer read it.
+    reached = with_token["Skel.usesBlindTokenWithToken"]
+    assert trusted(reached) == trusted(blind)
+    assert "+--" not in reached.blind_text()
     # Its own module imports the token, so there it is code.
     assert with_token["Skel.usesCommentToken"].statement == "theorem Skel.usesCommentToken : 2 +-- 3 = 6"
     assert with_token["Skel.Unparsed.usesLocalDef"].hash == alone["Skel.Unparsed.usesLocalDef"].hash
@@ -2598,7 +4462,7 @@ def test_shared_probe_tables_keep_every_hash(tmp_path: Path) -> None:
         node = NodeSkeleton(node_id=project_root, article_path="a.md", declarations=tuple(declarations))
         hashes[project_root] = [node.hash, node.evidence_hash, node.review_hash]
     digest = hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
-    assert digest == "3db5dbb9571689ba28c8877c4f25661a64db9768ada86293e0116cc5a17b6238", f"{digest}\n{json.dumps(hashes, indent=1)}"
+    assert digest == "9dad08e83318314c6f864446bd56d216063d49ec303e2eda20c5a5867ffcd20a", f"{digest}\n{json.dumps(hashes, indent=1)}"
 
 
 def _probe_records(
@@ -2921,7 +4785,11 @@ def test_statement_parsing_does_not_leak_scoped_notation(tmp_path: Path) -> None
     probe += """
 open Lean Elab Command
 run_cmd do
-  let _ ← AutoformSkeleton.statementSource `Skel.ScopedA.activatesScope
+  let grammars ← IO.mkRef ({} : AutoformSkeleton.GrammarCache)
+  -- The probe above already wrote this module's grammar record; a second
+  -- would be a duplicate, so this call's records are discarded.
+  let semantic ← IO.mkRef ({ output := ← IO.FS.Handle.mk "/dev/null" .write } : AutoformSkeleton.SemanticCache)
+  let _ ← AutoformSkeleton.statementSource grammars semantic `Skel.ScopedA.activatesScope
   let env ← getEnv
   match Parser.runParserCategory env `command
       "example : ⟬marker⟭ = Skel.Semantics.notationMarker := rfl" with
@@ -2987,6 +4855,7 @@ def test_packet_publication_refuses_an_incomplete_report(tmp_path: Path) -> None
     report = _fake_report(tmp_path)
     incomplete = replace(
         report,
+        nodes=(replace(report.nodes[0], declarations=(), complete=False),),
         unresolved=(
             UnresolvedTarget("basics/determined", "Skel.observation_determined", "missing"),
         ),
@@ -3007,7 +4876,7 @@ def test_cli_does_not_publish_packets_for_unresolved_declarations(
         tmp_path,
         lean={"determined": "Skel.observation_determined", "missing": "Skel.absent"},
     )
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
+    _fake_default_probe(monkeypatch, lambda probe, root: _fake_probe_output())
     packets = tmp_path / "packets"
     report_path = tmp_path / "skeleton.json"
 
@@ -3422,12 +5291,12 @@ def test_packet_publication_cleans_up_when_second_stage_fails(
     stage_output = _stage_output
     calls = 0
 
-    def fail_second_stage(destination: Path) -> Path:
+    def fail_second_stage(destination: Path, stages: list[Path]) -> Path:
         nonlocal calls
         calls += 1
         if calls == 2:
             raise OSError("simulated passage staging failure")
-        return stage_output(destination)
+        return stage_output(destination, stages)
 
     monkeypatch.setattr("autoform_cli.skeleton._stage_output", fail_second_stage)
 
@@ -3436,6 +5305,41 @@ def test_packet_publication_cleans_up_when_second_stage_fails(
 
     assert list(tmp_path.glob(".packets.autoform-stage-*")) == []
     assert not packets.exists() and not passages.exists()
+
+
+@pytest.mark.parametrize("step", ["create", "mode"])
+def test_packet_publication_removes_stages_interrupted_while_they_are_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step: str
+) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
+    packets = tmp_path / "packets"
+    passages = tmp_path / "passages"
+    write_packets(report, packets, passages=passages)
+    mkdir = Path.mkdir
+    chmod = Path.chmod
+
+    def interrupted_mkdir(self: Path, *args: object, **kwargs: object) -> None:
+        mkdir(self, *args, **kwargs)
+        if self.name.startswith(".packets.autoform-stage-"):
+            raise KeyboardInterrupt
+
+    def interrupted_chmod(self: Path, *args: object, **kwargs: object) -> None:
+        if self.name.startswith(".passages.autoform-stage-"):
+            raise KeyboardInterrupt
+        chmod(self, *args, **kwargs)
+
+    if step == "create":
+        monkeypatch.setattr(Path, "mkdir", interrupted_mkdir)
+    else:
+        monkeypatch.setattr(Path, "chmod", interrupted_chmod)
+
+    with pytest.raises(KeyboardInterrupt):
+        write_packets(report, packets, passages=passages)
+
+    assert list(tmp_path.glob(".*.autoform-stage-*")) == []
+    assert (packets / PACKET_MANIFEST).is_file() and (passages / PACKET_MANIFEST).is_file()
 
 
 def test_packet_publication_detects_a_concurrent_file_edit(tmp_path: Path, monkeypatch) -> None:

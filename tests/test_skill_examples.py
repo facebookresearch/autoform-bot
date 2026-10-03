@@ -278,7 +278,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
         assert linked.is_file(), href
 
     graph_page = (site / "dependencies.md").read_text(encoding="utf-8")
-    assert "```mermaid" in graph_page
+    assert '<div class="mermaid bp-graph">' in graph_page
     assert "graph_view: project" in graph_page
     assert '"dependencies/chapters/infimum-loss.html"' in graph_page
     assert '"dependencies/chapters/full-supervision.html"' in graph_page
@@ -362,6 +362,12 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "autoform check blueprint --lean-root ." in workflow
     assert "autoform render blueprint" in workflow
     assert "--require-declarations" in workflow
+    report = '"$RUNNER_TEMP/autoform-skeleton/skeleton-report.json"'
+    assert f"autoform review check blueprint\n          --skeleton-report {report}\n" in workflow
+    assert "review prepare" not in workflow
+    assert f"review_args=(--review --skeleton-report {report})" in workflow
+    assert "--with markdown==3.10.3" in workflow
+    assert "--with pymdown-extensions==11.0.1" in workflow
     assert "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128" in workflow
     assert "@main" not in workflow
 
@@ -372,6 +378,8 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "Reject kernel-check bypass options" in verify
     assert "Audit every root-package declaration" in verify
     assert "python3 .github/autoform_audit.py" in verify
+    assert "autoform review check blueprint --lean-root .\n" in verify
+    assert "review prepare" not in verify
     assert "lake pack" in verify
     assert "lake-modules" not in verify
     assert "contains no ILean artifacts" in (
@@ -382,12 +390,17 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'version: "0.12.1"' in verify
     assert "elan/releases/download/v4.2.3" in verify
     assert "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2" in verify
-    assert "github.ref == 'refs/heads/main'" in workflow
-    assert workflow.count('- "theme/**"') == 2
+    assert "if: needs.decide.outputs.publish == 'true'" in workflow
+    assert "refs/heads/main" not in workflow
+    assert workflow.count('- "theme/**"') == 1
     assert 'version: "0.12.1"' in workflow
     assert "@main" not in verify
 
-    for contents in (workflow, verify):
+    gate = (example / ".github/workflows/autoform-review-gate.yml").read_text(encoding="utf-8")
+    assert "autoform review authenticate blueprint --github" in gate
+    assert "@main" not in gate
+
+    for contents in (workflow, verify, gate):
         action_refs = re.findall(r"uses:\s+[^@\s]+@([^\s]+)", contents)
         assert action_refs
         assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in action_refs)
@@ -662,7 +675,7 @@ def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None
         repo_root / "autoform_cli/templates/github/autoform_audit.py"
     ).read_bytes() == (repo_root / _EXAMPLE / ".github/autoform_audit.py").read_bytes()
 
-    for name in ("autoform-verify.yml", "blueprint-pages.yml"):
+    for name in ("autoform-review-gate.yml", "autoform-verify.yml", "blueprint-pages.yml"):
         expected = (template_dir / name).read_text(encoding="utf-8")
         for placeholder, value in substitutions.items():
             expected = expected.replace(placeholder, value)
@@ -696,3 +709,22 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
     ).read_text(encoding="utf-8")
 
     assert significant(example) == significant(template)
+
+
+def test_review_skills_route_statement_review_through_the_cli_reference(repo_root: Path) -> None:
+    """Skills say what to achieve and link the CLI reference; flags live in one place."""
+
+    human = (repo_root / "skills/human-review/SKILL.md").read_text(encoding="utf-8")
+    reference = (repo_root / "autoform_cli/README.md").read_text(encoding="utf-8")
+    readback = (repo_root / "skills/human-review/references/readback.md").read_text(encoding="utf-8")
+
+    assert "../../autoform_cli/README.md#commands" in human
+    assert "references/readback.md" in human
+    for flag in ("--packets", "--passages", "--review-bundle"):
+        assert flag in reference, flag
+    assert "review_approved" in reference and "readbacks/" in reference
+    assert "Prove2me" in readback
+    assert "Return only testimony" in readback
+    assert "review record" in readback
+    assert "saved skeleton report" in human
+    assert (repo_root / "autoform_cli/probes/skeleton_probe.lean").is_file()

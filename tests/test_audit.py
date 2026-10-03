@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from autoform_cli.__main__ import main
 from autoform_cli.audit import audit_blueprint
+from autoform_cli.graph import load_graph
 
 
 def _ensure_chapter(blueprint: Path, relative: str) -> None:
@@ -515,10 +517,65 @@ def test_an_explicit_attr_list_anchor_resolves(tmp_path: Path) -> None:
     paper = blueprint / "sources" / "paper.md"
     paper.parent.mkdir(parents=True, exist_ok=True)
     paper.write_text(
-        "---\n---\n\n# Paper\n\n## A result {#main-result .highlight data-kind=result}\n\nText.\n",
+        "---\n---\n\n# Paper\n\n## A result {#main-result}\n\nText.\n",
         encoding="utf-8",
     )
 
     codes = {finding.code for finding in audit_blueprint(blueprint).findings}
 
     assert "source-anchor-not-found" not in codes
+
+
+def test_an_attr_list_that_does_more_than_name_a_heading_is_refused(tmp_path: Path, capsys) -> None:
+    """An article's attribute list may give a heading its id and nothing
+    else: a class or another attribute could restyle the page, so check
+    refuses it by line and says what to keep."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    _article(
+        blueprint,
+        "cited.md",
+        "## A result {#main-result .highlight data-kind=result}\n\nText.",
+        declaration="theorem",
+    )
+
+    assert main(["check", str(blueprint)]) == 1
+    assert (
+        "error: cited: line 7: attribute list {#main-result .highlight data-kind=result} is not allowed: "
+        'an article may only give a heading an id, as in "## Title {#title}"; delete it or keep only a '
+        "heading's id\n"
+    ) in capsys.readouterr().out
+
+
+def test_audit_reads_article_text_only_as_its_graph_parsed_it(tmp_path: Path, monkeypatch) -> None:
+    """An article rewritten after the graph was loaded is not audited as a blend.
+
+    Before the write the article has no '## Depends on' section; the write adds
+    one but marks the proof formalized without the statement. Each state has a
+    finding, but the old metadata beside the new text has none, so auditing that
+    blend would report a clean roadmap that no file ever held. The audit judges
+    the state the graph loaded.
+    """
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "result.md", depends=False, declaration="theorem")
+    assert _finding_map(blueprint) == {
+        "roadmap/result.md": [
+            ("missing-depends-section", "formalizable article has no explicit '## Depends on' section")
+        ]
+    }
+
+    def load_then_rewrite(*args, **kwargs):
+        graph = load_graph(*args, **kwargs)
+        _article(blueprint, "result.md", declaration="theorem", proof="formalized")
+        return graph
+
+    monkeypatch.setattr("autoform_cli.audit.load_graph", load_then_rewrite)
+    findings = _finding_map(blueprint)
+    monkeypatch.undo()
+
+    assert {path: [code for code, _reason in items] for path, items in findings.items()} == {
+        "roadmap/result.md": ["missing-depends-section"]
+    }
+    assert {code for code, _reason in _finding_map(blueprint)["roadmap/result.md"]} == {"proof-without-statement"}

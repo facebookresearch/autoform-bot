@@ -24,6 +24,7 @@ from autoform_cli.runtime import (
     build_runtime_graph,
     load_runtime_graph,
 )
+from autoform_cli.snapshot import BlueprintSnapshot
 from autoform_cli.status import derive, topological_order
 
 
@@ -232,8 +233,9 @@ def test_book_order_handles_a_1200_page_link_chain(tmp_path: Path) -> None:
         path.write_text(f"# {node_id}\n{next_link}", encoding="utf-8")
         nodes[node_id] = Node(node_id, node_id, path, ())
     graph = Graph(blueprint, nodes)
+    snapshot = BlueprintSnapshot({path.resolve(): path.read_bytes() for path in blueprint.rglob("*.md")})
 
-    ordered = _book_page_order(blueprint, blueprint, graph)
+    ordered = _book_page_order(blueprint, blueprint, graph, snapshot)
 
     assert len(ordered) == 1_201
     assert ordered[0] == blueprint / "README.md"

@@ -1,20 +1,16 @@
-{imports}
--- Autoform skeleton probe. This file is a Python-format template: `{{`/`}}` are
--- literal braces and single-brace fields are filled by autoform_cli.skeleton.
--- It is written to a temporary file and run with `lake env lean` inside the
--- built project; it never modifies the project.
+-- Autoform skeleton probe helpers. This file is a Python-format template: `{{`/`}}`
+-- are literal braces and single-brace fields are filled by autoform_cli.skeleton.
+-- Each extraction compiles it once, with `lake env lean -o` inside the built
+-- project, into a module in a temporary directory; it never modifies the
+-- project. Each probe imports one root module and this module, and only calls
+-- `AutoformSkeleton.main`, so no project name, notation, or option is in scope
+-- while these helpers elaborate.
 import Lean.Util.CollectAxioms
 import Lean.Util.Path
 import Lean.Elab.Command
 import Lean.Data.Json
 
 open Lean Elab Command Meta Term
-
--- A reader must see what is quantified over: `∃ n : ℕ, …`, not `∃ n, …`.
-set_option pp.funBinderTypes true
--- and where a cast lands: `(↑n : ℚ)`, not `↑n`, since `1 / ↑n` means something
--- else in `ℕ`.
-set_option pp.coercions.types true
 
 namespace AutoformSkeleton
 
@@ -96,8 +92,13 @@ structure SemanticCache where
   emitted : Std.HashSet (String × Name) := {{}}
   outputBytes : Nat := 0
   output : IO.FS.Handle
+  /-- Set once a record could not be written, which ends the probe: a later
+  record could name a fragment that never reached the file. -/
+  broken : Bool := false
 
 def probeOutputLimit : Nat := {output_limit}
+/-- Characters of an error message the probe reports for one root. -/
+def errorLimit : Nat := {error_limit}
 
 /-- Write one complete record without letting the scratch file grow past the
 CLI's output limit. The Python reader checks the limit again after exit. -/
@@ -105,9 +106,14 @@ def emitRecord (cache : IO.Ref SemanticCache) (record : Json) : IO Unit := do
   let line := s!"{marker}{{record.compress}}\n"
   let total := (← cache.get).outputBytes + line.utf8ByteSize
   if total > probeOutputLimit then
+    cache.modify fun c => {{ c with broken := true }}
     throw <| IO.userError s!"lake env lean exceeded the {{probeOutputLimit}}-byte output limit"
   cache.modify fun c => {{ c with outputBytes := total }}
-  (← cache.get).output.putStr line
+  try
+    (← cache.get).output.putStr line
+  catch e =>
+    cache.modify fun c => {{ c with broken := true }}
+    throw e
 
 /-- Pieces as the probe prints them: adjacent text merged into one string and
 each fragment as its number. Expanding the numbers gives `Json.compress`. -/
@@ -282,49 +288,20 @@ def kindOf (env : Environment) (c : Name) : String :=
   | some (.quotInfo _)   => "quot"
   | none                 => "unknown"
 
+/-- The options signatures print under, on top of the probe's defaults. -/
+def packetOptions (opts : Options) : Options :=
+  -- A reader must see what is quantified over: `∃ n : ℕ, …`, not `∃ n, …`,
+  -- and where a cast lands: `(↑n : ℚ)`, not `↑n`, since `1 / ↑n` means
+  -- something else in `ℕ`.
+  (opts.setBool `pp.funBinderTypes true).setBool `pp.coercions.types true
+
 /-- With `raw`, the signature bypasses project notation, unexpanders, and custom
 delaborators. Project syntax can print `HMul.hMul a b` as `a + b`; this form
 cannot. -/
 def signatureOf (c : Name) (raw := false) : CommandElabM String := do
-  let sig ← liftTermElabM <| withOptions (·.setBool `pp.raw raw) (PrettyPrinter.ppSignature c)
-  return sig.fmt.pretty 100
-
-/-- The namespace names in the words of one `open` line, and whether the
-command can go on: its names continue on more-indented lines, as in
-`open A B` followed by `  C`, until `in`, `hiding`, `renaming` or `(`. -/
-def openWords (words : String) : List Name × Bool :=
-  let ws := (words.splitOn " ").filter (fun t => t ≠ "" && t ≠ "scoped")
-  let stops (t : String) := t == "in" || t == "hiding" || t == "renaming" ||
-    t.startsWith "(" || t.startsWith "--" || t.startsWith "/-"
-  let names := ws.takeWhile (!stops ·)
-  (names.map String.toName, names.length == ws.length)
-
-/-- The namespaces the file opens above `pos`, from its `open …` commands,
-including a same-line `open … in` prefix and names on continuation lines. Their
-scoped notation (`#s`, `n !`, `∑ x ∈ s, f x`) must be active for the statement
-to parse; Lean records what a declaration means, not how its file was set up.
-Names are returned as written; the caller resolves them against the enclosing
-namespaces. -/
-def openedNamespaces (lines : List String) (pos : Position) : List Name := Id.run do
-  let current := ((lines[pos.line - 1]?.getD "").take pos.column).toString
-  let mut names : List Name := []
-  -- The column of an `open` whose names may continue on the next line.
-  let mut openColumn : Option Nat := none
-  for l in lines.take (pos.line - 1) ++ [current] do
-    let body := l.trimAsciiStart.toString
-    let column := l.length - body.length
-    if body.startsWith "open " then
-      let (opened, more) := openWords (body.drop 5).toString
-      names := names ++ opened
-      openColumn := if more then some column else none
-    else if let some c := openColumn then
-      if body.isEmpty then continue
-      if Nat.blt c column then
-        let (opened, more) := openWords body
-        names := names ++ opened
-        if !more then openColumn := none
-      else openColumn := none
-  return names
+  let sig ← liftTermElabM <|
+    withOptions (fun opts => (packetOptions opts).setBool `pp.raw raw) (PrettyPrinter.ppSignature c)
+  return sig.fmt.pretty' (← getOptions)
 
 /-- Slice the exact half-open source range recorded by Lean. Positions use
 Unicode columns, so convert them through `FileMap` before slicing UTF-8 bytes. -/
@@ -336,8 +313,8 @@ def sourceSlice (text : String) (r : DeclarationRange) : String :=
 
 /-! Comment ranges. Lean's parser, not a lexer guess, decides what is a comment:
 a project token such as `=--` or `+/-` is code, and `/--/ … -/` is a docstring.
-Arithmetic below is spelled `Nat.succ`/`Nat.add` because project notation that
-redefines `+` is imported above this file and would apply here too. -/
+Arithmetic below is spelled `Nat.succ`/`Nat.add`, which no notation can
+reinterpret. -/
 
 /-- End of a line comment starting at `i`: the next newline, kept as layout. -/
 partial def lineCommentEnd (bytes : ByteArray) (i stop : Nat) : Nat :=
@@ -386,55 +363,300 @@ partial def syntaxComments (bytes : ByteArray) (stx : Syntax) (acc : Array (Nat 
   | .ident info .. => infoComments bytes info acc
   | .missing => acc
 
-def commentsJson (bytes : ByteArray) (stx : Syntax) (cut : Nat) : Json :=
+/-- The comment ranges of `stx`, parsed from `bytes`, which hold the source
+after `offset` blank columns, relative to the source and cut at `cut`. -/
+def commentsJson (bytes : ByteArray) (stx : Syntax) (offset cut : Nat) : Json :=
   let ranges := (syntaxComments bytes stx #[]).foldl (init := #[]) fun acc (s, e) =>
-    let r := (s, Nat.min e cut)
-    if Nat.ble cut s || acc.contains r then acc else acc.push r
+    let r := (s - offset, Nat.min (e - offset) cut)
+    if Nat.ble cut r.1 || acc.contains r then acc else acc.push r
   Json.arr <| (ranges.qsort (fun a b => Nat.blt a.1 b.1)).map fun (s, e) => Json.arr #[s, e]
 
-/-- The global tokens declared by imports of `mod`. Tokens declared in `mod`
-itself are not safe here: the final environment does not record whether their
-declaration came before or after the source being inspected. Nor does it record
-where scoped tokens were opened. A `local` token is not recorded at all. -/
-def importedGlobalTokens (env : Environment) (mod : Name) : Std.HashSet String := Id.run do
-  let mut tokens : Std.HashSet String := {{}}
-  let mut seen : Std.HashSet Name := {{}}
-  let some rootIdx := env.getModuleIdx? mod | return tokens
-  let mut work : Array Name := env.header.moduleData[rootIdx.toNat]!.imports.map (·.module)
-  while h : work.size > 0 do
-    let m := work[work.size - 1]
-    work := work.pop
-    if seen.contains m then continue
-    seen := seen.insert m
-    let some idx := env.getModuleIdx? m | continue
-    for e in Parser.parserExtension.ext.getModuleEntries env idx do
-      match e with
-      | .global (.token t) => tokens := tokens.insert t
-      | _ => pure ()
-    for i in env.header.moduleData[idx.toNat]!.imports do
-      work := work.push i.module
-  return tokens
+/-! Grammars. Lean parses a declaration with the parser state in effect where
+it is written, and that state decides what is a comment: with `++"` a token,
+`x ++" -- y "` holds a comment; without it, a string. Lean does not record the
+state, so the probe rebuilds, from the final environment, every state Lean
+could have had there, up to entries that cannot change how the source parses.
+A state under which the source does not parse is then one Lean did not have;
+the comment ranges every other state gives must agree. The rule, and what it
+leaves unproven, is stated once in autoform_cli/README.md, after "A packet
+holds only what a blind auditor may see". -/
 
-/-- Whether `text` holds a non-builtin token containing `--` or a block-comment
-opener that was not globally active through an import. The probe's combined
-imports, a later declaration, or a reconstructed scoped `open` may activate it
-here even when the source did not, so the probe then cannot safely distinguish
-that token from a comment. -/
-def commentLikeToken (penv : Environment) (mod : Name) (text : String) : IO Bool := do
-  let builtin ← Parser.builtinTokenTable.get
-  let holds (s t : String) := Nat.blt 1 (s.splitOn t).length
-  let found := ((Parser.getTokenTable penv).findPrefix "").filter fun t =>
-    (builtin.find? t).isNone && (holds t "--" || holds t "/-") && holds text t
-  if found.isEmpty then return false
-  let global := importedGlobalTokens penv mod
-  return found.any fun t => !global.contains t
+/-- A parser extension entry as Lean holds it once loaded. -/
+abbrev GrammarEntry := ScopedEnvExtension.Entry Parser.ParserExtension.Entry
+
+instance : Inhabited GrammarEntry := ⟨.global (.kind .anonymous)⟩
+
+def entryOf : GrammarEntry → Parser.ParserExtension.Entry
+  | .global e => e
+  | .scoped _ e => e
+
+/-- What the environment proves about the parser states of one module. -/
+structure ModuleGrammar where
+  /-- The state at the module's first line: the builtin grammar and the global
+  entries of every module Lean loads to compile it, which under the module
+  system is not every module it imports, directly or not; `none` when the
+  probe cannot rebuild it. -/
+  base : Option Parser.ParserExtension.State
+  /-- The scoped entries of those modules, active where their namespace is. -/
+  imported : Array (Name × Parser.ParserExtension.Entry)
+  /-- The module's own entries, in the order Lean added them. -/
+  own : Array GrammarEntry
+  /-- For each own entry, a position Lean had reached before adding it, when
+  one is known. Nondecreasing, since entries come in the order Lean added them. -/
+  after : Array (Option Position)
+  /-- The token table of a file, outside the module system, whose only import
+  is the module: the builtin tokens and the global tokens of the module and of
+  everything it imports, directly or not. -/
+  importer : Parser.TokenTable
+
+/-- Each module's entries loaded once, and each module's grammar built once,
+per probe. -/
+structure GrammarCache where
+  loaded : Std.HashMap Name (Array GrammarEntry) := {{}}
+  modules : Std.HashMap Name ModuleGrammar := {{}}
+
+/-- Whether `p` comes before `q` in a file. -/
+def before (p q : Position) : Bool :=
+  p.line < q.line || (p.line == q.line && p.column < q.column)
+
+/-- `entry` as Lean loads it from an `.olean`: a parser entry names the
+constant that holds its parser. -/
+def loadEntry (categories : Parser.ParserCategories) :
+    Parser.ParserExtension.OLeanEntry → ImportM Parser.ParserExtension.Entry
+  | .token tk => return .token tk
+  | .kind k => return .kind k
+  | .category c d b => return .category c d b
+  | .parser c d prio => do
+    let (leading, p) ← Parser.mkParserOfConstant categories d
+    return .parser c d leading p prio
+
+/-- `ParserExtension.addEntryImpl`, failing where it would panic. -/
+def addGrammarEntry (s : Parser.ParserExtension.State) :
+    Parser.ParserExtension.Entry → Except String Parser.ParserExtension.State
+  | .token tk =>
+    if tk == "" then .error "invalid empty symbol"
+    else if (s.tokens.find? tk).isSome then .ok s
+    else .ok {{ s with tokens := s.tokens.insert tk tk }}
+  | .kind k => .ok {{ s with kinds := s.kinds.insert k }}
+  | .category c d b =>
+    .ok (if s.categories.contains c then s
+      else {{ s with categories := s.categories.insert c {{ declName := d, behavior := b }} }})
+  | .parser c d leading p prio => do
+    return {{ s with categories := ← Parser.addParser s.categories c d leading p prio }}
+
+/-- The entries `mod`, at `idx`, added, as Lean loads them. -/
+def loadedEntries (cache : IO.Ref GrammarCache) (env : Environment) (mod : Name) (idx : ModuleIdx) :
+    CommandElabM (Array GrammarEntry) := do
+  if let some known := (← cache.get).loaded.get? mod then return known
+  -- Every category is known here; Lean's own loading checks only that a
+  -- category a parser names exists, so the parsers are the ones it built.
+  let categories := (Parser.parserExtension.getState env).categories
+  let ctx : ImportM.Context := {{ env, opts := {{}} }}
+  let entries ← (Parser.parserExtension.ext.getModuleEntries env idx).mapM fun e =>
+    match e with
+    | .global a => return .global (← (loadEntry categories a).run ctx)
+    | .scoped ns a => return .scoped ns (← (loadEntry categories a).run ctx)
+  cache.modify fun c => {{ c with loaded := c.loaded.insert mod entries }}
+  return entries
+
+/-- The modules whose data Lean loads to compile the module at `modIdx`, as
+`importModulesCore` decides: every module it imports, directly or not,
+unless it is in the module system. Then each module it imports is loaded,
+and through a loaded module only what that module imports `public`ly, or
+everything when an unbroken chain of `import all` reaches it. -/
+def compiledImports (env : Environment) (modIdx : ModuleIdx) : Std.HashSet Name := Id.run do
+  let header := env.header.moduleData[modIdx.toNat]!
+  let everything := !header.isModule
+  -- Each loaded module, with whether `import all` alone reaches it.
+  let mut loaded : Std.HashMap Name Bool := {{}}
+  let mut work : Array (Name × Bool) := header.imports.map fun i => (i.module, everything || i.importAll)
+  while h : work.size > 0 do
+    let (m, all) := work[work.size - 1]
+    work := work.pop
+    if let some known := loaded.get? m then
+      if known || !all then continue
+    loaded := loaded.insert m all
+    let some idx := env.getModuleIdx? m | continue
+    for i in env.header.moduleData[idx.toNat]!.imports do
+      if i.isExported || all then
+        work := work.push (i.module, everything || (all && i.importAll))
+  return loaded.fold (init := {{}}) fun set m _ => set.insert m
+
+/-- The parser states `mod` can have had, as far as the environment shows. A
+module's entries are kept in the order Lean added them: global and scoped
+entries are added only on the main thread, as commands run. A parser entry
+naming a parser declared in the module comes after that declaration began,
+since the parser must exist. -/
+def moduleGrammar (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref SemanticCache) (mod : Name) :
+    CommandElabM ModuleGrammar := do
+  if let some known := (← cache.get).modules.get? mod then return known
+  let env ← getEnv
+  let builtin : Parser.ParserExtension.State := {{
+    tokens := ← Parser.builtinTokenTable.get, kinds := ← Parser.builtinSyntaxNodeKindSetRef.get,
+    categories := ← Parser.builtinParserCategoriesRef.get }}
+  let mut grammar : ModuleGrammar :=
+    {{ base := none, imported := #[], own := #[], after := #[], importer := builtin.tokens }}
+  if let some modIdx := env.getModuleIdx? mod then
+    let compiled := compiledImports env modIdx
+    let mut closure : Std.HashSet Name := {{}}
+    let mut work : Array Name := env.header.moduleData[modIdx.toNat]!.imports.map (·.module)
+    while h : work.size > 0 do
+      let m := work[work.size - 1]
+      work := work.pop
+      if closure.contains m then continue
+      closure := closure.insert m
+      let some idx := env.getModuleIdx? m | continue
+      for i in env.header.moduleData[idx.toNat]!.imports do
+        work := work.push i.module
+    let mut base : Except String Parser.ParserExtension.State := .ok builtin
+    let mut imported := #[]
+    let mut importer := builtin.tokens
+    -- Lean loads a module's imports in the environment's module order, which
+    -- lists every module after its imports.
+    for i in [0:modIdx.toNat] do
+      let m := env.header.moduleNames[i]!
+      if !closure.contains m then continue
+      if compiled.contains m then
+        let some idx := env.getModuleIdx? m | continue
+        for e in ← loadedEntries cache env m idx do
+          match e with
+          | .global entry =>
+            if let .token tk := entry then importer := importer.insert tk tk
+            base := base.bind (addGrammarEntry · entry)
+          | .scoped ns entry => imported := imported.push (ns, entry)
+      else
+        let some idx := env.getModuleIdx? m | continue
+        for e in Parser.parserExtension.ext.getModuleEntries env idx do
+          if let .global (.token tk) := e then importer := importer.insert tk tk
+    let own ← loadedEntries cache env mod modIdx
+    for e in own do
+      if let .global (.token tk) := e then importer := importer.insert tk tk
+    let mut bound : Array (Option Position) := own.map fun _ => none
+    for h : i in [0:own.size] do
+      if let .parser _ declName _ _ _ := entryOf own[i] then
+        if env.getModuleIdxFor? declName == some modIdx then
+          if let some r ← findDeclarationRanges? declName then
+            bound := bound.set! i (some r.range.pos)
+    let mut after := #[]
+    let mut latest : Option Position := none
+    for b in bound do
+      latest := match latest, b with
+        | some p, some q => some (if before p q then q else p)
+        | none, b => b
+        | l, none => l
+      after := after.push latest
+    grammar := {{ base := base.toOption, imported, own, after, importer }}
+  cache.modify fun c => {{ c with modules := c.modules.insert mod grammar }}
+  emitRecord semanticCache <| Json.mkObj [
+    ("table", Json.str "grammar"), ("name", Json.str (toString mod)), ("value", toJson grammar.own.size)]
+  return grammar
+
+/-- The most parser states a source is parsed under. -/
+def grammarLimit : Nat := 256
+
+/-- The token kinds Lean's parser tables index by name rather than by text:
+identifiers and literals. -/
+def literalKeys : List String := ["ident", "num", "scientific", "str", "char", "name", "fieldIdx", "hygieneInfo"]
+
+/-- Texts one of which a source must contain for `entry`, added to a state
+with tokens `base`, to change how Lean parses it; `none` when any source can.
+A token matters only where it occurs. A parser indexed by its first tokens
+runs only where one of them is read, and a token is read only where it occurs,
+unless it names identifiers or literals. -/
+def entryKeys (base : Parser.TokenTable) : Parser.ParserExtension.Entry → Option (List String)
+  | .token tk => if tk == "" then none else if (base.find? tk).isSome then some [] else some [tk]
+  | .kind _ => some []
+  | .category .. => none
+  | .parser _ _ _ p _ => match p.info.firstTokens with
+    | .tokens tks | .optTokens tks =>
+      if tks.any (fun tk => tk == "" || literalKeys.contains tk) then none else some tks
+    | _ => none
+
+/-- Whether `stx` holds an `open` of a name that may resolve to one of
+`namespaces`; inside the source, that `open` activates scoped entries the probe's
+parse does not. -/
+partial def opensScoped (namespaces : Array Name) (stx : Syntax) : Bool :=
+  let ids := if stx.isOfKind ``Parser.Command.openSimple then stx[0].getArgs
+    else if stx.isOfKind ``Parser.Command.openScoped then stx[1].getArgs else #[]
+  ids.any (fun id =>
+      let n := (id.getId.replacePrefix rootNamespace .anonymous).componentsRev
+      namespaces.any fun q => n.isPrefixOf q.componentsRev) ||
+    stx.getArgs.any (opensScoped namespaces)
+
+/-- Whether `stx` holds a quotation `` `(p| …) `` whose `p` is not a parser
+category. Lean resolved such a `p` in the current namespace and under the
+`open`s in force, which the probe's parse does not have, and read the
+quotation with the tokens of the parser it found. -/
+partial def quotesParser (env : Environment) (stx : Syntax) : Bool :=
+  (stx.isOfKind ``Parser.Term.dynamicQuot && !Parser.isParserCategory env stx[1].getId.eraseMacroScopes) ||
+    stx.getArgs.any (quotesParser env)
+
+/-- A declaration's source as the probe parses it. -/
+structure Snippet where
+  text : String
+  /-- The column the source starts at in its file. -/
+  column : Nat
+  /-- An environment for each parser state Lean may have parsed the source
+  with, up to entries that cannot change how it parses; empty when there are
+  too many. -/
+  grammars : Array Environment
+  /-- The namespaces with scoped entries that can change how it parses. -/
+  namespaces : Array Name
+
+/-- Parse `input`, starting at `column`, as one command of the grammar in
+`env`: `none` when it does not parse, and an error when it opens one of
+`namespaces` or quotes with a parser it names, which leaves the parse
+unknown. -/
+def parseCommand (env : Environment) (column : Nat) (namespaces : Array Name) (input : String) :
+    Except Unit (Option (Syntax × ByteArray)) :=
+  let padded := "".pushn ' ' column ++ input
+  let p := Parser.andthenFn Parser.whitespace (Parser.categoryParserFnImpl `command)
+  let ictx := Parser.mkInputContext padded "<input>"
+  let tokens := (Parser.parserExtension.getState env).tokens
+  let s := p.run ictx {{ env, options := {{}} }} tokens {{ Parser.mkParserState padded with pos := ⟨column⟩ }}
+  if s.allErrors.isEmpty && ictx.atEnd s.pos then
+    let stx := s.stxStack.back
+    if opensScoped namespaces stx || quotesParser env stx then .error ()
+    else .ok (some (stx, padded.toUTF8))
+  else .ok none
+
+/-- The one result every grammar under which a source parses gives: `none`
+when it parses under none, `some none` when they disagree or a parse is
+unknown. -/
+def agreement {{α : Type}} [BEq α] (results : Array (Except Unit (Option α))) : Option (Option α) := Id.run do
+  if results.any (· matches .error _) then return some none
+  let parsed := results.filterMap fun | .ok r => r | .error _ => none
+  let some first := parsed[0]? | return none
+  return some (if parsed.all (· == first) then some first else none)
+
+/-- Texts that hold a text of at most `window + 1` characters exactly when an
+input a statement is parsed from does. Those inputs are the source, then each
+prefix that ends before a `:=` with `:= sorry` as its value; each prefix is
+part of the source, so only text across its seam with `:= sorry` is new, and
+the texts are as long in total as the source and the seams. -/
+def statementInputs (window : Nat) (snippet : String) : Array String := Id.run do
+  let mut inputs := #[snippet]
+  let mut written := ""
+  for part in (snippet.splitOn ":=").dropLast do
+    written := written ++ part
+    inputs := inputs.push ((written.takeEnd window).toString ++ ":= sorry")
+    written := written ++ ":="
+  return inputs
 
 /-- Capture a declaration from the same source snapshot the probe inspects,
-and parse it with Lean's own parser. The surrounding source-tree guard rejects
-concurrent edits. The parse is `none` when the slice does not parse alone; the
-environment it was parsed in is returned for parsing parts of it. -/
-def declarationSnippet (c : Name) :
-    CommandElabM (Option (String × Option Syntax × Environment × Name)) := do
+with every parser state it may have been parsed with. `inputs window source`
+gives texts that hold each text of at most `window + 1` characters exactly
+when an input the source will be parsed from does. The surrounding
+source-tree guard rejects concurrent edits. Each state is the module's first-line state, the scoped entries of a
+set of namespaces, and the module's own entries up to a point, of which
+those in a namespace only when it is in the set:
+- An own entry comes no earlier than the point its bound proves.
+- Any namespace may be active: `open` and `namespace` activate one, and a
+  macro or elaborator can run them, so the file need not name it.
+- An entry matters only if `entryKeys` says the inputs can feel it, so only
+  points just after such an entry, and namespaces holding one, are tried. -/
+def declarationSnippet (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref SemanticCache) (c : Name)
+    (inputs : Nat → String → Array String) : CommandElabM (Option Snippet) := do
   let env ← getEnv
   let some r ← findDeclarationRanges? c | return none
   let some idx := env.getModuleIdxFor? c | return none
@@ -442,111 +664,177 @@ def declarationSnippet (c : Name) :
   let sp ← getSrcSearchPath
   let some path ← sp.findWithExt "lean" mod | return none
   let text ← IO.FS.readFile path
-  let lines := text.splitOn "\n"
   let snippet := sourceSlice text r.range
-  -- The declaration sits inside the namespaces its name lives in, and `open X`
-  -- written there may refer to any of them, as in `namespace A` … `open B`.
-  let mut scopes : Array Name := #[]
-  let mut ns := (privateToUserName c).getPrefix
-  while ns != Name.anonymous do
-    scopes := scopes.push ns
-    ns := ns.getPrefix
-  -- `activateScoped` mutates the environment. Isolate those parser-only changes
-  -- so one requested declaration cannot change how the next one is parsed.
-  withEnv env do
-    for scope in scopes do
-      if env.isNamespace scope then activateScoped scope
-    for opened in openedNamespaces lines r.range.pos do
-      for scope in scopes.push Name.anonymous do
-        if env.isNamespace (scope ++ opened) then activateScoped (scope ++ opened)
-    let penv ← getEnv
-    match Parser.runParserCategory penv `command snippet with
-    | .error _ => return some (snippet, none, penv, mod)
-    | .ok stx => return some (snippet, some stx, penv, mod)
+  let column := r.range.pos.column
+  let g ← moduleGrammar cache semanticCache mod
+  let some base := g.base | return some {{ text := snippet, column, grammars := #[], namespaces := #[] }}
+  -- One character less than the longest text an entry can need.
+  let longest (w : Nat) (e : Parser.ParserExtension.Entry) : Nat :=
+    (entryKeys base.tokens e).getD [] |>.foldl (fun w k => Nat.max w k.length) w
+  let window := g.imported.foldl (fun w (_, e) => longest w e) 1
+  let window := g.own.foldl (fun w e => longest w (entryOf e)) window - 1
+  let inputs := inputs window snippet
+  let matters (e : Parser.ParserExtension.Entry) : Bool :=
+    match entryKeys base.tokens e with
+    | none => true
+    | some keys => keys.any fun k => inputs.any (·.contains k)
+  -- Own entries from `hi` on come after the declaration began.
+  let hi := (g.after.findIdx? fun a => a.any fun p => !before p r.range.pos).getD g.own.size
+  let mut namespaces : Array Name := #[]
+  for (ns, e) in g.imported do
+    if !namespaces.contains ns && matters e then namespaces := namespaces.push ns
+  for e in g.own.extract 0 hi do
+    if let .scoped ns entry := e then
+      if !namespaces.contains ns && matters entry then namespaces := namespaces.push ns
+  let inScope (A : Array Name) : GrammarEntry → Bool
+    | .global _ => true
+    | .scoped ns _ => A.contains ns
+  let mut cuts : Array Nat := #[0]
+  for i in [0:hi] do
+    if inScope namespaces g.own[i]! && matters (entryOf g.own[i]!) then cuts := cuts.push (i + 1)
+  if grammarLimit < cuts.size * 2 ^ namespaces.size then
+    return some {{ text := snippet, column, grammars := #[], namespaces }}
+  let mut grammars : Array Environment := #[]
+  for bits in List.range (2 ^ namespaces.size) do
+    let active := (List.range namespaces.size).foldl (init := #[]) fun A i =>
+      if bits.testBit i then A.push namespaces[i]! else A
+    let activeScopes := active.foldl NameSet.insert {{}}
+    let mut state := g.imported.foldl (init := Except.ok base) fun s (ns, e) =>
+      if active.contains ns then s.bind (addGrammarEntry · e) else s
+    let mut states := #[]
+    for i in [0:hi + 1] do
+      if cuts.contains i then
+        if let .ok s := state then states := states.push s
+      if let some e := g.own[i]? then
+        if i < hi && inScope active e then state := state.bind (addGrammarEntry · (entryOf e))
+    for s in states do
+      grammars := grammars.push <| Parser.parserExtension.ext.modifyState env fun _ =>
+        {{ stateStack := [{{ state := s, activeScopes }}], scopedEntries := {{}}, newEntries := [] }}
+  return some {{ text := snippet, column, grammars, namespaces }}
 
-/-- `written` with its comment ranges, or with `null` ranges when the probe cannot
-tell a comment-like token from a comment. `parsed`, the text `stx?` was parsed
-from, starts with `written`. -/
-def shownSource (penv : Environment) (mod : Name) (written parsed : String) (stx? : Option Syntax) :
-    IO (Option (String × Json)) := do
-  if ← commentLikeToken penv mod written then return some (written, Json.null)
-  return some (written, match stx? with
-    | some stx => commentsJson parsed.toUTF8 stx written.utf8ByteSize
-    | none => Json.null)
-
-/-- A declaration's source and its comment ranges, `null` when it does not
-parse alone; the caller then decides whether the source can be shown. -/
-def declarationSource (c : Name) : CommandElabM (Option (String × Json)) := do
-  let some (snippet, stx?, penv, mod) ← declarationSnippet c | return none
-  shownSource penv mod snippet snippet stx?
+/-- A declaration's source and its comment ranges, `null` unless every parser
+state under which it parses agrees on them; the caller then decides whether
+the source can be shown. -/
+def declarationSource (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref SemanticCache) (c : Name) :
+    CommandElabM (Option (String × Json)) := do
+  let some s ← declarationSnippet cache semanticCache c (fun _ text => #[text]) | return none
+  let comments := s.grammars.map fun env =>
+    (parseCommand env s.column s.namespaces s.text).map fun parsed =>
+      parsed.map fun (stx, bytes) => commentsJson bytes stx s.column s.text.utf8ByteSize
+  return some (s.text, (agreement comments).join.getD Json.null)
 
 /-- Some declarations have a source range only through a parent that Lean's
 environment structurally identifies, such as a constructor's inductive type.
 Show that parent unless it is a theorem or axiom, whose source carries a proof.
 An internal-looking name is not provenance: project metaprograms can create it. -/
-partial def companionSource (c : Name) : CommandElabM (Option (String × Json)) := do
+partial def companionSource (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref SemanticCache) (c : Name) :
+    CommandElabM (Option (String × Json)) := do
   let env ← getEnv
   let parent := c.getPrefix
   if (← findDeclarationRanges? c).isSome || !env.contains parent then return none
   if canonical env c == c then return none
   if (← findDeclarationRanges? parent).isNone then
-    return ← companionSource parent
+    return ← companionSource cache semanticCache parent
   -- A field's companions (`S.x._default`, `S.p._autoParam`) read best in the
   -- structure that declares the field.
   let shown := canonical env parent
   let kind := kindOf env shown
   if kind == "theorem" || kind == "axiom" then return none
-  declarationSource shown
+  declarationSource cache semanticCache shown
 
-/-- The node where a parsed declaration's value starts, ending its statement. -/
-def valueNode? (stx : Syntax) : Option Syntax :=
+/-- The node kinds `valueNode?` looks for. -/
+def valueKinds : List SyntaxNodeKind := [``Parser.Command.declaration, ``Parser.Command.declValSimple,
+  ``Parser.Command.declValEqns, ``Parser.Command.whereStructInst]
+
+/-- Whether an alternative of a choice node in `stx` holds a node `valueNode?`
+looks for. -/
+partial def choiceHoldsValue (stx : Syntax) : Bool :=
+  if stx.isOfKind choiceKind then
+    stx.getArgs.any fun alt => (alt.find? fun n => valueKinds.any n.isOfKind).isSome
+  else stx.getArgs.any choiceHoldsValue
+
+/-- The node where a parsed declaration's value starts, ending its statement;
+an error when a choice node holds one. A choice node's alternatives come in
+the order Lean added their parsers, which the probe does not rebuild for
+scoped and own entries, so which alternative a search reaches first is
+unknown. -/
+def valueNode? (stx : Syntax) : Except Unit (Option Syntax) := do
+  if choiceHoldsValue stx then throw ()
   let decl := (stx.find? (·.isOfKind ``Parser.Command.declaration)).getD stx
-  (decl.find? (·.isOfKind ``Parser.Command.declValSimple)).orElse fun _ =>
+  return (decl.find? (·.isOfKind ``Parser.Command.declValSimple)).orElse fun _ =>
     (decl.find? (·.isOfKind ``Parser.Command.declValEqns)).orElse fun _ =>
       decl.find? (·.isOfKind ``Parser.Command.whereStructInst)
 
 /-- The statement of a declaration that does not parse whole, as when only its
-proof uses `local notation`: cut at successive `:=` tokens and parse the prefix
-with `:= sorry` as its value. The parsed value's start is the real statement
+proof uses `local notation`, or whose parse is unknown past the statement, as
+when its proof holds an `open … in`: cut at successive `:=` tokens and parse
+the prefix with `:= sorry` as its value. The parsed value's start is the real statement
 boundary. A cut inside a structure-style proof therefore recovers its preceding
 `where`; one inside the statement (`let x := …`) does not parse as a command. -/
-def statementPrefix? (penv : Environment) (snippet : String) :
-    Option (String × Syntax) := Id.run do
+def statementPrefix? (env : Environment) (column : Nat) (namespaces : Array Name) (snippet : String) :
+    Except Unit (Option (String × Syntax × ByteArray)) := do
   let mut written := ""
   for part in (snippet.splitOn ":=").dropLast do
     written := written ++ part
-    if let .ok stx := Parser.runParserCategory penv `command (written ++ ":= sorry") then
-      if let some v := valueNode? stx then
+    if let some (stx, bytes) ← parseCommand env column namespaces (written ++ ":= sorry") then
+      if let some v := (← valueNode? stx) then
         if let some pos := v.getPos? then
-          if Nat.ble pos.byteIdx written.utf8ByteSize then
-            let statementBytes := snippet.toUTF8.extract 0 pos.byteIdx
-            return some (String.fromUTF8! statementBytes, stx)
+          if Nat.ble (pos.byteIdx - column) written.utf8ByteSize then
+            let statementBytes := snippet.toUTF8.extract 0 (pos.byteIdx - column)
+            return some (String.fromUTF8! statementBytes, stx, bytes)
     written := written ++ ":="
   return none
 
 /-- The declaration's source up to its value: the statement as written, without
 the proof, with its comment ranges. Parsed with Lean's own parser rather than
-cut by pattern matching. -/
-def statementSource (root : Name) : CommandElabM (Option (String × Json)) := do
+cut by pattern matching, under every parser state the source may have been
+parsed with; states that cut the statement differently leave it unknown, and
+states that agree on the cut but not on the comments leave its comments
+unknown. -/
+def statementSource (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref SemanticCache) (root : Name) :
+    CommandElabM (Option (String × Json)) := do
   let env ← getEnv
-  let some (snippet, stx?, penv, mod) ← declarationSnippet root | return none
-  let shown := shownSource penv mod
+  let some s ← declarationSnippet cache semanticCache root statementInputs | return none
+  let snippet := s.text
   let kind := kindOf env root
   -- A type declaration has no value to strip: all of it is the statement.
-  if kind == "structure" || kind == "class" || kind == "inductive" then
-    return ← shown snippet.trimAsciiEnd.toString snippet stx?
-  let some stx := stx? | do
-    let some (written, stx) := statementPrefix? penv snippet | return none
-    shown written.trimAsciiEnd.toString (written ++ ":= sorry") (some stx)
-  let some v := valueNode? stx | do
-    if kind == "axiom" || kind == "opaque" then
-      return ← shown snippet.trimAsciiEnd.toString snippet (some stx)
-    return none
-  let some pos := v.getPos? | return none
-  -- `pos` is a byte position: cut by bytes, not by characters, or every `∀`
-  -- before the value pushes the cut past it.
-  let bytes := snippet.toUTF8.extract 0 pos.byteIdx
-  shown (String.fromUTF8! bytes).trimAsciiEnd.toString snippet (some stx)
+  let typeDecl := kind == "structure" || kind == "class" || kind == "inductive"
+  let shown (written : String) (stx : Syntax) (bytes : ByteArray) : Option (String × Json) :=
+    some (written, commentsJson bytes stx s.column written.utf8ByteSize)
+  -- One state's statement: `none` when the source does not parse under it,
+  -- `some none` when it parses with no statement to cut.
+  let statement (penv : Environment) : Except Unit (Option (Option (String × Json))) := do
+    let cut : Except Unit (Option (Option (String × Json))) := do
+      return (← statementPrefix? penv s.column s.namespaces snippet).map fun (written, stx, bytes) =>
+        shown written.trimAsciiEnd.toString stx bytes
+    match parseCommand penv s.column s.namespaces snippet with
+    -- An `open` or quotation that leaves the parse unknown changes only the
+    -- text after it, so a cut before it stands; `statementPrefix?` leaves the
+    -- statement unknown when one lies inside it.
+    | .error () => if typeDecl then throw () else cut
+    | .ok none => if typeDecl then return none else cut
+    | .ok (some (stx, bytes)) =>
+      if typeDecl then return some (shown snippet.trimAsciiEnd.toString stx bytes)
+      match ← valueNode? stx with
+      | none =>
+        return some (if kind == "axiom" || kind == "opaque" then shown snippet.trimAsciiEnd.toString stx bytes
+          else none)
+      | some v => match v.getPos? with
+        | none => return some none
+        -- `pos` is a byte position: cut by bytes, not by characters, or every
+        -- `∀` before the value pushes the cut past it.
+        | some pos =>
+          return some (shown (String.fromUTF8! (snippet.toUTF8.extract 0 (pos.byteIdx - s.column))).trimAsciiEnd.toString
+            stx bytes)
+  let results := s.grammars.map statement
+  match agreement results with
+  | some (some found) => return found
+  | some none =>
+    let written := results.map (·.map (·.map (·.map (·.1))))
+    return match agreement written with
+      | some (some (some w)) => some (w, Json.null)
+      | _ => none
+  | none => return if typeDecl then some (snippet.trimAsciiEnd.toString, Json.null) else none
 
 def rangeJson (c : Name) : CommandElabM Json := do
   match ← findDeclarationRanges? c with
@@ -559,14 +847,16 @@ def emit (cache : IO.Ref SemanticCache) (request : String)
 
 /-- Emit one entry of a table shared by every root, the first time a root
 needs it. Roots name their trusted declarations, external semantic material,
-and boundary modules, so what many roots share is stated once per run. -/
+and boundary modules, so what many roots share is stated once per run. An
+entry counts as stated once it is written: when computing it fails, the next
+root that needs it tries again. -/
 def emitShared (cache : IO.Ref SemanticCache) (table : String) (name : Name)
     (value : CommandElabM Json) : CommandElabM Unit := do
   unless (← cache.get).emitted.contains (table, name) do
-    cache.modify fun s => {{ s with emitted := s.emitted.insert (table, name) }}
     let entry := Json.mkObj [
       ("table", Json.str table), ("name", Json.str (toString name)), ("value", ← value)]
     emitRecord cache entry
+    cache.modify fun s => {{ s with emitted := s.emitted.insert (table, name) }}
 
 /-- The modules that belong to the running toolchain. A name root is not
 enough: a dependency may name its own module `Lake.Foo`, and that module is
@@ -585,6 +875,7 @@ def toolchainModules (env : Environment) : IO (Std.HashSet Name) := do
 def skeleton
     (projectRoots : List Name)
     (coreModules : Std.HashSet Name)
+    (grammarCache : IO.Ref GrammarCache)
     (semanticCache : IO.Ref SemanticCache)
     (request : String) (root : Name) : CommandElabM Unit := do
   let env ← getEnv
@@ -608,6 +899,12 @@ def skeleton
     return (← expandedMeaning semanticCache env isLocal c).2
   let material (c : Name) : CommandElabM Json := do
     semanticMaterial semanticCache env c (← expandedMeaning semanticCache env isLocal c).1
+  -- Signatures print with the token table of a file whose only import is the
+  -- root's module, so a name is escaped as `«…»` exactly where `#check` there
+  -- escapes it, whatever the helper's own imports declare.
+  let rootGrammar ← moduleGrammar grammarCache semanticCache ((moduleOf root).getD Name.anonymous)
+  let printEnv := Parser.parserExtension.modifyState env fun s =>
+    {{ s with tokens := rootGrammar.importer }}
   let mut trusted : Array Name := #[]
   let mut edges : Array (Name × Array Name) := #[]
   let mut assumed : Array Name := #[]
@@ -676,15 +973,15 @@ def skeleton
   let fields (c : Name) (companion : Bool) : CommandElabM (List (String × Json)) := do
     let kind := kindOf env c
     let shown ← if kind == "theorem" || kind == "axiom" then pure none else do
-      let s ← declarationSource c
-      if s.isNone && companion then companionSource c else pure s
+      let s ← declarationSource grammarCache semanticCache c
+      if s.isNone && companion then companionSource grammarCache semanticCache c else pure s
     let deps := (edges.find? (·.1 == c)).map (·.2) |>.getD #[]
     return [
       ("kind", Json.str kind),
       ("module", Json.str (toString ((moduleOf c).getD Name.anonymous))),
       ("range", ← rangeJson c),
-      ("signature", Json.str (← signatureOf c)),
-      ("raw_signature", Json.str (← signatureOf c (raw := true))),
+      ("signature", Json.str (← withEnv printEnv (signatureOf c))),
+      ("raw_signature", Json.str (← withEnv printEnv (signatureOf c (raw := true)))),
       ("semantic_schema", Json.str semanticSchema),
       ("semantic", ← material c),
       ("depends", Json.arr (deps.map fun d => Json.str (toString d))),
@@ -697,7 +994,7 @@ def skeleton
       return Json.mkObj <| [("name", Json.str (toString c)),
         ("source_name", Json.str (toString (privateToUserName c)))] ++ (← fields c true)
     items := items.push (Json.str (toString c))
-  let (statement, statementComments) := match ← statementSource root with
+  let (statement, statementComments) := match ← statementSource grammarCache semanticCache root with
     | some (s, comments) => (Json.str s, comments)
     | none => (Json.null, Json.null)
   for d in sortedAssumed ++ sortedAxioms do
@@ -712,11 +1009,13 @@ def skeleton
     ("boundary_modules", Json.arr boundaryModuleNames),
     ("axioms", Json.arr (sortedAxioms.map fun d => Json.str (toString d)))] ++ (← fields root false)
 
-end AutoformSkeleton
-
-set_option maxHeartbeats 0 in
-run_cmd do
-  let projectRoots : List Name := [{project_roots}]
+/-- The probe's entry point: the skeleton of each requested root, keyed by the
+name as the CLI spelled it. It runs in the probe's command scope, which has no
+`open` and no option set, so signatures print with only `packetOptions` added. -/
+def main (projectRoots : List Name) (roots : List (String × Name)) : CommandElabM Unit :=
+  -- Elaborated proofs can be large; reading them has no heartbeat budget.
+  withScope (fun scope => {{ scope with opts := maxHeartbeats.set scope.opts 0 }}) do
+  let grammarCache : IO.Ref AutoformSkeleton.GrammarCache ← IO.mkRef {{}}
   let coreModules ← AutoformSkeleton.toolchainModules (← getEnv)
   -- A command's `IO.println` output is captured and printed as one message when
   -- the command ends, at a cost quadratic in its size: on a Mathlib project that
@@ -726,7 +1025,23 @@ run_cmd do
   let out ← IO.FS.Handle.mk path .write
   let semanticCache : IO.Ref AutoformSkeleton.SemanticCache ← IO.mkRef {{ output := out }}
   try
-    for (request, root) in [{roots}] do
-      AutoformSkeleton.skeleton projectRoots coreModules semanticCache request root
+    for (request, root) in roots do
+      -- An error confined to one root leaves the others to be read. A record
+      -- that could not be written, or an interrupt, ends the whole probe.
+      tryCatch (AutoformSkeleton.skeleton projectRoots coreModules grammarCache semanticCache request root)
+        fun e => do
+          if (← semanticCache.get).broken || e.isInterrupt then throw e
+          let message ← e.toMessageData.toString
+          emit semanticCache request [("error", Json.str (message.take errorLimit).toString)]
   finally
     out.flush
+
+end AutoformSkeleton
+
+-- Each probe finds this module after the project's own search path, so a
+-- project or dependency module of the same name would be imported instead.
+run_cmd do
+  let helper := Name.mkSimple "{helper_module}"
+  if let some path ← (← searchPathRef.get).findWithExt "olean" helper then
+    throwError "the project's search path already provides a module named {{helper}}, at {{path}}; \
+      the skeleton probe needs that module name for its own helpers"

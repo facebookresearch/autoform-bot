@@ -85,3 +85,4 @@ jobs:
           tests/test_skeleton.py::test_packet_publication_rolls_back_when_interrupted_after_backup_rename
           tests/test_skeleton.py::test_packet_publication_restores_old_trees_when_quarantine_cleanup_fails
           tests/test_skeleton.py::test_packet_publication_does_not_overwrite_during_backup_restore
+          tests/test_readback.py::test_loading_without_no_follow_descriptors_refuses_a_link_present_only_while_opening

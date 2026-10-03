@@ -10,16 +10,18 @@ a second graph file that could drift from the book.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from .markdown import content_lines
+from .snapshot import BlueprintSnapshot, SnapshotError, read_regular_file
 
+_LINE_LOCATOR = re.compile(r"\AL(\d+)(?:-L(\d+))?\Z")
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
-_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _LINK = re.compile(r"(?<!!)\[[^\]]+\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+[^)]*)?\)")
-_HTML_COMMENT = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
 _INLINE_CODE = re.compile(r"(`+).*?\1")
 ARTICLE_ID_PATTERN = re.compile(r"af_[0-9a-f]{24}\Z")
 _FRONTMATTER_KEYS = frozenset(
@@ -35,8 +37,10 @@ _FRONTMATTER_KEYS = frozenset(
         "not_ready",
         "origin",
         "discussion",
+        "review_approved",
     }
 )
+_SKELETON_HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _FORMALIZED = "formalized"
 _TRUE = frozenset({"true", "yes"})
 _FALSE = frozenset({"false", "no"})
@@ -55,6 +59,23 @@ class GraphValidationError(ValueError):
     def __init__(self, issues: list[str] | tuple[str, ...]) -> None:
         self.issues = tuple(issues)
         super().__init__("; ".join(self.issues))
+
+
+@dataclass(frozen=True, slots=True)
+class CitedSource:
+    """The first ``## Sources`` link that locates lines in a non-Markdown file.
+
+    ``file`` is the canonical file whose bytes the graph captured, and
+    ``locator`` the path and lines a passage from it is cited as. ``problem``
+    says why the link names no captured file.
+    """
+
+    target: str
+    start: int
+    end: int
+    file: Path | None = None
+    locator: str | None = None
+    problem: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +110,10 @@ class Node:
     depth: int = 0
     article_id: str | None = None
     source_sha256: str | None = None
+    #: Hash of the complete review surface a person approved. Unlike the
+    #: skeleton alone, this binds the article, source, and read-backs.
+    review_approved: str | None = None
+    cited_source: CitedSource | None = None
 
     @property
     def formalizable(self) -> bool:
@@ -98,10 +123,22 @@ class Node:
 
 @dataclass(frozen=True, slots=True)
 class Graph:
-    """A validated blueprint graph, keyed by stable node id."""
+    """A validated blueprint graph, keyed by stable node id.
+
+    ``snapshot`` holds the bytes the graph was built from, keyed by canonical
+    path: every article it parsed and every source an article cites with a
+    line locator. Text shown or judged beside the graph is read from there, so
+    it is always the state the graph describes.
+    """
 
     blueprint_dir: Path
     nodes: dict[str, Node]
+    snapshot: BlueprintSnapshot = field(default_factory=BlueprintSnapshot)
+
+    def article_text(self, node: Node) -> str:
+        """Return the text ``node`` was parsed from."""
+
+        return self.snapshot.text(node.path)
 
     @property
     def edge_count(self) -> int:
@@ -127,6 +164,7 @@ class _ParsedNode:
 class _NodeSource:
     id: str
     path: Path
+    content: bytes
     text: str
     source_sha256: str
 
@@ -146,6 +184,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     issues.extend(discovery_issues)
     article_ids: dict[str, str] = {}
     source_hashes = {source.id: source.source_sha256 for source in sources}
+    files: dict[Path, bytes] = {}
 
     for source in sources:
         canonical = source.path.resolve()
@@ -157,6 +196,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             continue
         canonical_ids[canonical] = source.id
         node_ids[source.id] = canonical
+        files[canonical] = source.content
         node, node_issues = _parse_node(source.id, canonical, source.text)
         issues.extend(node_issues)
         if node is not None:
@@ -176,6 +216,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
 
     parents = _article_parents(parsed)
     nodes: dict[str, Node] = {}
+    cited_files: dict[Path, bytes | str] = {}
     for parsed_node in parsed:
 
         def resolve(targets: tuple[str, ...], node: _ParsedNode = parsed_node) -> list[str]:
@@ -220,6 +261,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             depth=_article_depth(parsed_node.id, parents),
             article_id=metadata.get("article_id"),
             source_sha256=source_hashes[parsed_node.id],
+            review_approved=metadata.get("review_approved"),
+            cited_source=_cite(parsed_node, blueprint, cited_files),
         )
 
     if not issues:
@@ -228,7 +271,93 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         issues.extend(_find_rollup_cycles(nodes))
     if issues:
         raise GraphValidationError(issues)
-    return Graph(blueprint_dir=blueprint, nodes=nodes)
+    files.update((path, content) for path, content in cited_files.items() if isinstance(content, bytes))
+    return Graph(blueprint_dir=blueprint, nodes=nodes, snapshot=BlueprintSnapshot(files))
+
+
+def _cite(node: _ParsedNode, blueprint: Path, captured: dict[Path, bytes | str]) -> CitedSource | None:
+    """Capture the first non-Markdown source ``node`` cites with a line locator.
+
+    ``captured`` holds each file read so far, or why it could not be, so a
+    source several articles cite is read once and they all see the same bytes.
+    """
+
+    for target in node.source_targets:
+        parsed = urlsplit(target)
+        path = unquote(parsed.path)
+        match = _LINE_LOCATOR.fullmatch(unquote(parsed.fragment) or "")
+        if (
+            parsed.scheme
+            or parsed.netloc
+            or match is None
+            or not path
+            or Path(path).suffix.casefold() == ".md"
+        ):
+            continue
+        start = int(match.group(1))
+        end = int(match.group(2) or start)
+        if "\x00" in path:
+            return CitedSource(target, start, end, problem="contains an invalid path")
+        try:
+            candidate = (node.path.parent / path).resolve()
+            relative = candidate.relative_to(blueprint).as_posix()
+        except ValueError:
+            return CitedSource(target, start, end, problem="points outside the blueprint")
+        if candidate not in captured:
+            captured[candidate] = _capture_cited_file(candidate)
+        content = captured[candidate]
+        if isinstance(content, str):
+            return CitedSource(target, start, end, problem=content)
+        return CitedSource(target, start, end, file=candidate, locator=f"{relative}#L{start}-L{end}")
+    return None
+
+
+def _capture_cited_file(path: Path) -> bytes | str:
+    if os.path.lexists(path) and not path.is_file():
+        return "names something other than a regular file"
+    try:
+        content = read_regular_file(path, label="cited source")
+    except SnapshotError:
+        return "names a file that is not readable UTF-8 text"
+    return "names a missing file" if content is None else content
+
+
+def source_passage(graph: Graph, node: Node, *, issues: list[str] | None = None) -> tuple[str | None, str | None]:
+    """Return the passage an article cites through a line locator, and the locator.
+
+    A ``## Sources`` link to a non-Markdown file inside the blueprint with a
+    ``#L<start>-L<end>`` fragment names the exact source text the statement
+    came from. The first such link wins. Markdown targets are notes, not
+    passages, and are ignored here. The text is cut from the bytes ``graph``
+    captured when it was loaded, so it is the passage of the state the graph
+    describes. When the first locator names no text there is no passage, and
+    the reason is appended to ``issues`` if given.
+    """
+
+    cited = node.cited_source
+    if cited is None:
+        return None, None
+
+    def broken(why: str) -> tuple[None, None]:
+        if issues is not None:
+            issues.append(f"source locator {cited.target} {why}")
+        return None, None
+
+    if cited.problem is not None or cited.file is None:
+        return broken(cited.problem or "names a missing file")
+    try:
+        # Lines are what an editor or `sed` counts: newline-separated. Python's
+        # `splitlines` also breaks on form feeds, which `pdftotext` writes
+        # between pages, and every locator into such a file would then drift
+        # by one line per page.
+        lines = graph.snapshot.text(cited.file).split("\n")
+    except UnicodeError:
+        return broken("names a file that is not readable UTF-8 text")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if cited.start < 1 or cited.end < cited.start or cited.end > len(lines):
+        return broken("names no lines of its file")
+    return "\n".join(lines[cited.start - 1 : cited.end]), cited.locator
 
 
 def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
@@ -264,7 +393,7 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
             issues.append(f"{node_id}: node file escapes the roadmap directory")
             continue
         sources.append(
-            _NodeSource(node_id, canonical, text, hashlib.sha256(content).hexdigest())
+            _NodeSource(node_id, canonical, content, text, hashlib.sha256(content).hexdigest())
         )
 
     issues.extend(_chapter_issues(roadmap_root))
@@ -365,22 +494,9 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         _SOURCES_SECTION: [],
     }
     section: str | None = None
-    fence: tuple[str, int] | None = None
-    body = _HTML_COMMENT.sub("", "\n".join(lines[body_start:]))
+    body = "\n".join(lines[body_start:])
 
-    for line in body.splitlines():
-        fence_match = _FENCE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            marker_kind = marker[0]
-            if fence is None:
-                fence = (marker_kind, len(marker))
-            elif marker_kind == fence[0] and len(marker) >= fence[1]:
-                fence = None
-            continue
-        if fence is not None:
-            continue
-
+    for line in content_lines(body):
         heading = _HEADING.match(line)
         if heading:
             level = len(heading.group(1))
@@ -416,6 +532,16 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         metadata,
     )
     return parsed, []
+
+
+def frontmatter_value(text: str, key: str) -> str | None:
+    """Return one canonical frontmatter value of an article's text, or None.
+
+    Frontmatter that does not parse cleanly yields None, so a caller comparing
+    another revision of an article never trusts a value the graph would reject.
+    """
+    metadata, _, issues = _parse_frontmatter("", text.splitlines())
+    return None if issues else metadata.get(key)
 
 
 def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], int, list[str]]:
@@ -475,6 +601,10 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
     if key == "origin":
         if folded not in {"cited", "bridged", "background"}:
             return value, f"{location}: 'origin' accepts cited, bridged, or background"
+        return folded, None
+    if key == "review_approved":
+        if not _SKELETON_HASH.fullmatch(folded):
+            return value, f"{location}: '{key}' must be a `sha256:<64 hex>` hash from `autoform review`"
         return folded, None
     return value, None
 
@@ -694,8 +824,11 @@ def _is_within(path: Path, directory: Path) -> bool:
 
 
 __all__ = [
+    "CitedSource",
     "Graph",
     "GraphValidationError",
     "Node",
+    "frontmatter_value",
     "load_graph",
+    "source_passage",
 ]

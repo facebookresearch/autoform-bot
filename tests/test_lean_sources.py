@@ -86,6 +86,13 @@ def test_commented_out_code_is_not_indexed(tmp_path: Path) -> None:
     assert index.find("Ghost.commented_out") is None
 
 
+def test_nothing_after_exit_is_indexed(tmp_path: Path) -> None:
+    index = _index(tmp_path, "def real : Nat := 1\n#exit\ndef dead : Nat := 2\n")
+
+    assert index.find("real") is not None
+    assert index.find("dead") is None
+
+
 def test_line_comments_are_ignored(tmp_path: Path) -> None:
     index = _index(tmp_path, "-- def notReal : Nat := 0\ndef real : Nat := 1\n")
 
@@ -104,7 +111,12 @@ def test_build_output_is_skipped(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "schema", ["autoform-skeleton-packets/v1", "autoform-skeleton-packets/v2"]
+    "schema",
+    [
+        "autoform-skeleton-packets/v1",
+        "autoform-skeleton-packets/v2",
+        "autoform-review-packets/v1",
+    ],
 )
 def test_managed_packet_output_is_not_indexed_as_project_source(
     tmp_path: Path, schema: str
@@ -117,6 +129,18 @@ def test_managed_packet_output_is_not_indexed_as_project_source(
         json.dumps({"kind": "packets", "packets": [], "schema": schema}) + "\n",
         encoding="utf-8",
     )
+
+    index = _index(tmp_path, "def target : Nat := 1\n", name="Actual.lean")
+
+    assert index.find("target").path == Path("Actual.lean")
+
+
+def test_unfinished_packet_stage_is_not_indexed_as_project_source(tmp_path: Path) -> None:
+    # A killed writer leaves its stage without a manifest. It sorts before the
+    # project's sources and would shadow the real declaration.
+    packet = tmp_path / ".review-packets.autoform-stage-0123456789abcdef" / "blind" / "0123.lean"
+    packet.parent.mkdir(parents=True)
+    packet.write_text("def target : Nat := 2\n", encoding="utf-8")
 
     index = _index(tmp_path, "def target : Nat := 1\n", name="Actual.lean")
 

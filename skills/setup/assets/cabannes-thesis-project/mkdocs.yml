@@ -60,12 +60,20 @@ markdown_extensions:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_div_format
+        # GitHub shows a ```math fence as a displayed formula, and $`...`$
+        # as one in a line; the site does too. Both come with autoform, which
+        # the Pages workflow installs for this build.
+        - name: math
+          class: arithmatex
+          format: !!python/name:autoform_cli.markdown.formula_fence
+  - autoform_cli.markdown:FormulaExtension
 
 extra_css:
   - stylesheets/blueprint.css
 
 extra_javascript:
+  # `autoform render` writes this script too. It loads the one MathJax release
+  # the site's checks were written for, and keeps each card's formulas apart.
   - javascripts/mathjax.js
-  - https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js
   - https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js
   - javascripts/blueprint-mermaid.js
