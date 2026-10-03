@@ -38,6 +38,14 @@ _MANIFEST_VERSION = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)(?:-[^ \t\r\n]+)?")
 _URL_CREDENTIALS = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@")
 _LEAN_ID_BEGIN_ESCAPE = "«"
 _LEAN_ID_END_ESCAPE = "»"
+# Rust's ``char::is_whitespace`` set, which ``str::trim`` uses in elan.
+# Python additionally treats U+001C..U+001F as whitespace; accepting those
+# would disagree with elan because they remain control characters there.
+_ELAN_WHITESPACE = frozenset(
+    "\u0009\u000a\u000b\u000c\u000d\u0020\u0085\u00a0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000"
+)
 _AUTOFORM_PATHS: dict[str, Callable[[Path], bool]] = {
     "blueprint": Path.is_dir,
     "mkdocs.yml": Path.is_file,
@@ -52,6 +60,10 @@ class ProjectDiagnostic:
     code: str
     message: str
     path: str | None = None
+
+
+class _JsonInteger(str):
+    """A JSON integer kept as bounded input text instead of materialized as a Python bigint."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,7 +328,7 @@ def _result(
                 ProjectDiagnostic(
                     "warning",
                     "release-indeterminate",
-                    "The Lean toolchain or the Mathlib Lake will build is unknown, so compatibility cannot be checked.",
+                    "Autoform could not establish a catalog-comparable Lean/Mathlib release identity.",
                 )
             )
     else:
@@ -328,7 +340,8 @@ def _result(
                 ProjectDiagnostic(
                     "warning",
                     "release-unlisted",
-                    "This Lean and Mathlib pair is not in the bundled release catalog.",
+                    "The inspected Lean toolchain, Mathlib Git lock, and loading layout do not identify a "
+                    "bundled release.",
                 )
             )
     return ProjectInspection(
@@ -370,8 +383,18 @@ def _inspect_lake(
         return None, None
     try:
         config = tomllib.loads(text)
-    except (tomllib.TOMLDecodeError, RecursionError):
+    except tomllib.TOMLDecodeError:
         config = None
+    except (RecursionError, ValueError):
+        diagnostics.append(
+            ProjectDiagnostic(
+                "error",
+                "invalid-lakefile-toml",
+                "Autoform could not safely decode lakefile.toml because it exceeds the parser's limits.",
+                "lakefile.toml",
+            )
+        )
+        return None, None
     problem = "it is not valid TOML" if config is None else _lakefile_problem(config)
     if problem is not None:
         diagnostics.append(
@@ -544,7 +567,12 @@ def _version_range_term_end(value: str, index: int) -> int | None:
             suffix = value[suffix_start:end]
             if not suffix:
                 return None
-        if prefix == "^" and [int(component) for component in components] == [0, 0, 0] and not suffix:
+        if (
+            prefix == "^"
+            and len(components) == 3
+            and all(_normalize_decimal(component) == "0" for component in components)
+            and not suffix
+        ):
             return None
         return end
 
@@ -568,6 +596,18 @@ def _lake_whitespace(character: str) -> bool:
     return character in " \t\r\n"
 
 
+def _trim_elan_whitespace(value: str) -> str:
+    """Mirror Rust's Unicode whitespace trim without Python's extra C0 separators."""
+
+    start = 0
+    while start < len(value) and value[start] in _ELAN_WHITESPACE:
+        start += 1
+    end = len(value)
+    while end > start and value[end - 1] in _ELAN_WHITESPACE:
+        end -= 1
+    return value[start:end]
+
+
 def _inspect_toolchain(snapshot: _DecisionSnapshot, diagnostics: list[ProjectDiagnostic]) -> str | None:
     if snapshot.file("lean-toolchain").state == "missing":
         diagnostics.append(ProjectDiagnostic("error", "missing-lean-toolchain", "The project has no lean-toolchain."))
@@ -575,15 +615,15 @@ def _inspect_toolchain(snapshot: _DecisionSnapshot, diagnostics: list[ProjectDia
     text = _read_text(snapshot, "lean-toolchain", diagnostics)
     if text is None:
         return None
-    # elan reads only the trimmed first line, and silently uses the default
-    # toolchain when that line is empty or malformed.
-    toolchain = text.split("\n", 1)[0].strip()
+    # elan reads only the trimmed first line and rejects an existing file when
+    # that line is empty or malformed.
+    toolchain = _trim_elan_whitespace(text.split("\n", 1)[0])
     if not toolchain or not toolchain.isprintable() or any(character.isspace() for character in toolchain):
         diagnostics.append(
             ProjectDiagnostic(
                 "error",
                 "invalid-lean-toolchain",
-                "elan ignores this lean-toolchain because its first line is empty or malformed.",
+                "elan rejects this lean-toolchain because its first line is empty or malformed.",
                 "lean-toolchain",
             )
         )
@@ -602,7 +642,7 @@ def _locked_mathlib(
     if text is None:
         return False, None
     try:
-        payload = json.loads(text, parse_constant=_reject_json_constant)
+        payload = json.loads(text, parse_constant=_reject_json_constant, parse_int=_parse_json_integer)
         if type(payload) is not dict:
             raise ValueError(relative)
         version = payload.get("version", payload.get("schemaVersion"))  # overrides use schemaVersion
@@ -610,19 +650,20 @@ def _locked_mathlib(
         if layout is None:
             raise ValueError(relative)
     except (AttributeError, RecursionError, ValueError):
+        kind = "Lake manifest" if relative == _MANIFEST else "Lake package-overrides file"
         diagnostics.append(
-            ProjectDiagnostic("error", "invalid-lake-manifest", f"{relative} is not a Lake manifest Autoform reads.", relative)
+            ProjectDiagnostic("error", "invalid-lake-manifest", f"{relative} is not a {kind} Autoform reads.", relative)
         )
         return False, None
     if layout == "legacy":
-        diagnostics.append(
-            ProjectDiagnostic(
-                "warning",
-                "unsupported-lake-manifest",
-                f"Lake still reads the legacy layout of {relative}, but Autoform does not; `lake update` rewrites it.",
-                relative,
+        if relative == _MANIFEST:
+            message = (
+                f"Lake still reads the legacy layout of {relative}, but Autoform does not; "
+                "`lake update` rewrites it."
             )
-        )
+        else:
+            message = f"Lake still reads the legacy layout of {relative}, but Autoform does not decode it."
+        diagnostics.append(ProjectDiagnostic("warning", "unsupported-lake-manifest", message, relative))
         return False, None
     try:
         if relative == _MANIFEST:
@@ -633,8 +674,9 @@ def _locked_mathlib(
             raise ValueError(relative)
         decoded = [_decode_package_entry(item, relative) for item in packages]
     except (AttributeError, RecursionError, ValueError):
+        kind = "Lake manifest" if relative == _MANIFEST else "Lake package-overrides file"
         diagnostics.append(
-            ProjectDiagnostic("error", "invalid-lake-manifest", f"{relative} is not a Lake manifest Autoform reads.", relative)
+            ProjectDiagnostic("error", "invalid-lake-manifest", f"{relative} is not a {kind} Autoform reads.", relative)
         )
         return False, None
     # Lake inserts entries into a NameMap in order, so the last duplicate wins.
@@ -655,7 +697,7 @@ def _validate_manifest_root(payload: dict[str, object]) -> None:
 
 def _decode_package_entry(
     entry: object, source: str
-) -> tuple[tuple[tuple[str, str | int], ...], MathlibLock]:
+) -> tuple[tuple[tuple[str, str], ...], MathlibLock]:
     """Mirror ``Lake.PackageEntry.fromJson?`` for the current manifest layout."""
 
     if type(entry) is not dict:
@@ -715,15 +757,45 @@ def _json_optional(mapping: dict[str, object], key: str, expected: type):
 def _manifest_layout(version: object) -> str | None:
     """Lake reads versions from 0.5.0 through any 1.x; versions before 0.7 are legacy."""
 
-    if isinstance(version, int) and not isinstance(version, bool):
-        parts = (0, version, 0)
-    elif isinstance(version, str) and (match := _MANIFEST_VERSION.fullmatch(version)):
-        parts = tuple(int(part) for part in match.groups())
-    else:
+    if type(version) is int:
+        if version < 5:
+            return None
+        return "legacy" if version < 7 else "current"
+    if isinstance(version, _JsonInteger):
+        numeric_version = _normalize_unsigned_decimal(version)
+        if numeric_version is None or _decimal_less_than(numeric_version, "5"):
+            return None
+        return "legacy" if _decimal_less_than(numeric_version, "7") else "current"
+    if type(version) is not str or (match := _MANIFEST_VERSION.fullmatch(version)) is None:
         return None
-    if parts < (0, 5, 0) or parts[0] > 1:
+    major, minor, _patch = (_normalize_decimal(part) for part in match.groups())
+    if major == "1":
+        return "current"
+    if major != "0" or _decimal_less_than(minor, "5"):
         return None
-    return "legacy" if parts < (0, 7, 0) else "current"
+    return "legacy" if _decimal_less_than(minor, "7") else "current"
+
+
+def _parse_json_integer(value: str) -> _JsonInteger:
+    """Keep Lake's arbitrary-precision JSON naturals lexical and size-bounded by the file cap."""
+
+    return _JsonInteger(value)
+
+
+def _normalize_unsigned_decimal(value: str) -> str | None:
+    if not value or any(character < "0" or character > "9" for character in value):
+        return None
+    return _normalize_decimal(value)
+
+
+def _normalize_decimal(value: str) -> str:
+    """Canonicalize known ASCII digits without constructing an unbounded integer."""
+
+    return value.lstrip("0") or "0"
+
+
+def _decimal_less_than(left: str, right: str) -> bool:
+    return (len(left), left) < (len(right), right)
 
 
 def _reject_json_constant(constant: str) -> None:
@@ -1025,7 +1097,7 @@ def _json_string(value: object) -> str:
     return value
 
 
-def _canonical_manifest_name(value: str) -> tuple[tuple[str, str | int], ...] | None:
+def _canonical_manifest_name(value: str) -> tuple[tuple[str, str], ...] | None:
     """Return the structural Name produced by JSON's strict ``String.toName``."""
 
     if value == "[anonymous]":
@@ -1033,16 +1105,16 @@ def _canonical_manifest_name(value: str) -> tuple[tuple[str, str | int], ...] | 
     parts = _split_lean_name(value)
     if parts is None:
         return None
-    return tuple((kind, int(text) if kind == "num" else text) for kind, text in parts)
+    return tuple((kind, _normalize_decimal(text) if kind == "num" else text) for kind, text in parts)
 
 
-def _canonical_toml_name(value: str) -> tuple[tuple[str, str | int], ...]:
+def _canonical_toml_name(value: str) -> tuple[tuple[str, str], ...]:
     """Return Lake's Name, including TOML's simple-name fallback."""
 
     parts = _split_lean_name(value)
     if parts is None:
         return (("str", value),)
-    return tuple((kind, int(text) if kind == "num" else text) for kind, text in parts)
+    return tuple((kind, _normalize_decimal(text) if kind == "num" else text) for kind, text in parts)
 
 
 def _split_lean_name(value: str) -> list[tuple[str, str]] | None:

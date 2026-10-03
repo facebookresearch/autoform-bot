@@ -393,6 +393,24 @@ def test_integer_manifest_versions_are_read(tmp_path: Path) -> None:
     assert inspect_project(root).compatibility.status == "supported"
 
 
+def test_arbitrary_precision_manifest_versions_are_compared_lexically(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    packages = json.dumps([_mathlib()])
+    huge_integer = "9" * 5_000
+    (root / "lake-manifest.json").write_text(
+        f'{{"version": {huge_integer}, "packages": {packages}}}', encoding="utf-8"
+    )
+
+    assert inspect_project(root).compatibility.status == "supported"
+
+    padded_minor = "0" * 5_000 + "7"
+    (root / "lake-manifest.json").write_text(
+        json.dumps({"version": f"0.{padded_minor}.0", "packages": [_mathlib()]}), encoding="utf-8"
+    )
+
+    assert inspect_project(root).compatibility.status == "supported"
+
+
 def test_package_override_replaces_the_locked_mathlib(tmp_path: Path) -> None:
     root = _project(tmp_path)
     (root / ".lake").mkdir()
@@ -446,6 +464,23 @@ def test_override_without_mathlib_leaves_the_manifest_in_charge(tmp_path: Path) 
     assert inspect_project(root).compatibility.status == "supported"
 
 
+def test_nondirectory_lake_path_fails_closed_without_hiding_the_manifest(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    (root / ".lake").write_text("not a directory\n", encoding="utf-8")
+
+    result = inspect_project(root)
+
+    assert not result.ok
+    assert result.compatibility.status == "indeterminate"
+    assert result.mathlib is None
+    assert any(
+        diagnostic.code == "unreadable-file"
+        and diagnostic.severity == "error"
+        and diagnostic.path == ".lake/package-overrides.json"
+        for diagnostic in result.diagnostics
+    )
+
+
 def test_lakefile_lean_cannot_confirm_an_inherited_mathlib(tmp_path: Path) -> None:
     root = _project(tmp_path, lakefile=None, manifest=(_mathlib(inherited=True),))
     (root / "lakefile.lean").write_text("import Lake\n", encoding="utf-8")
@@ -479,6 +514,9 @@ def test_legacy_override_file_cannot_fall_through_to_supported_manifest(tmp_path
     assert result.ok
     assert result.compatibility.status == "indeterminate"
     assert "unsupported-lake-manifest" in _codes(result)
+    warning = next(diagnostic for diagnostic in result.diagnostics if diagnostic.code == "unsupported-lake-manifest")
+    assert "package-overrides.json" in warning.message
+    assert "lake update" not in warning.message
 
 
 def test_lakefile_lean_takes_precedence_and_is_not_evaluated(tmp_path: Path) -> None:
@@ -516,6 +554,7 @@ def test_case_variant_lakefile_lean_still_takes_precedence_on_case_insensitive_f
         ("leanprover/lean4:v4.32.2\n\n", True),
         ("leanprover/lean4:v4.32.2\r\n", True),
         (" leanprover/lean4:v4.32.2\t\n", True),
+        ("\u2000leanprover/lean4:v4.32.2\u3000\n", True),
         ("leanprover/lean4:v4.32.2\nleanprover/lean4:v4.31.0\n", True),
         ("", False),
         ("\nleanprover/lean4:v4.32.2\n", False),
@@ -526,11 +565,27 @@ def test_case_variant_lakefile_lean_still_takes_precedence_on_case_insensitive_f
     ],
 )
 def test_toolchain_follows_elans_first_line_rule(tmp_path: Path, toolchain: str, ok: bool) -> None:
-    # Checked against elan 4.2.0: it trims the first line and ignores the file when that line is malformed.
+    # Checked against pinned elan 4.2.3: it trims the first line and rejects the file when that line is malformed.
     result = inspect_project(_project(tmp_path, toolchain=toolchain))
 
     assert result.ok is ok
     assert (result.lean_toolchain == "leanprover/lean4:v4.32.2") is ok
+
+
+@pytest.mark.parametrize("separator", [chr(codepoint) for codepoint in range(0x1C, 0x20)])
+@pytest.mark.parametrize("side", ["before", "after"])
+def test_python_only_c0_whitespace_is_not_trimmed_like_elan(tmp_path: Path, separator: str, side: str) -> None:
+    toolchain = "leanprover/lean4:v4.32.2"
+    text = separator + toolchain if side == "before" else toolchain + separator
+
+    result = inspect_project(_project(tmp_path, toolchain=text + "\n"))
+
+    assert not result.ok
+    assert result.compatibility.status == "indeterminate"
+    assert any(
+        diagnostic.code == "invalid-lean-toolchain" and diagnostic.severity == "error"
+        for diagnostic in result.diagnostics
+    )
 
 
 def test_missing_toolchain_and_lakefile_are_errors(tmp_path: Path) -> None:
@@ -542,6 +597,18 @@ def test_missing_toolchain_and_lakefile_are_errors(tmp_path: Path) -> None:
     assert not result.ok
     assert {"missing-lean-toolchain", "unreadable-file"} <= _codes(result)
     assert result.compatibility.status == "indeterminate"
+
+
+def test_missing_lake_configuration_is_an_error_verdict(tmp_path: Path) -> None:
+    result = inspect_project(_project(tmp_path, lakefile=None))
+
+    assert not result.ok
+    assert result.compatibility.status == "indeterminate"
+    assert result.compatibility.release is None
+    assert any(
+        diagnostic.code == "missing-lake-config" and diagnostic.severity == "error"
+        for diagnostic in result.diagnostics
+    )
 
 
 @pytest.mark.parametrize(
@@ -586,6 +653,17 @@ def test_numeric_and_escaped_numeric_target_names_are_distinct(tmp_path: Path) -
     lakefile = 'name = "E"\n[[lean_lib]]\nname = "1"\n[[lean_exe]]\nname = "«1»"\n'
 
     assert inspect_project(_project(tmp_path, lakefile=lakefile)).ok
+
+
+def test_arbitrary_precision_numeric_names_are_compared_without_python_ints(tmp_path: Path) -> None:
+    padded_one = "0" * 5_000 + "1"
+    lakefile = f'name = "E"\n[[lean_lib]]\nname = "{padded_one}"\n[[lean_exe]]\nname = "1"\n'
+
+    result = inspect_project(_project(tmp_path, lakefile=lakefile))
+
+    assert not result.ok
+    assert result.compatibility.status == "indeterminate"
+    assert "invalid-lakefile-toml" in _codes(result)
 
 
 @pytest.mark.parametrize(("plain", "escaped"), [("", "«»"), ("a b", "«a b»"), ("[anonymous]", "«[anonymous]»")])
@@ -672,6 +750,28 @@ def test_lake_version_constraint_spellings_are_accepted(tmp_path: Path, version:
     assert inspect_project(_project(tmp_path, lakefile=lakefile)).ok
 
 
+def test_huge_toml_numbers_return_stable_diagnostics(tmp_path: Path) -> None:
+    huge = "0" * 5_000
+    raw_integer = f'name = "Example"\nunknown = {"9" * 5_000}\n'
+    zero_constraint = f'name = "Example"\n[[require]]\nname = "other"\nversion = "^{huge}.0.0"\n'
+
+    for index, (lakefile, message) in enumerate(
+        (
+            (raw_integer, "Autoform could not safely decode lakefile.toml because it exceeds the parser's limits."),
+            (zero_constraint, "Lake cannot load lakefile.toml: a require entry has an invalid version constraint."),
+        )
+    ):
+        case = tmp_path / str(index)
+        case.mkdir()
+        result = inspect_project(_project(case, lakefile=lakefile))
+
+        assert not result.ok
+        assert result.compatibility.status == "indeterminate"
+        diagnostic = next(item for item in result.diagnostics if item.code == "invalid-lakefile-toml")
+        assert diagnostic.severity == "error"
+        assert diagnostic.message == message
+
+
 @pytest.mark.parametrize(
     "version",
     [
@@ -734,11 +834,47 @@ def test_oversized_and_non_utf8_files_are_errors(tmp_path: Path) -> None:
     ]
 
 
-@pytest.mark.parametrize("denied", ["lakefile.toml", "lean-toolchain", "lake-manifest.json"])
+@pytest.mark.parametrize(
+    ("relative", "failure"),
+    [
+        ("lakefile.toml", "non-utf8"),
+        ("lakefile.toml", "oversized"),
+        (".lake/package-overrides.json", "oversized"),
+    ],
+)
+def test_lake_decision_file_read_failures_are_error_verdicts(
+    tmp_path: Path, relative: str, failure: str
+) -> None:
+    root = _project(tmp_path)
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff" if failure == "non-utf8" else b" " * (1024 * 1024 + 1))
+
+    result = inspect_project(root)
+
+    assert not result.ok
+    assert result.compatibility.status == "indeterminate"
+    assert result.compatibility.release is None
+    assert any(
+        diagnostic.code == "unreadable-file"
+        and diagnostic.severity == "error"
+        and diagnostic.path == relative
+        for diagnostic in result.diagnostics
+    )
+
+
+@pytest.mark.parametrize(
+    "denied", ["lakefile.toml", "lean-toolchain", "lake-manifest.json", ".lake/package-overrides.json"]
+)
 def test_stably_unreadable_decision_file_is_not_misreported_as_changing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, denied: str
 ) -> None:
     root = _project(tmp_path)
+    if denied == ".lake/package-overrides.json":
+        (root / ".lake").mkdir()
+        (root / denied).write_text(
+            json.dumps({"schemaVersion": "1.1.0", "packages": []}), encoding="utf-8"
+        )
     original = project_inspect._open_beneath
 
     def deny_one(captured_root: Path, relative: str, flags: int):
@@ -751,7 +887,14 @@ def test_stably_unreadable_decision_file_is_not_misreported_as_changing(
     result = inspect_project(root)
 
     assert not result.ok
-    assert "unreadable-file" in _codes(result)
+    assert result.compatibility.status == "indeterminate"
+    assert result.compatibility.release is None
+    assert any(
+        diagnostic.code == "unreadable-file"
+        and diagnostic.severity == "error"
+        and diagnostic.path == denied
+        for diagnostic in result.diagnostics
+    )
     assert "project-changed-during-inspection" not in _codes(result)
 
 

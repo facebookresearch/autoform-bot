@@ -149,13 +149,14 @@ autoform project versions --json
 autoform project provenance --json
 ```
 
-`project inspect` reads the nearest enclosing project's `lean-toolchain`,
-`lake-manifest.json`, and `lakefile.toml` without running Lake, Lean, Git, or
-the network. Compatibility is decided by the toolchain and the Mathlib commit
-the manifest locks, which is what `lake build` uses: `supported` when that pair
-is in the bundled catalog, `unlisted` when it is not, and `indeterminate` when
-either is unknown (no manifest, no Mathlib, a path-based Mathlib, or any file
-error). When Lake can load the root manifest, a
+`project inspect` reads the nearest enclosing project's decision files without
+running Lake, Lean, Git, or the network. `supported` means the inspected Lean
+toolchain, immutable Mathlib Git lock, and release loading layout identify a
+bundled release. `unlisted` means those inputs are known but identify no
+bundled release. `indeterminate` means Autoform cannot establish that
+catalog-comparable identity, for example because a decision file is invalid,
+unreadable, or required but missing, Mathlib is path-based, or a required
+configuration is not evaluated. When Lake can load the root manifest, a
 `.lake/package-overrides.json` entry for Mathlib replaces the manifest's, and
 a `lakefile.toml` that requests a different Mathlib than the lock gets a
 `lake-manifest-stale` warning. A lock entry without a direct Mathlib
@@ -174,10 +175,14 @@ are outside the offline report.
 `project versions` lists the bundled catalog of known-good Lean and Mathlib
 pairs. It is an allowlist, not a resolver.
 
-`supported` certifies only the inspected Lean/Mathlib release pair; it is not a
-full Lake configuration or build-validity check. `ok` likewise means the files
-and fields used by this report were readable and decodable. Target and package
-options outside the report are left to Lake.
+`supported` certifies only the inspected Lean/Mathlib release identity; it is
+not a full Lake configuration or build-validity check. `ok` means inspection
+produced no error diagnostic; it does not mean compatibility was decidable.
+A missing or legacy manifest can therefore be a warning with `ok: true` and an
+`indeterminate` compatibility result, while an invalid, unreadable, or
+oversized decision file that Lake and the inspection need to consult is an
+error with `ok: false`. Target and package options outside the report are left
+to Lake.
 
 `project provenance` is the online step. It reads an exact plugin-root checkout,
 a bounded Codex installer record, or bounded Claude installation and marketplace
