@@ -20,6 +20,7 @@ evaluating that execution stack.
 
 - Python 3.10 or newer and [`uv`](https://docs.astral.sh/uv/)
 - Git
+- On an Intel Mac, the Xcode Command Line Tools, to compile `cmarkgfm`
 - Lean and Lake for Lean tooling and verification
 - Claude Code or Codex for the installation flows below
 
