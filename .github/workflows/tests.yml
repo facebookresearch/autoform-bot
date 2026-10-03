@@ -69,7 +69,10 @@ jobs:
           timeout --signal=TERM --kill-after=30s 20m lake exe cache get
           timeout --signal=TERM --kill-after=30s 10m lake build
       - name: Run the skeleton suite against real Lean
-        run: timeout --signal=TERM --kill-after=30s 25m uv run pytest -q tests/test_skeleton.py
+        run: >-
+          timeout --signal=TERM --kill-after=30s 25m uv run pytest -q
+          tests/test_skeleton.py
+          tests/test_project_inspect.py::test_stale_inherited_mathlib_is_ignored_by_real_lake
         env:
           AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
 
