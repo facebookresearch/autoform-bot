@@ -1324,12 +1324,14 @@ def test_node_links_resolve_each_target_page_once(tmp_path: Path, monkeypatch: p
 
     links = _anchored_links(targets, page)
 
-    assert sorted(calls) == [chapter, other]
-    # Once to compare it with the current page, once inside relative_link.
-    assert resolved.count(chapter) <= 2
+    assert calls == []
+    assert links["a/0"] == "a.html#n0"
     assert links["a/7"] == "a.html#n7"
     assert links["b"] == "b/index.html"
     assert links["here"] == "#self"
+    assert sorted(calls) == [chapter, other]
+    # Once to compare it with the current page, once inside relative_link.
+    assert resolved.count(chapter) <= 2
 
 
 def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1370,26 +1372,30 @@ def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypa
     assert calls == [chapter]
 
 
-def test_a_focus_page_asks_for_its_node_links_once(tmp_path: Path) -> None:
-    """Each request builds a link for every node, so asking twice per focus
-    page doubled the cost of the largest group of generated pages."""
+def test_the_shared_explorer_asks_for_its_node_links_once(tmp_path: Path) -> None:
+    """Node neighborhoods share one full-DAG page and one link request."""
     from autoform_cli.graph_pages import focus_page_path, write_graph_pages
 
     project = _project(tmp_path)
     graph = load_graph(project / "blueprint")
     destination = tmp_path / "out"
-    requested: list[Path] = []
+    requested: list[tuple[Path, tuple[str, ...]]] = []
 
-    def node_links(page: Path) -> dict[str, str]:
-        requested.append(page)
-        return {node_id: f"roadmap.html#{node_id}" for node_id in graph.nodes}
+    def node_links(page: Path, node_ids) -> dict[str, str]:
+        selected = tuple(node_ids)
+        requested.append((page, selected))
+        return {node_id: f"roadmap.html#{node_id}" for node_id in selected}
 
     write_graph_pages(graph, derive(graph), destination, node_links=node_links)
 
-    for node_id in ("base", "top"):
-        page = focus_page_path(destination, node_id)
-        assert requested.count(page) == 1
-        assert f"roadmap.html#{node_id}" in page.read_text(encoding="utf-8")
+    pages = {node_id: focus_page_path(destination, node_id) for node_id in ("base", "top")}
+    assert len(set(pages.values())) == 1
+    full_page = pages["base"]
+    assert [page for page, _ in requested].count(full_page) == 1
+    assert not (destination / "dependencies/nodes").exists()
+    payload = full_page.with_suffix(".json").read_text(encoding="utf-8")
+    for node_id in pages:
+        assert f"roadmap.html#{node_id}" in payload
 
 
 def test_a_node_that_is_the_current_page_links_as_a_bare_fragment(tmp_path: Path) -> None:
