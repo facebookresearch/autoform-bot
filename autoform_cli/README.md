@@ -657,10 +657,10 @@ had there from what the environment does record, once per module:
   entries written for such a parser, a parser declared in another module, a
   later `attribute [term_parser]`, or a token added by a metaprogram may have
   been added anywhere before that point.
-- A namespace's scoped entries, imported or the module's own, may be
-  active whether or not the file names the namespace: `namespace` and `open`
-  activate it, and a macro or elaborator can run them on syntax it builds.
-  The probe tries each subset of those namespaces.
+- A namespace's scoped entries, imported or the module's own, count as
+  possibly active only when the file's text above the declaration contains
+  the namespace's last component, since `namespace` and `open` name what they
+  activate; the probe tries each subset of those namespaces.
 A state adds the scoped entries of its namespaces before the module's own
 entries, where Lean interleaves them as `open` and `namespace` run. The
 order cannot change the result: the token table and the node kinds are
@@ -689,7 +689,8 @@ does not make the article unresolved. What the probe cannot prove, and so
 can get wrong, showing code as a comment or a comment as code: `local`
 syntax, which Lean records nowhere; a metaprogram that changes the parser
 state without recording an entry, records a parser entry naming a
-declaration made later in the module, records a second entry for a declared
+declaration made later in the module, activates a namespace without the
+file naming it, records a second entry for a declared
 category (Lean keeps the first it adds, and `declare_syntax_cat` refuses a
 declared category), or gives a declaration a range outside the command that
 made it; a parser that reads the environment, the options, the current

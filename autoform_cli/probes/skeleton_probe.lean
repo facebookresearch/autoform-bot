@@ -651,8 +651,8 @@ source-tree guard rejects concurrent edits. Each state is the module's first-lin
 set of namespaces, and the module's own entries up to a point, of which
 those in a namespace only when it is in the set:
 - An own entry comes no earlier than the point its bound proves.
-- Any namespace may be active: `open` and `namespace` activate one, and a
-  macro or elaborator can run them, so the file need not name it.
+- A namespace is active only where the file names it above the declaration,
+  in an `open` or `namespace`.
 - An entry matters only if `entryKeys` says the inputs can feel it, so only
   points just after such an entry, and namespaces holding one, are tried. -/
 def declarationSnippet (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref SemanticCache) (c : Name)
@@ -686,18 +686,23 @@ def declarationSnippet (cache : IO.Ref GrammarCache) (semanticCache : IO.Ref Sem
   for e in g.own.extract 0 hi do
     if let .scoped ns entry := e then
       if !namespaces.contains ns && matters entry then namespaces := namespaces.push ns
+  let above := String.fromUTF8! (text.toUTF8.extract 0 (text.toFileMap.ofPosition r.range.pos).byteIdx)
+  let named := namespaces.filter fun ns => match ns with
+    | .str _ s => above.contains s
+    | .num _ n => above.contains (toString n)
+    | .anonymous => true
   let inScope (A : Array Name) : GrammarEntry → Bool
     | .global _ => true
     | .scoped ns _ => A.contains ns
   let mut cuts : Array Nat := #[0]
   for i in [0:hi] do
-    if inScope namespaces g.own[i]! && matters (entryOf g.own[i]!) then cuts := cuts.push (i + 1)
-  if grammarLimit < cuts.size * 2 ^ namespaces.size then
+    if inScope named g.own[i]! && matters (entryOf g.own[i]!) then cuts := cuts.push (i + 1)
+  if grammarLimit < cuts.size * 2 ^ named.size then
     return some {{ text := snippet, column, grammars := #[], namespaces }}
   let mut grammars : Array Environment := #[]
-  for bits in List.range (2 ^ namespaces.size) do
-    let active := (List.range namespaces.size).foldl (init := #[]) fun A i =>
-      if bits.testBit i then A.push namespaces[i]! else A
+  for bits in List.range (2 ^ named.size) do
+    let active := (List.range named.size).foldl (init := #[]) fun A i =>
+      if bits.testBit i then A.push named[i]! else A
     let activeScopes := active.foldl NameSet.insert {{}}
     let mut state := g.imported.foldl (init := Except.ok base) fun s (ns, e) =>
       if active.contains ns then s.bind (addGrammarEntry · e) else s
