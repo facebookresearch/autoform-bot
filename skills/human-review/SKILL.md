@@ -26,9 +26,10 @@ rather than a reason to refuse to render.
 Stop on structural failures and present them before asking for mathematical
 judgment. For vault review, point the user to `blueprint/README.md`, coverage,
 chapter pages, and `blueprint/dependencies.md` in Obsidian. For browser review,
-serve the built site over localhost and provide the overview, including its
-progress summary, plus the project graph, relevant chapter graph, and
-node-neighborhood links.
+run `autoform dashboard <PROJECT> --site-dir site` so the same site deployed to
+GitHub Pages is served on loopback with local-only live claim badges. Provide
+the overview, including its progress summary, plus the project graph, relevant
+chapter graph, and node-neighborhood links.
 
 Guide the review from coarse to fine: declared scope and exclusions, milestone
 book, landing-page progress summary, cross-chapter graph, chapter graph, then

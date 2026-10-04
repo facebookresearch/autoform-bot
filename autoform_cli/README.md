@@ -165,6 +165,7 @@ uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform render blueprint \
   --output site-src --lean-root . --require-declarations
 uv run --with mkdocs --with mkdocs-material --with mkdocs-literate-nav \
   --with pymdown-extensions --with "<AUTOFORM_PLUGIN_ROOT>" mkdocs build --strict
+uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform dashboard . --site-dir site
 ```
 
 The build needs autoform too: `mkdocs.yml` reads formulas with its Markdown
@@ -172,6 +173,15 @@ extension, `autoform_cli.markdown:FormulaExtension`.
 
 Drop `--require-declarations` when reviewing work in progress, where a
 statement may name a Lean declaration that does not exist yet.
+
+`dashboard` serves the exact built MkDocs site on `127.0.0.1`, choosing an
+available port unless `--port` is supplied, and adds a read-only live overlay
+from current author claims. Static content remains the
+same artifact deployed to GitHub Pages; only the loopback server exposes
+`/__autoform/live.json`. The overlay is ephemeral, uses the runtime's temporary
+path-derived node IDs, and is never written into the vault, publication
+manifest, or public site. Re-run render and the MkDocs build to refresh durable
+content; claim badges update while the local server is running.
 
 Validate structure, and optionally check that every `lean:` name really exists
 in the project's Lean sources:

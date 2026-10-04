@@ -451,22 +451,29 @@ def test_bounded_command_finds_a_descendant_that_escapes_its_process_group(
     tmp_path: Path,
 ) -> None:
     child_pid = tmp_path / "detached-child.pid"
-    staged_pid = tmp_path / "detached-child.pid.tmp"
     # The child leaves the process group before it records its pid, and the
     # parent exits only once that record exists, so the child has escaped by
     # the time the command ends however slowly it starts.
     child_program = (
-        "import os, pathlib, time; os.setsid(); "
-        f"pathlib.Path({str(staged_pid)!r}).write_text(str(os.getpid())); "
-        f"os.replace({str(staged_pid)!r}, {str(child_pid)!r}); time.sleep(30)"
+        "import os, pathlib, sys, time; os.setsid(); time.sleep(0.1); "
+        f"pathlib.Path({str(child_pid)!r}).write_text(str(os.getpid())); "
+        "ready_fd = int(sys.argv[1]); os.write(ready_fd, b'1'); "
+        "os.close(ready_fd); time.sleep(30)"
     )
     parent_program = (
-        "import pathlib, subprocess, sys, time\n"
-        f"subprocess.Popen([sys.executable, '-c', {child_program!r}], "
-        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-        "deadline = time.monotonic() + 5\n"
-        f"while not pathlib.Path({str(child_pid)!r}).exists() and time.monotonic() < deadline:\n"
-        "    time.sleep(0.01)\n"
+        "import os, subprocess, sys\n"
+        "read_fd, write_fd = os.pipe()\n"
+        "try:\n"
+        f"    subprocess.Popen([sys.executable, '-c', {child_program!r}, str(write_fd)], "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, pass_fds=(write_fd,))\n"
+        "finally:\n"
+        "    os.close(write_fd)\n"
+        "try:\n"
+        "    ready = os.read(read_fd, 1)\n"
+        "finally:\n"
+        "    os.close(read_fd)\n"
+        "if ready != b'1':\n"
+        "    raise RuntimeError('detached child did not become ready')\n"
     )
 
     with pytest.raises(SkeletonError, match="descendant processes"):

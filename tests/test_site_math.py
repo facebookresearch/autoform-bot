@@ -304,7 +304,7 @@ def _file(path: Path) -> None:
         ("javascripts/mathjax.js", _fifo,
          "javascripts/mathjax.js: is a special file, where autoform render writes a file; remove it"),
         ("javascripts", _file,
-         "javascripts: is a file, where autoform render needs a folder for javascripts/blueprint-mermaid.js; "
+         "javascripts: is a file, where autoform render needs a folder for javascripts/blueprint-live.js; "
          "remove it"),
         ("stylesheets/blueprint.css", _directory_with_a_file,
          "stylesheets/blueprint.css: is a directory, where autoform render writes a file; remove it"),
@@ -345,6 +345,7 @@ _WRITTEN_BY_RENDER = (
     "dependencies/nodes/base.md",
     "dependencies/nodes/top.md",
     "graph.html",
+    "javascripts/blueprint-live.js",
     "javascripts/blueprint-mermaid.js",
     "javascripts/mathjax.js",
     "progress.md",

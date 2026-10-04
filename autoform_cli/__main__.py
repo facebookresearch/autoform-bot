@@ -9,6 +9,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -26,6 +27,7 @@ from .article_identity import plan_article_ids
 from .audit import audit_blueprint
 from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_key
 from .doctor import diagnose_project
+from .dashboard import publication_bound_live_state, serve_dashboard
 from .graph import Graph, GraphValidationError, load_graph
 from .lean import build_linker, declaration_names
 from .project import ProjectCatalogError, inspect_project, load_release_catalog
@@ -54,6 +56,7 @@ from .review import (
     write_review_bundle,
     write_review_packets,
 )
+from .runtime import RuntimeProjectionError, load_runtime_graph, resolve_runtime_paths
 from .scaffold import ScaffoldError, scaffold_project
 from .skeleton import (
     DEFAULT_PROBE_TIMEOUT,
@@ -112,6 +115,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     doctor.add_argument("project_or_blueprint")
     doctor.add_argument("--lean-root", type=Path, help="Lean project to resolve local targets against")
     doctor.add_argument("--json", action="store_true", help="write stable machine-readable output")
+
+    dashboard = subparsers.add_parser(
+        "dashboard",
+        help="serve the built publication with a loopback-only live claim overlay",
+    )
+    dashboard.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="project root or blueprint directory (default: current directory)",
+    )
+    dashboard.add_argument("--site-dir", default="site", help="built MkDocs site directory")
+    dashboard.add_argument("--repo", help="claim-board Git repository; defaults to project origin")
+    dashboard.add_argument("--scratch", type=Path, help="local bare Git object cache")
+    dashboard.add_argument("--host", default="127.0.0.1", help="loopback host")
+    dashboard.add_argument(
+        "--port",
+        type=_port,
+        default=0,
+        help="local port (default: choose an available port)",
+    )
 
     project = subparsers.add_parser("project", help="inspect local project configuration and releases")
     project_subparsers = project.add_subparsers(dest="project_command", required=True)
@@ -335,6 +359,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _audit(args)
     if args.command == "doctor":
         return _doctor(args)
+    if args.command == "dashboard":
+        return _dashboard(args)
     if args.command == "project":
         return _project(args)
     if args.command == "claim":
@@ -507,6 +533,44 @@ def _doctor(args: argparse.Namespace) -> int:
             marker = "PASS" if check.ok else "FAIL"
             print(f"{marker}: {check.name}: {check.detail}")
     return 0 if result.clean else 1
+
+
+def _dashboard(args: argparse.Namespace) -> int:
+    try:
+        paths = resolve_runtime_paths(args.target)
+        site = Path(args.site_dir).expanduser()
+        if not site.is_absolute():
+            site = paths.project_root / site
+        repo = args.repo or _origin_url(paths.project_root)
+
+        def run(scratch: Path) -> None:
+            claims = ClaimBoard(repo, "dashboard-readonly", scratch)
+            state = publication_bound_live_state(
+                lambda: load_runtime_graph(paths.project_root),
+                claims,
+                blueprint_dir=paths.blueprint_dir,
+                site_dir=site,
+            )
+            def ready(host: str, port: int) -> None:
+                print(f"Dashboard: http://{host}:{port}/", flush=True)
+                print(
+                    "Static content comes from the built site; live claims remain local-only.",
+                    flush=True,
+                )
+
+            serve_dashboard(site, state, host=args.host, port=args.port, on_ready=ready)
+
+        if args.scratch is not None:
+            run(args.scratch)
+        else:
+            with tempfile.TemporaryDirectory(prefix="autoform-dashboard-") as temporary:
+                run(Path(temporary) / "claims.git")
+    except (OSError, RuntimeProjectionError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        return 130
+    return 0
 
 
 def _project(args: argparse.Namespace) -> int:
@@ -1258,7 +1322,7 @@ def _claim_board(args: argparse.Namespace) -> ClaimBoard:
     return ClaimBoard(repo, worker_id, scratch)
 
 
-def _origin_url() -> str:
+def _origin_url(root: Path | None = None) -> str:
     try:
         result = subprocess.run(
             ["git", "remote", "get-url", "origin"],
@@ -1266,10 +1330,21 @@ def _origin_url() -> str:
             text=True,
             check=True,
             timeout=10,
+            cwd=root,
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise ValueError("--repo is required outside a Git checkout with an origin remote") from exc
     return result.stdout.strip()
+
+
+def _port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("port must be an integer") from error
+    if not 0 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be between 0 and 65535")
+    return port
 
 
 def _default_claim_scratch(repo: str, worker_id: str) -> Path:

@@ -6,15 +6,11 @@ publishes progress views, and prepares human or agent review. The plugin and
 CLI use the identifier `autoform`; the canonical repository is
 [`facebookresearch/autoform-bot`](https://github.com/facebookresearch/autoform-bot).
 
-The default `main` branch provides repository setup, roadmap planning,
-publication, human and agent review, and shared Lean LSP/REPL tools. It does
-**not** include autonomous orchestration.
-
-Autonomous execution is an opt-in overlay on the
-[`execution`](https://github.com/facebookresearch/autoform-bot/tree/execution)
-branch. It adds orchestration, claim-backed workers, specialist agents, and
-prover adapters on top of `main`. Use `main` unless you are explicitly
-evaluating that execution stack.
+The `main` branch provides repository setup, roadmap planning, publication,
+human and agent review, and shared Lean LSP/REPL tools. The historical
+`execution` branch and its custom worker/prover stack are deprecated and are
+not an installation target. New formalization execution work belongs on
+`main` as a Markdown-native workflow over the same blueprint.
 
 ## Prerequisites
 
@@ -100,6 +96,7 @@ plugin development and debugging, not as a required user workflow.
 | `autoform doctor` | Diagnose the local blueprint contract. |
 | `autoform skeleton` | Extract what a reader must trust for each formalized statement. |
 | `autoform claim` | Coordinate temporary ownership through Git refs. |
+| `autoform dashboard` | Serve the built publication locally with live claim badges. |
 | `autoform render` | Generate publishable MkDocs source. |
 | `autoform-visualize` | Generate the Mermaid dependency graph. |
 
@@ -111,6 +108,7 @@ uv run autoform-visualize /path/to/project/blueprint
 uv run autoform render /path/to/project/blueprint \
   --output /path/to/project/site-src \
   --lean-root /path/to/project --require-declarations
+uv run autoform dashboard /path/to/project --site-dir site
 ```
 
 From a consumer project, resolve the installed plugin root and prefix commands
@@ -124,6 +122,8 @@ blueprint-to-declaration match as a separate contract.
 
 `render` writes MkDocs source, not a deployed site. The generated Pages workflow
 deploys from `main` only after GitHub Pages is enabled in repository settings.
+`dashboard` serves that same built site on loopback and overlays current Git-ref
+claims. It never publishes worker information or creates another graph.
 
 ## Documentation
 

@@ -96,6 +96,7 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert (out / "dependencies/full.md").is_file()
     assert (out / "stylesheets/blueprint.css").is_file()
     assert (out / "javascripts/blueprint-mermaid.js").is_file()
+    assert (out / "javascripts/blueprint-live.js").is_file()
     assert (out / PUBLICATION_MANIFEST).is_file()
     # Nodes are absorbed into their chapter, not published one page each.
     assert not (out / "roadmap/base.md").exists()
@@ -287,6 +288,8 @@ def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -
     assert page.index("## Results") < page.index('id="top"')
     assert '<div class="bp-thmwrapper theorem-style-definition bp-fully_proved" id="base"' in page
     assert '<div class="bp-thmwrapper theorem-style-plain bp-fully_proved" id="top"' in page
+    assert 'data-autoform-node-id="base"' in page
+    assert 'data-autoform-node-id="top"' in page
     assert '<span class="bp-thmcaption">Definition</span><span class="bp-thmlabel">1</span>' in page
     assert '<span class="bp-thmtitle">Top</span>' in page
     assert "The main result." in page
@@ -599,6 +602,10 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     _render(tmp_path)
     css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
     script = (tmp_path / "out/javascripts/blueprint-mermaid.js").read_text(encoding="utf-8")
+    live = (tmp_path / "out/javascripts/blueprint-live.js").read_text(encoding="utf-8")
+    packaged_live = (
+        Path(__file__).resolve().parent.parent / "autoform_cli/assets/blueprint-live.js"
+    ).read_text(encoding="utf-8")
 
     # Facebook's surface greys and Meta blue, not Material's defaults, and both
     # schemes hang off the theme's own data-md-color-scheme attribute.
@@ -608,6 +615,13 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     assert "--bp-link: #2D88FF" in css
     assert "--bp-surface: #242526" in css
     assert "background-color: #18191A" in css
+    assert "/__autoform/live.json" in live
+    assert 'window.location.hostname !== "127.0.0.1"' in live
+    assert "data-autoform-node-id" in live
+    assert "setInterval" not in live
+    assert "setTimeout(refresh, pollDelayMs)" in live
+    assert 'render({ claims: [], error: "Live overlay unavailable" })' in live
+    assert live == packaged_live
     # The brand sweep is defined once and reused, rather than pasted per rule.
     assert css.count("--bp-sweep:") == 1
     assert css.count("var(--bp-sweep)") >= 3
@@ -1280,3 +1294,120 @@ def test_render_leaves_html_comments_out_of_the_site(tmp_path: Path) -> None:
     assert "The main result. Shown." in pages
     assert "secret note" not in pages
     assert "gone" not in pages
+
+
+def _count_relative_links(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """Record the target of every `mermaid.relative_link` call."""
+    from autoform_cli import mermaid
+
+    calls: list[Path] = []
+    relative_link = mermaid.relative_link
+
+    def counting(target: Path, output: Path, link_extension: str) -> str:
+        calls.append(target)
+        return relative_link(target, output, link_extension)
+
+    monkeypatch.setattr(mermaid, "relative_link", counting)
+    return calls
+
+
+def test_node_links_resolve_each_target_page_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Building a link per node resolved paths on disk once per node on every
+    page, which made render time grow with the square of the node count."""
+    from autoform_cli.render import _anchored_links
+
+    chapter, other, page = tmp_path / "a.md", tmp_path / "b" / "README.md", tmp_path / "page.md"
+    targets = {f"a/{index}": (chapter, f"n{index}") for index in range(20)}
+    targets["b"] = (other, "")
+    targets["here"] = (page, "self")
+    calls = _count_relative_links(monkeypatch)
+    resolved: list[Path] = []
+    resolve = Path.resolve
+
+    def counting_resolve(self: Path, strict: bool = False) -> Path:
+        resolved.append(self)
+        return resolve(self, strict)
+
+    monkeypatch.setattr(Path, "resolve", counting_resolve)
+
+    links = _anchored_links(targets, page)
+
+    assert sorted(calls) == [chapter, other]
+    # Once to compare it with the current page, once inside relative_link.
+    assert resolved.count(chapter) <= 2
+    assert links["a/7"] == "a.html#n7"
+    assert links["b"] == "b/index.html"
+    assert links["here"] == "#self"
+
+
+def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A page uses the few node links it contains, so rewriting it should not
+    build a link for every node in the graph."""
+    from autoform_cli.render import _rewrite_links
+
+    blueprint, destination = tmp_path / "blueprint", tmp_path / "out"
+    source_dir = blueprint / "roadmap"
+    source_dir.mkdir(parents=True)
+    chapter, other, page = destination / "a.md", destination / "b.md", destination / "page.md"
+    targets = {"a/x": (chapter, "x"), "a/z": (chapter, "z"), "b/y": (other, "y")}
+    node_sources = {
+        (source_dir / "x.md").resolve(): "a/x",
+        (source_dir / "z.md").resolve(): "a/z",
+        (source_dir / "y.md").resolve(): "b/y",
+    }
+    calls = _count_relative_links(monkeypatch)
+
+    def rewrite(text: str) -> str:
+        return _rewrite_links(
+            text,
+            source_dir=source_dir,
+            page=page,
+            blueprint=blueprint,
+            destination=destination,
+            node_sources=node_sources,
+            targets=targets,
+        )
+
+    assert rewrite("Plain prose.\n") == "Plain prose.\n"
+    assert calls == []
+    assert rewrite("See [X](x.md).\n") == "See [X](a.md#x).\n"
+    assert calls == [chapter]
+    calls.clear()
+    # Two nodes on the same chapter page cost one link to it, not one each.
+    assert rewrite("[X](x.md), [Z](z.md)\n") == "[X](a.md#x), [Z](a.md#z)\n"
+    assert calls == [chapter]
+
+
+def test_a_focus_page_asks_for_its_node_links_once(tmp_path: Path) -> None:
+    """Each request builds a link for every node, so asking twice per focus
+    page doubled the cost of the largest group of generated pages."""
+    from autoform_cli.graph_pages import focus_page_path, write_graph_pages
+
+    project = _project(tmp_path)
+    graph = load_graph(project / "blueprint")
+    destination = tmp_path / "out"
+    requested: list[Path] = []
+
+    def node_links(page: Path) -> dict[str, str]:
+        requested.append(page)
+        return {node_id: f"roadmap.html#{node_id}" for node_id in graph.nodes}
+
+    write_graph_pages(graph, derive(graph), destination, node_links=node_links)
+
+    for node_id in ("base", "top"):
+        page = focus_page_path(destination, node_id)
+        assert requested.count(page) == 1
+        assert f"roadmap.html#{node_id}" in page.read_text(encoding="utf-8")
+
+
+def test_a_node_that_is_the_current_page_links_as_a_bare_fragment(tmp_path: Path) -> None:
+    """A container article has no anchor of its own, and an empty href would
+    drop the link, so its own page links to the top of itself."""
+    from autoform_cli.render import _anchored_links
+
+    page = tmp_path / "chapter" / "README.md"
+
+    assert _anchored_links({"chapter": (page, ""), "chapter/x": (page, "x")}, page) == {
+        "chapter": "#",
+        "chapter/x": "#x",
+    }

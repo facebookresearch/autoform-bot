@@ -29,9 +29,8 @@ def test_root_readme_uses_the_canonical_repository(repo_root: Path) -> None:
         in readme
     )
     assert "git clone https://github.com/facebookresearch/autoform-bot.git" in readme
-    assert (
-        "https://github.com/facebookresearch/autoform-bot/tree/execution" in readme
-    )
+    assert "historical\n`execution` branch" in readme
+    assert "custom worker/prover stack are deprecated" in readme
     assert "VivienCabannes/autoform-bot" not in readme
 
 
@@ -50,6 +49,9 @@ def test_human_review_distinguishes_roadmap_progress_from_source_scope(
     assert "linked coverage contract" in skill
     assert "statement-only theorem remains incomplete" in skill
     assert "landing-page progress summary" in skill
+    assert "autoform dashboard <PROJECT> --site-dir site" in skill
+    assert "same site deployed to\nGitHub Pages" in skill
+    assert "local-only live claim badges" in skill
     assert "overview, progress, project graph" not in skill
 
 
