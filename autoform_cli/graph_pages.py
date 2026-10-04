@@ -35,7 +35,7 @@ def write_graph_pages(
     *,
     node_links: NodeLinks,
 ) -> tuple[Path, ...]:
-    """Write project, chapter, local, and full graph pages.
+    """Write project, chapter, nested-scope, and shared full-explorer pages.
 
     ``node_links`` resolves theorem ids to their published textbook anchors for
     each generated page.  Keeping that callback in the site renderer avoids
