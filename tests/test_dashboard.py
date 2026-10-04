@@ -11,6 +11,7 @@ from urllib.request import urlopen
 
 import pytest
 
+import autoform_cli._tree_snapshot as tree_snapshot_module
 from autoform_cli.claims import ClaimTransportError, author_claim_key
 from autoform_cli.dashboard import (
     DashboardHandler,
@@ -21,7 +22,7 @@ from autoform_cli.dashboard import (
     publication_bound_live_state,
     serve_dashboard,
 )
-from autoform_cli.render import publication_source_revision
+from autoform_cli.render import PUBLICATION_SCHEMA, publication_source_revision
 
 
 def _runtime():
@@ -137,15 +138,130 @@ def test_live_overlay_refuses_a_stale_built_publication(tmp_path: Path) -> None:
     article.write_text("# Roadmap\n", encoding="utf-8")
     site = tmp_path / "site"
     site.mkdir()
+    manifest_path = site / "publication.json"
+    manifest = {
+        "schema": PUBLICATION_SCHEMA,
+        "complete": True,
+        "source_revision": publication_source_revision(blueprint),
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    class EmptyClaims:
+        def list(self) -> list[dict[str, object]]:
+            return []
+
+    state = publication_bound_live_state(
+        EmptyClaims(),
+        blueprint_dir=blueprint,
+        site_dir=site,
+    )
+
+    assert state()["source_revision"] == manifest["source_revision"]
+    manifest["schema"] = "autoform-publication/v1"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    wrong_schema = state()
+    assert wrong_schema["claims"] == []
+    assert "stale" in str(wrong_schema["error"])
+
+    manifest["schema"] = PUBLICATION_SCHEMA
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    article.write_text("# Changed\n", encoding="utf-8")
+    stale = state()
+    assert stale["claims"] == []
+    assert "stale" in str(stale["error"])
+
+
+def test_live_overlay_builds_graph_from_the_verified_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+    roadmap.mkdir(parents=True)
+    article = roadmap / "README.md"
+    article.write_text("# Roadmap\n", encoding="utf-8")
+    site = tmp_path / "site"
+    site.mkdir()
+    revision = publication_source_revision(blueprint)
     (site / "publication.json").write_text(
         json.dumps(
             {
-                "schema": "autoform-publication/v1",
+                "schema": PUBLICATION_SCHEMA,
                 "complete": True,
-                "source_revision": publication_source_revision(blueprint),
+                "source_revision": revision,
             }
         ),
         encoding="utf-8",
+    )
+
+    class SnapshotClaims:
+        def list(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "_key": author_claim_key("roadmap"),
+                    "_malformed": False,
+                    "_expired": False,
+                    "owner": "worker-a",
+                }
+            ]
+
+    from autoform_cli import dashboard as dashboard_module
+
+    original = dashboard_module.load_graph_snapshot
+
+    def mutate_after_snapshot(*args, **kwargs):
+        graph = original(*args, **kwargs)
+        article.write_text("# Changed after capture\n", encoding="utf-8")
+        return graph
+
+    monkeypatch.setattr(
+        dashboard_module,
+        "load_graph_snapshot",
+        mutate_after_snapshot,
+    )
+
+    state = publication_bound_live_state(
+        SnapshotClaims(),
+        blueprint_dir=blueprint,
+        site_dir=site,
+    )()
+
+    assert state["source_revision"] == revision
+    assert state["claims"] == [
+        {
+            "node_id": "roadmap",
+            "title": "Roadmap",
+            "owner": "worker-a",
+        }
+    ]
+    assert "error" not in state
+    assert article.read_text(encoding="utf-8") == "# Changed after capture\n"
+
+
+def test_live_overlay_refuses_portable_freshness_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    blueprint.mkdir()
+    (blueprint / "README.md").write_text("# Blueprint\n", encoding="utf-8")
+    revision = publication_source_revision(blueprint)
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "publication.json").write_text(
+        json.dumps(
+            {
+                "schema": PUBLICATION_SCHEMA,
+                "complete": True,
+                "source_revision": revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        tree_snapshot_module,
+        "_DESCRIPTOR_CAPTURE_SUPPORTED",
+        False,
     )
 
     class EmptyClaims:
@@ -153,17 +269,13 @@ def test_live_overlay_refuses_a_stale_built_publication(tmp_path: Path) -> None:
             return []
 
     state = publication_bound_live_state(
-        _runtime,
         EmptyClaims(),
         blueprint_dir=blueprint,
         site_dir=site,
-    )
+    )()
 
-    assert state()["source_revision"] == "revision"
-    article.write_text("# Changed\n", encoding="utf-8")
-    stale = state()
-    assert stale["claims"] == []
-    assert "stale" in str(stale["error"])
+    assert state["claims"] == []
+    assert "could not be captured safely" in str(state["error"])
 
 
 def test_dashboard_handler_serves_static_site_and_no_store_overlay(tmp_path: Path) -> None:

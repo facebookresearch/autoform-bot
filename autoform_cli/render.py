@@ -18,7 +18,6 @@ import os
 import re
 import secrets
 import stat
-import subprocess
 import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -32,6 +31,7 @@ from . import graph_pages, graph_views, mermaid, status
 from ._directory_binding import RetainedDirectory
 from ._tree_snapshot import (
     BoundDirectoryTree,
+    OpaqueDirectoryMarker,
     TreeCaptureLimitError,
     TreeCaptureLimits,
     TreeSelection,
@@ -49,7 +49,9 @@ from .lean import (
     declaration_names,
     detect_ref,
     detect_repository_url,
+    index_failure_message,
     open_project_sources,
+    verify_repository_snapshot,
 )
 from .status import is_definition
 
@@ -78,13 +80,20 @@ _SKIPPED_DIRECTORIES = frozenset({".obsidian", ".trash", ".git"})
 SOURCES_DIR = "sources"
 PUBLICATION_MANIFEST = "publication.json"
 PUBLICATION_SCHEMA = "autoform-publication/v2"
+PUBLICATION_MANIFEST_MAX_BYTES = 8 * 1024 * 1024
+_PUBLICATION_OPAQUE_SCHEMAS = frozenset(
+    {"autoform-publication/v1", PUBLICATION_SCHEMA}
+)
 _PUBLICATION_STAGE_PREFIX = ".autoform-publication-"
+_WORKSPACE_MARKER = ".autoform-workspace.json"
+_WORKSPACE_MARKER_BYTES = (
+    b'{"schema":"autoform-publication-workspace/v1"}\n'
+)
 _PUBLICATION_MAX_ENTRIES = 100_000
 _PUBLICATION_MAX_DEPTH = 128
 _PUBLICATION_MAX_FILE_BYTES = 256 * 1024 * 1024
 _PUBLICATION_MAX_TOTAL_BYTES = 512 * 1024 * 1024
-_PUBLICATION_MANIFEST_MAX_BYTES = 8 * 1024 * 1024
-_GIT_TREE_MAX_BYTES = 64 * 1024 * 1024
+_PUBLICATION_MANIFEST_MAX_BYTES = PUBLICATION_MANIFEST_MAX_BYTES
 _PUBLICATION_CAPTURE_LIMITS = TreeCaptureLimits(
     max_entries=_PUBLICATION_MAX_ENTRIES,
     max_depth=_PUBLICATION_MAX_DEPTH,
@@ -383,6 +392,16 @@ class _CapturedBlueprint:
         return self.files[PurePosixPath(relative)].decode("utf-8")
 
 
+@dataclass(frozen=True, slots=True)
+class PublicationSourceSnapshot:
+    """Immutable blueprint bytes and layout consumed by a publication."""
+
+    root: Path
+    files: Mapping[PurePosixPath, bytes]
+    directories: frozenset[PurePosixPath]
+    revision: str
+
+
 @dataclass(slots=True)
 class _PublicationPlanBuilder:
     root: Path
@@ -559,6 +578,7 @@ def render_site(
         with bind_directory_tree(
             blueprint,
             selection=_PUBLICATION_SNAPSHOT_SELECTION,
+            require_descriptor=True,
         ) as source_tree:
             source_snapshot = source_tree.capture()
             _validate_publication_snapshot(source_snapshot)
@@ -575,6 +595,10 @@ def render_site(
     except TreeCaptureLimitError as error:
         raise PublicationError([f"blueprint {error}"]) from error
     except TreeSnapshotError as error:
+        if str(error) == "safe directory traversal is unavailable on this platform":
+            raise PublicationError(
+                ["transactional publication requires safe directory traversal"]
+            ) from error
         raise PublicationError(
             ["blueprint changed during publication; previous site was preserved"]
         ) from error
@@ -643,6 +667,7 @@ def _render_in_bound_output_parent(
     source_generation_revision = source_snapshot.generation_revision
     workspace: Path | None = None
     workspace_identity: tuple[int, int] | None = None
+    workspace_marker: tuple[tuple[int, ...], str] | None = None
     workspace_descriptor: int | None = None
     remove_workspace = True
     publication_succeeded = False
@@ -656,7 +681,7 @@ def _render_in_bound_output_parent(
     lean_sources: BoundProjectSources | None = None
     active_failure: BaseException | None = None
     try:
-        workspace, workspace_identity = _create_workspace(
+        workspace, workspace_identity, workspace_marker = _create_workspace(
             destination.parent,
             output_parent,
         )
@@ -688,8 +713,15 @@ def _render_in_bound_output_parent(
         lean_snapshot = _capture_bound_lean_source_snapshot(lean_sources)
         lean_source_revision = lean_snapshot.revision
         lean_generation_revision = lean_snapshot.generation_revision
-        resolved_repository_url = repository_url or detect_repository_url(repo_root)
-        requested_ref = ref or detect_ref(repo_root)
+        resolved_repository_url = (
+            repository_url
+            if repository_url is not None
+            else detect_repository_url(repo_root)
+        )
+        requested_ref = ref if ref is not None else detect_ref(repo_root)
+        repository_coordinates_requested = bool(
+            resolved_repository_url and requested_ref
+        )
         resolved_ref = (
             _verified_repository_ref(
                 repo_root,
@@ -700,8 +732,16 @@ def _render_in_bound_output_parent(
             if resolved_repository_url and requested_ref
             else None
         )
+        coordinates_stable = (
+            repository_url is not None
+            or detect_repository_url(repo_root) == resolved_repository_url
+        ) and (ref is not None or detect_ref(repo_root) == requested_ref)
+        if not coordinates_stable:
+            resolved_repository_url = None
+            resolved_ref = None
         repository_links_omitted = bool(
-            resolved_repository_url and requested_ref and resolved_ref is None
+            not coordinates_stable
+            or (repository_coordinates_requested and resolved_ref is None)
         )
         try:
             linker = build_linker(
@@ -713,7 +753,12 @@ def _render_in_bound_output_parent(
                 detect_missing=False,
             )
         except (OSError, ValueError) as error:
-            raise PublicationError(["Lean sources could not be indexed"]) from error
+            issue = (
+                index_failure_message(error)
+                if isinstance(error, OSError)
+                else "Lean sources could not be indexed"
+            )
+            raise PublicationError([issue]) from error
 
         initial_files: dict[PurePosixPath, bytes] = {}
         if not clean and expected_destination.kind == "owned":
@@ -861,6 +906,11 @@ def _render_in_bound_output_parent(
                     workspace,
                     workspace_identity,
                     expected_children=expected_children,
+                    expected_files=(
+                        {_WORKSPACE_MARKER: workspace_marker}
+                        if workspace_marker is not None
+                        else {}
+                    ),
                     parent_binding=output_parent,
                 )
             # Cleanup itself performs filesystem operations through the
@@ -1428,7 +1478,11 @@ def _open_or_create_output_parent(path: Path) -> RetainedDirectory:
             if created and first_created_index is None:
                 first_created_index = len(descriptors) - 1
 
-        binding = RetainedDirectory(absolute, tuple(descriptors), tuple(identities))
+        # ``RetainedDirectory`` owns the final directory descriptor.  The
+        # ancestor descriptors exist only long enough to create and fsync the
+        # path durably; close them before returning without surrendering the
+        # descriptor through which publication proceeds.
+        binding = RetainedDirectory(absolute, descriptors[-1], identities[-1])
         binding.verify()
         if first_created_index is not None:
             for containing_descriptor in reversed(
@@ -1436,23 +1490,29 @@ def _open_or_create_output_parent(path: Path) -> RetainedDirectory:
             ):
                 os.fsync(containing_descriptor)
             binding.verify()
+        for ancestor_descriptor in reversed(descriptors[:-1]):
+            try:
+                os.close(ancestor_descriptor)
+            except OSError:
+                pass
+        descriptors = descriptors[-1:]
         return binding
     except BaseException:
         if binding is not None:
             binding.close()
-        else:
-            for descriptor in reversed(descriptors):
-                try:
-                    os.close(descriptor)
-                except OSError:
-                    pass
+            descriptors = descriptors[:-1]
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         raise
 
 
 def _create_workspace(
     parent: Path,
     parent_binding: RetainedDirectory,
-) -> tuple[Path, tuple[int, int]]:
+) -> tuple[Path, tuple[int, int], tuple[tuple[int, ...], str]]:
     try:
         parent_binding.verify()
     except OSError as error:
@@ -1475,6 +1535,8 @@ def _create_workspace(
             )
             if _descriptor_identity(descriptor) != identity:
                 raise OSError(errno.ESTALE, "workspace changed during creation")
+            marker = _create_workspace_marker(descriptor)
+            os.fsync(parent_descriptor)
         except BaseException:
             try:
                 current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
@@ -1486,8 +1548,70 @@ def _create_workspace(
         finally:
             if descriptor is not None:
                 os.close(descriptor)
-        return parent / name, identity
+        return parent / name, identity, marker
     raise PublicationError(["could not create a private publication workspace"])
+
+
+def _create_workspace_marker(
+    workspace_descriptor: int,
+) -> tuple[tuple[int, ...], str]:
+    """Create and durably bind the marker used to prune retained workspaces."""
+
+    descriptor: int | None = None
+    created_identity: tuple[int, int] | None = None
+    try:
+        descriptor = os.open(
+            _WORKSPACE_MARKER,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=workspace_descriptor,
+        )
+        opened = os.fstat(descriptor)
+        created_identity = opened.st_dev, opened.st_ino
+        if not stat.S_ISREG(opened.st_mode):
+            raise OSError(errno.ESTALE, "workspace marker is not a regular file")
+        view = memoryview(_WORKSPACE_MARKER_BYTES)
+        written = 0
+        while written < len(view):
+            try:
+                count = os.write(descriptor, view[written:])
+            except InterruptedError:
+                continue
+            if count <= 0:
+                raise OSError(errno.EIO, "workspace marker write was incomplete")
+            written += count
+        os.fsync(descriptor)
+        final = _stat_signature(os.fstat(descriptor))
+        named = _stat_signature(
+            os.stat(
+                _WORKSPACE_MARKER,
+                dir_fd=workspace_descriptor,
+                follow_symlinks=False,
+            )
+        )
+        if (
+            final != named
+            or final[:2] != created_identity
+        ):
+            raise OSError(errno.ESTALE, "workspace marker changed during creation")
+        os.fsync(workspace_descriptor)
+        return final, hashlib.sha256(_WORKSPACE_MARKER_BYTES).hexdigest()
+    except BaseException:
+        if created_identity is not None:
+            try:
+                current = os.stat(
+                    _WORKSPACE_MARKER,
+                    dir_fd=workspace_descriptor,
+                    follow_symlinks=False,
+                )
+                if (current.st_dev, current.st_ino) == created_identity:
+                    os.unlink(_WORKSPACE_MARKER, dir_fd=workspace_descriptor)
+            except OSError:
+                pass
+        raise
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _open_workspace_directory(
@@ -1570,6 +1694,7 @@ def _remove_owned_workspace(
     identity: tuple[int, int],
     *,
     expected_children: dict[str, dict[tuple[int, int], _CleanupInventory]],
+    expected_files: Mapping[str, tuple[tuple[int, ...], str]] | None = None,
     parent_binding: RetainedDirectory | None = None,
 ) -> bool:
     """Remove only inventoried trees in Autoform's random mode-0700 workspace.
@@ -1609,6 +1734,7 @@ def _remove_owned_workspace(
         )
         if _descriptor_identity(workspace_descriptor) != identity:
             return False
+        files = dict(expected_files or {})
         names = set(
             _bounded_directory_names(
                 workspace_descriptor,
@@ -1616,9 +1742,40 @@ def _remove_owned_workspace(
                 depth=1,
             )
         )
-        if names != set(expected_children):
+        if names != set(expected_children) | set(files):
             return False
-        for name in names:
+        for name in files:
+            metadata = os.stat(
+                name,
+                dir_fd=workspace_descriptor,
+                follow_symlinks=False,
+            )
+            expected_identity, expected_digest = files[name]
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or _stat_signature(metadata) != expected_identity
+            ):
+                return False
+            data = _read_regular_file_at(
+                workspace_descriptor,
+                name,
+                workspace / name,
+                max_bytes=_PUBLICATION_MAX_FILE_BYTES,
+                ignore_close_errors=True,
+            )
+            if (
+                hashlib.sha256(data).hexdigest() != expected_digest
+                or _stat_signature(
+                    os.stat(
+                        name,
+                        dir_fd=workspace_descriptor,
+                        follow_symlinks=False,
+                    )
+                )
+                != expected_identity
+            ):
+                return False
+        for name in expected_children:
             child = os.stat(name, dir_fd=workspace_descriptor, follow_symlinks=False)
             child_identity = (child.st_dev, child.st_ino)
             expected_inventory = expected_children[name].get(child_identity)
@@ -1636,7 +1793,7 @@ def _remove_owned_workspace(
                     return False
             finally:
                 os.close(child_descriptor)
-        for name in sorted(names):
+        for name in sorted(expected_children):
             current = os.stat(name, dir_fd=workspace_descriptor, follow_symlinks=False)
             child_identity = (current.st_dev, current.st_ino)
             expected_inventory = expected_children[name].get(child_identity)
@@ -1655,6 +1812,19 @@ def _remove_owned_workspace(
             finally:
                 os.close(child_descriptor)
             os.rmdir(name, dir_fd=workspace_descriptor)
+        if files:
+            _remove_inventory_contents(
+                workspace_descriptor,
+                _CleanupInventory(
+                    (),
+                    tuple(
+                        sorted(
+                            (name, identity, digest)
+                            for name, (identity, digest) in files.items()
+                        )
+                    ),
+                ),
+            )
         current = os.stat(
             workspace.name, dir_fd=parent_descriptor, follow_symlinks=False
         )
@@ -1845,6 +2015,7 @@ def _remove_inventory_contents(
                 quarantine,
                 Path(relative),
                 max_bytes=_PUBLICATION_MAX_FILE_BYTES,
+                ignore_close_errors=True,
             )
             final = os.stat(
                 quarantine,
@@ -2211,8 +2382,16 @@ def _materialize_publication_plan(
     write_node(stage_descriptor, tree, "")
 
 
-def _update_source_digest(digest, relative: Path, data: bytes) -> None:
+def _update_source_digest(
+    digest,
+    relative: Path,
+    data: bytes,
+    *,
+    kind: bytes = b"file",
+) -> None:
     path = os.fsencode(relative.as_posix())
+    digest.update(len(kind).to_bytes(8, "big"))
+    digest.update(kind)
     digest.update(len(path).to_bytes(8, "big"))
     digest.update(path)
     digest.update(len(data).to_bytes(8, "big"))
@@ -2225,6 +2404,7 @@ def _read_regular_file_at(
     display_path: Path,
     *,
     max_bytes: int,
+    ignore_close_errors: bool = False,
 ) -> bytes:
     flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
     try:
@@ -2264,7 +2444,11 @@ def _read_regular_file_at(
             raise PublicationError([f"file changed while it was read: {display_path.name}"])
         return b"".join(chunks)
     finally:
-        os.close(descriptor)
+        try:
+            os.close(descriptor)
+        except OSError:
+            if not ignore_close_errors:
+                raise
 
 
 def _open_lean_sources(
@@ -2275,9 +2459,39 @@ def _open_lean_sources(
             root,
             exclude_roots=exclude_roots,
             limits=_PUBLICATION_CAPTURE_LIMITS,
+            opaque_markers=(
+                OpaqueDirectoryMarker(
+                    PUBLICATION_MANIFEST,
+                    PUBLICATION_MANIFEST_MAX_BYTES,
+                    _is_complete_publication_manifest,
+                ),
+                OpaqueDirectoryMarker(
+                    _WORKSPACE_MARKER,
+                    len(_WORKSPACE_MARKER_BYTES),
+                    _is_publication_workspace_marker,
+                ),
+            ),
         )
     except (OSError, TreeSnapshotError) as error:
         raise PublicationError(["could not capture a stable Lean source revision"]) from error
+
+
+def _is_complete_publication_manifest(data: bytes) -> bool:
+    if len(data) > PUBLICATION_MANIFEST_MAX_BYTES:
+        return False
+    try:
+        value = json.loads(data.decode("utf-8"))
+    except (UnicodeError, ValueError, RecursionError):
+        return False
+    return (
+        isinstance(value, dict)
+        and value.get("schema") in _PUBLICATION_OPAQUE_SCHEMAS
+        and value.get("complete") is True
+    )
+
+
+def _is_publication_workspace_marker(data: bytes) -> bool:
+    return data == _WORKSPACE_MARKER_BYTES
 
 
 def _capture_bound_lean_source_snapshot(
@@ -2306,125 +2520,24 @@ def _verified_repository_ref(
     therefore fall back to local publication rather than borrow ``HEAD``.
     """
 
-    resolved = _run_git(
+    files = [
+        (blueprint.path(relative), data)
+        for relative, data in blueprint.files.items()
+    ]
+    files.extend(
+        (lean_snapshot.index.root / relative, data)
+        for relative, data in lean_snapshot.source_files
+    )
+    sources = PurePosixPath(SOURCES_DIR)
+    required_directories = (
+        (blueprint.path(sources),) if sources in blueprint.directories else ()
+    )
+    return verify_repository_snapshot(
         repo_root,
-        (
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            "--end-of-options",
-            f"{requested_ref}^{{commit}}",
-        ),
-        max_bytes=1024,
+        requested_ref,
+        files,
+        required_directories=required_directories,
     )
-    if resolved is None:
-        return None
-    commit = resolved.strip().decode("ascii", errors="ignore")
-    algorithm = {40: "sha1", 64: "sha256"}.get(len(commit))
-    if algorithm is None or re.fullmatch(r"[0-9a-f]+", commit) is None:
-        return None
-
-    captured: dict[str, bytes] = {}
-    required_directories: set[str] = set()
-
-    def add(path: Path, data: bytes) -> bool:
-        try:
-            relative = _lexical_path(path).relative_to(repo_root)
-        except ValueError:
-            return False
-        relative_text = relative.as_posix()
-        if not relative_text or relative_text == "." or "\x00" in relative_text:
-            return False
-        previous = captured.setdefault(relative_text, data)
-        return previous == data
-
-    for relative, data in blueprint.files.items():
-        if not add(blueprint.path(relative), data):
-            return None
-    for relative, data in lean_snapshot.source_files:
-        if not add(lean_snapshot.index.root / relative, data):
-            return None
-
-    sources_relative = PurePosixPath(SOURCES_DIR)
-    if sources_relative in blueprint.directories:
-        try:
-            repository_sources = blueprint.path(sources_relative).relative_to(repo_root)
-        except ValueError:
-            return None
-        required_directories.add(repository_sources.as_posix())
-
-    top_level = sorted(
-        {
-            PurePosixPath(path).parts[0]
-            for path in (*captured, *required_directories)
-        }
-    )
-    tree: dict[bytes, tuple[bytes, bytes, bytes]] = {}
-    for component in top_level:
-        listing = _run_git(
-            repo_root,
-            (
-                "ls-tree",
-                "-rtz",
-                "--full-tree",
-                commit,
-                "--",
-                f":(literal){component}",
-            ),
-            max_bytes=_GIT_TREE_MAX_BYTES,
-        )
-        if listing is None:
-            return None
-        for record in listing.split(b"\0"):
-            if not record:
-                continue
-            try:
-                metadata, path = record.split(b"\t", 1)
-                mode, kind, object_id = metadata.split()
-            except ValueError:
-                return None
-            tree[path] = mode, kind, object_id
-
-    for relative, data in captured.items():
-        entry = tree.get(os.fsencode(relative))
-        if entry is None:
-            return None
-        mode, kind, object_id = entry
-        if kind != b"blob" or mode not in {b"100644", b"100755"}:
-            return None
-        digest = hashlib.new(algorithm)
-        digest.update(f"blob {len(data)}\0".encode("ascii"))
-        digest.update(data)
-        if digest.hexdigest().encode("ascii") != object_id:
-            return None
-    for relative in required_directories:
-        entry = tree.get(os.fsencode(relative))
-        if entry is None or entry[:2] != (b"040000", b"tree"):
-            return None
-    return commit
-
-
-def _run_git(
-    root: Path,
-    arguments: tuple[str, ...],
-    *,
-    max_bytes: int,
-) -> bytes | None:
-    """Run one read-only Git query with bounded accepted output and time."""
-
-    try:
-        result = subprocess.run(
-            ("git", *arguments),
-            cwd=root,
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0 or len(result.stdout) > max_bytes:
-        return None
-    return result.stdout
 
 
 def _require_bound_lean_source_revision(
@@ -2930,6 +3043,11 @@ def _source_href(sources_base: _SourceBase, tail: tuple[str, ...]) -> str:
 
 def _source_revision(blueprint: _CapturedBlueprint) -> str:
     digest = hashlib.sha256(b"autoform-markdown-publication/v2\0")
+    for relative in sorted(blueprint.directories, key=lambda path: path.as_posix()):
+        path = Path(relative.as_posix())
+        if _SKIPPED_DIRECTORIES.intersection(path.parts) or _is_hidden(path):
+            continue
+        _update_source_digest(digest, path, b"", kind=b"directory")
     for relative, data in sorted(
         blueprint.files.items(), key=lambda item: item[0].as_posix()
     ):
@@ -2942,10 +3060,37 @@ def _source_revision(blueprint: _CapturedBlueprint) -> str:
     return digest.hexdigest()
 
 
+def capture_publication_source(
+    blueprint_dir: str | Path,
+) -> PublicationSourceSnapshot:
+    """Capture the exact descriptor-backed blueprint generation used by readers."""
+
+    try:
+        blueprint = Path(blueprint_dir).expanduser().resolve()
+        with bind_directory_tree(
+            blueprint,
+            selection=_PUBLICATION_SNAPSHOT_SELECTION,
+            require_descriptor=True,
+        ) as source_tree:
+            snapshot = source_tree.capture()
+            _validate_publication_snapshot(snapshot)
+            captured = _CapturedBlueprint.from_snapshot(blueprint, snapshot)
+            return PublicationSourceSnapshot(
+                root=blueprint,
+                files=MappingProxyType(dict(captured.files)),
+                directories=captured.directories,
+                revision=_source_revision(captured),
+            )
+    except PublicationError as error:
+        raise OSError("blueprint source revision is not publishable") from error
+    except (OSError, RuntimeError, TreeSnapshotError, ValueError) as error:
+        raise OSError("blueprint source revision could not be captured safely") from error
+
+
 def publication_source_revision(blueprint_dir: str | Path) -> str:
     """Return the deterministic source hash stored in ``publication.json``."""
 
-    return _source_revision(Path(blueprint_dir).expanduser().resolve())
+    return capture_publication_source(blueprint_dir).revision
 
 
 def _write_publication_manifest(
@@ -5048,9 +5193,13 @@ __all__ = [
     "LOGO",
     "MERMAID_SCRIPT",
     "PUBLICATION_MANIFEST",
+    "PUBLICATION_MANIFEST_MAX_BYTES",
+    "PUBLICATION_SCHEMA",
+    "PublicationSourceSnapshot",
     "PublicationError",
     "STYLESHEET",
     "RenderReport",
+    "capture_publication_source",
     "render_site",
     "publication_source_revision",
 ]

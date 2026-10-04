@@ -320,11 +320,13 @@ def open_project_sources(
     *,
     exclude_roots: Iterable[str | Path] = (),
     limits: TreeCaptureLimits = TreeCaptureLimits(),
+    opaque_markers: Iterable[OpaqueDirectoryMarker] = (),
 ) -> BoundProjectSources:
     """Open a retained Lean source root; the caller must close it.
 
     A root that changes while it is bound raises ``TreeChangedError``, which a
-    retry may clear.
+    retry may clear. Callers may supply bounded opaque markers for generated
+    directory formats they own; Lean source policy does not name those formats.
     """
 
     root_path = directory_binding.lexical_absolute_path(root)
@@ -340,7 +342,11 @@ def open_project_sources(
             exclude_roots,
             root_identity=tree.identity,
         )
-        tree.selection = _lean_tree_selection(excluded, limits=limits)
+        tree.selection = _lean_tree_selection(
+            excluded,
+            limits=limits,
+            opaque_markers=tuple(opaque_markers),
+        )
         tree.verify()
     except BaseException:
         tree.close()
@@ -430,6 +436,7 @@ def _lean_tree_selection(
     excluded: tuple[PurePosixPath, ...],
     *,
     limits: TreeCaptureLimits = TreeCaptureLimits(),
+    opaque_markers: tuple[OpaqueDirectoryMarker, ...] = (),
 ) -> TreeSelection:
     return TreeSelection(
         include=lambda path, mode: _lean_snapshot_includes(
@@ -460,6 +467,7 @@ def _lean_tree_selection(
                 _MANAGED_OUTPUT_MANIFEST_BYTE_LIMIT,
                 _is_managed_output_manifest_bytes,
             ),
+            *opaque_markers,
         ),
     )
 
@@ -1000,32 +1008,150 @@ def _committed_source_paths(
         path: (prefix / path).as_posix()
         for path, _data in snapshot.source_files
     }
-    tree_oids = _git_tree_oids(root, commit, tuple(repo_paths.values()))
-    if tree_oids is None:
+    tree_entries = _git_tree_entries(root, commit, tuple(repo_paths.values()))
+    if tree_entries is None:
         return None
     linkable: set[Path] = set()
     for path, data in snapshot.source_files:
         framed = b"blob " + str(len(data)).encode("ascii") + b"\0" + data
-        if hashlib.new(algorithm, framed).hexdigest() == tree_oids.get(repo_paths[path]):
+        entry = tree_entries.get(repo_paths[path])
+        if (
+            entry is not None
+            and entry[0] in {"100644", "100755"}
+            and entry[1] == "blob"
+            and hashlib.new(algorithm, framed).hexdigest() == entry[2]
+        ):
             linkable.add(path)
     return frozenset(linkable)
 
 
-def _git_tree_oids(
+def verify_repository_snapshot(
+    root: str | Path,
+    requested_ref: str,
+    files: Iterable[tuple[Path, bytes]],
+    *,
+    required_directories: Iterable[Path] = (),
+) -> str | None:
+    """Return the immutable commit containing every captured regular file.
+
+    Git repository selectors, replacement refs, alternate object directories,
+    and command-scoped configuration are stripped by the shared Git runner.
+    The caller therefore attests the named repository and ordinary commit
+    graph, rather than an ambient process override.
+    """
+
+    try:
+        repository_root = Path(root).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    commit = _git(
+        repository_root,
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        f"{requested_ref}^{{commit}}",
+    )
+    algorithm = _git(repository_root, "rev-parse", "--show-object-format")
+    if (
+        commit is None
+        or algorithm not in {"sha1", "sha256"}
+        or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit) is None
+    ):
+        return None
+
+    captured: dict[str, bytes] = {}
+    for path, data in files:
+        try:
+            relative = path.relative_to(repository_root)
+        except ValueError:
+            return None
+        relative_text = relative.as_posix()
+        if (
+            not relative_text
+            or relative_text == "."
+            or "\0" in relative_text
+            or relative.is_absolute()
+            or ".." in relative.parts
+        ):
+            return None
+        previous = captured.setdefault(relative_text, data)
+        if previous != data:
+            return None
+
+    directories: set[str] = set()
+    for path in required_directories:
+        try:
+            relative = path.relative_to(repository_root)
+        except ValueError:
+            return None
+        relative_text = relative.as_posix()
+        if (
+            not relative_text
+            or relative_text == "."
+            or "\0" in relative_text
+            or relative.is_absolute()
+            or ".." in relative.parts
+        ):
+            return None
+        directories.add(relative_text)
+
+    entries = _git_tree_entries(
+        repository_root,
+        commit,
+        tuple(sorted(captured)),
+    )
+    if entries is None:
+        return None
+    for path, data in captured.items():
+        entry = entries.get(path)
+        if (
+            entry is None
+            or entry[0] not in {"100644", "100755"}
+            or entry[1] != "blob"
+        ):
+            return None
+        framed = b"blob " + str(len(data)).encode("ascii") + b"\0" + data
+        if hashlib.new(algorithm, framed).hexdigest() != entry[2]:
+            return None
+    directory_entries = _git_tree_entries(
+        repository_root,
+        commit,
+        tuple(sorted(directories)),
+        recursive=False,
+    )
+    if directory_entries is None or any(
+        directory_entries.get(path, (None, None, None))[:2] != ("040000", "tree")
+        for path in directories
+    ):
+        return None
+    return commit
+
+
+def _git_tree_entries(
     root: Path,
     commit: str,
     paths: tuple[str, ...],
-) -> dict[str, str] | None:
-    """Read raw tree object IDs for exact paths without Git's quoting layer."""
+    *,
+    recursive: bool = True,
+) -> dict[str, tuple[str, str, str]] | None:
+    """Read exact tree entry modes, kinds, and IDs without Git quoting."""
 
-    result: dict[str, str] = {}
+    result: dict[str, tuple[str, str, str]] = {}
     for start in range(0, len(paths), 128):
         batch = paths[start : start + 128]
         if not batch:
             continue
         try:
             completed = subprocess.run(
-                ["git", "ls-tree", "-rz", "--full-tree", commit, "--", *batch],
+                [
+                    "git",
+                    "ls-tree",
+                    "-rz" if recursive else "-z",
+                    "--full-tree",
+                    commit,
+                    "--",
+                    *(f":(literal){path}" for path in batch),
+                ],
                 cwd=str(root),
                 capture_output=True,
                 env=_git_environment(),
@@ -1041,9 +1167,16 @@ def _git_tree_oids(
                 continue
             header, separator, encoded_path = record.partition(b"\t")
             fields = header.split()
-            if not separator or len(fields) != 3 or fields[1] != b"blob":
+            if not separator or len(fields) != 3:
                 continue
-            result[os.fsdecode(encoded_path)] = fields[2].decode("ascii")
+            try:
+                result[os.fsdecode(encoded_path)] = (
+                    fields[0].decode("ascii"),
+                    fields[1].decode("ascii"),
+                    fields[2].decode("ascii"),
+                )
+            except UnicodeError:
+                return None
     return result
 
 
@@ -1178,4 +1311,5 @@ __all__ = [
     "project_source_revision",
     "snapshot_project_sources",
     "strip_lean_comments",
+    "verify_repository_snapshot",
 ]

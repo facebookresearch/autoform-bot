@@ -1121,10 +1121,18 @@ def test_source_revision_frames_file_names_and_contents_unambiguously(
         {PurePosixPath("a"): b"X", PurePosixPath("b"): b"Y"},
         frozenset({PurePosixPath(".")}),
     )
+    empty_directory_snapshot = render_module._CapturedBlueprint(
+        first,
+        {PurePosixPath("a"): b"X\0b\0Y"},
+        frozenset({PurePosixPath("."), PurePosixPath("sources")}),
+    )
 
     assert render_module._source_revision(first_snapshot) != render_module._source_revision(
         second_snapshot
     )
+    assert render_module._source_revision(
+        first_snapshot
+    ) != render_module._source_revision(empty_directory_snapshot)
 
 
 def test_source_change_during_lean_indexing_aborts_before_render(
@@ -1507,7 +1515,9 @@ def test_interrupt_after_first_install_retains_uncertain_workspace(
     assert "previous site" not in str(error.value)
     workspaces = list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
     assert len(workspaces) == 1
-    assert not any(workspaces[0].iterdir())
+    assert {path.name for path in workspaces[0].iterdir()} == {
+        render_module._WORKSPACE_MARKER
+    }
 
 
 def test_descriptor_close_failure_after_exchange_retains_previous_site(
@@ -1674,6 +1684,61 @@ def test_in_repo_staging_never_supplies_lean_source_links(tmp_path: Path) -> Non
         f"https://github.com/owner/repo/blob/{ref}/blueprint/proofs.lean#L1",
         f"https://github.com/owner/repo/blob/{ref}/blueprint/proofs.lean#L1",
     ]
+
+
+def test_render_supplies_its_publication_marker_to_source_capture(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    prior = project / "prior-site"
+    prior.mkdir()
+    (prior / PUBLICATION_MANIFEST).write_text(
+        json.dumps(
+            {
+                "schema": "autoform-publication/v1",
+                "complete": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (prior / "Copied.lean").write_text(
+        "def generatedOnly : Nat := 0\n",
+        encoding="utf-8",
+    )
+    incomplete = project / "incomplete-site"
+    incomplete.mkdir()
+    (incomplete / PUBLICATION_MANIFEST).write_text(
+        json.dumps(
+            {
+                "schema": render_module.PUBLICATION_SCHEMA,
+                "complete": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (incomplete / "Visible.lean").write_text(
+        "def incompleteOutputSource : Nat := 0\n",
+        encoding="utf-8",
+    )
+    recovery = project / ".autoform-publication-recovery"
+    (recovery / "site").mkdir(parents=True)
+    (recovery / render_module._WORKSPACE_MARKER).write_bytes(
+        render_module._WORKSPACE_MARKER_BYTES
+    )
+    (recovery / "site/Leaked.lean").write_text(
+        "def retainedRecoverySource : Nat := 0\n",
+        encoding="utf-8",
+    )
+
+    sources = render_module._open_lean_sources(project, exclude_roots=())
+    try:
+        index = sources.capture().index
+    finally:
+        sources.close()
+
+    assert index.find("generatedOnly") is None
+    assert index.find("incompleteOutputSource") is not None
+    assert index.find("retainedRecoverySource") is None
 
 
 def test_render_fsyncs_staged_files_and_directories(
@@ -2193,6 +2258,35 @@ def test_untracked_source_note_stays_published_instead_of_linking_to_a_404(
     assert report.warnings
 
 
+def test_untracked_empty_sources_directory_cannot_receive_a_commit_link(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap/README.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8")
+        + "\nBrowse [all sources](../sources/).\n",
+        encoding="utf-8",
+    )
+    commit = _commit_project(project)
+    (project / "blueprint/sources").mkdir()
+    output = tmp_path / "out"
+
+    report = render_site(
+        project / "blueprint",
+        output,
+        lean_root=project,
+        repository_url="https://github.com/owner/repo",
+        ref=commit,
+    )
+
+    chapter = (output / "roadmap/README.md").read_text(encoding="utf-8")
+    manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert f"/tree/{commit}/blueprint/sources" not in chapter
+    assert manifest["git_ref"] is None
+    assert report.warnings
+
+
 def test_ref_change_after_capture_cannot_label_old_bytes_with_the_new_ref(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2661,6 +2755,40 @@ def test_output_must_have_an_ordinary_final_component(tmp_path: Path) -> None:
     assert not (tmp_path / "child").exists()
 
 
+def test_output_parent_binding_uses_one_retained_final_descriptor(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "new" / "nested" / "parent"
+
+    binding = render_module._open_or_create_output_parent(parent)
+    try:
+        metadata = os.fstat(binding.descriptor)
+        assert binding.path == parent.absolute()
+        assert binding.identity == (metadata.st_dev, metadata.st_ino)
+        assert not hasattr(binding, "descriptors")
+        assert not hasattr(binding, "identities")
+        binding.verify()
+    finally:
+        binding.close()
+
+
+def test_render_refuses_portable_blueprint_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    monkeypatch.setattr(
+        tree_snapshot_module,
+        "_DESCRIPTOR_CAPTURE_SUPPORTED",
+        False,
+    )
+
+    with pytest.raises(PublicationError, match="requires safe directory traversal"):
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert not (tmp_path / "out").exists()
+
+
 def test_render_rejects_a_case_alias_destination_inside_the_blueprint(
     tmp_path: Path,
 ) -> None:
@@ -2812,6 +2940,60 @@ def test_git_remote_a_b_a_change_cannot_change_published_links(
     page = (output / "roadmap/README.md").read_text(encoding="utf-8")
     assert "github.com/correct/source" in page
     assert "github.com/wrong/source" not in page
+
+
+def test_transient_auto_detected_remote_cannot_label_captured_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for variable in ("GITHUB_REPOSITORY", "GITHUB_SERVER_URL"):
+        monkeypatch.delenv(variable, raising=False)
+    project = _project(tmp_path)
+    ref = _commit_project(project)
+    subprocess.run(
+        ["git", "config", "remote.origin.url", "https://github.com/correct/source.git"],
+        cwd=project,
+        check=True,
+    )
+    original = render_module.detect_repository_url
+    first = True
+
+    def transient_remote(root: Path) -> str | None:
+        nonlocal first
+        if not first:
+            return original(root)
+        first = False
+        subprocess.run(
+            ["git", "config", "remote.origin.url", "https://github.com/wrong/source.git"],
+            cwd=project,
+            check=True,
+        )
+        try:
+            return original(root)
+        finally:
+            subprocess.run(
+                [
+                    "git",
+                    "config",
+                    "remote.origin.url",
+                    "https://github.com/correct/source.git",
+                ],
+                cwd=project,
+                check=True,
+            )
+
+    monkeypatch.setattr(render_module, "detect_repository_url", transient_remote)
+    report = render_site(
+        project / "blueprint",
+        tmp_path / "out",
+        lean_root=project,
+        ref=ref,
+    )
+
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert "github.com/correct/source" not in page
+    assert "github.com/wrong/source" not in page
+    assert report.warnings
 
 
 def test_blueprint_capture_enforces_file_limit(
@@ -2990,13 +3172,21 @@ def test_cleanup_claim_retains_a_replacement_injected_after_read(
     original = render_module._read_regular_file_at
     injected = False
 
-    def inject_after_read(parent_descriptor, name, display_path, *, max_bytes):
+    def inject_after_read(
+        parent_descriptor,
+        name,
+        display_path,
+        *,
+        max_bytes,
+        ignore_close_errors=False,
+    ):
         nonlocal injected
         data = original(
             parent_descriptor,
             name,
             display_path,
             max_bytes=max_bytes,
+            ignore_close_errors=ignore_close_errors,
         )
         if ".autoform-cleanup-" in name and not injected:
             injected = True

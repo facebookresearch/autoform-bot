@@ -25,7 +25,7 @@ from .impact import ImpactError, format_impact, revision_impact
 from .lean import build_linker, declaration_names, index_failure_message
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
 from .render import PublicationError, render_site
-from .runtime import RuntimeProjectionError, load_runtime_graph, resolve_runtime_paths
+from .runtime import RuntimeProjectionError, resolve_runtime_paths
 from .scaffold import ScaffoldError, scaffold_project
 from .skeleton import (
     DEFAULT_PROBE_TIMEOUT,
@@ -453,7 +453,6 @@ def _dashboard(args: argparse.Namespace) -> int:
         def run(scratch: Path) -> None:
             claims = ClaimBoard(repo, "dashboard-readonly", scratch)
             state = publication_bound_live_state(
-                lambda: load_runtime_graph(paths.project_root),
                 claims,
                 blueprint_dir=paths.blueprint_dir,
                 site_dir=site,
