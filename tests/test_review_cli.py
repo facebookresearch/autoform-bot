@@ -281,6 +281,106 @@ def test_check_and_render_derive_the_bundle_from_their_own_extraction(
     assert "bp-readback-current" in pages
 
 
+def test_check_and_render_refuse_the_blank_passage_prepare_refuses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A bundle derived without prepare is held to the rules prepare writes by.
+    An article not marked cited may cite only blank lines; prepare refuses that
+    passage, so check and render refuse it too, even with a current card and the
+    approval an unchecked derived bundle would offer, rather than publish an
+    empty passage."""
+
+    blueprint = _blueprint(tmp_path)
+    article = blueprint / "roadmap/basics/result.md"
+    article.write_text(
+        article.read_text(encoding="utf-8") + "\n## Sources\n\n[Book](sources/book.txt#L2-L2)\n", encoding="utf-8"
+    )
+    source = blueprint / "roadmap/basics/sources/book.txt"
+    source.parent.mkdir()
+
+    def cite(line: str) -> None:
+        """Make ``line`` the cited line, and extract the passage as Lean would."""
+
+        source.write_text(f"Heading\n{line}\n", encoding="utf-8")
+        node = replace(_skeleton().nodes[0], passage=line, passage_locator="roadmap/basics/sources/book.txt#L2-L2")
+        report = replace(_skeleton(), nodes=(node,))
+        monkeypatch.setattr(
+            "autoform_cli.__main__.extract_skeletons", lambda *args, **kwargs: _as_extracted(report, args[0])
+        )
+
+    cite("Source theorem.")
+    bundle_path = tmp_path / "review.json"
+    packets = tmp_path / "packets"
+    prepare = [
+        "review",
+        "prepare",
+        str(blueprint),
+        "--lean-root",
+        str(tmp_path),
+        "--output",
+        str(bundle_path),
+        "--packets",
+        str(packets),
+    ]
+    assert main(prepare) == 0
+    packet = packets / json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"][0]["packet"]
+    testimony = tmp_path / "testimony.md"
+    testimony.write_text("For the unique proposition, the proposition is true.\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "review",
+                "record",
+                str(blueprint),
+                "--lean-root",
+                str(tmp_path),
+                "--bundle",
+                str(bundle_path),
+                "--article-id",
+                "af_0123456789abcdef01234567",
+                "--declaration",
+                "Review.result",
+                "--packet",
+                str(packet),
+                "--testimony",
+                str(testimony),
+                "--model",
+                "test-model",
+            ]
+        )
+        == 0
+    )
+
+    # The card binds the packet, not the passage, so it stays current.
+    cite("   ")
+    prepared = load_review_bundle(bundle_path)
+    offered = replace(prepared, articles=(replace(prepared.articles[0], passage="   "),))
+    approval = offered.review_hash("af_0123456789abcdef01234567", load_readbacks(blueprint))
+    article.write_text(
+        article.read_text(encoding="utf-8").replace(
+            "statement: formalized\n", f"statement: formalized\nreview_approved: {approval}\n"
+        ),
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    assert main(prepare) == 2
+    refused = capsys.readouterr().err
+    assert refused == "error: malformed source passage for basics/result\n"
+
+    assert main(["review", "check", str(blueprint), "--lean-root", str(tmp_path)]) == 2
+    captured = capsys.readouterr()
+    assert captured.err == refused
+    assert "OK:" not in captured.out
+
+    site = tmp_path / "site"
+    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 1
+    assert capsys.readouterr().out == refused
+    assert not site.exists()
+
+
 def _published_card(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

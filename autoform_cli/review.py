@@ -258,6 +258,10 @@ def build_review_bundle(graph: Graph, skeleton: SkeletonReport) -> ReviewBundle:
     ``blueprint_hash`` must name ``graph``. A report paired with articles it
     never saw is incoherent evidence, and is refused before anything in it is
     compared with them.
+
+    The bundle must also be one ``write_review_bundle`` would write, so a
+    check or render that derives it instead of reading a prepared one refuses
+    what ``review prepare`` refuses, such as a blank source passage.
     """
 
     findings = _snapshot_findings(graph, skeleton) or _report_findings(graph, skeleton)
@@ -298,7 +302,9 @@ def build_review_bundle(graph: Graph, skeleton: SkeletonReport) -> ReviewBundle:
                 declarations=tuple(_review_declaration(item) for item in record.declarations),
             )
         )
-    return ReviewBundle(tuple(articles))
+    bundle = ReviewBundle(tuple(articles))
+    _validate_bundle_for_write(bundle)
+    return bundle
 
 
 def validate_review_bundle(
