@@ -116,6 +116,7 @@ def test_substitutions_reach_the_site_config(tmp_path: Path) -> None:
     # Quoted: a title is a YAML scalar, not bare text pasted after a colon.
     assert 'site_name: "Finite Flat"' in mkdocs
     assert 'repo_url: "https://example.test/repo"' in mkdocs
+    assert "- navigation.prune" in mkdocs
 
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
     assert 'AUTOFORM_SOURCE: "https://example.test/autoform.git"' in verify

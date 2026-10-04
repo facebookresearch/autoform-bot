@@ -240,7 +240,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert '<a class="bp-code-link"' in chapter
     assert '<svg class="bp-code-icon"' in chapter
     assert '<a class="bp-context-link"' in chapter
-    assert "dependencies/nodes/infimum-loss/theorems/supervision-recovery.html" in chapter
+    assert "dependencies/full.html#node=infimum-loss%2Ftheorems%2Fsupervision-recovery" in chapter
     assert '<details class="bp-dependencies"><summary>Dependencies</summary>' in chapter
     assert '<nav class="bp-book-nav" aria-label="Blueprint chapters">' in chapter
     assert (
@@ -296,20 +296,16 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
         group = node_id.split("/", 1)[0]
         target_graph = chapter_graph if group == "infimum-loss" else support_graph
         assert f'"../../roadmap/{group}/index.html#{anchor}"' in target_graph
-        assert (site / "dependencies/nodes" / f"{node_id}.md").is_file()
+    assert not (site / "dependencies/nodes").exists()
 
     full_graph = (site / "dependencies/full.md").read_text(encoding="utf-8")
     assert "graph_view: full" in full_graph
-    focus_graph = (
-        site / "dependencies/nodes/infimum-loss/theorems/supervision-recovery.md"
-    ).read_text(encoding="utf-8")
-    assert "graph_view: focus" in focus_graph
-    assert re.search(r"class n\d+ focus", focus_graph)
-    assert "one dependency hop" in focus_graph
-    assert (
-        "[Open textbook statement](../../../../roadmap/infimum-loss/README.md#"
-        "theorems-supervision-recovery)"
-    ) in focus_graph
+    assert 'class="bp-dag-viewer"' in full_graph
+    assert "```mermaid" not in full_graph
+    payload = json.loads((site / "dependencies/full.json").read_text(encoding="utf-8"))
+    assert {node["id"] for node in payload["nodes"]} == set(graph.nodes)
+    statement_page = (site / "roadmap/infimum-loss/README.md").read_text(encoding="utf-8")
+    assert "dependencies/full.html#node=infimum-loss%2Ftheorems%2Fsupervision-recovery" in statement_page
 
     # Progress folded into the Book landing and the Graph; no separate page.
     assert not (site / "progress.md").exists()
@@ -343,6 +339,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "pymdownx.superfences" in mkdocs
     assert "stylesheets/blueprint.css" in mkdocs
     assert "javascripts/blueprint-mermaid.js" in mkdocs
+    assert "javascripts/blueprint-dag.js" in mkdocs
     # The nav is generated from the vault into SUMMARY.md, so mkdocs.yml has
     # none: a hand-written chapter list would drift from the book.
     assert "\nnav:\n" not in mkdocs
@@ -634,6 +631,44 @@ def test_roadmap_reconciles_the_pages_setup_wrote(repo_root: Path) -> None:
 
     for required in ("blueprint/README.md", "repository `README.md`"):
         assert required in roadmap, f"Roadmap never reconciles {required}"
+
+
+def test_roadmap_repository_scope_inventories_existing_lean(repo_root: Path) -> None:
+    """A global blueprint is a catalog, not merely a future-work backlog.
+
+    A consumer asked for one wiki covering all mathematics in an established
+    Lean repository. The old workflow treated local implementations as prior
+    art, produced only prospective roadmaps, and therefore rendered 0% despite
+    extensive existing code.
+    """
+
+    roadmap_path = repo_root / "skills" / "roadmap" / "SKILL.md"
+    roadmap = roadmap_path.read_text(encoding="utf-8")
+    normalized = " ".join(roadmap.split())
+    metadata = (
+        repo_root / "skills" / "roadmap" / "agents" / "openai.yaml"
+    ).read_text(encoding="utf-8")
+    example = (
+        repo_root / "skills" / "roadmap" / "references" / "cabannes-thesis-roadmap.md"
+    ).read_text(encoding="utf-8")
+
+    for required in (
+        "repository-wide catalog",
+        "project-owned Lean is a primary mathematical source",
+        "inventory every in-scope tracked module and public mathematical declaration",
+        "future-work slice cannot stand in for a repository-wide inventory",
+        "`DECOMPOSED` means represented by roadmap articles, not unfinished",
+        "record exact compiled names in `lean`",
+        "`proof: formalized` for a theorem or lemma only after checking that its proof is complete",
+        "An axiom or wanted placeholder does not justify a formalized proof",
+        "a definition of a conjecture proposition formalizes its statement representation",
+        "`mathlib: true` only for an exact verified upstream result",
+    ):
+        assert required in normalized
+
+    assert "internal/runbooks/planning.md" not in roadmap
+    assert "existing formalized Lean" in metadata
+    assert "Existing and planned mathematics coexist in one book" in example
 
 
 def test_roadmap_commits_so_the_published_site_can_catch_up(repo_root: Path) -> None:

@@ -26,6 +26,9 @@ from .markdown import markdown_links as _markdown_links
 
 #: More siblings than this at one level is a table of contents, not a chapter.
 _MAX_DIRECT_CHILDREN = 24
+#: A repository-wide subject index is itself a table of contents and can be
+#: wider than a readable mathematical chapter while remaining navigable.
+_MAX_ROOT_CHILDREN = 64
 
 #: A node is reported as oversized only once its finished Lean work clears both
 #: an absolute floor and a large multiple of this project's own median. The
@@ -152,6 +155,7 @@ def audit_graph(
                         "formalizable article has contained articles; declaration-sized articles must be leaves",
                     )
                 )
+
             if not article.statement_text:
                 findings.append(
                     AuditFinding(
@@ -177,13 +181,23 @@ def audit_graph(
                     )
                 )
 
-        if len(children) > _MAX_DIRECT_CHILDREN:
+        if node.catalog and children:
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "catalog-container",
+                    "catalog article has contained articles; a module catalog must be a leaf",
+                )
+            )
+
+        child_limit = _MAX_ROOT_CHILDREN if node.parent is None else _MAX_DIRECT_CHILDREN
+        if len(children) > child_limit:
             findings.append(
                 AuditFinding(
                     article_path,
                     "overfull-container",
                     f"article directly contains {len(children)} articles, more than the "
-                    f"{_MAX_DIRECT_CHILDREN}-article limit; group them into chapters",
+                    f"{child_limit}-article limit; group them into chapters",
                 )
             )
 
@@ -214,12 +228,12 @@ def audit_graph(
             or bool(node.mathlib_file)
             or derived[node_id].proved
         )
-        if not children and formalization_evidence and not node.declaration:
+        if not children and formalization_evidence and not (node.declaration or node.catalog):
             findings.append(
                 AuditFinding(
                     article_path,
                     "missing-declaration-intent",
-                    "formalization-bearing leaf has no declaration intent metadata",
+                    "formalization-bearing leaf has neither declaration nor catalog intent metadata",
                 )
             )
 
@@ -363,12 +377,22 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
         ]
 
     findings: list[AuditFinding] = []
-    index = index_project(root)
+    names_to_resolve = tuple(
+        dict.fromkeys(
+            name
+            for node in graph.nodes.values()
+            if node.catalog is None
+            for name in declaration_names(node.lean or "")
+        )
+    )
+    index = index_project(root, names=names_to_resolve)
     spans = _source_spans(index)
     sizes: dict[str, int] = {}
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
+        if node.catalog is not None:
+            continue
         names = declaration_names(node.lean or "")
         if (node.statement_formalized or node.proof_formalized) and not names:
             findings.append(

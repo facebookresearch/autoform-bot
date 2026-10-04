@@ -31,6 +31,7 @@ theme:
     # The chapter tree stays visible, which is what makes a blueprint readable
     # as a book rather than as a pile of pages.
     - navigation.sections
+    - navigation.prune
     - navigation.indexes
     - navigation.top
     - toc.follow
@@ -68,3 +69,4 @@ extra_javascript:
   - https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js
   - https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js
   - javascripts/blueprint-mermaid.js
+  - javascripts/blueprint-dag.js

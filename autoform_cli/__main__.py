@@ -264,7 +264,14 @@ def _check(args: argparse.Namespace) -> int:
     if args.lean_root is None:
         return 0
 
-    linker = build_linker(args.lean_root)
+    lean_names = tuple(
+        dict.fromkeys(
+            name
+            for node in graph.nodes.values()
+            for name in declaration_names(node.lean or "")
+        )
+    )
+    linker = build_linker(args.lean_root, names=lean_names)
     missing = [
         f"{node.id}: declaration not found in {args.lean_root}: {name}"
         for node in graph.nodes.values()
