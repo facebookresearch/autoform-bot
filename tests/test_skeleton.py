@@ -407,13 +407,25 @@ def test_bounded_command_finds_a_descendant_that_escapes_its_process_group(
 ) -> None:
     child_pid = tmp_path / "detached-child.pid"
     child_program = (
-        "import os, pathlib, time; os.setsid(); "
-        f"pathlib.Path({str(child_pid)!r}).write_text(str(os.getpid())); time.sleep(30)"
+        "import os, pathlib, sys, time; os.setsid(); time.sleep(0.1); "
+        f"pathlib.Path({str(child_pid)!r}).write_text(str(os.getpid())); "
+        "ready_fd = int(sys.argv[1]); os.write(ready_fd, b'1'); "
+        "os.close(ready_fd); time.sleep(30)"
     )
     parent_program = (
-        "import subprocess, sys; "
-        f"subprocess.Popen([sys.executable, '-c', {child_program!r}], "
-        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)"
+        "import os, subprocess, sys\n"
+        "read_fd, write_fd = os.pipe()\n"
+        "try:\n"
+        f"    subprocess.Popen([sys.executable, '-c', {child_program!r}, str(write_fd)], "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, pass_fds=(write_fd,))\n"
+        "finally:\n"
+        "    os.close(write_fd)\n"
+        "try:\n"
+        "    ready = os.read(read_fd, 1)\n"
+        "finally:\n"
+        "    os.close(read_fd)\n"
+        "if ready != b'1':\n"
+        "    raise RuntimeError('detached child did not become ready')\n"
     )
 
     with pytest.raises(SkeletonError, match="descendant processes"):

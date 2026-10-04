@@ -29,10 +29,30 @@ def test_root_readme_uses_the_canonical_repository(repo_root: Path) -> None:
         in readme
     )
     assert "git clone https://github.com/facebookresearch/autoform-bot.git" in readme
-    assert (
-        "https://github.com/facebookresearch/autoform-bot/tree/execution" in readme
-    )
+    assert "historical\n`execution` branch" in readme
+    assert "custom worker/prover stack are deprecated" in readme
     assert "VivienCabannes/autoform-bot" not in readme
+
+
+def test_human_review_distinguishes_roadmap_progress_from_source_scope(
+    repo_root: Path,
+) -> None:
+    skill = (repo_root / "skills/human-review/SKILL.md").read_text(encoding="utf-8")
+
+    assert "`Scoped roadmap` percentage" in skill
+    assert "formalizable leaf targets" in skill
+    assert "fully proved, including every dependency" in skill
+    assert "bodies for definitions" in skill
+    assert "`mathlib: true` follows the authored status contract" in skill
+    assert "not audit verification" in skill
+    assert "never as whole-source completion" in skill
+    assert "linked coverage contract" in skill
+    assert "statement-only theorem remains incomplete" in skill
+    assert "landing-page progress summary" in skill
+    assert "autoform dashboard <PROJECT> --site-dir site" in skill
+    assert "same site deployed to\nGitHub Pages" in skill
+    assert "local-only live claim badges" in skill
+    assert "overview, progress, project graph" not in skill
 
 
 def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path) -> None:
@@ -298,8 +318,13 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert not (site / "book.md").exists()
     overview = (site / "README.md").read_text(encoding="utf-8")
     # The landing page states progress as figures; the chapters keep the strip.
-    assert "5 of 7 items settled" in overview
+    assert "Scoped roadmap" in overview
+    assert "5 of 7 targets complete" in overview
     assert ">71%<" in overview
+    assert "Declared source coverage:" in overview
+    assert "1 decomposed · 5 mapped · 1 out" in overview
+    assert 'href="coverage/index.html"' in overview
+    assert "items settled" not in overview
     assert "bp-progress-link" not in overview
     # A chapter strip counts that chapter, so this is 4 of the project's 5.
     milestone = (site / "roadmap/infimum-loss/README.md").read_text(encoding="utf-8")

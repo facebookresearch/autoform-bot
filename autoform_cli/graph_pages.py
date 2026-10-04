@@ -183,7 +183,8 @@ def write_graph_pages(
         view = local_views[node_id]
         parent = graph.nodes[node_id].parent
         chapter_page = scope_pages.get(parent or article_groups[node_id], chapter_pages[article_groups[node_id]])
-        statement_href = _markdown_document_link(node_links(focus_page)[node_id])
+        focus_links = node_links(focus_page)
+        statement_href = _markdown_document_link(focus_links[node_id])
         navigation = _navigation(
             ("Project map", _markdown_link(project_page, focus_page)),
             ("Chapter map", _markdown_link(chapter_page, focus_page)),
@@ -195,7 +196,7 @@ def write_graph_pages(
                 focus_page,
                 view=view,
                 statuses=_selected_statuses(statuses, view),
-                links=node_links(focus_page),
+                links=focus_links,
                 heading=view.title,
                 lead=(
                     "This local map shows one dependency hop in either direction. "
