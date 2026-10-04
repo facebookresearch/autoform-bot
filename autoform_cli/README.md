@@ -482,6 +482,24 @@ This is failure atomicity, not simultaneous visibility across paths: each
 rename is atomic, but a reader opening several outputs during publication can
 briefly observe different generations.
 
+Inspect the current Markdown-derived formalization frontier without creating a
+queue or scheduler state:
+
+```bash
+autoform work list . --lean-root .
+autoform work list . --lean-root . --json
+autoform work context chapter/result . --lean-root . --json
+```
+
+`work list` returns only formalizable leaves whose next statement or proof phase
+is unblocked. `work context` accepts the path-derived node ID or an assigned
+`article_id` and reports the exact article, dependencies, source targets, Lean
+targets, blockers, article and graph source revisions, and claim target. The claim target prefers
+durable `article_id` metadata. `work list` fails explicitly if an unfinished
+formalizable leaf lacks one; `work context` may still select that article by its
+path ID to report the migration blocker. Both commands are read-only projections
+of Markdown.
+
 Plan durable article identity metadata without changing the blueprint:
 
 ```bash
@@ -492,8 +510,8 @@ autoform migrate article-ids blueprint --check
 `article_id` accepts opaque values in the form `af_` plus 24 lowercase hex
 digits. The planner validates uniqueness, proposes deterministic IDs for
 missing articles, includes exact source hashes, and is strictly read-only.
-Applying plans, moving runtime consumers and claims to durable IDs, and
-preserving publication routes are intentionally deferred to follow-up changes.
+Runtime v2 and `autoform work` expose assigned IDs immediately; applying plans
+and preserving publication routes across path moves remain follow-up changes.
 
 Coordinate temporary cross-machine ownership without modifying the book:
 
@@ -591,9 +609,9 @@ r = 0.25; its largest node is 1344 lines of Lean behind 66 words of prose and a
 single declaration name. Pre-formalization size estimates were considered and
 rejected on that evidence.
 
-The audit API also accepts an already compiled graph. Future orchestration may
-turn its findings into private work items, but the audit itself never enqueues
-work, stamps articles, or creates another graph artifact.
+The audit API also accepts an already compiled graph. Formalize may use its
+findings while working the Markdown frontier, but the audit itself never
+enqueues work, stamps articles, or creates another graph artifact.
 
 ## Claim contract
 
@@ -641,7 +659,7 @@ doctor, separate from any future Deicyde fleet or machine-capability preflight.
 ## Runtime contract
 
 `autoform_cli.runtime` projects the canonical Markdown graph into the versioned,
-deeply immutable in-memory schema `autoform-runtime/v1`. Its declared authority
+deeply immutable in-memory schema `autoform-runtime/v2`. Its declared authority
 is `markdown-articles`: the adapter copies hierarchy, typed statement and proof
 dependencies, authored assertions, derived progress, provenance, and optional
 local Lean source locations, but it provides no persistence or write API.
@@ -657,12 +675,11 @@ and bytes, excluding timestamps, absolute paths, Git state, and operational
 state. Optional Lean locations come from a local lexical scan and do not by
 themselves establish compilation or proof correctness.
 
-Schema v1 retains the graph's path-derived article ID. That is suitable for
-an ephemeral runtime projection and temporary claims, but it is not yet an
-approved durable identity. Queues, reviews, recovery records, PR markers,
-dashboard routes, providers, and logs must not persist against this ID until a
-path-move identity and migration policy is defined. Those records remain private
-and excluded from runtime snapshots and publication.
+Schema v2 exposes optional durable `article_id` metadata beside the graph's
+path-derived `id`. Temporary claims and local dashboard hooks may fall back to
+the path ID, but durable execution records and routes must require `article_id`
+until the path-move migration is complete. Operational state remains private and
+excluded from runtime snapshots and publication.
 
 ## Publication contract
 

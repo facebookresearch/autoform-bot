@@ -51,6 +51,7 @@ def _project(tmp_path: Path) -> Path:
         project,
         "chapter/section/base.md",
         title="Base",
+        article_id="af_000000000000000000000001",
         declaration="definition",
         statement="formalized",
         lean="Project.base",
@@ -60,6 +61,7 @@ def _project(tmp_path: Path) -> Path:
         project,
         "chapter/section/result.md",
         title="Result",
+        article_id="af_000000000000000000000002",
         declaration="theorem",
         statement="formalized",
         proof="formalized",
@@ -107,6 +109,8 @@ def test_preserves_hierarchy_typed_dependencies_and_dispatchability(tmp_path: Pa
 
     assert chapter is not None and not chapter.formalizable and not chapter.dispatchable
     assert base is not None and base.dispatchable
+    assert base.article_id == "af_000000000000000000000001"
+    assert len(base.source_sha256) == 64
     assert base.status.state == "fully_proved"
     assert base.status.defined
     assert result is not None

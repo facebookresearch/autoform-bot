@@ -48,6 +48,7 @@ or run its commands.
 | --- | --- | --- |
 | Set up the blueprint and publication files | `/autoform:setup` | `$setup` |
 | Build a source-grounded roadmap | `/autoform:roadmap` | `$roadmap` |
+| Formalize ready roadmap leaves | `/autoform:formalize` | `$formalize` |
 | Prepare a person-led review | `/autoform:human-review` | `$human-review` |
 | Run an independent agent review | `/autoform:agent-review` | `$agent-review` |
 
@@ -94,6 +95,7 @@ plugin development and debugging, not as a required user workflow.
 | `autoform audit` | Audit completeness and checked facts. |
 | `autoform doctor` | Diagnose the local blueprint contract. |
 | `autoform skeleton` | Extract what a reader must trust for each formalized statement. |
+| `autoform work` | Inspect the Markdown-derived formalization frontier and node context. |
 | `autoform claim` | Coordinate temporary ownership through Git refs. |
 | `autoform dashboard` | Serve the built publication locally with live claim badges. |
 | `autoform render` | Generate publishable MkDocs source. |

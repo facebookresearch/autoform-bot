@@ -26,12 +26,18 @@ from autoform_cli.render import publication_source_revision
 def _runtime():
     return SimpleNamespace(
         source_revision="revision",
-        nodes=(SimpleNamespace(id="chapter/result", title="Main result"),),
+        nodes=(
+            SimpleNamespace(
+                id="chapter/result",
+                article_id="af_000000000000000000000001",
+                title="Main result",
+            ),
+        ),
     )
 
 
 def test_live_state_projects_only_current_author_claims() -> None:
-    key = author_claim_key("chapter/result")
+    key = author_claim_key("af_000000000000000000000001")
     state = build_live_state(
         _runtime(),  # type: ignore[arg-type]
         [
@@ -64,6 +70,7 @@ def test_live_state_projects_only_current_author_claims() -> None:
         "claims": [
             {
                 "node_id": "chapter/result",
+                "article_id": "af_000000000000000000000001",
                 "title": "Main result",
                 "owner": "worker-a",
                 "expires_at": 123.0,

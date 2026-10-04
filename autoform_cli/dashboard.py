@@ -47,6 +47,8 @@ def build_live_state(runtime: RuntimeGraph, leases: list[dict[str, object]]) -> 
             "title": node.title,
             "owner": lease["owner"],
         }
+        if getattr(node, "article_id", None):
+            item["article_id"] = node.article_id
         for field in ("expires_at", "note"):
             value = lease.get(field)
             if isinstance(value, (int, float, str)) and not isinstance(value, bool):
