@@ -75,12 +75,21 @@ target, `bridged` for a result introduced between source targets, and
 Frontmatter is optional. A container article that only supplies prose and
 placement needs none at all; only checked facts are recorded.
 
+A repository-wide inventory may use a narrative leaf to summarize an existing
+Lean module containing several declarations. Such a leaf sets
+`catalog: module` and omits `declaration`, so it is never dispatched as one
+proof task, but may assert
+`statement: formalized` and `proof: formalized` when the complete module has
+been checked. It then contributes honestly to progress and graph status while
+remaining a readable catalog page.
+
 ## Assertions and derived status
 
 An article asserts only facts a human or agent verified:
 
 | Key | Meaning |
 | --- | --- |
+| `catalog: module` | A non-dispatchable leaf cataloging one existing Lean module. |
 | `statement: formalized` | The Lean statement exists and compiles. |
 | `proof: formalized` | The Lean proof is complete. |
 | `mathlib: true` | The result is upstreamed into Mathlib. |
@@ -530,10 +539,14 @@ progress summary after each chapter's opening prose, writes `structure.md` so a
 vault's layout can be checked against the book it produces, and shows a source
 icon when a `lean:` declaration resolves to a repository permalink. Its
 `dependencies.md` entry point rolls dependencies through the article hierarchy,
-with links to declaration maps, one-hop local contexts, and the complete DAG.
-Every graph article returns to the book, and every formal statement links to
-its local context. Point `mkdocs.yml` at `docs_dir: site-src` and enable
-`md_in_html` plus a `pymdownx.superfences` mermaid fence; see the [repository
+with links to declaration maps and the complete DAG. Project, chapter, and small
+local maps remain compact Mermaid diagrams. The full graph is a deterministic
+JSON-derived Canvas explorer with search, filters, pan/zoom, and hash-routed
+node neighborhoods, so it does not inherit Mermaid's text, edge, or SVG-size
+ceilings. Every graph article returns to the book, and every formal statement
+links to the shared explorer focused on that item. Point `mkdocs.yml` at
+`docs_dir: site-src` and enable `md_in_html` plus a
+`pymdownx.superfences` mermaid fence; see the [repository
 example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 
 ## Validation
@@ -567,7 +580,8 @@ roadmap root and the book loses a level. `missing-chapter-article` reports a
 directory directly under `roadmap/` that holds articles but names no chapter.
 Deeper directories (the `definitions/` and `theorems/` buckets the bundled
 example uses) are a filing convention inside a chapter and are not checked.
-`overfull-container` reports an article with more than 24 direct children,
+`overfull-container` reports a mathematical article with more than 24 direct
+children, or a repository-wide root subject index with more than 64,
 which is a table of contents rather than a chapter. Both defects leave a valid
 graph, which is why they need their own checks rather than falling out of
 `autoform check`.

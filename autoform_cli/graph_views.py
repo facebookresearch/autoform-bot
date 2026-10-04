@@ -36,6 +36,7 @@ class ViewNode:
     members: tuple[str, ...]
     status_counts: tuple[tuple[str, int], ...]
     declaration: str | None = None
+    catalog: str | None = None
     status_key: str | None = None
     focus: bool = False
 
@@ -130,6 +131,7 @@ def project_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
             kind="scope",
             members=grouped.get(group, ()),
             status_counts=_status_counts(grouped.get(group, ()), statuses),
+            status_key=_rollup_status_key(grouped.get(group, ()), statuses),
         )
         for group in scopes
     )
@@ -174,6 +176,7 @@ def chapter_view(graph: Graph, statuses: dict[str, NodeStatus], group: str) -> G
             kind="boundary",
             members=tuple(sorted(external_members)),
             status_counts=_status_counts(external_members, statuses),
+            status_key=_rollup_status_key(external_members, statuses),
         )
         for external, external_members in sorted(boundaries.items())
     )
@@ -294,6 +297,7 @@ def _scope_view(
                     kind="scope",
                     members=members[child],
                     status_counts=_status_counts(members[child], statuses),
+                    status_key=_rollup_status_key(members[child], statuses),
                 )
             )
         else:
@@ -331,6 +335,7 @@ def _scope_view(
                 kind="boundary",
                 members=tuple(sorted(external_members)),
                 status_counts=_status_counts(external_members, statuses),
+                status_key=_rollup_status_key(external_members, statuses),
             )
         )
     return GraphView(
@@ -372,10 +377,9 @@ def focus_views(
 ) -> dict[str, GraphView]:
     """Build every local view while sharing the graph-wide indexes.
 
-    Static publication writes one focus page per theorem. Recomputing adjacency
-    and topological order for every page becomes quadratic on a large book, so
-    the bulk path constructs both once and keeps each page proportional to its
-    local neighborhood.
+    Programmatic consumers that need all local views can avoid recomputing
+    adjacency and topological order for every node. Static publication uses the
+    shared hash-addressable explorer instead of emitting one HTML page per node.
     """
     if radius < 0:
         raise ValueError("focus radius must be non-negative")
@@ -430,6 +434,7 @@ def _focus_view(
             members=node.members,
             status_counts=node.status_counts,
             declaration=node.declaration,
+            catalog=node.catalog,
             status_key=node.status_key,
             focus=node.id == node_id,
         )
@@ -446,9 +451,23 @@ def _focus_view(
 
 
 def full_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
-    """Present the complete fine-grained theorem DAG through the view API."""
+    """Present every article and dependency, with container status rolled up."""
     view = _node_view(graph, statuses, graph.nodes)
-    return GraphView(kind="full", title="Full theorem dependency graph", nodes=view.nodes, edges=view.edges)
+    descendants = _leaf_descendant_map(graph)
+    nodes = tuple(
+        ViewNode(
+            id=node.id,
+            title=node.title,
+            kind="scope",
+            members=(node.id, *descendants[node.id]),
+            status_counts=_status_counts(descendants[node.id], statuses),
+            status_key=_rollup_status_key(descendants[node.id], statuses),
+        )
+        if graph.children(node.id)
+        else node
+        for node in view.nodes
+    )
+    return GraphView(kind="full", title="Full dependency graph", nodes=nodes, edges=view.edges)
 
 
 def _node_view(
@@ -523,6 +542,7 @@ def _theorem_node(node: Node, node_status: NodeStatus) -> ViewNode:
         members=(node.id,),
         status_counts=((node_status.key, 1),),
         declaration=node.declaration,
+        catalog=node.catalog,
         status_key=node_status.key,
     )
 
@@ -535,6 +555,15 @@ def _status_counts(
     for node_id in node_ids:
         counts[statuses[node_id].key] += 1
     return tuple((state.key, counts[state.key]) for state in STATES if counts[state.key])
+
+
+def _rollup_status_key(
+    node_ids: Iterable[str],
+    statuses: dict[str, NodeStatus],
+) -> str:
+    """Use the least-complete descendant as a container's honest status."""
+    counts = _status_counts(node_ids, statuses)
+    return counts[-1][0] if counts else "planned"
 
 
 def _scope_node_id(group: str) -> str:
@@ -614,6 +643,27 @@ def _containment_children(graph: Graph) -> dict[str, tuple[str, ...]]:
             current = graph.nodes[current].parent
         acyclic |= trail
     return {parent: tuple(node_ids) for parent, node_ids in children.items()}
+
+
+def _leaf_descendant_map(graph: Graph) -> dict[str, tuple[str, ...]]:
+    """Compute every containment rollup once for full-graph rendering."""
+    descendants: dict[str, tuple[str, ...]] = {}
+
+    def visit(node_id: str) -> tuple[str, ...]:
+        if node_id in descendants:
+            return descendants[node_id]
+        children = graph.children(node_id)
+        result = (
+            tuple(leaf for child in children for leaf in visit(child))
+            if children
+            else (node_id,)
+        )
+        descendants[node_id] = result
+        return result
+
+    for node_id in graph.nodes:
+        visit(node_id)
+    return descendants
 
 
 __all__ = [

@@ -9,15 +9,15 @@ source of graph state.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
+from urllib.parse import quote
 
-from . import mermaid
+from . import dag_viewer, mermaid
 from .graph import Graph
 from .graph_views import (
     GraphView,
     chapter_view,
-    focus_views,
     full_view,
     group_nodes,
     project_view,
@@ -25,8 +25,7 @@ from .graph_views import (
 )
 from .status import NodeStatus
 
-
-NodeLinks = Callable[[Path], Mapping[str, str]]
+NodeLinks = Callable[[Path, Iterable[str]], Mapping[str, str]]
 
 
 def write_graph_pages(
@@ -44,7 +43,6 @@ def write_graph_pages(
     """
     destination = Path(destination).resolve()
     groups = group_nodes(graph)
-    local_views = focus_views(graph, statuses)
     project_page = destination / "dependencies.md"
     full_page = destination / "dependencies/full.md"
     chapter_pages = {group: destination / "dependencies/chapters" / f"{group or 'roadmap'}.md" for group in groups}
@@ -61,13 +59,11 @@ def write_graph_pages(
         for node_id in containers
     }
     scope_pages["roadmap"] = project_page
-    article_groups = {node_id: group for group, node_ids in groups.items() for node_id in node_ids}
-    focus_pages = {node_id: destination / "dependencies/nodes" / f"{node_id}.md" for node_id in article_groups}
     written: list[Path] = []
 
     project = project_view(graph, statuses)
     project_item_count = sum(len(node_ids) for node_ids in groups.values())
-    project_book_links = node_links(project_page)
+    project_book_links = node_links(project_page, _article_link_ids(project))
     project_links = {
         view_node.id: (
             _published_link(
@@ -98,7 +94,7 @@ def write_graph_pages(
 
     for group, chapter_page in chapter_pages.items():
         view = scope_maps[group] if group in scope_maps else chapter_view(graph, statuses, group)
-        links = dict(node_links(chapter_page))
+        links = dict(node_links(chapter_page, _article_link_ids(view)))
         for node in view.nodes:
             if node.kind == "boundary":
                 external = node.id.removeprefix("boundary:")
@@ -114,7 +110,7 @@ def write_graph_pages(
         )
         navigation = _navigation(
             ("Project map", _markdown_link(project_page, chapter_page)),
-            ("Full theorem DAG", _markdown_link(full_page, chapter_page)),
+            ("Full dependency graph", _markdown_link(full_page, chapter_page)),
             ("Open textbook chapter", _markdown_link(book_page, chapter_page)),
         )
         written.append(
@@ -137,7 +133,7 @@ def write_graph_pages(
             continue
         scope_page = scope_pages[scope]
         view = scope_maps[scope]
-        links = dict(node_links(scope_page))
+        links = dict(node_links(scope_page, _article_link_ids(view)))
         for node in view.nodes:
             if node.kind == "scope":
                 nested = node.id.removeprefix("scope:")
@@ -160,59 +156,51 @@ def write_graph_pages(
                 ),
                 navigation=_navigation(
                     ("Parent map", _markdown_link(parent_page, scope_page)),
-                    ("Full theorem DAG", _markdown_link(full_page, scope_page)),
+                    ("Full dependency graph", _markdown_link(full_page, scope_page)),
                 ),
             )
         )
     complete = full_view(graph, statuses)
+    # Unlike a projected scope box, every full-view node is a real authored
+    # article, including containers whose presentation kind is ``scope``.
+    full_links = node_links(full_page, (node.id for node in complete.nodes))
+    full_data = full_page.with_suffix(".json")
+    dag_viewer.write_payload(full_data, complete, links=full_links)
     written.append(
         _write_page(
             full_page,
             view=complete,
             statuses=statuses,
-            links=node_links(full_page),
+            links=full_links,
             heading=complete.title,
             lead=(
                 f"{len(graph.nodes)} nodes · {graph.edge_count} dependencies. Arrows point from a "
-                "prerequisite to what depends on it; dashed arrows are needed only by proofs."
+                "prerequisite to what depends on it; dashed arrows are needed only by proofs. "
+                "Drag to pan, scroll to zoom, and search to focus a node."
             ),
-            navigation=_navigation(("Project map", _markdown_link(project_page, full_page))),
+            navigation=_navigation(
+                ("Project map", _markdown_link(project_page, full_page)),
+                ("Download graph data", full_data.name),
+            ),
+            diagram=dag_viewer.render_container(
+                full_data.name,
+                script_href=_viewer_script_link(full_page),
+            ),
         )
     )
-
-    for node_id, focus_page in focus_pages.items():
-        view = local_views[node_id]
-        parent = graph.nodes[node_id].parent
-        chapter_page = scope_pages.get(parent or article_groups[node_id], chapter_pages[article_groups[node_id]])
-        focus_links = node_links(focus_page)
-        statement_href = _markdown_document_link(focus_links[node_id])
-        navigation = _navigation(
-            ("Project map", _markdown_link(project_page, focus_page)),
-            ("Chapter map", _markdown_link(chapter_page, focus_page)),
-            ("Full theorem DAG", _markdown_link(full_page, focus_page)),
-            ("Open textbook statement", statement_href),
-        )
-        written.append(
-            _write_page(
-                focus_page,
-                view=view,
-                statuses=_selected_statuses(statuses, view),
-                links=focus_links,
-                heading=view.title,
-                lead=(
-                    "This local map shows one dependency hop in either direction. "
-                    "The highlighted item is the current focus."
-                ),
-                navigation=navigation,
-            )
-        )
 
     return tuple(written)
 
 
 def focus_page_path(destination: str | Path, node_id: str) -> Path:
-    """Return the generated local-context page for a theorem node."""
-    return Path(destination).resolve() / "dependencies/nodes" / f"{node_id}.md"
+    """Return the shared explorer page used for a theorem's local context."""
+    return Path(destination).resolve() / "dependencies/full.md"
+
+
+def focus_page_href(destination: str | Path, node_id: str, page: str | Path) -> str:
+    """Return a published explorer link with durable node focus in the hash."""
+    target = focus_page_path(destination, node_id)
+    return f"{mermaid.relative_link(target, Path(page), '.html')}#node={quote(node_id, safe='')}"
 
 
 def _write_page(
@@ -225,8 +213,19 @@ def _write_page(
     lead: str,
     navigation: str = "",
     extra: str = "",
+    diagram: str | None = None,
 ) -> Path:
-    diagram = mermaid.render_view_diagram(view, links=dict(links), include_classdefs=False)
+    if diagram is None:
+        candidate = mermaid.render_view_diagram(view, links=dict(links), include_classdefs=False)
+        if dag_viewer.requires_interactive(view, candidate):
+            payload = page.with_suffix(".json")
+            dag_viewer.write_payload(payload, view, links=links)
+            diagram = dag_viewer.render_container(
+                payload.name,
+                script_href=_viewer_script_link(page),
+            )
+        else:
+            diagram = candidate
     sections = [
         "---",
         "kind: graph",
@@ -256,6 +255,16 @@ def _selected_statuses(
     return {node_id: statuses[node_id] for node_id in view.member_ids}
 
 
+def _article_link_ids(view: GraphView) -> tuple[str, ...]:
+    """Return only view nodes whose links come from published articles.
+
+    Scope and boundary links are derived locally by this module. Asking the
+    renderer for every graph node on every scope page made a repository-wide
+    wiki spend quadratic time constructing links that the diagram never used.
+    """
+    return tuple(node.id for node in view.nodes if node.kind == "node")
+
+
 def _navigation(*items: tuple[str, str]) -> str:
     return " · ".join(f"[{label}]({href})" for label, href in items)
 
@@ -268,15 +277,20 @@ def _published_link(target: Path, page: Path) -> str:
     return mermaid.relative_link(target, page, ".html")
 
 
-def _markdown_document_link(href: str) -> str:
-    """Turn a raw published-page URL back into a link MkDocs can validate."""
-    path, separator, fragment = href.partition("#")
-    document = Path(path)
-    if document.name == "index.html":
-        document = document.parent / "README.md"
-    elif document.suffix == ".html":
-        document = document.with_suffix(".md")
-    return f"{document.as_posix()}{separator}{fragment}"
+def _viewer_script_link(page: Path) -> str:
+    if page.name == "dependencies.md":
+        site_root = page.parent
+    else:
+        dependencies = next(
+            (parent for parent in page.parents if parent.name == "dependencies"),
+            page.parent,
+        )
+        site_root = dependencies.parent
+    return mermaid.relative_link(
+        site_root / "javascripts/blueprint-dag.js",
+        page,
+        ".js",
+    )
 
 
-__all__ = ["focus_page_path", "write_graph_pages"]
+__all__ = ["focus_page_href", "focus_page_path", "write_graph_pages"]

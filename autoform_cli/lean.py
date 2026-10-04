@@ -17,15 +17,18 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 _NAMESPACE = re.compile(r"^\s*namespace\s+(.+)$")
-_SECTION = re.compile(r"^\s*section\b\s*(\S*)")
+_SECTION = re.compile(
+    r"^\s*(?:(?:public|private|noncomputable|unsafe|local)\s+)*section\b\s*(\S*)"
+)
 _END = re.compile(r"^\s*end\b\s*(\S*)")
 _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
-    r"(?:(?:private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
+    r"(?:(?:public|private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
     r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom)\s+(.+)$"
 )
 _IGNORED_DIRECTORIES = frozenset({".lake", ".git", "lake-packages", "build"})
@@ -64,11 +67,27 @@ class SourceIndex:
         return self.declarations.get(name)
 
 
-def index_project(root: str | Path) -> SourceIndex:
-    """Scan ``*.lean`` beneath *root* and index declarations by full name."""
+def index_project(
+    root: str | Path,
+    *,
+    names: Iterable[str] | None = None,
+) -> SourceIndex:
+    """Scan ``*.lean`` beneath *root* and index declarations.
+
+    When *names* is supplied, a fast lexical prefilter limits the full
+    comment-aware scan to files that can contain one of those declarations.
+    Every declaration in a matching file is still indexed, preserving source
+    span calculations, and the digest continues to cover the complete tree.
+    """
     root_path = Path(root).expanduser().resolve()
     declarations: dict[str, Declaration] = {}
     digest = hashlib.sha256()
+    wanted = None if names is None else frozenset(names)
+    wanted_short = (
+        None
+        if wanted is None
+        else frozenset(_short_name(name) for name in wanted)
+    )
     if not root_path.is_dir():
         return SourceIndex(root=root_path, declarations=declarations, source_digest=digest.hexdigest())
 
@@ -93,11 +112,37 @@ def index_project(root: str | Path) -> SourceIndex:
         digest.update(b"\0")
         digest.update(text.encode("utf-8"))
         digest.update(b"\0")
+        if wanted_short is not None and not _may_declare(text, wanted_short):
+            continue
         for declaration in _scan(text, relative):
             # First definition wins, so an earlier file is not masked by a later
             # one when a name is genuinely duplicated across namespaces.
             declarations.setdefault(declaration.name, declaration)
     return SourceIndex(root=root_path, declarations=declarations, source_digest=digest.hexdigest())
+
+
+def _may_declare(text: str, wanted_short: frozenset[str]) -> bool:
+    """Cheaply reject files that cannot contain a requested declaration."""
+    if not wanted_short:
+        return False
+    for line in text.splitlines():
+        match = _DECLARATION.match(line)
+        if match is None:
+            continue
+        name = _name_token(match.group(2))
+        if name is None:
+            continue
+        short = _short_name(name.removesuffix("."))
+        if short in wanted_short:
+            return True
+    return False
+
+
+def _short_name(name: str) -> str:
+    """Return the last Lean name component without splitting quoted dots."""
+    if name.endswith("»") and "«" in name:
+        return name[name.rfind("«") :]
+    return name.rsplit(".", 1)[-1]
 
 
 def _is_managed_output(path: Path) -> bool:
@@ -150,6 +195,9 @@ def _scan(text: str, relative: Path) -> list[Declaration]:
             name = _name_token(declaration_match.group(2))
             if name is None:
                 continue
+            # `_name_token` stops before the `{` in an explicit universe
+            # binder, leaving the syntactic separator behind.
+            name = re.sub(r"\.\{[^}\n]+\}$", "", name).removesuffix(".")
             qualified = ".".join([*namespaces, name])
             found.append(Declaration(qualified, relative, number, keyword))
     return found
@@ -280,10 +328,11 @@ def build_linker(
     *,
     repository_url: str | None = None,
     ref: str | None = None,
+    names: Iterable[str] | None = None,
 ) -> SourceLinker:
     """Index *lean_root* and resolve the repository coordinates to link against."""
     return SourceLinker(
-        index=index_project(lean_root),
+        index=index_project(lean_root, names=names),
         repository_url=repository_url or detect_repository_url(lean_root),
         ref=ref or detect_ref(lean_root),
     )

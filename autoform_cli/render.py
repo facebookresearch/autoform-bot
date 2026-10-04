@@ -14,12 +14,12 @@ import html
 import json
 import re
 import shutil
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
-from . import graph_pages, graph_views, mermaid, status
+from . import dag_viewer, graph_pages, graph_views, mermaid, status
 from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage
 from .graph import Graph, Node, load_graph
 from .lean import SourceLinker, build_linker, declaration_names
@@ -89,6 +89,7 @@ DECLARATION_LABELS = {
 STYLESHEET = "stylesheets/blueprint.css"
 MERMAID_SCRIPT = "javascripts/blueprint-mermaid.js"
 LIVE_SCRIPT = "javascripts/blueprint-live.js"
+DAG_SCRIPT = "javascripts/blueprint-dag.js"
 LOGO = "assets/autoform.svg"
 _ASSET_DIR = Path(__file__).resolve().parent / "assets"
 
@@ -279,12 +280,25 @@ def render_site(
     # <repo>/docs/blueprint would otherwise be described as <repo>/blueprint,
     # and every generated permalink would 404.
     repo_root = Path(lean_root).expanduser().resolve() if lean_root is not None else blueprint.parent
-    linker = build_linker(repo_root, repository_url=repository_url, ref=ref)
+    lean_names = tuple(
+        dict.fromkeys(
+            name
+            for node in graph.nodes.values()
+            for name in declaration_names(node.lean or "")
+        )
+    )
+    linker = build_linker(
+        repo_root,
+        repository_url=repository_url,
+        ref=ref,
+        names=lean_names,
+    )
     numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
     sources_base = _sources_base(blueprint, repo_root, linker)
 
     _prepare_destination(destination, clean=clean)
+    source_revision = _source_revision(blueprint)
     _write_publication_manifest(
         destination,
         blueprint,
@@ -292,6 +306,7 @@ def render_site(
         linker,
         coverage=coverage,
         complete=False,
+        source_revision=source_revision,
     )
 
     report = RenderReport(output_dir=destination)
@@ -435,7 +450,11 @@ def render_site(
         graph,
         statuses,
         destination,
-        node_links=lambda page: _anchored_links(targets, page),
+        node_links=lambda page, node_ids: _anchored_links(
+            targets,
+            page,
+            node_ids=node_ids,
+        ),
     )
     report.pages += len(generated_graph_pages)
 
@@ -443,6 +462,7 @@ def render_site(
         (STYLESHEET, _stylesheet()),
         (MERMAID_SCRIPT, _mermaid_script()),
         (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
+        (DAG_SCRIPT, dag_viewer.viewer_script()),
         (LOGO, _logo()),
     ):
         asset = destination / relative
@@ -455,6 +475,7 @@ def render_site(
         linker,
         coverage=coverage,
         complete=True,
+        source_revision=source_revision,
     )
     return report
 
@@ -604,6 +625,7 @@ def _write_publication_manifest(
     *,
     coverage: CoverageSummary,
     complete: bool,
+    source_revision: str,
 ) -> None:
     manifest = {
         "complete": complete,
@@ -616,7 +638,7 @@ def _write_publication_manifest(
         },
         "schema": "autoform-publication/v1",
         "source": "blueprint/roadmap Markdown",
-        "source_revision": publication_source_revision(blueprint),
+        "source_revision": source_revision,
         "git_ref": linker.ref,
         "nodes": len(graph.nodes),
         "dependencies": graph.edge_count,
@@ -857,9 +879,7 @@ def _next_target(
         if statement is None and chapter_page is not None:
             anchor = node.id.split("/", 1)[1].replace("/", "-") if "/" in node.id else node.id
             statement = f"{mermaid.relative_link(chapter_page, page, '.html')}#{anchor}"
-        graph_href = mermaid.relative_link(
-            graph_pages.focus_page_path(destination, node.id), page, ".html"
-        )
+        graph_href = graph_pages.focus_page_href(destination, node.id, page)
 
         title = html.escape(node.title)
         heading = (
@@ -1051,7 +1071,7 @@ def _render_summary_nav(
         [
             "- Graph",
             "    - [Dependency maps](dependencies.md)",
-            "    - [Full theorem DAG](dependencies/full.md)",
+            "    - [Full dependency graph](dependencies/full.md)",
             f"    - [Vault structure]({STRUCTURE_PAGE})",
         ]
     )
@@ -1176,13 +1196,16 @@ _COVERAGE_SUMMARY_ORDER = tuple(
 def _is_countable(graph: Graph, node_id: str, containers: frozenset[str]) -> bool:
     """Whether *node_id* is a formalization target the dashboards should count.
 
-    A leaf, and a leaf that declares something. Counting every leaf made a
-    freshly scaffolded vault report "0 of 1 targets complete, 1 ready now": the
-    roadmap landing page has no children yet, so it counted as an unstarted
-    result, and the site claimed work existed before any had been planned.
+    Declaration leaves are targets. A catalog may instead summarize an
+    existing formalized module on a narrative leaf, so an explicit checked
+    status also makes that leaf countable. Bare navigation and prose leaves do
+    not count: a freshly scaffolded roadmap must not invent unfinished targets.
     """
-
-    return node_id not in containers and graph.nodes[node_id].formalizable
+    node = graph.nodes[node_id]
+    asserted_status = node.statement_formalized or node.proof_formalized or node.mathlib
+    return node_id not in containers and (
+        node.formalizable or (node.catalog is not None and asserted_status)
+    )
 
 
 def _countable(graph: Graph) -> list[str]:
@@ -1396,43 +1419,82 @@ def _anchor(node_id: str, group: str) -> str:
     return remainder.replace("/", "-")
 
 
+class _AnchoredLinks(Mapping[str, str]):
+    """Resolve published article links on demand for one output page.
+
+    Most article bodies mention no other article, while a repository-wide wiki
+    can contain tens of thousands of targets. Materializing the complete map
+    for every body therefore made link rewriting quadratic in the roadmap size.
+    """
+
+    def __init__(
+        self,
+        targets: Mapping[str, tuple[Path, str]],
+        page: Path,
+        *,
+        extension: str,
+        node_ids: Iterable[str] | None,
+    ) -> None:
+        self._targets = targets
+        self._page = page
+        self._resolved_page = page.resolve()
+        self._node_ids = targets.keys() if node_ids is None else tuple(dict.fromkeys(node_ids))
+        self._allowed = None if node_ids is None else frozenset(self._node_ids)
+        self._extension = extension
+        self._cache: dict[str, str] = {}
+        self._hrefs: dict[Path, str] = {}
+
+    def __getitem__(self, node_id: str) -> str:
+        if self._allowed is not None and node_id not in self._allowed:
+            raise KeyError(node_id)
+        cached = self._cache.get(node_id)
+        if cached is not None:
+            return cached
+        target, anchor = self._targets[node_id]
+        if target in self._hrefs:
+            href = self._hrefs[target]
+        elif target.resolve() == self._resolved_page:
+            href = ""
+            self._hrefs[target] = href
+        else:
+            href = mermaid.relative_link(target, self._page, self._extension)
+            if self._extension == ".html":
+                href = _as_published(href)
+            self._hrefs[target] = href
+        if href:
+            anchored = f"{href}#{anchor}" if anchor else href
+        else:
+            anchored = f"#{anchor}" if anchor else "#"
+        self._cache[node_id] = anchored
+        return anchored
+
+    def __iter__(self):
+        return iter(self._node_ids)
+
+    def __len__(self) -> int:
+        return len(self._node_ids)
+
+
 def _anchored_links(
-    targets: dict[str, tuple[Path, str]],
+    targets: Mapping[str, tuple[Path, str]],
     page: Path,
     *,
     extension: str = ".html",
-    hrefs: dict[Path, str] | None = None,
-) -> dict[str, str]:
+    node_ids: Iterable[str] | None = None,
+) -> Mapping[str, str]:
     """Link every node to its statement on the published chapter page.
 
     Use ``.md`` for links MkDocs will parse -- it validates and rewrites those
     itself -- and ``.html`` for raw HTML and Mermaid, which it never sees. A
-    statement on the current page is just a fragment. Calls for the same page
-    and extension can share *hrefs*, so each target page is linked once across
-    all of them.
+    statement on the current page is just a fragment. Link construction is
+    lazy, and nodes on the same target page share its cached base href.
     """
-    resolved_page = page.resolve()
-    # Many nodes share a chapter page, and resolving a path walks the disk, so
-    # each target page is linked once. The current page is cached as "" and
-    # links as a bare fragment.
-    if hrefs is None:
-        hrefs = {}
-    links: dict[str, str] = {}
-    for node_id, (target, anchor) in targets.items():
-        href = hrefs.get(target)
-        if href is None:
-            if target.resolve() == resolved_page:
-                href = ""
-            else:
-                href = mermaid.relative_link(target, page, extension)
-                if extension == ".html":
-                    href = _as_published(href)
-            hrefs[target] = href
-        if href:
-            links[node_id] = f"{href}#{anchor}" if anchor else href
-        else:
-            links[node_id] = f"#{anchor}" if anchor else "#"
-    return links
+    return _AnchoredLinks(
+        targets,
+        page,
+        extension=extension,
+        node_ids=node_ids,
+    )
 
 
 def _as_published(href: str) -> str:
@@ -1467,9 +1529,9 @@ def _rewrite_links(
     all when *sources_base* says where to reach them in the repository.
     """
     # Most pages name a few nodes, so each node link is built where it is used.
-    # A coverage page can name most of the graph, so one cache serves the whole
-    # text and each target page it reaches is linked once.
-    page_hrefs: dict[Path, str] = {}
+    # A coverage page can name most of the graph, so one lazy map serves the
+    # whole text and each target page it reaches is linked once.
+    anchored = _anchored_links(targets, page, extension=".md")
 
     def moved_target(raw: str) -> str | None:
         """Where *raw* should point once published, or None to leave it alone."""
@@ -1480,7 +1542,7 @@ def _rewrite_links(
         candidate = (source_dir / unquote(path)).resolve()
         node_id = node_sources.get(candidate)
         if node_id is not None:
-            href = _anchored_links({node_id: targets[node_id]}, page, extension=".md", hrefs=page_hrefs)[node_id]
+            href = anchored[node_id]
             if not targets[node_id][1] and separator:
                 href = f"{'' if href == '#' else href}#{fragment}"
             return href
@@ -1684,7 +1746,7 @@ def _render_environment(
     numbers: dict[str, str],
     used_by: dict[str, list[str]],
     linker: SourceLinker,
-    links: dict[str, str],
+    links: Mapping[str, str],
     page: Path,
     blueprint: Path,
     repo_root: Path,
@@ -1834,10 +1896,9 @@ def _vault_source_link(node: Node, *, repo_root: Path, linker) -> str:
 
 
 def _graph_context_link(node: Node, *, page: Path, destination: Path) -> str:
-    """Link a textbook statement to its generated one-hop dependency view."""
-    target = graph_pages.focus_page_path(destination, node.id)
-    href = mermaid.relative_link(target, page, ".html")
-    label = html.escape(f"Open local dependency context for {node.title}", quote=True)
+    """Link a textbook statement to its hash-focused dependency explorer."""
+    href = graph_pages.focus_page_href(destination, node.id, page)
+    label = html.escape(f"Open dependency explorer for {node.title}", quote=True)
     icon = (
         '<svg class="bp-context-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
         '<circle cx="6" cy="12" r="2.25"/><circle cx="18" cy="6" r="2.25"/>'
@@ -1857,7 +1918,7 @@ def _dependency_disclosure(
     statuses: dict[str, status.NodeStatus],
     numbers: dict[str, str],
     used_by: dict[str, list[str]],
-    links: dict[str, str],
+    links: Mapping[str, str],
 ) -> str:
     """Hide DAG relations behind a native, keyboard-accessible disclosure."""
     rows: list[tuple[str, str]] = []
@@ -2608,6 +2669,74 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   vertical-align: middle;
 }}
 
+.bp-dag-viewer {{
+  border: 1px solid var(--bp-rule);
+  border-radius: 12px;
+  background: var(--bp-surface);
+  overflow: hidden;
+  min-height: 34rem;
+}}
+.bp-dag-toolbar {{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem 0.8rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--bp-rule);
+  font-family: {sans};
+  font-size: 0.78rem;
+}}
+.bp-dag-search {{
+  width: min(22rem, 48vw);
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--bp-rule);
+  border-radius: 7px;
+  color: var(--bp-fg);
+  background: var(--bp-surface);
+}}
+.bp-dag-status, .bp-dag-button {{
+  padding: 0.38rem 0.55rem;
+  border: 1px solid var(--bp-rule);
+  border-radius: 7px;
+  color: var(--bp-fg);
+  background: var(--bp-surface);
+}}
+.bp-dag-button {{ cursor: pointer; font-weight: 700; }}
+.bp-dag-button:hover {{ border-color: var(--bp-link); color: var(--bp-link); }}
+.bp-dag-stats {{ margin-left: auto; color: var(--bp-muted); }}
+.bp-dag-canvas {{
+  display: block;
+  width: 100%;
+  height: min(72vh, 780px);
+  min-height: 30rem;
+  cursor: grab;
+  touch-action: none;
+  background: var(--bp-surface);
+}}
+.bp-dag-canvas:active {{ cursor: grabbing; }}
+.bp-dag-canvas:focus-visible {{ outline: 3px solid var(--bp-link); outline-offset: -3px; }}
+.bp-dag-detail {{
+  min-height: 2.5rem;
+  padding: 0.7rem 0.85rem;
+  border-top: 1px solid var(--bp-rule);
+  color: var(--bp-muted);
+  overflow-wrap: anywhere;
+}}
+.bp-dag-open {{ margin-left: 0.2rem; }}
+.bp-dag-relations {{ margin-top: 0.45rem; color: var(--bp-fg); }}
+.bp-dag-relations summary {{ cursor: pointer; color: var(--bp-link); }}
+.bp-dag-results {{ display: grid; gap: 0.25rem; margin: 0.5rem 0 0; padding: 0; list-style: none; }}
+.bp-dag-result {{
+  border: 0;
+  padding: 0.15rem 0;
+  color: var(--bp-link);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}}
+.bp-dag-result:hover {{ text-decoration: underline; }}
+.bp-dag-loading, .bp-dag-error {{ padding: 1rem; }}
+
 {light}
 
 /* The graph is an SVG Mermaid builds from the fence, so the dark scheme has
@@ -2632,6 +2761,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 __all__ = [
     "DECLARATION_LABELS",
     "LIVE_SCRIPT",
+    "DAG_SCRIPT",
     "LOGO",
     "MERMAID_SCRIPT",
     "PUBLICATION_MANIFEST",

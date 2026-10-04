@@ -92,6 +92,24 @@ def test_loads_nested_wiki_and_metadata(tmp_path: Path) -> None:
     assert graph.edge_count == 1
 
 
+def test_loads_a_non_dispatchable_module_catalog_status(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "module.md",
+        "# Existing module\n",
+        catalog="module",
+        statement="formalized",
+        proof="formalized",
+    )
+
+    node = load_graph(blueprint).nodes["module"]
+    assert node.catalog == "module"
+    assert not node.formalizable
+    assert node.statement_formalized
+    assert node.proof_formalized
+
+
 def test_resolves_links_relative_to_each_node(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "base.md", "# Base\n")
@@ -113,6 +131,7 @@ def test_resolves_links_relative_to_each_node(tmp_path: Path) -> None:
         (_node_text("# First title\n# Second title\n"), "multiple H1 titles"),
         ("---\ndeclaration: theorem\n# Title\n", "unterminated frontmatter"),
         (_node_text("# Title\n", owner="me"), "unsupported frontmatter key"),
+        (_node_text("# Title\n", catalog="book"), "'catalog' accepts only 'module'"),
         (_node_text("# Result\n## Depends on\n[x](missing.md)\n"), "does not exist"),
         (_node_text("# Result\n## Depends on\n[x](note.txt)\n"), "relative .md file"),
         (

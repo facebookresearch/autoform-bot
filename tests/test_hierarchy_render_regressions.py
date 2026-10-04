@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -91,8 +92,9 @@ def test_render_publishes_dependencies_between_the_roadmap_root_and_a_chapter(
     assert "1 item across 1 chapter" in project_map
     assert '"../../dependencies.html"' in chapter_map
     assert "External chapter: Root result" in chapter_map
-    assert "Root result" in full_map
-    assert "Chapter result" in full_map
+    assert 'class="bp-dag-viewer"' in full_map
+    payload = json.loads((output / "dependencies/full.json").read_text(encoding="utf-8"))
+    assert {node["title"] for node in payload["nodes"]} == {"Root result", "Chapter", "Chapter result"}
 
 
 def test_nested_container_keeps_its_own_narrative_and_statements(tmp_path: Path) -> None:

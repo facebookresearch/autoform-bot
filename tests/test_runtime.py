@@ -126,6 +126,26 @@ def test_preserves_hierarchy_typed_dependencies_and_dispatchability(tmp_path: Pa
     assert result.dispatchable
 
 
+def test_runtime_exposes_a_settled_module_catalog_without_dispatching_it(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _article(
+        project,
+        "chapter/catalog.md",
+        title="Existing module",
+        catalog="module",
+        statement="formalized",
+        proof="formalized",
+    )
+
+    catalog = load_runtime_graph(project).get("chapter/catalog")
+
+    assert catalog is not None
+    assert catalog.catalog == "module"
+    assert not catalog.formalizable
+    assert not catalog.dispatchable
+    assert catalog.status.state == "fully_proved"
+
+
 def test_exposes_provenance_mathlib_and_optional_lean_locations(tmp_path: Path) -> None:
     project = _project(tmp_path)
     lean_root = tmp_path / "lean"
