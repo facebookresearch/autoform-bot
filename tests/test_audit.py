@@ -152,6 +152,22 @@ def test_audit_requires_mathlib_declaration_and_declaration_intent_on_evidenced_
     assert "roadmap/exposition.md" not in findings
 
 
+def test_audit_accepts_an_explicit_non_dispatchable_module_catalog(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(
+        blueprint,
+        "existing-module.md",
+        catalog="module",
+        statement="formalized",
+        proof="formalized",
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+
+    assert audit_blueprint(blueprint, lean_root=lean_root).clean
+
+
 def test_audit_validates_local_source_links_without_network_access(tmp_path: Path, monkeypatch) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
@@ -407,10 +423,11 @@ def test_audit_reports_a_container_holding_too_many_articles(tmp_path: Path) -> 
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     _article(blueprint, "README.md", depends=False)
+    _article(blueprint, "chapter/README.md", depends=False)
     for index in range(25):
-        _article(blueprint, f"unit-{index:02d}.md", declaration="theorem")
+        _article(blueprint, f"chapter/unit-{index:02d}.md", declaration="theorem")
 
-    findings = _finding_map(blueprint)["roadmap/README.md"]
+    findings = _finding_map(blueprint)["roadmap/chapter/README.md"]
 
     assert findings == [
         (
@@ -419,6 +436,16 @@ def test_audit_reports_a_container_holding_too_many_articles(tmp_path: Path) -> 
             "group them into chapters",
         )
     ]
+
+
+def test_audit_allows_a_wide_repository_subject_index(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    for index in range(33):
+        _article(blueprint, f"subject-{index:02d}/README.md", depends=False)
+
+    assert audit_blueprint(blueprint).clean
 
 
 def test_audit_reports_nodes_that_are_large_outliers_for_their_project(tmp_path: Path) -> None:

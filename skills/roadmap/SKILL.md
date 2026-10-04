@@ -44,9 +44,10 @@ choosing one would discard accepted work.
 
 ## Inventory existing project mathematics
 
-When the adopted boundary is a repository, library, global wiki, or other
-existing codebase, project-owned Lean is a primary mathematical source rather
-than implementation prior art to omit. Before planning future work:
+When the adopted boundary is a repository-wide catalog, library, global wiki,
+or other existing codebase, project-owned Lean is a primary mathematical
+source rather than implementation prior art to omit. Before planning future
+work:
 
 - inventory every in-scope tracked module and public mathematical declaration,
   plus declaration-like wishlist or conjecture entries and adopted planning
@@ -58,7 +59,7 @@ than implementation prior art to omit. Before planning future work:
 - record each module and declaration name, together with any separate literary
   provenance, under `blueprint/sources/`.
 
-A future-work slice never stands in for a repository-wide inventory. Keep
+A future-work slice cannot stand in for a repository-wide inventory. Keep
 existing, wishlist, conjectural, and planned mathematics in the same book and
 DAG. `DECOMPOSED` means represented by roadmap articles, not unfinished, so it
 may describe mathematics whose Lean implementation is already complete. A
@@ -92,13 +93,30 @@ into fictional future work. Ground each statement and proof sketch in the
 source. Put genuine statement prerequisites under `## Depends on` and
 proof-only prerequisites under `## Proof depends on`.
 
+A source-complete repository inventory may instead use a leaf with
+`catalog: module` to group peer declarations from one existing Lean module,
+provided an exact declaration ledger is linked and every private/supporting
+exclusion is explicit. A catalog leaf omits `declaration` and is not
+dispatchable as one proof task; refine it into declaration-sized children when
+the mathematical DAG or implementation handoff needs that granularity.
+
 Assert `statement: formalized`, `proof: formalized`, or `mathlib: true` only
-after exact verification. Definitions, structures, classes, instances, and
-inductives have no separate proof obligation. A theorem or lemma receives
-`proof: formalized` only when its proof is complete and contains no placeholder
-or proof-wanted mechanism. An axiom or wanted declaration is not a proof; a
-definition of a conjecture proposition formalizes its representation, not the
-conjecture. Hand deeper trust and axiom review to Agent Review.
+after exact verification. For declaration leaves, record exact compiled names
+in `lean`. Definitions, structures, classes, instances, and inductives have no
+separate proof obligation. Set `proof: formalized` for a theorem or lemma only
+after checking that its proof is complete and contains no placeholder or
+proof-wanted mechanism. An axiom or wanted placeholder does not justify a
+formalized proof; a definition of a conjecture proposition formalizes its
+statement representation, not the conjecture. Set `mathlib: true` only for an
+exact verified upstream result. Hand deeper trust and axiom review to Agent
+Review.
+
+For a `catalog: module` leaf, assertion keys describe the whole tracked module:
+set `statement: formalized` only when all inventoried public declarations
+exist, and `proof: formalized` only when every included implementation or proof
+is complete under the repository's trust policy. Record per-declaration
+compiled-name deferrals in the linked ledger rather than misreporting the
+module as future work.
 
 For a large source, divide independent sections among available agents while
 retaining one owner for global coverage, status semantics, and dependency

@@ -167,6 +167,10 @@ def test_roadmap_root_dependencies_have_nodes_in_every_view(
     complete = full_view(graph, statuses)
     assert set(complete.member_ids) == set(graph.nodes)
     assert {(edge.source, edge.target) for edge in complete.edges} == {(source, target)}
+    chapter_node = next(node for node in complete.nodes if node.id == "chapter")
+    assert chapter_node.kind == "scope"
+    assert chapter_node.members == ("chapter", "chapter/result")
+    assert chapter_node.status_key == statuses["chapter/result"].key
 
 
 def test_scope_view_collapses_nested_articles_and_rolls_up_dependencies(tmp_path: Path) -> None:
