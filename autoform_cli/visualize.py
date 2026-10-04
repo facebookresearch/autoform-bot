@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Sequence
 
-from . import mermaid, status
+from . import graph_views, mermaid, status
 from .graph import GraphValidationError, load_graph
 
 
@@ -77,13 +77,39 @@ def export_graph(
     destination = _destination(output or blueprint_dir / "dependencies.md")
     graph = load_graph(blueprint_dir)
     statuses = status.derive(graph)
-    page = mermaid.render_page(
-        graph,
-        statuses,
-        destination,
-        link_extension=link_extension,
-        title=title,
-    )
+    view = graph_views.project_view(graph, statuses)
+    links = {}
+    for node in view.nodes:
+        scope = node.id.removeprefix("scope:")
+        target = (
+            blueprint_dir / "roadmap/README.md"
+            if scope == "roadmap"
+            else blueprint_dir / "roadmap" / scope / "README.md"
+        )
+        if not target.is_file() and node.members:
+            target = graph.nodes[node.members[0]].path
+        links[node.id] = mermaid.relative_link(target, destination, link_extension)
+    diagram = mermaid.render_view_diagram(view, links=links)
+    legend = mermaid.render_legend(statuses)
+    sections = [
+        "---",
+        "kind: graph",
+        "graph_view: project",
+        "---",
+        "",
+        f"# {title}",
+        "",
+        (
+            f"{len(graph.nodes)} nodes · {graph.edge_count} dependencies, collapsed into "
+            f"{len(view.nodes)} top-level scopes. Open the rendered site for the searchable full DAG."
+        ),
+        "",
+        diagram,
+        "",
+    ]
+    if legend:
+        sections.extend(["## Legend", "", legend, ""])
+    page = "\n".join(sections)
     _atomic_write(destination, page)
     return destination
 

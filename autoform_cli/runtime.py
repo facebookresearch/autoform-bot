@@ -101,6 +101,7 @@ class RuntimeNode:
     parent: str | None
     depth: int
     declaration: str | None
+    catalog: str | None
     formalizable: bool
     dispatchable: bool
     statement_dependencies: tuple[str, ...]
@@ -119,6 +120,7 @@ class RuntimeNode:
         return {
             "article_path": self.article_path,
             "assertions": self.assertions.as_dict(),
+            "catalog": self.catalog,
             "declaration": self.declaration,
             "dependencies": list(self.dependencies),
             "depth": self.depth,
@@ -335,6 +337,7 @@ def build_runtime_graph(
                 parent=node.parent,
                 depth=node.depth,
                 declaration=node.declaration,
+                catalog=node.catalog,
                 formalizable=node.formalizable,
                 dispatchable=node.formalizable and node_id not in parents,
                 statement_dependencies=node.statement_dependencies,

@@ -16,8 +16,8 @@ Setup. Keep the Markdown vault as the source of truth and regenerate only
 derived review views.
 
 Regenerate the review views from `<PROJECT>`: validate the blueprint, refresh
-the Mermaid graph with `autoform-visualize` so Obsidian shows current
-dependencies, render the site source, then strict-build the site. Follow the
+the bounded Mermaid project graph with `autoform-visualize` so Obsidian shows
+current high-level dependencies, render the site source, then strict-build the site. Follow the
 publication sequence in the [CLI reference](../../autoform_cli/README.md#commands),
 but omit `--require-declarations`: review happens while statements are still
 unformalized, and a missing declaration is something for the reviewer to see
@@ -27,8 +27,10 @@ Stop on structural failures and present them before asking for mathematical
 judgment. For vault review, point the user to `blueprint/README.md`, coverage,
 chapter pages, and `blueprint/dependencies.md` in Obsidian. For browser review,
 serve the built site over localhost and provide the overview, including its
-progress summary, plus the project graph, relevant chapter graph, and
-node-neighborhood links.
+progress summary, plus the project graph, relevant chapter graph, and full-DAG
+explorer links. The full graph uses the site's virtualized Canvas viewer and
+hash-routed node neighborhoods; never work around a large graph by raising
+Mermaid's text or edge limits.
 
 Guide the review from coarse to fine: declared scope and exclusions, milestone
 book, landing-page progress summary, cross-chapter graph, chapter graph, then

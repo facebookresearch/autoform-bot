@@ -240,7 +240,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert '<a class="bp-code-link"' in chapter
     assert '<svg class="bp-code-icon"' in chapter
     assert '<a class="bp-context-link"' in chapter
-    assert "dependencies/nodes/infimum-loss/theorems/supervision-recovery.html" in chapter
+    assert "dependencies/full.html#node=infimum-loss%2Ftheorems%2Fsupervision-recovery" in chapter
     assert '<details class="bp-dependencies"><summary>Dependencies</summary>' in chapter
     assert '<nav class="bp-book-nav" aria-label="Blueprint chapters">' in chapter
     assert (
@@ -296,20 +296,16 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
         group = node_id.split("/", 1)[0]
         target_graph = chapter_graph if group == "infimum-loss" else support_graph
         assert f'"../../roadmap/{group}/index.html#{anchor}"' in target_graph
-        assert (site / "dependencies/nodes" / f"{node_id}.md").is_file()
+    assert not (site / "dependencies/nodes").exists()
 
     full_graph = (site / "dependencies/full.md").read_text(encoding="utf-8")
     assert "graph_view: full" in full_graph
-    focus_graph = (
-        site / "dependencies/nodes/infimum-loss/theorems/supervision-recovery.md"
-    ).read_text(encoding="utf-8")
-    assert "graph_view: focus" in focus_graph
-    assert re.search(r"class n\d+ focus", focus_graph)
-    assert "one dependency hop" in focus_graph
-    assert (
-        "[Open textbook statement](../../../../roadmap/infimum-loss/README.md#"
-        "theorems-supervision-recovery)"
-    ) in focus_graph
+    assert 'class="bp-dag-viewer"' in full_graph
+    assert "```mermaid" not in full_graph
+    payload = json.loads((site / "dependencies/full.json").read_text(encoding="utf-8"))
+    assert {node["id"] for node in payload["nodes"]} == set(graph.nodes)
+    statement_page = (site / "roadmap/infimum-loss/README.md").read_text(encoding="utf-8")
+    assert "dependencies/full.html#node=infimum-loss%2Ftheorems%2Fsupervision-recovery" in statement_page
 
     # Progress folded into the Book landing and the Graph; no separate page.
     assert not (site / "progress.md").exists()
@@ -343,6 +339,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "pymdownx.superfences" in mkdocs
     assert "stylesheets/blueprint.css" in mkdocs
     assert "javascripts/blueprint-mermaid.js" in mkdocs
+    assert "javascripts/blueprint-dag.js" in mkdocs
     # The nav is generated from the vault into SUMMARY.md, so mkdocs.yml has
     # none: a hand-written chapter list would drift from the book.
     assert "\nnav:\n" not in mkdocs

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -25,6 +25,7 @@ ARTICLE_ID_PATTERN = re.compile(r"af_[0-9a-f]{24}\Z")
 _FRONTMATTER_KEYS = frozenset(
     {
         "article_id",
+        "catalog",
         "declaration",
         "lean",
         "statement",
@@ -76,6 +77,7 @@ class Node:
     kind: str = "node"
     lean: str | None = None
     declaration: str | None = None
+    catalog: str | None = None
     statement_formalized: bool = False
     proof_formalized: bool = False
     mathlib: bool = False
@@ -102,6 +104,26 @@ class Graph:
 
     blueprint_dir: Path
     nodes: dict[str, Node]
+    _children_by_parent: dict[str | None, tuple[str, ...]] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _children_node_count: int = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self._rebuild_children()
+
+    def _rebuild_children(self) -> None:
+        grouped: dict[str | None, list[str]] = {}
+        for node in self.nodes.values():
+            grouped.setdefault(node.parent, []).append(node.id)
+        object.__setattr__(
+            self,
+            "_children_by_parent",
+            {parent: tuple(children) for parent, children in grouped.items()},
+        )
+        object.__setattr__(self, "_children_node_count", len(self.nodes))
 
     @property
     def edge_count(self) -> int:
@@ -109,7 +131,12 @@ class Graph:
 
     def children(self, node_id: str) -> tuple[str, ...]:
         """Return the direct contained articles of *node_id*."""
-        return tuple(node.id for node in self.nodes.values() if node.parent == node_id)
+        # ``Graph`` historically preserves a caller's plain mutable node dict.
+        # Refresh after additions/removals while keeping the normal validated,
+        # stable graph lookup O(1).
+        if len(self.nodes) != self._children_node_count:
+            self._rebuild_children()
+        return self._children_by_parent.get(node_id, ())
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +233,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             proof_dependencies=tuple(proof_dependencies),
             kind="article",
             declaration=metadata.get("declaration"),
+            catalog=metadata.get("catalog"),
             lean=metadata.get("lean"),
             statement_formalized=metadata.get("statement") == _FORMALIZED,
             proof_formalized=metadata.get("proof") == _FORMALIZED,
@@ -464,6 +492,10 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
         if not ARTICLE_ID_PATTERN.fullmatch(value):
             return value, f"{location}: malformed article_id {value!r}"
         return value, None
+    if key == "catalog":
+        if folded != "module":
+            return value, f"{location}: 'catalog' accepts only 'module'"
+        return folded, None
     if key in {"statement", "proof"}:
         if folded != _FORMALIZED:
             return value, f"{location}: {key!r} accepts only {_FORMALIZED!r}; omit the key otherwise"
