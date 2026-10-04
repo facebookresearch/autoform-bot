@@ -23,6 +23,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
     review_dir = repo_root / "skills" / "agent-review"
     references = {
         "faithfulness.md",
+        "readback-faithfulness.md",
         "proof-integrity.md",
         "code-quality.md",
         "mathlib-style.md",
