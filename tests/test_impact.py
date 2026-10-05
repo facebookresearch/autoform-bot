@@ -22,6 +22,7 @@ from autoform_cli.impact import (
     render_impact_probe,
     revision_impact,
 )
+from autoform_cli.runtime import load_runtime_graph
 from autoform_cli.skeleton import LeanLibrary, SkeletonError, lean_libraries
 from autoform_cli.work import work_context
 
@@ -398,13 +399,29 @@ def test_rendered_probe_imports_modules_and_names_local_prefixes() -> None:
         render_impact_probe(imports=[], project_roots=["Demo"])
 
 
-def test_probe_failures_name_the_impact_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+_SHADOWED_STD = "object file '/deps/Std/Data.olean' of module Std.Data does not exist"
+
+
+@pytest.mark.parametrize(
+    ("stderr", "message"),
+    [
+        ("unknown module", "the {label} failed; is the project built with `lake build`?\nunknown module"),
+        (
+            _SHADOWED_STD,
+            "the {label} cannot load toolchain module Std.Data: a dependency library probably provides modules "
+            "under `Std`, which hides the toolchain's own `Std`; rename that library's modules\n" + _SHADOWED_STD,
+        ),
+    ],
+)
+def test_probe_failures_name_the_impact_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stderr: str, message: str
+) -> None:
     (tmp_path / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
     monkeypatch.setattr("autoform_cli.skeleton._check_artifacts_fresh", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "autoform_cli.skeleton._run_bounded_command",
-        lambda command, **kwargs: subprocess.CompletedProcess(command, 1, stdout="", stderr="unknown module"),
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 1, stdout="", stderr=stderr),
     )
     probe = render_impact_probe(imports=["Demo"], project_roots=["Demo"])
 
@@ -413,10 +430,8 @@ def test_probe_failures_name_the_impact_probe(tmp_path: Path, monkeypatch: pytes
     with pytest.raises(SkeletonError) as default:
         skeleton.run_probe(probe, tmp_path)
 
-    assert impact.value.issues == ("the impact probe failed; is the project built with `lake build`?\nunknown module",)
-    assert default.value.issues == (
-        "the skeleton probe failed; is the project built with `lake build`?\nunknown module",
-    )
+    assert impact.value.issues == (message.format(label="impact probe"),)
+    assert default.value.issues == (message.format(label="skeleton probe"),)
 
 
 # --------------------------------------------------------------------------- #
@@ -767,7 +782,7 @@ def test_cli_requires_a_lake_project_and_a_lean_root(tmp_path: Path, monkeypatch
     assert missing.value.code == 2
 
 
-def test_revision_impact_reports_a_roadmap_without_the_selected_article(tmp_path: Path, monkeypatch) -> None:
+def test_revision_impact_reports_an_article_nothing_uses_as_contained(tmp_path: Path, monkeypatch) -> None:
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _stub_lean_root(tmp_path)
     _stub_probe(monkeypatch)
@@ -777,6 +792,70 @@ def test_revision_impact_reports_a_roadmap_without_the_selected_article(tmp_path
     assert report.declarations == ("Demo.uses",)
     assert report.contained
     assert report.claim_targets == (_USES_ID,)
+
+
+def test_helpers_are_located_by_source_name_in_their_module_s_file(tmp_path: Path, monkeypatch) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    (lean_root / "Demo").mkdir()
+    (lean_root / "Demo" / "Extra.lean").write_text(
+        "namespace Demo\n\nprivate theorem secret (n : Nat) : base n = n := rfl\n\nend Demo\n", encoding="utf-8"
+    )
+    # A file outside the library that reuses names the library's modules declare.
+    (lean_root / "Scratch.lean").write_text(
+        "theorem Demo.twin : True := trivial\n\ntheorem Demo.made : True := trivial\n", encoding="utf-8"
+    )
+    _stub_probe(
+        monkeypatch,
+        [
+            *_STUB_RECORDS,
+            _payload("_private.Demo.Extra.0.Demo.secret", module="Demo.Extra", type_uses=["Demo.base"]),
+            _payload("Demo.twin", type_uses=["Demo.base"]),
+            _payload("Demo.made", module="Demo.Made", type_uses=["Demo.base"]),
+            _payload("Demo.lost", module="Demo.Made", type_uses=["Demo.base"]),
+        ],
+    )
+
+    report = revision_impact(project, "chapter/base", lean_root=lean_root)
+
+    # A private name is looked up by its source name. An indexed declaration
+    # in another file than the module's own gives only that file, without a
+    # line; a module without a source file falls back to the index alone.
+    assert [(helper.name, helper.path, helper.line) for helper in report.helpers] == [
+        ("Demo.base_eq", "Demo.lean", 5),
+        ("Demo.lost", None, None),
+        ("Demo.made", "Scratch.lean", 3),
+        ("Demo.twin", "Demo.lean", None),
+        ("_private.Demo.Extra.0.Demo.secret", "Demo/Extra.lean", 3),
+    ]
+
+
+def _rewrite_base(project: Path) -> None:
+    metadata = [f"article_id: {_BASE_ID}", "declaration: definition", "statement: formalized", "lean: Demo.base"]
+    _write_article(project, "base.md", metadata=metadata, title="Base, revised")
+
+
+def _delete_empty(project: Path) -> None:
+    (project / "blueprint/roadmap/chapter/empty.md").unlink()
+
+
+@pytest.mark.parametrize(("selector", "change"), [("chapter/base", _rewrite_base), ("chapter/empty", _delete_empty)])
+def test_revision_impact_refuses_a_roadmap_that_changes_while_it_is_read(
+    tmp_path: Path, monkeypatch, selector: str, change
+) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    calls = _stub_probe(monkeypatch)
+
+    def changed(target: Path):
+        change(project)
+        return load_runtime_graph(target)
+
+    monkeypatch.setattr("autoform_cli.impact.load_runtime_graph", changed)
+
+    with pytest.raises(ImpactError, match="^the roadmap changed while it was read; rerun the command$"):
+        revision_impact(project, selector, lean_root=lean_root)
+    assert calls == []
 
 
 # --------------------------------------------------------------------------- #

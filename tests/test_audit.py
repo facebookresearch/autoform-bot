@@ -263,6 +263,8 @@ def test_audit_reports_lean_targets_declared_deprecated(tmp_path: Path) -> None:
         "multi-line.md": "Project.multiLine",
         "fresh.md": "Project.fresh",
         "decoy.md": "Project.decoy",
+        "after-previous.md": "Project.afterPrevious",
+        "after-alias.md": "Project.afterAlias",
     }
     for relative, name in targets.items():
         _article(blueprint, relative, declaration="theorem", statement="formalized", lean=name)
@@ -289,6 +291,14 @@ def test_audit_reports_lean_targets_declared_deprecated(tmp_path: Path) -> None:
         "theorem Project.decoy : True := by",
         '  have : "@[deprecated]" = "@[deprecated]" := rfl',
         "  trivial",
+        "",
+        # An earlier declaration's attributes stay with it, indexed or not.
+        "@[deprecated Project.fresh] theorem Project.previous : True := trivial",
+        "theorem Project.afterPrevious : True := trivial",
+        "",
+        "@[deprecated Project.fresh]",
+        "alias Project.oldAlias := Project.fresh",
+        "theorem Project.afterAlias : True := trivial",
     ]
     (lean_root / "Old.lean").write_text("\n".join(source) + "\n", encoding="utf-8")
 
