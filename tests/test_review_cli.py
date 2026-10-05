@@ -1640,9 +1640,14 @@ def test_a_fifo_put_at_an_article_stops_the_batch_without_blocking_it(
     batch.join(30)
     blocked = batch.is_alive()
     if blocked:
-        # A batch stuck opening the FIFO is let go, so the test fails rather than hangs.
-        os.close(os.open(other, os.O_WRONLY))
-        batch.join()
+        # A batch stuck opening the FIFO is let go, so the test fails rather than
+        # hangs. The FIFO is opened without waiting, since a batch held anywhere
+        # else leaves it no reader to wait for.
+        try:
+            os.close(os.open(other, os.O_WRONLY | os.O_NONBLOCK))
+        except OSError:
+            pass
+        batch.join(30)
     assert not blocked
 
     err = capsys.readouterr().err
