@@ -37,7 +37,7 @@ def test_doctor_cli_reports_deterministic_human_and_json_output(tmp_path: Path, 
     assert main(["doctor", str(blueprint)]) == 0
     assert capsys.readouterr().out.splitlines() == [
         "PASS: blueprint: resolved blueprint",
-        "PASS: runtime: autoform-runtime/v1; markdown-articles; revision "
+        "PASS: runtime: autoform-runtime/v2; markdown-articles; revision "
         + load_runtime_graph(blueprint).source_revision,
         "PASS: graph: 1 articles; 0 dependencies; 1 formalizable; 1 dispatchable; depth 0",
         "PASS: references: all parents, typed dependencies, and dispatchable leaves are consistent",

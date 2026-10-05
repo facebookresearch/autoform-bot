@@ -331,7 +331,6 @@ class LeanReplConfig:
     chunk_size: int = 4096
 
     instance_mem_limit_gb: int = 16
-    mem_interval_check: float = 1.0
     max_retries: int = 1
 
     allowed_imports: frozenset[str] = ALLOWED_IMPORTS

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -110,6 +111,44 @@ def test_build_output_is_skipped(tmp_path: Path) -> None:
     assert index.find("vendored") is None
 
 
+@pytest.mark.parametrize("git_entry", ["file", "directory"])
+def test_nested_checkouts_are_not_indexed_as_project_source(
+    tmp_path: Path, git_entry: str
+) -> None:
+    # A Git worktree or submodule has a .git file; a nested clone has a directory.
+    (tmp_path / ".git").mkdir()
+    worktree = tmp_path / ".claude/worktrees/worker"
+    (worktree / "Project").mkdir(parents=True)
+    if git_entry == "file":
+        (worktree / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    else:
+        (worktree / ".git").mkdir()
+    (worktree / "Project/Basic.lean").write_text(
+        "def toplevel : Nat := 3\ndef workerOnly : Nat := 0\n", encoding="utf-8"
+    )
+
+    index = _index(tmp_path)
+
+    assert index.find("toplevel").path == Path("Project/Basic.lean")
+    assert index.find("workerOnly") is None
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="needs a non-root POSIX user, for whom a mode-0 directory is unreadable",
+)
+def test_unreadable_directories_do_not_abort_the_scan(tmp_path: Path) -> None:
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0)
+    try:
+        index = _index(tmp_path)
+    finally:
+        locked.chmod(0o755)
+
+    assert index.find("Outer.alpha") is not None
+
+
 @pytest.mark.parametrize(
     "schema",
     [
@@ -145,6 +184,12 @@ def test_unfinished_packet_stage_is_not_indexed_as_project_source(tmp_path: Path
     index = _index(tmp_path, "def target : Nat := 1\n", name="Actual.lean")
 
     assert index.find("target").path == Path("Actual.lean")
+
+
+def test_irreducible_definitions_are_indexed(tmp_path: Path) -> None:
+    index = _index(tmp_path, "namespace A\nirreducible_def b : Nat := 1\nend A\n")
+
+    assert index.find("A.b").keyword == "irreducible_def"
 
 
 def test_anonymous_instances_are_not_mistaken_for_names(tmp_path: Path) -> None:

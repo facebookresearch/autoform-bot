@@ -28,7 +28,7 @@ _EXIT = re.compile(r"^\s*#exit\b")
 _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
     r"(?:(?:private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
-    r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom)\s+(.+)$"
+    r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom|irreducible_def)\s+(.+)$"
 )
 _IGNORED_DIRECTORIES = frozenset({".lake", ".git", "lake-packages", "build"})
 #: A packet tree still being staged beside its destination, which has no
@@ -88,11 +88,15 @@ def index_project(root: str | Path) -> SourceIndex:
     paths: list[Path] = []
     for directory, names, files in os.walk(root_path):
         current = Path(directory)
+        # A nested checkout, such as a worker's Git worktree under .claude/,
+        # is another copy of the sources, so its declarations must not
+        # shadow this project's.
         names[:] = sorted(
             name
             for name in names
             if name not in _IGNORED_DIRECTORIES
             and not _OUTPUT_STAGE.match(name)
+            and not os.path.lexists(current / name / ".git")
             and not _is_managed_output(current / name)
         )
         paths.extend(current / name for name in files if name.endswith(".lean"))

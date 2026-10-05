@@ -194,6 +194,10 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         if source.id in node_ids:
             issues.append(f"{source.id}: duplicate node id also used by {node_ids[source.id]}")
             continue
+        if ARTICLE_ID_PATTERN.fullmatch(source.id):
+            # Selectors and claim keys accept either form, so the two must not overlap.
+            issues.append(f"{source.id}: node id has the form of an article_id; rename its file or directory")
+            continue
         canonical_ids[canonical] = source.id
         node_ids[source.id] = canonical
         files[canonical] = source.content

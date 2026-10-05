@@ -21,9 +21,26 @@ if TYPE_CHECKING:
 
 #: Lean commands that introduce data rather than a proposition to prove. Such a
 #: node is complete as soon as its statement is formalized -- there is no
-#: separate proof obligation.
+#: separate proof obligation. ``axiom`` stays out: counting an assumption as
+#: proved would hide it.
 DEFINITION_DECLARATIONS = frozenset(
-    {"abbrev", "class", "def", "definition", "inductive", "instance", "structure"}
+    {
+        "abbrev",
+        "class",
+        "def",
+        "definition",
+        "inductive",
+        "instance",
+        "irreducible_def",
+        "opaque",
+        "structure",
+    }
+)
+
+#: Modifiers that may precede the command without changing what it introduces,
+#: as in ``noncomputable def``.
+_DECLARATION_MODIFIERS = frozenset(
+    {"local", "noncomputable", "partial", "private", "protected", "scoped", "unsafe"}
 )
 
 
@@ -97,7 +114,10 @@ class NodeStatus:
 
 def is_definition(node: Node) -> bool:
     """Whether *node* introduces data instead of a proposition."""
-    return (node.declaration or "").casefold() in DEFINITION_DECLARATIONS
+    words = (node.declaration or "").casefold().split()
+    while len(words) > 1 and words[0] in _DECLARATION_MODIFIERS:
+        words.pop(0)
+    return " ".join(words) in DEFINITION_DECLARATIONS
 
 
 def derive(graph: Graph) -> dict[str, NodeStatus]:
