@@ -1188,6 +1188,14 @@ def load_record_manifest(path: str | Path) -> tuple[RecordRequest, ...]:
     # decoder recurses.
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8"), object_pairs_hook=_strict_json_object)
+        # As in a bundle, an escape such as "\ud800" decodes to half of a
+        # surrogate pair, which no path or card can encode as UTF-8.
+        json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        reason = f"it escapes a lone surrogate, {exc.object[exc.start]!r}, which UTF-8 cannot encode"
+        raise ReviewError(
+            [ReviewFinding("manifest", "review-records-invalid", f"cannot read {manifest}: {reason}")]
+        ) from exc
     except (OSError, RecursionError, ValueError) as exc:
         raise ReviewError([ReviewFinding("manifest", "review-records-invalid", f"cannot read {manifest}: {exc}")]) from exc
     if not isinstance(payload, dict) or payload.keys() != {"records", "schema"}:

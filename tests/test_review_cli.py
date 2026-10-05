@@ -1963,6 +1963,28 @@ def test_a_bundle_with_a_number_too_long_or_a_lone_surrogate_is_refused_as_unrea
         assert reported == f"error: cannot read review bundle {bundle}: {reason}\n"
 
 
+@pytest.mark.parametrize("field", ["article_id", "declaration", "packet", "testimony"])
+def test_a_manifest_with_a_lone_surrogate_is_refused_as_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], field: str
+) -> None:
+    """Refused as the bundle is, rather than as an article_id or declaration the
+    bundle lacks, or a path whose encoding error points into the resolved path."""
+
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    text = manifest.read_text(encoding="utf-8")
+    assert f'"{field}": "' in text
+    manifest.write_text(text.replace(f'"{field}": "', f'"{field}": "\\ud800', 1), encoding="utf-8")
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    reason = "it escapes a lone surrogate, '\\ud800', which UTF-8 cannot encode"
+    assert capsys.readouterr().err == f"error: cannot read {manifest}: {reason}\n"
+    assert extraction.scopes == [None]  # only `review prepare` extracted
+    assert load_readbacks(blueprint) == {}
+
+
 def _long_link_chain(directory: Path, target: Path) -> str:
     """A short path in ``directory`` that reaches ``target`` through links whose
     resolved form is longer than PATH_MAX.
