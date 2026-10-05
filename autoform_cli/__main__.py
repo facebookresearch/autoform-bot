@@ -1433,12 +1433,15 @@ def _record_selection_finding(request: RecordRequest) -> ReviewFinding:
 
     # A card's path is keyed by its article_id: the card a re-review names
     # stays under the old one, so a record taking the new one must not name it.
+    # A packet is named by its content, so a different one is text the
+    # testimony was not written from.
     drop_hash = " and drop its expected_card_hash" if request.expected_card_hash is not None else ""
     return ReviewFinding(
         request.article_id,
         "review-selection-missing",
         f"{request.declaration}: article_id {request.article_id} is no longer in the blueprint; drop the record, "
-        f"or rerun review prepare and take its article_id and packet from the new packet manifest{drop_hash}",
+        f"or rerun review prepare and take its article_id from the new packet manifest{drop_hash}; if that manifest "
+        "names a different packet for it, the record needs that packet and a testimony written from it",
     )
 
 
