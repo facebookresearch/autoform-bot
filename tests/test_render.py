@@ -1299,10 +1299,16 @@ def _conditional_project(tmp_path: Path, policy: str) -> Path:
     return project
 
 
-def test_a_conditional_proof_names_the_open_statements_it_assumes(tmp_path: Path) -> None:
+def test_a_conditional_proof_names_the_open_statements_it_assumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The Lean row is the fallback for a declaration without a source link, and
+    # on CI the Actions environment would supply the coordinates for one.
+    for variable in ("GITHUB_REPOSITORY", "GITHUB_SERVER_URL", "GITHUB_SHA"):
+        monkeypatch.delenv(variable, raising=False)
     project = _conditional_project(tmp_path, "allowed")
 
-    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     top = page[page.index('id="top"'):]
 
