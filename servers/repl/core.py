@@ -296,22 +296,6 @@ def _validate_command_response(
     return environment, messages
 
 
-class _HeaderProcessCleanupError(RuntimeError):
-    """Header validation ended without verified process cleanup."""
-
-    def __init__(
-        self,
-        message: str,
-        process: subprocess.Popen[bytes],
-        original_error: BaseException | None,
-        cleanup_error: BaseException,
-    ) -> None:
-        super().__init__(message)
-        self.process = process
-        self.original_error = original_error
-        self.cleanup_error = cleanup_error
-
-
 def _communicate_bounded(
     process: subprocess.Popen[bytes],
     input_bytes: bytes,
@@ -320,11 +304,6 @@ def _communicate_bounded(
     max_output_bytes: int,
 ) -> tuple[bytes, bytes]:
     """Exchange bytes with a child without unbounded output or time."""
-    if max_output_bytes < 1:
-        raise ValueError("header parser output limit must be positive")
-    if process.stdin is None or process.stdout is None or process.stderr is None:
-        raise RuntimeError("header parser pipes are unavailable")
-
     stdin_fd = process.stdin.fileno()
     stdout_fd = process.stdout.fileno()
     stderr_fd = process.stderr.fileno()
@@ -427,24 +406,8 @@ class _LeanHeaderAnalysis:
 
 def _decode_header_analysis(stdout: bytes) -> _LeanHeaderAnalysis:
     """Decode the strict schemas emitted by Lean's fast import parser."""
-
-    def reject_constant(value: str) -> None:
-        raise ValueError(f"nonstandard JSON constant {value!r}")
-
-    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f"duplicate JSON key {key!r}")
-            result[key] = value
-        return result
-
     try:
-        payload = json.loads(
-            stdout.decode("utf-8"),
-            parse_constant=reject_constant,
-            object_pairs_hook=reject_duplicate_keys,
-        )
+        payload = _decode_repl_json(stdout)
         if not isinstance(payload, dict) or set(payload) != {"imports"}:
             raise ValueError
         entries = payload["imports"]
@@ -471,13 +434,9 @@ def _decode_header_analysis(stdout: bytes) -> _LeanHeaderAnalysis:
             if not isinstance(result, dict):
                 raise ValueError
             imports = result.get("imports")
-            candidate_is_module = result.get("isModule")
-            if (
-                candidate_is_module is not None
-                and type(candidate_is_module) is not bool
-            ):
+            is_module = result.get("isModule")
+            if is_module is not None and type(is_module) is not bool:
                 raise ValueError
-            is_module = candidate_is_module
         else:
             imports = entry["imports"]
         if not isinstance(imports, list):
@@ -514,96 +473,12 @@ def _decode_header_analysis(stdout: bytes) -> _LeanHeaderAnalysis:
                 and is_module is False
             ),
         )
-    except UnicodeDecodeError:
-        raise ValueError("unrecognized output from lean --deps-json") from None
-    except (TypeError, KeyError, json.JSONDecodeError):
+    except (ReplProtocolError, TypeError, KeyError, json.JSONDecodeError):
         raise ValueError("unrecognized output from lean --deps-json") from None
     except ValueError as error:
         if str(error):
             raise
         raise ValueError("unrecognized output from lean --deps-json") from None
-
-
-def _lean_header_analysis(
-    command: list[str],
-    code: str,
-    *,
-    cwd: str | None,
-    env: dict[str, str],
-    deadline: float,
-    max_output_bytes: int,
-) -> _LeanHeaderAnalysis:
-    """Return Lean-owned composition facts for one submitted header."""
-    if deadline - time.monotonic() <= 0:
-        raise TimeoutError("timed out before checking the Lean header")
-    process = subprocess.Popen(
-        command,
-        cwd=cwd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-        start_new_session=True,
-    )
-    original_error: BaseException | None = None
-    stdout = b""
-    stderr = b""
-    try:
-        stdout, stderr = _communicate_bounded(
-            process,
-            code.encode(),
-            deadline=deadline,
-            max_output_bytes=max_output_bytes,
-        )
-    except BaseException as error:
-        original_error = error
-    try:
-        _kill_subprocesses(
-            process,
-            process.pid,
-            time.monotonic() + DEFAULT_REPL_CLEANUP_SECONDS,
-        )
-    except BaseException as cleanup_error:
-        raise _HeaderProcessCleanupError(
-            f"Lean header parser cleanup failed: {cleanup_error}",
-            process,
-            original_error,
-            cleanup_error,
-        ) from cleanup_error
-    finally:
-        for stream in (process.stdin, process.stdout, process.stderr):
-            if stream is not None and not stream.closed:
-                try:
-                    stream.close()
-                except OSError:
-                    pass
-    if original_error is not None:
-        raise original_error.with_traceback(original_error.__traceback__)
-    if process.returncode != 0:
-        detail = stderr.decode(errors="replace").strip().splitlines()
-        raise ValueError(detail[0] if detail else f"exit status {process.returncode}")
-    return _decode_header_analysis(stdout)
-
-
-def _lean_header_modules(
-    command: list[str],
-    code: str,
-    *,
-    cwd: str | None,
-    env: dict[str, str],
-    deadline: float,
-    max_output_bytes: int,
-) -> list[str]:
-    """Compatibility wrapper returning only Lean's direct imported modules."""
-    analysis = _lean_header_analysis(
-        command,
-        code,
-        cwd=cwd,
-        env=env,
-        deadline=deadline,
-        max_output_bytes=max_output_bytes,
-    )
-    return list(analysis.modules)
 
 
 def _split_imports_and_body(code: str) -> tuple[list[str], str, int]:
@@ -647,23 +522,14 @@ class LeanReplConfig:
     chunk_size: int = 4096
 
     instance_mem_limit_gb: int = 16
-    mem_interval_check: float = 1.0
     max_retries: int = 1
 
     allowed_imports: frozenset[str] = ALLOWED_IMPORTS
     warmup_imports: frozenset[str] = WARMUP_IMPORTS
 
-    repl_command: list[str] = field(
-        default_factory=lambda: ["lake", "exe", "@repl/repl"]
-    )
+    repl_command: list[str] = field(default_factory=lambda: ["lake", "exe", "@repl/repl"])
     header_deps_command: list[str] = field(
-        default_factory=lambda: [
-            "lake",
-            "env",
-            sys.executable,
-            "-c",
-            _LEAN_HEADER_LAUNCHER,
-        ]
+        default_factory=lambda: ["lake", "env", sys.executable, "-c", _LEAN_HEADER_LAUNCHER]
     )
 
     # stdout is capped per response. stderr has no protocol framing, so its
@@ -902,7 +768,7 @@ class LeanRepl:
         self,
         startup_timeout: float | None = None,
         *,
-        warmup_imports: frozenset[str] | tuple[str, ...] | None = None,
+        warm: bool = True,
     ) -> None:
         """Start and warm the Lean REPL within one startup deadline."""
         if os.name != "posix":
@@ -937,18 +803,13 @@ class LeanRepl:
             self._stderr_bytes = 0
             self._stderr_tail.clear()
 
-            startup_imports = (
-                self.config.warmup_imports
-                if warmup_imports is None
-                else warmup_imports
-            )
-            if startup_imports:
+            if warm and self.config.warmup_imports:
                 header = "\n".join(
-                    f"import {root}" for root in startup_imports
+                    f"import {root}" for root in self.config.warmup_imports
                 )
                 logger.info(
                     "Loading imports at startup: %s",
-                    startup_imports,
+                    self.config.warmup_imports,
                 )
                 resp = self._run(code=header, env_id=None, timeout=remaining())
                 environment, messages = _validate_command_response(
@@ -1059,6 +920,37 @@ class LeanRepl:
         """Return whether this wrapper owns no process generation."""
         return self.process is None and self._process_group_id is None
 
+    def _check_header(self, code: str, deadline: float) -> _LeanHeaderAnalysis:
+        """Analyze the submitted header with the selected toolchain's Lean parser.
+
+        The parser is this wrapper's process generation until close() verifies
+        that it exited, so a failed cleanup is retried before the slot is reused.
+        """
+        env = _inherit_clean_env()
+        env.update(self.config.env)
+        self.process = subprocess.Popen(
+            self.config.header_deps_command,
+            cwd=self.cwd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            start_new_session=True,
+        )
+        self._process_group_id = self.process.pid
+        stdout, stderr = _communicate_bounded(
+            self.process,
+            code.encode(),
+            deadline=deadline,
+            max_output_bytes=self.config.max_buffer_bytes,
+        )
+        returncode = self.process.returncode
+        self.close(deadline=deadline)
+        if returncode != 0:
+            detail = stderr.decode(errors="replace").strip().splitlines()
+            raise ValueError(detail[0] if detail else f"exit status {returncode}")
+        return _decode_header_analysis(stdout)
+
     def run_disposable(
         self,
         code: str,
@@ -1084,67 +976,27 @@ class LeanRepl:
                 # A previous failed cleanup must settle before another process
                 # generation can be created from this slot.
                 self.close(deadline=deadline)
-                lexical_imports, _, _ = _split_imports_and_body(code)
-                header_modules = lexical_imports
+                imports, _, _ = _split_imports_and_body(code)
                 accepts_leading_imports = True
                 if (
                     self.config.validate_imports
                     and self._allowed_import_roots is not None
                 ):
-                    env = _inherit_clean_env()
-                    env.update(self.config.env)
                     try:
-                        header = _lean_header_analysis(
-                            self.config.header_deps_command,
-                            code,
-                            cwd=self.cwd,
-                            env=env,
-                            deadline=deadline,
-                            max_output_bytes=self.config.max_buffer_bytes,
-                        )
-                        header_modules = list(header.modules)
-                        accepts_leading_imports = header.accepts_leading_imports
-                    except _HeaderProcessCleanupError as error:
-                        # Preserve ownership so the normal disposable cleanup
-                        # retries before this slot can ever be reused.
-                        self.process = error.process
-                        self._process_group_id = error.process.pid
-                        self._retire_pending = True
-                        original_error = error.original_error
-                        cleanup_error = error.cleanup_error
-                        if original_error is not None and not isinstance(
-                            original_error, Exception
-                        ):
-                            add_note = getattr(original_error, "add_note", None)
-                            if add_note is not None:
-                                add_note(str(error))
-                            raise original_error.with_traceback(
-                                original_error.__traceback__
-                            )
-                        if not isinstance(cleanup_error, Exception):
-                            raise cleanup_error.with_traceback(
-                                cleanup_error.__traceback__
-                            )
-                        raise
+                        header = self._check_header(code, deadline)
                     except ValueError as error:
                         result = {"repl_error": f"Rejected Lean header: {error}"}
-                        header_modules = []
-                        accepts_leading_imports = False
-                submitted_roots = {
-                    module.split(".")[0] for module in header_modules
-                }
+                    else:
+                        imports = list(header.modules)
+                        accepts_leading_imports = header.accepts_leading_imports
+                submitted_roots = {statement.split(".")[0] for statement in imports}
                 if (
                     result is None
                     and self.config.validate_imports
                     and self._allowed_import_roots is not None
                 ):
-                    warmup_roots = {
-                        module.split(".")[0]
-                        for module in self.config.warmup_imports
-                    }
-                    disallowed = (
-                        submitted_roots | warmup_roots
-                    ) - self._allowed_import_roots
+                    warmup_roots = {root.split(".")[0] for root in self.config.warmup_imports}
+                    disallowed = (submitted_roots | warmup_roots) - self._allowed_import_roots
                     if disallowed:
                         result = {
                             "repl_error": (
@@ -1154,15 +1006,10 @@ class LeanRepl:
                             )
                         }
                 if result is None:
-                    missing_warmup_imports = tuple(
+                    added_imports = tuple(
                         root
                         for root in sorted(self.config.warmup_imports)
-                        if root not in submitted_roots
-                    )
-                    added_imports = (
-                        missing_warmup_imports
-                        if accepts_leading_imports
-                        else ()
+                        if accepts_leading_imports and root not in submitted_roots
                     )
                     prefix = "\n".join(
                         f"import {root}" for root in added_imports
@@ -1170,10 +1017,7 @@ class LeanRepl:
                     command = f"{prefix}\n{code}" if prefix else code
                     # Do not send startup import or smoke-test frames. The
                     # submitted command is the generation's only request.
-                    self.start(
-                        startup_timeout=remaining(),
-                        warmup_imports=(),
-                    )
+                    self.start(startup_timeout=remaining(), warm=False)
                     response = self._run(
                         code=command,
                         env_id=None,
@@ -1237,8 +1081,6 @@ class LeanRepl:
 
             if request_error is not None:
                 raise request_error.with_traceback(request_error.__traceback__)
-            if result is None:
-                raise RuntimeError("disposable Lean REPL call produced no result")
             return result
 
     def run(self, code: str, env_id: int | None = None, timeout: float | None = None) -> dict[str, Any]:

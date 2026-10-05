@@ -657,4 +657,6 @@ def test_runtime_accepts_hand_built_nodes_without_a_source_digest(tmp_path: Path
 
     runtime = build_runtime_graph(hand_built, project_root=project)
 
-    assert runtime.get("item") is not None
+    item = runtime.get("item")
+    assert item is not None
+    assert item.source_sha256 is None

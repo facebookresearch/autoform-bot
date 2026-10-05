@@ -1,3 +1,7 @@
+---
+article_id: af_f1a5f854986973ef5904f6c3
+---
+
 # Infimum Loss milestone
 
 This chapter isolates the conditions under which weak observations still

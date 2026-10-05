@@ -776,7 +776,7 @@ def test_disposable_call_uses_one_frame_and_removes_process_handles(monkeypatch)
         "sorries": [{"goal": "False"}],
     }
     assert len(starts) == 1
-    assert starts[0]["warmup_imports"] == ()
+    assert starts[0]["warm"] is False
     assert 0 < starts[0]["startup_timeout"] <= 3
     assert len(calls) == 1
     assert calls[0][0] == "import Mathlib\n#check Nat"
@@ -823,7 +823,7 @@ def test_disposable_call_rejects_import_before_starting_a_process(monkeypatch):
     starts = []
     monkeypatch.setattr(repl, "start", lambda **kwargs: starts.append(kwargs))
 
-    result = repl.run_disposable("import Unsafe\n#check Nat", timeout=1)
+    result = repl.run_disposable("import Unsafe\n#check Nat", timeout=10)
 
     assert "Disallowed imports: Unsafe" in result["repl_error"]
     assert starts == []
@@ -845,56 +845,24 @@ def _deps_json(
     is_module: bool = False,
     prelude: bool = False,
 ) -> str:
+    def item(module: str, is_meta: bool = False) -> dict:
+        return {"module": module, "importAll": False, "isExported": True, "isMeta": is_meta}
+
     entry: dict = {"errors": list(errors)}
     if not errors:
-        imports = []
-        if not prelude:
-            imports.extend(
-                [
-                    {
-                        "module": "Init",
-                        "importAll": False,
-                        "isExported": True,
-                        "isMeta": False,
-                    },
-                    {
-                        "module": "Init",
-                        "importAll": False,
-                        "isExported": True,
-                        "isMeta": True,
-                    },
-                ]
-            )
-        imports.extend(
-            {
-                "module": module,
-                "importAll": False,
-                "isExported": True,
-                "isMeta": False,
-            }
-            for module in modules
-        )
-        entry["result"] = {
-            "imports": imports,
-            "isModule": is_module,
-        }
+        implicit = [] if prelude else [item("Init"), item("Init", is_meta=True)]
+        imports = implicit + [item(module) for module in modules]
+        entry["result"] = {"imports": imports, "isModule": is_module}
     return json.dumps({"imports": [entry]})
 
 
-def _header_modules(
-    command: list[str],
-    *,
-    deadline: float | None = None,
-    max_output_bytes: int = 1024 * 1024,
-) -> list[str]:
-    return repl_core._lean_header_modules(
-        command,
-        "import Mathlib",
-        cwd=None,
-        env=dict(os.environ),
-        deadline=time.monotonic() + 10 if deadline is None else deadline,
-        max_output_bytes=max_output_bytes,
-    )
+def _header_modules(command: list[str], *, deadline: float | None = None, **config) -> list[str]:
+    repl = repl_core.LeanRepl(repl_core.LeanReplConfig(header_deps_command=command, **config))
+    try:
+        deadline = time.monotonic() + 10 if deadline is None else deadline
+        return list(repl._check_header("import Mathlib", deadline).modules)
+    finally:
+        repl.close()
 
 
 def test_header_check_accepts_current_and_legacy_lean_schemas():
@@ -945,34 +913,29 @@ def test_header_parser_launcher_ignores_a_path_shadow(tmp_path):
 
     write_parser(trusted_bin / "lean", "Mathlib")
     write_parser(shadow_bin / "lean", "Unsafe")
-    env = dict(os.environ)
-    env["LEAN_SYSROOT"] = str(trusted_bin.parent)
-    env["PATH"] = f"{shadow_bin}{os.pathsep}{env.get('PATH', '')}"
+    env = {
+        "LEAN_SYSROOT": str(trusted_bin.parent),
+        "PATH": f"{shadow_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+    }
 
-    modules = repl_core._lean_header_modules(
-        [sys.executable, "-c", repl_core._LEAN_HEADER_LAUNCHER],
-        "import Mathlib",
-        cwd=None,
-        env=env,
-        deadline=time.monotonic() + 10,
-        max_output_bytes=1024 * 1024,
-    )
+    modules = _header_modules([sys.executable, "-c", repl_core._LEAN_HEADER_LAUNCHER], env=env)
 
     assert modules == ["Mathlib"]
 
 
 @pytest.mark.parametrize(
-    ("output", "message"),
+    ("command", "message"),
     [
-        (_deps_json(errors=("bad header",)), "bad header"),
-        ("not json", "unrecognized output"),
-        ('{"imports": [], "imports": []}', "duplicate JSON key"),
-        ('{"imports": NaN}', "nonstandard JSON constant"),
+        (_fake_header_deps(_deps_json(errors=("bad header",))), "bad header"),
+        (_fake_header_deps("", returncode=1, stderr="unknown package\n"), "unknown package"),
+        (_fake_header_deps("not json"), "unrecognized output"),
+        (_fake_header_deps('{"imports": [], "imports": []}'), "unrecognized output"),
+        (_fake_header_deps('{"imports": NaN}'), "unrecognized output"),
     ],
 )
-def test_header_check_fails_closed_on_rejected_or_unknown_output(output, message):
+def test_header_check_fails_closed_on_rejected_or_unknown_output(command, message):
     with pytest.raises(ValueError, match=message):
-        _header_modules(_fake_header_deps(output))
+        _header_modules(command)
 
 
 @pytest.mark.parametrize(
@@ -1013,39 +976,42 @@ def test_disposable_call_checks_submitted_header_before_warmup_prefix(monkeypatc
     )
     checked = []
 
-    def header_analysis(command, code, **kwargs):
+    def check_header(code, deadline):
         checked.append(code)
         raise ValueError("stop")
 
-    monkeypatch.setattr(repl_core, "_lean_header_analysis", header_analysis)
+    monkeypatch.setattr(repl, "_check_header", check_header)
 
     repl.run_disposable("/- note -/ import Unsafe\n#check Nat")
 
     assert checked == ["/- note -/ import Unsafe\n#check Nat"]
 
 
+_LEGACY_INIT_ONLY = json.dumps(
+    {"imports": [{"errors": [], "imports": [{"module": "Init", "importAll": False}]}]}
+)
+
+
 @pytest.mark.parametrize(
-    ("deps_output", "code"),
+    ("deps_output", "code", "frame"),
     [
+        (_deps_json(), "#check Nat", "import Mathlib\n#check Nat"),
         (
             _deps_json("REPL.Frontend", is_module=True),
+            "module\npublic import REPL.Frontend\n",
             "module\npublic import REPL.Frontend\n",
         ),
         (
             _deps_json("REPL.Frontend", prelude=True),
             "prelude\nimport REPL.Frontend\n#check Nat",
+            "prelude\nimport REPL.Frontend\n#check Nat",
         ),
-        (
-            _deps_json("Init", prelude=True),
-            "prelude\nimport Init\n#check Nat",
-        ),
+        (_deps_json("Init", prelude=True), "prelude\nimport Init\n#check Nat", "prelude\nimport Init\n#check Nat"),
+        # The legacy schema cannot prove an ordinary header, so nothing is prefixed.
+        (_LEGACY_INIT_ONLY, "#check Nat", "#check Nat"),
     ],
 )
-def test_disposable_call_does_not_displace_lean_header_directives(
-    monkeypatch,
-    deps_output,
-    code,
-):
+def test_disposable_call_prefixes_warmup_only_onto_proven_ordinary_headers(monkeypatch, deps_output, code, frame):
     repl = repl_core.LeanRepl(
         repl_core.LeanReplConfig(
             allowed_imports=frozenset({"Mathlib", "REPL", "Init"}),
@@ -1063,67 +1029,7 @@ def test_disposable_call_does_not_displace_lean_header_directives(
     monkeypatch.setattr(repl, "_run", run_frame)
 
     assert repl.run_disposable(code) == {"messages": [], "sorries": []}
-    assert frames == [code]
-
-
-def test_disposable_call_preserves_warmup_for_ordinary_headers(monkeypatch):
-    repl = repl_core.LeanRepl(
-        repl_core.LeanReplConfig(
-            allowed_imports=frozenset({"Mathlib"}),
-            warmup_imports=frozenset({"Mathlib"}),
-            header_deps_command=_fake_header_deps(_deps_json()),
-        )
-    )
-    frames = []
-    monkeypatch.setattr(repl, "start", lambda *args, **kwargs: None)
-
-    def run_frame(code, env_id, timeout):
-        frames.append(code)
-        return {"env": 1, "messages": [], "sorries": []}
-
-    monkeypatch.setattr(repl, "_run", run_frame)
-
-    assert repl.run_disposable("#check Nat") == {
-        "messages": [],
-        "sorries": [],
-    }
-    assert frames == ["import Mathlib\n#check Nat"]
-
-
-def test_legacy_header_schema_fails_closed_on_warmup_composition(monkeypatch):
-    legacy_output = json.dumps(
-        {
-            "imports": [
-                {
-                    "errors": [],
-                    "imports": [
-                        {"module": "Init", "importAll": False},
-                    ],
-                }
-            ]
-        }
-    )
-    repl = repl_core.LeanRepl(
-        repl_core.LeanReplConfig(
-            allowed_imports=frozenset({"Mathlib"}),
-            warmup_imports=frozenset({"Mathlib"}),
-            header_deps_command=_fake_header_deps(legacy_output),
-        )
-    )
-    frames = []
-    monkeypatch.setattr(repl, "start", lambda *args, **kwargs: None)
-
-    def run_frame(code, env_id, timeout):
-        frames.append(code)
-        return {"env": 1, "messages": [], "sorries": []}
-
-    monkeypatch.setattr(repl, "_run", run_frame)
-
-    assert repl.run_disposable("#check Nat") == {
-        "messages": [],
-        "sorries": [],
-    }
-    assert frames == ["#check Nat"]
+    assert frames == [frame]
 
 
 def test_disposable_call_rejects_disallowed_warmup_import(monkeypatch):
@@ -1161,7 +1067,7 @@ def test_header_check_rejects_output_over_the_combined_limit():
     with pytest.raises(ValueError, match="output exceeded 1024 bytes"):
         _header_modules(
             _fake_header_deps("x" * 1025),
-            max_output_bytes=1024,
+            max_buffer_bytes=1024,
         )
 
 
@@ -1209,7 +1115,7 @@ def test_disposable_call_retries_header_cleanup_before_reuse(monkeypatch):
 
     response = repl.run_disposable("import Mathlib\n#check Nat")
 
-    assert "header parser cleanup failed" in response["repl_error"]
+    assert "injected cleanup failure" in response["repl_error"]
     assert cleanup_calls == 2
     assert repl.is_clean()
 
@@ -1272,10 +1178,15 @@ def test_disposable_call_preserves_header_request_cancellation(monkeypatch):
 
     if hasattr(raised.value, "add_note"):
         assert raised.value.__notes__ == [
-            "Lean header parser cleanup failed: header cleanup failed"
+            "Lean REPL process cleanup also failed: header cleanup failed"
         ]
+    # The slot keeps the parser until a later close() verifies that it exited.
+    assert not repl.is_clean()
+    repl.close()
     assert cleanup_calls == 2
     assert repl.is_clean()
+
+
 def test_response_timeout_after_full_write_is_not_retried(monkeypatch):
     repl = repl_core.LeanRepl(
         repl_core.LeanReplConfig(

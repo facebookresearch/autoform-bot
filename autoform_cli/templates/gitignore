@@ -2,3 +2,4 @@
 site/
 site-src/
 *.log
+.claude/worktrees/

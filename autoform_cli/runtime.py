@@ -14,10 +14,10 @@ from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
 from .graph import Graph, load_graph
-from .lean import declaration_names, index_project
+from .lean import declaration_names, index_failure_message, index_project
 from .status import derive, is_definition
 
-RUNTIME_SCHEMA = "autoform-runtime/v1"
+RUNTIME_SCHEMA = "autoform-runtime/v2"
 RUNTIME_AUTHORITY = "markdown-articles"
 
 
@@ -96,6 +96,8 @@ class RuntimeNode:
     """One immutable article record exposed to runtime consumers."""
 
     id: str
+    article_id: str | None
+    source_sha256: str | None
     title: str
     article_path: str
     parent: str | None
@@ -117,6 +119,7 @@ class RuntimeNode:
 
     def as_dict(self) -> dict[str, object]:
         return {
+            "article_id": self.article_id,
             "article_path": self.article_path,
             "assertions": self.assertions.as_dict(),
             "declaration": self.declaration,
@@ -133,6 +136,7 @@ class RuntimeNode:
             "parent": self.parent,
             "proof_dependencies": list(self.proof_dependencies),
             "source_targets": list(self.source_targets),
+            "source_sha256": self.source_sha256,
             "statement_dependencies": list(self.statement_dependencies),
             "status": self.status.as_dict(),
             "title": self.title,
@@ -306,7 +310,10 @@ def build_runtime_graph(
         root = Path(lean_root).expanduser().resolve()
         if not root.is_dir():
             raise RuntimeProjectionError(["Lean root does not exist or is not a directory"])
-        lean_index = index_project(root)
+        try:
+            lean_index = index_project(root)
+        except OSError as error:
+            raise RuntimeProjectionError([index_failure_message(error)]) from error
 
     parents = {node.parent for node in graph.nodes.values() if node.parent is not None}
     runtime_nodes: list[RuntimeNode] = []
@@ -326,10 +333,11 @@ def build_runtime_graph(
             if source_file is not None and not _is_portable_relative_path(source_file):
                 raise RuntimeProjectionError([f"{node.id}: Lean source file escapes the Lean root"])
             lean_targets.append(RuntimeLeanTarget(name, source_file))
-
         runtime_nodes.append(
             RuntimeNode(
                 id=node.id,
+                article_id=node.article_id,
+                source_sha256=node.source_sha256,
                 title=node.title,
                 article_path=article_paths[node.id],
                 parent=node.parent,

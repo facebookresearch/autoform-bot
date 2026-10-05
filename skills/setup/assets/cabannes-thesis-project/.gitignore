@@ -1,3 +1,4 @@
 .lake/
 site/
 site-src/
+.claude/worktrees/
