@@ -41,7 +41,9 @@ def test_human_review_distinguishes_roadmap_progress_from_source_scope(
 
     assert "`Scoped roadmap` percentage" in skill
     assert "formalizable leaf targets" in skill
-    assert "fully proved, including every dependency" in skill
+    assert "module catalogs carrying checked formalization" in skill
+    assert "Completion includes every dependency recursively" in skill
+    assert "never\ndispatchable proof tasks" in skill
     assert "bodies for definitions" in skill
     assert "`mathlib: true` follows the authored status contract" in skill
     assert "not audit verification" in skill
@@ -64,6 +66,9 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     assert "private declaration safety as fail-closed evidence" in normalized
     assert "official user name" in normalized
     assert "by source coordinates" in normalized
+    assert "repeated pathname reads are not a generation boundary" in normalized
+    assert "marker schema in its owning feature" in normalized
+    assert "match the blob at the stable detected commit" in normalized
 
 
 def test_agent_review_treats_skeleton_hashes_as_advisory(repo_root: Path) -> None:
@@ -439,7 +444,7 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
     assert "stale-build refusal" in agent_review
     assert "drift checksum" in agent_review
     assert "autoform-visualize" in human_review
-    assert "`approve`, `revise`, or\n`block`" in human_review
+    assert "`approve`,\n`revise`, or `block`" in human_review
     for required in (
         "example-based plugin",
         "independent formalization",

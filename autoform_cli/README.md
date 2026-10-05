@@ -571,6 +571,19 @@ absent from the sources, as `leanblueprint checkdecls` does for LaTeX
 blueprints. It validates structure and leaves mathematical correctness to the
 agent and the Lean kernel.
 
+Source-aware `--lean-root` inspection requires directory-descriptor traversal.
+Platforms without that capability, including Windows, fail closed instead of
+treating repeated pathname reads as one filesystem generation. Declaration
+locations and source revisions come from the same retained capture. Recognized
+skeleton packet/passages directories are identified by their bounded managed
+manifest before descendants are read; publication-output policy remains with
+the publication feature rather than this source layer.
+
+Automatically detected Git permalinks are emitted only for captured files whose
+bytes equal the blob at the stable detected commit. Dirty, untracked, missing,
+or concurrently checked-out files keep local declaration locations but receive
+no URL. An explicitly supplied ref remains a caller attestation.
+
 The Markdown files are the source of truth. Graphs and sites are derived views
 that may be regenerated at any time.
 
@@ -683,7 +696,8 @@ and bytes, excluding timestamps, absolute paths, Git state, and operational
 state. Optional Lean locations come from a local lexical scan and do not by
 themselves establish compilation or proof correctness.
 
-Schema v1 retains the graph's path-derived article ID. That is suitable for
+Schema v2 adds non-dispatchable module catalogs and retains the graph's
+path-derived article ID. That is suitable for
 an ephemeral runtime projection and temporary claims, but it is not yet an
 approved durable identity. Queues, reviews, recovery records, PR markers,
 dashboard routes, providers, and logs must not persist against this ID until a
@@ -700,5 +714,10 @@ cause the render to fail rather than silently leak them. Source and output
 directories must be disjoint.
 
 Every render writes `publication.json` with the source-content hash, Git ref,
-article and dependency counts, and available views. It contains no timestamp or
-absolute path, so identical inputs produce identical output files.
+article and dependency counts, available views, and whether capture used a
+retained directory descriptor or the documented portable best-effort path. It
+contains no timestamp or absolute path, so identical inputs on the same
+filesystem-capability class produce identical output files.
+Rendering reads only one retained source snapshot. Later edits cannot mix into
+the output; they instead make the dashboard report the built site as stale
+until it is rendered again.

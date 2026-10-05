@@ -17,8 +17,9 @@ derived review views.
 
 Regenerate the review views from `<PROJECT>`: validate the blueprint, refresh
 the bounded Mermaid project graph with `autoform-visualize` so Obsidian shows
-current high-level dependencies, render the site source, then strict-build the site. Follow the
-publication sequence in the [CLI reference](../../autoform_cli/README.md#commands),
+current high-level dependencies, render the site source, then strict-build the
+site. Follow the publication sequence in the
+[CLI reference](../../autoform_cli/README.md#commands),
 but omit `--require-declarations`: review happens while statements are still
 unformalized, and a missing declaration is something for the reviewer to see
 rather than a reason to refuse to render.
@@ -35,18 +36,20 @@ a large graph by raising Mermaid's text or edge limits.
 
 Guide the review from coarse to fine: declared scope and exclusions, milestone
 book, landing-page progress summary, cross-chapter graph, chapter graph, then
-individual node and Lean-source links. Record each human decision as `approve`, `revise`, or
-`block`, with the exact page or node and rationale. Separate validator output
+individual node and Lean-source links. Record each human decision as `approve`,
+`revise`, or `block`, with the exact page or node and rationale. Separate validator output
 from the person's judgment. Do not silently apply requested revisions: hand
 mathematical-plan changes to Roadmap, Lean implementation changes to
 Orchestrate, and autonomous rubric scoring to Agent Review.
 
 Treat the landing page's `Scoped roadmap` percentage as completion among
-formalizable leaf targets that are fully proved, including every dependency
-recursively. This requires proofs for theorems and bodies for definitions. A
-target marked `mathlib: true` follows the authored status contract; the marker
-is an author assertion, not audit verification that the declaration is in
-Mathlib. Treat the percentage never as whole-source completion. Read the
-adjacent declared source coverage and its linked coverage contract before
-making scope claims. A statement-only theorem remains incomplete whether it is
-blocked or ready to prove.
+formalizable leaf targets and module catalogs carrying checked formalization
+assertions and evidence. Catalogs are inventory summaries, never
+dispatchable proof tasks. Completion includes every dependency recursively and
+requires proofs for theorems and bodies for definitions. A target marked
+`mathlib: true` follows the authored status contract; the marker is an author
+assertion, not audit verification that the declaration is in Mathlib. Treat the
+percentage never as whole-source completion. Read the adjacent declared source
+coverage and its linked coverage contract before making scope claims. A
+statement-only theorem remains incomplete whether it is blocked or ready to
+prove.

@@ -14,7 +14,7 @@ from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
 from .graph import Graph, load_graph
-from .lean import declaration_names, index_project
+from .lean import declaration_names, index_failure_message, index_project
 from .status import derive, is_definition
 
 RUNTIME_SCHEMA = "autoform-runtime/v2"
@@ -342,7 +342,10 @@ def build_runtime_graph(
                 for name in declaration_names(node.lean or "")
             )
         )
-        lean_index = index_project(root, names=lean_names)
+        try:
+            lean_index = index_project(root, names=lean_names)
+        except OSError as error:
+            raise RuntimeProjectionError([index_failure_message(error)]) from error
 
     parents = {node.parent for node in graph.nodes.values() if node.parent is not None}
     runtime_nodes: list[RuntimeNode] = []

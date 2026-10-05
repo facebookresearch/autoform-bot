@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.graph import Graph, Node, load_graph
+from autoform_cli.lean import LeanSourceError
 from autoform_cli.runtime import (
     RUNTIME_AUTHORITY,
     RUNTIME_SCHEMA,
@@ -128,13 +129,18 @@ def test_preserves_hierarchy_typed_dependencies_and_dispatchability(tmp_path: Pa
 
 def test_runtime_exposes_a_settled_module_catalog_without_dispatching_it(tmp_path: Path) -> None:
     project = _project(tmp_path)
+    ledger = project / "blueprint/sources/catalog.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Catalog declarations\n", encoding="utf-8")
     _article(
         project,
         "chapter/catalog.md",
         title="Existing module",
         catalog="module",
+        lean="Project.base",
         statement="formalized",
         proof="formalized",
+        sources=("../../sources/catalog.md",),
     )
 
     catalog = load_runtime_graph(project).get("chapter/catalog")
@@ -283,6 +289,35 @@ def test_rejects_nonportable_authored_file_paths(tmp_path: Path) -> None:
     with pytest.raises(RuntimeProjectionError, match="mathlib file must be a portable relative path") as error:
         load_runtime_graph(project)
 
+    assert str(tmp_path) not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("reason", "message"),
+    [
+        (None, "Lean sources could not be indexed"),
+        (
+            "permission denied: Project/Secret.lean",
+            "Lean sources could not be indexed: permission denied: Project/Secret.lean",
+        ),
+    ],
+)
+def test_runtime_translates_source_index_io_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str | None, message: str
+) -> None:
+    project = _project(tmp_path)
+
+    def fail_index(root: Path, **_kwargs):
+        if reason is not None:
+            raise LeanSourceError(reason)
+        raise OSError(f"private host detail: {root}")
+
+    monkeypatch.setattr("autoform_cli.runtime.index_project", fail_index)
+
+    with pytest.raises(RuntimeProjectionError) as error:
+        load_runtime_graph(project, lean_root=project)
+
+    assert error.value.issues == (message,)
     assert str(tmp_path) not in str(error.value)
 
 

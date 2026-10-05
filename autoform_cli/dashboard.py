@@ -15,7 +15,7 @@ from .graph import GraphValidationError
 from .render import (
     LIVE_SCRIPT,
     PUBLICATION_MANIFEST,
-    SUPPORTED_PUBLICATION_SCHEMAS,
+    PUBLICATION_SCHEMA,
     publication_source_revision,
 )
 from .runtime import RuntimeGraph, RuntimeProjectionError
@@ -113,7 +113,7 @@ def publication_bound_live_state(
             manifest = json.loads(encoded)
             if (
                 not isinstance(manifest, dict)
-                or manifest.get("schema") not in SUPPORTED_PUBLICATION_SCHEMAS
+                or manifest.get("schema") != PUBLICATION_SCHEMA
                 or manifest.get("complete") is not True
                 or manifest.get("source_revision") != publication_source_revision(blueprint)
             ):

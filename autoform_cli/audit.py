@@ -17,7 +17,7 @@ from urllib.parse import unquote, urlsplit
 from . import status
 from .coverage import CoverageSummary, load_coverage
 from .graph import Graph, GraphValidationError, Node, load_graph
-from .lean import SourceIndex, declaration_names, index_project
+from .lean import SourceIndex, declaration_names, index_failure_message, index_project
 from .markdown import FENCE as _FENCE
 from .markdown import frontmatter_end as _frontmatter_end
 from .markdown import HEADING as _HEADING
@@ -435,7 +435,16 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
             for name in declaration_names(node.lean or "")
         )
     )
-    index = index_project(root, names=names_to_resolve)
+    try:
+        index = index_project(root, names=names_to_resolve)
+    except OSError as error:
+        return [
+            AuditFinding(
+                ".",
+                "unreadable-lean-sources",
+                index_failure_message(error),
+            )
+        ]
     spans = _source_spans(index)
     sizes: dict[str, int] = {}
     for node_id in sorted(graph.nodes):
@@ -497,7 +506,7 @@ def _source_spans(index: SourceIndex) -> dict[str, int]:
     tails: dict[Path, int] = {}
     for path, lines in starts.items():
         lines.sort()
-        tails[path] = _line_count(index.root / path)
+        tails[path] = index.line_counts.get(path, 0)
 
     spans: dict[str, int] = {}
     for declaration in index.declarations.values():
@@ -506,13 +515,6 @@ def _source_spans(index: SourceIndex) -> dict[str, int]:
         end = lines[following] - 1 if following < len(lines) else tails[declaration.path]
         spans[declaration.name] = max(1, end - declaration.line + 1)
     return spans
-
-
-def _line_count(path: Path) -> int:
-    try:
-        return len(path.read_text(encoding="utf-8").splitlines())
-    except (OSError, UnicodeError):
-        return 0
 
 
 def _size_findings(graph: Graph, sizes: dict[str, int]) -> list[AuditFinding]:

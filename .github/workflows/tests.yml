@@ -61,7 +61,7 @@ jobs:
           AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
 
   windows-hardening:
-    name: Windows subprocess and publication hardening
+    name: Windows capability, subprocess, and publication hardening
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -75,6 +75,8 @@ jobs:
       - name: Exercise bounded subprocesses and transactional output
         run: >-
           uv run pytest -q
+          tests/test_windows_source_boundary.py
+          tests/test_tree_snapshot_limits.py
           tests/test_skeleton.py::test_bounded_command_rejects_excess_output
           tests/test_skeleton.py::test_bounded_command_caps_stdout_and_stderr_together
           tests/test_skeleton.py::test_bounded_command_rejects_invalid_utf8

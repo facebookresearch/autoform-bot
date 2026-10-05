@@ -218,6 +218,20 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             dependency for dependency in proof_dependencies if dependency not in dependencies
         )
         metadata = parsed_node.metadata
+        if metadata.get("catalog") is not None:
+            if (
+                metadata.get("statement") == _FORMALIZED
+                or metadata.get("proof") == _FORMALIZED
+            ) and not metadata.get("lean"):
+                issues.append(
+                    f"{parsed_node.id}: formalized module catalog must list exact "
+                    "compiled names in 'lean'"
+                )
+            if not _catalog_has_local_ledger(parsed_node, blueprint):
+                issues.append(
+                    f"{parsed_node.id}: module catalog must link a declaration ledger "
+                    "under blueprint/sources from its '## Sources' section"
+                )
         nodes[parsed_node.id] = Node(
             id=parsed_node.id,
             title=parsed_node.title,
@@ -251,6 +265,25 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     if issues:
         raise GraphValidationError(issues)
     return Graph(blueprint_dir=blueprint, nodes=nodes)
+
+
+def _catalog_has_local_ledger(node: _ParsedNode, blueprint: Path) -> bool:
+    sources = (blueprint / "sources").resolve()
+    for target in node.source_targets:
+        split = urlsplit(target)
+        if split.scheme or split.netloc or split.query or not split.path:
+            continue
+        path = Path(unquote(split.path))
+        if path.is_absolute():
+            continue
+        try:
+            candidate = (node.path.parent / path).resolve()
+            candidate.relative_to(sources)
+        except (OSError, ValueError):
+            continue
+        if candidate.is_file():
+            return True
+    return False
 
 
 def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:

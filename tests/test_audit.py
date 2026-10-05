@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+import autoform_cli.audit as audit_module
 from autoform_cli.audit import audit_blueprint
+from autoform_cli.lean import LeanSourceError
 
 
 def _ensure_chapter(blueprint: Path, relative: str) -> None:
@@ -177,7 +181,7 @@ def test_audit_accepts_an_explicit_non_dispatchable_module_catalog(tmp_path: Pat
     assert audit_blueprint(blueprint, lean_root=lean_root).clean
 
 
-def test_audit_requires_a_local_declaration_ledger_for_module_catalog(
+def test_audit_surfaces_invalid_module_catalog_evidence(
     tmp_path: Path,
 ) -> None:
     blueprint = tmp_path / "blueprint"
@@ -192,16 +196,10 @@ def test_audit_requires_a_local_declaration_ledger_for_module_catalog(
 
     findings = _finding_map(blueprint)["roadmap/existing-module.md"]
 
-    assert findings == [
-        (
-            "catalog-without-lean-targets",
-            "formalized module catalog has no exact compiled names in lean frontmatter",
-        ),
-        (
-            "catalog-without-ledger",
-            "module catalog has no local declaration ledger under blueprint/sources",
-        ),
-    ]
+    assert {code for code, _reason in findings} == {"invalid-graph"}
+    reasons = {reason for _code, reason in findings}
+    assert any("must list exact compiled names" in reason for reason in reasons)
+    assert any("must link a declaration ledger" in reason for reason in reasons)
 
 
 def test_audit_validates_local_source_links_without_network_access(tmp_path: Path, monkeypatch) -> None:
@@ -530,6 +528,80 @@ def test_audit_reports_nodes_that_are_large_outliers_for_their_project(tmp_path:
             )
         ]
     }
+
+
+def test_audit_measures_source_spans_from_the_captured_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    spans = {f"Project.small{index}": 6 for index in range(5)}
+    spans["Project.big"] = 420
+    for name in spans:
+        _article(
+            blueprint,
+            f"{name.rsplit('.', 1)[-1]}.md",
+            declaration="theorem",
+            statement="formalized",
+            proof="formalized",
+            lean=name,
+        )
+    lean_root = _lean_project(tmp_path, spans)
+    real_index_project = audit_module.index_project
+
+    def index_then_mutate(root: Path, **kwargs):
+        index = real_index_project(root, **kwargs)
+        (root / "big.lean").write_text(
+            "theorem Project.big : True := trivial\n", encoding="utf-8"
+        )
+        return index
+
+    monkeypatch.setattr(audit_module, "index_project", index_then_mutate)
+
+    findings = _finding_map(blueprint, lean_root=lean_root)
+
+    assert findings["roadmap/big.md"] == [
+        (
+            "node-too-large",
+            "node's Lean declarations span 420 lines against this project's "
+            "6-line median; split it into pull-request-sized nodes",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("reason", "message"),
+    [
+        (None, "Lean sources could not be indexed"),
+        (
+            "permission denied: Project/Secret.lean",
+            "Lean sources could not be indexed: permission denied: Project/Secret.lean",
+        ),
+    ],
+)
+def test_audit_reports_source_index_io_failure_without_host_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str | None, message: str
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "result.md", declaration="theorem", lean="Project.result")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+
+    def fail_index(root: Path, **_kwargs):
+        if reason is not None:
+            raise LeanSourceError(reason)
+        raise OSError(f"private host detail: {root}")
+
+    monkeypatch.setattr(audit_module, "index_project", fail_index)
+
+    result = audit_blueprint(blueprint, lean_root=lean_root)
+
+    assert [(finding.article_path, finding.code, finding.reason) for finding in result.findings] == [
+        (".", "unreadable-lean-sources", message)
+    ]
+    assert str(tmp_path) not in result.to_json()
 
 
 def test_audit_measures_node_size_against_the_project_rather_than_a_fixed_limit(

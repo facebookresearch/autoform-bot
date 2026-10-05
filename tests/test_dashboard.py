@@ -95,12 +95,13 @@ def test_live_loader_does_not_hide_programming_errors() -> None:
 
 
 @pytest.mark.parametrize(
-    "publication_schema",
-    ["autoform-publication/v1", "autoform-publication/v2"],
+    ("publication_schema", "accepted"),
+    [("autoform-publication/v1", False), ("autoform-publication/v2", True)],
 )
 def test_live_overlay_refuses_a_stale_built_publication(
     tmp_path: Path,
     publication_schema: str,
+    accepted: bool,
 ) -> None:
     blueprint = tmp_path / "blueprint"
     roadmap = blueprint / "roadmap"
@@ -131,7 +132,12 @@ def test_live_overlay_refuses_a_stale_built_publication(
         site_dir=site,
     )
 
-    assert state()["source_revision"] == "revision"
+    initial = state()
+    if not accepted:
+        assert initial["claims"] == []
+        assert "stale" in str(initial["error"])
+        return
+    assert initial["source_revision"] == "revision"
     article.write_text("# Changed\n", encoding="utf-8")
     stale = state()
     assert stale["claims"] == []

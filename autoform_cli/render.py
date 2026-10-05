@@ -24,9 +24,16 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 from . import dag_viewer, graph_pages, graph_views, mermaid, status
+from ._tree_snapshot import (
+    BoundDirectoryTree,
+    TreeSelection,
+    TreeSnapshot,
+    TreeSnapshotError,
+    bind_directory_tree,
+)
 from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage
 from .graph import Graph, Node, load_graph
-from .lean import SourceLinker, build_linker, declaration_names
+from .lean import SourceLinker, build_linker, declaration_names, index_failure_message
 from .status import is_definition
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
@@ -268,9 +275,12 @@ def render_site(
         raise PublicationError(
             ["blueprint and output directories must be disjoint; refusing destructive render"]
         )
-    _validate_publication_tree(blueprint)
-
-    with _captured_blueprint(blueprint) as captured:
+    with _captured_blueprint(blueprint) as (
+        captured,
+        source_snapshot,
+        source_binding,
+        capture_mode,
+    ):
         return _render_captured_site(
             captured,
             destination,
@@ -279,6 +289,9 @@ def render_site(
             repository_url=repository_url,
             ref=ref,
             clean=clean,
+            source_snapshot=source_snapshot,
+            source_binding=source_binding,
+            capture_mode=capture_mode,
         )
 
 
@@ -291,6 +304,9 @@ def _render_captured_site(
     repository_url: str | None,
     ref: str | None,
     clean: bool,
+    source_snapshot: TreeSnapshot,
+    source_binding: BoundDirectoryTree,
+    capture_mode: str,
 ) -> RenderReport:
     """Render exclusively from one captured blueprint generation."""
 
@@ -323,18 +339,21 @@ def _render_captured_site(
             for name in declaration_names(node.lean or "")
         )
     )
-    linker = build_linker(
-        repo_root,
-        repository_url=repository_url,
-        ref=ref,
-        names=lean_names,
-    )
+    try:
+        linker = build_linker(
+            repo_root,
+            repository_url=repository_url,
+            ref=ref,
+            names=lean_names,
+        )
+    except OSError as error:
+        raise PublicationError([index_failure_message(error)]) from error
     numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
     sources_base = _sources_base(authored_blueprint, repo_root, linker)
 
     _prepare_destination(destination, clean=clean)
-    source_revision = _source_revision(blueprint)
+    source_revision = _snapshot_source_revision(source_snapshot)
     _write_publication_manifest(
         destination,
         blueprint,
@@ -343,6 +362,7 @@ def _render_captured_site(
         coverage=coverage,
         complete=False,
         source_revision=source_revision,
+        source_capture=capture_mode,
     )
 
     report = RenderReport(output_dir=destination)
@@ -509,8 +529,10 @@ def _render_captured_site(
         asset = destination / relative
         asset.parent.mkdir(parents=True, exist_ok=True)
         asset.write_text(contents, encoding="utf-8")
-    if _source_revision(authored_blueprint) != source_revision:
-        raise PublicationError(["blueprint changed during publication; retry the render"])
+    try:
+        source_binding.verify()
+    except TreeSnapshotError as error:
+        raise PublicationError(["blueprint changed during publication; retry the render"]) from error
     _write_publication_manifest(
         destination,
         blueprint,
@@ -519,6 +541,7 @@ def _render_captured_site(
         coverage=coverage,
         complete=True,
         source_revision=source_revision,
+        source_capture=capture_mode,
     )
     return report
 
@@ -556,114 +579,130 @@ def _prepare_destination(destination: Path, *, clean: bool) -> None:
         destination.mkdir(parents=True)
 
 
-def _validate_publication_tree(blueprint: Path) -> None:
-    """Reject inputs that could leak local state through a public artifact."""
-    issues: list[str] = []
-    if not blueprint.is_dir():
-        return
-    for source in sorted(blueprint.rglob("*")):
-        relative = source.relative_to(blueprint)
-        folded_parts = {part.casefold() for part in relative.parts}
-        name = relative.name.casefold()
-        if (
-            folded_parts.intersection(_LOCAL_ONLY_NAMES)
-            or name == ".env"
-            or name.startswith(".env.")
-            or name.endswith((".key", ".log", ".pem"))
-        ):
-            issues.append(f"refusing local or sensitive publication input: {relative.as_posix()}")
-            continue
-        if _is_hidden(relative):
-            continue
-        if source.is_symlink():
-            issues.append(f"refusing symlink in blueprint publication: {relative.as_posix()}")
-    if issues:
-        raise PublicationError(issues)
-
-
-_CAPTURE_FLAGS = (
-    os.O_RDONLY
-    | getattr(os, "O_NOFOLLOW", 0)
-    | getattr(os, "O_CLOEXEC", 0)
-    | getattr(os, "O_BINARY", 0)
-)
-
-
-def _capture_signature(metadata: os.stat_result) -> tuple[int, ...]:
-    return (
-        metadata.st_dev,
-        metadata.st_ino,
-        metadata.st_mode,
-        metadata.st_size,
-        metadata.st_mtime_ns,
-        metadata.st_ctime_ns,
+def _is_sensitive_publication_path(relative: Path) -> bool:
+    folded_parts = {part.casefold() for part in relative.parts}
+    name = relative.name.casefold()
+    return bool(
+        folded_parts.intersection(_LOCAL_ONLY_NAMES)
+        or name == ".env"
+        or name.startswith(".env.")
+        or name.endswith((".key", ".log", ".pem"))
     )
 
 
+def _publication_path_selected(relative) -> bool:
+    path = Path(relative.as_posix())
+    if _SKIPPED_DIRECTORIES.intersection(path.parts):
+        return False
+    if _is_sensitive_publication_path(path):
+        return True
+    return not (
+        _is_hidden(path)
+        or path.name in _GENERATED_FILES
+    )
+
+
+_PUBLICATION_SELECTION = TreeSelection(
+    include=lambda path, mode: (
+        _publication_path_selected(path)
+        and not (
+            _is_sensitive_publication_path(Path(path.as_posix()))
+            and stat.S_ISREG(mode)
+        )
+    ),
+    descend=lambda path: (
+        _publication_path_selected(path)
+        and not _is_sensitive_publication_path(Path(path.as_posix()))
+    ),
+    placeholder=lambda path, mode: (
+        _is_sensitive_publication_path(Path(path.as_posix()))
+        and not stat.S_ISDIR(mode)
+    ),
+    record_omitted=True,
+)
+
+
+def _validate_publication_snapshot(snapshot: TreeSnapshot) -> None:
+    paths = [
+        *snapshot.directories,
+        *(relative for relative, _data in snapshot.files),
+        *(relative for relative, _target in snapshot.symlinks),
+        *(relative for relative, _mode in snapshot.special),
+        *snapshot.placeholders,
+        *(relative for relative, _kind in snapshot.omitted),
+    ]
+    issues = [
+        f"refusing local or sensitive publication input: {relative}"
+        for relative in paths
+        if relative and _is_sensitive_publication_path(Path(relative))
+    ]
+    if issues:
+        raise PublicationError(sorted(set(issues)))
+
+
+def _capture_mode(bound: BoundDirectoryTree) -> str:
+    try:
+        bound.descriptor
+    except TreeSnapshotError:
+        return "portable-best-effort"
+    return "retained-descriptor"
+
+
+def _materialize_publication_snapshot(
+    snapshot: TreeSnapshot,
+    destination: Path,
+    *,
+    capture_mode: str,
+) -> None:
+    issues = snapshot.unsupported_entries()
+    if issues:
+        relative, reason = issues[0]
+        if reason == "symbolic links are not supported":
+            raise PublicationError([f"refusing symlink in blueprint publication: {relative}"])
+        raise PublicationError([f"refusing blueprint entry {relative}: {reason}"])
+    if capture_mode == "retained-descriptor":
+        snapshot.materialize(destination, verify_bytes=False)
+        return
+
+    # The destination is a fresh private temporary directory and every relative
+    # component has already passed TreeSnapshot's portable-name validation. No
+    # live source path is reopened while these exact captured bytes are written.
+    destination.mkdir()
+    for relative in snapshot.directories:
+        if relative:
+            (destination / relative).mkdir(parents=True, exist_ok=True)
+    for relative, data in snapshot.files:
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+
+
 @contextmanager
-def _captured_blueprint(blueprint: Path) -> Iterator[Path]:
-    """Materialize one immutable set of authored inputs for publication."""
+def _captured_blueprint(
+    blueprint: Path,
+) -> Iterator[tuple[Path, TreeSnapshot, BoundDirectoryTree, str]]:
+    """Retain, capture, and materialize one authored blueprint generation."""
 
-    with tempfile.TemporaryDirectory(prefix="autoform-blueprint-") as temporary:
-        captured = Path(temporary).resolve() / "blueprint"
-        captured.mkdir()
-        for source in sorted(blueprint.rglob("*")):
-            relative = source.relative_to(blueprint)
-            if (
-                _SKIPPED_DIRECTORIES.intersection(relative.parts)
-                or _is_hidden(relative)
-                or relative.name in _GENERATED_FILES
-            ):
-                continue
-            try:
-                named = source.stat(follow_symlinks=False)
-            except OSError as error:
-                raise PublicationError(
-                    [f"blueprint changed while it was captured: {relative.as_posix()}"]
-                ) from error
-            if stat.S_ISDIR(named.st_mode):
-                (captured / relative).mkdir(parents=True, exist_ok=True)
-                continue
-            if not stat.S_ISREG(named.st_mode):
-                raise PublicationError(
-                    [f"refusing unsupported blueprint entry: {relative.as_posix()}"]
+    try:
+        with bind_directory_tree(
+            blueprint,
+            selection=_PUBLICATION_SELECTION,
+        ) as bound:
+            snapshot = bound.capture()
+            _validate_publication_snapshot(snapshot)
+            capture_mode = _capture_mode(bound)
+            with tempfile.TemporaryDirectory(prefix="autoform-blueprint-") as temporary:
+                captured = Path(temporary).resolve() / "blueprint"
+                _materialize_publication_snapshot(
+                    snapshot,
+                    captured,
+                    capture_mode=capture_mode,
                 )
-
-            descriptor: int | None = None
-            try:
-                descriptor = os.open(source, _CAPTURE_FLAGS)
-                with os.fdopen(descriptor, "rb") as stream:
-                    descriptor = None
-                    opened = os.fstat(stream.fileno())
-                    if not stat.S_ISREG(opened.st_mode):
-                        raise PublicationError(
-                            [f"refusing unsupported blueprint entry: {relative.as_posix()}"]
-                        )
-                    data = stream.read()
-                    closed = os.fstat(stream.fileno())
-                final_named = source.stat(follow_symlinks=False)
-            except PublicationError:
-                raise
-            except (OSError, ValueError) as error:
-                raise PublicationError(
-                    [f"blueprint changed while it was captured: {relative.as_posix()}"]
-                ) from error
-            finally:
-                if descriptor is not None:
-                    os.close(descriptor)
-            if not (
-                _capture_signature(named)
-                == _capture_signature(opened)
-                == _capture_signature(closed)
-                == _capture_signature(final_named)
-            ):
-                raise PublicationError(
-                    [f"blueprint changed while it was captured: {relative.as_posix()}"]
-                )
-            target = captured / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-        yield captured
+                yield captured, snapshot, bound, capture_mode
+    except PublicationError:
+        raise
+    except TreeSnapshotError as error:
+        raise PublicationError([f"blueprint could not be captured safely: {error}"]) from error
 
 
 def _is_hidden(relative: Path) -> bool:
@@ -723,23 +762,25 @@ def _source_href(sources_base: _SourceBase, tail: tuple[str, ...]) -> str:
     return sources_base.href(tail)
 
 
-def _published_source_files(blueprint: Path):
-    """Yield the regular authored inputs that contribute to the static site."""
-    for source in sorted(blueprint.rglob("*")):
-        relative = source.relative_to(blueprint)
-        if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
-            continue
-        if relative.name in _GENERATED_FILES or not source.is_file():
-            continue
-        yield source, relative
+def _snapshot_source_revision(snapshot: TreeSnapshot) -> str:
+    digest = hashlib.sha256(b"autoform-markdown-publication/v2\0")
+    for relative, data in snapshot.files:
+        path = os.fsencode(relative)
+        for chunk in (path, data):
+            digest.update(len(chunk).to_bytes(8, "big"))
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _source_revision(blueprint: Path) -> str:
-    digest = hashlib.sha256(b"autoform-markdown-publication/v1\0")
-    for source, relative in _published_source_files(blueprint):
-        digest.update(relative.as_posix().encode("utf-8") + b"\0")
-        digest.update(source.read_bytes() + b"\0")
-    return digest.hexdigest()
+    try:
+        with bind_directory_tree(
+            blueprint,
+            selection=_PUBLICATION_SELECTION,
+        ) as bound:
+            return _snapshot_source_revision(bound.capture())
+    except TreeSnapshotError as error:
+        raise PublicationError([f"blueprint could not be captured safely: {error}"]) from error
 
 
 def publication_source_revision(blueprint_dir: str | Path) -> str:
@@ -757,6 +798,7 @@ def _write_publication_manifest(
     coverage: CoverageSummary,
     complete: bool,
     source_revision: str,
+    source_capture: str,
 ) -> None:
     manifest = {
         "complete": complete,
@@ -769,6 +811,7 @@ def _write_publication_manifest(
         },
         "schema": PUBLICATION_SCHEMA,
         "source": "blueprint/roadmap Markdown",
+        "source_capture": source_capture,
         "source_revision": source_revision,
         "git_ref": linker.ref,
         "nodes": len(graph.nodes),

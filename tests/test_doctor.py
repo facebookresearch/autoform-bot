@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.doctor import diagnose_project
+from autoform_cli.lean import LeanSourceError
 
 
 def _article(
@@ -164,6 +165,34 @@ def test_optional_lean_targets_report_success_missing_and_kind_mismatch(tmp_path
     source.write_text("def Project.result : Nat := 1\n", encoding="utf-8")
     mismatch = diagnose_project(project, lean_root=lean_root)
     assert _checks(mismatch)["lean targets"] == (False, "1 finding(s): lean-target-kind-mismatch")
+
+
+def test_unreadable_lean_sources_are_a_lean_target_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _clean_project(
+        tmp_path,
+        metadata=(
+            "declaration: theorem",
+            "statement: formalized",
+            "proof: formalized",
+            "lean: Project.result",
+        ),
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Project.lean").write_text("theorem Project.result : True := trivial\n", encoding="utf-8")
+
+    def changed_after_projection(_root, **_kwargs):
+        raise LeanSourceError("Lean sources kept changing while they were indexed")
+
+    monkeypatch.setattr("autoform_cli.audit.index_project", changed_after_projection)
+
+    result = diagnose_project(project, lean_root=lean_root)
+
+    assert not result.clean
+    assert _checks(result)["runtime"][0]
+    assert _checks(result)["audit"] == (True, "roadmap audit passed")
+    assert _checks(result)["lean targets"] == (False, "1 finding(s): unreadable-lean-sources")
+    assert str(tmp_path) not in result.to_json()
 
 
 def test_runtime_projection_failure_is_reported_without_traceback(tmp_path: Path) -> None:

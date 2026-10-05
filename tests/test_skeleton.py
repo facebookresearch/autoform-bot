@@ -17,7 +17,15 @@ import pytest
 import psutil
 
 from autoform_cli.__main__ import main
-from autoform_cli.lean import PACKET_SCHEMA, PASSAGE_SCHEMA, index_project
+from autoform_cli.graph import load_graph
+from autoform_cli.lean import (
+    PACKET_SCHEMA,
+    PASSAGE_SCHEMA,
+    Declaration,
+    LeanSourceError,
+    SourceIndex,
+    index_project,
+)
 from autoform_cli.skeleton import (
     DeclarationSkeleton,
     NodeSkeleton,
@@ -46,6 +54,7 @@ from autoform_cli.skeleton import (
     _project_control_snapshot,
     _without_comments,
     _probe_record_issue,
+    extract_graph_skeletons,
     extract_skeletons,
     format_report,
     lean_libraries,
@@ -247,6 +256,26 @@ def _fake_report(tmp_path: Path, output: str | None = None) -> SkeletonReport:
     project = _project(tmp_path)
     blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
     output = _fake_probe_output() if output is None else output
+    if os.name == "nt":
+        declaration = Declaration(
+            "Skel.observation_determined",
+            Path("Skel/Main.lean"),
+            15,
+            "theorem",
+        )
+        index = SourceIndex(
+            root=project,
+            declarations={declaration.name: declaration},
+            source_digest="windows-publication-fixture",
+            line_counts={Path("Skel/Main.lean"): 21},
+        )
+        return extract_graph_skeletons(
+            load_graph(blueprint),
+            lean_root=project,
+            libraries=lean_libraries(project),
+            index=index,
+            runner=lambda _probe, _root: output,
+        )
     return extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
 
 
@@ -1221,6 +1250,48 @@ def test_custom_runner_rejects_sources_changed_during_probe(tmp_path: Path) -> N
 
     with pytest.raises(SkeletonError, match="Lean sources changed"):
         extract_skeletons(blueprint, lean_root=project, runner=changing_runner)
+
+
+@pytest.mark.parametrize(
+    ("reason", "message"),
+    [
+        (None, "Lean sources could not be indexed"),
+        (
+            "permission denied: Project/Secret.lean",
+            "Lean sources could not be indexed: permission denied: Project/Secret.lean",
+        ),
+    ],
+)
+@pytest.mark.parametrize("failure_call", (1, 2))
+def test_extraction_translates_source_index_io_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_call: int, reason: str | None, message: str
+) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    real_index_project = index_project
+    calls = 0
+
+    def fail_index(root: Path):
+        nonlocal calls
+        calls += 1
+        if calls == failure_call:
+            if reason is not None:
+                raise LeanSourceError(reason)
+            raise OSError(f"private host detail: {root}")
+        return real_index_project(root)
+
+    monkeypatch.setattr("autoform_cli.skeleton.index_project", fail_index)
+
+    with pytest.raises(SkeletonError) as error:
+        extract_skeletons(
+            blueprint,
+            lean_root=project,
+            runner=lambda probe, root: _fake_probe_output(),
+        )
+
+    assert error.value.issues == (message,)
+    assert str(tmp_path) not in str(error.value)
+    assert calls == failure_call
 
 
 def test_extraction_rejects_configuration_changed_while_reading_libraries(tmp_path: Path, monkeypatch) -> None:

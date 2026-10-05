@@ -41,6 +41,7 @@ from .lean import (
     PASSAGE_SCHEMA,
     SourceIndex,
     declaration_names,
+    index_failure_message,
     index_project,
 )
 
@@ -2002,7 +2003,10 @@ def extract_skeletons(
         raise SkeletonError(
             ["Lean project configuration changed while skeletons were being extracted; retry after the project is idle"]
         )
-    index = index_project(root)
+    try:
+        index = index_project(root)
+    except OSError as error:
+        raise SkeletonError([index_failure_message(error)]) from error
     report = extract_graph_skeletons(
         graph,
         lean_root=root,
@@ -2011,7 +2015,11 @@ def extract_skeletons(
         runner=runner or run_probe,
         node_ids=node_ids,
     )
-    if index_project(root).source_digest != index.source_digest:
+    try:
+        current_index = index_project(root)
+    except OSError as error:
+        raise SkeletonError([index_failure_message(error)]) from error
+    if current_index.source_digest != index.source_digest:
         raise SkeletonError(["Lean sources changed while skeletons were being extracted; retry after the build is idle"])
     if _project_control_snapshot(root) != control_snapshot:
         raise SkeletonError(

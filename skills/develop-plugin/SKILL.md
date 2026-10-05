@@ -7,23 +7,23 @@ description: >-
 
 # Develop Autoform from consumer nudges
 
-Treat Autoform as an example-based plugin installed in an
-independent formalization repository. Use the Cabannes thesis as an executable consumer example.
+Treat Autoform as an example-based plugin in an independent formalization
+repository. Use the Cabannes thesis as executable consumer.
 
-Inspect the worktree, state a consumer scenario, and observe installed behavior.
-Name a refactor's invariant.
+Inspect the worktree, state a consumer scenario, observe installed behavior,
+and name the invariant. Treat user nudges as product evidence: preserve the
+insight, not the transcript, in an owning-skill trigger, rule, focused test,
+and assertion; future agents need less steering.
 
-Treat user nudges during real work as product evidence. Distill reusable ones
-into the owning skill as a trigger, decision rule, and action.
-Ensure future agents need less steering.
-Preserve the insight, not the transcript or consumer choice.
-Add a focused test and acceptance assertion in `tests/test_skill_examples.py`.
+Implement reusable behavior. Keep Cabannes-specific facts in examples and
+references. Keep roots distinct. Agents can infer routine details; record only
+fragile constraints.
 
-Implement reusable plugin behavior. Keep Cabannes-specific facts in the example
-and references; demonstrate outcomes without special-casing them.
-
-Keep plugin and formalization roots distinct. Agents can infer routine details;
-keep skills to non-obvious constraints and fragile domain steps.
+Source indexes, revisions, and links form one evidence boundary. Require
+retained descriptors; repeated pathname reads are not a generation boundary.
+Read bounded generated-output markers before descendants, keeping each marker
+schema in its owning feature. Auto-detected links must match the blob at the
+stable detected commit.
 
 Run focused checks, then normally run:
 
