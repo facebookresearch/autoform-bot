@@ -133,6 +133,25 @@ def test_module_catalog_requires_exact_names_and_a_local_ledger(tmp_path: Path) 
     assert "must link a declaration ledger" in str(error.value)
 
 
+def test_formalized_module_catalog_rejects_an_empty_lean_name_list(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    ledger = blueprint / "sources/module.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Module declarations\n", encoding="utf-8")
+    _node(
+        blueprint,
+        "module.md",
+        "# Existing module\n\n## Sources\n\n- [Ledger](../sources/module.md)\n",
+        catalog="module",
+        lean=",",
+        statement="formalized",
+        proof="formalized",
+    )
+
+    with pytest.raises(GraphValidationError, match="must list exact compiled names"):
+        load_graph(blueprint)
+
+
 @pytest.mark.parametrize(
     "metadata",
     [
