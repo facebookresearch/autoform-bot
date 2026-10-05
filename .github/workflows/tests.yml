@@ -10,6 +10,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       matrix:
         python-version: ["3.10", "3.13"]
@@ -56,12 +57,15 @@ jobs:
             elan toolchain install "$(tr -d '\r\n' < tests/fixtures/skeleton-project/lean-toolchain)"
           command -v lake
       - name: Run the skeleton suite against real Lean
-        run: timeout --signal=TERM --kill-after=30s 25m uv run pytest -q tests/test_skeleton.py
+        run: >-
+          timeout --signal=TERM --kill-after=30s 25m uv run pytest -q
+          tests/test_skeleton.py
+          tests/test_project_inspect.py::test_stale_inherited_mathlib_is_ignored_by_real_lake
         env:
           AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
 
   windows-hardening:
-    name: Windows subprocess and publication hardening
+    name: Windows inspection, subprocess, and publication hardening
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -72,9 +76,10 @@ jobs:
           python-version: "3.13"
           enable-cache: true
       - run: uv sync --frozen --extra dev --extra repl
-      - name: Exercise bounded subprocesses and transactional output
+      - name: Exercise inspection, bounded subprocesses, and transactional output
         run: >-
           uv run pytest -q
+          tests/test_project_inspect.py
           tests/test_skeleton.py::test_bounded_command_rejects_excess_output
           tests/test_skeleton.py::test_bounded_command_caps_stdout_and_stderr_together
           tests/test_skeleton.py::test_bounded_command_rejects_invalid_utf8
