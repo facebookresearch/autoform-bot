@@ -222,6 +222,8 @@ def test_helpers_report_location_and_the_article_owning_the_nearest_ancestor() -
     ]
     assert located == [helper.name for helper in report.helpers]
     assert _ids(report.statement_impacted) == ["uses"]
+    # The helpers are repaired under their owners' claims, so shared-a is claimed too.
+    assert report.claim_targets == ("base", "shared-a", "uses")
 
 
 def test_revised_names_resolve_by_component_and_are_never_their_own_helpers() -> None:

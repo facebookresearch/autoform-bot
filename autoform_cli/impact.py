@@ -489,7 +489,10 @@ def compute_impact(
         if record.deprecated
     )
 
-    claim_targets = (revised.claim_target, *sorted({item.claim_target for item in impacted} - {revised.claim_target}))
+    # A helper is repaired under its owner's claim, so the owner is claimed too.
+    owners = {by_id[helper.owner].claim_target for helper in helpers if helper.owner in by_id}
+    others = {item.claim_target for item in impacted} | owners
+    claim_targets = (revised.claim_target, *sorted(others - {revised.claim_target}))
     return ImpactReport(
         source_revision=source_revision,
         article=revised,
