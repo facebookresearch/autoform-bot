@@ -110,6 +110,36 @@ class LeanReplPool:
             add_note(f"Lean REPL cleanup also raised: {error}")
         return remembered
 
+    def _stop_admission_with_retry(
+        self,
+        cleanup_base_error: BaseException | None,
+        delay: float,
+    ) -> tuple[BaseException | None, float]:
+        """Stop admission before cleanup despite cancellation-like interruptions."""
+        while True:
+            try:
+                self._stop_admission()
+            except BaseException as error:
+                cleanup_base_error = self._remember_cleanup_base_error(
+                    cleanup_base_error,
+                    error,
+                )
+                logger.error(
+                    "failed to stop Lean REPL pool admission; retrying",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+            else:
+                return cleanup_base_error, delay
+
+            try:
+                time.sleep(delay)
+            except BaseException as error:
+                cleanup_base_error = self._remember_cleanup_base_error(
+                    cleanup_base_error,
+                    error,
+                )
+            delay = min(delay * 2, _CLEANUP_RETRY_MAX_SECONDS)
+
     def _settle_worker(
         self,
         worker: LeanRepl,
@@ -117,22 +147,24 @@ class LeanReplPool:
         quarantine: bool,
     ) -> BaseException | None:
         """Retain and retry a worker until it verifiably owns no process."""
-        if quarantine:
-            self._stop_admission()
-
         cleanup_base_error: BaseException | None = None
         delay = _CLEANUP_RETRY_INITIAL_SECONDS
+        if quarantine:
+            cleanup_base_error, delay = self._stop_admission_with_retry(
+                cleanup_base_error,
+                delay,
+            )
         while True:
             try:
                 clean = worker.is_clean()
             except BaseException as error:
-                logger.error(
-                    "failed to verify Lean REPL worker cleanup",
-                    exc_info=(type(error), error, error.__traceback__),
-                )
                 cleanup_base_error = self._remember_cleanup_base_error(
                     cleanup_base_error,
                     error,
+                )
+                logger.error(
+                    "failed to verify Lean REPL worker cleanup",
+                    exc_info=(type(error), error, error.__traceback__),
                 )
                 clean = False
 
@@ -140,31 +172,34 @@ class LeanReplPool:
                 return cleanup_base_error
 
             if not quarantine:
-                self._stop_admission()
+                cleanup_base_error, delay = self._stop_admission_with_retry(
+                    cleanup_base_error,
+                    delay,
+                )
                 quarantine = True
 
             try:
                 worker.close()
             except BaseException as error:
-                logger.error(
-                    "failed to retire quarantined Lean REPL worker; retrying",
-                    exc_info=(type(error), error, error.__traceback__),
-                )
                 cleanup_base_error = self._remember_cleanup_base_error(
                     cleanup_base_error,
                     error,
+                )
+                logger.error(
+                    "failed to retire quarantined Lean REPL worker; retrying",
+                    exc_info=(type(error), error, error.__traceback__),
                 )
 
             try:
                 clean = worker.is_clean()
             except BaseException as error:
-                logger.error(
-                    "failed to verify quarantined Lean REPL worker cleanup",
-                    exc_info=(type(error), error, error.__traceback__),
-                )
                 cleanup_base_error = self._remember_cleanup_base_error(
                     cleanup_base_error,
                     error,
+                )
+                logger.error(
+                    "failed to verify quarantined Lean REPL worker cleanup",
+                    exc_info=(type(error), error, error.__traceback__),
                 )
                 clean = False
             if clean:
@@ -264,18 +299,20 @@ class LeanReplPool:
             return call_result
         finally:
             emergency_cleanup_error: BaseException | None = None
-            if repl is not None and not worker_settled:
-                emergency_cleanup_error = self._settle_worker(
-                    repl,
-                    quarantine=True,
-                )
-                worker_settled = True
-            with self._condition:
-                if repl is not None:
-                    if worker_settled and not self._shutdown:
-                        self._idle.put(repl)
-                self._active_calls -= 1
-                self._condition.notify_all()
+            try:
+                if repl is not None and not worker_settled:
+                    emergency_cleanup_error = self._settle_worker(
+                        repl,
+                        quarantine=True,
+                    )
+                    worker_settled = True
+            finally:
+                with self._condition:
+                    if repl is not None:
+                        if worker_settled and not self._shutdown:
+                            self._idle.put(repl)
+                    self._active_calls -= 1
+                    self._condition.notify_all()
             if emergency_cleanup_error is not None:
                 raise emergency_cleanup_error.with_traceback(
                     emergency_cleanup_error.__traceback__
