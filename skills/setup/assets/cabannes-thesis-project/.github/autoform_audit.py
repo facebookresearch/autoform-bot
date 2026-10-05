@@ -459,10 +459,15 @@ import Lean.Data.Json
 
 open Lean Elab Command
 
-namespace AutoformOpenStatementAudit
+-- No namespace: inside one, Lean resolves a name to a constant under that
+-- namespace before any other, so a root module could define, say,
+-- `<namespace>.Json.parse` and silently replace the parser. At the top level a
+-- root constant with a helper's name fails as already declared, and one that
+-- matches a library name makes the reference ambiguous; both fail closed. The
+-- parser is fully qualified, so a project's own `Json.parse` does not even do that.
 
 /-- A name spelled as its components: strings, and numbers for numeric ones. -/
-def nameOf (json : Json) : Except String Name := do
+def autoformOpenAuditNameOf (json : Json) : Except String Name := do
   let mut name := Name.anonymous
   for part in (← json.getArr?) do
     match part with
@@ -472,18 +477,18 @@ def nameOf (json : Json) : Except String Name := do
 
 /-- Per article declaration: its name, its article, whether the article is an
 open statement, and the open statements the declaration may rest on. -/
-def readArticles (text : String) : Except String (Array (Name × String × Bool × Array Name)) := do
-  (← (← Json.parse text).getArr?).mapM fun entry => do
-    let declName ← nameOf (← entry.getArrVal? 0)
+def autoformOpenAuditReadArticles (text : String) : Except String (Array (Name × String × Bool × Array Name)) := do
+  (← (← _root_.Lean.Json.parse text).getArr?).mapM fun entry => do
+    let declName ← autoformOpenAuditNameOf (← entry.getArrVal? 0)
     let article ← (← entry.getArrVal? 1).getStr?
     let isOpen ← (← entry.getArrVal? 2).getBool?
-    let allowedOpen ← (← (← entry.getArrVal? 3).getArr?).mapM nameOf
+    let allowedOpen ← (← (← entry.getArrVal? 3).getArr?).mapM autoformOpenAuditNameOf
     return (declName, article, isOpen, allowedOpen)
 
 /-- The types and constructors of one mutual inductive block refer to each
 other. Nothing else in a safe environment does, so the walk treats a block as
 one node and needs no cycle handling. -/
-def blockOf (env : Environment) (declName : Name) : Name :=
+def autoformOpenAuditBlockOf (env : Environment) (declName : Name) : Name :=
   let induct := match env.find? declName with
     | some (.ctorInfo info) => info.induct
     | _ => declName
@@ -494,7 +499,7 @@ def blockOf (env : Environment) (declName : Name) : Name :=
 /-- The constants a node refers to, as `collectAxioms` follows them, except that
 an open statement's proof is not entered: a dependent rests on the statement,
 whatever its proof uses. -/
-def edges (env : Environment) (openSet : Std.HashSet Name) (node : Name) : Array Name :=
+def autoformOpenAuditEdges (env : Environment) (openSet : Std.HashSet Name) (node : Name) : Array Name :=
   match env.find? node with
   | some (.inductInfo info) =>
     info.all.foldl (init := (#[] : Array Name)) fun used induct =>
@@ -513,35 +518,33 @@ def edges (env : Environment) (openSet : Std.HashSet Name) (node : Name) : Array
 
 /-- The open statements a node rests on. A constant outside the root package
 contributes none: the audit requires those to be free of `sorry`. -/
-partial def openHits (env : Environment) (isRoot : Name → Bool) (openSet : Std.HashSet Name)
+partial def autoformOpenAuditOpenHits (env : Environment) (isRoot : Name → Bool) (openSet : Std.HashSet Name)
     (node : Name) : StateM (Std.HashMap Name (Array Name)) (Array Name) := do
   if let some known := (← get).get? node then
     return known
   -- In progress. Only unsafe recursion comes back here, and the audit rejects it.
   modify (·.insert node #[])
   let mut hits : Array Name := if openSet.contains node then #[node] else #[]
-  for used in edges env openSet node do
+  for used in autoformOpenAuditEdges env openSet node do
     if used == ``sorryAx || !isRoot used then
       continue
-    let target := blockOf env used
+    let target := autoformOpenAuditBlockOf env used
     if target == node then
       continue
-    for hit in (← openHits env isRoot openSet target) do
+    for hit in (← autoformOpenAuditOpenHits env isRoot openSet target) do
       unless hits.contains hit do
         hits := hits.push hit
   hits := hits.qsort Name.lt
   modify (·.insert node hits)
   return hits
 
-def nameList (names : Array Name) : MessageData :=
+def autoformOpenAuditNameList (names : Array Name) : MessageData :=
   MessageData.joinSep (names.toList.map MessageData.ofName) ", "
-
-end AutoformOpenStatementAudit
 
 run_cmd do
   let targetModules : List Name := [{target_modules}]
   let allowed : List Name := [``propext, ``Classical.choice, ``Quot.sound]
-  let articles ← match AutoformOpenStatementAudit.readArticles {articles} with
+  let articles ← match autoformOpenAuditReadArticles {articles} with
     | .ok articles => pure articles
     | .error message => throwError "cannot read the article table: {{message}}"
   let env ← getEnv
@@ -596,8 +599,8 @@ run_cmd do
         externalSorry := externalSorry.insert used tainted
       if tainted then
         errors := errors.push m!"{{declName}} uses {{used}}, which is outside the root package and depends on sorry"
-    let (hits, cache) := Id.run ((AutoformOpenStatementAudit.openHits env isRoot openSet
-      (AutoformOpenStatementAudit.blockOf env declName)).run hitCache)
+    let (hits, cache) := Id.run ((autoformOpenAuditOpenHits env isRoot openSet
+      (autoformOpenAuditBlockOf env declName)).run hitCache)
     hitCache := cache
     if errors.size == reported && usedAxioms.contains ``sorryAx && hits.isEmpty then
       errors := errors.push m!"{{declName}} depends on sorry outside every declared open statement"
@@ -614,12 +617,12 @@ run_cmd do
         else
           logInfo m!"sorry-free: {{declName}} [{{article}}]"
       else
-        let (hits, cache) := Id.run ((AutoformOpenStatementAudit.openHits env isRoot openSet
-          (AutoformOpenStatementAudit.blockOf env declName)).run hitCache)
+        let (hits, cache) := Id.run ((autoformOpenAuditOpenHits env isRoot openSet
+          (autoformOpenAuditBlockOf env declName)).run hitCache)
         hitCache := cache
         let undeclared := hits.filter (fun hit => !allowedOpen.contains hit)
         unless undeclared.isEmpty do
-          errors := errors.push m!"{{declName}} [{{article}}] rests on open statement(s) {{AutoformOpenStatementAudit.nameList undeclared}}, which its article's Markdown dependencies do not reach; add the dependency to the article or stop using them"
+          errors := errors.push m!"{{declName}} [{{article}}] rests on open statement(s) {{autoformOpenAuditNameList undeclared}}, which its article's Markdown dependencies do not reach; add the dependency to the article or stop using them"
         if openSet.contains declName then
           unless isOpen do
             errors := errors.push m!"{{declName}} [{{article}}] is an open statement, but its article records it as proved"
@@ -635,7 +638,7 @@ run_cmd do
             logInfo m!"open statement (proof is sorry-free; record proof: formalized): {{declName}} [{{article}}]"
         else if !hits.isEmpty then
           conditionalCount := conditionalCount + 1
-          logInfo m!"conditional: {{declName}} [{{article}}] rests on open statement(s) {{AutoformOpenStatementAudit.nameList hits}}"
+          logInfo m!"conditional: {{declName}} [{{article}}] rests on open statement(s) {{autoformOpenAuditNameList hits}}"
         else unless (← Lean.collectAxioms declName).contains ``sorryAx do
           logInfo m!"sorry-free: {{declName}} [{{article}}]"
   for error in errors do

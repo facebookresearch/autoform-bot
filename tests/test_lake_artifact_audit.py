@@ -589,8 +589,8 @@ def test_open_probe_spells_names_as_components(helper: ModuleType, tmp_path: Pat
 
     probe = helper.render_open_probe(("Fixture",), helper.load_assumption_contract(contract))
 
-    table = next(line for line in probe.splitlines() if "readArticles " in line and " with" in line)
-    literal = table.split("readArticles ", 1)[1].rsplit(" with", 1)[0]
+    table = next(line for line in probe.splitlines() if "ReadArticles " in line and " with" in line)
+    literal = table.split("ReadArticles ", 1)[1].rsplit(" with", 1)[0]
     assert json.loads(json.loads(literal)) == [
         [["Fixture", "a.b c"], "open", True, [["Fixture", "a.b c"]]],
         [["Fixture", "x", 1], 'odd "id" \\', False, [["Fixture", "a.b c"]]],
@@ -631,7 +631,7 @@ def test_helper_cli_forms(repo_root: Path, tmp_path: Path) -> None:
     assert prepared.stdout == (
         "prepared open-statement audit for 1 root-package module(s) and 1 open statement candidate(s)\n"
     )
-    assert "AutoformOpenStatementAudit.readArticles" in probe.read_text(encoding="utf-8")
+    assert "autoformOpenAuditReadArticles" in probe.read_text(encoding="utf-8")
 
     _contract_file(contract, _contract(open_statements=False))
     forbidden = run("--open-statements", str(contract), "Fixture", str(archive), str(probe))
@@ -683,6 +683,23 @@ theorem uses_dependency_sorry : True := Dep.dep_sorry
 end Fixture
 """
 
+# A sorry theorem that would pass as open if the probe read this forged table.
+_FORGED_TABLE = json.dumps(json.dumps([[["Fixture", "cheat"], "x", True, [["Fixture", "cheat"]]]]))
+
+_FORGED_LEAN = """import Lean.Data.Json
+
+namespace Fixture
+
+theorem cheat : 2 + 2 = 5 := sorry
+
+theorem fully : 2 + 2 = 5 := cheat
+
+end Fixture
+
+def {parser} (_ : String) : Except String Lean.Json :=
+  Lean.Json.parse {table}
+"""
+
 
 @pytest.fixture(scope="module")
 def open_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[Path, Path]]:
@@ -694,7 +711,14 @@ def open_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[P
     _write(dependency / "lakefile.toml", 'name = "Dep"\ndefaultTargets = ["Dep"]\n\n[[lean_lib]]\nname = "Dep"\n')
     _write(dependency / "Dep.lean", _DEPENDENCY_LEAN)
     projects: dict[str, tuple[Path, Path]] = {}
-    for name, source in (("open", _OPEN_LEAN), ("bad", _BAD_LEAN)):
+    for name, source in (
+        ("open", _OPEN_LEAN),
+        ("bad", _BAD_LEAN),
+        # The probe's helpers once lived in this namespace, where the name took
+        # precedence over the library parser.
+        ("hijack", _FORGED_LEAN.format(parser="AutoformOpenStatementAudit.Json.parse", table=_FORGED_TABLE)),
+        ("forged", _FORGED_LEAN.format(parser="Json.parse", table=_FORGED_TABLE)),
+    ):
         project = root / name
         _write(project / "lean-toolchain", "leanprover/lean4:v4.32.2\n")
         _write(
@@ -809,6 +833,23 @@ def test_open_probe_rejects_sorry_outside_an_open_statement_body(
         "root-package declarations failed the open-statement audit",
     ):
         assert message in output
+
+
+@pytest.mark.parametrize("project", ["hijack", "forged"])
+def test_open_probe_reads_its_table_with_the_library_parser(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]], project: str
+) -> None:
+    audited = _audit(
+        helper,
+        open_projects[project],
+        _contract(_article("fully", ["Fixture.fully"]), _article("cheat", ["Fixture.cheat"])),
+    )
+
+    output = audited.stdout + audited.stderr
+    assert audited.returncode != 0, output
+    assert "Fixture.cheat contains sorry but is not an open statement" in output
+    assert "Fixture.fully depends on sorry outside every declared open statement" in output
+    assert "kernel trust clean" not in output
 
 
 def test_strict_probe_still_rejects_every_sorry(
