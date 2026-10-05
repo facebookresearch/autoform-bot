@@ -243,9 +243,9 @@ def _file(tmp_path: Path, testimony: str) -> Path:
 @pytest.mark.parametrize(
     ("testimony", "reason"),
     [
-        ("​", "U+200B ZERO WIDTH SPACE"),
-        ("The claim holds⁠ for all x.", "U+2060 WORD JOINER"),
-        ("The bound is ‮1 > x‬ for every x.", "U+202E RIGHT-TO-LEFT OVERRIDE"),
+        ("\u200b", "U+200B ZERO WIDTH SPACE"),
+        ("The claim holds\u2060 for all x.", "U+2060 WORD JOINER"),
+        ("The bound is \u202e1 > x\u202c for every x.", "U+202E RIGHT-TO-LEFT OVERRIDE"),
         ("The claim holds&#8203; for all x.", "U+200B ZERO WIDTH SPACE"),
         ("The claim holds\U00016fe4 for all x.", "U+16FE4 KHITAN SMALL SCRIPT FILLER"),
         ("P&#x16FE4;Q", "&#x16FE4; (U+16FE4 KHITAN SMALL SCRIPT FILLER)"),
