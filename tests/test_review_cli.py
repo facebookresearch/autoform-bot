@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -705,18 +706,19 @@ class _Extraction:
 
 
 def _prepared_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extraction: _Extraction) -> tuple[Path, Path, Path]:
-    """Prepare two articles and write a records manifest beside two testimonies."""
+    """Prepare two articles and write a records manifest beside their packets and
+    two testimonies, the layout the README describes."""
 
     blueprint = _two_article_blueprint(tmp_path)
     monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", extraction)
     bundle_path = tmp_path / "review.json"
-    packets = tmp_path / "packets"
+    batch = tmp_path / "batch"
+    batch.mkdir()
+    packets = batch / "review-packets"
     assert main(
         ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle_path), "--packets", str(packets)]
     ) == 0
     entries = json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"]
-    batch = tmp_path / "batch"
-    batch.mkdir()
     records = []
     for entry in entries:
         testimony = batch / f"{entry['declaration']}.md"
@@ -725,7 +727,7 @@ def _prepared_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extraction:
             {
                 "article_id": entry["article_id"],
                 "declaration": entry["declaration"],
-                "packet": f"../packets/{entry['packet']}",
+                "packet": f"review-packets/{entry['packet']}",
                 "testimony": testimony.name,
             }
         )
@@ -1413,6 +1415,183 @@ def test_a_malformed_manifest_is_refused_before_any_lean_work(
     assert extraction.scopes == [None]  # only `review prepare` extracted
 
 
+def _long_link_chain(directory: Path, target: Path) -> str:
+    """A short path in ``directory`` that reaches ``target`` through links whose
+    resolved form is longer than PATH_MAX.
+
+    Each link names a directory beside it whose name is as long as allowed, so
+    the path a resolver builds grows by that much per link, while open()
+    follows each link from where it is. The directories are made through file
+    descriptors, since their full paths soon become too long to name.
+    """
+
+    longest = os.pathconf(directory, "PC_NAME_MAX")
+    levels = os.pathconf(directory, "PC_PATH_MAX") // (longest + 1) + 1
+    here = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for _ in range(levels):
+            os.mkdir("d" * longest, dir_fd=here)
+            os.symlink("d" * longest, "s", dir_fd=here)
+            below = os.open("d" * longest, os.O_RDONLY | os.O_DIRECTORY, dir_fd=here)
+            os.close(here)
+            here = below
+        os.symlink("../" * levels + os.path.relpath(target, directory), "x", dir_fd=here)
+    finally:
+        os.close(here)
+    return "s/" * levels + "x"
+
+
+@pytest.mark.parametrize("field", ["packet", "testimony"])
+@pytest.mark.parametrize(
+    ("form", "problem"),
+    [
+        ("absolute", "is absolute"),
+        ("parent", "has a '..' component"),
+        ("link", "resolves outside the manifest's directory"),
+        ("long-chain", "cannot be resolved: File name too long"),
+    ],
+    ids=["absolute", "parent", "link", "long-chain"],
+)
+def test_a_record_names_only_files_inside_its_manifest_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    form: str,
+    problem: str,
+    field: str,
+) -> None:
+    """Only a packet's bytes are checked against the bundle, so a testimony path
+    that may leave the batch files any readable file as a reviewer's read-back.
+    Each case names a valid copy of the record's file from outside the
+    manifest's directory, so only where the file lives is wrong."""
+
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    outside = elsewhere / Path(records[0][field]).name
+    outside.write_bytes((manifest.parent / records[0][field]).read_bytes())
+    if form == "absolute":
+        records[0][field] = str(outside)
+    elif form == "parent":
+        records[0][field] = f"../elsewhere/{outside.name}"
+    elif form == "link":
+        (manifest.parent / f"linked-{outside.name}").symlink_to(outside)
+        records[0][field] = f"linked-{outside.name}"
+    else:
+        records[0][field] = _long_link_chain(manifest.parent, outside)
+    manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    assert f"record 1: {field} {records[0][field]!r} {problem}" in capsys.readouterr().err
+    assert extraction.scopes == [None]  # only `review prepare` extracted
+    assert load_readbacks(blueprint) == {}
+
+
+def test_a_link_that_stays_inside_the_manifest_directory_is_followed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A link is judged by where it leads, not refused for being a link."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    (manifest.parent / "linked.md").symlink_to(records[0]["testimony"])
+    records[0]["testimony"] = "linked.md"
+    manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 0
+    assert len(load_readbacks(blueprint)) == 2
+
+
+def test_a_link_inside_is_followed_whatever_case_spells_the_manifest_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Where the file system ignores case, --manifest may spell the directory in
+    other case than a link's absolute target does. Both name one directory, so
+    the link stays inside it."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    spelled = manifest.parent.with_name(manifest.parent.name.upper()) / manifest.name
+    if not spelled.exists():
+        pytest.skip("this file system tells case apart")
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    (manifest.parent / "linked.md").symlink_to(manifest.parent / records[0]["testimony"])
+    records[0]["testimony"] = "linked.md"
+    manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
+
+    assert _record(blueprint, bundle, spelled, tmp_path) == 0
+    assert len(load_readbacks(blueprint)) == 2
+
+
+@pytest.mark.parametrize("field", ["packet", "testimony"])
+def test_a_record_path_with_a_nul_byte_is_refused_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], field: str
+) -> None:
+    """No file name holds a NUL byte, and the error resolving one raises says
+    nothing of which record or field it came from."""
+
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    records[0][field] += "\x00"
+    manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    assert f"record 1: {field} {records[0][field]!r} cannot be resolved" in capsys.readouterr().err
+    assert extraction.scopes == [None]  # only `review prepare` extracted
+    assert load_readbacks(blueprint) == {}
+
+
+def test_a_chain_of_links_too_long_to_follow_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Python before 3.13 follows links by recursion, so resolving a chain of more
+    links than the recursion limit raises RecursionError. Later versions follow
+    it, and the read then stops at the kernel's own limit on links."""
+
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    for position in range(sys.getrecursionlimit() + 100):
+        (manifest.parent / f"link-{position}").symlink_to(records[0]["testimony"])
+        records[0]["testimony"] = f"link-{position}"
+    manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    assert extraction.scopes == [None]  # only `review prepare` extracted
+    assert load_readbacks(blueprint) == {}
+
+
+@pytest.mark.parametrize("key", ["records", "testimony"])
+def test_a_manifest_that_repeats_a_key_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], key: str
+) -> None:
+    """A plain JSON decoder keeps the last of two equal keys, so the batch would
+    file whichever value came last and drop the other unseen."""
+
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    if key == "records":
+        text = '{"schema": "autoform-review-records/v1", "records": [], "records": ' + json.dumps(records) + "}"
+    else:
+        # Another testimony key ahead of the record's own, which comes last and would win.
+        record = json.dumps(records[0]).replace('"testimony": ', '"testimony": "elsewhere.md", "testimony": ')
+        text = '{"schema": "autoform-review-records/v1", "records": [' + record + "]}"
+    manifest.write_text(text, encoding="utf-8")
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    assert f"duplicate JSON key {key!r}" in capsys.readouterr().err
+    assert extraction.scopes == [None]  # only `review prepare` extracted
+    assert load_readbacks(blueprint) == {}
+
+
 def test_every_unreadable_input_is_named_before_any_lean_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1421,7 +1600,7 @@ def test_every_unreadable_input_is_named_before_any_lean_work(
     extraction = _Extraction()
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
     records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
-    records[0]["packet"] = "../packets/blind/nowhere.lean"
+    records[0]["packet"] = "review-packets/blind/nowhere.lean"
     (manifest.parent / records[1]["testimony"]).unlink()
     manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
     capsys.readouterr()

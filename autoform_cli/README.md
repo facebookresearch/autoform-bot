@@ -811,8 +811,10 @@ manifest sits beside `review-packets`:
 }
 ```
 
-Relative paths resolve against the manifest's directory, a record may carry its
-own `expected_card_hash`, and a declaration may appear once. Every packet and
+Paths are relative to the manifest's directory and may not leave it: an
+absolute path, a `..` component, or a link that points outside is refused. A
+record may carry its own `expected_card_hash`, a declaration may appear once,
+and no object may repeat a key. Every packet and
 testimony is read and checked against the bundle before Lean starts. So is
 every card the batch would write over: a re-review lands on the path of the
 card it supersedes, which it may replace only by naming that card's hash, and
