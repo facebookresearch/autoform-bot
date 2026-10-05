@@ -62,8 +62,9 @@ def _article(
     dependencies: tuple[str, ...] = (),
     statement_dependencies: tuple[str, ...] = (),
     stated: bool = False,
+    mathlib: bool = False,
 ) -> ImpactArticle:
-    return ImpactArticle(node_id, article_id, declarations, dependencies, statement_dependencies, stated)
+    return ImpactArticle(node_id, article_id, declarations, dependencies, statement_dependencies, stated, mathlib)
 
 
 def _impact(records, articles, revised: str, declarations=None, **kwargs):
@@ -320,6 +321,8 @@ def test_stated_markdown_statement_dependents_the_lean_does_not_show_are_reporte
         stated("proof-only", "A.proofOnly"),
         _article("unstated", "A.unstated", dependencies=("base",), statement_dependencies=("base",)),
         _article("via-proof", "A.viaProof", dependencies=("base",), stated=True),
+        # Stated by Mathlib, whose declaration cannot use A.base.
+        stated("in-mathlib", mathlib=True),
     ]
 
     report = _impact(records, articles, "base")
@@ -1054,6 +1057,26 @@ def _stub_probe(monkeypatch: pytest.MonkeyPatch, records=_STUB_RECORDS, *, error
 
     monkeypatch.setattr("autoform_cli.skeleton.run_probe", run_probe)
     return calls
+
+
+def test_cli_leaves_a_mathlib_statement_dependent_unclaimed(tmp_path: Path, monkeypatch, capsys) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    _write_article(
+        project,
+        "known.md",
+        metadata=["declaration: theorem", "mathlib: true", "mathlib_declaration: Nat.add_zero"],
+        depends=("base.md",),
+    )
+    lean_root = _stub_lean_root(tmp_path)
+    _stub_probe(monkeypatch)
+
+    code = cli.main(["work", "impact", _BASE_ID, str(project), "--lean-root", str(lean_root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    assert report["unused_statement_dependencies"] == ["chapter/inlines"]
+    assert "chapter/known" not in report["claim_targets"]
 
 
 def test_cli_writes_the_impact_report_as_canonical_json(tmp_path: Path, monkeypatch, capsys) -> None:
