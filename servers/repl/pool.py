@@ -140,7 +140,7 @@ class LeanReplPool:
                 )
             delay = min(delay * 2, _CLEANUP_RETRY_MAX_SECONDS)
 
-    def _settle_worker(
+    def _settle_worker_once(
         self,
         worker: LeanRepl,
         *,
@@ -213,6 +213,43 @@ class LeanReplPool:
                     error,
                 )
             delay = min(delay * 2, _CLEANUP_RETRY_MAX_SECONDS)
+
+    def _settle_worker(
+        self,
+        worker: LeanRepl,
+        *,
+        quarantine: bool,
+    ) -> BaseException | None:
+        """Retry the complete settlement protocol until cleanup is verified."""
+        cleanup_base_error: BaseException | None = None
+        delay = _CLEANUP_RETRY_INITIAL_SECONDS
+        while True:
+            try:
+                settled_error = self._settle_worker_once(
+                    worker,
+                    quarantine=quarantine,
+                )
+            except BaseException as error:
+                cleanup_base_error = self._remember_cleanup_base_error(
+                    cleanup_base_error,
+                    error,
+                )
+                quarantine = True
+                try:
+                    time.sleep(delay)
+                except BaseException as sleep_error:
+                    cleanup_base_error = self._remember_cleanup_base_error(
+                        cleanup_base_error,
+                        sleep_error,
+                    )
+                delay = min(delay * 2, _CLEANUP_RETRY_MAX_SECONDS)
+                continue
+            if settled_error is not None and settled_error is not cleanup_base_error:
+                cleanup_base_error = self._remember_cleanup_base_error(
+                    cleanup_base_error,
+                    settled_error,
+                )
+            return cleanup_base_error
 
     def run(self, code: str, **kwargs: Any) -> dict[str, Any]:
         """Run code on an idle REPL within one queue-and-execution timeout."""
@@ -308,10 +345,12 @@ class LeanReplPool:
                     worker_settled = True
             finally:
                 with self._condition:
-                    if repl is not None:
-                        if worker_settled and not self._shutdown:
+                    if repl is not None and not worker_settled:
+                        self._shutdown = True
+                    else:
+                        if repl is not None and not self._shutdown:
                             self._idle.put(repl)
-                    self._active_calls -= 1
+                        self._active_calls -= 1
                     self._condition.notify_all()
             if emergency_cleanup_error is not None:
                 raise emergency_cleanup_error.with_traceback(

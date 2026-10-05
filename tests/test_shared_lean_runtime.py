@@ -249,6 +249,130 @@ def test_quarantined_repl_pool_is_replaced_only_after_active_cleanup(tmp_path):
         services.close()
 
 
+def test_unexpected_settle_escape_cannot_release_dirty_pool_ownership(
+    tmp_path,
+    monkeypatch,
+):
+    from servers.repl import pool as repl_pool
+
+    project = make_lake_project(tmp_path, "settlement-escape")
+    allow_cleanup = threading.Event()
+    settle_escaped = threading.Event()
+    close_failed = threading.Event()
+    second_started = threading.Event()
+    pools = []
+    workers = []
+
+    class FakeRepl:
+        def __init__(self, config):
+            self.number = len(workers) + 1
+            self.dirty = False
+            self.close_calls = 0
+            workers.append(self)
+
+        def run_disposable(self, code, **kwargs):
+            if self.number == 1:
+                self.dirty = True
+            return {"messages": []}
+
+        def is_clean(self):
+            return not self.dirty
+
+        def close(self):
+            self.close_calls += 1
+            if self.dirty and not allow_cleanup.is_set():
+                close_failed.set()
+                raise RuntimeError("persistent cleanup failure")
+            self.dirty = False
+
+        def get_memory_usage(self):
+            return 0.0
+
+    monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
+
+    def create_pool(root):
+        pool = repl_pool.LeanReplPool(
+            repl_pool.LeanReplPoolConfig(cwd=str(root), num_repls=1)
+        )
+        pools.append(pool)
+        if len(pools) == 1:
+            settle_worker_once = pool._settle_worker_once
+            escapes_remaining = 2
+
+            def escape_before_cleanup(worker, *, quarantine):
+                nonlocal escapes_remaining
+                if escapes_remaining:
+                    escapes_remaining -= 1
+                    pool._stop_admission()
+                    if escapes_remaining == 0:
+                        settle_escaped.set()
+                    raise RuntimeError("unexpected settlement escape")
+                return settle_worker_once(worker, quarantine=quarantine)
+
+            monkeypatch.setattr(pool, "_settle_worker_once", escape_before_cleanup)
+        return pool
+
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=create_pool,
+        lsp_factory=FakeLsp,
+        start_sweepers=False,
+    )
+    results = []
+    errors = []
+
+    def dispatch(code, *, started=None):
+        if started is not None:
+            started.set()
+        try:
+            results.append(
+                services.dispatch(
+                    "repl.run",
+                    {"project_dir": str(project), "code": code, "timeout": 1},
+                )
+            )
+        except BaseException as error:
+            errors.append(error)
+
+    first = threading.Thread(target=dispatch, args=("#check Nat",))
+    first.start()
+    assert settle_escaped.wait(timeout=1)
+    assert close_failed.wait(timeout=1)
+
+    second = threading.Thread(
+        target=dispatch,
+        args=("#check Int",),
+        kwargs={"started": second_started},
+    )
+    second.start()
+    assert second_started.wait(timeout=1)
+    second.join(timeout=0.1)
+
+    try:
+        assert first.is_alive()
+        assert second.is_alive()
+        assert len(pools) == 1
+        assert pools[0]._active_calls == 1
+        assert workers[0].dirty
+        assert workers[0].close_calls >= 1
+        assert services.repl_projects.stats()["resident"][0]["active"] == 1
+    finally:
+        allow_cleanup.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+    try:
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert errors == []
+        assert results == ["Compiles successfully", "Compiles successfully"]
+        assert len(pools) == 2
+        assert workers[0].is_clean()
+    finally:
+        allow_cleanup.set()
+        services.close()
+
+
 def test_lru_limit_never_evicts_an_active_project(tmp_path):
     first = make_lake_project(tmp_path, "first")
     second = make_lake_project(tmp_path, "second")
