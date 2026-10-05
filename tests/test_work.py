@@ -474,6 +474,8 @@ def test_work_cli_does_not_report_output_errors_as_unreadable_paths(
     monkeypatch.setattr(sys, "stdout", ClosedPipe())
     with pytest.raises(BrokenPipeError):
         cli.main(["work", "list", str(project)])
+    with pytest.raises(BrokenPipeError):
+        cli.main(["work", "assumptions", str(project)])
 
 
 def test_node_ids_cannot_impersonate_article_ids(tmp_path: Path, capsys) -> None:
@@ -821,7 +823,9 @@ def test_work_assumptions_under_the_open_policy_bounds_each_article(
     )
 
 
-def test_work_assumptions_reports_errors_on_stderr_with_exit_2(tmp_path: Path, capsys) -> None:
+def test_work_assumptions_reports_errors_on_stderr_with_exit_2(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
     assert cli.main(["work", "assumptions", str(tmp_path / "missing")]) == 2
     assert capsys.readouterr().err == "error: project or blueprint directory does not exist\n"
 
@@ -830,3 +834,15 @@ def test_work_assumptions_reports_errors_on_stderr_with_exit_2(tmp_path: Path, c
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == "error: roadmap:2: 'open_statements' accepts allowed or forbidden\n"
+
+    for failure in (
+        PermissionError(13, "Permission denied", "/private/secret/blueprint"),
+        RuntimeError("Symlink loop from '/private/secret/blueprint'"),
+    ):
+
+        def unreadable(*_args, failure: Exception = failure, **_kwargs):
+            raise failure
+
+        monkeypatch.setattr(cli, "assumption_contract", unreadable)
+        assert cli.main(["work", "assumptions", str(project)]) == 2
+        assert capsys.readouterr().err == "error: project or blueprint path cannot be read\n"
