@@ -660,9 +660,7 @@ def test_failed_lsp_session_is_replaced_on_the_next_call(tmp_path):
         services.close()
 
 
-def test_failed_lsp_cleanup_is_invalidated_and_settled_before_replacement(
-    tmp_path, monkeypatch
-):
+def test_failed_lsp_cleanup_is_invalidated_and_settled_before_replacement(tmp_path, monkeypatch):
     from servers.lsp import server as lsp
 
     project = make_lake_project(tmp_path, "lsp-cleanup-order")

@@ -207,9 +207,7 @@ def test_failed_operation_poisons_a_queued_waiter_before_releasing_admission(mon
 
 
 @pytest.mark.parametrize("operation", ["diagnostics", "hover"])
-def test_did_close_failure_keeps_the_result_but_poisons_the_session(
-    tmp_path, monkeypatch, operation
-):
+def test_did_close_failure_keeps_the_result_but_poisons_the_session(tmp_path, monkeypatch, operation):
     source = tmp_path / "Test.lean"
     source.write_text("#check Nat\n")
     session = lsp.LeanLspSession(lsp.LspConfig())
