@@ -1063,6 +1063,70 @@ def test_disposable_call_retries_header_cleanup_before_reuse(monkeypatch):
     assert repl.is_clean()
 
 
+def test_disposable_call_preserves_header_cleanup_cancellation(monkeypatch):
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(
+            warmup_imports=frozenset(),
+            header_deps_command=_fake_header_deps(_deps_json("Mathlib")),
+        )
+    )
+    real_kill = repl_core._kill_subprocesses
+    cleanup_calls = 0
+
+    def cancel_once(process, process_group_id, deadline=None):
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        if cleanup_calls == 1:
+            raise asyncio.CancelledError("cancel header cleanup")
+        return real_kill(process, process_group_id, deadline)
+
+    monkeypatch.setattr(repl_core, "_kill_subprocesses", cancel_once)
+
+    with pytest.raises(asyncio.CancelledError, match="cancel header cleanup"):
+        repl.run_disposable("import Mathlib\n#check Nat")
+
+    assert cleanup_calls == 2
+    assert repl.is_clean()
+
+
+def test_disposable_call_preserves_header_request_cancellation(monkeypatch):
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(
+            warmup_imports=frozenset(),
+            header_deps_command=[sys.executable, "-c", "import time; time.sleep(30)"],
+        )
+    )
+    real_kill = repl_core._kill_subprocesses
+    cleanup_calls = 0
+
+    monkeypatch.setattr(
+        repl_core,
+        "_communicate_bounded",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            KeyboardInterrupt("cancel header request")
+        ),
+    )
+
+    def fail_once(process, process_group_id, deadline=None):
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        if cleanup_calls == 1:
+            raise RuntimeError("header cleanup failed")
+        return real_kill(process, process_group_id, deadline)
+
+    monkeypatch.setattr(repl_core, "_kill_subprocesses", fail_once)
+
+    with pytest.raises(KeyboardInterrupt, match="cancel header request") as raised:
+        repl.run_disposable("import Mathlib\n#check Nat")
+
+    if hasattr(raised.value, "add_note"):
+        assert raised.value.__notes__ == [
+            "Lean header parser cleanup failed: header cleanup failed"
+        ]
+    assert cleanup_calls == 2
+    assert repl.is_clean()
+
+
 def test_response_timeout_after_full_write_is_not_retried(monkeypatch):
     repl = repl_core.LeanRepl(
         repl_core.LeanReplConfig(
