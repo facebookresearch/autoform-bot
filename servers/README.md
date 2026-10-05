@@ -13,6 +13,9 @@ runtime for the current AutoformBot installation, Unix user, and compute node.
 That runtime owns one REPL admission pool and LSP session per active Lean
 project. LSP sessions stay warm; each public REPL call gets a fresh child and
 no process-owned environment or proof-state handle survives the response.
+Before that child starts, the selected Lake toolchain's `lean --deps-json`
+parser validates the submitted header and its complete import set; a rejected
+or unrecognized parser response fails closed.
 Closing the session that started it does not stop it; after a crash, the next
 tool call starts it again. Runtime sockets include a code fingerprint, so an
 in-place upgrade gracefully replaces the older build.

@@ -110,6 +110,8 @@ def test_public_repl_calls_are_documented_as_process_disposable(repo_root: Path)
 
     assert "each public REPL call gets a fresh child" in servers
     assert "no process-owned environment or proof-state handle survives" in servers
+    assert "toolchain's `lean --deps-json`" in servers
+    assert "unrecognized parser response fails closed" in servers
 
 
 def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
