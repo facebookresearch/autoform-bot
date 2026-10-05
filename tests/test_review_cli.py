@@ -1575,6 +1575,63 @@ def test_a_manifest_or_bundle_nested_too_deep_to_decode_is_refused_before_any_le
     assert load_readbacks(blueprint) == {}
 
 
+def _damage_bundle(bundle: Path, damage: str) -> None:
+    if damage == "a-number-too-long":
+        bundle.write_text('{"schema": 1' + "0" * 4300 + "}", encoding="utf-8")
+    else:
+        text = bundle.read_text(encoding="utf-8")
+        assert '"title":"' in text
+        bundle.write_text(text.replace('"title":"', '"title":"\\ud800', 1), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("command", "refused"), [("review check", 2), ("audit", 2), ("render", 1), ("review record", 2)]
+)
+@pytest.mark.parametrize("damage", ["a-number-too-long", "a-lone-surrogate"])
+def test_a_bundle_with_a_number_too_long_or_a_lone_surrogate_is_refused_as_unreadable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    damage: str,
+    command: str,
+    refused: int,
+) -> None:
+    """json.loads raises a plain ValueError, not a JSONDecodeError, for an integer
+    of more than 4300 digits, and decodes "\\ud800" to half of a surrogate pair,
+    which the evidence hash cannot encode as UTF-8."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    _damage_bundle(bundle, damage)
+    capsys.readouterr()
+
+    if command == "review check":
+        code = main(["review", "check", str(blueprint), "--lean-root", str(tmp_path), "--bundle", str(bundle)])
+    elif command == "audit":
+        code = _audit(blueprint, tmp_path)
+    elif command == "render":
+        site = tmp_path / "site"
+        code = main(
+            [
+                "render",
+                str(blueprint),
+                "--lean-root",
+                str(tmp_path),
+                "--review-bundle",
+                str(bundle),
+                "--output",
+                str(site),
+            ]
+        )
+    else:
+        code = _record(blueprint, bundle, manifest, tmp_path)
+
+    captured = capsys.readouterr()
+    # render prints its errors on stdout.
+    reported = captured.out if command == "render" else captured.err
+    assert code == refused
+    assert reported.startswith(f"error: cannot read review bundle {bundle}: ")
+
+
 def _long_link_chain(directory: Path, target: Path) -> str:
     """A short path in ``directory`` that reaches ``target`` through links whose
     resolved form is longer than PATH_MAX.
