@@ -1170,6 +1170,8 @@ imp_alias seedAlias := seedEq
 
 theorem seedAgain : seed = 1 + 1 := seedEq
 
+partial def seedLoop (n : Nat) : Nat := if n = 0 then seed else seedLoop (n - 1)
+
 theorem usesAlias : seed = 2 ∧ True := ⟨seedAlias, trivial⟩
 
 @[simp, deprecated seedEq (since := "2026-10-05")]
@@ -1301,9 +1303,13 @@ def test_the_probe_reads_a_built_project(tmp_path: Path, monkeypatch, capsys) ->
         ImpactArticle("chapter/seed-eq", None, ("Imp.seedEq",)),
         ImpactArticle("chapter/uses-alias", None, ("Imp.usesAlias",)),
         ImpactArticle("chapter/box", None, ("Imp.Box",)),
+        ImpactArticle("chapter/loop", None, ("Imp.seedLoop",)),
     ]
     seed = compute_impact(records, more, more[0], ["Imp.seed"], source_revision="rev")
-    assert _ids(seed.statement_impacted) == ["chapter/priv", "chapter/seed-eq", "chapter/uses-alias"]
+    # A partial def's kernel value is an `Inhabited` witness; its body is in
+    # the `_unsafe_rec` companion.
+    assert "Imp.seedLoop._unsafe_rec" in records["Imp.seedLoop"].value_uses
+    assert _ids(seed.statement_impacted) == ["chapter/loop", "chapter/priv", "chapter/seed-eq", "chapter/uses-alias"]
     assert [(helper.name, helper.owner) for helper in seed.helpers] == [
         ("Imp.seedAgain", None),
         ("Imp.seedAlias", None),

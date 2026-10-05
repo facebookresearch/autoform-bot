@@ -54,7 +54,9 @@ def namesJson (names : Array Name) : Json :=
 /-- What a revision of any project-local constant can reach through `c`: the
 local constants its type and its value mention, and its deprecation state.
 Theorem values are read too (`allowOpaque`), since proofs break when the
-statements they use change; an inductive's constructors stand in for a value.
+statements they use change; an inductive's constructors stand in for a value,
+and so does the `_unsafe_rec` companion of a `partial def`, whose kernel value
+is only an `Inhabited` witness while the companion holds the body Lean runs.
 `internal` is judged on the user-facing name: a private declaration someone
 wrote is not an internal detail, while the companions Lean generates for it
 (`_proof_1`, `match_1`, `_simp_1`) still are. `user_name` is that name for a
@@ -68,8 +70,13 @@ def record (env : Environment) (isLocal : Name → Bool) (c : Name) (info : Cons
     (module : Name) : Json :=
   let value := info.value? (allowOpaque := true)
   let typeConstants := info.type.getUsedConstants
+  -- `Compiler.mkUnsafeRecName c`, spelled out to keep the probe's imports small.
+  let implementation := Name.str c "_unsafe_rec"
   let valueConstants := match info with
     | .inductInfo v => v.ctors.toArray
+    | .opaqueInfo _ =>
+      let uses := (value.map (·.getUsedConstants)).getD #[]
+      if env.contains implementation then uses.push implementation else uses
     | _             => (value.map (·.getUsedConstants)).getD #[]
   let valueMissing := match info with
     | .thmInfo _ | .defnInfo _ | .opaqueInfo _ => value.isNone
