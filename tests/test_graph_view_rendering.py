@@ -88,7 +88,11 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
             title="Unsafe <script>" if index == 0 else f"Node {index}",
             kind="node",
             members=(f"chapter/node-{index}",),
-            status_counts=(("planned", 1),),
+            status_counts=(
+                (("inventory_checked", 1),)
+                if index == 0
+                else (("planned", 1),)
+            ),
             declaration=None if index == 0 else "theorem",
             catalog="module" if index == 0 else None,
             status_key="planned",
@@ -112,6 +116,12 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
     assert payload["edge_count"] == 169
     assert payload["nodes"][0]["title"] == "Unsafe <script>"
     assert payload["nodes"][0]["catalog"] == "module"
+    assert payload["nodes"][0]["status"] == "inventory_checked"
+    assert payload["palette"]["inventory_checked"]["label"] == "inventory checked"
+    assert (
+        payload["palette"]["inventory_checked"]["light"]
+        == payload["palette"]["planned"]["light"]
+    )
     assert max(node["row"] for node in payload["nodes"]) < dag_viewer.MAX_LAYOUT_ROWS
     assert max(node["column"] for node in payload["nodes"]) > 0
 
@@ -120,6 +130,8 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
     assert "textContent" in script
     assert "requestAnimationFrame" in script
     assert "#node=" in script
+    assert 'node.catalog === "module" ? "module inventory"' in script
+    assert 'node.catalog + " catalog"' not in script
 
 
 def test_large_views_fail_over_before_mermaid_hard_limits() -> None:

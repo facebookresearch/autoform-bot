@@ -75,7 +75,7 @@ def test_audit_cli_reports_clean_human_output(tmp_path: Path, capsys) -> None:
     assert main(["audit", str(blueprint)]) == 0
     assert capsys.readouterr().out == (
         "OK: roadmap audit passed\n"
-        "    coverage: 0 mapped · 0 decomposed · 0 deferred · 1 out\n"
+        "    coverage: 0 mapped · 0 decomposed · 0 inventoried · 0 deferred · 1 out\n"
     )
 
 
@@ -91,7 +91,10 @@ def test_audit_cli_prints_coverage_summary_with_findings(tmp_path: Path, capsys)
 
     assert main(["audit", str(blueprint)]) == 1
     output = capsys.readouterr().out
-    assert "coverage: 1 mapped · 0 decomposed · 0 deferred · 0 out" in output
+    assert (
+        "coverage: 1 mapped · 0 decomposed · 0 inventoried · 0 deferred · 0 out"
+        in output
+    )
     assert "declared-coverage-gap" in output
 
 

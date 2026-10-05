@@ -78,6 +78,46 @@ def test_project_view_collapses_chapters_without_flattening_statuses(tmp_path: P
     ]
 
 
+def test_checked_catalog_has_a_neutral_inventory_presentation_status(tmp_path: Path) -> None:
+    roadmap = tmp_path / "blueprint/roadmap"
+    graph = Graph(
+        tmp_path / "blueprint",
+        {
+            "result": Node(
+                "result",
+                "Result",
+                roadmap / "result.md",
+                (),
+                declaration="theorem",
+            ),
+            "catalog": Node(
+                "catalog",
+                "Existing module",
+                roadmap / "catalog.md",
+                (),
+                catalog="module",
+                statement_formalized=True,
+                proof_formalized=True,
+            ),
+        },
+    )
+    statuses = derive(graph)
+
+    assert statuses["catalog"].key == "fully_proved"
+    project = project_view(graph, statuses)
+    assert project.nodes[0].status_counts == (
+        ("can_state", 1),
+        ("inventory_checked", 1),
+    )
+    assert project.nodes[0].status_key == "can_state"
+
+    complete = full_view(graph, statuses)
+    inventory = next(node for node in complete.nodes if node.id == "catalog")
+    assert inventory.catalog == "module"
+    assert inventory.status_counts == (("inventory_checked", 1),)
+    assert inventory.status_key == "planned"
+
+
 def test_chapter_view_keeps_external_relations_as_boundaries(tmp_path: Path) -> None:
     graph = _graph(tmp_path)
     view = chapter_view(graph, derive(graph), "b")

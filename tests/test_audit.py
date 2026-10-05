@@ -103,7 +103,13 @@ def test_clean_audit_has_stable_machine_readable_representation(tmp_path: Path) 
     assert first.findings == ()
     assert first.clean
     assert first.coverage is not None
-    assert first.coverage.counts == {"MAPPED": 0, "DECOMPOSED": 0, "DEFERRED": 0, "OUT": 1}
+    assert first.coverage.counts == {
+        "MAPPED": 0,
+        "DECOMPOSED": 0,
+        "INVENTORIED": 0,
+        "DEFERRED": 0,
+        "OUT": 1,
+    }
     assert first.as_dict()["findings"] == []
     assert second.to_json() == first.to_json()
     assert str(tmp_path) not in first.to_json()
@@ -154,7 +160,13 @@ def test_audit_requires_mathlib_declaration_and_declaration_intent_on_evidenced_
 
 def test_audit_accepts_an_explicit_non_dispatchable_module_catalog(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Existing module | INVENTORIED | "
+        "[Catalog](../roadmap/existing-module.md) |",
+    )
     _article(
         blueprint,
         "existing-module.md",
@@ -166,6 +178,52 @@ def test_audit_accepts_an_explicit_non_dispatchable_module_catalog(tmp_path: Pat
     lean_root.mkdir()
 
     assert audit_blueprint(blueprint, lean_root=lean_root).clean
+
+
+def test_audit_accepts_coverage_roles_through_containers(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _article(blueprint, "mathematics/result.md", declaration="theorem")
+    _article(blueprint, "inventory/existing.md", catalog="module")
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Mathematical content | DECOMPOSED | "
+        "[Chapter](../roadmap/mathematics/README.md) |\n"
+        "| Existing modules | INVENTORIED | "
+        "[Chapter](../roadmap/inventory/README.md) |",
+    )
+
+    assert audit_blueprint(blueprint).clean
+
+
+def test_audit_aggregates_coverage_role_mismatches_and_unclassified_inventory(
+    tmp_path: Path,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _article(blueprint, "catalogs/one.md", catalog="module")
+    _article(blueprint, "catalogs/two.md", catalog="module")
+    _article(blueprint, "results/one.md", declaration="theorem")
+    _article(blueprint, "results/two.md", declaration="lemma")
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Wrong exposition | DECOMPOSED | "
+        "[One](../roadmap/catalogs/one.md), [two](../roadmap/catalogs/two.md) |\n"
+        "| Wrong inventory | INVENTORIED | "
+        "[One](../roadmap/results/one.md), [two](../roadmap/results/two.md) |",
+    )
+
+    findings = _finding_map(blueprint)["coverage/README.md"]
+
+    role_mismatches = [finding for finding in findings if finding[0] == "coverage-role-mismatch"]
+    assert len(role_mismatches) == 2
+    assert any("Wrong exposition" in reason for _code, reason in role_mismatches)
+    assert any("Wrong inventory" in reason for _code, reason in role_mismatches)
+    assert [code for code, _reason in findings].count("unclassified-inventory") == 1
+    unclassified = next(reason for code, reason in findings if code == "unclassified-inventory")
+    assert "2 catalog articles" in unclassified
 
 
 def test_audit_validates_local_source_links_without_network_access(tmp_path: Path, monkeypatch) -> None:

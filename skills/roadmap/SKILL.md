@@ -59,6 +59,12 @@ work:
 - record each module and declaration name, together with any separate literary
   provenance, under `blueprint/sources/`.
 
+Treat exact inventory reconciliation and human mathematical exposition as
+independent completeness axes. A declaration ledger answers what exists and
+where; article prose explains the mathematics. An import list, status table,
+or catalog ledger may close the inventory axis, but none is mathematical
+exposition or, by itself, evidence that a coverage area is `DECOMPOSED`.
+
 A future-work slice cannot stand in for a repository-wide inventory. Keep
 existing, wishlist, conjectural, and planned mathematics in the same book and
 DAG. `DECOMPOSED` means represented by roadmap articles, not unfinished, so it
@@ -71,12 +77,16 @@ not invent an external citation or historical-source claim.
 Inspect the repository and existing vault before writing. Preserve accepted
 material and unrelated changes; send missing infrastructure to Setup.
 
-Work from exact source passages. Record stable source locations, assumptions,
-and uncovered prerequisites under `blueprint/sources/`; label project-authored
+Before external research, extract module and declaration docstrings and nearby
+source comments alongside the Lean signatures and implementations. Work from
+those exact source passages. Record stable source locations, assumptions, and
+uncovered prerequisites under `blueprint/sources/`; label project-authored
 specifications honestly. Search the pinned Mathlib checkout before planning a
 replacement. External research is read-only, and contacting people requires
-permission. Read [Setup's Zulip workflow](../setup/references/zulip.md) only for
-requested Zulip work.
+permission. Do not invent a statement, motivation, proof narrative, dependency,
+citation, or historical attribution that the available sources do not support.
+Read [Setup's Zulip workflow](../setup/references/zulip.md) only for requested
+Zulip work.
 
 Enumerate the entire adopted boundary in `blueprint/coverage/README.md`.
 `MAPPED` is unfinished, `DECOMPOSED` links to roadmap nodes, `DEFERRED` records
@@ -86,19 +96,30 @@ to shorten the run. Because `coverage.complete` only checks declared rows,
 compare the table with the source structure yourself.
 
 Write milestone pages under `blueprint/roadmap/` by mathematical significance,
-then one fine article per coherent unit with one unique main result. For an
-existing repository, coherent grouping is allowed only when the exact ledger
-still reconciles every public declaration. Do not turn existing formalization
-into fictional future work. Ground each statement and proof sketch in the
-source. Put genuine statement prerequisites under `## Depends on` and
-proof-only prerequisites under `## Proof depends on`.
+then one fine article per coherent unit with one unique main result. A Lean
+module is not automatically a coherent article boundary: split modules that
+span distinct ideas, and group declarations across modules only when the
+mathematics and sources justify one unit. For an existing repository, coherent
+grouping is allowed only when the exact ledger still reconciles every public
+declaration. Do not turn existing formalization into fictional future work.
 
-A source-complete repository inventory may instead use a leaf with
-`catalog: module` to group peer declarations from one existing Lean module,
-provided an exact declaration ledger is linked and every private/supporting
-exclusion is explicit. A catalog leaf omits `declaration` and is not
-dispatchable as one proof task; refine it into declaration-sized children when
-the mathematical DAG or implementation handoff needs that granularity.
+Each expositional article must use reader-facing prose, rather than only names,
+Lean signatures, or ledger rows, to give source-grounded, human-readable
+statements or definitions corresponding to the Lean declarations, explain
+their mathematical significance, and cite exact locations under `## Sources`.
+Describe the proof architecture when docstrings, comments, or implementation
+support it; otherwise say honestly that the source provides no proof
+explanation. Record genuine mathematical prerequisites, not merely imports,
+under `## Depends on`, and proof-only prerequisites under
+`## Proof depends on`.
+
+Use `catalog: module` only as an inventory index for declarations from an
+existing Lean module. It may accompany exposition, but the catalog marker,
+exact ledger, status table, and import table never satisfy the exposition axis.
+A catalog-only page cannot by itself make an area `DECOMPOSED`; link its
+declarations to coherent expositional articles. A catalog leaf omits
+`declaration` and is not dispatchable as one proof task; refine it when the
+mathematical DAG or implementation handoff needs more granularity.
 
 Assert `statement: formalized`, `proof: formalized`, or `mathlib: true` only
 after exact verification. For declaration leaves, record exact compiled names
@@ -133,10 +154,12 @@ refreshed graph only after this final validation; pushing is outward-facing and
 requires a user request.
 
 Finish only when the adopted boundary has no `MAPPED` rows, every `DECOMPOSED`
-area links to a source-grounded fine DAG or exact catalog ledger, affected pages
-and the graph agree, and the latest commit contains every change from the pass.
-Do not stop after discovery, a coarse proposal, one chapter, or unchanged
-validation. Report the material delta, evidence, existing/formalized versus
-wishlist/conjectural/planned counts, declaration-reconciliation gaps, remaining
-explicit blockers, and the next execution frontier. Mark an active Goal
-complete only after these conditions hold.
+area links to source-grounded expositional articles meeting the content
+requirements above, every in-scope Lean declaration is separately reconciled
+in the exact inventory, affected pages and the graph agree, and the latest
+commit contains every change from the pass. Do not stop after discovery, a
+coarse proposal, one chapter, or unchanged validation. Report the material
+delta, evidence, existing/formalized versus wishlist/conjectural/planned counts,
+declaration-reconciliation gaps, remaining explicit blockers, and the next
+execution frontier. Mark an active Goal complete only after these conditions
+hold.

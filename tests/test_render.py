@@ -519,7 +519,7 @@ def test_single_target_uses_singular_completion_copy(tmp_path: Path) -> None:
     assert "1 of 1 targets complete" not in overview
 
 
-def test_module_catalog_leaf_counts_as_complete_without_becoming_dispatchable(
+def test_module_catalog_is_reported_separately_from_formalization_progress(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
@@ -528,12 +528,102 @@ def test_module_catalog_leaf_counts_as_complete_without_becoming_dispatchable(
         "# Existing module\n\nA checked inventory of an existing Lean module.\n",
         encoding="utf-8",
     )
+    (project / "blueprint/coverage/README.md").write_text(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        "| Mathematical results | DECOMPOSED | [Roadmap](../roadmap/README.md) |\n"
+        "| Existing module | INVENTORIED | [Catalog](../roadmap/catalog.md) |\n",
+        encoding="utf-8",
+    )
 
     render_site(project / "blueprint", tmp_path / "out")
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert "3 of 3 targets complete" in overview
+    assert "2 of 2 targets complete" in overview
+    assert "3 of 3 targets complete" not in overview
+    assert (
+        '<div class="bp-figure bp-figure-neutral"><div class="bp-figure-value">1</div>'
+        '<div class="bp-figure-label">Module inventories</div>'
+        in overview
+    )
+    assert "3 items · 2 fully proved · 1 inventory checked" in overview
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert "1 definition · 1 result · 1 module inventory" in chapter
+    structure = (tmp_path / "out/structure.md").read_text(encoding="utf-8")
+    assert '<span class="bp-tree-kind">module inventory</span>' in structure
+    assert '<span class="bp-tree-state">inventory checked</span>' in structure
+    payload = json.loads((tmp_path / "out/dependencies/full.json").read_text(encoding="utf-8"))
+    catalog = next(node for node in payload["nodes"] if node["id"] == "catalog")
+    assert catalog["status"] == "inventory_checked"
+    assert payload["palette"]["inventory_checked"]["label"] == "inventory checked"
     assert (tmp_path / "out/roadmap/catalog.md").is_file()
+
+
+def test_inventory_only_project_has_zero_targets_and_a_neutral_inventory_metric(
+    tmp_path: Path,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+    roadmap.mkdir(parents=True)
+    (blueprint / "README.md").write_text("# Inventory\n", encoding="utf-8")
+    (roadmap / "README.md").write_text("# Roadmap\n", encoding="utf-8")
+    (roadmap / "catalog.md").write_text(
+        "---\ncatalog: module\nstatement: formalized\nproof: formalized\n---\n\n"
+        "# Existing module\n\nA checked module inventory.\n",
+        encoding="utf-8",
+    )
+    coverage = blueprint / "coverage/README.md"
+    coverage.parent.mkdir()
+    coverage.write_text(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        "| Existing module | INVENTORIED | [Catalog](../roadmap/catalog.md) |\n",
+        encoding="utf-8",
+    )
+
+    render_site(blueprint, tmp_path / "out")
+
+    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert "0 of 0 targets complete" in overview
+    assert (
+        '<div class="bp-figure bp-figure-neutral"><div class="bp-figure-value">1</div>'
+        '<div class="bp-figure-label">Module inventories</div>'
+        in overview
+    )
+    assert "1 module inventory" in chapter
+    assert "definition" not in chapter
+    assert "result" not in chapter
+
+
+def test_render_rejects_catalog_only_decomposed_coverage_before_writing(
+    tmp_path: Path,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+    roadmap.mkdir(parents=True)
+    (blueprint / "README.md").write_text("# Inventory\n", encoding="utf-8")
+    (roadmap / "README.md").write_text("# Roadmap\n", encoding="utf-8")
+    (roadmap / "catalog.md").write_text(
+        "---\ncatalog: module\nstatement: formalized\nproof: formalized\n---\n\n"
+        "# Existing module\n",
+        encoding="utf-8",
+    )
+    coverage = blueprint / "coverage/README.md"
+    coverage.parent.mkdir()
+    coverage.write_text(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        "| Mathematical exposition | DECOMPOSED | [Catalog](../roadmap/catalog.md) |\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "out"
+
+    with pytest.raises(PublicationError) as error:
+        render_site(blueprint, output)
+
+    assert "coverage area 'Mathematical exposition' is DECOMPOSED" in str(error.value)
+    assert "coverage contract leaves 1 catalog article outside INVENTORIED evidence" in str(
+        error.value
+    )
+    assert not output.exists()
 
 
 def test_the_landing_page_is_the_hero_and_the_map_and_nothing_else(tmp_path: Path) -> None:
@@ -766,7 +856,13 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path
         "complete": True,
         "coverage": {
             "complete": False,
-            "counts": {"DECOMPOSED": 0, "DEFERRED": 0, "MAPPED": 1, "OUT": 0},
+            "counts": {
+                "DECOMPOSED": 0,
+                "DEFERRED": 0,
+                "INVENTORIED": 0,
+                "MAPPED": 1,
+                "OUT": 0,
+            },
             "schema": "autoform-coverage/v1",
             "source_path": "coverage/README.md",
             "source_sha256": manifest["coverage"]["source_sha256"],
@@ -866,7 +962,13 @@ def test_manifest_records_machine_checkable_coverage_aggregates(tmp_path: Path) 
     manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
     assert manifest["coverage"] == {
         "complete": False,
-        "counts": {"DECOMPOSED": 1, "DEFERRED": 0, "MAPPED": 1, "OUT": 1},
+        "counts": {
+            "DECOMPOSED": 1,
+            "DEFERRED": 0,
+            "INVENTORIED": 0,
+            "MAPPED": 1,
+            "OUT": 1,
+        },
         "schema": "autoform-coverage/v1",
         "source_path": "coverage/README.md",
         "source_sha256": manifest["coverage"]["source_sha256"],

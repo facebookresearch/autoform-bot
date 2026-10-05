@@ -83,7 +83,13 @@ def test_scaffolded_vault_has_a_valid_incomplete_coverage_contract(tmp_path: Pat
 
     assert issues == ()
     assert coverage is not None
-    assert coverage.counts == {"MAPPED": 1, "DECOMPOSED": 0, "DEFERRED": 0, "OUT": 0}
+    assert coverage.counts == {
+        "MAPPED": 1,
+        "DECOMPOSED": 0,
+        "INVENTORIED": 0,
+        "DEFERRED": 0,
+        "OUT": 0,
+    }
     assert not coverage.complete
 
 

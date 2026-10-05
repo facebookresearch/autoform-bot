@@ -14,6 +14,7 @@ import re
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlsplit
 
 from .markdown import (
@@ -27,8 +28,11 @@ from .markdown import (
     rendered_visible_text,
 )
 
+if TYPE_CHECKING:
+    from .graph import Graph
+
 COVERAGE_SCHEMA = "autoform-coverage/v1"
-COVERAGE_DISPOSITIONS = ("MAPPED", "DECOMPOSED", "DEFERRED", "OUT")
+COVERAGE_DISPOSITIONS = ("MAPPED", "DECOMPOSED", "INVENTORIED", "DEFERRED", "OUT")
 _EXPECTED_HEADER = ("Area", "Coverage", "Evidence")
 _SEPARATOR = re.compile(r"^:?-{3,}:?$")
 
@@ -48,6 +52,15 @@ class CoverageIssue:
     """One structural problem in a coverage contract."""
 
     line: int
+    reason: str
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class CoverageRoleIssue:
+    """One graph-semantic mismatch in an otherwise valid coverage contract."""
+
+    line: int
+    code: str
     reason: str
 
 
@@ -88,8 +101,9 @@ class CoverageSummary:
         """Whether every author-declared row reached a terminal disposition.
 
         Terminal means the row is no longer ``MAPPED`` -- the author has either
-        decomposed it into roadmap articles, deferred it to a named milestone,
-        or excluded it with a reason.
+        decomposed it into declaration-sized mathematical articles, inventoried
+        it in module catalogs, deferred it to a named milestone, or excluded it
+        with a reason.
 
         This is a claim about the *contract*, not about the project. It does not
         establish that the declared rows cover the source exhaustively, and it
@@ -142,6 +156,119 @@ def load_coverage(blueprint_dir: str | Path) -> tuple[CoverageSummary | None, tu
         ),
         (),
     )
+
+
+def validate_coverage_roles(
+    graph: Graph,
+    coverage: CoverageSummary,
+) -> tuple[CoverageRoleIssue, ...]:
+    """Validate exposition and inventory evidence against *graph*.
+
+    :func:`load_coverage` remains a syntax-only operation. Callers that already
+    have a validated graph use this second phase to distinguish declaration
+    exposition from module inventory before auditing or publishing.
+    """
+
+    contained: dict[str, list[str]] = {}
+    for node in graph.nodes.values():
+        if node.parent is not None:
+            contained.setdefault(node.parent, []).append(node.id)
+
+    issues: list[CoverageRoleIssue] = []
+    inventoried: set[str] = set()
+    catalog_nodes = {node_id for node_id, node in graph.nodes.items() if node.catalog}
+
+    for entry in coverage.entries:
+        role = {
+            "DECOMPOSED": "declaration",
+            "INVENTORIED": "catalog",
+        }.get(entry.disposition)
+        if role is None:
+            continue
+
+        targets = _coverage_target_nodes(graph, coverage, entry.evidence)
+        role_scopes = [
+            _leaf_role_nodes(graph, contained, node_id, role=role) for node_id in targets
+        ]
+        if not targets or any(not scope for scope in role_scopes):
+            issues.append(
+                CoverageRoleIssue(
+                    entry.line,
+                    "coverage-role-mismatch",
+                    f"coverage area {entry.area!r} is {entry.disposition}, but each roadmap "
+                    f"link must resolve to a {role} leaf or a container with {role} descendants",
+                )
+            )
+
+        if entry.disposition == "INVENTORIED":
+            for scope in role_scopes:
+                inventoried.update(scope)
+
+    unclassified = catalog_nodes - inventoried
+    if unclassified:
+        noun = "article" if len(unclassified) == 1 else "articles"
+        issues.append(
+            CoverageRoleIssue(
+                0,
+                "unclassified-inventory",
+                f"coverage contract leaves {len(unclassified)} catalog {noun} outside "
+                "INVENTORIED evidence; link each inventory area directly or through a "
+                "containing roadmap article",
+            )
+        )
+    return tuple(issues)
+
+
+def _coverage_target_nodes(
+    graph: Graph,
+    coverage: CoverageSummary,
+    evidence: str,
+) -> tuple[str, ...]:
+    """Resolve the roadmap nodes visibly linked by one coverage evidence cell."""
+
+    coverage_path = graph.blueprint_dir / coverage.source_path
+    by_path = {node.path.resolve(): node_id for node_id, node in graph.nodes.items()}
+    resolved: list[str] = []
+    for target in link_targets(evidence):
+        split = urlsplit(target)
+        if split.scheme or split.netloc:
+            continue
+        raw_path = unquote(split.path)
+        if not raw_path or "\x00" in raw_path:
+            continue
+        try:
+            candidate = (coverage_path.parent / Path(raw_path)).resolve()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        node_id = by_path.get(candidate)
+        if node_id is not None and node_id not in resolved:
+            resolved.append(node_id)
+    return tuple(resolved)
+
+
+def _leaf_role_nodes(
+    graph: Graph,
+    contained: dict[str, list[str]],
+    root_id: str,
+    *,
+    role: str,
+) -> set[str]:
+    """Return role-bearing leaves at or beneath one coverage target."""
+
+    found: set[str] = set()
+    pending = [root_id]
+    seen: set[str] = set()
+    while pending:
+        node_id = pending.pop()
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        children = contained.get(node_id, ())
+        if children:
+            pending.extend(children)
+        elif getattr(graph.nodes[node_id], role) is not None:
+            found.add(node_id)
+    return found
 
 
 def _parse_table(text: str) -> tuple[list[CoverageEntry], list[CoverageIssue]]:
@@ -478,15 +605,16 @@ def _validate_evidence(
         if _is_placeholder(visible_evidence):
             issues.append(CoverageIssue(entry.line, "coverage evidence is a placeholder"))
             continue
-        if entry.disposition != "DECOMPOSED":
+        if entry.disposition not in {"DECOMPOSED", "INVENTORIED"}:
             continue
 
+        disposition = entry.disposition
         targets = link_targets(entry.evidence)
         if not targets:
             issues.append(
                 CoverageIssue(
                     entry.line,
-                    "DECOMPOSED coverage evidence must link to at least one roadmap article",
+                    f"{disposition} coverage evidence must link to at least one roadmap article",
                 )
             )
             continue
@@ -505,7 +633,7 @@ def _validate_evidence(
             issues.append(
                 CoverageIssue(
                     entry.line,
-                    "DECOMPOSED coverage evidence has no link to an existing roadmap article",
+                    f"{disposition} coverage evidence has no link to an existing roadmap article",
                 )
             )
     return issues
@@ -611,6 +739,8 @@ __all__ = [
     "COVERAGE_SCHEMA",
     "CoverageEntry",
     "CoverageIssue",
+    "CoverageRoleIssue",
     "CoverageSummary",
     "load_coverage",
+    "validate_coverage_roles",
 ]

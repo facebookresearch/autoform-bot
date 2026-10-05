@@ -14,13 +14,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import status
-from .coverage import CoverageSummary, load_coverage
+from .coverage import CoverageSummary, load_coverage, validate_coverage_roles
 from .graph import Graph, GraphValidationError, Node, load_graph
 from .lean import SourceIndex, declaration_names, index_project
 from .markdown import FENCE as _FENCE
-from .markdown import frontmatter_end as _frontmatter_end
 from .markdown import HEADING as _HEADING
 from .markdown import HTML_COMMENT as _HTML_COMMENT
+from .markdown import frontmatter_end as _frontmatter_end
 from .markdown import local_target_issue as _local_target_issue
 from .markdown import markdown_links as _markdown_links
 
@@ -246,6 +246,8 @@ def audit_graph(
     if coverage_findings is None:
         coverage, coverage_findings = _coverage_findings(graph.blueprint_dir)
     findings.extend(coverage_findings)
+    if coverage is not None:
+        findings.extend(_coverage_role_findings(graph, coverage))
     if lean_root is not None:
         findings.extend(_lean_findings(graph, lean_root))
     return _result(findings, coverage=coverage)
@@ -367,6 +369,22 @@ def _coverage_findings(
                     AuditFinding(article_path, code, f"{reason} (line {line_number})")
                 )
     return coverage, findings
+
+
+def _coverage_role_findings(
+    graph: Graph,
+    coverage: CoverageSummary,
+) -> list[AuditFinding]:
+    """Project public coverage-role issues into the audit result model."""
+
+    return [
+        AuditFinding(
+            "coverage/README.md",
+            issue.code,
+            f"{issue.reason}{f' (line {issue.line})' if issue.line else ''}",
+        )
+        for issue in validate_coverage_roles(graph, coverage)
+    ]
 
 
 def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:

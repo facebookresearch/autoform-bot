@@ -280,6 +280,27 @@ def test_the_vault_gets_a_structure_page_obsidian_can_read(tmp_path: Path) -> No
     assert "dependencies.md)" not in page
 
 
+def test_vault_views_label_checked_catalogs_as_module_inventories(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _write_node(
+        blueprint / "roadmap/catalog.md",
+        "Existing module",
+        catalog="module",
+        statement="formalized",
+        proof="formalized",
+    )
+
+    graph_page = export_graph(blueprint).read_text(encoding="utf-8")
+    structure_page = export_structure(blueprint).read_text(encoding="utf-8")
+
+    assert "1 item · 1 inventory checked" in graph_page
+    assert "fully proved" not in graph_page
+    assert (
+        "[Existing module](roadmap/catalog.md) · module inventory · inventory checked"
+        in structure_page
+    )
+
+
 def test_generated_structure_can_be_refreshed(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _write_node(blueprint / "roadmap" / "first.md", "First")

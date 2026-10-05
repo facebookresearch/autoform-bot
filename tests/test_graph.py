@@ -132,6 +132,10 @@ def test_resolves_links_relative_to_each_node(tmp_path: Path) -> None:
         ("---\ndeclaration: theorem\n# Title\n", "unterminated frontmatter"),
         (_node_text("# Title\n", owner="me"), "unsupported frontmatter key"),
         (_node_text("# Title\n", catalog="book"), "'catalog' accepts only 'module'"),
+        (
+            _node_text("# Title\n", catalog="module", declaration="theorem"),
+            "'catalog' and 'declaration' are mutually exclusive",
+        ),
         (_node_text("# Result\n## Depends on\n[x](missing.md)\n"), "does not exist"),
         (_node_text("# Result\n## Depends on\n[x](note.txt)\n"), "relative .md file"),
         (
@@ -332,7 +336,7 @@ def test_records_origin_and_source_links_without_treating_them_as_edges(tmp_path
 
 def test_check_cli(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
-    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "base.md", "# Base\n", declaration="theorem")
     result = subprocess.run(
         [sys.executable, "-m", "autoform_cli", "check", str(blueprint)],
         check=False,
@@ -344,6 +348,34 @@ def test_check_cli(tmp_path: Path) -> None:
     lines = result.stdout.splitlines()
     assert lines[0] == "OK: 1 articles, 0 dependencies"
     assert lines[1].strip() == "1 ready to state"
+
+
+def test_check_cli_separates_module_inventories_from_target_statuses(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", "# Result\n", declaration="theorem")
+    _node(
+        blueprint,
+        "catalog.md",
+        "# Existing module\n",
+        catalog="module",
+        statement="formalized",
+        proof="formalized",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "autoform_cli", "check", str(blueprint)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "OK: 2 articles, 0 dependencies",
+        "    1 ready to state",
+        "    1 module inventory",
+    ]
+    assert "fully proved" not in result.stdout
 
 
 def test_check_cli_reports_validation_errors(tmp_path: Path) -> None:

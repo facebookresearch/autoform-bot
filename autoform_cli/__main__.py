@@ -282,10 +282,27 @@ def _check(args: argparse.Namespace) -> int:
         return 1
 
     statuses = status.derive(graph)
-    summary = " · ".join(f"{count} {state.label}" for state, count in status.summarize(statuses))
+    containers = frozenset(
+        node.parent for node in graph.nodes.values() if node.parent is not None
+    )
+    target_statuses = {
+        node_id: statuses[node_id]
+        for node_id, node in graph.nodes.items()
+        if node_id not in containers and node.formalizable
+    }
+    inventories = sum(
+        node_id not in containers and node.catalog == "module"
+        for node_id, node in graph.nodes.items()
+    )
+    summary = " · ".join(
+        f"{count} {state.label}" for state, count in status.summarize(target_statuses)
+    )
     print(f"OK: {len(graph.nodes)} articles, {graph.edge_count} dependencies")
     if summary:
         print(f"    {summary}")
+    if inventories:
+        label = "module inventory" if inventories == 1 else "module inventories"
+        print(f"    {inventories} {label}")
 
     if args.lean_root is None:
         return 0
@@ -326,6 +343,7 @@ def _audit(args: argparse.Namespace) -> int:
                 "    coverage: "
                 f"{counts['MAPPED']} mapped · "
                 f"{counts['DECOMPOSED']} decomposed · "
+                f"{counts['INVENTORIED']} inventoried · "
                 f"{counts['DEFERRED']} deferred · "
                 f"{counts['OUT']} out"
             )

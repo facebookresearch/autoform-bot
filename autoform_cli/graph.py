@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _LINK = re.compile(r"(?<!!)\[[^\]]+\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+[^)]*)?\)")
@@ -480,6 +479,9 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
             issues.append(issue)
             continue
         metadata[key] = value
+
+    if "catalog" in metadata and "declaration" in metadata:
+        issues.append(f"{node_id}: 'catalog' and 'declaration' are mutually exclusive")
 
     return metadata, end + 1, issues
 

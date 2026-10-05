@@ -238,6 +238,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert manifest["coverage"]["counts"] == {
         "DECOMPOSED": 1,
         "DEFERRED": 0,
+        "INVENTORIED": 0,
         "MAPPED": 5,
         "OUT": 1,
     }
@@ -766,6 +767,45 @@ def test_roadmap_repository_scope_inventories_existing_lean(repo_root: Path) -> 
     assert "internal/runbooks/planning.md" not in roadmap
     assert "existing formalized Lean" in metadata
     assert "Existing and planned mathematics coexist in one book" in example
+
+
+def test_roadmap_catalog_inventory_cannot_replace_mathematical_exposition(
+    repo_root: Path,
+) -> None:
+    """A declaration ledger is evidence of inventory, not a mathematical wiki.
+
+    A repository-wide run once rendered module, import, and Lean-status tables
+    as the finished articles. The source was fully counted but readers received
+    no statements, significance, proof ideas, or mathematical dependency DAG.
+    """
+
+    roadmap = (repo_root / "skills" / "roadmap" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(roadmap.split())
+    finish = " ".join(roadmap.split("## Finish", 1)[1].split())
+
+    for required in (
+        "exact inventory reconciliation and human mathematical exposition as independent completeness axes",
+        "none is mathematical exposition or, by itself, evidence that a coverage area is `DECOMPOSED`",
+        "Before external research, extract module and declaration docstrings",
+        "A Lean module is not automatically a coherent article boundary",
+        "reader-facing prose, rather than only names, Lean signatures, or ledger rows",
+        "source-grounded, human-readable statements or definitions",
+        "explain their mathematical significance",
+        "cite exact locations under `## Sources`",
+        "the source provides no proof explanation",
+        "genuine mathematical prerequisites, not merely imports",
+        "Do not invent a statement, motivation, proof narrative, dependency, citation, or historical attribution",
+        "Use `catalog: module` only as an inventory index",
+        "A catalog-only page cannot by itself make an area `DECOMPOSED`",
+    ):
+        assert required in normalized
+
+    assert "exact catalog ledger" not in finish
+    assert "may instead use a leaf with `catalog: module`" not in normalized
+    assert "every `DECOMPOSED` area links to source-grounded expositional articles" in finish
+    assert "every in-scope Lean declaration is separately reconciled" in finish
 
 
 def test_roadmap_commits_so_the_published_site_can_catch_up(repo_root: Path) -> None:
