@@ -371,6 +371,31 @@ def test_a_retracted_theorem_still_naming_its_lean_stays_an_open_statement(tmp_p
         assert (statuses["reduction"].key, statuses["reduction"].assumes) == ("proved", ())
 
 
+@pytest.mark.parametrize("policy", ["forbidden", "allowed"])
+def test_a_retracted_definition_still_passes_on_what_its_body_reaches(tmp_path: Path, policy: str) -> None:
+    """A retracted definition is not open, but its body stays in the build and still uses its open statements."""
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "README.md", open_statements=policy)
+    _node(blueprint, "open.md", declaration="theorem", statement="formalized", lean="Ns.open")
+    _node(blueprint, "old.md", "## Proof depends on\n\n- [Open](open.md)\n", declaration="def", lean="Ns.old")
+    _node(
+        blueprint,
+        "uses.md",
+        "## Proof depends on\n\n- [Old](old.md)\n",
+        declaration="theorem",
+        statement="formalized",
+        proof="formalized",
+        lean="Ns.uses",
+    )
+
+    statuses = derive(load_graph(blueprint))
+
+    if policy == "allowed":
+        assert (statuses["uses"].key, statuses["uses"].assumes) == ("conditional", ("open",))
+    else:
+        assert (statuses["uses"].key, statuses["uses"].assumes) == ("proved", ())
+
+
 @pytest.mark.parametrize("open_statements", [False, True])
 def test_a_missing_dependency_counts_as_neither_stated_nor_proved(
     tmp_path: Path, open_statements: bool

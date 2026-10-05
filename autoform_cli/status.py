@@ -181,15 +181,16 @@ def derive(graph: Graph) -> dict[str, NodeStatus]:
             can_prove = stated and not unstated and not unmet
             waiting = unstated + unmet if stated or definition else unstated
             # Mathlib and unstated nodes reach nothing, so they get no entry,
-            # except a theorem whose statement a revision retracted while its
+            # except an article whose statement a revision retracted while its
             # `lean:` still names the old declaration: that declaration and its
-            # sorry stay in the build until Formalize restates it.
+            # sorry stay in the build until Formalize restates it. A retracted
+            # definition is not open, but its body still reaches what it used.
             if not node.mathlib:
                 reached = frozenset().union(*(reaches.get(other, frozenset()) for other in node.dependencies))
                 assumes = tuple(sorted(reached))
-                if proved:
+                if proved or (definition and node.lean):
                     reaches[node_id] = reached
-                elif stated or (node.lean and not definition):
+                elif stated or node.lean:
                     reaches[node_id] = frozenset({node_id}).union(
                         *(reaches.get(other, frozenset()) for other in node.statement_dependencies)
                     )
