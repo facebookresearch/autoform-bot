@@ -964,15 +964,17 @@ def _record_inputs(bundle: ReviewBundle, requests: tuple[RecordRequest, ...]) ->
                 )
             )
             continue
-        # At most one byte past the limit is read, which marks a testimony
-        # over it, so a huge file costs no more than a testimony does.
+        # The limit applies after "\r\n" is read as "\n", which at most halves
+        # a testimony. So at most one byte past twice the limit is read, which
+        # marks a testimony over it, and a huge file costs no more than two
+        # testimonies do.
         try:
             with request.testimony.open("rb") as handle:
-                raw = handle.read(TESTIMONY_MAX_BYTES + 1)
+                raw = handle.read(2 * TESTIMONY_MAX_BYTES + 1)
         except OSError as exc:
             findings.append(_unreadable_input(request, "testimony", request.testimony, exc))
             continue
-        if len(raw) > TESTIMONY_MAX_BYTES:
+        if len(raw) - raw.count(b"\r\n") > TESTIMONY_MAX_BYTES:
             findings.append(
                 ReviewFinding(
                     request.article_id,

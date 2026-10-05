@@ -1689,21 +1689,39 @@ def test_every_unreadable_input_is_named_before_any_lean_work(
 
 
 @pytest.mark.parametrize("over", [False, True], ids=["at-the-limit", "past-the-limit"])
-def test_a_testimony_is_read_no_further_than_one_byte_past_its_limit(
+def test_a_testimony_is_read_no_further_than_one_byte_past_twice_its_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], over: bool
 ) -> None:
-    """The bytes after the first one over the limit are not read as testimony;
-    here they are not even UTF-8, and they run on to 64 MiB, which reading the
-    file whole would hold in memory."""
+    """A testimony is measured with its line endings read as text, which at
+    most halves it, so it is read no further than the first byte past twice
+    the limit. Here the file runs on to 64 MiB, which reading it whole would
+    hold in memory."""
 
+    import io
     import tracemalloc
 
     extraction = _Extraction()
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
     testimony = manifest.resolve().parent / "Review.result.md"
-    testimony.write_bytes(b"a" * TESTIMONY_MAX_BYTES + (b"a" + b"\xff" * 64 if over else b""))
+    testimony.write_bytes(b"a" * (2 * TESTIMONY_MAX_BYTES + 1 if over else TESTIMONY_MAX_BYTES))
     if over:
         os.truncate(testimony, 64 * 1024 * 1024)  # sparse: no disk, only memory if read
+    positions: list[int] = []
+
+    class Unbuffered(io.FileIO):
+        """The testimony, read as asked; where it stands when closed is how far it was read."""
+
+        def close(self) -> None:
+            if not self.closed:
+                positions.append(self.tell())
+            super().close()
+
+    path_open = Path.open
+    monkeypatch.setattr(
+        Path,
+        "open",
+        lambda path, *args, **kwargs: Unbuffered(path) if path == testimony else path_open(path, *args, **kwargs),
+    )
     capsys.readouterr()
 
     tracemalloc.start()
@@ -1719,12 +1737,45 @@ def test_a_testimony_is_read_no_further_than_one_byte_past_its_limit(
             f"error: Review.result: unsafe read-back testimony: {testimony} is over the "
             f"{TESTIMONY_MAX_BYTES}-byte limit\n"
         )
+        assert positions == [2 * TESTIMONY_MAX_BYTES + 1]
         assert peak < 2 * 1024 * 1024
         assert extraction.scopes == [None]  # only `review prepare` extracted
         assert load_readbacks(blueprint) == {}
     else:
+        assert positions == [TESTIMONY_MAX_BYTES]
         assert err == ""
         assert (_RESULT_ID, "Review.result") in load_readbacks(blueprint)
+
+
+@pytest.mark.parametrize("over", [False, True], ids=["at-the-limit", "past-the-limit"])
+def test_a_testimony_is_measured_with_crlf_read_as_lf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], over: bool
+) -> None:
+    """Saved with CRLF line endings, a testimony within the limit once read as
+    text is filed, though the file is over it."""
+
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    testimony = manifest.resolve().parent / "Review.result.md"
+    lines = ["a" * 127] * (TESTIMONY_MAX_BYTES // 128)
+    lines[0] += "a" if over else ""
+    testimony.write_bytes("".join(line + "\r\n" for line in lines).encode())
+    assert testimony.stat().st_size > TESTIMONY_MAX_BYTES
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == (2 if over else 0)
+
+    err = capsys.readouterr().err
+    if over:
+        assert err == (
+            f"error: Review.result: unsafe read-back testimony: {testimony} is over the "
+            f"{TESTIMONY_MAX_BYTES}-byte limit\n"
+        )
+        assert extraction.scopes == [None]  # only `review prepare` extracted
+        assert load_readbacks(blueprint) == {}
+    else:
+        assert err == ""
+        assert load_readbacks(blueprint)[(_RESULT_ID, "Review.result")].text == "\n".join(lines)
 
 
 def test_a_testimony_ends_a_line_at_crlf_or_cr_as_at_lf(
