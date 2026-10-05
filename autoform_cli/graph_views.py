@@ -453,7 +453,8 @@ def _focus_view(
 def full_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
     """Present every article and dependency, with container status rolled up."""
     view = _node_view(graph, statuses, graph.nodes)
-    descendants = _leaf_descendant_map(graph)
+    children = _containment_children(graph)
+    descendants = _leaf_descendant_map(graph, children)
     nodes = tuple(
         ViewNode(
             id=node.id,
@@ -463,7 +464,7 @@ def full_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
             status_counts=_status_counts(descendants[node.id], statuses),
             status_key=_rollup_status_key(descendants[node.id], statuses),
         )
-        if graph.children(node.id)
+        if node.id in children
         else node
         for node in view.nodes
     )
@@ -645,17 +646,20 @@ def _containment_children(graph: Graph) -> dict[str, tuple[str, ...]]:
     return {parent: tuple(node_ids) for parent, node_ids in children.items()}
 
 
-def _leaf_descendant_map(graph: Graph) -> dict[str, tuple[str, ...]]:
+def _leaf_descendant_map(
+    graph: Graph,
+    children: dict[str, tuple[str, ...]],
+) -> dict[str, tuple[str, ...]]:
     """Compute every containment rollup once for full-graph rendering."""
     descendants: dict[str, tuple[str, ...]] = {}
 
     def visit(node_id: str) -> tuple[str, ...]:
         if node_id in descendants:
             return descendants[node_id]
-        children = graph.children(node_id)
+        contained = children.get(node_id, ())
         result = (
-            tuple(leaf for child in children for leaf in visit(child))
-            if children
+            tuple(leaf for child in contained for leaf in visit(child))
+            if contained
             else (node_id,)
         )
         descendants[node_id] = result

@@ -530,7 +530,7 @@ def _index_builds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chapters: int
             graph,
             derive(graph),
             tmp_path / str(chapters) / "site",
-            node_links=lambda page: {node_id: "book.html" for node_id in graph.nodes},
+            node_links=lambda page, node_ids: {node_id: "book.html" for node_id in node_ids},
         )
     return builds
 
