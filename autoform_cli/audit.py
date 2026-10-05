@@ -397,11 +397,14 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
                 resolved.append(declaration)
 
         expected = declaration_keywords(node.declaration)
-        mismatched = [
-            declaration
-            for declaration in resolved
-            if expected is not None and declaration.keyword not in expected
-        ]
+        primary = index.find(names[0]) if names else None
+        mismatched = (
+            [primary]
+            if primary is not None
+            and expected is not None
+            and primary.keyword not in expected
+            else []
+        )
         if mismatched:
             actual = ", ".join(sorted({declaration.keyword for declaration in mismatched}))
             findings.append(

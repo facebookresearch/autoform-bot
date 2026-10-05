@@ -124,11 +124,18 @@ def test_substitutions_reach_the_site_config(tmp_path: Path) -> None:
     assert "python -I .github/autoform_audit.py preflight blueprint" in verify
     assert "python -I .github/autoform_audit.py verify" in verify
     assert "blueprint\n          ." in verify
-    assert "workflow_call:" in verify
+    assert "workflow_dispatch:" in verify
+    assert "workflow_call:" not in verify
+    assert "paths:" not in verify
+    assert "  build:\n    name: build" in verify
+    assert verify.index("Preflight artifact claims") < verify.index("Validate the theorem DAG")
+    assert "uses: ./.github/workflows/blueprint-pages.yml" in verify
+    assert "needs: build" in verify
 
     pages = (tmp_path / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8")
-    assert "uses: ./.github/workflows/autoform-verify.yml" in pages
-    assert "needs: verify" in pages
+    assert "workflow_call:" in pages
+    assert "uses: ./.github/workflows/autoform-verify.yml" not in pages
+    assert "autoform check blueprint" not in pages
     assert "lake build" not in pages
 
 

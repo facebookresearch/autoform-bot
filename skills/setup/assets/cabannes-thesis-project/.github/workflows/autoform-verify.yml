@@ -4,30 +4,10 @@
 name: autoform verify
 
 on:
-  workflow_call:
   pull_request:
-    paths:
-      - "blueprint/**"
-      - "**.lean"
-      - "lakefile.lean"
-      - "lakefile.toml"
-      - "lake-manifest.json"
-      - "lean-toolchain"
-      - ".github/autoform_audit.py"
-      - ".github/workflows/autoform-verify.yml"
-      - ".github/workflows/blueprint-pages.yml"
   push:
     branches: [main]
-    paths:
-      - "blueprint/**"
-      - "**.lean"
-      - "lakefile.lean"
-      - "lakefile.toml"
-      - "lake-manifest.json"
-      - "lean-toolchain"
-      - ".github/autoform_audit.py"
-      - ".github/workflows/autoform-verify.yml"
-      - ".github/workflows/blueprint-pages.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -41,8 +21,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: verify
+  build:
+    name: build
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -66,11 +46,11 @@ jobs:
           uv pip install --python "$environment/bin/python" "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           echo "$environment/bin" >> "$GITHUB_PATH"
 
-      - name: Validate the theorem DAG
-        run: autoform check blueprint
-
       - name: Preflight artifact claims
         run: python -I .github/autoform_audit.py preflight blueprint
+
+      - name: Validate the theorem DAG
+        run: autoform check blueprint
 
       - name: Install elan
         run: |
@@ -106,3 +86,12 @@ jobs:
           python -I .github/autoform_audit.py verify
           blueprint
           .
+
+  pages:
+    name: pages
+    needs: build
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/blueprint-pages.yml

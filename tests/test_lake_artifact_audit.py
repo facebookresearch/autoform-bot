@@ -96,7 +96,12 @@ def _built_local_audit_fixture(tmp_path: Path) -> tuple[Path, Path]:
         'name = "Fixture"\nversion = "0.1.0"\ndefaultTargets = ["Fixture"]\n\n'
         '[[lean_lib]]\nname = "Fixture"\n',
     )
-    _write(project / "Fixture.lean", "theorem Fixture.claim : True := by trivial\n")
+    _write(project / "payload.txt", "bound payload\n")
+    _write(
+        project / "Fixture.lean",
+        'def Fixture.payload := include_str "payload.txt"\n'
+        "theorem Fixture.claim : True := by trivial\n",
+    )
     blueprint = _blueprint(project)
     _article(blueprint, "claim", "declaration: theorem", "lean: Fixture.claim")
     built = _run(project, "lake", "build")
@@ -215,12 +220,57 @@ def test_blueprint_targets_bind_every_local_claim(helper: ModuleType, tmp_path: 
 
     assert [(target.article_path, target.name, target.expected_kind) for target in targets] == [
         ("roadmap/local.md", "Fixture.first", "theorem"),
-        ("roadmap/local.md", "Fixture.second", "theorem"),
+        ("roadmap/local.md", "Fixture.second", None),
     ]
     probe = helper.render_probe(("Fixture",), targets)
     assert "belongs to non-root module" in probe
     assert "does not have expected kind" in probe
+    assert "unless expectedKind.isEmpty" in probe
     assert helper.preflight_blueprint(blueprint) == 2
+
+
+def test_axiom_intent_is_rejected_during_bounded_preflight(
+    helper: ModuleType, tmp_path: Path
+) -> None:
+    blueprint = _blueprint(tmp_path)
+    _article(blueprint, "assumption", "declaration: axiom", "lean: Fixture.assumption")
+
+    with pytest.raises(helper.AuditInputError, match="axiom declarations are not permitted"):
+        helper.preflight_blueprint(blueprint)
+
+
+def test_probe_binds_every_import_to_its_queried_root_olean(helper: ModuleType) -> None:
+    probe = helper.render_probe(
+        ("Fixture",),
+        expected_oleans={"Fixture": "/project/.lake/build/lib/lean/Fixture.olean"},
+    )
+
+    assert "findOLean moduleName" in probe
+    assert "IO.FS.realPath" in probe
+    assert "/project/.lake/build/lib/lean/Fixture.olean" in probe
+    with pytest.raises(helper.AuditInputError, match="does not match the root module set"):
+        helper.render_probe(("Fixture",), expected_oleans={"Other": "/tmp/Other.olean"})
+    with pytest.raises(helper.AuditInputError, match="does not match the root module set"):
+        helper.render_probe(("Fixture",), expected_oleans={})
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Fixture.lookup?", "Fixture.run!", "Fixture.12", "Fixture.«quoted.part with space»"],
+)
+def test_blueprint_targets_accept_structurally_rendered_lean_names(
+    helper: ModuleType, tmp_path: Path, name: str
+) -> None:
+    blueprint = _blueprint(tmp_path)
+    _article(blueprint, "named", "declaration: theorem", f"lean: {name}")
+
+    targets = helper.targets_from_blueprint(blueprint)
+    probe = helper.render_probe(("Fixture",), targets)
+
+    assert [target.name for target in targets] == [name]
+    assert "Name.str" in probe
+    if name == "Fixture.12":
+        assert "Name.num" in probe
 
 
 def test_mathlib_claim_fails_closed_until_its_gate_is_installed(
@@ -409,6 +459,48 @@ def test_project_input_snapshot_rejects_symlinked_controls(
         tree.close()
 
 
+def test_project_input_snapshot_binds_arbitrary_payloads_overrides_and_generation(
+    helper: ModuleType, tmp_path: Path
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    _write(project / "lean-toolchain", "leanprover/lean4:v4.32.2\n")
+    _write(project / "lakefile.lean", "import Lake\n")
+    _write(project / "lakefile.toml", 'name = "Fixture"\n')
+    _write(project / "lake-manifest.json", "{}\n")
+    _write(project / "payload.txt", "first\n")
+    _write(project / ".lake/package-overrides.json", "{}\n")
+    _write(project / ".lake/build/generated", "ignored\n")
+    tree = helper._open_project_tree(project)
+    try:
+        first = helper._capture_project_inputs(tree)
+        assert {path for path, _digest in first.files} >= {
+            "payload.txt",
+            ".lake/package-overrides.json",
+            "lakefile.lean",
+            "lakefile.toml",
+        }
+
+        _write(project / ".lake/build/generated", "changed but still ignored\n")
+        assert helper._capture_project_inputs(tree) == first
+
+        _write(project / "payload.txt", "second\n")
+        second = helper._capture_project_inputs(tree)
+        assert second != first
+        assert second.generation_revision != first.generation_revision
+    finally:
+        tree.close()
+
+
+def test_json_string_walk_is_iterative_and_bounded(helper: ModuleType) -> None:
+    value: object = "leaf"
+    for _index in range(helper._MAX_JSON_DEPTH + 1):
+        value = [value]
+
+    with pytest.raises(helper.AuditInputError, match="nesting depth"):
+        tuple(helper._json_strings(value))
+
+
 def test_root_source_and_artifact_paths_cannot_escape_project(
     helper: ModuleType, tmp_path: Path
 ) -> None:
@@ -573,6 +665,7 @@ def test_subprocess_runner_cleans_up_surviving_descendants(
         ("lakefile", "Lean project inputs changed"),
         ("manifest", "Lake manifest"),
         ("source", "Lean project inputs changed"),
+        ("payload", "Lean project inputs changed"),
         ("ilean", "live root-package artifact does not match packed bytes"),
         ("olean", "live root-package artifact does not match packed bytes"),
         ("trace", "live root-package artifact does not match packed bytes"),
@@ -593,6 +686,7 @@ def test_artifact_gate_revalidates_every_local_evidence_boundary_after_lean(
         "lakefile": project / "lakefile.toml",
         "manifest": project / "lake-manifest.json",
         "source": project / "Fixture.lean",
+        "payload": project / "payload.txt",
         "ilean": project / ".lake/build/lib/lean/Fixture.ilean",
         "olean": project / ".lake/build/lib/lean/Fixture.olean",
         "trace": project / ".lake/build/lib/lean/Fixture.trace",
@@ -778,7 +872,71 @@ srcDir = "app-src"
 
 
 @pytest.mark.skipif(shutil.which("lake") is None, reason="Lake is not installed")
-def test_root_package_clean_excludes_stale_custom_artifacts(
+def test_kernel_probe_rejects_a_same_named_dependency_olean(
+    helper: ModuleType, tmp_path: Path
+) -> None:
+    project = tmp_path / "collision-project"
+    dependency = project / "dep"
+    dependency.mkdir(parents=True)
+    _write(project / "lean-toolchain", "leanprover/lean4:v4.32.2\n")
+    _write(dependency / "lean-toolchain", "leanprover/lean4:v4.32.2\n")
+    _write(
+        dependency / "lakefile.lean",
+        '''import Lake
+open Lake DSL
+package «Dependency»
+@[default_target] lean_lib «DependencyLib» where
+  globs := #[.one `Collision]
+''',
+    )
+    source = "theorem Collision.origin : True := by trivial\n"
+    _write(dependency / "Collision.lean", source)
+    _write(
+        project / "lakefile.lean",
+        '''import Lake
+open Lake DSL
+package «Root»
+require «Dependency» from "dep"
+@[default_target] lean_lib «RootLib» where
+  globs := #[.one `Collision]
+''',
+    )
+    _write(project / "Collision.lean", source)
+
+    built = _run(
+        project,
+        "lake",
+        "build",
+        "@Dependency/+Collision:olean",
+        "@Root/+Collision:olean",
+    )
+    assert built.returncode == 0, built.stdout + built.stderr
+    queried = _run(
+        project,
+        "lake",
+        "query",
+        "--json",
+        "@Dependency/+Collision:olean",
+        "@Root/+Collision:olean",
+    )
+    assert queried.returncode == 0, queried.stdout + queried.stderr
+    dependency_value, root_value = map(json.loads, queried.stdout.splitlines())
+    dependency_olean = Path(dependency_value)
+    root_olean = Path(root_value)
+    if not dependency_olean.is_absolute():
+        dependency_olean = project / dependency_olean
+    if not root_olean.is_absolute():
+        root_olean = project / root_olean
+    assert dependency_olean.resolve() != root_olean.resolve()
+
+    blueprint = _blueprint(project)
+    _article(blueprint, "origin", "declaration: theorem", "lean: Collision.origin")
+    with pytest.raises(helper.AuditInputError, match="resolved to .* expected"):
+        helper.run_artifact_audit(blueprint, project)
+
+
+@pytest.mark.skipif(shutil.which("lake") is None, reason="Lake is not installed")
+def test_artifact_gate_never_deletes_stale_custom_artifacts(
     helper: ModuleType, tmp_path: Path
 ) -> None:
     project = tmp_path / "stale-project"
@@ -805,10 +963,39 @@ lean_lib «Fresh»
     blueprint = _blueprint(project)
     _article(blueprint, "fresh", "declaration: theorem", "lean: fresh_ok")
 
-    summary = helper.run_artifact_audit(blueprint, project)
+    with pytest.raises(helper.AuditInputError, match="unknown module `Stale`"):
+        helper.run_artifact_audit(blueprint, project)
 
-    assert summary.root_modules == ("Fresh",)
-    assert not (stale / "Stale.ilean").exists()
+    assert (stale / "Stale.ilean").read_text(encoding="utf-8") == _metadata("Stale").decode()
+
+
+@pytest.mark.skipif(shutil.which("lake") is None, reason="Lake is not installed")
+def test_project_root_build_directory_is_rejected_without_deleting_project(
+    helper: ModuleType, tmp_path: Path
+) -> None:
+    project = tmp_path / "root-build-project"
+    project.mkdir()
+    marker = project / "must-survive.txt"
+    _write(marker, "keep me\n")
+    _write(project / "lean-toolchain", "leanprover/lean4:v4.32.2\n")
+    _write(
+        project / "lakefile.lean",
+        '''import Lake
+open Lake DSL
+package «RootBuild» where
+  buildDir := "."
+@[default_target]
+lean_lib «RootBuild»
+''',
+    )
+    _write(project / "RootBuild.lean", "theorem RootBuild.ok : True := by trivial\n")
+    blueprint = _blueprint(project)
+
+    with pytest.raises(helper.AuditInputError, match="buildDir must be a canonical project-relative directory"):
+        helper.run_artifact_audit(blueprint, project)
+
+    assert marker.read_text(encoding="utf-8") == "keep me\n"
+    assert (project / "lakefile.lean").is_file()
 
 
 @pytest.mark.skipif(shutil.which("lake") is None, reason="Lake is not installed")
@@ -921,7 +1108,7 @@ lean_lib «FormalMath»
     summary = helper.run_artifact_audit(blueprint, project)
 
     assert summary.root_package == "«formal-math»"
-    assert ("lake", "clean", "«formal-math»") in commands
+    assert not any(command[:2] == ("lake", "clean") for command in commands)
     assert any("@«formal-math»/+FormalMath:ilean" in command for command in commands)
 
 
@@ -991,7 +1178,6 @@ opaque Fixture.opaqueClaim : Nat := 1
     assert {
         "evaluated Lake configuration",
         "Lake build-directory check",
-        "root-package clean",
         "root-package build",
         "root-package archive",
         "Lean artifact probe",

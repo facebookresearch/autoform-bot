@@ -27,7 +27,10 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+import tomli
+
 from ._directory_binding import RetainedDirectory, lexical_absolute_path, open_directory
+from ._lean_names import LeanNameError, parse_lean_name, render_lean_name_term
 from ._tree_snapshot import (
     BoundDirectoryTree,
     TreeCaptureLimits,
@@ -55,6 +58,8 @@ _MAX_DIRECTORY_ENTRIES = 100_000
 _MAX_PROJECT_INPUT_BYTES = 256 * 1024 * 1024
 _MAX_OUTPUT_BYTES = 1024 * 1024
 _MAX_NAME_LENGTH = 1024
+_MAX_JSON_VALUES = 1_000_000
+_MAX_JSON_DEPTH = 256
 _DEFAULT_DEADLINE_SECONDS = 110 * 60
 _QUERY_BATCH_SIZE = 128
 _TOP_LEVEL_NAME = re.compile(r'^name\s*=\s*("(?:[^"\\]|\\.)*")\s*(?:#.*)?$')
@@ -99,7 +104,6 @@ _PROJECT_IGNORED_DIRECTORIES = frozenset(
     {
         ".direnv",
         ".git",
-        ".lake",
         ".mypy_cache",
         ".pytest_cache",
         ".ruff_cache",
@@ -124,7 +128,7 @@ class BlueprintTarget:
 
     article_path: str
     name: str
-    expected_kind: str
+    expected_kind: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +223,7 @@ class _ArchiveSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class _ProjectInputSnapshot:
+    generation_revision: str
     files: tuple[tuple[str, str], ...]
 
 
@@ -226,6 +231,18 @@ class _ProjectInputSnapshot:
 class _ArtifactSetSnapshot:
     generation_revision: str
     digests: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RootArtifactEvidence:
+    artifacts: _ArtifactSetSnapshot
+    module_oleans: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _LakeConfiguration:
+    root_package: str
+    build_directory: PurePosixPath
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,7 +280,7 @@ def root_package_from_config(config: Path) -> str:
 
     evidence = _open_bound_file(config, "evaluated Lake configuration", _MAX_CONFIG_BYTES, collect=True)
     try:
-        name = _root_package_from_bytes(evidence.data)
+        name = _lake_configuration_from_bytes(evidence.data).root_package
         evidence.verify()
         return name
     finally:
@@ -316,9 +333,22 @@ def targets_from_blueprint(blueprint: Path) -> tuple[BlueprintTarget, ...]:
             raise AuditInputError(
                 f"{article_path}: declaration intent is missing or unsupported: {node.declaration or ''!r}"
             )
-        for name in local_names:
+        if expected_kind == "axiom":
+            raise AuditInputError(
+                f"{article_path}: axiom declarations are not permitted by the artifact policy"
+            )
+        for index, name in enumerate(local_names):
             _validate_lean_name(name, article_path)
-            targets.append(BlueprintTarget(article_path, name, expected_kind))
+            # The first name is the article's primary declaration.  Remaining
+            # names are supporting declarations: they must exist, belong to a
+            # root module, and pass trust checks, but may have different kinds.
+            targets.append(
+                BlueprintTarget(
+                    article_path,
+                    name,
+                    expected_kind if index == 0 else None,
+                )
+            )
         if len(targets) > _MAX_TARGETS:
             raise AuditInputError(f"blueprint exceeds declaration target limit {_MAX_TARGETS}")
 
@@ -328,7 +358,7 @@ def targets_from_blueprint(blueprint: Path) -> tuple[BlueprintTarget, ...]:
             key=lambda target: (
                 target.article_path,
                 target.name,
-                target.expected_kind,
+                target.expected_kind or "",
             ),
         )
     )
@@ -356,16 +386,25 @@ def preflight_blueprint(blueprint: Path) -> int:
 def render_probe(
     modules: tuple[str, ...],
     targets: tuple[BlueprintTarget, ...] = (),
+    *,
+    expected_oleans: Mapping[str, str] | None = None,
 ) -> str:
     """Render the Lean kernel probe for root declarations and roadmap claims."""
 
     if not modules:
         raise AuditInputError("refusing to render an empty kernel-trust audit")
+    artifact_paths = dict(expected_oleans or {})
+    if expected_oleans is not None and set(artifact_paths) != set(modules):
+        raise AuditInputError("kernel probe OLean evidence does not match the root module set")
     imports = "\n".join(f"import {module}" for module in modules)
     root_names = ", ".join(_lean_name(module) for module in modules)
+    root_artifacts = ", ".join(
+        f"({_lean_name(module)}, {json.dumps(path, ensure_ascii=False)})"
+        for module, path in sorted(artifact_paths.items())
+    )
     local_targets = ", ".join(
         f"({json.dumps(target.article_path, ensure_ascii=False)}, {_lean_name(target.name)}, "
-        f"{json.dumps(target.expected_kind)})"
+        f"{json.dumps(target.expected_kind or '')})"
         for target in targets
     )
     probe = f"""{imports}
@@ -394,7 +433,7 @@ private def matchesDeclarationKind
       | _ => false
   | "def" =>
       match env.find? declName with
-      | some (.defnInfo info) => info.hints != .abbrev
+      | some (.defnInfo info) => info.hints != .abbrev && !Meta.isInstanceCore env declName
       | _ => false
   | "instance" => Meta.isInstanceCore env declName
   | "class" => isClass env declName
@@ -405,9 +444,17 @@ private def matchesDeclarationKind
 
 run_cmd do
   let rootModules : List Name := [{root_names}]
+  let expectedArtifacts : List (Name × String) := [{root_artifacts}]
   let localTargets : List (String × Name × String) := [{local_targets}]
   let allowed : List Name := [``propext, ``Classical.choice, ``Quot.sound]
   let env ← getEnv
+  let mut badArtifacts := false
+  for (moduleName, expectedPath) in expectedArtifacts do
+    let actual ← IO.FS.realPath (← findOLean moduleName)
+    let expected ← IO.FS.realPath (System.FilePath.mk expectedPath)
+    unless actual == expected do
+      badArtifacts := true
+      logError m!"root module {{moduleName}} resolved to {{actual}}, expected {{expected}}"
   let mut badTargets := false
   for (article, declName, expectedKind) in localTargets do
     if env.find? declName |>.isNone then
@@ -422,9 +469,10 @@ run_cmd do
           unless rootModules.contains moduleName do
             badTargets := true
             logError m!"{{article}}: local declaration {{declName}} belongs to non-root module {{moduleName}}"
-      unless matchesDeclarationKind env declName expectedKind do
-        badTargets := true
-        logError m!"{{article}}: declaration {{declName}} does not have expected kind {{expectedKind}}"
+      unless expectedKind.isEmpty do
+        unless matchesDeclarationKind env declName expectedKind do
+          badTargets := true
+          logError m!"{{article}}: declaration {{declName}} does not have expected kind {{expectedKind}}"
   let mut checked : Nat := 0
   let mut badSafety : Array Name := #[]
   let mut badAxioms : Array (Name × Name) := #[]
@@ -444,7 +492,7 @@ run_cmd do
     logError m!"{{declName}} depends on unexpected axiom {{usedAxiom}}"
   if checked == 0 then
     throwError "kernel-trust audit found no root-package declarations"
-  unless !badTargets && badSafety.isEmpty && badAxioms.isEmpty do
+  unless !badArtifacts && !badTargets && badSafety.isEmpty && badAxioms.isEmpty do
     throwError "blueprint or root-package declarations failed the artifact audit"
   logInfo m!"artifact audit clean ({{checked}} root-package declaration(s) audited)"
 """
@@ -506,8 +554,36 @@ def _run_artifact_audit(
 
             project = _open_project_tree(lean_root)
             stack.callback(project.close)
-            project_inputs = _capture_project_inputs(project)
 
+            # Lakefile.lean is executable configuration, so first discover its
+            # build directory and then evaluate it again while a complete
+            # project-input generation is retained.  A changed second result
+            # is rejected rather than mixing configuration from one generation
+            # with sources from another.
+            discovery_path = private / "lake-config-discovery.toml"
+            _checked_command(
+                ["lake", "translate-config", "toml", str(discovery_path)],
+                cwd=project.root,
+                deadline=deadline,
+                label="Lake configuration discovery",
+                environment=environment,
+            )
+            discovery = _open_bound_file(
+                discovery_path,
+                "discovered Lake configuration",
+                _MAX_CONFIG_BYTES,
+                collect=True,
+            )
+            try:
+                discovered_configuration = _lake_configuration_from_bytes(discovery.data)
+                discovery.verify()
+            finally:
+                discovery.close()
+
+            project_inputs = _capture_project_inputs(
+                project,
+                build_directory=discovered_configuration.build_directory,
+            )
             config_path = private / "lake-config.toml"
             _checked_command(
                 ["lake", "translate-config", "toml", str(config_path)],
@@ -523,20 +599,22 @@ def _run_artifact_audit(
                 collect=True,
             )
             stack.callback(config.close)
-            root_package = _root_package_from_bytes(config.data)
+            configuration = _lake_configuration_from_bytes(config.data)
+            if configuration != discovered_configuration:
+                raise AuditInputError("Lake configuration changed while project inputs were retained")
+            after_configuration = _capture_project_inputs(
+                project,
+                build_directory=configuration.build_directory,
+            )
+            if after_configuration != project_inputs:
+                raise AuditInputError("Lean project inputs changed during Lake configuration evaluation")
+            root_package = configuration.root_package
 
             _checked_command(
                 ["lake", "check-build"],
                 cwd=project.root,
                 deadline=deadline,
                 label="Lake build-directory check",
-                environment=environment,
-            )
-            _checked_command(
-                ["lake", "clean", root_package],
-                cwd=project.root,
-                deadline=deadline,
-                label="root-package clean",
                 environment=environment,
             )
             _checked_command(
@@ -575,7 +653,11 @@ def _run_artifact_audit(
             probe = private / "probe.lean"
             _write_private_file(
                 probe,
-                render_probe(archive_snapshot.modules, targets).encode("utf-8"),
+                render_probe(
+                    archive_snapshot.modules,
+                    targets,
+                    expected_oleans=dict(root_evidence.module_oleans),
+                ).encode("utf-8"),
             )
             probe_evidence = _open_bound_file(
                 probe,
@@ -595,15 +677,18 @@ def _run_artifact_audit(
                 config.verify()
                 packed.verify()
                 probe_evidence.verify()
-                final_inputs = _capture_project_inputs(project)
+                final_inputs = _capture_project_inputs(
+                    project,
+                    build_directory=configuration.build_directory,
+                )
                 if final_inputs != project_inputs:
                     raise AuditInputError("Lean project inputs changed during build or artifact validation")
                 final_artifacts = _capture_artifact_set(
                     project,
-                    tuple(path for path, _digest in root_evidence.digests),
-                    expected_digests=dict(root_evidence.digests),
+                    tuple(path for path, _digest in root_evidence.artifacts.digests),
+                    expected_digests=dict(root_evidence.artifacts.digests),
                 )
-                if final_artifacts != root_evidence:
+                if final_artifacts != root_evidence.artifacts:
                     raise AuditInputError("root-package artifacts changed during artifact validation")
                 final_blueprint = _capture_blueprint(blueprint_tree)
                 if final_blueprint.generation_revision != blueprint_snapshot.generation_revision:
@@ -645,6 +730,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _root_package_from_bytes(data: bytes | None) -> str:
+    return _lake_configuration_from_bytes(data).root_package
+
+
+def _lake_configuration_from_bytes(data: bytes | None) -> _LakeConfiguration:
     if data is None:
         raise AuditInputError("evaluated Lake configuration was not captured")
     try:
@@ -670,7 +759,29 @@ def _root_package_from_bytes(data: bytes | None) -> str:
             names.append(value)
     if len(names) != 1:
         raise AuditInputError("evaluated Lake configuration must define exactly one root package name")
-    return names[0]
+    try:
+        decoded = tomli.loads(text)
+    except (tomli.TOMLDecodeError, RecursionError, ValueError) as exc:
+        raise AuditInputError("evaluated Lake configuration is not valid TOML") from exc
+    build_value = decoded.get("buildDir", ".lake/build")
+    if not isinstance(build_value, str):
+        raise AuditInputError("evaluated Lake configuration has an invalid buildDir")
+    build_directory = PurePosixPath(build_value)
+    if (
+        not build_value
+        or "\\" in build_value
+        or build_directory.is_absolute()
+        or build_directory.as_posix() != build_value
+        or build_directory in {PurePosixPath("."), PurePosixPath("..")}
+        or any(
+            part in {"", ".", ".."} or not _is_nfc_text(part) or not _portable_component(part)
+            for part in build_directory.parts
+        )
+    ):
+        raise AuditInputError(
+            "evaluated Lake configuration buildDir must be a canonical project-relative directory"
+        )
+    return _LakeConfiguration(names[0], build_directory)
 
 
 def _valid_package_name(value: object) -> bool:
@@ -1110,8 +1221,10 @@ def _module_parts(module: str, display: str) -> tuple[str, ...]:
 
 def _validate_lean_name(name: str, article_path: str) -> None:
     try:
-        _module_parts(name, article_path)
-    except AuditInputError as exc:
+        if len(name) > _MAX_NAME_LENGTH or not _is_nfc_text(name):
+            raise LeanNameError(f"invalid Lean name: {name!r}")
+        parse_lean_name(name)
+    except LeanNameError as exc:
         raise AuditInputError(
             f"{article_path}: invalid Lean declaration name in blueprint: {name!r}"
         ) from exc
@@ -1129,15 +1242,25 @@ def _validate_root_trace(trace: object, module: str, package: str, display: str)
 
 
 def _json_strings(value: object) -> Iterable[str]:
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, list):
-        for item in value:
-            yield from _json_strings(item)
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            yield from _json_strings(key)
-            yield from _json_strings(item)
+    """Yield JSON strings without depending on Python's recursion limit."""
+
+    stack: list[tuple[object, int]] = [(value, 0)]
+    visited = 0
+    while stack:
+        item, depth = stack.pop()
+        visited += 1
+        if visited > _MAX_JSON_VALUES:
+            raise AuditInputError(f"JSON evidence exceeds {_MAX_JSON_VALUES} values")
+        if depth > _MAX_JSON_DEPTH:
+            raise AuditInputError(f"JSON evidence exceeds nesting depth {_MAX_JSON_DEPTH}")
+        if isinstance(item, str):
+            yield item
+        elif isinstance(item, list):
+            stack.extend((child, depth + 1) for child in reversed(item))
+        elif isinstance(item, dict):
+            for key, child in reversed(tuple(item.items())):
+                stack.append((child, depth + 1))
+                stack.append((key, depth + 1))
 
 
 def _open_blueprint_tree(blueprint: Path) -> BoundDirectoryTree:
@@ -1181,14 +1304,32 @@ def _open_project_tree(lean_root: Path) -> BoundDirectoryTree:
         raise AuditInputError(f"cannot retain Lean project root: {exc}") from exc
 
 
-def _capture_project_inputs(tree: BoundDirectoryTree) -> _ProjectInputSnapshot:
+def _capture_project_inputs(
+    tree: BoundDirectoryTree,
+    *,
+    build_directory: PurePosixPath = PurePosixPath(".lake/build"),
+) -> _ProjectInputSnapshot:
+    """Capture every project-authored build input, not just Lean sources.
+
+    Lake code and Lean's ``include_str`` can read extensionless or arbitrary
+    files.  Only well-known caches and the evaluated root build directory are
+    omitted.  ``.lake/package-overrides.json`` remains an input even though the
+    rest of ``.lake`` is generated state.
+    """
+
     def included(path: PurePosixPath, _mode: int) -> bool:
-        return (
-            len(path.parts) == 1 and path.name in _PROJECT_CONTROL_FILES
-        ) or path.suffix == ".lean"
+        if path.parts and path.parts[0] == ".lake":
+            return path == PurePosixPath(".lake/package-overrides.json")
+        return True
 
     def descended(path: PurePosixPath) -> bool:
-        return bool(path.parts) and path.parts[0] not in _PROJECT_IGNORED_DIRECTORIES
+        if not path.parts:
+            return False
+        if path == build_directory or build_directory in path.parents:
+            return False
+        if path.parts[0] == ".lake":
+            return path == PurePosixPath(".lake")
+        return not any(part in _PROJECT_IGNORED_DIRECTORIES or part == ".lake" for part in path.parts)
 
     def byte_limit(path: PurePosixPath) -> int:
         if path.name == "lean-toolchain" and len(path.parts) == 1:
@@ -1203,7 +1344,7 @@ def _capture_project_inputs(tree: BoundDirectoryTree) -> _ProjectInputSnapshot:
         include=included,
         descend=descended,
         byte_limit=byte_limit,
-        record_omitted=True,
+        record_omitted=False,
         limits=_PROJECT_INPUT_LIMITS,
     )
     try:
@@ -1230,9 +1371,10 @@ def _capture_project_inputs(tree: BoundDirectoryTree) -> _ProjectInputSnapshot:
     for name in ("lean-toolchain", "lake-manifest.json"):
         _require_snapshot_file(snapshot, aliases, name, f"Lean project {name}")
     lakefiles = [name for name in ("lakefile.lean", "lakefile.toml") if name in files]
-    if len(lakefiles) != 1:
-        raise AuditInputError("Lean project must contain exactly one regular lakefile.lean or lakefile.toml")
-    _require_snapshot_file(snapshot, aliases, lakefiles[0], "Lean project lakefile")
+    if not lakefiles:
+        raise AuditInputError("Lean project must contain a regular lakefile.lean or lakefile.toml")
+    for lakefile in lakefiles:
+        _require_snapshot_file(snapshot, aliases, lakefile, f"Lean project {lakefile}")
     if not files["lean-toolchain"].strip():
         raise AuditInputError("Lean project lean-toolchain is empty")
     manifest = _decode_json(files["lake-manifest.json"], "Lake manifest", "lake-manifest.json")
@@ -1240,6 +1382,7 @@ def _capture_project_inputs(tree: BoundDirectoryTree) -> _ProjectInputSnapshot:
         raise AuditInputError("Lake manifest must be a JSON object")
     _reject_file_aliases(tuple(files))
     return _ProjectInputSnapshot(
+        snapshot.generation_revision,
         tuple(
             (path, hashlib.sha256(data).hexdigest())
             for path, data in sorted(snapshot.files)
@@ -1322,7 +1465,7 @@ def _inspect_root_artifacts(
     root_package: str,
     *,
     environment: Mapping[str, str] | None,
-) -> _ArtifactSetSnapshot:
+) -> _RootArtifactEvidence:
     paths = _query_ilean_paths(
         project.root,
         archive.modules,
@@ -1332,6 +1475,7 @@ def _inspect_root_artifacts(
     )
     project_files = dict(project_inputs.files)
     expected: dict[str, str] = {}
+    module_oleans: list[tuple[str, str]] = []
     for module in archive.modules:
         record = archive.records[module]
         if _trace_package(record.trace) != _package_trace_name(root_package):
@@ -1344,6 +1488,7 @@ def _inspect_root_artifacts(
             )
         ilean = paths[module]
         _validate_live_artifact_path(project.root, ilean, module)
+        module_oleans.append((module, str(ilean.with_suffix(".olean"))))
         for path, digest in zip(
             (ilean, ilean.with_suffix(".olean"), ilean.with_suffix(".trace")),
             (record.ilean_digest, record.olean_digest, record.trace_digest),
@@ -1352,7 +1497,12 @@ def _inspect_root_artifacts(
             if relative in expected:
                 raise AuditInputError(f"multiple root modules resolve to artifact {relative}")
             expected[relative] = digest
-    return _capture_artifact_set(project, tuple(sorted(expected)), expected_digests=expected)
+    artifacts = _capture_artifact_set(
+        project,
+        tuple(sorted(expected)),
+        expected_digests=expected,
+    )
+    return _RootArtifactEvidence(artifacts, tuple(sorted(module_oleans)))
 
 
 def _trace_package(trace: object) -> str:
@@ -1529,7 +1679,7 @@ def _checked_command(
         environment=_audit_environment(environment),
     )
     if result.returncode != 0:
-        detail = _last_output_line(result.stderr) or _last_output_line(result.stdout)
+        detail = _output_tail(result.stderr) or _output_tail(result.stdout)
         suffix = f": {detail}" if detail else ""
         raise AuditInputError(f"{label} failed with exit code {result.returncode}{suffix}")
     return result
@@ -1704,9 +1854,11 @@ def _audit_environment(supplied: Mapping[str, str] | None) -> dict[str, str]:
     return environment
 
 
-def _last_output_line(value: bytes) -> str:
+def _output_tail(value: bytes) -> str:
+    """Keep enough bounded subprocess context to make Lean failures useful."""
+
     lines = value.decode("utf-8", errors="replace").strip().splitlines()
-    return lines[-1] if lines else ""
+    return "\n".join(lines[-20:])[-8192:] if lines else ""
 
 
 def _require_within(path: Path, root: Path, label: str) -> None:
@@ -1743,10 +1895,10 @@ def _write_private_file(path: Path, data: bytes) -> None:
 
 
 def _lean_name(name: str) -> str:
-    result = "Name.anonymous"
-    for part in _module_parts(name, name):
-        result = f"Name.str ({result}) {json.dumps(part, ensure_ascii=False)}"
-    return result
+    try:
+        return render_lean_name_term(name)
+    except LeanNameError as exc:
+        raise AuditInputError(f"invalid Lean name: {name!r}") from exc
 
 
 def _is_reparse_point(metadata: os.stat_result) -> bool:

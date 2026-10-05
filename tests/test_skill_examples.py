@@ -382,8 +382,9 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "https://github.com/facebookresearch/autoform-bot" in theme
     assert '<a href="{{ config.repo_url }}">Formalization source</a>.' in theme
     workflow = (example / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8")
-    assert "uses: ./.github/workflows/autoform-verify.yml" in workflow
-    assert "needs: verify" in workflow
+    assert "workflow_call:" in workflow
+    assert "uses: ./.github/workflows/autoform-verify.yml" not in workflow
+    assert "autoform check blueprint" not in workflow
     assert "autoform render blueprint" in workflow
     assert "--require-declarations" in workflow
     assert "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128" in workflow
@@ -399,6 +400,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "lake build" not in verify
     assert "lake pack" not in verify
     assert "lake-modules" not in verify
+    assert verify.index("Preflight artifact claims") < verify.index("Validate the theorem DAG")
     assert verify.index("Preflight artifact claims") < verify.index("Install elan")
     assert verify.index("Preflight artifact claims") < verify.index("Fetch the Mathlib build cache")
     helper = (example / ".github/autoform_audit.py").read_text(encoding="utf-8")
@@ -410,7 +412,10 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "elan/releases/download/v4.2.3" in verify
     assert "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2" in verify
     assert "github.ref == 'refs/heads/main'" in workflow
-    assert workflow.count('- "theme/**"') == 2
+    assert "paths:" not in workflow
+    assert "paths:" not in verify
+    assert "uses: ./.github/workflows/blueprint-pages.yml" in verify
+    assert "needs: build" in verify
     assert 'version: "0.12.1"' in workflow
     assert "@main" not in verify
 
@@ -775,28 +780,34 @@ def test_setup_and_roadmap_explain_the_artifact_gate(repo_root: Path) -> None:
     assert "rejects `mathlib: true`" in roadmap
 
 
-def test_verification_gate_is_reused_and_retriggers_on_all_evidence(repo_root: Path) -> None:
+def test_verification_is_the_only_entry_point_and_gates_pages(repo_root: Path) -> None:
     workflows = repo_root / _EXAMPLE / ".github/workflows"
     verify = (workflows / "autoform-verify.yml").read_text(encoding="utf-8")
     pages = (workflows / "blueprint-pages.yml").read_text(encoding="utf-8")
-    evidence_paths = (
-        "lakefile.lean",
-        "lakefile.toml",
-        "lake-manifest.json",
-        "lean-toolchain",
-        ".github/autoform_audit.py",
-        ".github/workflows/autoform-verify.yml",
-        ".github/workflows/blueprint-pages.yml",
-    )
 
-    assert "workflow_call:" in verify
-    assert "uses: ./.github/workflows/autoform-verify.yml" in pages
-    assert "needs: verify" in pages
+    assert "\n  pull_request:\n" in verify
+    assert "\n  push:\n" in verify
+    assert "\n  workflow_dispatch:\n" in verify
+    assert "workflow_call:" not in verify
+    assert "paths:" not in verify
+    assert "\n  build:\n    name: build" in verify
+    assert "uses: ./.github/workflows/blueprint-pages.yml" in verify
+    assert "needs: build" in verify
     assert "autoform-verification-" in verify
+
+    assert "\n  workflow_call:\n" in pages
+    assert "\n  pull_request:" not in pages
+    assert "\n  push:" not in pages
+    assert "\n  workflow_dispatch:" not in pages
+    assert "paths:" not in pages
+    assert "autoform check blueprint" not in pages
+    assert "autoform_audit.py" not in pages
     assert "group: blueprint-pages-" in pages
-    for path in evidence_paths:
-        assert path in verify
-        assert path in pages
+    assert "autoform render blueprint" in pages
+    assert "pages: write" in verify
+    assert "id-token: write" in verify
+    assert "pages: write" in pages
+    assert "id-token: write" in pages
 
 
 def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> None:

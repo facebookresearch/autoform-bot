@@ -1,34 +1,7 @@
 name: Blueprint Pages
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "blueprint/**"
-      - "**.lean"
-      - "lakefile.lean"
-      - "lakefile.toml"
-      - "lake-manifest.json"
-      - "lean-toolchain"
-      - "mkdocs.yml"
-      - "theme/**"
-      - ".github/autoform_audit.py"
-      - ".github/workflows/autoform-verify.yml"
-      - ".github/workflows/blueprint-pages.yml"
-  pull_request:
-    paths:
-      - "blueprint/**"
-      - "**.lean"
-      - "lakefile.lean"
-      - "lakefile.toml"
-      - "lake-manifest.json"
-      - "lean-toolchain"
-      - "mkdocs.yml"
-      - "theme/**"
-      - ".github/autoform_audit.py"
-      - ".github/workflows/autoform-verify.yml"
-      - ".github/workflows/blueprint-pages.yml"
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -42,13 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify:
-    uses: ./.github/workflows/autoform-verify.yml
-    permissions:
-      contents: read
-
   build:
-    needs: verify
     runs-on: ubuntu-latest
     steps:
       - name: Check out project

@@ -266,9 +266,7 @@ def test_audit_validates_lean_targets_only_when_root_is_supplied(tmp_path: Path)
     assert with_lean["roadmap/wrong-kind.md"] == [
         ("lean-target-kind-mismatch", "Lean target kind def does not match declaration intent theorem")
     ]
-    assert with_lean["roadmap/one-wrong-kind.md"] == [
-        ("lean-target-kind-mismatch", "Lean target kind def does not match declaration intent theorem")
-    ]
+    assert "roadmap/one-wrong-kind.md" not in with_lean
 
 
 def test_audit_reports_invalid_lean_root_once(tmp_path: Path) -> None:
