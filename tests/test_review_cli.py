@@ -828,6 +828,53 @@ def test_an_article_changed_during_extraction_files_nothing(
     assert "changed during extraction; nothing was filed" in capsys.readouterr().err
 
 
+def _delete_other(blueprint: Path) -> None:
+    chapter = blueprint / "roadmap" / "basics"
+    (chapter / "other.md").unlink()
+    readme = chapter / "README.md"
+    readme.write_text(readme.read_text(encoding="utf-8").replace("- [Other](other.md)\n", ""), encoding="utf-8")
+
+
+def _renumber_other(blueprint: Path) -> None:
+    other = blueprint / "roadmap" / "basics" / "other.md"
+    other.write_text(other.read_text(encoding="utf-8").replace(_OTHER_ID, "af_" + "1" * 24), encoding="utf-8")
+
+
+@pytest.mark.parametrize("edit", [_delete_other, _renumber_other], ids=["deleted", "renumbered"])
+@pytest.mark.parametrize("during_the_record", [False, True], ids=["after-prepare", "during-extraction"])
+def test_an_article_gone_since_prepare_is_named_rather_than_the_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    edit: Callable[[Path], None],
+    during_the_record: bool,
+) -> None:
+    """The bundle still has the declaration; the blueprint no longer has its article_id."""
+
+    calls: list[int] = []
+
+    def edit_during_the_record() -> None:
+        calls.append(1)
+        if during_the_record and len(calls) == 2:  # the first extraction is `review prepare`
+            edit(tmp_path / "blueprint")
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction(edit_during_the_record))
+    if not during_the_record:
+        edit(blueprint)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    err = capsys.readouterr().err
+    assert load_readbacks(blueprint) == {}
+    assert (
+        f"error: Review.other: article_id {_OTHER_ID} is no longer in the blueprint, or now names another "
+        "declaration; rerun review prepare\n"
+    ) in err
+    assert "prepared review bundle" not in err
+    assert len(calls) == (2 if during_the_record else 1)
+
+
 def test_any_blueprint_edit_during_a_record_extraction_files_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

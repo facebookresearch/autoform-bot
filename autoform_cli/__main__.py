@@ -1018,7 +1018,7 @@ def _record_snapshot(graph: Graph, requests: tuple[RecordRequest, ...]) -> tuple
             continue
         matches = [node for node in graph.nodes.values() if node.article_id == request.article_id]
         if len(matches) != 1:
-            raise ReviewError([_review_selection_finding(request.article_id, request.declaration)])
+            raise ReviewError([_record_selection_finding(request.article_id, request.declaration)])
         node = matches[0]
         state[request.article_id] = (request.article_id, node.id, str(node.path), node.source_sha256 or "")
     return tuple(sorted(state.values()))
@@ -1324,6 +1324,17 @@ def _review_selection_finding(article_id: str, declaration: str) -> ReviewFindin
         article_id,
         "review-selection-missing",
         f"prepared review bundle has no declaration {declaration!r} for article_id {article_id}",
+    )
+
+
+def _record_selection_finding(article_id: str, declaration: str) -> ReviewFinding:
+    """The bundle has this declaration, but the current blueprint no longer maps its article_id to it."""
+
+    return ReviewFinding(
+        article_id,
+        "review-selection-missing",
+        f"{declaration}: article_id {article_id} is no longer in the blueprint, or now names another declaration; "
+        "rerun review prepare",
     )
 
 
