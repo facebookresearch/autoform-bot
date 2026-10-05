@@ -525,7 +525,9 @@ def _run_step(
     gh.write_text(_GH_STUB, encoding="utf-8")
     gh.chmod(0o755)
     for path, answer in answers.items():
-        (stub / (re.sub(r"[^A-Za-z0-9]", "_", path) + ".json")).write_text(json.dumps(answer), encoding="utf-8")
+        (stub / (re.sub(r"[^A-Za-z0-9]", "_", path) + ".json")).write_text(
+            json.dumps(answer, default=_HoursAgo.timestamp), encoding="utf-8"
+        )
     for name, body in (tools or {}).items():
         (stub / name).write_text(f"#!/bin/bash\n{body}\n", encoding="utf-8")
         (stub / name).chmod(0o755)
@@ -716,6 +718,21 @@ _RUNS = f"{_REPOSITORY}/actions/workflows/blueprint-pages.yml/runs"
 _DEPLOYMENTS = f"{_REPOSITORY}/deployments"
 
 
+class _HoursAgo:
+    """``hours`` before the step that reads it runs. Timestamps taken at
+    collection aged as a slow suite ran: by the time it reached these tests,
+    a failure meant to sit half an hour inside its backoff window had left it."""
+
+    def __init__(self, hours: float) -> None:
+        self.hours = hours
+
+    def __repr__(self) -> str:
+        return f"_HoursAgo({self.hours})"
+
+    def timestamp(self) -> str:
+        return (datetime.now(timezone.utc) - timedelta(hours=self.hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _github_after(
     *,
     failed: tuple[tuple[str, float] | tuple[str, float, str], ...] = (),
@@ -730,8 +747,8 @@ def _github_after(
     before it ``earlier``, newest first. A run may name another conclusion
     than failure as a third item."""
 
-    def ago(hours: float) -> str:
-        return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    def ago(hours: float) -> _HoursAgo:
+        return _HoursAgo(hours)
 
     runs = [
         {"event": run[0], "conclusion": run[2] if len(run) > 2 else "failure", "updated_at": ago(run[1])}
