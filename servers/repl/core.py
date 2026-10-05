@@ -417,7 +417,15 @@ def _communicate_bounded(
     return bytes(stdout), bytes(stderr)
 
 
-def _decode_header_modules(stdout: bytes) -> list[str]:
+@dataclass(frozen=True)
+class _LeanHeaderAnalysis:
+    """Lean-owned facts needed to validate and compose one submitted header."""
+
+    modules: tuple[str, ...]
+    accepts_leading_imports: bool
+
+
+def _decode_header_analysis(stdout: bytes) -> _LeanHeaderAnalysis:
     """Decode the strict schemas emitted by Lean's fast import parser."""
 
     def reject_constant(value: str) -> None:
@@ -457,26 +465,55 @@ def _decode_header_modules(stdout: bytes) -> list[str]:
         has_imports = "imports" in entry
         if has_result == has_imports:
             raise ValueError
+        is_module: bool | None = None
         if has_result:
             result = entry["result"]
             if not isinstance(result, dict):
                 raise ValueError
             imports = result.get("imports")
+            candidate_is_module = result.get("isModule")
+            if (
+                candidate_is_module is not None
+                and type(candidate_is_module) is not bool
+            ):
+                raise ValueError
+            is_module = candidate_is_module
         else:
             imports = entry["imports"]
         if not isinstance(imports, list):
             raise ValueError
 
         modules: list[str] = []
+        has_implicit_init = False
+        has_composition_metadata = has_result and is_module is not None
         for item in imports:
             if not isinstance(item, dict):
                 raise ValueError
             module = item.get("module")
             if not isinstance(module, str) or not module:
                 raise ValueError
+            if has_result:
+                is_meta = item.get("isMeta")
+                if is_meta is not None and type(is_meta) is not bool:
+                    raise ValueError
+                if is_meta is None:
+                    has_composition_metadata = False
+                if module == "Init" and is_meta:
+                    has_implicit_init = True
             if module != "Init":
                 modules.append(module)
-        return modules
+        # Only the current schema exposes enough parser state to distinguish
+        # Lean's implicit Init imports from an explicit ``prelude``/``module``
+        # header. The legacy schema remains valid for allowlist checks, but
+        # fails closed on source rewriting and sends the validated frame exact.
+        return _LeanHeaderAnalysis(
+            modules=tuple(modules),
+            accepts_leading_imports=(
+                has_composition_metadata
+                and has_implicit_init
+                and is_module is False
+            ),
+        )
     except UnicodeDecodeError:
         raise ValueError("unrecognized output from lean --deps-json") from None
     except (TypeError, KeyError, json.JSONDecodeError):
@@ -487,7 +524,7 @@ def _decode_header_modules(stdout: bytes) -> list[str]:
         raise ValueError("unrecognized output from lean --deps-json") from None
 
 
-def _lean_header_modules(
+def _lean_header_analysis(
     command: list[str],
     code: str,
     *,
@@ -495,8 +532,8 @@ def _lean_header_modules(
     env: dict[str, str],
     deadline: float,
     max_output_bytes: int,
-) -> list[str]:
-    """Return imports parsed from ``code`` by the selected Lean toolchain."""
+) -> _LeanHeaderAnalysis:
+    """Return Lean-owned composition facts for one submitted header."""
     if deadline - time.monotonic() <= 0:
         raise TimeoutError("timed out before checking the Lean header")
     process = subprocess.Popen(
@@ -545,7 +582,28 @@ def _lean_header_modules(
     if process.returncode != 0:
         detail = stderr.decode(errors="replace").strip().splitlines()
         raise ValueError(detail[0] if detail else f"exit status {process.returncode}")
-    return _decode_header_modules(stdout)
+    return _decode_header_analysis(stdout)
+
+
+def _lean_header_modules(
+    command: list[str],
+    code: str,
+    *,
+    cwd: str | None,
+    env: dict[str, str],
+    deadline: float,
+    max_output_bytes: int,
+) -> list[str]:
+    """Compatibility wrapper returning only Lean's direct imported modules."""
+    analysis = _lean_header_analysis(
+        command,
+        code,
+        cwd=cwd,
+        env=env,
+        deadline=deadline,
+        max_output_bytes=max_output_bytes,
+    )
+    return list(analysis.modules)
 
 
 def _split_imports_and_body(code: str) -> tuple[list[str], str, int]:
@@ -1028,6 +1086,7 @@ class LeanRepl:
                 self.close(deadline=deadline)
                 lexical_imports, _, _ = _split_imports_and_body(code)
                 header_modules = lexical_imports
+                accepts_leading_imports = True
                 if (
                     self.config.validate_imports
                     and self._allowed_import_roots is not None
@@ -1035,7 +1094,7 @@ class LeanRepl:
                     env = _inherit_clean_env()
                     env.update(self.config.env)
                     try:
-                        header_modules = _lean_header_modules(
+                        header = _lean_header_analysis(
                             self.config.header_deps_command,
                             code,
                             cwd=self.cwd,
@@ -1043,6 +1102,8 @@ class LeanRepl:
                             deadline=deadline,
                             max_output_bytes=self.config.max_buffer_bytes,
                         )
+                        header_modules = list(header.modules)
+                        accepts_leading_imports = header.accepts_leading_imports
                     except _HeaderProcessCleanupError as error:
                         # Preserve ownership so the normal disposable cleanup
                         # retries before this slot can ever be reused.
@@ -1068,6 +1129,7 @@ class LeanRepl:
                     except ValueError as error:
                         result = {"repl_error": f"Rejected Lean header: {error}"}
                         header_modules = []
+                        accepts_leading_imports = False
                 submitted_roots = {
                     module.split(".")[0] for module in header_modules
                 }
@@ -1092,10 +1154,15 @@ class LeanRepl:
                             )
                         }
                 if result is None:
-                    added_imports = tuple(
+                    missing_warmup_imports = tuple(
                         root
                         for root in sorted(self.config.warmup_imports)
                         if root not in submitted_roots
+                    )
+                    added_imports = (
+                        missing_warmup_imports
+                        if accepts_leading_imports
+                        else ()
                     )
                     prefix = "\n".join(
                         f"import {root}" for root in added_imports
