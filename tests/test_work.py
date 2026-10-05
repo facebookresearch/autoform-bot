@@ -867,6 +867,28 @@ def test_work_assumptions_keeps_a_retracted_theorem_while_its_lean_names_the_old
     assert articles["chapter/reduction"]["allowed_open_declarations"] == list(allowed)
 
 
+@pytest.mark.parametrize("policy", ["forbidden", "allowed"])
+def test_work_assumptions_bounds_a_proof_recorded_without_its_statement(
+    tmp_path: Path, capsys, policy: str
+) -> None:
+    """`proof: formalized` without `statement: formalized` still declares Lean the CI probe must bound."""
+    project = _policy_project(tmp_path, policy)
+    _edit(project, "reduction.md", "statement: formalized\n", "")
+    allowed = ("Project.open_aux", "Project.open_thm") if policy == "allowed" else ()
+
+    assert cli.main(["work", "assumptions", str(project), "--json"]) == 0
+    articles = {article["id"]: article for article in json.loads(capsys.readouterr().out)["articles"]}
+
+    assert articles["chapter/reduction"] == _contract_article(
+        "chapter/reduction",
+        "af_00000000000000000000000c",
+        "conditional" if policy == "allowed" else "proved",
+        ["Project.reduction"],
+        assumes=("chapter/open",) if policy == "allowed" else (),
+        allowed=allowed,
+    )
+
+
 def test_work_assumptions_reports_errors_on_stderr_with_exit_2(
     tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
 ) -> None:
