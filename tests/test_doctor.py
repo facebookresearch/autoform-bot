@@ -166,6 +166,30 @@ def test_optional_lean_targets_report_success_missing_and_kind_mismatch(tmp_path
     assert _checks(mismatch)["lean targets"] == (False, "1 finding(s): lean-target-kind-mismatch")
 
 
+def test_a_deprecated_lean_target_fails_the_lean_targets_check(tmp_path: Path) -> None:
+    project = _clean_project(
+        tmp_path,
+        metadata=(
+            "declaration: theorem",
+            "statement: formalized",
+            "proof: formalized",
+            "lean: Project.result",
+        ),
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Project.lean").write_text(
+        "theorem Project.fresh : True := trivial\n\n"
+        "@[deprecated Project.fresh] theorem Project.result : True := trivial\n",
+        encoding="utf-8",
+    )
+
+    result = diagnose_project(project, lean_root=lean_root)
+
+    assert _checks(result)["lean targets"] == (False, "1 finding(s): lean-target-deprecated")
+    assert _checks(result)["audit"][0]
+
+
 def test_runtime_projection_failure_is_reported_without_traceback(tmp_path: Path) -> None:
     project = _clean_project(
         tmp_path,

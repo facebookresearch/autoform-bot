@@ -28,6 +28,7 @@ from .runtime import (
 _LEAN_FINDING_CODES = frozenset(
     {
         "invalid-lean-root",
+        "lean-target-deprecated",
         "lean-target-kind-mismatch",
         "lean-target-not-found",
         "missing-lean-target",
