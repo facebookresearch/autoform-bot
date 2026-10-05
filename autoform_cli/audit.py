@@ -200,6 +200,15 @@ def audit_graph(
                 )
             )
 
+        if derived[node_id].proved and article.has_execution_notes:
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "stale-execution-notes",
+                    "completed article retains Execution notes from an unfinished attempt",
+                )
+            )
+
         if node.mathlib and not declaration_names(node.mathlib_declaration or ""):
             findings.append(
                 AuditFinding(
@@ -241,13 +250,14 @@ def audit_graph(
 class _ArticleShape:
     statement_text: bool
     has_depends_section: bool
+    has_execution_notes: bool
 
 
 def _read_article(path: Path) -> _ArticleShape:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
-        return _ArticleShape(False, False)
+        return _ArticleShape(False, False, False)
 
     lines = text.splitlines()
     start = _frontmatter_end(lines)
@@ -256,6 +266,7 @@ def _read_article(path: Path) -> _ArticleShape:
     before_first_h2 = True
     statement_text = False
     has_depends_section = False
+    has_execution_notes = False
     fence: tuple[str, int] | None = None
 
     for line in body.splitlines():
@@ -280,11 +291,13 @@ def _read_article(path: Path) -> _ArticleShape:
                 before_first_h2 = False
                 if title == "depends on":
                     has_depends_section = True
+                if title == "execution notes":
+                    has_execution_notes = True
             continue
         if seen_h1 and before_first_h2 and line.strip():
             statement_text = True
 
-    return _ArticleShape(statement_text, has_depends_section)
+    return _ArticleShape(statement_text, has_depends_section, has_execution_notes)
 
 
 def _source_findings(graph: Graph, node: Node, article_path: str) -> list[AuditFinding]:

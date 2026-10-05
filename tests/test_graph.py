@@ -134,6 +134,36 @@ def test_rejects_invalid_nodes(tmp_path: Path, body: str, message: str) -> None:
         load_graph(blueprint)
 
 
+def test_execution_notes_cannot_nest_inside_dependency_sections(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(
+        blueprint,
+        "result.md",
+        "# Result\n\nA statement.\n\n## Proof depends on\n\n"
+        "### Execution notes\n\n[Base](base.md)\n",
+    )
+
+    with pytest.raises(GraphValidationError, match="Execution notes must be a top-level H2"):
+        load_graph(blueprint)
+
+
+def test_execution_notes_must_be_the_final_article_section(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "result.md",
+        "# Result\n\nA statement.\n\n## Execution notes\n\nTry induction.\n\n"
+        "## Depends on\n\nNone.\n",
+    )
+
+    with pytest.raises(
+        GraphValidationError,
+        match="Execution notes must be the article's final section",
+    ):
+        load_graph(blueprint)
+
+
 def test_rejects_self_edge(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "self.md", "# Self\n## Depends on\n[Self](self.md)\n")

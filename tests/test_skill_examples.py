@@ -77,6 +77,10 @@ def test_formalize_replaces_custom_orchestration_with_the_markdown_frontier(
     assert "no custom scheduler or provider adapter" in normalized
     assert "ready, running, retrying, failed, or blocked scheduler states" in normalized
     assert "never a transcript or retry counter" in normalized
+    assert "remove any stale `## Execution notes`" in normalized
+    assert "outside `## Depends on`, `## Proof depends on`, and `## Sources`" in normalized
+    assert "article's final section" in normalized
+    assert "rather than appending another one" in normalized
     assert "$formalize" in metadata
     assert "Formalize the ready Markdown roadmap frontier" in codex
     assert '"id": "formalize"' in muse

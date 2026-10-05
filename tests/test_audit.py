@@ -109,6 +109,28 @@ def test_clean_audit_has_stable_machine_readable_representation(tmp_path: Path) 
     assert str(tmp_path) not in first.to_json()
 
 
+def test_completed_article_cannot_keep_stale_execution_notes(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    article = _article(
+        blueprint,
+        "result.md",
+        declaration="theorem",
+        statement="formalized",
+        proof="formalized",
+        lean="Project.result",
+    )
+    article.write_text(
+        article.read_text(encoding="utf-8")
+        + "\n## Execution notes\n\nRemaining goal: obsolete.\n",
+        encoding="utf-8",
+    )
+
+    findings = _finding_map(blueprint)
+
+    assert any(code == "stale-execution-notes" for code, _ in findings["roadmap/result.md"])
+
+
 def test_audit_reports_formalizable_structure_and_inconsistent_checked_facts(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)

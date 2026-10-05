@@ -81,9 +81,14 @@ score instead.
 
 On acceptance, update only the claimed article with the exact compiled
 declaration and truthful assertions: `statement: formalized`, plus `proof:
-formalized` once the proof is complete. On a useful failed route, record only
-distilled reusable evidence under `## Execution notes`—the remaining goal,
-checked lemmas, and next route—never a transcript or retry counter. A missing
+formalized` once the proof is complete, and remove any stale `## Execution
+notes` from earlier failed attempts. On a useful failed route, record only
+distilled reusable evidence under one top-level `## Execution notes` section as
+the article's final section, after the mathematical statement and outside `##
+Depends on`, `## Proof depends on`, and `## Sources`. Replace that section's
+contents on a later failed route rather than appending another one; record the
+remaining goal, checked lemmas, and next route, never a transcript or retry
+counter. A missing
 prerequisite, an incorrect decomposition, a change another article needs, or a
 proof recorded without its statement returns to Roadmap instead of silently
 changing the DAG.

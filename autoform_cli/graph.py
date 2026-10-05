@@ -369,6 +369,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         _SOURCES_SECTION: [],
     }
     section: str | None = None
+    execution_notes_seen = False
     fence: tuple[str, int] | None = None
     body = _HTML_COMMENT.sub("", "\n".join(lines[body_start:]))
 
@@ -389,12 +390,24 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         if heading:
             level = len(heading.group(1))
             heading_text = heading.group(2).strip()
+            heading_key = heading_text.casefold()
+            if execution_notes_seen:
+                issues.append(
+                    f"{node_id}: Execution notes must be the article's final section"
+                )
             if level == 1:
                 title_count += 1
                 if title is None:
                     title = heading_text
+            if heading_key == "execution notes":
+                section = None
+                execution_notes_seen = True
+                if level != 2:
+                    issues.append(
+                        f"{node_id}: Execution notes must be a top-level H2 section"
+                    )
+                continue
             if level <= 2:
-                heading_key = heading_text.casefold()
                 section = heading_key if level == 2 and heading_key in targets else None
             continue
         if section is not None:
