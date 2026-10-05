@@ -826,7 +826,10 @@ so one bad record stops the batch. Publishing then goes card by card, each
 under its own compare-and-swap; a concurrent writer or a failed write (a full
 disk, or an I/O or permission error) can stop it midway. The command says how
 many cards it filed, and because filing identical content is a no-op, running
-the same batch again once the cause is cleared completes it.
+the same batch again once the cause is cleared completes it. When the cause is
+a card another writer filed, replaced, or removed meanwhile, the batch's record
+for it must first name the hash of the card now there, or no hash if there is
+none.
 
 `review check`, `audit`, and `render` re-extract the
 current Lean evidence and reject unresolved, partial, foreign, or stale

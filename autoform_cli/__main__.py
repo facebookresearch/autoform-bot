@@ -1066,8 +1066,9 @@ def _report_recorded(written: list[tuple[Path, str]], total: int) -> None:
         print(f"{path}: recorded read-back for {declaration}")
     if written and len(written) < total:
         print(
-            f"error: {len(written)} of {total} read-back(s) were filed before the failure below; "
-            "running the same record again files the rest and leaves these as they are",
+            f"error: {len(written)} of {total} read-back(s) were filed before the failure below; once its cause is "
+            "cleared (for a conflict, by setting that record's expected_card_hash to the card hash it found, or "
+            "removing it if it found none), running the record again files the rest and leaves these as they are",
             file=sys.stderr,
         )
 

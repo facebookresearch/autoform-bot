@@ -988,7 +988,8 @@ def test_a_batch_interrupted_while_publishing_says_what_it_filed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Every check runs before the first card is written. A concurrent writer
-    can still stop the batch midway, and running it again finishes it."""
+    can still stop the batch midway, and running it again, naming the card
+    that writer filed, finishes it."""
 
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
     records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
@@ -1014,16 +1015,98 @@ def test_a_batch_interrupted_while_publishing_says_what_it_filed(
 
     captured = capsys.readouterr()
     assert captured.out.count("recorded read-back for") == 2  # ours, then the other writer's
-    assert "1 of 2 read-back(s) were filed before the failure below" in captured.err
+    assert (
+        "1 of 2 read-back(s) were filed before the failure below; once its cause is cleared (for a conflict, by "
+        "setting that record's expected_card_hash to the card hash it found, or removing it if it found none), "
+        "running the record again files the rest"
+    ) in captured.err
     assert "read-back already exists with different content" in captured.err
 
-    # Naming the card it replaces lets the same batch finish.
+    # Unchanged, the batch is refused: the other writer's card is a conflict.
     monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish)
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+    assert f"{later['declaration']}: read-back already exists with different content" in capsys.readouterr().err
+
+    # Naming the card it replaces lets the same batch finish.
     current = load_readbacks(blueprint)[(later["article_id"], later["declaration"])].file_hash
     records[1]["expected_card_hash"] = current
     manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
     assert _record(blueprint, bundle, manifest, tmp_path) == 0
     assert len(load_readbacks(blueprint)) == 2
+
+
+def test_a_batch_whose_named_card_is_removed_midway_finishes_naming_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A record may replace only the card it names. When another writer removes
+    that card midway, the record finishes once it names no card."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    later = records[1]
+    key = (later["article_id"], later["declaration"])
+    _file_alone(blueprint, bundle, manifest, tmp_path, later, "An earlier reading.\n")
+    records[1]["expected_card_hash"] = load_readbacks(blueprint)[key].file_hash
+    manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
+    publish = main.__globals__["publish_readback"]
+
+    def publish_then_remove_the_named_card(card: object) -> Path:
+        path = publish(card)
+        if key in load_readbacks(blueprint):
+            load_readbacks(blueprint)[key].path.unlink()
+        return path
+
+    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish_then_remove_the_named_card)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    err = capsys.readouterr().err
+    assert "or removing it if it found none" in err
+    assert "error: read-back changed before replacement: expected 'sha256:" in err
+    assert err.endswith(", found None\n")
+
+    # The record still names the removed card, so it is refused until it names none.
+    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish)
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+    assert ", found None" in capsys.readouterr().err
+    del records[1]["expected_card_hash"]
+    manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
+    assert _record(blueprint, bundle, manifest, tmp_path) == 0
+    assert len(load_readbacks(blueprint)) == 2
+
+
+def test_a_failed_write_stops_the_batch_until_its_cause_is_cleared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("permissions do not bind root")
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    first = (records[0]["article_id"], records[0]["declaration"])
+    # The first card's directory exists, and the second's cannot be made.
+    cards = blueprint / "readbacks"
+    (cards / records[0]["article_id"]).mkdir(parents=True)
+    cards.chmod(0o555)
+    try:
+        capsys.readouterr()
+        assert _record(blueprint, bundle, manifest, tmp_path) == 2
+        err = capsys.readouterr().err
+        assert "1 of 2 read-back(s) were filed before the failure below; once its cause is cleared" in err
+        assert f"{cards / records[1]['article_id']}: Permission denied" in err
+        filed = load_readbacks(blueprint)
+        assert set(filed) == {first}
+
+        # Until the cause is cleared, running the batch again stops at the same card.
+        assert _record(blueprint, bundle, manifest, tmp_path) == 2
+        assert "Permission denied" in capsys.readouterr().err
+    finally:
+        cards.chmod(0o755)
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 0
+    after = load_readbacks(blueprint)
+    assert set(after) == {(record["article_id"], record["declaration"]) for record in records}
+    assert after[first] == filed[first]
 
 
 @pytest.mark.parametrize(
