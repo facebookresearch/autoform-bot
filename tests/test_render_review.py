@@ -1318,6 +1318,13 @@ def test_brackets_over_the_limit_are_refused_with_a_rewrite_that_is_accepted() -
         ("+ " * 32 + "a", "+ " * 32 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
         ("* " * 32 + "a", "* " * 32 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
         ("1. " * 21 + " a", "1. " * 21 + "  a", "testimony nests blocks 65 columns deep, over the limit of 64"),
+        # Outside a code block, nested "1) " is refused anyway, as text GitHub
+        # shows differently; inside one, only the nesting count refuses it.
+        (
+            "```\n" + "1) " * 21 + " a\n```",
+            "```\n" + "1) " * 21 + "  a\n```",
+            "testimony nests blocks 65 columns deep, over the limit of 64",
+        ),
         (" _a" * 256, " _a" * 257, "testimony has 257 underscores that start a word, over the limit of 256"),
         ("*a* " * 512, "*a* " * 512 + "\\*", "testimony has 1025 asterisks, over the limit of 1024"),
         ("a" + "\\." * 2048, "a" + "\\." * 2049, "testimony has 2049 backslashes, over the limit of 2048"),
