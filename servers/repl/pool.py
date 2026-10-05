@@ -234,6 +234,10 @@ class LeanReplPool:
                     cleanup_base_error,
                     error,
                 )
+                logger.error(
+                    "Lean REPL settlement failed unexpectedly; retrying",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
                 quarantine = True
                 try:
                     time.sleep(delay)
