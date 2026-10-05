@@ -82,11 +82,11 @@ def write_graph_pages(
         _write_page(
             project_page,
             view=project,
-            statuses=statuses,
+            statuses=_selected_statuses(graph, statuses, project),
             links=project_links,
             heading="Dependency maps",
             lead=(
-                f"{project_item_count} item{'s' if project_item_count != 1 else ''} across "
+                f"{project_item_count} roadmap entr{'y' if project_item_count == 1 else 'ies'} across "
                 f"{len(groups)} chapter{'s' if len(groups) != 1 else ''}."
             ),
             site_root=destination,
@@ -118,11 +118,11 @@ def write_graph_pages(
             _write_page(
                 chapter_page,
                 view=view,
-                statuses=_selected_statuses(statuses, view),
+                statuses=_selected_statuses(graph, statuses, view),
                 links=links,
                 heading=view.title,
                 lead=(
-                    f"This map contains the {len(groups[group])} decomposed items in this chapter. "
+                    f"This map contains {len(groups[group])} roadmap entries in this chapter. "
                     "Dashed chapter boxes stand for external prerequisites or dependents."
                 ),
                 navigation=navigation,
@@ -149,7 +149,7 @@ def write_graph_pages(
             _write_page(
                 scope_page,
                 view=view,
-                statuses=_selected_statuses(statuses, view),
+                statuses=_selected_statuses(graph, statuses, view),
                 links=links,
                 heading=view.title,
                 lead=(
@@ -254,10 +254,28 @@ def _write_page(
 
 
 def _selected_statuses(
+    graph: Graph,
     statuses: dict[str, NodeStatus],
     view: GraphView,
 ) -> dict[str, NodeStatus]:
-    return {node_id: statuses[node_id] for node_id in view.member_ids}
+    containers = frozenset(
+        node.parent for node in graph.nodes.values() if node.parent is not None
+    )
+    return {
+        node_id: statuses[node_id]
+        for node_id in view.member_ids
+        if node_id not in containers and graph.nodes[node_id].formalizable
+    }
+
+
+def _article_link_ids(view: GraphView) -> tuple[str, ...]:
+    """Return only view nodes whose links come from published articles.
+
+    Scope and boundary links are derived locally by this module. Asking the
+    renderer for every graph node on every scope page made a repository-wide
+    wiki spend quadratic time constructing links that the diagram never used.
+    """
+    return tuple(node.id for node in view.nodes if node.kind == "node")
 
 
 def _article_link_ids(view: GraphView) -> tuple[str, ...]:

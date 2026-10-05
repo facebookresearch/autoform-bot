@@ -89,7 +89,7 @@ def test_render_publishes_dependencies_between_the_roadmap_root_and_a_chapter(
     project_map = (output / "dependencies.md").read_text(encoding="utf-8")
     chapter_map = (output / "dependencies/chapters/chapter.md").read_text(encoding="utf-8")
     full_map = (output / "dependencies/full.md").read_text(encoding="utf-8")
-    assert "1 item across 1 chapter" in project_map
+    assert "1 roadmap entry across 1 chapter" in project_map
     assert '"../../dependencies.html"' in chapter_map
     assert "External chapter: Root result" in chapter_map
     assert 'class="bp-dag-viewer"' in full_map

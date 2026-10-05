@@ -24,6 +24,7 @@ NodeKind = Literal["scope", "boundary", "node"]
 _ScopedRelation = tuple[str, str, bool, str | None, str | None]
 
 _H1 = re.compile(r"^ {0,3}#[ \t]+(.+?)[ \t]*#*[ \t]*$")
+INVENTORY_CHECKED_STATUS = "inventory_checked"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,7 @@ class ViewNode:
     members: tuple[str, ...]
     status_counts: tuple[tuple[str, int], ...]
     declaration: str | None = None
+    catalog: str | None = None
     status_key: str | None = None
     focus: bool = False
     catalog: str | None = None
@@ -536,12 +538,17 @@ def _edges(counts: dict[tuple[str, str], list[int]]) -> tuple[ViewEdge, ...]:
 
 
 def _theorem_node(node: Node, node_status: NodeStatus) -> ViewNode:
+    display_status = (
+        INVENTORY_CHECKED_STATUS
+        if node.catalog == "module" and node_status.fully_proved
+        else node_status.key
+    )
     return ViewNode(
         id=node.id,
         title=node.title,
         kind="node",
         members=(node.id,),
-        status_counts=((node_status.key, 1),),
+        status_counts=((display_status, 1),),
         declaration=node.declaration,
         catalog=node.catalog,
         status_key=node_status.key,
@@ -549,13 +556,37 @@ def _theorem_node(node: Node, node_status: NodeStatus) -> ViewNode:
 
 
 def _status_counts(
+    graph: Graph,
     node_ids: Iterable[str],
     statuses: dict[str, NodeStatus],
 ) -> tuple[tuple[str, int], ...]:
     counts = {state.key: 0 for state in STATES}
+    inventories = 0
     for node_id in node_ids:
-        counts[statuses[node_id].key] += 1
-    return tuple((state.key, counts[state.key]) for state in STATES if counts[state.key])
+        node_status = statuses[node_id]
+        if graph.nodes[node_id].catalog == "module" and node_status.fully_proved:
+            inventories += 1
+        else:
+            counts[node_status.key] += 1
+    state_counts = tuple(
+        (state.key, counts[state.key]) for state in STATES if counts[state.key]
+    )
+    if inventories:
+        return (*state_counts, (INVENTORY_CHECKED_STATUS, inventories))
+    return state_counts
+
+
+def _rollup_status_key(
+    graph: Graph,
+    node_ids: Iterable[str],
+    statuses: dict[str, NodeStatus],
+) -> str:
+    """Use the least-complete descendant as a container's honest status."""
+    counts = _status_counts(graph, node_ids, statuses)
+    target_counts = tuple(
+        (key, count) for key, count in counts if key != INVENTORY_CHECKED_STATUS
+    )
+    return target_counts[-1][0] if target_counts else "planned"
 
 
 def _rollup_status_key(

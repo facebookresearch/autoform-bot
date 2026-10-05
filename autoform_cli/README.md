@@ -214,11 +214,22 @@ and read-only: it neither contacts network services nor writes findings back
 into the blueprint. Pass `--json` for stable machine-readable output; a nonzero
 exit status means the audit found at least one issue. The machine-checkable
 `coverage/README.md` contract contains one `Area | Coverage | Evidence` table
-with `MAPPED`, `DECOMPOSED`, `DEFERRED`, or `OUT` dispositions. `MAPPED` is
-nonterminal; the other three explicitly disposition an area. Audit JSON includes
-canonical rows, counts, and the exact coverage source hash, while
-`publication.json` records aggregate counts without duplicating the authored
-rows.
+with `MAPPED`, `INVENTORIED`, `DECOMPOSED`, `DEFERRED`, or `OUT` dispositions.
+`MAPPED` is nonterminal. `INVENTORIED` is the terminal disposition for exact
+source accounting and must link to a `catalog: module` record, directly or
+through a containing roadmap scope. `DECOMPOSED` is reserved for
+source-grounded declaration articles and must link to one, directly or through
+a containing roadmap scope. `DEFERRED` and `OUT` record an explicit later
+milestone or exclusion. Audit JSON includes canonical rows, counts, and the
+exact coverage source hash, while `publication.json` records aggregate counts
+without duplicating the authored rows.
+
+One row carries one disposition, so represent both axes with distinct,
+axis-qualified `Area` labels. For example, `Repository inventory / MathlibExt`
+may be `INVENTORIED` while `Mathematical exposition / MathlibExt` remains
+`MAPPED` and later becomes `DECOMPOSED`; duplicate exact area labels are
+invalid. A broad inventory row may link a container and classify every catalog
+below it while finer exposition rows evolve independently.
 
 The contract is read as published Markdown and fails closed. A table inside an
 HTML comment, a fenced block, or a four-space-indented block is documentation
@@ -292,11 +303,13 @@ its second paragraph, since that one implicitly closes the first. `title="hidden
 hides nothing at all. So is evidence that is nothing but `TODO`, `TBD`, `pending`,
 `placeholder`, or `unknown`, or that opens with one of those as a marker such as
 `TODO: choose a milestone`. A status word that merely begins a sentence is fine:
-"Pending Mathlib PR 1234" names something a reader can check. `DECOMPOSED`
-evidence must contain at least one complete inline link to an existing roadmap
-article, and *every* link it offers must resolve, fragments included, under the
-same rules the audit applies. A link missing its closing parenthesis does not
-render and does not count.
+"Pending Mathlib PR 1234" names something a reader can check. `INVENTORIED` and
+`DECOMPOSED` evidence must contain at least one complete inline link to an
+existing roadmap article. Every linked roadmap scope must contain the role the
+row claims: a module inventory for `INVENTORIED`, or a declaration-bearing leaf
+for `DECOMPOSED`. Every local link it offers must resolve, fragments included,
+under the same rules the audit applies. A link missing its closing parenthesis
+does not render and does not count.
 
 Fragment checking uses the renderer rather than predicting it. Anchors come from
 running Python-Markdown with the extensions the generated `mkdocs.yml` enables
@@ -313,13 +326,38 @@ a heading-affecting extension cannot silently invalidate the audit.
 `coverage.complete` in audit and `publication.json` means exactly one thing:
 every row the author declared has reached a terminal disposition, so no row is
 still `MAPPED`. It is a statement about the contract, not a measurement of the
-project.
+project. Terminal dispositions close different questions: `INVENTORIED` closes
+exact source accounting, while `DECOMPOSED` says the area has source-grounded
+declaration articles. One does not imply the other.
 
 It does **not** claim that the declared rows cover the source exhaustively, and
 it says nothing about whether the linked roadmap articles are formalized or
 proved. A project that declares one narrow area and disposes of it reports
 `complete` while most of its source remains undeclared. Exhaustiveness is an
 authoring judgement that no local check can make.
+
+Module inventory counts are reported separately from formalization-target
+completion. The target denominator, readiness count, declaration-kind totals,
+and progress-state breakdown use non-container articles carrying
+`declaration`; a `catalog: module` record contributes only to the separate
+module-inventory count. The coverage `counts` object always includes an integer
+`INVENTORIED` key, including zero when no row uses it. Status assertions on a
+catalog remain accepted. The presentation calls a fully checked catalog
+`inventory checked`, not a completed definition or result. The rendered site
+and `autoform check` show the module-inventory count separately from those
+target metrics.
+
+For an existing blueprint, migrate a catalog-only `DECOMPOSED` row to
+`INVENTORIED`. If the same source also has declaration articles, keep that
+inventory row and add distinct, axis-qualified `DECOMPOSED` rows for the
+mathematical scopes; do not overwrite the inventory claim. This is a
+backward-compatible extension of `autoform-coverage/v1` and
+`autoform-publication/v1`: existing Markdown and frontmatter still parse, and no
+manifest schema version changes. Until migrated, a catalog-only `DECOMPOSED` row
+remains syntactically accepted but audit reports `coverage-role-mismatch`; a
+catalog not reached by any `INVENTORIED` evidence also reports
+`unclassified-inventory`. Target-completion percentages may change because
+catalog records are no longer included in their denominator.
 
 Publication and audit are deliberately different gates. The generated
 `blueprint-pages.yml` runs `check` and `render`; it does not run `audit`. An
@@ -696,10 +734,11 @@ creates, synchronizes, or treats `graph.json` as an authority.
 Every article remains in the runtime view so consumers can preserve the book's
 arbitrary containment hierarchy. A node is dispatchable only when it is both a
 formalizable article and a leaf; narrative containers and prose-only leaves are
-never proof work units. The source revision hashes exact roadmap article paths
-and bytes, excluding timestamps, absolute paths, Git state, and operational
-state. Optional Lean locations come from a local lexical scan and do not by
-themselves establish compilation or proof correctness.
+never proof work units. Module inventories are likewise non-formalizable,
+non-dispatchable source records. The source revision hashes exact roadmap
+article paths and bytes, excluding timestamps, absolute paths, Git state, and
+operational state. Optional Lean locations come from a local lexical scan and do
+not by themselves establish compilation or proof correctness.
 
 Schema v2 adds non-dispatchable module catalogs and retains the graph's
 path-derived article ID. That is suitable for

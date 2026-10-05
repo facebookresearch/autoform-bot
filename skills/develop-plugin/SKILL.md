@@ -26,6 +26,10 @@ the blob at the stable detected commit.
 Client-side scale is a publication contract. Keep Material search title-only—one
 record per page. Keep shared agent entrypoints concise and use on-demand references.
 
+Treat client-side scale as a publication contract. Material search stays
+title-only—one record per page, without section or body records—unless measured
+browser memory proves a wider index safe.
+
 Run focused checks, then normally run:
 
 ```bash

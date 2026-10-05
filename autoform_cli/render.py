@@ -323,6 +323,16 @@ def _render_captured_site(
         )
     if coverage is None:
         raise PublicationError(["coverage contract could not be loaded"])
+    coverage_role_issues = validate_coverage_roles(graph, coverage)
+    if coverage_role_issues:
+        raise PublicationError(
+            [
+                f"coverage contract line {issue.line}: {issue.reason}"
+                if issue.line
+                else f"coverage contract: {issue.reason}"
+                for issue in coverage_role_issues
+            ]
+        )
     statuses = status.derive(graph)
     # The repository root, not the vault's parent. A blueprint nested at
     # <repo>/docs/blueprint would otherwise be described as <repo>/blueprint,
@@ -370,8 +380,13 @@ def _render_captured_site(
     # Nodes are published as environments on their milestone page, the way a
     # blueprint chapter carries many statements in sequence. Each keeps an
     # anchor so every cross-reference still lands on the statement itself.
-    groups = _group_nodes(graph)
     containers = _containers(graph)
+    groups = _group_nodes(graph)
+    # An inventory-only chapter still needs its authored landing page decorated
+    # with the neutral inventory metric, even though it has no theorem
+    # environments to consolidate.
+    for node_id in _module_inventories(graph, containers=containers):
+        groups.setdefault(graph.nodes[node_id].parent or "roadmap", [])
     anchors = {
         node_id: _anchor(node_id, group)
         for group, node_ids in groups.items()
@@ -1174,6 +1189,10 @@ def _render_structure_page(
         href = links.get(node.id)
         label = f'<a href="{html.escape(href, quote=True)}">{name}</a>' if href else name
         state = statuses[node.id]
+        inventory_checked = node.catalog == "module" and state.fully_proved
+        kind = "module inventory" if node.catalog == "module" else node.declaration or node.kind
+        state_key = "planned" if inventory_checked else state.key
+        state_label = "inventory checked" if inventory_checked else state.label
         rows.append(
             row(
                 depth,
@@ -1322,7 +1341,8 @@ def _render_landing_page(
             targets=targets,
         ),
     ]
-    breakdown = mermaid.render_legend(statuses)
+    target_statuses = {node_id: statuses[node_id] for node_id in _countable(graph)}
+    breakdown = mermaid.render_legend(target_statuses)
     project = graph_views.project_view(graph, statuses)
     if project.nodes:
         # Clicking a chapter on the home page opens that chapter's dependency
@@ -1402,6 +1422,22 @@ def _countable(graph: Graph) -> list[str]:
     return [node_id for node_id in graph.nodes if _is_countable(graph, node_id, containers)]
 
 
+def _module_inventories(
+    graph: Graph,
+    *,
+    containers: frozenset[str] | None = None,
+    node_ids: Iterable[str] | None = None,
+) -> list[str]:
+    """Return inventory leaves separately from mathematical targets."""
+    containers = _containers(graph) if containers is None else containers
+    candidates = graph.nodes if node_ids is None else node_ids
+    return [
+        node_id
+        for node_id in candidates
+        if node_id not in containers and graph.nodes[node_id].catalog == "module"
+    ]
+
+
 def _completion_percentage(done: int, total: int) -> int:
     """Round progress while reserving both endpoints for the exact endpoints."""
 
@@ -1456,19 +1492,27 @@ def _render_hero(
         if state.key in _ACTIONABLE_STATES
     )
     total = len(leaves)
+    inventory_count = len(_module_inventories(graph))
     share = _completion_percentage(done, total)
     target_label = "target" if total == 1 else "targets"
 
     figures = [
-        ("Scoped roadmap", f"{share}%", f"{done} of {total} {target_label} complete"),
-        ("Ready now", str(actionable), "unblocked, waiting for an author"),
-        ("Chapters", str(len(graph_views.group_nodes(graph))), "top-level milestones"),
+        ("Scoped roadmap", f"{share}%", f"{done} of {total} {target_label} complete", False),
+        ("Ready now", str(actionable), "unblocked, waiting for an author", False),
+        (
+            "Module inventories",
+            str(inventory_count),
+            "existing Lean modules checked",
+            True,
+        ),
+        ("Chapters", str(len(graph_views.group_nodes(graph))), "top-level milestones", False),
     ]
     stats = "".join(
-        f'<div class="bp-figure"><div class="bp-figure-value">{value}</div>'
+        f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">'
+        f'<div class="bp-figure-value">{value}</div>'
         f'<div class="bp-figure-label">{html.escape(label)}</div>'
         f'<div class="bp-figure-note">{html.escape(note)}</div></div>'
-        for label, value, note in figures
+        for label, value, note, neutral in figures
     )
     coverage_line = (
         '<div class="bp-hero-coverage">'
@@ -1523,9 +1567,10 @@ def _render_overview_summary(
     node_ids: list[str] | None = None,
 ) -> str:
     """Render the compact, honest progress strip shown at the start of the book."""
+    candidates = list(node_ids if node_ids is not None else graph.nodes)
     selected_ids = [
         node_id
-        for node_id in (node_ids if node_ids is not None else graph.nodes)
+        for node_id in candidates
         if _is_countable(graph, node_id, containers)
     ]
     catalogs = sum(graph.nodes[node_id].catalog is not None for node_id in selected_ids)
@@ -1541,6 +1586,11 @@ def _render_overview_summary(
         item_parts.append(f"{definitions} definition{'s' if definitions != 1 else ''}")
     if results:
         item_parts.append(f"{results} result{'s' if results != 1 else ''}")
+    if inventory_count:
+        item_parts.append(
+            f"{inventory_count} module "
+            f"{'inventory' if inventory_count == 1 else 'inventories'}"
+        )
     item_summary = " · ".join(item_parts) or "No decomposed definitions or results yet"
 
     state_parts = []
@@ -1875,11 +1925,19 @@ def _render_chapter(
         linked += node_linked
         unresolved.extend(node_unresolved)
 
+    summary_node_ids = [
+        *node_ids,
+        *(
+            node_id
+            for node_id, node in graph.nodes.items()
+            if node.catalog == "module" and (node.parent or "roadmap") == group
+        ),
+    ]
     chapter_summary = _render_overview_summary(
         graph,
         statuses,
         containers=containers,
-        node_ids=node_ids,
+        node_ids=summary_node_ids,
     )
     if narrative is None:
         title = graph.nodes[group].title if group in graph.nodes else group.replace("-", " ").capitalize()
@@ -2453,6 +2511,10 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}}
+.bp-figure-neutral .bp-figure-value {{
+  background: none;
+  color: var(--bp-muted);
 }}
 .bp-figure-label {{
   margin-top: 0.45rem;

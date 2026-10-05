@@ -71,12 +71,16 @@ not invent an external citation or historical-source claim.
 Inspect the repository and existing vault before writing. Preserve accepted
 material and unrelated changes; send missing infrastructure to Setup.
 
-Work from exact source passages. Record stable source locations, assumptions,
-and uncovered prerequisites under `blueprint/sources/`; label project-authored
+Before external research, extract module and declaration docstrings and nearby
+source comments alongside the Lean signatures and implementations. Work from
+those exact source passages. Record stable source locations, assumptions, and
+uncovered prerequisites under `blueprint/sources/`; label project-authored
 specifications honestly. Search the pinned Mathlib checkout before planning a
 replacement. External research is read-only, and contacting people requires
-permission. Read [Setup's Zulip workflow](../setup/references/zulip.md) only for
-requested Zulip work.
+permission. Do not invent a statement, motivation, proof narrative, dependency,
+citation, or historical attribution that the available sources do not support.
+Read [Setup's Zulip workflow](../setup/references/zulip.md) only for requested
+Zulip work.
 
 Enumerate the entire adopted boundary in `blueprint/coverage/README.md`.
 `MAPPED` is unfinished, `DECOMPOSED` links to roadmap nodes, `DEFERRED` records

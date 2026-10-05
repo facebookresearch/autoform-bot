@@ -107,7 +107,13 @@ def test_clean_audit_has_stable_machine_readable_representation(tmp_path: Path) 
     assert first.findings == ()
     assert first.clean
     assert first.coverage is not None
-    assert first.coverage.counts == {"MAPPED": 0, "DECOMPOSED": 0, "DEFERRED": 0, "OUT": 1}
+    assert first.coverage.counts == {
+        "MAPPED": 0,
+        "DECOMPOSED": 0,
+        "INVENTORIED": 0,
+        "DEFERRED": 0,
+        "OUT": 1,
+    }
     assert first.as_dict()["findings"] == []
     assert second.to_json() == first.to_json()
     assert str(tmp_path) not in first.to_json()
@@ -487,9 +493,9 @@ def test_audit_keeps_the_normal_limit_for_flat_root_articles(tmp_path: Path) -> 
     _coverage(blueprint)
     _article(blueprint, "README.md", depends=False)
     for index in range(25):
-        _article(blueprint, f"unit-{index:02d}.md", declaration="theorem")
+        _article(blueprint, f"chapter/unit-{index:02d}.md", declaration="theorem")
 
-    findings = _finding_map(blueprint)["roadmap/README.md"]
+    findings = _finding_map(blueprint)["roadmap/chapter/README.md"]
 
     assert findings == [
         (

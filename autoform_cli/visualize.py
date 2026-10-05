@@ -19,6 +19,21 @@ class VisualizationError(ValueError):
     """Raised when visualization output would overwrite authored content."""
 
 
+def _target_statuses(
+    graph: Graph,
+    statuses: dict[str, status.NodeStatus],
+) -> dict[str, status.NodeStatus]:
+    """Keep inventory articles out of the mathematical progress legend."""
+    containers = frozenset(
+        node.parent for node in graph.nodes.values() if node.parent is not None
+    )
+    return {
+        node_id: statuses[node_id]
+        for node_id, node in graph.nodes.items()
+        if node_id not in containers and node.formalizable
+    }
+
+
 def _destination(path: Path) -> Path:
     """Canonicalize the parent without following the final destination symlink."""
     path = path.absolute()
@@ -157,7 +172,7 @@ def export_structure(blueprint_dir: Path, output: Path | None = None) -> Path:
             continue
         kind = f"{node.catalog} catalog" if node.catalog is not None else node.declaration or node.kind
         lines.append(
-            f"{indent}- [{node.title}]({entry.as_posix()}) · {kind} · {statuses[node.id].label}"
+            f"{indent}- [{node.title}]({entry.as_posix()}) · {kind} · {state_label}"
         )
 
     depths = {len(p.relative_to(blueprint_dir).parts) - 1 for p in by_path}

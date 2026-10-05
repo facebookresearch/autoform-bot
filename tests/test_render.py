@@ -827,7 +827,13 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path
         "complete": True,
         "coverage": {
             "complete": False,
-            "counts": {"DECOMPOSED": 0, "DEFERRED": 0, "MAPPED": 1, "OUT": 0},
+            "counts": {
+                "DECOMPOSED": 0,
+                "DEFERRED": 0,
+                "INVENTORIED": 0,
+                "MAPPED": 1,
+                "OUT": 0,
+            },
             "schema": "autoform-coverage/v1",
             "source_path": "coverage/README.md",
             "source_sha256": manifest["coverage"]["source_sha256"],
@@ -1047,7 +1053,13 @@ def test_manifest_records_machine_checkable_coverage_aggregates(tmp_path: Path) 
     manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
     assert manifest["coverage"] == {
         "complete": False,
-        "counts": {"DECOMPOSED": 1, "DEFERRED": 0, "MAPPED": 1, "OUT": 1},
+        "counts": {
+            "DECOMPOSED": 1,
+            "DEFERRED": 0,
+            "INVENTORIED": 0,
+            "MAPPED": 1,
+            "OUT": 1,
+        },
         "schema": "autoform-coverage/v1",
         "source_path": "coverage/README.md",
         "source_sha256": manifest["coverage"]["source_sha256"],

@@ -240,6 +240,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert manifest["coverage"]["counts"] == {
         "DECOMPOSED": 1,
         "DEFERRED": 0,
+        "INVENTORIED": 0,
         "MAPPED": 5,
         "OUT": 1,
     }

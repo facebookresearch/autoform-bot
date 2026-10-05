@@ -78,6 +78,12 @@ Optional `declaration: theorem`, `declaration: def`, and similar frontmatter
 marks a formalizable article. Inline relative links under `## Depends on` and
 `## Proof depends on` define dependency edges; reference-style links do not.
 
+`catalog: module` instead marks a source/module inventory record: it is neither
+mathematical exposition nor a formalization target. Coverage uses `INVENTORIED`
+for exact source accounting and reserves `DECOMPOSED` for source-grounded
+declaration articles. Inventory totals are reported separately from target
+completion.
+
 Markdown is the source of truth; Mermaid graphs and MkDocs pages are derived
 views. See the [blueprint format and CLI reference](autoform_cli/README.md) for
 complete frontmatter, hierarchy, status, and validation rules.
