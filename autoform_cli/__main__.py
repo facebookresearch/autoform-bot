@@ -880,7 +880,13 @@ def _review_record(args: argparse.Namespace) -> int:
             # while the card is written, goes unseen, and so does an edit to a
             # source the article cites, which only the reload above compares.
             _refuse_changed_article(card, *articles[card.article_id])
-            written.append((publish_readback(card), card.declaration))
+            try:
+                path = publish_readback(card)
+            except ValueError as exc:
+                # Named as the conflict check names it: the partial-batch
+                # message points to "that record", so the error must say which.
+                raise ValueError(f"{card.declaration}: {exc}") from exc
+            written.append((path, card.declaration))
     except (GraphValidationError, ReviewError, SkeletonError) as exc:
         _report_recorded(written, len(requests))
         for issue in exc.issues:

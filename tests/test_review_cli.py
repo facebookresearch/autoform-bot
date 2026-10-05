@@ -1196,7 +1196,7 @@ def test_a_batch_interrupted_while_publishing_says_what_it_filed(
         "setting that record's expected_card_hash to the card hash it found, or removing it if it found none), "
         "running the record again files the rest"
     ) in captured.err
-    assert "read-back already exists with different content" in captured.err
+    assert f"error: {later['declaration']}: read-back already exists with different content" in captured.err
 
     # Unchanged, the batch is refused: the other writer's card is a conflict.
     monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish)
@@ -1239,7 +1239,7 @@ def test_a_batch_whose_named_card_is_removed_midway_finishes_naming_none(
 
     err = capsys.readouterr().err
     assert "or removing it if it found none" in err
-    assert "error: read-back changed before replacement: expected 'sha256:" in err
+    assert f"error: {later['declaration']}: read-back changed before replacement: expected 'sha256:" in err
     assert err.endswith(", found None\n")
 
     # The record still names the removed card, so it is refused until it names none.
