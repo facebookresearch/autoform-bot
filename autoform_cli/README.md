@@ -842,9 +842,10 @@ while Lean ran or the reloaded blueprint is not the one the extraction saw.
 Every card is built and checked before the first is written,
 so one bad record stops the batch. Publishing then goes card by card, each
 under its own compare-and-swap, and each card's article is read again just
-before it is written; a concurrent writer, an edit to an article whose card is
-not yet written, or a failed write (a full disk, or an I/O or permission error)
-can stop it midway. Only the article's own file is read again, through the
+before it is written; a concurrent writer, an article whose card is not yet
+written being edited or made unreadable, or a failed write (a full disk, or an
+I/O or permission error) can stop it midway. Only the article's own file is
+read again, through the
 link if the article is one, and an edit after that read, while the card is
 written, goes unseen. The command says how
 many cards it filed, and because filing identical content is a no-op, running
@@ -852,7 +853,8 @@ the same batch again once the cause is cleared completes it. When the cause is
 a card another writer filed, replaced, or removed meanwhile, the batch's record
 for it must first name the hash of the card now there, or no hash if there is
 none. When it is an article deleted meanwhile, the article must be restored or
-its records dropped. A batch with records whose `article_id` is no longer in
+its records dropped, and one made unreadable must be readable again. A batch
+with records whose `article_id` is no longer in
 the blueprint files nothing and names each of them, before it lists any card
 conflict; each must be dropped, or take its `article_id` and packet from the
 packet manifest a new `review prepare` writes and drop any
