@@ -9,6 +9,15 @@ from importlib.resources import files
 
 RELEASE_CATALOG_SCHEMA = "autoform-project-release-catalog/v1"
 _COMMIT = re.compile(r"[0-9a-f]{40}")
+_ELAN_LEAN4_RELEASE = re.compile(
+    r"(?:(?:leanprover/lean4:)?v?)([0-9]+\.[0-9]+\.[0-9]+(?:-[^ \t\r\n]+)?)"
+)
+_GIT_URL_AUTHORITY = re.compile(
+    r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://"
+    r"(?P<userinfo>[^/@]*@)?"
+    r"(?P<host>\[[^]]+\]|[^/:?#]+)"
+    r"(?P<rest>.*)"
+)
 
 
 class ProjectCatalogError(ValueError):
@@ -35,11 +44,12 @@ class ReleaseCatalog:
 
     def match(self, lean_toolchain: str, mathlib_git: str | None, mathlib_commit: str | None) -> SupportedRelease | None:
         commit = None if mathlib_commit is None else mathlib_commit.lower()  # Git reads either case
+        toolchain = canonical_lean_toolchain(lean_toolchain)
         return next(
             (
                 release
                 for release in self.releases
-                if release.lean_toolchain == lean_toolchain
+                if canonical_lean_toolchain(release.lean_toolchain) == toolchain
                 and release.mathlib_commit == commit
                 and canonical_git_url(release.mathlib_git) == canonical_git_url(mathlib_git)
             ),
@@ -53,10 +63,28 @@ class ReleaseCatalog:
         return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
 
 
-def canonical_git_url(url: str | None) -> str | None:
-    """Drop the trailing `/` and `.git`, which do not change the repository a URL names."""
+def canonical_lean_toolchain(toolchain: str) -> str:
+    """Expand the stable Lean release aliases that elan resolves identically."""
 
-    return None if url is None else url.rstrip("/").removesuffix(".git")
+    match = _ELAN_LEAN4_RELEASE.fullmatch(toolchain)
+    return f"leanprover/lean4:v{match.group(1)}" if match is not None else toolchain
+
+
+def canonical_git_url(url: str | None) -> str | None:
+    """Normalize Git URL spellings without changing repository-path identity."""
+
+    if url is None:
+        return None
+    value = url.rstrip("/").removesuffix(".git")
+    match = _GIT_URL_AUTHORITY.fullmatch(value)
+    if match is None:
+        return value
+    return (
+        f"{match.group('scheme').lower()}://"
+        f"{match.group('userinfo') or ''}"
+        f"{match.group('host').lower()}"
+        f"{match.group('rest')}"
+    )
 
 
 def load_release_catalog() -> ReleaseCatalog:

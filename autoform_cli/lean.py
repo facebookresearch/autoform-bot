@@ -315,6 +315,9 @@ def _normalize_remote(remote: str) -> str | None:
         remote = "https://" + remote[len("ssh://git@") :]
     if not remote.startswith(("http://", "https://")):
         return None
+    scheme, _, rest = remote.partition("://")
+    authority, slash, path = rest.partition("/")
+    remote = f"{scheme}://{authority.rpartition('@')[2]}{slash}{path}"
     return remote[: -len(".git")] if remote.endswith(".git") else remote.rstrip("/")
 
 

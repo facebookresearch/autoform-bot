@@ -139,17 +139,22 @@ autoform project inspect path/inside/project --json
 autoform project versions --json
 ```
 
-`project inspect` reads the nearest enclosing project's `lean-toolchain`,
-`lake-manifest.json`, and `lakefile.toml` without running Lake, Lean, Git, or
-the network. Compatibility is decided by the toolchain and the Mathlib commit
-the manifest locks, which is what `lake build` uses: `supported` when that pair
-is in the bundled catalog, `unlisted` when it is not, and `indeterminate` when
-either is unknown (no manifest, no Mathlib, a path-based Mathlib, or any file
-error). A `.lake/package-overrides.json` entry for Mathlib replaces the
-manifest's, and a `lakefile.toml` that requests a different Mathlib than the
-lock gets a `lake-manifest-stale` warning. `lakefile.lean` takes precedence, as
-in Lake, but is never evaluated, so its projects stay `indeterminate`. As in
-elan, only the trimmed first line of `lean-toolchain` counts.
+`project inspect` is local and read-only. It inspects the nearest enclosing Lean
+project without running Lake, Lean, Git, or the network. For automation, use
+`--json`; accept only `autoform-project-inspection/v1`, then branch on `ok`,
+`compatibility.status`, and `diagnostics[].code`, not message text.
+
+Treat `ok` and compatibility independently:
+
+- `ok` reports whether inspection found errors.
+- `compatibility.status` is `supported` when the active Lean/Mathlib release
+  identity matches the bundled catalog, `unlisted` when comparable but absent,
+  and `indeterminate` when Autoform cannot establish that identity.
+
+Exit 0 means `ok: true`, exit 1 an inspection or catalog error, and exit 2
+invalid CLI usage. `supported` certifies release identity, not build validity.
+See the [project-inspection reference](project/README.md) for resolver rules,
+scope limits, JSON fields, nullability, and diagnostic codes.
 
 `project versions` lists the bundled catalog of known-good Lean and Mathlib
 pairs. It is an allowlist, not a resolver.

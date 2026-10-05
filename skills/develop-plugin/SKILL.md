@@ -23,7 +23,7 @@ Implement reusable plugin behavior. Keep Cabannes-specific facts in the example
 and references; demonstrate outcomes without special-casing them.
 
 Keep plugin and formalization roots distinct. Agents can infer routine details;
-keep skills to non-obvious constraints and fragile domain steps.
+keep shared agent entrypoints concise and link command/schema details as on-demand references.
 
 Run focused checks, then normally run:
 
@@ -39,4 +39,4 @@ only to test installed discovery in a new thread. Report outcome and checks.
 Treat rewritten private declaration safety as fail-closed evidence: correlate
 the official user name to its lexical declaration by source coordinates.
 
-Lean: follow `docs/lean-beam.md`; Beam owns processes.
+Lean: follow `docs/lean-beam.md`.

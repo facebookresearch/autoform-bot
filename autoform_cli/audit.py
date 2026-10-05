@@ -136,11 +136,15 @@ def audit_graph(
 
     findings: list[AuditFinding] = []
     derived = status.derive(graph)
+    contained: dict[str, list[str]] = {}
+    for node in graph.nodes.values():
+        if node.parent is not None:
+            contained.setdefault(node.parent, []).append(node.id)
 
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
-        children = graph.children(node_id)
+        children = contained.get(node_id, ())
         article = _read_article(node.path)
 
         if node.formalizable:
