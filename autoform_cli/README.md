@@ -802,8 +802,10 @@ modules of the articles it files, so only those modules need to be built and
 fresh, and its packets match the ones `review prepare` wrote from a full
 extraction.
 
-`--manifest` files a batch against one extraction, where one record per card
-would pay a Lake freshness check and a Lean start each. A coordinator builds it
+`--manifest` files a batch against one extraction: one Lake freshness check,
+one helper build, and one probe for each module that declares a batch
+declaration. One record per card would pay the freshness check, the helper
+build, and a probe each, two Lean starts per card. A coordinator builds it
 from the packet manifest `review prepare` writes: each record takes an entry's
 `article_id` and `declaration`, its `packet` made relative to the records
 manifest's directory (the packet manifest's paths are relative to the packets
