@@ -613,10 +613,12 @@ SECONDS` sets the probe's budget, 600 seconds by default. The report lists:
   article's, every helper owner's, and, for a helper without an owner, a
   `lean/<slug>-<digest>` key derived from its name, so two revisions touching
   the same helper contend for the same claim; each helper reports its key as
-  `claim_target`.
+  `claim_target`. A revised declaration that no article names is claimed the
+  same way, under its owner's target or its own key.
 
 A revision is `contained` when no other article uses it and every helper it
-impacts belongs to the revised article; it can then be made in place under
+impacts or revises belongs to the revised article, so its only claim target is
+that article's; it can then be made in place under
 that article's claim. A declaration derived from a revised one without naming
 it in its statement changes with it, but `work impact` does not report that
 declaration's users: the additive form `to_additive` writes, which goes
