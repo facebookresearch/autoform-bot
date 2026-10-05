@@ -658,6 +658,49 @@ def test_a_revised_declaration_no_article_names_is_claimed_like_a_helper() -> No
     assert own.contained
 
 
+def test_markdown_paths_count_from_every_article_a_revised_declaration_belongs_to() -> None:
+    records = _records(
+        _rec("A.R", "def"),
+        _rec("A.X", "def"),
+        _rec("A.O", "def"),
+        _rec("A.O.aux", "def", parent="A.O"),
+        _rec("A.loose", "def"),
+        _rec("A.useX", type_uses=("A.X",)),
+        _rec("A.inlinesX"),
+        _rec("A.inlinesAux"),
+    )
+
+    def stated(node_id: str, *declarations: str, on: str) -> ImpactArticle:
+        return _article(node_id, *declarations, dependencies=(on,), statement_dependencies=(on,), stated=True)
+
+    articles = [
+        _article("r", "A.R"),
+        _article("t", "A.X", stated=True),
+        _article("o-a", "A.O"),
+        _article("o-b", "A.O"),
+        _article("uses-x", "A.useX", dependencies=("t",)),
+        stated("inlines-x", "A.inlinesX", on="t"),
+        stated("inlines-aux", "A.inlinesAux", on="o-b"),
+    ]
+
+    named = _impact(records, articles, "r", ["A.X"])
+    owned = _impact(records, articles, "r", ["A.O.aux"])
+    unowned = _impact(records, articles, "r", ["A.loose"])
+
+    # A.X belongs to t, so t needs no path to r, a path to t declares uses-x,
+    # and inlines-x rests on A.X through t although its Lean shows no use.
+    assert _ids(named.statement_impacted) == ["t", "uses-x"]
+    assert named.undeclared_dependencies == ()
+    assert named.unused_statement_dependencies == ("inlines-x",)
+    assert named.claim_targets == ("r", "inlines-x", "t", "uses-x")
+    # The unnamed A.O.aux belongs to both of A.O's articles.
+    assert owned.unused_statement_dependencies == ("inlines-aux",)
+    assert owned.claim_targets == ("r", "inlines-aux", "o-a", "o-b")
+    # A.loose belongs to no article, so only paths to r count.
+    assert unowned.unused_statement_dependencies == ()
+    assert unowned.claim_targets == ("r", _lean_key("A.loose"))
+
+
 def test_an_unowned_helper_claim_key_is_ref_safe_for_any_name() -> None:
     names = ("_private.Demo.Extra.0.A.priv", "A.«weird name»", "«∀»", "A." + "long" * 20)
     records = _records(_rec("A.base", "def"), *(_rec(name, type_uses=("A.base",)) for name in names))
@@ -1121,7 +1164,7 @@ def test_cli_text_report_lists_each_section(tmp_path: Path, monkeypatch, capsys)
         "  chapter/loose: Demo.loose",
         "Helpers no article names:",
         "  Demo.base_eq (theorem, statement) Demo.lean:5; no owner; claims lean/demo-base-eq-7f17aa41d1461243",
-        "Impacted without a Markdown dependency path to the revised article: chapter/loose",
+        "Impacted without a Markdown dependency path to the revised declarations: chapter/loose",
         "Statement dependents in Markdown that are not statement impacted: chapter/inlines",
         "Deprecated:",
         "  Demo.gone: no users, safe to delete",

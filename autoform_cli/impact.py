@@ -15,7 +15,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -436,9 +436,12 @@ class ImpactReport:
     statement_impacted: tuple[ImpactedArticle, ...]
     proof_impacted: tuple[ImpactedArticle, ...]
     helpers: tuple[ImpactHelper, ...]
+    #: Impacted articles with no Markdown dependency path to the revised
+    #: declarations: to the revised article, or to an article naming one of
+    #: them or, when none names it, owning it.
     undeclared_dependencies: tuple[str, ...]
     #: Stated articles other than Mathlib ones whose Markdown statement rests on
-    #: the revised article, through statement edges only, that are not
+    #: the revised declarations, through statement edges only, that are not
     #: statement-impacted: their Lean may inline a revised definition's body
     #: instead of naming it.
     unused_statement_dependencies: tuple[str, ...]
@@ -455,8 +458,9 @@ class ImpactReport:
         does not count; any other helper, owned or not, does, and so does a
         revised declaration that belongs to another article or to none, or a
         stated article, other than a Mathlib one, whose Markdown statement rests
-        on the revised one, even when its Lean shows no use. The revision is
-        contained exactly when its only claim target is the revised article's.
+        on the revised declarations, even when its Lean shows no use. The
+        revision is contained exactly when its only claim target is the revised
+        article's.
         """
 
         return self.claim_targets == (self.article.claim_target,)
@@ -584,8 +588,16 @@ def compute_impact(
             ImpactHelper(name, record.kind, impact, record.module, path, line, owners, targets)
         )
 
+    # A revised declaration belongs to the articles naming it or, when none
+    # does, to its owners, so a Markdown path to any of them reaches the
+    # revision as surely as a path to the revised article does.
+    anchors = {revised.id}
+    for name in revised_names:
+        anchors.update(named.get(name) or _owners(records[name], records, named))
     impacted = (*statement_impacted, *proof_impacted)
-    undeclared = sorted(item.id for item in impacted if not _reaches(item.id, revised.id, by_id))
+    undeclared = sorted(
+        item.id for item in impacted if item.id not in anchors and not _reaches(item.id, anchors, by_id)
+    )
     # The probe sees only names, so a dependent whose Lean inlines a revised
     # definition's body instead of naming it would keep its statement under the
     # old meaning; its Markdown statement dependency is the only trace. A
@@ -599,7 +611,7 @@ def compute_impact(
         and not article.mathlib
         and article.id != revised.id
         and article.id not in statement_ids
-        and _reaches(article.id, revised.id, by_id, statement_only=True)
+        and _reaches(article.id, anchors, by_id, statement_only=True)
     )
 
     deprecated_users: dict[str, set[str]] = {}
@@ -740,9 +752,9 @@ def _descends_from(record: ConstantRecord, ancestor: str, records: Mapping[str, 
 
 
 def _reaches(
-    start: str, target: str, articles: Mapping[str, ImpactArticle], *, statement_only: bool = False
+    start: str, targets: Collection[str], articles: Mapping[str, ImpactArticle], *, statement_only: bool = False
 ) -> bool:
-    """Whether ``start`` reaches ``target`` through Markdown dependencies, or only statement ones."""
+    """Whether ``start`` reaches one of ``targets`` through Markdown dependencies, or only statement ones."""
 
     seen = {start}
     work = [start]
@@ -750,7 +762,7 @@ def _reaches(
         article = articles.get(work.pop())
         edges = () if article is None else article.statement_dependencies if statement_only else article.dependencies
         for dependency in edges:
-            if dependency == target:
+            if dependency in targets:
                 return True
             if dependency not in seen:
                 seen.add(dependency)
@@ -919,7 +931,7 @@ def format_impact(report: ImpactReport) -> list[str]:
             )
     if report.undeclared_dependencies:
         lines.append(
-            "Impacted without a Markdown dependency path to the revised article: "
+            "Impacted without a Markdown dependency path to the revised declarations: "
             + ", ".join(report.undeclared_dependencies)
         )
     if report.unused_statement_dependencies:
