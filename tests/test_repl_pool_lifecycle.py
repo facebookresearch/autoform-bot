@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 
 import pytest
 
@@ -135,6 +137,45 @@ def test_pool_quarantines_every_slot_after_unverified_cleanup(monkeypatch):
 
     assert pool._idle.qsize() == 1
     pool.shutdown()
+
+
+def test_shutdown_unblocks_a_call_waiting_for_a_cold_slot(monkeypatch):
+    class FakeRepl:
+        def __init__(self, config):
+            pass
+
+        def is_clean(self):
+            return True
+
+        def close(self):
+            pass
+
+        def get_memory_usage(self):
+            return 0.0
+
+    monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
+    pool = repl_pool.LeanReplPool(repl_pool.LeanReplPoolConfig(num_repls=1))
+    pool._idle.get_nowait()
+    errors = []
+    waiter = threading.Thread(
+        target=lambda: errors.append(
+            pytest.raises(RuntimeError, pool.run, "#check Nat").value
+        )
+    )
+    waiter.start()
+    deadline = time.monotonic() + 2
+    while pool._active_calls == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    stopper = threading.Thread(target=pool.shutdown)
+    stopper.start()
+    waiter.join(timeout=2)
+    stopper.join(timeout=2)
+
+    assert not waiter.is_alive()
+    assert not stopper.is_alive()
+    assert len(errors) == 1
+    assert "pool is shut down" in str(errors[0])
 
 
 def test_repl_retry_recovery_uses_the_original_deadline(monkeypatch):
