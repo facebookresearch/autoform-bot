@@ -2338,7 +2338,7 @@ def test_environmental_failures_still_abort_a_per_module_extraction(tmp_path: Pa
 
     monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", stale)
 
-    with pytest.raises(SkeletonError, match="build artifacts are stale"):
+    with pytest.raises(SkeletonError, match=r"build artifacts are stale; run `lake build Skel.Main Skel.Uses`"):
         extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project)
     assert calls == [["/bin/lake", "--rehash", "--no-build", "build", "Skel.Main", "Skel.Uses"]]
 
