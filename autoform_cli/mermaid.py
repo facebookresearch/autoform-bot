@@ -265,7 +265,7 @@ _MEANINGS = {
     "fully_proved": "Proved, and every prerequisite is fully proved too.",
     "proved": "Proof compiles, but something it rests on is not finished.",
     "defined": "Definition is written in Lean.",
-    "conditional": "Proof compiles, but rests on an open statement whose Lean proof is still sorry.",
+    "conditional": "Proof compiles, but rests on an open statement without a recorded Lean proof.",
     "can_prove": "Statement is in Lean and nothing it needs is blocked, so the proof can start.",
     "stated": "Statement is in Lean; the proof is not.",
     "can_state": "Nothing it needs is blocked, so the statement can be written in Lean.",

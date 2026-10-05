@@ -151,7 +151,7 @@ def test_a_conditional_proof_has_its_own_colour_and_legend_entry(tmp_path: Path)
     assert '("Top"):::conditional' in document
     assert f"classDef conditional fill:{_state('conditional').fill}" in document
     assert '<span class="bp-swatch bp-swatch-conditional">' in document
-    assert "Proof compiles, but rests on an open statement whose Lean proof is still sorry." in document
+    assert "Proof compiles, but rests on an open statement without a recorded Lean proof." in document
 
 
 def test_the_legend_explains_readiness_without_naming_a_policy(tmp_path: Path) -> None:

@@ -1311,7 +1311,7 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(tmp_path: Path
     assert (
         '<span class="bp-key">Assumes</span><span class="bp-value">'
         '<a class="bp-ref bp-ref-can_prove" href="#open">Theorem 1 (Open)</a>'
-        " (open statements whose Lean proofs are still sorry)</span>"
+        " (open statements without a recorded Lean proof)</span>"
     ) in top
     # Only the conditional proof carries the row; the open statement assumes nothing.
     assert page.count('<span class="bp-key">Assumes</span>') == 1

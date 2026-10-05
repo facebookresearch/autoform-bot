@@ -1708,7 +1708,7 @@ def _render_environment(
         assumed = _node_references(
             node_status.assumes, graph=graph, statuses=statuses, numbers=numbers, links=links
         )
-        meta_rows.append(("Assumes", f"{assumed} (open statements whose Lean proofs are still sorry)"))
+        meta_rows.append(("Assumes", f"{assumed} (open statements without a recorded Lean proof)"))
     if node.discussion:
         meta_rows.append(("Discussion", _discussion_link(node.discussion, linker)))
     meta = _render_rows(meta_rows, css_class="bp-meta")
