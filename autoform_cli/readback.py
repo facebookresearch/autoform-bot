@@ -3873,7 +3873,8 @@ def _card_conflict(path: Path, before: str | None, expected_card_hash: str | Non
     if before is not None and expected_card_hash is None:
         return f"read-back already exists with different content: {path}; retry with expected_card_hash={before!r}"
     if before != expected_card_hash:
-        return f"read-back changed before replacement: expected {expected_card_hash!r}, found {before!r}"
+        found = "no card" if before is None else repr(before)
+        return f"read-back changed before replacement: expected {expected_card_hash!r}, found {found}"
     return None
 
 

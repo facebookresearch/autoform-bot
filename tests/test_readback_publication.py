@@ -1297,7 +1297,7 @@ def test_the_conflict_check_reports_a_card_removed_since_its_hash_was_taken(tmp_
     path.unlink()
 
     (conflict,) = readback_conflicts([card])
-    assert "changed before replacement" in conflict and "found None" in conflict
+    assert conflict.endswith(f"read-back changed before replacement: expected {expected!r}, found no card")
     with pytest.raises(ValueError, match="changed before replacement"):
         publish_readback(card)
     assert not path.exists()

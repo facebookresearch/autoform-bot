@@ -1385,12 +1385,12 @@ def test_a_batch_whose_named_card_is_removed_midway_finishes_naming_none(
     err = capsys.readouterr().err
     assert "or removing it if it found none" in err
     assert f"error: {later['declaration']}: read-back changed before replacement: expected 'sha256:" in err
-    assert err.endswith(", found None\n")
+    assert err.endswith(", found no card\n")
 
     # The record still names the removed card, so it is refused until it names none.
     monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish)
     assert _record(blueprint, bundle, manifest, tmp_path) == 2
-    assert ", found None" in capsys.readouterr().err
+    assert ", found no card\n" in capsys.readouterr().err
     del records[1]["expected_card_hash"]
     manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
     assert _record(blueprint, bundle, manifest, tmp_path) == 0
