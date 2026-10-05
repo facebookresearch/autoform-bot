@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "autoform"
 version = "0.6.0"
-description = "Markdown-blueprint roadmaps with managed Lean Beam tooling"
+description = "Markdown-blueprint roadmaps for Lean formalization"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"

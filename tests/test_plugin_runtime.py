@@ -8,6 +8,24 @@ import sys
 import zipfile
 
 
+def test_product_descriptions_focus_on_workflow_not_runtime(repo_root):
+    marketplace = json.loads((repo_root / ".claude-plugin" / "marketplace.json").read_text())
+    claude = json.loads((repo_root / ".claude-plugin" / "plugin.json").read_text())
+    codex = json.loads((repo_root / ".codex-plugin" / "plugin.json").read_text())
+    muse = json.loads((repo_root / ".muse-plugin" / "plugin.json").read_text())
+
+    descriptions = [
+        marketplace["description"],
+        *(plugin["description"] for plugin in marketplace["plugins"]),
+        claude["description"],
+        codex["description"],
+        codex["interface"]["shortDescription"],
+        codex["interface"]["longDescription"],
+        muse["description"],
+    ]
+    assert all("beam" not in description.casefold() for description in descriptions)
+
+
 def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
     skills = {path.parent.name for path in (repo_root / "skills").glob("*/SKILL.md")}
     assert skills == {

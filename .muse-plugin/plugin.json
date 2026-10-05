@@ -3,7 +3,7 @@
   "name": "autoform",
   "displayName": "AutoForm Bot",
   "version": "0.6.0",
-  "description": "Set up Lean repositories, build Markdown roadmaps, and use a managed Lean Beam server.",
+  "description": "Set up Lean repositories, build Markdown roadmaps, and support human or agent review.",
   "compat": {
     "source": "native",
     "manifestDir": ".muse-plugin"

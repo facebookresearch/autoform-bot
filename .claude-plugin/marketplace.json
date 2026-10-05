@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "autoform",
-  "description": "Lean repository setup, Markdown-vault roadmaps, proving, and review with managed Lean Beam tooling.",
+  "description": "Lean repository setup, Markdown-vault roadmaps, proving, and human or agent review.",
   "owner": {
     "name": "Vivien Cabannes",
     "url": "https://github.com/facebookresearch/autoform-bot"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "autoform",
-      "description": "Set up, plan, publish, prove, and review Lean formalizations with managed Lean Beam tooling.",
+      "description": "Set up, plan, publish, prove, and review Lean formalizations as linked Markdown nodes.",
       "source": "./",
       "category": "productivity"
     }
