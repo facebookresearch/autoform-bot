@@ -7,6 +7,11 @@ name = "mathlib"
 git = "https://github.com/leanprover-community/mathlib4.git"
 rev = "v4.32.2"
 
+[[require]]
+name = "repl"
+git = "https://github.com/leanprover-community/repl.git"
+rev = "68a3b3a059787a7db44fb1e6281e4a657efee470"
+
 [[lean_lib]]
 name = "CabannesThesis"
 srcDir = "src"

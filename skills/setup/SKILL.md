@@ -42,7 +42,10 @@ bash "<AUTOFORM_PLUGIN_ROOT>/scripts/make_project.sh" \
 For a new or incomplete repository:
 
 - create or repair a buildable Lean project with matching `lean-toolchain` and
-  Mathlib revisions; and
+  Mathlib revisions;
+- declare `leanprover-community/repl` at an immutable revision tested against
+  that exact Lean toolchain, then verify `lake build @repl/repl`; never guess a
+  compatible revision; and
 - write the blueprint vault, site configuration, and CI with `autoform init`.
 
 `autoform init` is the whole vault: `blueprint/` with its landing page,
@@ -91,6 +94,7 @@ then run the publication sequence:
 ```bash
 lake exe cache get   # skip only when the project has no Mathlib dependency
 lake build
+lake build @repl/repl
 ```
 
 Then validate, visualize, render, and strict-build the site, keeping
