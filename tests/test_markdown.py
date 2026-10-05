@@ -19,6 +19,11 @@ from autoform_cli.markdown import (
     rendered_visible_text,
 )
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
+
 #: Heading forms whose published anchors are easy to get subtly wrong, paired
 #: with what the configured MkDocs renderer actually publishes for them. Several
 #: of these depend on block context or on a specific extension setting rather
@@ -122,6 +127,45 @@ def test_the_renderer_pins_match_the_pages_build(workflow: str) -> None:
     build = pages[pages.index("- name: Build the Markdown site") :]
     build = build[: build.index("\n\n")]
     assert '--with "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in build
+
+
+#: Pins the Pages build may keep below uv.lock. mkdocs-literate-nav 0.6.2
+#: requires only mkdocs>=1.4.1, so it resolves beside the pinned mkdocs; the
+#: lock's 0.6.3 would also install properdocs.
+PAGES_PINS_BELOW_THE_LOCK = {"mkdocs-literate-nav": "0.6.2"}
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        "autoform_cli/templates/github/workflows/blueprint-pages.yml",
+        "skills/setup/assets/cabannes-thesis-project/.github/workflows/blueprint-pages.yml",
+    ],
+)
+def test_the_pages_build_pins_the_locked_versions(workflow: str) -> None:
+    """The site build installs its own pinned set, and a set with no solution
+    fails every project's Pages run: mkdocs-material 9.6.21 requires
+    pymdown-extensions<11, and the build pinned 11.0.1 beside it. uv.lock is a
+    set uv resolved, so each package the build pins that the lock holds must
+    carry the lock's version."""
+
+    root = Path(__file__).resolve().parents[1]
+    locked: dict[str, set[str]] = {}
+    with (root / "uv.lock").open("rb") as handle:
+        for package in tomllib.load(handle)["package"]:
+            locked.setdefault(package["name"], set()).add(package["version"])
+    pages = (root / workflow).read_text(encoding="utf-8")
+    build = pages[pages.index("- name: Build the Markdown site") :]
+    build = build[: build.index("\n\n")]
+    pins = dict(re.findall(r"--(?:from|with) ([\w.-]+)==(\S+)", build))
+
+    assert "mkdocs-material" in pins
+    drifted = {
+        name: (version, sorted(locked[name]))
+        for name, version in pins.items()
+        if name in locked and locked[name] != {version} and PAGES_PINS_BELOW_THE_LOCK.get(name) != version
+    }
+    assert drifted == {}
 
 
 def test_the_documented_site_build_installs_autoform() -> None:

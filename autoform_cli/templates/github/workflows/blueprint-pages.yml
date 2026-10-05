@@ -408,7 +408,7 @@ jobs:
       - name: Build the Markdown site
         run: >-
           uvx --from mkdocs==1.6.1
-          --with mkdocs-material==9.6.21
+          --with mkdocs-material==9.7.7
           --with mkdocs-literate-nav==0.6.2
           --with markdown==3.10.3
           --with pymdown-extensions==11.0.1
