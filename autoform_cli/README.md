@@ -554,6 +554,13 @@ Leases expire after 1500 seconds unless `--ttl` sets another length. Renew well
 within that, and confirm a claim is still held with `renew`, not `acquire`,
 which also succeeds once a lease has expired or been released.
 
+Pass several targets to `acquire`, `renew`, or `release` when one change needs
+shared ownership. The board reads the set once and sends one atomic push with a
+lease for every ref, so either every target changes or none does. A remote that
+cannot push atomically is refused, and duplicate or malformed targets fail
+before any push. To avoid deadlock, acquire the complete set in one command;
+never hold a partial set while waiting for another target.
+
 Claims are fail-closed compare-and-swap leases under
 `refs/autoform-claims/` on the Git `origin`; pass `--repo` for another claim
 board. A failed acquire or renew means the caller cannot prove ownership and
@@ -595,6 +602,19 @@ values it does not recognize. With `--lean-root` it also fails on a `lean:` name
 absent from the sources, as `leanblueprint checkdecls` does for LaTeX
 blueprints. It validates structure and leaves mathematical correctness to the
 agent and the Lean kernel.
+
+Source-aware `--lean-root` inspection requires directory-descriptor traversal.
+Platforms without that capability, including Windows, fail closed instead of
+treating repeated pathname reads as one filesystem generation. Declaration
+locations and source revisions come from the same retained capture. Recognized
+skeleton packet/passages directories are identified by their bounded managed
+manifest before descendants are read; publication-output policy remains with
+the publication feature rather than this source layer.
+
+Automatically detected Git permalinks are emitted only for captured files whose
+bytes equal the blob at the stable detected commit. Dirty, untracked, missing,
+or concurrently checked-out files keep local declaration locations but receive
+no URL. An explicitly supplied ref remains a caller attestation.
 
 The Markdown files are the source of truth. Graphs and sites are derived views
 that may be regenerated at any time.

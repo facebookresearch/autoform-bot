@@ -90,6 +90,9 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     assert "private declaration safety as fail-closed evidence" in normalized
     assert "official user name" in normalized
     assert "by source coordinates" in normalized
+    assert "repeated pathname reads are not a generation boundary" in normalized
+    assert "marker schema in its owning feature" in normalized
+    assert "match the blob at the stable detected commit" in normalized
 
 
 def test_development_guidance_uses_progressive_command_reference(repo_root: Path) -> None:

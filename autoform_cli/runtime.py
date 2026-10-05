@@ -14,7 +14,7 @@ from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
 from .graph import Graph, load_graph
-from .lean import declaration_names, index_project
+from .lean import declaration_names, index_failure_message, index_project
 from .status import derive, is_definition
 
 RUNTIME_SCHEMA = "autoform-runtime/v2"
@@ -310,7 +310,10 @@ def build_runtime_graph(
         root = Path(lean_root).expanduser().resolve()
         if not root.is_dir():
             raise RuntimeProjectionError(["Lean root does not exist or is not a directory"])
-        lean_index = index_project(root)
+        try:
+            lean_index = index_project(root)
+        except OSError as error:
+            raise RuntimeProjectionError([index_failure_message(error)]) from error
 
     parents = {node.parent for node in graph.nodes.values() if node.parent is not None}
     runtime_nodes: list[RuntimeNode] = []
