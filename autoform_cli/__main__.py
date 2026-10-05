@@ -29,6 +29,7 @@ from .scaffold import ScaffoldError, scaffold_project
 from .skeleton import (
     DEFAULT_PROBE_TIMEOUT,
     SkeletonError,
+    check_statement_hashes,
     extract_skeletons,
     format_report,
     run_probe,
@@ -236,6 +237,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="SECONDS",
         help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g}); "
         "the Lake freshness check before it has its own budget",
+    )
+    skeleton.add_argument(
+        "--check-statements",
+        action="store_true",
+        help="fail when an article's recorded statement_hash no longer matches its statement",
     )
 
     render = subparsers.add_parser("render", help="build the publishable blueprint")
@@ -740,6 +746,27 @@ def _positive_seconds(value: str) -> float:
 
 
 def _skeleton(args: argparse.Namespace) -> int:
+    runner = None if args.timeout is None else lambda probe, root: run_probe(probe, root, timeout=args.timeout)
+    if args.check_statements:
+        if args.nodes or args.json or args.output is not None or args.packets is not None or args.passages is not None:
+            print(
+                "error: --check-statements does not combine with --node, --json, --output, --packets, or --passages",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            recorded, failures = check_statement_hashes(args.blueprint_dir, lean_root=args.lean_root, runner=runner)
+        except SkeletonError as exc:
+            for issue in exc.issues:
+                print(f"error: {issue}", file=sys.stderr)
+            return 2
+        for failure in failures:
+            print(f"error: {failure}", file=sys.stderr)
+        if not recorded:
+            print("no article records statement_hash; nothing to check")
+        elif not failures:
+            print(f"{recorded} recorded statement hash(es) match")
+        return 1 if failures else 0
     if args.passages is not None and args.packets is None:
         print("error: --passages requires --packets", file=sys.stderr)
         return 2
@@ -754,9 +781,7 @@ def _skeleton(args: argparse.Namespace) -> int:
         report = extract_skeletons(
             args.blueprint_dir,
             lean_root=args.lean_root,
-            runner=None
-            if args.timeout is None
-            else lambda probe, root: run_probe(probe, root, timeout=args.timeout),
+            runner=runner,
             node_ids=tuple(args.nodes) if args.nodes else None,
         )
         if args.packets is not None and not report.clean:

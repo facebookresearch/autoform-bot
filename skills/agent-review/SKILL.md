@@ -47,6 +47,8 @@ the evidence hash for the exact packet that was read. For a
 source-faithfulness verdict, record the article review hash that binds the joint
 packet to the cited passage, its locator, and the skeleton hash. These hashes
 are provenance evidence, not reviewer authentication or an approval key.
+When a statement passes, report the article's `statement_hash` from the same
+skeleton output; Formalize records it next to `statement: formalized`.
 A read-back verdict also copies its raw read-back hashes as specified by its
 rubric.
 Candidate code runs during extraction and can forge process output, so treat

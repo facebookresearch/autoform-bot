@@ -65,7 +65,8 @@ Lean uses: start from `autoform work impact` and make only the edits the
 [revision contract](../../autoform_cli/README.md#revision-contract) requires,
 under the claims it requires. A work item flagged `revision`, whose article
 records `statement: retracted`, is such a revision; restating it replaces
-`statement: retracted` with `statement: formalized`. Never add a new use of a
+`statement: retracted` with `statement: formalized` and records the restated
+statement's `statement_hash`. Never add a new use of a
 deprecated declaration. Search the pinned Mathlib checkout before adding
 helpers, and use the shared Lean LSP and REPL with `<PROJECT>` as the project
 path. Finish with the focused Lake target. Declare the result in a module the
@@ -111,7 +112,13 @@ score instead.
 
 On acceptance, update only the claimed article with the exact compiled
 declaration and truthful assertions: `statement: formalized`, plus `proof:
-formalized` once the proof is complete. On a useful failed route, record only
+formalized` once the proof is complete. Record `statement: formalized` together
+with the `statement_hash` that `autoform skeleton <PROJECT>/blueprint
+--lean-root <PROJECT> --node <ID>` prints for the candidate Agent Review passed.
+The hash binds the article's statement text and the elaborated meaning of its
+declarations, so a later edit to either fails CI's `--check-statements` until
+the statement is reviewed again and the new hash recorded. A proof does not
+change it: the proof phase leaves a recorded hash as it is. On a useful failed route, record only
 distilled reusable evidence under `## Execution notes`—the remaining goal,
 checked lemmas, and next route—never a transcript or retry counter. A missing
 prerequisite, an incorrect decomposition, a change another article needs, or a

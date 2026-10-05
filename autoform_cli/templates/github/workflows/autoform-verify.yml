@@ -111,3 +111,12 @@ jobs:
               "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
           fi
           lake env lean "$probe"
+
+      - name: Check recorded statement hashes
+        run: |
+          set -euo pipefail
+          # An article's statement_hash binds the statement Agent Review approved
+          # (its text and the elaborated Lean meaning). A drifted statement fails
+          # here until it is re-reviewed and the new hash recorded.
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            autoform skeleton blueprint --lean-root . --check-statements
