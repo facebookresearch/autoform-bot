@@ -2168,6 +2168,47 @@ def test_every_unreadable_input_is_named_before_any_lean_work(
     assert load_readbacks(blueprint) == {}
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+def test_a_fifo_given_as_a_packet_or_testimony_is_refused_without_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Opening a FIFO to read it waits for a writer, so a packet or testimony
+    that is one is refused unread, and named with its record and field."""
+
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    base = manifest.resolve().parent
+    packet = base / records[0]["packet"]
+    testimony = base / records[1]["testimony"]
+    for path in (packet, testimony):
+        path.unlink()
+        os.mkfifo(path)
+    capsys.readouterr()
+    exits: list[int] = []
+
+    batch = threading.Thread(target=lambda: exits.append(_record(blueprint, bundle, manifest, tmp_path)), daemon=True)
+    batch.start()
+    batch.join(30)
+    blocked = batch.is_alive()
+    if blocked:
+        # A batch stuck opening a FIFO is let go, so the test fails rather than hangs.
+        for path in (packet, testimony):
+            try:
+                os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+            except OSError:
+                pass
+        batch.join(30)
+    assert not blocked
+
+    err = capsys.readouterr().err
+    assert exits == [2]
+    assert f"{records[0]['declaration']}: cannot read the packet {packet}: not a regular file\n" in err
+    assert f"{records[1]['declaration']}: cannot read the testimony {testimony}: not a regular file\n" in err
+    assert extraction.scopes == [None]  # only `review prepare` extracted
+    assert load_readbacks(blueprint) == {}
+
+
 @pytest.mark.parametrize("over", [False, True], ids=["at-the-limit", "past-the-limit"])
 def test_a_testimony_is_read_no_further_than_one_byte_past_twice_its_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], over: bool
@@ -2196,11 +2237,12 @@ def test_a_testimony_is_read_no_further_than_one_byte_past_twice_its_limit(
                 positions.append(self.tell())
             super().close()
 
-    path_open = Path.open
     monkeypatch.setattr(
-        Path,
-        "open",
-        lambda path, *args, **kwargs: Unbuffered(path) if path == testimony else path_open(path, *args, **kwargs),
+        "autoform_cli.__main__.open",
+        lambda path, *args, opener=None, **kwargs: (
+            Unbuffered(path, opener=opener) if path == testimony else open(path, *args, opener=opener, **kwargs)
+        ),
+        raising=False,
     )
     capsys.readouterr()
 

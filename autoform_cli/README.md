@@ -922,7 +922,8 @@ Paths are relative to the manifest's directory and may not leave it: an
 absolute path, a `..` component, or a link that points outside is refused. A
 record may carry its own `expected_card_hash`, a declaration may appear once,
 and no object may repeat a key. Every packet is read and checked against the
-bundle, and every testimony read and validated, before Lean starts. So is
+bundle, and every testimony read and validated (either is refused unread if it
+is not a regular file, such as a FIFO), before Lean starts. So is
 every card the batch would write over: a re-review lands on the path of the
 card it supersedes, which it may replace only by naming that card's hash, and
 the batch lists every card that needs one, with the hash, before extracting,

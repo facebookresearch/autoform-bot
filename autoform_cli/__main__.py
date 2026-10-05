@@ -1364,7 +1364,7 @@ def _record_inputs(bundle: ReviewBundle, requests: tuple[RecordRequest, ...]) ->
             findings.append(_review_selection_finding(request.article_id, request.declaration))
             continue
         try:
-            packet_bytes = request.packet.read_bytes()
+            packet_bytes = _read_regular_file(request.packet)
         except OSError as exc:
             findings.append(_unreadable_input(request, "packet", request.packet, exc))
             continue
@@ -1382,8 +1382,7 @@ def _record_inputs(bundle: ReviewBundle, requests: tuple[RecordRequest, ...]) ->
         # marks a testimony over it, and a huge file costs no more than two
         # testimonies do.
         try:
-            with request.testimony.open("rb") as handle:
-                raw = handle.read(2 * TESTIMONY_MAX_BYTES + 1)
+            raw = _read_regular_file(request.testimony, 2 * TESTIMONY_MAX_BYTES + 1)
         except OSError as exc:
             findings.append(_unreadable_input(request, "testimony", request.testimony, exc))
             continue
@@ -1409,6 +1408,18 @@ def _record_inputs(bundle: ReviewBundle, requests: tuple[RecordRequest, ...]) ->
     if findings:
         raise ReviewError(findings)
     return inputs
+
+
+def _read_regular_file(path: Path, size: int = -1) -> bytes:
+    """Up to ``size`` bytes of the regular file at ``path``, all of it by default."""
+
+    # Opened without waiting for a writer, so a FIFO is refused unread
+    # instead of holding the batch.
+    nonblocking = getattr(os, "O_NONBLOCK", 0)
+    with open(path, "rb", opener=lambda name, flags: os.open(name, flags | nonblocking)) as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise OSError("not a regular file")
+        return handle.read(size)
 
 
 def _unreadable_input(request: RecordRequest, role: str, path: Path, exc: Exception) -> ReviewFinding:
