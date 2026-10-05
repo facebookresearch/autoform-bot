@@ -12,7 +12,7 @@ import pytest
 from autoform_cli.__main__ import _current_review, main
 from autoform_cli.graph import Graph, load_graph
 from autoform_cli.markdown import site_converter
-from autoform_cli.readback import load_readbacks, render_testimony
+from autoform_cli.readback import load_readbacks, readback_path, render_testimony
 from autoform_cli.render import PublicationError, render_site
 from autoform_cli.review import REVIEW_PACKET_SCHEMA, load_review_bundle, validate_review_bundle
 from autoform_cli.skeleton import (
@@ -1003,6 +1003,75 @@ def test_a_stale_expected_hash_is_refused_before_lean_runs(
 
     assert len(extraction.scopes) == extractions
     assert f"read-back changed before replacement: expected {stale!r}" in capsys.readouterr().err
+
+
+def _symlink_at(path: Path) -> None:
+    path.symlink_to(path.with_name("elsewhere.md"))
+
+
+def _fifo_at(path: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("needs FIFOs")
+    os.mkfifo(path)
+
+
+def _oversized_at(path: Path) -> None:
+    path.write_bytes(b"x" * (4 * 1024 * 1024 + 1))
+
+
+@pytest.mark.parametrize(
+    ("unsafe", "reason"),
+    [
+        (_symlink_at, "cannot safely inspect existing read-back"),
+        (Path.mkdir, "read-back destination is not a regular file"),
+        (_fifo_at, "read-back destination is not a regular file"),
+        (_oversized_at, "existing read-back is over the 4194304-byte limit for a card file"),
+    ],
+    ids=["symlink", "directory", "fifo", "oversized"],
+)
+def test_an_unsafe_card_is_listed_with_the_rest_before_lean_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    unsafe: Callable[[Path], None],
+    reason: str,
+) -> None:
+    """A card path the batch cannot safely read joins the listing rather than cutting it short."""
+
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    first, later = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    _file_alone(blueprint, bundle, manifest, tmp_path, later, "An older reading.\n")
+    filed = load_readbacks(blueprint)[(later["article_id"], later["declaration"])].file_hash
+    path = readback_path(blueprint.resolve(), first["article_id"], first["declaration"])
+    path.parent.mkdir()
+    unsafe(path)
+    extractions = len(extraction.scopes)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    assert len(extraction.scopes) == extractions
+    err = capsys.readouterr().err
+    assert f"error: {first['declaration']}: {reason}" in err and str(path) in err
+    assert f"error: {later['declaration']}: read-back already exists with different content" in err
+    assert f"expected_card_hash={filed!r}" in err
+
+
+def test_a_platform_that_cannot_publish_is_refused_once_before_lean_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    extractions = len(extraction.scopes)
+    # As on Windows: no fcntl.
+    monkeypatch.setattr("autoform_cli.readback.fcntl", None)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    assert len(extraction.scopes) == extractions
+    assert capsys.readouterr().err == "error: this platform cannot safely publish read-back cards\n"
 
 
 def test_a_card_filed_while_lean_runs_stops_the_batch_before_any_write(

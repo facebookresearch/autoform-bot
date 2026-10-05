@@ -816,7 +816,9 @@ own `expected_card_hash`, and a declaration may appear once. Every packet and
 testimony is read and checked against the bundle before Lean starts. So is
 every card the batch would write over: a re-review lands on the path of the
 card it supersedes, which it may replace only by naming that card's hash, and
-the batch lists every card that needs one, with the hash, before extracting. The
+the batch lists every card that needs one, with the hash, before extracting,
+along with every card path it cannot safely read (a link, directory, FIFO, or
+file over the card limit). The
 extraction selects the batch's articles, and each article is
 validated against its own part of it, as a single record would be. The
 blueprint is then reloaded, and nothing is filed if a selected article changed

@@ -828,7 +828,8 @@ def _review_record(args: argparse.Namespace) -> int:
         # without an extraction.
         inputs = _record_inputs(bundle, requests)
         # So is every card that would replace different content without naming
-        # it: all of them at once, rather than one per extraction.
+        # it, or whose existing card cannot be safely read: all of them at
+        # once, rather than one per extraction.
         _refuse_conflicts(_planned_records(args.blueprint_dir, inputs, model=args.model))
         graph = load_graph(args.blueprint_dir)
         before = _record_snapshot(graph, requests)
@@ -1004,7 +1005,21 @@ def _planned_records(
 
 
 def _refuse_conflicts(cards: list[PreparedReadback]) -> None:
-    conflicts = readback_conflicts(cards)
+    """Refuse the batch if publishing would refuse any card, naming every such card.
+
+    An existing card that cannot be safely read (a link, a directory, a FIFO,
+    or a file over the card limit) is listed with the conflicts rather than
+    ending the listing.
+    """
+
+    # A platform that cannot publish is refused once, not once per card.
+    readback_conflicts([])
+    conflicts: list[str] = []
+    for card in cards:
+        try:
+            conflicts.extend(readback_conflicts([card]))
+        except ValueError as exc:
+            conflicts.append(f"{card.declaration}: {exc}")
     if conflicts:
         raise ReviewError([ReviewFinding("record", "review-card-conflict", conflict) for conflict in conflicts])
 
