@@ -134,7 +134,7 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     chapter_payload = json.loads(
         (out / "dependencies/chapters/roadmap.json").read_text(encoding="utf-8")
     )
-    assert chapter_payload["title"] == "Roadmap knowledge map"
+    assert chapter_payload["title"] == "Roadmap dependencies"
     assert chapter_payload["view"]["breadcrumbs"][-1] == {"label": "Roadmap", "url": None}
     full_page = (out / "dependencies/full.md").read_text(encoding="utf-8")
     assert 'data-graph-src="full.json"' in full_page
@@ -1394,6 +1394,7 @@ def test_render_omits_benign_hidden_files(tmp_path: Path) -> None:
         ("https://github.com/owner/repo/", "https://github.com/owner/repo"),
         ("ssh://git@github.com/owner/repo.git", "https://github.com/owner/repo"),
         ("https://user:secret@github.com/owner/repo.git", None),
+        ("https://ci:token@git.example.com:8443/group/repo.git", None),
         ("https://github.com/owner/repo.git?access_token=secret", None),
         ("https://github.com/owner/repo.git#secret", None),
         ("/local/path", None),

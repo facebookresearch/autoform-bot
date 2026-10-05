@@ -17,8 +17,9 @@ import socket
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 CLAIM_REF_PREFIX = "refs/autoform-claims/"
 CLAIM_SCHEMA = "autoform-claim/v1"
@@ -38,6 +39,9 @@ _CAS_REJECTIONS = (
     "remote ref updated since checkout",
     "cannot lock ref",
 )
+# When the remote aborts an atomic push, every ref reports "atomic transaction
+# failed"; only this error line names the ref whose expected value was gone.
+_LOCK_FAILURE_RE = re.compile(r"cannot lock ref '([^']+)'")
 
 
 class ClaimTransportError(RuntimeError):
@@ -48,6 +52,23 @@ class MalformedLeaseError(ClaimTransportError):
     """A claim ref exists, but its lease cannot be verified safely."""
 
 
+@dataclass(frozen=True, slots=True)
+class ClaimBatchResult:
+    """The outcome of an all-or-nothing multi-key claim operation.
+
+    It is true exactly when the operation succeeded for every key. Otherwise no
+    key changed, ``reason`` says why, and ``blocking`` names the keys
+    responsible when known.
+    """
+
+    ok: bool
+    blocking: tuple[str, ...] = ()
+    reason: str = ""
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+
 def _validate_key(key: str) -> str:
     if not isinstance(key, str) or not CLAIM_KEY_RE.fullmatch(key) or ".." in key:
         raise ValueError(f"invalid claim key {key!r}")
@@ -55,6 +76,37 @@ def _validate_key(key: str) -> str:
     if any(part.startswith(".") or part.endswith(".") or part.endswith(".lock") for part in parts):
         raise ValueError(f"invalid claim key {key!r}")
     return key
+
+
+def _validate_keys(keys: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(keys, str):
+        raise TypeError("claim keys must be a sequence of keys, not one string")
+    batch = tuple(_validate_key(key) for key in keys)
+    if not batch:
+        raise ValueError("at least one claim key is required")
+    seen: set[str] = set()
+    for key in batch:
+        if key in seen:
+            raise ValueError(f"duplicate claim key {key!r}")
+        seen.add(key)
+    return batch
+
+
+def _rejected_keys(detail: str, keys_by_ref: Mapping[str, str]) -> tuple[str, ...]:
+    """Return the keys a refused push reports as stale or contended, in push order."""
+    refs = set(_LOCK_FAILURE_RE.findall(detail))
+    for line in detail.splitlines():
+        # Porcelain status lines read "<flag>\t<from>:<to>\t<summary>".
+        flag, _, rest = line.partition("\t")
+        refspec, _, summary = rest.partition("\t")
+        if flag == "!" and any(marker in summary.lower() for marker in _CAS_REJECTIONS):
+            refs.add(refspec.rpartition(":")[2])
+    return tuple(key for ref, key in keys_by_ref.items() if ref in refs)
+
+
+def _refusal(blocked: Mapping[str, str]) -> ClaimBatchResult:
+    """Refuse a batch before pushing, naming each blocking key in batch order and every reason."""
+    return ClaimBatchResult(False, tuple(blocked), " or ".join(dict.fromkeys(blocked.values())))
 
 
 def _is_finite_number(value: object) -> bool:
@@ -145,6 +197,19 @@ class ClaimBoard:
         line = proc.stdout.strip()
         return line.split("\t", 1)[0] if line else None
 
+    def _remote_oids(self, keys: Sequence[str]) -> dict[str, str]:
+        """Read every present key's object ID with one ``ls-remote``."""
+        keys_by_ref = {self._ref(key): key for key in keys}
+        proc = self._git(["ls-remote", self.repo_url, *keys_by_ref])
+        oids: dict[str, str] = {}
+        for line in proc.stdout.splitlines():
+            oid, separator, ref = line.partition("\t")
+            # ls-remote patterns also match longer names ending in the same
+            # path, such as refs/heads/<ref>; only the exact ref is the claim.
+            if separator and ref in keys_by_ref:
+                oids[keys_by_ref[ref]] = oid
+        return oids
+
     def _read_lease(self, key: str, oid: str) -> dict[str, Any]:
         ref = self._ref(key)
         if self._git(["cat-file", "-e", f"{oid}^{{commit}}"], check=False).returncode != 0:
@@ -182,6 +247,27 @@ class ClaimBoard:
         )
         return bool(valid and (key is None or lease.get("resource") == key))
 
+    def _held_by_peer(self, key: str, old: str | None) -> bool:
+        """Return whether ``old`` is another worker's verified live lease, which blocks acquiring."""
+        if old is None:
+            return False
+        lease = self._read_lease(key, old)
+        return bool(
+            lease is not None
+            and self._lease_is_valid(lease, key)
+            and lease.get("owner") != self.worker_id
+            and not self.expired(lease)
+        )
+
+    def _owned_lease(self, key: str, old: str | None) -> dict[str, Any] | None:
+        """Return this worker's verified lease at ``old``, or ``None`` if absent or not owned."""
+        if old is None:
+            return None
+        lease = self._read_lease(key, old)
+        if lease is None or not self._lease_is_valid(lease, key) or lease.get("owner") != self.worker_id:
+            return None
+        return lease
+
     def _make_lease_commit(self, key: str, ttl: int | float, note: str = "") -> str:
         key = _validate_key(key)
         ttl = _validate_ttl(ttl)
@@ -210,24 +296,41 @@ class ClaimBoard:
         return self._git(["commit-tree", tree, "-m", message]).stdout.strip()
 
     def _cas_push(self, key: str, old: str | None, new: str) -> bool:
-        ref = self._ref(key)
-        source = new if new else ""
+        return self._cas_push_refs([(key, old, new)]).ok
+
+    def _cas_push_refs(
+        self,
+        updates: Sequence[tuple[str, str | None, str]],
+        *,
+        atomic: bool = False,
+    ) -> ClaimBatchResult:
+        """Push ``(key, old, new)`` updates, each leased on its observed ``old``; empty ``new`` deletes.
+
+        With ``atomic`` the remote applies every update or none. A lost
+        compare-and-swap is a failed result; anything else raises.
+        """
+        keys_by_ref = {self._ref(key): key for key, _, _ in updates}
         proc = self._git(
             [
                 "push",
                 "--quiet",
                 "--porcelain",
-                f"--force-with-lease={ref}:{old or ''}",
+                *(["--atomic"] if atomic else []),
+                *(f"--force-with-lease={self._ref(key)}:{old or ''}" for key, old, _ in updates),
                 self.repo_url,
-                f"{source}:{ref}",
+                *(f"{new if new else ''}:{self._ref(key)}" for key, _, new in updates),
             ],
             check=False,
         )
         if proc.returncode == 0:
-            return True
+            return ClaimBatchResult(True)
         detail = f"{proc.stdout}\n{proc.stderr}".strip()
+        if atomic and "does not support --atomic" in detail:
+            # Falling back to separate pushes could leave a partial claim set.
+            raise ClaimTransportError("claim board does not support atomic pushes; refusing a multi-key update")
         if any(marker in detail.lower() for marker in _CAS_REJECTIONS):
-            return False
+            stale = _rejected_keys(detail, keys_by_ref)
+            return ClaimBatchResult(False, stale, "changed concurrently" if stale else "a claim changed concurrently")
         raise ClaimTransportError(f"claim CAS push failed: {detail[:300]}")
 
     def read(self, key: str) -> dict[str, Any] | None:
@@ -253,16 +356,8 @@ class ClaimBoard:
         _validate_ttl(ttl)
         self._ensure_scratch()
         old = self._remote_oid(key)
-        if old is not None:
-            lease = self._read_lease(key, old)
-            if (
-                lease is not None
-                and self._lease_is_valid(lease, key)
-                and lease.get("owner") != self.worker_id
-                and not self.expired(lease)
-                and not steal
-            ):
-                return False
+        if self._held_by_peer(key, old) and not steal:
+            return False
         new = self._make_lease_commit(key, ttl, note)
         return self._cas_push(key, old, new)
 
@@ -272,10 +367,8 @@ class ClaimBoard:
         _validate_ttl(ttl)
         self._ensure_scratch()
         old = self._remote_oid(key)
-        if old is None:
-            return False
-        lease = self._read_lease(key, old)
-        if lease is None or not self._lease_is_valid(lease, key) or lease.get("owner") != self.worker_id:
+        lease = self._owned_lease(key, old)
+        if lease is None:
             return False
         new = self._make_lease_commit(key, ttl, str(lease.get("note", "")))
         return self._cas_push(key, old, new)
@@ -287,10 +380,81 @@ class ClaimBoard:
         old = self._remote_oid(key)
         if old is None:
             return True
-        lease = self._read_lease(key, old)
-        if lease is None or not self._lease_is_valid(lease, key) or lease.get("owner") != self.worker_id:
+        if self._owned_lease(key, old) is None:
             return False
         return self._cas_push(key, old, "")
+
+    # The *_many methods read every key with one ls-remote, apply the per-key
+    # checks of the single-key method, and change all keys in one atomic push,
+    # so a batch never leaves some of its claims taken and others not. Where
+    # the single-key method raises MalformedLeaseError, a batch names that key
+    # as blocking instead, so one refusal can explain every blocked key.
+
+    def acquire_many(
+        self,
+        keys: Sequence[str],
+        *,
+        ttl: int | float = CLAIM_TTL_S,
+        note: str = "",
+    ) -> ClaimBatchResult:
+        """Acquire every key or none; a live lease of another worker on any key blocks all."""
+        keys = _validate_keys(keys)
+        _validate_ttl(ttl)
+        self._ensure_scratch()
+        olds = self._remote_oids(keys)
+        blocked: dict[str, str] = {}
+        for key in keys:
+            try:
+                if self._held_by_peer(key, olds.get(key)):
+                    blocked[key] = "held by another worker"
+            except MalformedLeaseError:
+                blocked[key] = "malformed lease"
+        if blocked:
+            return _refusal(blocked)
+        updates = [(key, olds.get(key), self._make_lease_commit(key, ttl, note)) for key in keys]
+        return self._cas_push_refs(updates, atomic=True)
+
+    def renew_many(self, keys: Sequence[str], *, ttl: int | float = CLAIM_TTL_S) -> ClaimBatchResult:
+        """Renew every key or none; each must be this worker's lease, as :meth:`renew` requires."""
+        keys = _validate_keys(keys)
+        _validate_ttl(ttl)
+        self._ensure_scratch()
+        olds = self._remote_oids(keys)
+        notes: dict[str, str] = {}
+        blocked: dict[str, str] = {}
+        for key in keys:
+            try:
+                lease = self._owned_lease(key, olds.get(key))
+            except MalformedLeaseError:
+                blocked[key] = "malformed lease"
+                continue
+            if lease is None:
+                blocked[key] = "not held by this worker"
+            else:
+                notes[key] = str(lease.get("note", ""))
+        if blocked:
+            return _refusal(blocked)
+        updates = [(key, olds[key], self._make_lease_commit(key, ttl, notes[key])) for key in keys]
+        return self._cas_push_refs(updates, atomic=True)
+
+    def release_many(self, keys: Sequence[str]) -> ClaimBatchResult:
+        """Delete every present key or none; absent keys count as released, as in :meth:`release`."""
+        keys = _validate_keys(keys)
+        self._ensure_scratch()
+        olds = self._remote_oids(keys)
+        present = [key for key in keys if key in olds]
+        blocked: dict[str, str] = {}
+        for key in present:
+            try:
+                if self._owned_lease(key, olds[key]) is None:
+                    blocked[key] = "not held by this worker"
+            except MalformedLeaseError:
+                blocked[key] = "malformed lease"
+        if blocked:
+            return _refusal(blocked)
+        if not present:
+            return ClaimBatchResult(True)
+        return self._cas_push_refs([(key, olds[key], "") for key in present], atomic=True)
 
     def holds(self, key: str) -> bool:
         """Return whether this worker verifiably owns the current live lease."""
@@ -419,6 +583,7 @@ __all__ = [
     "CLAIM_REF_PREFIX",
     "CLAIM_SCHEMA",
     "CLAIM_TTL_S",
+    "ClaimBatchResult",
     "ClaimBoard",
     "ClaimTransportError",
     "Heartbeat",

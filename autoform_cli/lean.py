@@ -416,6 +416,15 @@ def _lean_tree_selection(
         record_omitted=True,
         limits=limits,
         opaque_markers=(
+            # A nested Git checkout is another source tree.  Treat the
+            # presence of either a worktree/submodule .git file or a clone's
+            # .git directory as a bounded sentinel before visiting children.
+            OpaqueDirectoryMarker(
+                ".git",
+                0,
+                lambda _data: False,
+                presence_only=True,
+            ),
             OpaqueDirectoryMarker(
                 _MANAGED_OUTPUT_MANIFEST,
                 _MANAGED_OUTPUT_MANIFEST_BYTE_LIMIT,

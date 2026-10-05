@@ -617,6 +617,13 @@ Leases expire after 1500 seconds unless `--ttl` sets another length. Renew well
 within that, and confirm a claim is still held with `renew`, not `acquire`,
 which also succeeds once a lease has expired or been released.
 
+Pass several targets to `acquire`, `renew`, or `release` when one change needs
+shared ownership. The board reads the set once and sends one atomic push with a
+lease for every ref, so either every target changes or none does. A remote that
+cannot push atomically is refused, and duplicate or malformed targets fail
+before any push. To avoid deadlock, acquire the complete set in one command;
+never hold a partial set while waiting for another target.
+
 Claims are fail-closed compare-and-swap leases under
 `refs/autoform-claims/` on the Git `origin`; pass `--repo` for another claim
 board. A failed acquire or renew means the caller cannot prove ownership and

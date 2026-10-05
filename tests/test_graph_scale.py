@@ -558,7 +558,7 @@ def test_graph_page_publication_builds_whole_graph_indexes_a_fixed_number_of_tim
     large = _index_builds(tmp_path, monkeypatch, 8)
 
     assert large == small
-    assert max(small.values()) <= 4
+    assert max(small.values()) <= 5
 
 
 def _written_blueprint(tmp_path: Path, sections: int = 1) -> Path:

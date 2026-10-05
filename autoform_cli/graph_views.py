@@ -126,6 +126,7 @@ def group_title(graph: Graph, group: str) -> str:
 def project_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
     """Collapse every publication chapter to one project-map node."""
     children = _containment_children(graph)
+    internal_counts = _internal_dependency_counts(graph, children)
     grouped = _group_nodes(graph, children)
     edges = _project_edges(graph, children)
     required_scopes = {endpoint.removeprefix("scope:") for edge in edges for endpoint in (edge.source, edge.target)}
@@ -140,7 +141,11 @@ def project_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
             status_key=_rollup_status_key(graph, grouped.get(group, ()), statuses),
             summary=graph.nodes[group].summary if group in graph.nodes else None,
             area=graph.nodes[group].area if group in graph.nodes else None,
-            internal_dependency_count=_internal_dependency_count(graph, grouped.get(group, ())),
+            internal_dependency_count=(
+                internal_counts[group]
+                if group in internal_counts
+                else _dependency_count_within(graph, grouped.get(group, ()))
+            ),
         )
         for group in scopes
     )
@@ -219,6 +224,7 @@ def scope_view(
     containment hierarchy without creating another graph representation.
     """
     children = _containment_children(graph)
+    internal_counts = _internal_dependency_counts(graph, children)
     if scope not in graph.nodes or scope not in children:
         raise KeyError(f"unknown blueprint scope: {scope}")
     relations = (
@@ -230,6 +236,7 @@ def scope_view(
         statuses,
         scope,
         children=children,
+        internal_counts=internal_counts,
         relations=relations,
         top_scope=lambda node_id: _top_scope(graph, node_id, children),
         include_external=include_external,
@@ -250,6 +257,7 @@ def scope_views(
     files each relation under only the containers that enclose an endpoint.
     """
     children = _containment_children(graph)
+    internal_counts = _internal_dependency_counts(graph, children)
     enclosing: dict[str, dict[str, str]] = {}
     top_scopes: dict[str, str] = {}
 
@@ -281,6 +289,7 @@ def scope_views(
             statuses,
             scope,
             children=children,
+            internal_counts=internal_counts,
             relations=relations.get(scope, ()),
             top_scope=top_scope,
             include_external=include_external,
@@ -296,6 +305,7 @@ def _scope_view(
     scope: str,
     *,
     children: dict[str, tuple[str, ...]],
+    internal_counts: dict[str, int],
     relations: Iterable[_ScopedRelation],
     top_scope: Callable[[str], str],
     include_external: bool,
@@ -316,7 +326,7 @@ def _scope_view(
                     status_key=_rollup_status_key(graph, members[child], statuses),
                     summary=article.summary,
                     area=article.area,
-                    internal_dependency_count=_internal_dependency_count(graph, members[child]),
+                    internal_dependency_count=internal_counts.get(child, 0),
                 )
             )
         else:
@@ -479,6 +489,7 @@ def full_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
     """Present every article and dependency, with container status rolled up."""
     view = _node_view(graph, statuses, graph.nodes)
     children = _containment_children(graph)
+    internal_counts = _internal_dependency_counts(graph, children)
     descendants = _leaf_descendant_map(graph, children)
     nodes = tuple(
         ViewNode(
@@ -490,7 +501,7 @@ def full_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
             status_key=_rollup_status_key(graph, descendants[node.id], statuses),
             summary=graph.nodes[node.id].summary,
             area=graph.nodes[node.id].area,
-            internal_dependency_count=_internal_dependency_count(graph, descendants[node.id]),
+            internal_dependency_count=internal_counts.get(node.id, 0),
         )
         if node.id in children
         else node
@@ -613,7 +624,22 @@ def _status_counts(
     return state_counts
 
 
-def _internal_dependency_count(graph: Graph, node_ids: Iterable[str]) -> int:
+def _internal_dependency_counts(
+    graph: Graph,
+    children: dict[str, tuple[str, ...]],
+) -> dict[str, int]:
+    """Count typed relations inside every container in one graph-wide pass."""
+    counts = {scope: 0 for scope in children}
+    enclosing = {node_id: set(_enclosing_scopes(graph, node_id)) for node_id in graph.nodes}
+    for node_id in children:
+        enclosing[node_id].add(node_id)
+    for source, target, _proof_only in _relations(graph):
+        for scope in enclosing[source].intersection(enclosing[target]):
+            counts[scope] += 1
+    return counts
+
+
+def _dependency_count_within(graph: Graph, node_ids: Iterable[str]) -> int:
     selected = frozenset(node_ids)
     return sum(
         dependency in selected

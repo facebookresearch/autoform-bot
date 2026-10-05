@@ -18,6 +18,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import signal
 import shutil
 import stat
@@ -881,12 +882,12 @@ def _remember_descendants(
 
     try:
         children = psutil.Process(process.pid).children(recursive=True)
-    except (psutil.Error, OSError):
+    except (psutil.Error, OSError, SystemError):
         return
     for child in children:
         try:
             descendants[(child.pid, child.create_time())] = child
-        except (psutil.Error, OSError):
+        except (psutil.Error, OSError, SystemError):
             continue
 
 
@@ -895,24 +896,48 @@ def _remember_tagged_processes(
     descendants: dict[tuple[int, float], psutil.Process],
     *,
     root_pid: int,
+    strict: bool = True,
 ) -> None:
     """Find descendants that escaped the original parent and process group."""
 
-    for candidate in psutil.process_iter():
-        if candidate.pid in {os.getpid(), root_pid}:
-            continue
+    last_scan_error: BaseException | None = None
+    for _attempt in range(2):
+        retry = False
         try:
-            if candidate.environ().get(_PROCESS_TOKEN_ENV) == token:
-                descendants[(candidate.pid, candidate.create_time())] = candidate
-        except (psutil.Error, OSError):
+            candidates = tuple(psutil.process_iter())
+        except (psutil.Error, OSError, SystemError) as error:
+            last_scan_error = error
             continue
+        for candidate in candidates:
+            if candidate.pid in {os.getpid(), root_pid}:
+                continue
+            try:
+                if candidate.environ().get(_PROCESS_TOKEN_ENV) == token:
+                    descendants[(candidate.pid, candidate.create_time())] = candidate
+            except (psutil.Error, OSError):
+                continue
+            except SystemError as error:
+                last_scan_error = error
+                retry = True
+        if not retry:
+            return
+    if strict and last_scan_error is not None:
+        raise SkeletonError(
+            ["cannot safely inspect descendant processes after repeated process-table errors"]
+        ) from last_scan_error
 
 
 def _process_is_alive(process: psutil.Process) -> bool:
     try:
         return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
-    except (psutil.Error, OSError):
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
         return False
+    except (psutil.Error, OSError, SystemError):
+        # Uncertainty is live for the success gate and cleanup target list.  A
+        # disappeared/reused PID is handled by psutil's identity checks when
+        # termination is attempted; treating inspection failure as dead could
+        # let an escaped descendant survive a successful command.
+        return True
 
 
 def _process_group_is_alive(pid: int) -> bool:
@@ -951,18 +976,23 @@ def _terminate_process_tree(
     started, available = time.perf_counter(), _remaining(deadline)
     for share, group_signal, method in ((0.4, "SIGTERM", "terminate"), (0.8, "SIGKILL", "kill")):
         _remember_descendants(process, descendants)
-        _remember_tagged_processes(token, descendants, root_pid=process.pid)
+        _remember_tagged_processes(
+            token,
+            descendants,
+            root_pid=process.pid,
+            strict=False,
+        )
         live = [child for child in descendants.values() if child.pid != process.pid and _process_is_alive(child)]
         if os.name == "posix":
             with contextlib.suppress(OSError):
                 os.killpg(process.pid, getattr(signal, group_signal))
         for target in ([process] if process.poll() is None else []) + live:
-            with contextlib.suppress(OSError, psutil.Error):
+            with contextlib.suppress(OSError, psutil.Error, SystemError):
                 getattr(target, method)()
         phase_deadline = started + available * share
         with contextlib.suppress(OSError, subprocess.TimeoutExpired):
             process.wait(timeout=_remaining(phase_deadline))
-        with contextlib.suppress(OSError, psutil.Error):
+        with contextlib.suppress(OSError, psutil.Error, SystemError):
             psutil.wait_procs(live, timeout=_remaining(phase_deadline))
 
 
@@ -1375,7 +1405,13 @@ def _check_artifacts_fresh(
     )
     detail = (result.stderr or result.stdout).strip()
     if result.returncode == _LAKE_NO_BUILD_EXIT:
-        raise SkeletonError([f"Lean build artifacts are stale; run `lake build` before extracting skeletons\n{detail}"])
+        build_command = shlex.join(["lake", "build", *modules])
+        raise SkeletonError(
+            [
+                "Lean build artifacts are stale; run "
+                f"`{build_command}` before extracting skeletons\n{detail}"
+            ]
+        )
     if result.returncode != 0:
         raise SkeletonError(
             [
@@ -2106,6 +2142,7 @@ def extract_graph_skeletons(
     unresolved: list[UnresolvedTarget] = []
     imports: set[str] = set()
     roots: list[str] = []
+    root_modules: dict[str, str] = {}
     for node, names in selected:
         for name in names:
             if node.id in broken_passages:
@@ -2130,6 +2167,7 @@ def extract_graph_skeletons(
             imports.add(module)
             if name not in roots:
                 roots.append(name)
+                root_modules[name] = module
 
     records: dict[str, dict[str, object]] = {}
     snapshot_started_ns: int | None = None
@@ -2158,7 +2196,8 @@ def extract_graph_skeletons(
                     UnresolvedTarget(
                         node.id,
                         name,
-                        "not in the built environment; run `lake build`",
+                        "not in the built environment after importing "
+                        f"{root_modules[name]}; check the `lean:` target and declaring source",
                     )
                 )
                 continue
