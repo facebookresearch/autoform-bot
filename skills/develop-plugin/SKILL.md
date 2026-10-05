@@ -8,26 +8,26 @@ description: >-
 
 # Develop Autoform from consumer nudges
 
-Treat Autoform as an example-based plugin whose product is installed behavior
-in an independent formalization repository. Use the bundled Cabannes thesis
-repository only as an executable consumer example.
+Autoform is an example-based plugin for an independent formalization
+repository. Use the bundled Cabannes thesis only as an executable consumer
+example. State a consumer scenario, inspect the worktree, observe installed
+behavior, and name a refactor's invariant.
 
-Inspect the worktree, state a consumer scenario, and observe installed behavior.
-For a refactor, name the invariant. Trace needed layers.
+Treat user nudges as product evidence. Distill each reusable insight into the
+owning skill so future agents need less steering. Preserve the insight,
+not the transcript. Add an assertion in `tests/test_skill_examples.py`. Keep
+Cabannes-specific facts out of reusable plugin behavior.
 
-Treat user nudges during real work as product evidence. Distill reusable ones
-into the owning skill as a trigger, decision rule, and action.
-Ensure future agents need less steering.
-Preserve the insight, not the transcript or consumer choice.
-Add a focused test and acceptance assertion in `tests/test_skill_examples.py`.
-
-Implement reusable plugin behavior. Keep Cabannes-specific facts in the example
-and references; demonstrate outcomes without special-casing them.
+For external protocols, prefer a maintained client library implementing
+framing, server requests, encoding, and synchronization barriers. Keep
+Autoform's adapter responsible for policy: clean startup, absolute deadlines,
+resource ownership, limits, and error translation. Test
+that boundary as a contract; duplicate wire protocol only when necessary.
 
 Keep plugin and formalization roots distinct. Agents can infer routine details;
-keep skills to non-obvious constraints and fragile domain steps.
+skills should preserve only non-obvious constraints.
 
-Run focused checks, then normally run:
+Normally run:
 
 ```bash
 make lint
@@ -35,6 +35,5 @@ make test
 make check-example
 ```
 
-Run `lake build` when example Lean results change. Validate edited skills and
-the manifest with skill-creator and plugin-creator. Use cachebuster and reinstall
-only to test installed discovery in a new thread. Report outcome and checks.
+Run `lake build` when Lean changes. Validate with skill-creator and
+plugin-creator. Cachebust and reinstall only to test discovery in a new thread.

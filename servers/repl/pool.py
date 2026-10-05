@@ -16,6 +16,8 @@ logger = getLogger(__name__)
 DEFAULT_PORT = 8990
 DEFAULT_RAM_FRACTION = 0.5
 DEFAULT_STARTUP_STAGGER_SECONDS = 2.0
+DEFAULT_CLEANUP_RETRY_SECONDS = 0.05
+MAX_CLEANUP_RETRY_SECONDS = 1.0
 
 
 @dataclass
@@ -63,36 +65,44 @@ class LeanReplPool:
 
                     time.sleep(config.startup_stagger)
                 repl = LeanRepl(config)
-                try:
-                    repl.start()
-                except BaseException:
-                    # LeanRepl.start() currently cleans up its own process, but
-                    # keep the pool transaction safe for alternate/test workers
-                    # and future implementations too.
-                    try:
-                        repl.close()
-                    except Exception:
-                        logger.exception("failed to close REPL after startup error")
-                    raise
                 self._workers.append(repl)
+                repl.start()
                 self._idle.put(repl)
         except BaseException:
-            self._close_workers()
+            self._close_workers_until_clean()
             raise
 
     def _close_workers(self) -> None:
-        """Close every constructed worker, preserving cleanup after one failure."""
-        for worker in reversed(self._workers):
+        """Close every worker and retain any whose cleanup failed."""
+        failed_workers = []
+        first_error: Exception | None = None
+        for worker in self._workers:
             try:
                 worker.close()
-            except Exception:
+            except Exception as error:
                 logger.exception("failed to close REPL worker")
-        self._workers.clear()
+                failed_workers.append(worker)
+                if first_error is None:
+                    first_error = error
+        self._workers = failed_workers
         while True:
             try:
                 self._idle.get_nowait()
             except queue.Empty:
                 break
+        if first_error is not None:
+            raise first_error
+
+    def _close_workers_until_clean(self) -> None:
+        """Retry idempotent worker cleanup without releasing ownership."""
+        delay = DEFAULT_CLEANUP_RETRY_SECONDS
+        while self._workers:
+            try:
+                self._close_workers()
+            except Exception:
+                logger.exception("REPL cleanup failed; retrying")
+                time.sleep(delay)
+                delay = min(delay * 2, MAX_CLEANUP_RETRY_SECONDS)
 
     def run(
         self,
@@ -112,6 +122,7 @@ class LeanReplPool:
                 raise RuntimeError("Lean REPL pool is shut down")
             self._active_calls += 1
         repl: LeanRepl | None = None
+        reusable = False
 
         try:
             while repl is None:
@@ -131,22 +142,29 @@ class LeanReplPool:
             with self._condition:
                 if self._shutdown:
                     raise RuntimeError("Lean REPL pool is shut down")
+            reusable = True
 
             if deadline is not None:
                 if deadline - time.monotonic() <= 0:
                     raise TimeoutError("timed out waiting for an idle Lean REPL")
             try:
-                return repl.run(code, deadline=deadline, **kwargs)
-            except BaseException:
+                response = repl.run(code, deadline=deadline, **kwargs)
+                return response
+            except BaseException as request_error:
                 try:
                     repl.close()
-                except BaseException:
+                except BaseException as cleanup_error:
+                    reusable = False
                     logger.exception("failed to retire REPL worker after request error")
+                    with self._condition:
+                        self._shutdown = True
+                        self._condition.notify_all()
+                    raise cleanup_error from request_error
                 raise
         finally:
             if repl is not None:
                 with self._condition:
-                    if not self._shutdown:
+                    if reusable and not self._shutdown:
                         self._idle.put(repl)
             with self._condition:
                 self._active_calls -= 1
@@ -155,6 +173,11 @@ class LeanReplPool:
     def get_memory_usage(self) -> float:
         """Total memory usage across all REPL instances in GB."""
         return sum(w.get_memory_usage() for w in self._workers)
+
+    def is_usable(self) -> bool:
+        """Return whether the pool can admit another request."""
+        with self._condition:
+            return not self._shutdown and not self._closed
 
     def shutdown(self) -> None:
         """Shut down all REPL instances."""
@@ -168,10 +191,15 @@ class LeanReplPool:
             if self._closed:
                 return
             self._closing = True
+        error: BaseException | None = None
         try:
             self._close_workers()
+        except BaseException as caught:
+            error = caught
         finally:
             with self._condition:
                 self._closing = False
-                self._closed = True
+                self._closed = not self._workers
                 self._condition.notify_all()
+        if error is not None:
+            raise error

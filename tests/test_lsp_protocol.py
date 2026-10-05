@@ -1,602 +1,356 @@
-"""Protocol and lifecycle regression tests for the Lean server's LSP backend."""
+"""Adapter and lifecycle tests for Autoform's leanclient LSP boundary."""
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
+from importlib.metadata import version
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from leanclient.aio import AsyncLeanLSPClient, LeanTransportError
 
 from servers.lsp import server as lsp
 
 
-class _FakeProcess:
-    def __init__(self) -> None:
-        self.pid = 999_999_999
-        self.returncode: int | None = None
-        self.killed = False
-        self.waited = False
+class _FakeAsyncClient:
+    instances: list[_FakeAsyncClient] = []
 
-    def poll(self):
-        return self.returncode
+    def __init__(self, **kwargs) -> None:
+        self.kwargs = kwargs
+        self.alive = False
+        self.calls: list[tuple] = []
+        self.diagnostic_items = [
+            {
+                "severity": 1,
+                "message": "type mismatch",
+                "range": {"start": {"line": 2, "character": 4}},
+            }
+        ]
+        self.hover_result: dict | None = {
+            "contents": {"kind": "markdown", "value": "`Nat`"}
+        }
+        self.diagnostics_error: BaseException | None = None
+        self.block_diagnostics = False
+        type(self).instances.append(self)
 
-    def kill(self) -> None:
-        self.killed = True
-        self.returncode = -9
+    async def start(self) -> None:
+        self.calls.append(("start",))
+        self.alive = True
 
-    def terminate(self) -> None:
-        self.killed = True
-        self.returncode = -signal.SIGTERM
+    async def close(self) -> None:
+        self.calls.append(("close",))
+        self.alive = False
 
-    def wait(self, timeout=None):
-        self.waited = True
-        return self.returncode
+    async def open(self, path: str, *, wait: bool) -> None:
+        self.calls.append(("open", path, wait))
+
+    async def diagnostics(self, path: str, *, fresh: bool, timeout: float):
+        self.calls.append(("diagnostics", path, fresh, timeout))
+        if self.diagnostics_error is not None:
+            raise self.diagnostics_error
+        if self.block_diagnostics:
+            await asyncio.sleep(60)
+        return SimpleNamespace(items=self.diagnostic_items)
+
+    async def barrier(self, path: str, *, timeout: float) -> None:
+        self.calls.append(("barrier", path, timeout))
+
+    async def hover(self, path: str, line: int, character: int, *, fresh: bool):
+        self.calls.append(("hover", path, line, character, fresh))
+        return self.hover_result
+
+    async def close_file(self, path: str) -> None:
+        self.calls.append(("close_file", path))
 
 
-def test_json_rpc_error_response_raises_protocol_error(monkeypatch):
-    session = lsp.LeanLspSession(lsp.LspConfig())
+@pytest.fixture
+def fake_session(tmp_path: Path, monkeypatch):
+    _FakeAsyncClient.instances.clear()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "lakefile.toml").write_text('name = "AdapterTest"\n', encoding="utf-8")
+    source = project / "Main.lean"
+    source.write_text("#check Nat\n", encoding="utf-8")
+    session = lsp.LeanLspSession(
+        lsp.LspConfig(cwd=str(project), timeout=1),
+        client_factory=_FakeAsyncClient,
+    )
+    monkeypatch.setattr(session, "_read_process_identity", lambda: 999_999_999)
     monkeypatch.setattr(
         session,
-        "_read_message",
-        lambda timeout: {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "error": {"code": -32603, "message": "initialization failed"},
-        },
+        "_process_group_exists",
+        lambda process_group_id: bool(session._client and session._client.alive),
+    )
+    session.start()
+    try:
+        yield session, source, _FakeAsyncClient.instances[-1]
+    finally:
+        session.close()
+
+
+def test_leanclient_dependency_and_public_api_are_pinned() -> None:
+    assert version("leanclient") == "0.13.2"
+    constructor = inspect.signature(AsyncLeanLSPClient)
+    for parameter in (
+        "project_path",
+        "max_workers",
+        "request_timeout",
+        "check_version",
+        "server_command",
+        "report_delay_ms",
+    ):
+        assert parameter in constructor.parameters
+    for method in ("start", "close", "open", "diagnostics", "barrier", "hover", "close_file"):
+        assert inspect.iscoroutinefunction(getattr(AsyncLeanLSPClient, method))
+
+
+def test_start_configures_pinned_client_and_supervised_command(fake_session) -> None:
+    session, _, client = fake_session
+
+    assert client.kwargs["project_path"] == str(Path(session.config.cwd).resolve())
+    assert client.kwargs["max_workers"] == 1
+    assert client.kwargs["request_timeout"] == 1
+    assert client.kwargs["check_version"] is True
+    assert client.kwargs["report_delay_ms"] is None
+    command = client.kwargs["server_command"]
+    assert command[:3] == [sys.executable, "-m", "servers.lsp.launcher"]
+    assert command[-3:] == ["--", "lake", "serve"]
+    assert session.is_alive()
+
+
+def test_start_failure_closes_client_and_event_loop(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    class FailingClient(_FakeAsyncClient):
+        async def start(self) -> None:
+            self.calls.append(("start",))
+            raise LeanTransportError("initialize failed")
+
+    session = lsp.LeanLspSession(
+        lsp.LspConfig(cwd=str(project), timeout=1),
+        client_factory=FailingClient,
+    )
+    monkeypatch.setattr(
+        session,
+        "_read_process_identity",
+        lambda: (_ for _ in ()).throw(lsp.LspCleanupError("no child identity")),
     )
 
-    with pytest.raises(lsp.LspProtocolError, match="initialization failed"):
-        session._read_response(1)
-
-
-def test_start_aborts_process_when_initialize_fails(monkeypatch):
-    process = _FakeProcess()
-    popen_kwargs = {}
-    for name in ("ELAN_TOOLCHAIN", "LEAN_PATH", "LAKE_CONFIG", "PYTHONPATH"):
-        monkeypatch.setenv(name, "poisoned")
-
-    def popen(*args, **kwargs):
-        popen_kwargs.update(kwargs)
-        return process
-
-    monkeypatch.setattr(lsp.subprocess, "Popen", popen)
-
-    session = lsp.LeanLspSession(lsp.LspConfig())
-
-    def fail_initialize(method, params):
-        raise lsp.LspProtocolError("initialize rejected")
-
-    monkeypatch.setattr(session, "_send_request", fail_initialize)
-
-    with pytest.raises(lsp.LspProtocolError, match="initialize rejected"):
+    with pytest.raises(lsp.LspProtocolError, match="initialize failed"):
         session.start()
 
-    assert process.killed is True
-    assert process.waited is True
-    assert session.process is None
-    assert popen_kwargs["stderr"] is subprocess.DEVNULL
-    assert popen_kwargs["start_new_session"] is True
-    assert all(
-        name not in popen_kwargs["env"]
-        for name in ("ELAN_TOOLCHAIN", "LEAN_PATH", "LAKE_CONFIG", "PYTHONPATH")
+    assert session._client is None
+    assert session._loop is None
+    assert session._loop_thread is None
+
+
+def test_launcher_scrubs_lake_environment_and_records_own_group(tmp_path: Path) -> None:
+    identity = tmp_path / "identity.json"
+    observed = tmp_path / "environment.json"
+    probe = (
+        "import json, os, sys; "
+        "open(sys.argv[1], 'w').write(json.dumps({"
+        "name: os.environ.get(name) for name in "
+        "('ELAN_TOOLCHAIN', 'LEAN_PATH', 'LAKE_CONFIG', 'PYTHONPATH')}))"
     )
+    environment = os.environ.copy()
+    for name in ("ELAN_TOOLCHAIN", "LEAN_PATH", "LAKE_CONFIG", "PYTHONPATH"):
+        environment[name] = "poisoned"
 
-
-def test_fatal_operation_poisons_session_before_releasing_next_waiter(
-    tmp_path: Path, monkeypatch
-):
-    first = tmp_path / "First.lean"
-    second = tmp_path / "Second.lean"
-    first.write_text("#check Nat\n")
-    second.write_text("#check Int\n")
-    session = lsp.LeanLspSession(lsp.LspConfig(timeout=1))
-    first_entered = threading.Event()
-    release_first = threading.Event()
-    protocol_calls = []
-    errors = []
-
-    def get_diagnostics(file_path, *, timeout):
-        protocol_calls.append(file_path)
-        first_entered.set()
-        assert release_first.wait(timeout=1)
-        raise lsp.LspProtocolError("broken shared stream")
-
-    def abort():
-        session._poisoned = True
-        session.process = None
-
-    monkeypatch.setattr(session, "_get_diagnostics", get_diagnostics)
-    monkeypatch.setattr(session, "_abort_process", abort)
-
-    def invoke(path):
-        try:
-            session.get_diagnostics(str(path))
-        except BaseException as error:
-            errors.append(error)
-
-    threads = [
-        threading.Thread(target=invoke, args=(first,)),
-        threading.Thread(target=invoke, args=(second,)),
-    ]
-    threads[0].start()
-    assert first_entered.wait(timeout=1)
-    threads[1].start()
-    time.sleep(0.05)
-    release_first.set()
-    for thread in threads:
-        thread.join(timeout=2)
-
-    assert len(protocol_calls) == 1
-    assert len(errors) == 2
-    assert any("broken shared stream" in str(error) for error in errors)
-    assert any("no longer usable" in str(error) for error in errors)
-
-
-def test_lsp_abort_terminates_the_process_group_with_bounded_wait(tmp_path: Path):
-    child_pid_file = tmp_path / "child.pid"
-    script = (
-        "import subprocess, sys, time; "
-        "child = subprocess.Popen([sys.executable, '-c', "
-        "'import time; time.sleep(30)']); "
-        "open(sys.argv[1], 'w').write(str(child.pid)); "
-        "time.sleep(30)"
-    )
-    process = subprocess.Popen(
-        [sys.executable, "-c", script, str(child_pid_file)],
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "servers.lsp.launcher",
+            str(identity),
+            "--",
+            sys.executable,
+            "-c",
+            probe,
+            str(observed),
+        ],
+        cwd=Path(__file__).parents[1],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=5,
         start_new_session=True,
     )
-    deadline = time.monotonic() + 2
-    while not child_pid_file.exists() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert child_pid_file.exists()
-    child_pid = int(child_pid_file.read_text())
-    session = lsp.LeanLspSession(lsp.LspConfig())
-    session.process = process
+
+    assert result.returncode == 0, result.stderr
+    process_identity = json.loads(identity.read_text(encoding="utf-8"))
+    assert process_identity["pid"] == process_identity["pgid"]
+    assert json.loads(observed.read_text(encoding="utf-8")) == {
+        "ELAN_TOOLCHAIN": None,
+        "LEAN_PATH": None,
+        "LAKE_CONFIG": None,
+        "PYTHONPATH": None,
+    }
+
+
+def test_diagnostics_use_lean_barrier_and_close_document(fake_session) -> None:
+    session, source, client = fake_session
+
+    assert session.get_diagnostics(str(source)) == client.diagnostic_items
+
+    assert [call[0] for call in client.calls] == [
+        "start",
+        "open",
+        "diagnostics",
+        "close_file",
+    ]
+    assert client.calls[1] == ("open", "Main.lean", False)
+    assert client.calls[2][1:3] == ("Main.lean", True)
+    assert 0 < client.calls[2][3] <= session.config.timeout
+
+
+def test_hover_waits_for_barrier_and_preserves_text_format(fake_session) -> None:
+    session, source, client = fake_session
+
+    assert session.hover(str(source), 0, 7) == "`Nat`"
+
+    assert [call[0] for call in client.calls] == [
+        "start",
+        "open",
+        "barrier",
+        "hover",
+        "close_file",
+    ]
+    assert client.calls[2][1] == "Main.lean"
+    assert client.calls[3] == ("hover", "Main.lean", 0, 7, False)
+
+
+def test_document_operations_reject_paths_outside_project(fake_session, tmp_path: Path) -> None:
+    session, _, client = fake_session
+    outside = tmp_path / "Outside.lean"
+    outside.write_text("#check Int\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="inside project root"):
+        session.get_diagnostics(str(outside))
+
+    assert [call[0] for call in client.calls] == ["start"]
+    assert session.is_alive()
+
+
+def test_lsp_queue_wait_is_bounded_by_session_timeout(fake_session) -> None:
+    session, source, _ = fake_session
+    session.config.timeout = 0.01
+    session._operation_lock.acquire()
+    try:
+        with pytest.raises(lsp.LspBusyError, match="waiting for the Lean LSP session"):
+            session.hover(str(source), 0, 0)
+    finally:
+        session._operation_lock.release()
+
+
+def test_leanclient_failure_poisons_session_before_next_operation(fake_session) -> None:
+    session, source, client = fake_session
+    client.diagnostics_error = LeanTransportError("broken stream")
+
+    with pytest.raises(lsp.LspProtocolError, match="broken stream"):
+        session.get_diagnostics(str(source))
+
+    assert not session.is_alive()
+    with pytest.raises(lsp.LspProtocolError, match="no longer usable"):
+        session.get_diagnostics(str(source))
+
+
+def test_operation_timeout_is_absolute_and_aborts_session(fake_session) -> None:
+    session, source, client = fake_session
+    session.config.timeout = 0.02
+    client.block_diagnostics = True
 
     started = time.monotonic()
-    session.abort()
-
-    assert time.monotonic() - started < 2
-    assert session.process is None
-    deadline = time.monotonic() + 2
-    while time.monotonic() < deadline:
-        try:
-            os.kill(child_pid, 0)
-        except ProcessLookupError:
-            break
-        time.sleep(0.01)
-    else:
-        os.kill(child_pid, signal.SIGKILL)
-        pytest.fail("LSP descendant survived process-group abort")
-
-
-def test_lsp_abort_escalates_to_kill_without_unbounded_wait(monkeypatch):
-    signals = []
-
-    class StubbornProcess:
-        pid = 12345
-
-        def poll(self):
-            return None
-
-        def wait(self, timeout):
-            raise subprocess.TimeoutExpired("lake serve", timeout)
-
-    monkeypatch.setattr(lsp.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
-    session = lsp.LeanLspSession(lsp.LspConfig())
-    session.process = StubbornProcess()
-
-    session.abort()
-
-    assert signals == [
-        (12345, signal.SIGTERM),
-        (12345, signal.SIGKILL),
-    ]
-    assert session.process is None
-
-
-def test_lsp_abort_kills_the_group_even_if_the_wrapper_exits_on_term(monkeypatch):
-    signals = []
-
-    class ExitedWrapper:
-        pid = 12345
-
-        def poll(self):
-            return None
-
-        def wait(self, timeout):
-            return -signal.SIGTERM
-
-    monkeypatch.setattr(lsp.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
-    session = lsp.LeanLspSession(lsp.LspConfig())
-    session.process = ExitedWrapper()
-
-    session.abort()
-
-    assert signals == [
-        (12345, signal.SIGTERM),
-        (12345, signal.SIGKILL),
-    ]
-
-
-def test_lsp_abort_kills_descendant_after_group_leader_already_exited(tmp_path: Path):
-    child_pid_file = tmp_path / "orphan.pid"
-    script = (
-        "import subprocess, sys; "
-        "child = subprocess.Popen([sys.executable, '-c', "
-        "'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-        "time.sleep(30)']); "
-        "open(sys.argv[1], 'w').write(str(child.pid))"
-    )
-    process = subprocess.Popen(
-        [sys.executable, "-c", script, str(child_pid_file)],
-        start_new_session=True,
-    )
-    deadline = time.monotonic() + 2
-    while not child_pid_file.exists() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert child_pid_file.exists()
-    child_pid = int(child_pid_file.read_text())
-    assert process.wait(timeout=2) == 0
-
-    session = lsp.LeanLspSession(lsp.LspConfig())
-    session.process = process
-    session._process_group_id = process.pid
-    try:
-        session.abort()
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            try:
-                os.kill(child_pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.01)
-        else:
-            pytest.fail("LSP descendant survived abort after its wrapper exited")
-    finally:
-        try:
-            os.kill(child_pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-
-
-def test_diagnostics_wait_through_initial_quiet_period(monkeypatch):
-    session = lsp.LeanLspSession(lsp.LspConfig())
-    uri = "file:///tmp/Test.lean"
-    messages = iter(
-        [
-            None,
-            None,
-            {
-                "jsonrpc": "2.0",
-                "method": "textDocument/publishDiagnostics",
-                "params": {"uri": uri, "diagnostics": []},
-            },
-            None,
-        ]
-    )
-    monkeypatch.setattr(session, "_read_message", lambda timeout: next(messages))
-
-    # The first two quiet reads are not evidence that the file is clean. The
-    # explicit empty publication is, and should be returned as a valid result.
-    assert session._collect_diagnostics(uri, timeout=60) == []
-
-
-def test_diagnostics_timeout_without_publication(monkeypatch):
-    session = lsp.LeanLspSession(lsp.LspConfig())
-    clock = {"now": 0.0}
-
-    monkeypatch.setattr(lsp.time, "monotonic", lambda: clock["now"])
-
-    def quiet_read(timeout):
-        clock["now"] += timeout
-        return None
-
-    monkeypatch.setattr(session, "_read_message", quiet_read)
-
-    with pytest.raises(TimeoutError, match="waiting for diagnostics"):
-        session._collect_diagnostics("file:///tmp/Test.lean", timeout=5)
-
-    assert clock["now"] == 5
-
-
-def test_malformed_diagnostics_payload_is_protocol_error(monkeypatch):
-    session = lsp.LeanLspSession(lsp.LspConfig())
-    uri = "file:///tmp/Test.lean"
-    messages = iter(
-        [
-            {
-                "jsonrpc": "2.0",
-                "method": "textDocument/publishDiagnostics",
-                "params": {"uri": uri, "diagnostics": {"not": "a list"}},
-            }
-        ]
-    )
-    monkeypatch.setattr(session, "_read_message", lambda timeout: next(messages))
-
-    with pytest.raises(lsp.LspProtocolError, match="diagnostics must be a list"):
-        session._collect_diagnostics(uri, timeout=60)
-
-
-@pytest.mark.parametrize(
-    "diagnostics",
-    [
-        [1],
-        [{"range": 1}],
-        [{"range": {"start": 1}}],
-        [{"range": {"start": {"line": "0"}}}],
-        [{"severity": []}],
-        [{"message": 1}],
-    ],
-)
-def test_malformed_diagnostic_entry_poisons_session(
-    tmp_path: Path, monkeypatch, diagnostics
-):
-    source = tmp_path / "Test.lean"
-    source.write_text("#check Nat\n")
-    uri = source.resolve().as_uri()
-    session = lsp.LeanLspSession(lsp.LspConfig())
-    messages = iter(
-        [
-            {
-                "jsonrpc": "2.0",
-                "method": "textDocument/publishDiagnostics",
-                "params": {"uri": uri, "diagnostics": diagnostics},
-            }
-        ]
-    )
-
-    monkeypatch.setattr(session, "_send_notification", lambda *args, **kwargs: None)
-    monkeypatch.setattr(session, "_read_message", lambda timeout: next(messages))
-
-    def abort():
-        session._poisoned = True
-        session.process = None
-
-    monkeypatch.setattr(session, "_abort_process", abort)
-
-    with pytest.raises(lsp.LspProtocolError, match="publishDiagnostics"):
-        session.get_diagnostics(str(source))
-    assert session._poisoned is True
-
-
-def test_get_diagnostics_closes_document_after_timeout(tmp_path: Path, monkeypatch):
-    source = tmp_path / "Test.lean"
-    source.write_text("example : True := by trivial\n")
-    session = lsp.LeanLspSession(lsp.LspConfig())
-    notifications: list[str] = []
-
-    monkeypatch.setattr(
-        session,
-        "_send_notification",
-        lambda method, params, **kwargs: notifications.append(method),
-    )
-
-    def timeout(uri, timeout):
-        raise TimeoutError("no diagnostics publication")
-
-    monkeypatch.setattr(session, "_collect_diagnostics", timeout)
-
-    with pytest.raises(TimeoutError, match="no diagnostics publication"):
+    with pytest.raises(TimeoutError, match="running Lean LSP operation"):
         session.get_diagnostics(str(source))
 
-    assert notifications == [
-        "textDocument/didOpen",
-        "textDocument/didClose",
-    ]
+    assert time.monotonic() - started < 1
+    assert not session.is_alive()
 
 
-def test_failed_document_close_poisons_the_session(tmp_path: Path, monkeypatch):
-    source = tmp_path / "Test.lean"
-    source.write_text("#check Nat\n")
-    session = lsp.LeanLspSession(lsp.LspConfig())
+def test_close_escalates_until_the_supervised_group_is_gone(
+    fake_session, monkeypatch
+) -> None:
+    session, _, client = fake_session
+    group_alive = {"value": True}
+    signals: list[int] = []
 
-    def notify(method, params, **kwargs):
-        if method == "textDocument/didClose":
-            raise lsp.LspProtocolError("close failed")
+    async def incomplete_close() -> None:
+        client.calls.append(("close",))
 
-    def abort():
-        session._poisoned = True
-        session.process = None
+    def signal_group(process_group_id: int, signal_number: int) -> None:
+        signals.append(signal_number)
+        if signal_number == signal.SIGKILL:
+            group_alive["value"] = False
 
-    monkeypatch.setattr(session, "_send_notification", notify)
-    monkeypatch.setattr(session, "_collect_diagnostics", lambda uri, timeout: [])
-    monkeypatch.setattr(session, "_abort_process", abort)
+    monkeypatch.setattr(client, "close", incomplete_close)
+    monkeypatch.setattr(session, "_process_group_exists", lambda process_group_id: group_alive["value"])
+    monkeypatch.setattr(session, "_signal_process_group", signal_group)
 
-    assert session.get_diagnostics(str(source)) == []
-    assert session._poisoned is True
-    with pytest.raises(lsp.LspProtocolError, match="no longer usable"):
-        session.get_diagnostics(str(source))
+    session.close()
 
-
-def test_exhausted_diagnostics_deadline_poisons_before_next_waiter(
-    tmp_path: Path, monkeypatch
-):
-    source = tmp_path / "Test.lean"
-    source.write_text("#check Nat\n")
-    session = lsp.LeanLspSession(lsp.LspConfig(timeout=1))
-    clock = {"now": 0.0}
-    notifications = []
-
-    monkeypatch.setattr(lsp.time, "monotonic", lambda: clock["now"])
-    monkeypatch.setattr(
-        session,
-        "_send_notification",
-        lambda method, params, **kwargs: notifications.append(method),
-    )
-
-    def collect(uri, timeout):
-        clock["now"] = 1.0
-        return []
-
-    def abort():
-        session._poisoned = True
-        session.process = None
-
-    monkeypatch.setattr(session, "_collect_diagnostics", collect)
-    monkeypatch.setattr(session, "_abort_process", abort)
-
-    assert session.get_diagnostics(str(source)) == []
-    assert notifications == ["textDocument/didOpen"]
-    assert session._poisoned is True
-    with pytest.raises(lsp.LspProtocolError, match="no longer usable"):
-        session.get_diagnostics(str(source))
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+    assert session._process_group_id is None
 
 
-def test_hover_opens_and_closes_document(tmp_path: Path, monkeypatch):
-    source = tmp_path / "Test.lean"
-    source_text = "#check Nat\n"
-    source.write_text(source_text)
-    session = lsp.LeanLspSession(lsp.LspConfig())
-    notifications: list[tuple[str, dict]] = []
+def test_close_raises_and_retains_identity_when_group_survives(
+    fake_session, monkeypatch
+) -> None:
+    session, _, client = fake_session
 
-    monkeypatch.setattr(
-        session,
-        "_send_notification",
-        lambda method, params, **kwargs: notifications.append((method, params)),
-    )
+    async def incomplete_close() -> None:
+        client.calls.append(("close",))
 
-    def send_request(method, params, timeout=30):
-        assert method == "textDocument/hover"
-        assert params["textDocument"]["uri"] == source.resolve().as_uri()
-        return {"contents": {"kind": "plaintext", "value": "Nat : Type"}}
+    monkeypatch.setattr(client, "close", incomplete_close)
+    monkeypatch.setattr(session, "_process_group_exists", lambda process_group_id: True)
+    monkeypatch.setattr(session, "_signal_process_group", lambda *args: None)
+    monkeypatch.setattr(session, "_wait_for_group_exit", lambda *args: False)
 
-    monkeypatch.setattr(session, "_send_request", send_request)
+    with pytest.raises(lsp.LspCleanupError, match="survived SIGKILL"):
+        session.close()
 
-    assert session.hover(str(source), 0, 7) == "Nat : Type"
-    assert [method for method, _ in notifications] == [
-        "textDocument/didOpen",
-        "textDocument/didClose",
-    ]
-    assert notifications[0][1]["textDocument"]["text"] == source_text
+    assert session._process_group_id == 999_999_999
+    monkeypatch.setattr(session, "_process_group_exists", lambda process_group_id: False)
 
 
-def test_malformed_hover_result_poisons_the_session(tmp_path: Path, monkeypatch):
-    source = tmp_path / "Test.lean"
-    source.write_text("#check Nat\n")
-    session = lsp.LeanLspSession(lsp.LspConfig())
-
-    monkeypatch.setattr(session, "_send_notification", lambda *args, **kwargs: None)
-    monkeypatch.setattr(session, "_send_request", lambda *args, **kwargs: 1)
-
-    def abort():
-        session._poisoned = True
-        session.process = None
-
-    monkeypatch.setattr(session, "_abort_process", abort)
-
-    with pytest.raises(lsp.LspProtocolError, match="non-object"):
-        session.hover(str(source), 0, 0)
-    assert session._poisoned is True
-
-
-def test_malformed_hover_contents_value_poisons_the_session(
-    tmp_path: Path, monkeypatch
-):
-    source = tmp_path / "Test.lean"
-    source.write_text("#check Nat\n")
-    session = lsp.LeanLspSession(lsp.LspConfig())
-
-    monkeypatch.setattr(session, "_send_notification", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        session,
-        "_send_request",
-        lambda *args, **kwargs: {"contents": {"value": 7}},
-    )
-
-    def abort():
-        session._poisoned = True
-        session.process = None
-
-    monkeypatch.setattr(session, "_abort_process", abort)
-
-    with pytest.raises(lsp.LspProtocolError, match="contents.value"):
-        session.hover(str(source), 0, 0)
-    assert session._poisoned is True
-
-
-def test_exhausted_hover_deadline_poisons_before_next_waiter(
-    tmp_path: Path, monkeypatch
-):
-    source = tmp_path / "Test.lean"
-    source.write_text("#check Nat\n")
-    session = lsp.LeanLspSession(lsp.LspConfig(timeout=1))
-    clock = {"now": 0.0}
-    notifications = []
-
-    monkeypatch.setattr(lsp.time, "monotonic", lambda: clock["now"])
-    monkeypatch.setattr(
-        session,
-        "_send_notification",
-        lambda method, params, **kwargs: notifications.append(method),
-    )
-
-    def request(method, params, timeout):
-        clock["now"] = 1.0
-        return {"contents": "Nat : Type"}
-
-    def abort():
-        session._poisoned = True
-        session.process = None
-
-    monkeypatch.setattr(session, "_send_request", request)
-    monkeypatch.setattr(session, "_abort_process", abort)
-
-    assert session.hover(str(source), 0, 0) == "Nat : Type"
-    assert notifications == ["textDocument/didOpen"]
-    assert session._poisoned is True
-    with pytest.raises(lsp.LspProtocolError, match="no longer usable"):
-        session.hover(str(source), 0, 0)
-
-
-def test_document_operations_are_serialized_per_session(tmp_path: Path, monkeypatch):
-    first = tmp_path / "First.lean"
-    second = tmp_path / "Second.lean"
-    first.write_text("#check Nat\n")
-    second.write_text("#check Int\n")
-    session = lsp.LeanLspSession(lsp.LspConfig())
+def test_document_operations_are_serialized(fake_session) -> None:
+    session, source, client = fake_session
     first_entered = threading.Event()
-    second_entered = threading.Event()
     release_first = threading.Event()
-    calls = 0
-    calls_lock = threading.Lock()
+    second_entered = threading.Event()
+    call_count = 0
 
-    monkeypatch.setattr(
-        session,
-        "_send_notification",
-        lambda method, params, **kwargs: None,
-    )
-
-    def collect(uri, timeout):
-        nonlocal calls
-        with calls_lock:
-            calls += 1
-            number = calls
-        if number == 1:
+    async def diagnostics(path: str, *, fresh: bool, timeout: float):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
             first_entered.set()
-            assert release_first.wait(timeout=2)
+            while not release_first.is_set():
+                await asyncio.sleep(0.005)
         else:
             second_entered.set()
-        return []
+        return SimpleNamespace(items=[])
 
-    monkeypatch.setattr(session, "_collect_diagnostics", collect)
+    client.diagnostics = diagnostics
     threads = [
-        threading.Thread(target=session.get_diagnostics, args=(str(first),)),
-        threading.Thread(target=session.get_diagnostics, args=(str(second),)),
+        threading.Thread(target=session.get_diagnostics, args=(str(source),))
+        for _ in range(2)
     ]
     threads[0].start()
     assert first_entered.wait(timeout=1)
     threads[1].start()
-
-    # The second call cannot begin reading the shared stdout stream until the
-    # first document's complete didOpen/diagnostics/didClose lifecycle finishes.
-    assert not second_entered.wait(timeout=0.1)
+    assert not second_entered.wait(timeout=0.05)
     release_first.set()
     for thread in threads:
         thread.join(timeout=2)
@@ -605,54 +359,38 @@ def test_document_operations_are_serialized_per_session(tmp_path: Path, monkeypa
     assert all(not thread.is_alive() for thread in threads)
 
 
-def test_lsp_queue_wait_is_bounded_by_session_timeout(tmp_path: Path):
-    source = tmp_path / "Queued.lean"
-    source.write_text("#check Nat\n")
-    session = lsp.LeanLspSession(lsp.LspConfig(timeout=0.01))
-    session._operation_lock.acquire()
+@pytest.mark.real_lean
+@pytest.mark.skipif(shutil.which("lake") is None, reason="Lake is not installed")
+def test_real_leanclient_adapter_waits_for_diagnostics_and_serves_hover(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "leanclient-project"
+    project.mkdir()
+    (project / "lean-toolchain").write_text("leanprover/lean4:v4.32.2\n", encoding="utf-8")
+    (project / "lakefile.toml").write_text(
+        'name = "LeanclientFixture"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    source = project / "Main.lean"
+    source.write_text(
+        "def twice (n : Nat) : Nat := n + n\n"
+        "example : False := by\n"
+        "  trivial\n",
+        encoding="utf-8",
+    )
+    session = lsp.LeanLspSession(lsp.LspConfig(cwd=str(project), timeout=60))
+
+    session.start()
+    process_group_id = session._process_group_id
     try:
-        with pytest.raises(TimeoutError, match="waiting for the Lean LSP session"):
-            session.hover(str(source), 0, 0)
+        diagnostics = session.get_diagnostics(str(source))
+        assert any(item.get("severity") == 1 for item in diagnostics)
+        assert any("False" in str(item.get("message")) for item in diagnostics)
+        hover = session.hover(str(source), 0, 5)
+        assert hover is not None
+        assert "twice" in hover
     finally:
-        session._operation_lock.release()
+        session.close()
 
-
-@pytest.mark.parametrize(
-    "partial",
-    [
-        b"Content-Length: 10\r\n",
-        b"Content-Length: 10\r\n\r\n{}",
-    ],
-)
-def test_partial_lsp_frame_cannot_block_past_deadline(partial):
-    read_fd, write_fd = os.pipe()
-    reader = os.fdopen(read_fd, "rb", buffering=0)
-    session = lsp.LeanLspSession(lsp.LspConfig())
-    session.process = SimpleNamespace(stdout=reader)
-    try:
-        os.write(write_fd, partial)
-        with pytest.raises(TimeoutError, match="reading an LSP"):
-            session._read_message(timeout=0.01)
-    finally:
-        os.close(write_fd)
-        reader.close()
-
-
-def test_lsp_write_cannot_block_on_a_full_pipe():
-    read_fd, write_fd = os.pipe()
-    os.set_blocking(write_fd, False)
-    while True:
-        try:
-            os.write(write_fd, b"x" * 4096)
-        except BlockingIOError:
-            break
-
-    writer = os.fdopen(write_fd, "wb", buffering=0)
-    session = lsp.LeanLspSession(lsp.LspConfig())
-    session.process = SimpleNamespace(stdin=writer)
-    try:
-        with pytest.raises(TimeoutError, match="writing an LSP message"):
-            session._write_message({"jsonrpc": "2.0"}, timeout=0.01)
-    finally:
-        writer.close()
-        os.close(read_fd)
+    assert process_group_id is not None
+    assert not session._process_group_exists(process_group_id)

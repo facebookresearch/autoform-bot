@@ -11,6 +11,10 @@ license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=3.4.5,<4",
+    # Keep Lean's evolving LSP protocol in its maintained client library.
+    # The exact pin also protects the small synchronous adapter around its
+    # public async API from silent lifecycle-contract drift.
+    "leanclient==0.13.2",
     "psutil>=5.9",
     # The blueprint checks predict what the generated MkDocs site publishes.
     # Anchor prediction runs the configured renderer itself rather than

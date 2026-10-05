@@ -78,6 +78,8 @@ RUNTIME_SAFETY_SECONDS = 30.0
 # an inactive project must be replaced first.
 LSP_STARTUP_BUDGET = 60.0
 LSP_CLOSE_BUDGET = 65.0
+RESOURCE_CLEANUP_RETRY_INITIAL_SECONDS = 0.05
+RESOURCE_CLEANUP_RETRY_MAX_SECONDS = 5.0
 
 
 class ProjectResourceBusyError(TimeoutError):
@@ -357,7 +359,11 @@ class ProjectResourceCache(Generic[T]):
                     {
                         "project_dir": str(root),
                         "active": entry.active,
-                        "valid": not entry.invalid,
+                        "valid": not entry.invalid
+                        and (
+                            self._is_valid is None
+                            or self._is_valid(entry.resource)
+                        ),
                         "idle_seconds": round(max(0.0, now - entry.last_used), 3),
                     }
                     for root, entry in sorted(
@@ -366,6 +372,27 @@ class ProjectResourceCache(Generic[T]):
                 ],
                 "creating": sorted(str(root) for root in self._creating),
             }
+
+    @contextmanager
+    def inspect(self, project_dir: str) -> Iterator[T | None]:
+        """Lease existing state without validating, replacing, or creating it."""
+        root = resolve_lean_project_dir(project_dir)
+        with self._condition:
+            if self._closed:
+                raise RuntimeError("project resource cache is closed")
+            entry = self._entries.get(root)
+            if entry is None:
+                resource = None
+            else:
+                entry.active += 1
+                self._active_leases += 1
+                entry.last_used = self._clock()
+                resource = entry.resource
+        try:
+            yield resource
+        finally:
+            if resource is not None:
+                self._release(root, resource)
 
     def state(self, project_dir: str) -> str:
         """Return ``cold``, ``warming``, or ``warm`` without creating state."""
@@ -933,10 +960,18 @@ class ProjectResourceCache(Generic[T]):
             raise
 
     def _safe_close(self, resource: T) -> None:
-        try:
-            self._close_resource(resource)
-        except Exception:
-            logger.exception("failed to close Lean project resource")
+        delay = RESOURCE_CLEANUP_RETRY_INITIAL_SECONDS
+        while True:
+            try:
+                self._close_resource(resource)
+                return
+            except Exception:
+                # Returning here would drop the only cache-owned reference and
+                # allow a replacement project process to start. Cleanup methods
+                # are required to be idempotent, so retain ownership and retry.
+                logger.exception("failed to close Lean project resource; retrying")
+                time.sleep(delay)
+                delay = min(delay * 2, RESOURCE_CLEANUP_RETRY_MAX_SECONDS)
 
 
 class LeanRuntimeServices:
@@ -980,6 +1015,7 @@ class LeanRuntimeServices:
             lambda pool: pool.shutdown(),
             max_entries=self.config.repl_project_limit,
             idle_seconds=self.config.idle_seconds,
+            is_valid=lambda pool: pool.is_usable(),
             start_sweeper=start_sweepers,
         )
         self.lsp_projects = ProjectResourceCache(
@@ -1013,7 +1049,7 @@ class LeanRuntimeServices:
                 effective_timeout = float(timeout)
             if effective_timeout > self.config.max_repl_request_seconds:
                 raise ValueError(
-                    "timeout exceeds the node-wide limit of "
+                    "timeout exceeds the per-installation limit of "
                     f"{self.config.max_repl_request_seconds:g} seconds"
                 )
             deadline = time.monotonic() + effective_timeout
@@ -1028,7 +1064,7 @@ class LeanRuntimeServices:
                 return format_repl_response(response)
         if method == "repl.status":
             project_dir = self._string_param(params, "project_dir")
-            with self.repl_projects.lease(project_dir, create=False) as pool:
+            with self.repl_projects.inspect(project_dir) as pool:
                 state = "warm" if pool is not None else self.repl_projects.state(project_dir)
                 return {
                     "state": state,
@@ -1405,22 +1441,35 @@ def serve(paths: RuntimePaths) -> None:
                 os.close(lifetime_fd)
 
 
-def _paths_from_args(socket_path: str | None, log_path: str | None) -> RuntimePaths:
+def _paths_from_args(
+    socket_path: str | None,
+    log_path: str | None,
+    lifetime_lock_path: str | None = None,
+) -> RuntimePaths:
     paths = (
         runtime_paths_for_socket(socket_path)
         if socket_path is not None
         else default_runtime_paths()
     )
-    if log_path is None:
+    if log_path is None and lifetime_lock_path is None:
         return paths
-    log = Path(log_path).expanduser()
-    if not log.is_absolute():
-        raise LeanRuntimeError("Lean runtime log path must be absolute")
+    log = paths.log
+    if log_path is not None:
+        log = Path(log_path).expanduser()
+        if not log.is_absolute():
+            raise LeanRuntimeError("Lean runtime log path must be absolute")
+    lifetime_lock = paths.lifetime_lock
+    if lifetime_lock_path is not None:
+        lifetime_lock = Path(lifetime_lock_path).expanduser()
+        if not lifetime_lock.is_absolute():
+            raise LeanRuntimeError("Lean runtime lifetime lock path must be absolute")
+        if lifetime_lock.parent != paths.directory:
+            raise LeanRuntimeError("Lean runtime lifetime lock must be in the runtime directory")
     return RuntimePaths(
         directory=paths.directory,
         socket=paths.socket,
         lock=paths.lock,
-        lifetime_lock=paths.lifetime_lock,
+        lifetime_lock=lifetime_lock,
         log=log,
     )
 
@@ -1429,6 +1478,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", help="override the Unix socket path")
     parser.add_argument("--log", help="override the rotating log path")
+    parser.add_argument("--lifetime-lock", help=argparse.SUPPRESS)
     parser.add_argument(
         "command",
         choices=("serve", "start", "status", "stop"),
@@ -1436,7 +1486,7 @@ def main(argv: list[str] | None = None) -> None:
         default="status",
     )
     args = parser.parse_args(argv)
-    paths = _paths_from_args(args.socket, args.log)
+    paths = _paths_from_args(args.socket, args.log, args.lifetime_lock)
 
     if args.command == "serve":
         serve(paths)

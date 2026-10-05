@@ -387,6 +387,10 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
         "product evidence",
         "future agents need less steering",
         "not the transcript",
+        "maintained client library",
+        "synchronization barriers",
+        "Autoform's adapter responsible for policy",
+        "Test\nthat boundary as a contract",
     ):
         assert required in develop_plugin
     assert re.search(r"consumer\s+scenario", develop_plugin)

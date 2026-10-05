@@ -22,6 +22,7 @@ from servers.lean_client import (
     PROTOCOL_VERSION,
     LeanRuntimeClient,
     LeanRuntimeError,
+    LeanRuntimeProtocolError,
     LeanRuntimeUnavailable,
 )
 from servers.lean_runtime import (
@@ -34,21 +35,26 @@ from servers.lean_runtime import (
 
 
 def test_runtime_identity_tracks_all_behavior_affecting_modules():
-    relative_paths = {
+    relative_paths = [
         path.relative_to(lean_client.PACKAGE_ROOT).as_posix()
         for path in lean_client._RUNTIME_FILES
-    }
+    ]
 
-    assert relative_paths == {
-        "servers/__init__.py",
-        "servers/lean_client.py",
-        "servers/lean_runtime.py",
-        "servers/lsp/server.py",
-        "servers/repl/__init__.py",
-        "servers/repl/server.py",
-        "servers/repl/core.py",
-        "servers/repl/pool.py",
-    }
+    assert relative_paths[:2] == ["pyproject.toml", "uv.lock"]
+    assert relative_paths[2:] == sorted(
+        path.relative_to(lean_client.PACKAGE_ROOT).as_posix()
+        for path in (lean_client.PACKAGE_ROOT / "servers").rglob("*.py")
+    )
+
+
+def test_default_runtime_ownership_paths_are_protocol_independent(runtime_dir, monkeypatch):
+    monkeypatch.setenv("AUTOFORM_RUNTIME_DIR", str(runtime_dir))
+
+    paths = lean_client.default_runtime_paths()
+
+    assert paths.lock.name == f"lean-{INSTALL_PATH_ID}.lock"
+    assert paths.lifetime_lock.name == f"lean-{INSTALL_PATH_ID}.lifetime.lock"
+    assert f"lean-v{PROTOCOL_VERSION}-" in paths.socket.name
 
 
 def make_lake_project(tmp_path, name: str):
@@ -92,6 +98,9 @@ class FakePool:
 
     def get_memory_usage(self):
         return 0.25
+
+    def is_usable(self):
+        return not self._shutdown
 
     def shutdown(self):
         self._shutdown = True
@@ -153,6 +162,47 @@ def test_runtime_reuses_one_project_pool_and_status_stays_lazy(tmp_path):
     finally:
         services.close()
     assert pools[0]._shutdown is True
+
+
+def test_repl_status_observes_a_poisoned_pool_without_cleaning_it(tmp_path):
+    project = make_lake_project(tmp_path, "poisoned-status")
+    pools = []
+
+    class PoisonablePool(FakePool):
+        def __init__(self, root):
+            super().__init__(root)
+            self.shutdown_calls = 0
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+            super().shutdown()
+
+    def create_pool(root):
+        pool = PoisonablePool(root)
+        pools.append(pool)
+        return pool
+
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=create_pool,
+        lsp_factory=FakeLsp,
+        start_sweepers=False,
+    )
+    try:
+        services.dispatch(
+            "repl.run",
+            {"project_dir": str(project), "code": "#check Nat", "timeout": None},
+        )
+        pools[0]._shutdown = True
+
+        status = services.dispatch("repl.status", {"project_dir": str(project)})
+
+        assert status["state"] == "warm"
+        assert status["shutdown"] is True
+        assert pools[0].shutdown_calls == 0
+        assert len(pools) == 1
+    finally:
+        services.close()
 
 
 def test_runtime_formats_unknown_repl_outcomes_without_hiding_them(tmp_path):
@@ -1156,6 +1206,63 @@ def test_idle_eviction_reserves_its_slot_until_cleanup_finishes(tmp_path):
     cache.close()
 
 
+def test_failed_victim_cleanup_blocks_replacement_until_retry_succeeds(tmp_path):
+    first = make_lake_project(tmp_path, "retry-cleanup-first")
+    second = make_lake_project(tmp_path, "retry-cleanup-second")
+    cleanup_failed = threading.Event()
+    allow_retry = threading.Event()
+    second_started = threading.Event()
+    errors = []
+    close_attempts = 0
+
+    def factory(root):
+        if root == second.resolve():
+            second_started.set()
+        return root
+
+    def close_resource(resource):
+        nonlocal close_attempts
+        if resource != first.resolve():
+            return
+        close_attempts += 1
+        if close_attempts == 1:
+            cleanup_failed.set()
+            raise RuntimeError("transient cleanup failure")
+        assert allow_retry.wait(timeout=2)
+
+    cache = ProjectResourceCache(
+        factory,
+        close_resource,
+        max_entries=1,
+        idle_seconds=1800,
+        start_sweeper=False,
+    )
+    with cache.lease(str(first)):
+        pass
+
+    def lease_second():
+        try:
+            with cache.lease(str(second)):
+                pass
+        except BaseException as error:
+            errors.append(error)
+
+    acquisition = threading.Thread(target=lease_second)
+    acquisition.start()
+    try:
+        assert cleanup_failed.wait(timeout=1)
+        assert not second_started.wait(timeout=0.1)
+    finally:
+        allow_retry.set()
+        acquisition.join(timeout=2)
+
+    assert not acquisition.is_alive()
+    assert close_attempts == 2
+    assert second_started.is_set()
+    assert errors == []
+    cache.close()
+
+
 def test_victim_cleanup_thread_start_failure_closes_synchronously(
     tmp_path, monkeypatch
 ):
@@ -1409,6 +1516,198 @@ def test_new_build_replaces_previous_runtime_at_same_install_path(runtime_dir, m
         assert not old_socket.exists()
     finally:
         current.stop()
+
+
+@pytest.mark.daemon
+def test_new_protocol_retires_old_protocol_before_owning_runtime(
+    runtime_dir,
+    repo_root,
+    monkeypatch,
+    request,
+):
+    monkeypatch.setenv("AUTOFORM_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("AUTOFORM_REPL_TOTAL_WORKERS", "1")
+    current = LeanRuntimeClient(startup_timeout=15)
+    old_protocol = PROTOCOL_VERSION - 1
+    assert old_protocol >= 0
+    old_socket = runtime_dir / f"lean-v{old_protocol}-{INSTALL_PATH_ID}-old.sock"
+    draining = runtime_dir / "old-draining"
+    release = runtime_dir / "release-old"
+    old_script = """
+import fcntl
+import json
+import os
+import socket
+import sys
+import time
+from pathlib import Path
+
+socket_path = Path(sys.argv[1])
+lifetime_path = Path(sys.argv[2])
+draining_path = Path(sys.argv[3])
+release_path = Path(sys.argv[4])
+protocol = int(sys.argv[5])
+lifetime_fd = os.open(lifetime_path, os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(lifetime_fd, fcntl.LOCK_EX)
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(str(socket_path))
+server.listen()
+try:
+    while True:
+        connection, _ = server.accept()
+        with connection:
+            request = json.loads(connection.makefile("rb").readline())
+            assert request["v"] == protocol
+            stopping = request["method"] == "daemon.shutdown"
+            result = (
+                {"stopping": True, "pid": os.getpid()}
+                if stopping
+                else {
+                    "pid": os.getpid(),
+                    "protocol": protocol,
+                    "install_id": sys.argv[6],
+                    "build_generation": 0,
+                }
+            )
+            connection.sendall(
+                json.dumps(
+                    {"v": protocol, "id": request["id"], "ok": True, "result": result}
+                ).encode()
+                + b"\\n"
+            )
+        if stopping:
+            server.close()
+            socket_path.unlink()
+            draining_path.touch()
+            while not release_path.exists():
+                time.sleep(0.01)
+            break
+finally:
+    server.close()
+    socket_path.unlink(missing_ok=True)
+    os.close(lifetime_fd)
+"""
+    old_process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            old_script,
+            str(old_socket),
+            str(current.paths.lifetime_lock),
+            str(draining),
+            str(release),
+            str(old_protocol),
+            f"{INSTALL_PATH_ID}-old",
+        ],
+        cwd=repo_root,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    def stop_old_process():
+        release.touch(exist_ok=True)
+        if old_process.poll() is None:
+            old_process.terminate()
+            old_process.wait(timeout=5)
+
+    request.addfinalizer(stop_old_process)
+    old_client = LeanRuntimeClient(socket_path=old_socket, startup_timeout=15)
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if old_process.poll() is not None:
+            pytest.fail(f"old protocol runtime exited with {old_process.returncode}")
+        try:
+            old_status = old_client._request_once(
+                "daemon.ping",
+                {},
+                protocol_version=old_protocol,
+            )
+            break
+        except LeanRuntimeUnavailable:
+            time.sleep(0.025)
+    else:
+        pytest.fail("old protocol runtime did not become ready")
+
+    statuses = []
+    errors = []
+
+    def start_current():
+        try:
+            statuses.append(current.ensure_running())
+        except BaseException as error:
+            errors.append(error)
+
+    starter = threading.Thread(target=start_current)
+    try:
+        starter.start()
+        deadline = time.monotonic() + 10
+        while not draining.exists() and time.monotonic() < deadline:
+            time.sleep(0.025)
+        assert draining.exists()
+        starter.join(timeout=0.1)
+        assert starter.is_alive()
+        assert old_process.poll() is None
+        assert not current.paths.socket.exists()
+
+        release.touch()
+        starter.join(timeout=20)
+        assert not starter.is_alive()
+        assert errors == []
+        assert len(statuses) == 1
+        current_status = statuses[0]
+        assert current_status["protocol"] == PROTOCOL_VERSION
+        assert current_status["pid"] != old_status["pid"]
+        assert old_process.wait(timeout=5) == 0
+
+        import fcntl
+
+        lifetime_fd = os.open(current.paths.lifetime_lock, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(lifetime_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(lifetime_fd)
+    finally:
+        release.touch(exist_ok=True)
+        starter.join(timeout=5)
+        try:
+            current.stop()
+        except LeanRuntimeUnavailable:
+            pass
+        if old_process.poll() is None:
+            old_process.terminate()
+            old_process.wait(timeout=5)
+
+
+@pytest.mark.daemon
+def test_new_protocol_removes_stale_old_protocol_socket(runtime_dir, monkeypatch):
+    monkeypatch.setenv("AUTOFORM_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("AUTOFORM_REPL_TOTAL_WORKERS", "1")
+    stale_path = runtime_dir / f"lean-v0-{INSTALL_PATH_ID}-stale.sock"
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(stale_path))
+    stale.close()
+
+    current = LeanRuntimeClient(startup_timeout=15)
+    try:
+        current.ensure_running()
+        assert not stale_path.exists()
+    finally:
+        current.stop()
+
+
+def test_newer_protocol_socket_fails_closed(runtime_dir, monkeypatch):
+    monkeypatch.setenv("AUTOFORM_RUNTIME_DIR", str(runtime_dir))
+    newer_path = runtime_dir / f"lean-v{PROTOCOL_VERSION + 1}-{INSTALL_PATH_ID}-new.sock"
+    newer_path.touch()
+    current = LeanRuntimeClient(startup_timeout=0.1)
+
+    with pytest.raises(LeanRuntimeProtocolError, match="newer than supported"):
+        current.ensure_running()
+
+    assert newer_path.is_file()
 
 
 @pytest.mark.daemon

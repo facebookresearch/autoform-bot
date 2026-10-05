@@ -29,14 +29,9 @@ DEFAULT_STARTUP_TIMEOUT = 15.0
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_PATH_ID = hashlib.sha256(os.fsencode(PACKAGE_ROOT)).hexdigest()[:10]
 _RUNTIME_FILES = (
-    PACKAGE_ROOT / "servers" / "__init__.py",
-    Path(__file__).resolve(),
-    PACKAGE_ROOT / "servers" / "lean_runtime.py",
-    PACKAGE_ROOT / "servers" / "lsp" / "server.py",
-    PACKAGE_ROOT / "servers" / "repl" / "__init__.py",
-    PACKAGE_ROOT / "servers" / "repl" / "server.py",
-    PACKAGE_ROOT / "servers" / "repl" / "core.py",
-    PACKAGE_ROOT / "servers" / "repl" / "pool.py",
+    PACKAGE_ROOT / "pyproject.toml",
+    PACKAGE_ROOT / "uv.lock",
+    *sorted((PACKAGE_ROOT / "servers").rglob("*.py")),
 )
 
 
@@ -82,6 +77,23 @@ class LeanRuntimeProtocolError(LeanRuntimeError):
 
 class LeanRuntimeRemoteError(LeanRuntimeError):
     """The runtime rejected a well-formed request."""
+
+
+def _protocol_version_from_socket(socket_path: Path) -> int:
+    """Read the wire generation from an installation-owned socket name."""
+    prefix = "lean-v"
+    install_marker = f"-{INSTALL_PATH_ID}-"
+    name = socket_path.name
+    if not name.startswith(prefix) or not name.endswith(".sock"):
+        raise LeanRuntimeProtocolError(
+            f"cannot determine Lean runtime protocol from socket name: {socket_path}"
+        )
+    version, separator, build = name[len(prefix) :].partition(install_marker)
+    if not separator or not version.isdecimal() or not build.removesuffix(".sock"):
+        raise LeanRuntimeProtocolError(
+            f"cannot determine Lean runtime protocol from socket name: {socket_path}"
+        )
+    return int(version)
 
 
 def _response_timeout_from_environment() -> float:
@@ -163,12 +175,10 @@ def default_runtime_paths() -> RuntimePaths:
         directory=directory,
         socket=socket_path,
         # Bootstrap and lifetime locks are installation-wide, rather than
-        # build-wide, so two plugin versions cannot race to launch parallel
-        # daemons while replacing one another after an in-place upgrade.
-        lock=directory / f"lean-v{PROTOCOL_VERSION}-{INSTALL_PATH_ID}.lock",
-        lifetime_lock=(
-            directory / f"lean-v{PROTOCOL_VERSION}-{INSTALL_PATH_ID}.lifetime.lock"
-        ),
+        # build- or protocol-wide, so two plugin versions cannot race to launch
+        # parallel daemons while replacing one another after an in-place upgrade.
+        lock=directory / f"lean-{INSTALL_PATH_ID}.lock",
+        lifetime_lock=directory / f"lean-{INSTALL_PATH_ID}.lifetime.lock",
         log=directory / f"lean-v{PROTOCOL_VERSION}-{INSTALL_ID}.log",
     )
 
@@ -270,15 +280,9 @@ class LeanRuntimeClient:
         except LeanRuntimeUnavailable:
             pass
 
-        try:
-            import fcntl
-        except ImportError as error:  # pragma: no cover - guarded by AF_UNIX above
-            raise LeanRuntimeError("runtime bootstrap requires POSIX file locking") from error
-
         _private_runtime_directory(self.paths.directory)
-        lock_fd = os.open(self.paths.lock, os.O_CREAT | os.O_RDWR, 0o600)
+        lock_fds = self._acquire_bootstrap_locks()
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
             try:
                 return self.ping(autostart=False)
             except LeanRuntimeUnavailable:
@@ -289,6 +293,8 @@ class LeanRuntimeClient:
             # A daemon owns this lock for its complete lifetime. If it has
             # stopped accepting connections but is still draining requests,
             # wait here rather than starting an overlapping replacement.
+            import fcntl
+
             lifetime_fd = os.open(
                 self.paths.lifetime_lock,
                 os.O_CREAT | os.O_RDWR,
@@ -329,22 +335,136 @@ class LeanRuntimeClient:
                 self._terminate_failed_start(process)
                 raise
         finally:
-            os.close(lock_fd)
+            for lock_fd in reversed(lock_fds):
+                os.close(lock_fd)
 
     def stop(self) -> dict[str, Any]:
         """Ask a running daemon to finish active calls within one deadline."""
-        deadline = time.monotonic() + self.response_timeout
+        lock_fds = self._acquire_bootstrap_locks()
         try:
-            result = self.request(
-                "daemon.shutdown",
-                autostart=False,
-                response_timeout=min(self.response_timeout, 10.0),
+            deadline = time.monotonic() + self.response_timeout
+            try:
+                result = self.request(
+                    "daemon.shutdown",
+                    autostart=False,
+                    response_timeout=min(self.response_timeout, 10.0),
+                )
+            except LeanRuntimeUnavailable:
+                stopped = self._stop_previous_builds()
+                if stopped:
+                    return {"stopping": False, "stopped_previous": stopped}
+                raise
+            if not isinstance(result, dict):
+                raise LeanRuntimeProtocolError("daemon.shutdown returned a non-object result")
+            while self.paths.socket.exists() and time.monotonic() < deadline:
+                time.sleep(0.025)
+            if self.paths.socket.exists():
+                raise LeanRuntimeError(
+                    f"Lean runtime is still draining requests at {self.paths.socket}"
+                )
+            return result
+        finally:
+            for lock_fd in reversed(lock_fds):
+                os.close(lock_fd)
+
+    def _acquire_bootstrap_locks(self) -> list[int]:
+        """Hold current and pre-stable bootstrap locks during lifecycle changes."""
+        try:
+            import fcntl
+        except ImportError as error:  # pragma: no cover - guarded by AF_UNIX above
+            raise LeanRuntimeError("runtime bootstrap requires POSIX file locking") from error
+
+        lock_paths = [self.paths.lock]
+        if self._uses_default_paths:
+            lock_paths.extend(
+                self.paths.directory / f"lean-v{version}-{INSTALL_PATH_ID}.lock"
+                for version in range(PROTOCOL_VERSION + 1)
             )
-        except LeanRuntimeUnavailable:
-            stopped = self._stop_previous_builds()
-            if stopped:
-                return {"stopping": False, "stopped_previous": stopped}
+        lock_fds: list[int] = []
+        try:
+            for lock_path in lock_paths:
+                lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+                lock_fds.append(lock_fd)
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        except BaseException:
+            for lock_fd in reversed(lock_fds):
+                os.close(lock_fd)
             raise
+        return lock_fds
+
+    def _stop_previous_builds(self) -> list[int]:
+        """Gracefully replace older protocol/build generations for this install."""
+        if not self._uses_default_paths:
+            return []
+        pattern = f"lean-v*-{INSTALL_PATH_ID}-*.sock"
+        stopped: list[int] = []
+        for socket_path in sorted(self.paths.directory.glob(pattern)):
+            if socket_path == self.paths.socket:
+                continue
+            protocol_version = _protocol_version_from_socket(socket_path)
+            if protocol_version > PROTOCOL_VERSION:
+                raise LeanRuntimeProtocolError(
+                    f"Lean runtime protocol v{protocol_version} is newer than "
+                    f"supported v{PROTOCOL_VERSION}; restart with the newer Autoform installation"
+                )
+            previous = LeanRuntimeClient(
+                socket_path=socket_path,
+                autostart=False,
+                connect_timeout=self.connect_timeout,
+                response_timeout=self.response_timeout,
+                startup_timeout=self.startup_timeout,
+            )
+            try:
+                status = previous._request_once(
+                    "daemon.ping",
+                    {},
+                    response_timeout=min(self.response_timeout, 5.0),
+                    protocol_version=protocol_version,
+                )
+            except LeanRuntimeUnavailable:
+                previous._remove_stale_socket()
+                previous._wait_for_legacy_lifetime()
+                continue
+            if not isinstance(status, dict):
+                raise LeanRuntimeProtocolError("daemon.ping returned a non-object result")
+            if status.get("protocol") != protocol_version:
+                raise LeanRuntimeProtocolError(
+                    f"runtime at {socket_path} does not match protocol v{protocol_version}"
+                )
+            install_id = status.get("install_id")
+            if not isinstance(install_id, str) or not install_id.startswith(
+                f"{INSTALL_PATH_ID}-"
+            ):
+                raise LeanRuntimeProtocolError(
+                    f"runtime at {socket_path} does not belong to this Autoform installation"
+                )
+            generation = status.get("build_generation")
+            if protocol_version == PROTOCOL_VERSION:
+                if not isinstance(generation, int):
+                    raise LeanRuntimeProtocolError(
+                        f"runtime at {socket_path} did not report a build generation"
+                    )
+                if generation > BUILD_GENERATION:
+                    raise LeanRuntimeProtocolError(
+                        "a newer Autoform runtime build is already active; "
+                        "restart this plugin session before using Lean tools"
+                    )
+            result = previous._stop_protocol(protocol_version)
+            previous._wait_for_legacy_lifetime()
+            pid = result.get("pid") if isinstance(result, dict) else None
+            if isinstance(pid, int):
+                stopped.append(pid)
+        return stopped
+
+    def _stop_protocol(self, protocol_version: int) -> dict[str, Any]:
+        """Stop one discovered runtime using its advertised wire generation."""
+        deadline = time.monotonic() + self.response_timeout
+        result = self._request_once(
+            "daemon.shutdown",
+            {},
+            response_timeout=min(self.response_timeout, 10.0),
+            protocol_version=protocol_version,
+        )
         if not isinstance(result, dict):
             raise LeanRuntimeProtocolError("daemon.shutdown returned a non-object result")
         while self.paths.socket.exists() and time.monotonic() < deadline:
@@ -355,39 +475,19 @@ class LeanRuntimeClient:
             )
         return result
 
-    def _stop_previous_builds(self) -> list[int]:
-        """Gracefully replace older code generations at the same install path."""
-        if not self._uses_default_paths:
-            return []
-        pattern = f"lean-v{PROTOCOL_VERSION}-{INSTALL_PATH_ID}-*.sock"
-        stopped: list[int] = []
-        for socket_path in self.paths.directory.glob(pattern):
-            if socket_path == self.paths.socket:
-                continue
-            previous = LeanRuntimeClient(
-                socket_path=socket_path,
-                autostart=False,
-                connect_timeout=self.connect_timeout,
-                response_timeout=self.response_timeout,
-                startup_timeout=self.startup_timeout,
-            )
-            try:
-                status = previous.request("daemon.ping", autostart=False)
-            except LeanRuntimeUnavailable:
-                continue
-            generation = (
-                status.get("build_generation") if isinstance(status, dict) else None
-            )
-            if isinstance(generation, int) and generation > BUILD_GENERATION:
-                raise LeanRuntimeProtocolError(
-                    "a newer Autoform runtime build is already active; "
-                    "restart this plugin session before using Lean tools"
-                )
-            result = previous.stop()
-            pid = result.get("pid") if isinstance(result, dict) else None
-            if isinstance(pid, int):
-                stopped.append(pid)
-        return stopped
+    def _wait_for_legacy_lifetime(self) -> None:
+        """Wait for daemons that derived their lifetime lock from the socket."""
+        try:
+            import fcntl
+        except ImportError as error:  # pragma: no cover - guarded by AF_UNIX above
+            raise LeanRuntimeError("runtime bootstrap requires POSIX file locking") from error
+
+        legacy_path = self.paths.socket.with_suffix(".lifetime.lock")
+        lifetime_fd = os.open(legacy_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(lifetime_fd, fcntl.LOCK_EX)
+        finally:
+            os.close(lifetime_fd)
 
     def _spawn_daemon(self) -> subprocess.Popen[bytes]:
         command = [
@@ -398,6 +498,8 @@ class LeanRuntimeClient:
             str(self.paths.socket),
             "--log",
             str(self.paths.log),
+            "--lifetime-lock",
+            str(self.paths.lifetime_lock),
             "serve",
         ]
         with self.paths.log.open("ab", buffering=0) as log:
@@ -443,11 +545,13 @@ class LeanRuntimeClient:
         params: dict[str, Any],
         *,
         response_timeout: float | None = None,
+        protocol_version: int | None = None,
     ) -> Any:
+        wire_protocol = PROTOCOL_VERSION if protocol_version is None else protocol_version
         request_id = uuid.uuid4().hex
         payload = json.dumps(
             {
-                "v": PROTOCOL_VERSION,
+                "v": wire_protocol,
                 "id": request_id,
                 "method": method,
                 "params": params,
@@ -502,9 +606,9 @@ class LeanRuntimeClient:
             raise LeanRuntimeProtocolError("Lean runtime returned invalid JSON") from error
         if not isinstance(response, dict):
             raise LeanRuntimeProtocolError("Lean runtime response is not an object")
-        if response.get("v") != PROTOCOL_VERSION:
+        if response.get("v") != wire_protocol:
             raise LeanRuntimeProtocolError(
-                f"Lean runtime protocol mismatch: expected {PROTOCOL_VERSION}, got {response.get('v')!r}"
+                f"Lean runtime protocol mismatch: expected {wire_protocol}, got {response.get('v')!r}"
             )
         if response.get("id") != request_id:
             raise LeanRuntimeProtocolError("Lean runtime response id does not match the request")

@@ -41,6 +41,36 @@ def test_partial_pool_startup_closes_all_constructed_workers(monkeypatch):
     assert workers[1].closed is True
 
 
+def test_partial_pool_startup_retries_failed_cleanup(monkeypatch):
+    workers = []
+
+    class FakeRepl:
+        def __init__(self, config):
+            self.number = len(workers) + 1
+            self.close_calls = 0
+            workers.append(self)
+
+        def start(self):
+            if self.number == 2:
+                raise RuntimeError("second worker failed")
+
+        def close(self):
+            self.close_calls += 1
+            if self.number == 1 and self.close_calls == 1:
+                raise RuntimeError("transient cleanup failure")
+
+    monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
+    monkeypatch.setattr(repl_pool.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="second worker failed"):
+        repl_pool.LeanReplPool(
+            repl_pool.LeanReplPoolConfig(num_repls=2, startup_stagger=0)
+        )
+
+    assert workers[0].close_calls == 2
+    assert workers[1].close_calls == 1
+
+
 def test_shutdown_closes_every_worker_and_drains_idle_queue(monkeypatch):
     workers = []
 
@@ -91,6 +121,32 @@ def test_request_timeout_includes_waiting_for_an_idle_worker(monkeypatch):
         pool.shutdown()
 
 
+def test_expired_deadline_after_admission_returns_worker(monkeypatch):
+    class FakeRepl:
+        def __init__(self, config):
+            pass
+
+        def start(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
+    clock = iter((0.0, 2.0))
+    monkeypatch.setattr(repl_pool.time, "monotonic", lambda: next(clock))
+    pool = repl_pool.LeanReplPool(
+        repl_pool.LeanReplPoolConfig(num_repls=1, startup_stagger=0)
+    )
+
+    try:
+        with pytest.raises(TimeoutError, match="waiting for an idle Lean REPL"):
+            pool.run("#check Nat", deadline=1)
+        assert pool._idle.qsize() == 1
+    finally:
+        pool.shutdown()
+
+
 def test_pool_retires_a_worker_before_requeue_after_request_exception(monkeypatch):
     workers = []
 
@@ -120,6 +176,49 @@ def test_pool_retires_a_worker_before_requeue_after_request_exception(monkeypatc
         assert pool._idle.qsize() == 1
     finally:
         pool.shutdown()
+
+
+def test_pool_never_requeues_a_worker_that_repeatedly_fails_to_close(monkeypatch):
+    workers = []
+
+    class FakeRepl:
+        def __init__(self, config):
+            self.close_calls = 0
+            workers.append(self)
+
+        def start(self):
+            pass
+
+        def run(self, code, **kwargs):
+            raise OSError("stdout failed")
+
+        def close(self):
+            self.close_calls += 1
+            if self.close_calls < 3:
+                raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
+    pool = repl_pool.LeanReplPool(
+        repl_pool.LeanReplPoolConfig(num_repls=1, startup_stagger=0)
+    )
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        pool.run("#check Nat")
+
+    assert workers[0].close_calls == 1
+    assert pool._idle.empty()
+    assert pool._active_calls == 0
+    assert pool.is_usable() is False
+    with pytest.raises(RuntimeError, match="pool is shut down"):
+        pool.run("#check Bool")
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        pool.shutdown()
+    pool.shutdown()
+
+    assert workers[0].close_calls == 3
+    assert pool._workers == []
+    assert pool._closed is True
 
 
 def test_pool_forwards_the_absolute_deadline(monkeypatch):

@@ -117,6 +117,95 @@ def test_close_kills_descendant_after_repl_wrapper_already_exited(tmp_path):
             pass
 
 
+def test_process_group_cleanup_reports_an_unreaped_parent(monkeypatch):
+    waits = []
+    signals = []
+
+    class Process:
+        def wait(self, timeout):
+            waits.append(timeout)
+            raise subprocess.TimeoutExpired("lean-repl", timeout)
+
+    monkeypatch.setattr(
+        repl_core.os,
+        "killpg",
+        lambda process_group_id, sent_signal: signals.append(
+            (process_group_id, sent_signal)
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="timed out reaping"):
+        repl_core._kill_subprocesses(Process(), 1234)
+
+    assert waits == [
+        repl_core.REPL_ABORT_TERM_SECONDS,
+        repl_core.REPL_ABORT_KILL_SECONDS,
+    ]
+    assert signals == [(1234, signal.SIGTERM), (1234, signal.SIGKILL)]
+
+
+def test_process_group_cleanup_waits_for_descendants_after_parent_exit(monkeypatch):
+    signals = []
+    clock = iter((0.0, 2.0))
+
+    class Process:
+        def wait(self, timeout):
+            return 0
+
+    monkeypatch.setattr(repl_core.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(repl_core.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        repl_core.os,
+        "killpg",
+        lambda process_group_id, sent_signal: signals.append(
+            (process_group_id, sent_signal)
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="process group"):
+        repl_core._kill_subprocesses(Process(), 1234)
+
+    assert signals == [
+        (1234, signal.SIGTERM),
+        (1234, signal.SIGKILL),
+        (1234, 0),
+    ]
+
+
+def test_close_retains_process_handle_until_cleanup_succeeds(tmp_path, monkeypatch):
+    (tmp_path / "lakefile.toml").write_text('name = "Fixture"\n')
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(
+            cwd=str(tmp_path),
+            warmup_imports=frozenset(),
+            validate_imports=False,
+        )
+    )
+    process = object()
+    repl.process = process
+    repl._process_group_id = 1234
+    cleanup_calls = []
+
+    def cleanup(candidate, process_group_id):
+        cleanup_calls.append((candidate, process_group_id))
+        if len(cleanup_calls) == 1:
+            raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(repl_core, "_kill_subprocesses", cleanup)
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        repl.close()
+
+    assert repl.process is process
+    assert repl._process_group_id == 1234
+
+    repl.close()
+
+    assert cleanup_calls == [(process, 1234), (process, 1234)]
+    assert repl.process is None
+    assert repl._process_group_id is None
+
+
 def test_split_imports_preserves_body_offset_after_comments_and_blank_lines():
     code = """-- preface
 import Mathlib.Data.Nat.Basic
