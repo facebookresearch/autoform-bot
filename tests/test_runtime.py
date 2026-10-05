@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.graph import Graph, Node, load_graph
+from autoform_cli.lean import LeanSourceError
 from autoform_cli.runtime import (
     RUNTIME_AUTHORITY,
     RUNTIME_SCHEMA,
@@ -51,6 +52,7 @@ def _project(tmp_path: Path) -> Path:
         project,
         "chapter/section/base.md",
         title="Base",
+        article_id="af_000000000000000000000001",
         declaration="definition",
         statement="formalized",
         lean="Project.base",
@@ -60,6 +62,7 @@ def _project(tmp_path: Path) -> Path:
         project,
         "chapter/section/result.md",
         title="Result",
+        article_id="af_000000000000000000000002",
         declaration="theorem",
         statement="formalized",
         proof="formalized",
@@ -107,6 +110,8 @@ def test_preserves_hierarchy_typed_dependencies_and_dispatchability(tmp_path: Pa
 
     assert chapter is not None and not chapter.formalizable and not chapter.dispatchable
     assert base is not None and base.dispatchable
+    assert base.article_id == "af_000000000000000000000001"
+    assert len(base.source_sha256) == 64
     assert base.status.state == "fully_proved"
     assert base.status.defined
     assert result is not None
@@ -159,6 +164,9 @@ def test_serialization_is_deterministic_relative_and_deeply_immutable(tmp_path: 
 
     assert json.loads(runtime.to_json()) == payload
     assert runtime.to_json() == load_runtime_graph(project).to_json()
+    base = next(node for node in payload["nodes"] if node["id"] == "chapter/section/base")
+    assert base["article_id"] == "af_000000000000000000000001"
+    assert base["source_sha256"] == runtime.get("chapter/section/base").source_sha256
     assert str(tmp_path) not in runtime.to_json()
     assert all(not Path(node.article_path).is_absolute() for node in runtime.nodes)
     assert isinstance(runtime.nodes, tuple)
@@ -251,6 +259,35 @@ def test_rejects_nonportable_authored_file_paths(tmp_path: Path) -> None:
     with pytest.raises(RuntimeProjectionError, match="mathlib file must be a portable relative path") as error:
         load_runtime_graph(project)
 
+    assert str(tmp_path) not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("reason", "message"),
+    [
+        (None, "Lean sources could not be indexed"),
+        (
+            "permission denied: Project/Secret.lean",
+            "Lean sources could not be indexed: permission denied: Project/Secret.lean",
+        ),
+    ],
+)
+def test_runtime_translates_source_index_io_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str | None, message: str
+) -> None:
+    project = _project(tmp_path)
+
+    def fail_index(root: Path):
+        if reason is not None:
+            raise LeanSourceError(reason)
+        raise OSError(f"private host detail: {root}")
+
+    monkeypatch.setattr("autoform_cli.runtime.index_project", fail_index)
+
+    with pytest.raises(RuntimeProjectionError) as error:
+        load_runtime_graph(project, lean_root=project)
+
+    assert error.value.issues == (message,)
     assert str(tmp_path) not in str(error.value)
 
 

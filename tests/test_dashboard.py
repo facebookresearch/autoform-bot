@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 import threading
 from functools import partial
@@ -26,12 +27,19 @@ from autoform_cli.render import publication_source_revision
 def _runtime():
     return SimpleNamespace(
         source_revision="revision",
-        nodes=(SimpleNamespace(id="chapter/result", title="Main result"),),
+        nodes=(
+            SimpleNamespace(
+                id="chapter/result",
+                article_id="af_000000000000000000000001",
+                title="Main result",
+            ),
+            SimpleNamespace(id="chapter/other", article_id=None, title="Other result"),
+        ),
     )
 
 
 def test_live_state_projects_only_current_author_claims() -> None:
-    key = author_claim_key("chapter/result")
+    key = author_claim_key("af_000000000000000000000001")
     state = build_live_state(
         _runtime(),  # type: ignore[arg-type]
         [
@@ -42,6 +50,18 @@ def test_live_state_projects_only_current_author_claims() -> None:
                 "owner": "worker-a",
                 "expires_at": 123.0,
                 "note": "proof attempt 1",
+            },
+            {
+                "_key": author_claim_key("chapter/result"),
+                "_malformed": False,
+                "_expired": False,
+                "owner": "path-worker",
+            },
+            {
+                "_key": author_claim_key("chapter/other"),
+                "_malformed": False,
+                "_expired": False,
+                "owner": "worker-c",
             },
             {
                 "_key": "lake-build",
@@ -63,12 +83,27 @@ def test_live_state_projects_only_current_author_claims() -> None:
         "source_revision": "revision",
         "claims": [
             {
+                "node_id": "chapter/other",
+                "title": "Other result",
+                "owner": "worker-c",
+                "claim_target": "chapter/other",
+            },
+            {
                 "node_id": "chapter/result",
+                "article_id": "af_000000000000000000000001",
                 "title": "Main result",
                 "owner": "worker-a",
+                "claim_target": "af_000000000000000000000001",
                 "expires_at": 123.0,
                 "note": "proof attempt 1",
-            }
+            },
+            {
+                "node_id": "chapter/result",
+                "article_id": "af_000000000000000000000001",
+                "title": "Main result",
+                "owner": "path-worker",
+                "claim_target": "chapter/result",
+            },
         ],
     }
 
@@ -148,6 +183,80 @@ def test_dashboard_handler_serves_static_site_and_no_store_overlay(tmp_path: Pat
             assert json.loads(response.read()) == state
             assert response.headers["Cache-Control"] == "no-store"
             assert response.headers["X-Content-Type-Options"] == "nosniff"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+@pytest.mark.parametrize("path", ["/", LIVE_ENDPOINT])
+def test_dashboard_rejects_dns_rebinding_host_before_serving(
+    tmp_path: Path,
+    path: str,
+    method: str,
+) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.html").write_text("private dashboard", encoding="utf-8")
+    loads = []
+    handler = partial(
+        DashboardHandler,
+        directory=str(site),
+        live_state=lambda: loads.append(True) or {},
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(method, path, headers={"Host": "attacker.example"})
+        response = connection.getresponse()
+        response.read()
+        connection.close()
+
+        assert response.status == 421
+        assert loads == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_dashboard_rejects_cross_origin_request_before_loading_claims(
+    tmp_path: Path,
+    method: str,
+) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    loads = []
+    handler = partial(
+        DashboardHandler,
+        directory=str(site),
+        live_state=lambda: loads.append(True) or {},
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            method,
+            LIVE_ENDPOINT,
+            headers={
+                "Host": f"127.0.0.1:{port}",
+                "Origin": "https://attacker.example",
+            },
+        )
+        response = connection.getresponse()
+        response.read()
+        connection.close()
+
+        assert response.status == 403
+        assert loads == []
     finally:
         server.shutdown()
         server.server_close()

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Formalize"
+  short_description: "Prove ready Markdown roadmap leaves in Lean"
+  default_prompt: "Use $formalize to prove the current ready frontier and record only verified progress."

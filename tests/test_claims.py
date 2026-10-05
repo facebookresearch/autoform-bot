@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import threading
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,119 @@ def board_repo(tmp_path: Path) -> Path:
 
 def _board(tmp_path: Path, repo: Path, owner: str) -> claims.ClaimBoard:
     return claims.ClaimBoard(repo, owner, tmp_path / f"scratch-{owner}")
+
+
+def test_claim_board_recognizes_scp_remote_without_explicit_user(tmp_path: Path) -> None:
+    board = claims.ClaimBoard(
+        "github-work:org/repo.git",
+        "worker",
+        tmp_path / "scratch",
+    )
+
+    assert board.repo_url == "github-work:org/repo.git"
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        "git@example.com:org/repo.git",
+        "github-work:org/repo.git",
+        "[2001:db8::1]:org/repo.git",
+        "g:repo.git",
+    ],
+)
+def test_repository_remote_grammar_matches_scp_forms(remote: str) -> None:
+    assert claims._repository_is_remote(remote, windows=False)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"C:\projects\claims.git",
+        "C:/projects/claims.git",
+        r"\\?\C:\projects\claims.git",
+        r"\\.\C:\projects\claims.git",
+        r"\\server\share\claims.git",
+    ],
+)
+def test_repository_remote_grammar_rejects_rooted_windows_paths(path: str) -> None:
+    assert not claims._repository_is_remote(path, windows=False)
+
+
+def test_drive_relative_path_is_local_only_on_windows() -> None:
+    assert claims._repository_is_remote("C:claims.git", windows=False)
+    assert not claims._repository_is_remote("C:claims.git", windows=True)
+
+
+def test_claim_board_does_not_treat_windows_drive_as_scp_remote(tmp_path: Path) -> None:
+    raw = r"C:\projects\claims.git"
+    board = claims.ClaimBoard(
+        raw,
+        "worker",
+        tmp_path / "scratch",
+    )
+
+    assert board.repo_url == str(Path(raw).expanduser().resolve())
+    assert Path(board.repo_url).is_absolute()
+
+
+def test_non_directory_scratch_is_a_clean_transport_error(
+    tmp_path: Path,
+    board_repo: Path,
+) -> None:
+    scratch = tmp_path / "scratch"
+    scratch.write_text("not a directory", encoding="utf-8")
+    board = claims.ClaimBoard(board_repo, "worker", scratch)
+
+    with pytest.raises(claims.ClaimTransportError, match="prepare.*scratch"):
+        board.read("author/node")
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="needs a non-root POSIX user and mode-bit permissions",
+)
+def test_inaccessible_scratch_parent_is_a_clean_transport_error(
+    tmp_path: Path,
+    board_repo: Path,
+) -> None:
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    board = claims.ClaimBoard(board_repo, "worker", locked / "scratch")
+    locked.chmod(0)
+    try:
+        with pytest.raises(claims.ClaimTransportError, match="prepare.*scratch"):
+            board.read("author/node")
+    finally:
+        locked.chmod(0o755)
+
+
+def test_concurrent_first_use_initializes_one_shared_scratch(
+    tmp_path: Path,
+    board_repo: Path,
+) -> None:
+    scratch = tmp_path / "scratch"
+    workers = 12
+    start = threading.Barrier(workers)
+    failures: list[BaseException] = []
+
+    def read_missing_claim() -> None:
+        try:
+            start.wait(timeout=5)
+            board = claims.ClaimBoard(board_repo, "worker", scratch)
+            assert board.read("author/missing") is None
+        except BaseException as error:
+            failures.append(error)
+
+    threads = [threading.Thread(target=read_missing_claim) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert failures == []
+    assert _git("rev-parse", "--is-bare-repository", cwd=scratch) == "true"
 
 
 def _plant_message(repo: Path, key: str, message: str) -> str:
@@ -456,3 +570,293 @@ def test_acquire_rejects_nonfinite_expiry_before_commit_or_push(
         board.acquire("bad-expiry", ttl=1e308)
 
     assert _git("for-each-ref", "--format=%(refname)", claims.CLAIM_REF_PREFIX + "bad-expiry", cwd=board_repo) == ""
+
+
+def _refs(repo: Path) -> dict[str, str]:
+    listing = _git("for-each-ref", "--format=%(refname) %(objectname)", cwd=repo)
+    return dict(line.split(" ", 1) for line in listing.splitlines())
+
+
+def test_acquire_many_is_all_or_nothing_when_a_peer_holds_one_key(tmp_path: Path, board_repo: Path) -> None:
+    peer = _board(tmp_path, board_repo, "worker-b")
+    assert peer.acquire("held", ttl=600)
+    before = _refs(board_repo)
+    board = _board(tmp_path, board_repo, "worker-a")
+
+    result = board.acquire_many(["first", "held", "last"], ttl=600)
+
+    assert result == claims.ClaimBatchResult(False, ("held",), "held by another worker")
+    assert not result
+    assert _refs(board_repo) == before
+
+
+def test_acquire_many_takes_over_an_expired_key(tmp_path: Path, board_repo: Path) -> None:
+    _plant_lease(board_repo, "expired", owner="worker-b")
+    board = _board(tmp_path, board_repo, "worker-a")
+
+    result = board.acquire_many(["fresh", "expired"], ttl=600, note="revision")
+
+    assert result == claims.ClaimBatchResult(True)
+    for key in ("fresh", "expired"):
+        lease = board.read(key)
+        assert lease["owner"] == "worker-a"
+        assert lease["note"] == "revision"
+        assert board.holds(key)
+
+
+def test_acquire_many_changes_no_ref_when_one_lease_goes_stale_before_the_push(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _plant_lease(board_repo, "contested", owner="worker-b")
+    board = _board(tmp_path, board_repo, "worker-a")
+    peer = _board(tmp_path, board_repo, "worker-b")
+    push = board._cas_push_refs
+    observed: dict[str, dict[str, str]] = {}
+
+    def peer_renews_first(updates: Sequence[tuple[str, str | None, str]], *, atomic: bool = False):
+        # The expired lease passed the ownership check; its owner renews it
+        # before the push, so exactly one of the two leases is stale.
+        assert peer.renew("contested", ttl=600)
+        observed["refs"] = _refs(board_repo)
+        return push(updates, atomic=atomic)
+
+    monkeypatch.setattr(board, "_cas_push_refs", peer_renews_first)
+    result = board.acquire_many(["free", "contested"], ttl=600)
+
+    assert result == claims.ClaimBatchResult(False, ("contested",), "changed concurrently")
+    assert _refs(board_repo) == observed["refs"]
+    assert claims.CLAIM_REF_PREFIX + "free" not in observed["refs"]
+    assert peer.holds("contested")
+
+
+def test_acquire_many_changes_no_ref_when_the_remote_aborts_the_transaction(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board = _board(tmp_path, board_repo, "worker-a")
+    board._ensure_scratch()
+    rival = _git("commit-tree", _git("mktree", cwd=board_repo, input_text=""), "-m", "rival", cwd=board_repo)
+    contested = claims.CLAIM_REF_PREFIX + "contested"
+    # Git runs pre-push after checking every lease against the remote's
+    # advertisement, so this rival claim meets the remote's own check inside
+    # the ref transaction instead.
+    hooks = board.scratch / "hooks"
+    hooks.mkdir(exist_ok=True)
+    hook = hooks / "pre-push"
+    hook.write_text(f'#!/bin/sh\ncat >/dev/null\nexec git --git-dir="{board_repo}" update-ref {contested} {rival}\n')
+    hook.chmod(0o755)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(hooks))
+
+    result = board.acquire_many(["free", "contested"], ttl=600)
+
+    assert result == claims.ClaimBatchResult(False, ("contested",), "changed concurrently")
+    assert _refs(board_repo) == {contested: rival}
+
+
+def test_overlapping_batch_race_has_one_winner_and_no_partial_loser(tmp_path: Path, board_repo: Path) -> None:
+    boards = {owner: _board(tmp_path, board_repo, owner) for owner in ("worker-a", "worker-b")}
+    barrier = threading.Barrier(2)
+    original_remote_oids = claims.ClaimBoard._remote_oids
+
+    def synchronized_remote_oids(self: claims.ClaimBoard, keys: Sequence[str]) -> dict[str, str]:
+        oids = original_remote_oids(self, keys)
+        barrier.wait(timeout=60)
+        return oids
+
+    for board in boards.values():
+        board._remote_oids = synchronized_remote_oids.__get__(board, claims.ClaimBoard)  # type: ignore[method-assign]
+
+    results: dict[str, claims.ClaimBatchResult] = {}
+    errors: list[BaseException] = []
+
+    def acquire(owner: str) -> None:
+        try:
+            results[owner] = boards[owner].acquire_many([f"only-{owner}", "shared"], ttl=600)
+        except BaseException as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=acquire, args=(owner,)) for owner in boards]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+
+    assert not errors
+    assert not any(thread.is_alive() for thread in threads)
+    winners = [owner for owner, result in results.items() if result]
+    assert len(winners) == 1
+    winner = winners[0]
+    loser = next(owner for owner in boards if owner != winner)
+    assert results[loser] == claims.ClaimBatchResult(False, ("shared",), "changed concurrently")
+    assert sorted(_refs(board_repo)) == [claims.CLAIM_REF_PREFIX + key for key in (f"only-{winner}", "shared")]
+    assert boards[loser].read("shared")["owner"] == winner
+
+
+def test_renew_many_renews_every_owned_key_and_keeps_notes(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = 1_000.0
+    monkeypatch.setattr(claims.time, "time", lambda: now)
+    board = _board(tmp_path, board_repo, "worker-a")
+    assert board.acquire_many(["first", "second"], ttl=60, note="revision")
+    monkeypatch.setattr(claims.time, "time", lambda: now + 30)
+
+    assert board.renew_many(["first", "second"], ttl=600) == claims.ClaimBatchResult(True)
+    for key in ("first", "second"):
+        lease = board.read(key)
+        assert lease["expires_at"] == now + 30 + 600
+        assert lease["note"] == "revision"
+
+
+def test_renew_many_renews_nothing_unless_every_key_is_owned(tmp_path: Path, board_repo: Path) -> None:
+    board = _board(tmp_path, board_repo, "worker-a")
+    peer = _board(tmp_path, board_repo, "worker-b")
+    assert board.acquire("mine", ttl=600)
+    assert peer.acquire("theirs", ttl=600)
+    before = _refs(board_repo)
+
+    result = board.renew_many(["mine", "theirs", "absent"], ttl=900)
+
+    assert result == claims.ClaimBatchResult(False, ("theirs", "absent"), "not held by this worker")
+    assert _refs(board_repo) == before
+
+
+def test_release_many_deletes_owned_keys_and_treats_absent_keys_as_released(tmp_path: Path, board_repo: Path) -> None:
+    board = _board(tmp_path, board_repo, "worker-a")
+    assert board.acquire_many(["first", "second"], ttl=600)
+
+    assert board.release_many(["first", "absent", "second"]) == claims.ClaimBatchResult(True)
+    assert _refs(board_repo) == {}
+    assert board.release_many(["first", "second"]) == claims.ClaimBatchResult(True)
+
+
+def test_release_many_releases_nothing_when_one_key_is_foreign(tmp_path: Path, board_repo: Path) -> None:
+    board = _board(tmp_path, board_repo, "worker-a")
+    peer = _board(tmp_path, board_repo, "worker-b")
+    assert board.acquire("mine", ttl=600)
+    assert peer.acquire("theirs", ttl=600)
+    before = _refs(board_repo)
+
+    result = board.release_many(["mine", "theirs"])
+
+    assert result == claims.ClaimBatchResult(False, ("theirs",), "not held by this worker")
+    assert _refs(board_repo) == before
+
+
+def test_release_many_deletes_no_ref_when_one_lease_goes_stale_before_the_push(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board = _board(tmp_path, board_repo, "worker-a")
+    peer = _board(tmp_path, board_repo, "worker-b")
+    assert board.acquire_many(["kept", "stolen"], ttl=600)
+    push = board._cas_push_refs
+    observed: dict[str, dict[str, str]] = {}
+
+    def peer_steals_first(updates: Sequence[tuple[str, str | None, str]], *, atomic: bool = False):
+        assert peer.acquire("stolen", ttl=600, steal=True)
+        observed["refs"] = _refs(board_repo)
+        return push(updates, atomic=atomic)
+
+    monkeypatch.setattr(board, "_cas_push_refs", peer_steals_first)
+    result = board.release_many(["kept", "stolen"])
+
+    assert result == claims.ClaimBatchResult(False, ("stolen",), "changed concurrently")
+    assert _refs(board_repo) == observed["refs"]
+    assert board.holds("kept")
+
+
+@pytest.mark.parametrize("method", ["acquire_many", "renew_many", "release_many"])
+def test_batch_names_a_malformed_lease_as_blocking_and_changes_nothing(
+    tmp_path: Path, board_repo: Path, method: str
+) -> None:
+    board = _board(tmp_path, board_repo, "worker-a")
+    assert board.acquire("mine", ttl=600)
+    _plant_message(board_repo, "broken", "not json")
+    before = _refs(board_repo)
+
+    result = getattr(board, method)(["mine", "broken"])
+
+    assert result == claims.ClaimBatchResult(False, ("broken",), "malformed lease")
+    assert _refs(board_repo) == before
+
+
+def test_acquire_many_names_every_blocking_key_in_batch_order(tmp_path: Path, board_repo: Path) -> None:
+    peer = _board(tmp_path, board_repo, "worker-b")
+    assert peer.acquire("held", ttl=600)
+    _plant_message(board_repo, "broken", "not json")
+    before = _refs(board_repo)
+    board = _board(tmp_path, board_repo, "worker-a")
+
+    result = board.acquire_many(["broken", "free", "held"], ttl=600)
+
+    assert result == claims.ClaimBatchResult(False, ("broken", "held"), "malformed lease or held by another worker")
+    assert _refs(board_repo) == before
+
+
+@pytest.mark.parametrize("method", ["acquire_many", "renew_many", "release_many"])
+@pytest.mark.parametrize(
+    ("keys", "error", "match"),
+    [
+        (["first", "second", "first"], ValueError, "duplicate claim key 'first'"),
+        ([], ValueError, "at least one claim key is required"),
+        (["first", "../escape"], ValueError, "invalid claim key"),
+        ("first", TypeError, "not one string"),
+    ],
+)
+def test_batch_methods_reject_bad_keys_before_touching_the_board(
+    tmp_path: Path, board_repo: Path, method: str, keys: object, error: type[Exception], match: str
+) -> None:
+    board = _board(tmp_path, board_repo, "worker-a")
+
+    with pytest.raises(error, match=match):
+        getattr(board, method)(keys)
+
+    assert not board.scratch.exists()
+    assert _refs(board_repo) == {}
+
+
+def test_batch_refuses_a_board_without_atomic_push_support(tmp_path: Path, board_repo: Path) -> None:
+    with (board_repo / "config").open("a", encoding="utf-8") as config:
+        config.write("[receive]\n\tadvertiseAtomic = false\n")
+    board = _board(tmp_path, board_repo, "worker-a")
+
+    with pytest.raises(claims.ClaimTransportError, match="does not support atomic pushes"):
+        board.acquire_many(["first", "second"], ttl=600)
+
+    assert _refs(board_repo) == {}
+    assert board.acquire("first", ttl=600)
+
+
+def test_single_key_push_is_unchanged_and_batches_push_atomically(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board = _board(tmp_path, board_repo, "worker-a")
+    git = board._git
+    pushes: list[list[str]] = []
+
+    def recording_git(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[0] == "push":
+            pushes.append(args)
+        return git(args, **kwargs)
+
+    monkeypatch.setattr(board, "_git", recording_git)
+    assert board.acquire("single", ttl=600)
+    assert board.acquire_many(["one", "two"], ttl=600)
+
+    single, one, two = (claims.CLAIM_REF_PREFIX + key for key in ("single", "one", "two"))
+    refs = _refs(board_repo)
+    assert pushes == [
+        ["push", "--quiet", "--porcelain", f"--force-with-lease={single}:", board.repo_url, f"{refs[single]}:{single}"],
+        [
+            "push",
+            "--quiet",
+            "--porcelain",
+            "--atomic",
+            f"--force-with-lease={one}:",
+            f"--force-with-lease={two}:",
+            board.repo_url,
+            f"{refs[one]}:{one}",
+            f"{refs[two]}:{two}",
+        ],
+    ]

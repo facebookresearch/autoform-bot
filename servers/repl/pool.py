@@ -13,7 +13,6 @@ from .core import LeanRepl, LeanReplConfig
 
 logger = getLogger(__name__)
 
-DEFAULT_PORT = 8990
 DEFAULT_RAM_FRACTION = 0.5
 DEFAULT_STARTUP_STAGGER_SECONDS = 2.0
 

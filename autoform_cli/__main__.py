@@ -20,7 +20,7 @@ from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_k
 from .doctor import diagnose_project
 from .dashboard import publication_bound_live_state, serve_dashboard
 from .graph import GraphValidationError, load_graph
-from .lean import build_linker, declaration_names
+from .lean import build_linker, declaration_names, index_failure_message
 from .project import ProjectCatalogError, inspect_project, load_release_catalog
 from .render import PublicationError, render_site
 from .runtime import RuntimeProjectionError, load_runtime_graph, resolve_runtime_paths
@@ -34,6 +34,7 @@ from .skeleton import (
     write_packets,
     write_skeleton_report,
 )
+from .work import WORK_SCHEMA, WorkError, list_ready_work, work_context
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -109,11 +110,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         "versions", help="list bundled known-good Lean and Mathlib releases"
     )
     project_versions.add_argument("--json", action="store_true", help="write stable machine-readable output")
+
+    work = subparsers.add_parser("work", help="inspect the Markdown-derived formalization frontier")
+    work_subparsers = work.add_subparsers(dest="work_command", required=True)
+    work_list = work_subparsers.add_parser("list", help="list ready formalization leaves")
+    work_list.add_argument(
+        "target", nargs="?", default=".", help="project root or blueprint directory"
+    )
+    work_list.add_argument("--lean-root", type=Path, help="resolve local Lean declaration targets")
+    work_list.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    work_context_parser = work_subparsers.add_parser(
+        "context", help="show one article's phase, dependencies, sources, and claim target"
+    )
+    work_context_parser.add_argument("selector", help="path-derived node id or durable article_id")
+    work_context_parser.add_argument(
+        "target", nargs="?", default=".", help="project root or blueprint directory"
+    )
+    work_context_parser.add_argument(
+        "--lean-root", type=Path, help="resolve local Lean declaration targets"
+    )
+    work_context_parser.add_argument(
+        "--json", action="store_true", help="write stable machine-readable output"
+    )
     claim = subparsers.add_parser("claim", help="coordinate temporary node ownership through Git refs")
     claim_subparsers = claim.add_subparsers(dest="claim_command", required=True)
     for operation in ("acquire", "renew", "release"):
         command = claim_subparsers.add_parser(operation)
-        command.add_argument("node_id")
+        command.add_argument("node_id", nargs="+", help="claim target(s); several change all-or-nothing")
         _add_claim_board_arguments(command)
         if operation in {"acquire", "renew"}:
             command.add_argument("--ttl", type=int, default=CLAIM_TTL_S)
@@ -209,6 +232,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _dashboard(args)
     if args.command == "project":
         return _project(args)
+    if args.command == "work":
+        return _work(args)
     if args.command == "claim":
         return _claim(args)
     if args.command == "migrate":
@@ -281,16 +306,23 @@ def _check(args: argparse.Namespace) -> int:
             print(f"error: {issue}")
         return 1
 
+    linker = None
+    if args.lean_root is not None:
+        try:
+            linker = build_linker(args.lean_root)
+        except OSError as error:
+            print(f"error: {index_failure_message(error)}")
+            return 1
+
     statuses = status.derive(graph)
     summary = " · ".join(f"{count} {state.label}" for state, count in status.summarize(statuses))
     print(f"OK: {len(graph.nodes)} articles, {graph.edge_count} dependencies")
     if summary:
         print(f"    {summary}")
 
-    if args.lean_root is None:
+    if linker is None:
         return 0
 
-    linker = build_linker(args.lean_root)
     missing = [
         f"{node.id}: declaration not found in {args.lean_root}: {name}"
         for node in graph.nodes.values()
@@ -403,6 +435,79 @@ def _project(args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def _work(args: argparse.Namespace) -> int:
+    # Only loading the roadmap can fail on the project's paths; printing the
+    # result stays outside, so an output error is not reported as one.
+    try:
+        if args.work_command == "list":
+            frontier = list_ready_work(args.target, lean_root=args.lean_root)
+        else:
+            source_revision, item = work_context(
+                args.target,
+                args.selector,
+                lean_root=args.lean_root,
+            )
+    except (GraphValidationError, RuntimeProjectionError) as error:
+        for issue in error.issues:
+            print(f"error: {_human_text(issue)}", file=sys.stderr)
+        return 2
+    except WorkError as error:
+        print(f"error: {_human_text(error)}", file=sys.stderr)
+        return 2
+    except (OSError, RuntimeError, ValueError):
+        print("error: project, blueprint, or Lean root path cannot be read", file=sys.stderr)
+        return 2
+
+    if args.work_command == "list":
+        if args.json:
+            print(frontier.to_json())
+            return 0
+        if not frontier.items:
+            print("No ready formalization work.")
+            return 0
+        for item in frontier.items:
+            durable = f" [{item.article_id}]" if item.article_id else ""
+            print(_human_text(f"{item.phase}: {item.node_id}{durable} - {item.title}"))
+        return 0
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "schema": WORK_SCHEMA,
+                    "source_revision": source_revision,
+                    "item": item.as_dict(),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        return 0
+    if item.phase:
+        phase = item.phase
+    elif item.blockers:
+        phase = "not ready"
+    else:
+        phase = "none (already formalized)"
+    print(_human_text(f"{item.title} ({item.node_id})"))
+    print(f"State: {item.state}")
+    print(f"Phase: {phase}")
+    print(_human_text(f"Claim target: {item.claim_target}"))
+    if item.blockers:
+        print(_human_text("Blocked by: " + ", ".join(item.blockers)))
+    print(_human_text(f"Article: {item.article_path}"))
+    print(f"Article revision: {item.article_revision or 'unknown'}")
+    print(f"Graph source revision: {source_revision}")
+    if item.dependencies:
+        print(_human_text("Dependencies: " + ", ".join(item.dependencies)))
+    if item.source_targets:
+        print(_human_text("Sources: " + ", ".join(item.source_targets)))
+    for target in item.lean_targets:
+        location = f" ({target.source_file})" if target.source_file else ""
+        print(_human_text(f"Lean: {target.declaration}{location}"))
+    return 0
+
+
 def _print_project_inspection(result) -> None:
     if result.project_root is not None:
         print(f"Project root: {_human_text(result.project_root)}")
@@ -446,7 +551,36 @@ def _claim(args: argparse.Namespace) -> int:
             print(f"removed {board.cleanup()} expired claim(s)")
             return 0
 
-        key = author_claim_key(args.node_id)
+        past_tense = {"acquire": "acquired", "renew": "renewed", "release": "released"}
+        if len(args.node_id) > 1:
+            # Several targets change in one atomic push, so a failure holds none of them.
+            targets: dict[str, str] = {}
+            for node_id in args.node_id:
+                key = author_claim_key(node_id)
+                if key in targets:
+                    print(f"error: duplicate claim target: {node_id}", file=sys.stderr)
+                    return 2
+                targets[key] = node_id
+            if operation == "acquire":
+                result = board.acquire_many(list(targets), ttl=args.ttl, note=args.note)
+            elif operation == "renew":
+                result = board.renew_many(list(targets), ttl=args.ttl)
+            else:
+                result = board.release_many(list(targets))
+            if result:
+                for key, node_id in targets.items():
+                    print(f"{past_tense[operation]} {node_id} ({key})")
+                return 0
+            blocking = ", ".join(targets.get(key, key) for key in result.blocking)
+            reason = f"{result.reason}: {blocking}" if blocking else result.reason
+            print(
+                f"error: could not {operation} {', '.join(args.node_id)}; "
+                f"no claim was {past_tense[operation]}: {reason}"
+            )
+            return 1
+
+        node_id = args.node_id[0]
+        key = author_claim_key(node_id)
         if operation == "acquire":
             succeeded = board.acquire(key, ttl=args.ttl, note=args.note)
         elif operation == "renew":
@@ -454,10 +588,9 @@ def _claim(args: argparse.Namespace) -> int:
         else:
             succeeded = board.release(key)
         if succeeded:
-            past_tense = {"acquire": "acquired", "renew": "renewed", "release": "released"}
-            print(f"{past_tense[operation]} {args.node_id} ({key})")
+            print(f"{past_tense[operation]} {node_id} ({key})")
             return 0
-        print(f"error: could not {operation} {args.node_id}; ownership is held or unverifiable")
+        print(f"error: could not {operation} {node_id}; ownership is held or unverifiable")
         return 1
     except (ClaimTransportError, ValueError) as exc:
         print(f"error: {exc}")
