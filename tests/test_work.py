@@ -692,6 +692,20 @@ def test_open_work_text_names_the_policy_and_what_each_item_assumes(tmp_path: Pa
     assert all(item["open_statements"] is True for item in frontier["items"])
 
 
+def test_open_work_list_names_the_policy_even_when_nothing_is_ready(tmp_path: Path, capsys) -> None:
+    project = tmp_path / "project"
+    _article(project, "README.md", title="Chapter", metadata=[])
+    (project / "blueprint/roadmap/README.md").write_text(
+        "---\nopen_statements: allowed\n---\n\n# Roadmap\n", encoding="utf-8"
+    )
+
+    assert cli.main(["work", "list", str(project)]) == 0
+    assert capsys.readouterr().out == (
+        "Open statements: allowed (a statement may land with a sorry proof)\n"
+        "No ready formalization work.\n"
+    )
+
+
 def _contract_article(
     node_id: str,
     article_id: str,

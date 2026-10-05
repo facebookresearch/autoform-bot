@@ -1315,6 +1315,9 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(tmp_path: Path
     ) in top
     # Only the conditional proof carries the row; the open statement assumes nothing.
     assert page.count('<span class="bp-key">Assumes</span>') == 1
+    # The row follows the implementation row and precedes Discussion.
+    meta = top[top.index('<div class="bp-meta">'):top.index('<details class="bp-dependencies">')]
+    assert re.findall(r'<span class="bp-key">([^<]+)</span>', meta) == ["Lean", "Assumes", "Discussion"]
 
     css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
     assert ".bp-ref-conditional::before, .bp-swatch-conditional { background: #E9DFFC; border-color: #6B3FCF; }" in css
@@ -1330,3 +1333,25 @@ def test_the_strict_policy_shows_the_same_proof_as_proved_with_no_assumptions(tm
 
     assert '<div class="bp-thmwrapper theorem-style-plain bp-proved" id="top"' in page
     assert '<span class="bp-key">Assumes</span>' not in page
+
+
+@pytest.mark.parametrize(
+    ("dropped", "why"),
+    [
+        ("proof: formalized\n", "Its prerequisites are ready, so the proof can be written now."),
+        (
+            "statement: formalized\nproof: formalized\n",
+            "Its prerequisites are ready, so the statement can be written down.",
+        ),
+    ],
+)
+def test_next_up_explains_readiness_without_naming_a_policy(tmp_path: Path, dropped: str, why: str) -> None:
+    project = _project(tmp_path)
+    top = project / "blueprint" / "roadmap" / "top.md"
+    top.write_text(top.read_text(encoding="utf-8").replace(dropped, ""), encoding="utf-8")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    landing = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+
+    assert '<div class="bp-next-target" data-autoform-node-id="top">' in landing
+    assert f'<div class="bp-next-why">{why}</div>' in landing

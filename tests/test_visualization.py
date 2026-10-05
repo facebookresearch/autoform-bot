@@ -153,6 +153,21 @@ def test_a_conditional_proof_has_its_own_colour_and_legend_entry(tmp_path: Path)
     assert '<span class="bp-swatch bp-swatch-conditional">' in document
     assert "Proof compiles, but rests on an open statement whose Lean proof is still sorry." in document
 
+
+def test_the_legend_explains_readiness_without_naming_a_policy(tmp_path: Path) -> None:
+    """Readiness depends on the project's policy, so the legend words it without naming one."""
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "stated.md", "Stated", declaration="theorem", statement="formalized")
+    _write_node(blueprint / "roadmap" / "unstated.md", "Unstated", declaration="theorem")
+    statuses = derive(load_graph(blueprint))
+
+    legend = mermaid.render_legend(statuses)
+
+    assert [statuses[key].key for key in ("stated", "unstated")] == ["can_prove", "can_state"]
+    assert "Statement is in Lean and nothing it needs is blocked, so the proof can start." in legend
+    assert "Nothing it needs is blocked, so the statement can be written in Lean." in legend
+
+
 def test_cli_writes_only_the_graph_by_default(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
