@@ -1681,7 +1681,7 @@ def test_a_manifest_or_bundle_nested_too_deep_to_decode_is_refused_before_any_le
 
 def _damage_bundle(bundle: Path, damage: str) -> None:
     if damage == "a-number-too-long":
-        bundle.write_text('{"schema": 1' + "0" * 4300 + "}", encoding="utf-8")
+        bundle.write_text('{"schema": 1' + "0" * sys.get_int_max_str_digits() + "}", encoding="utf-8")
     else:
         text = bundle.read_text(encoding="utf-8")
         assert '"title":"' in text
@@ -1701,9 +1701,13 @@ def test_a_bundle_with_a_number_too_long_or_a_lone_surrogate_is_refused_as_unrea
     refused: int,
 ) -> None:
     """json.loads raises a plain ValueError, not a JSONDecodeError, for an integer
-    of more than 4300 digits, and decodes "\\ud800" to half of a surrogate pair,
-    which the evidence hash cannot encode as UTF-8."""
+    of more digits than sys.get_int_max_str_digits(), 4300 by default, and decodes
+    "\\ud800" to half of a surrogate pair, which the evidence hash cannot encode as
+    UTF-8. An interpreter with no such limit (before 3.10.7, or with it set to 0)
+    converts an integer of any length, and skips the long-number cases."""
 
+    if damage == "a-number-too-long" and not getattr(sys, "get_int_max_str_digits", lambda: 0)():
+        pytest.skip("this interpreter converts an integer of any length")
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
     _damage_bundle(bundle, damage)
     capsys.readouterr()
