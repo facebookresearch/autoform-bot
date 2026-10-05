@@ -1073,7 +1073,7 @@ def _next_target(
         if statement is None and chapter_page is not None:
             anchor = node.id.split("/", 1)[1].replace("/", "-") if "/" in node.id else node.id
             statement = f"{mermaid.relative_link(chapter_page, page, '.html')}#{anchor}"
-        graph_href = graph_pages.focus_page_href(destination, node.id, page)
+        graph_href = graph_pages.focus_page_href(destination, node.id, page, parent=node.parent)
 
         title = html.escape(node.title)
         heading = (
@@ -1353,7 +1353,7 @@ def _render_landing_page(
             '<div class="bp-map-head">',
             '<span class="bp-map-title">Dependency explorer</span>',
             '<span class="bp-map-hint">Explore chapters and their dependencies · '
-            '<a href="dependencies/full.html">all nodes</a></span>',
+            '<a href="dependencies.html">open full-page</a></span>',
             "</div>",
             "",
             dag_viewer.render_container(
@@ -1361,9 +1361,10 @@ def _render_landing_page(
                 script_href=mermaid.relative_link(destination / DAG_SCRIPT, page, ".js"),
                 fallback_links=(
                     ("Open the dependency explorer", "dependencies.html"),
-                    ("Browse all nodes", "dependencies/full.html"),
                 ),
-                fallback_total=2,
+                fallback_total=1,
+                layout="embedded",
+                search_href="dependencies/index.json",
             ),
             "",
             f'<div class="bp-map-legend" markdown="1">\n\n{breakdown}\n\n</div>'
@@ -2171,7 +2172,7 @@ def _vault_source_link(
 
 def _graph_context_link(node: Node, *, page: Path, destination: Path) -> str:
     """Link a textbook statement to its hash-focused dependency explorer."""
-    href = graph_pages.focus_page_href(destination, node.id, page)
+    href = graph_pages.focus_page_href(destination, node.id, page, parent=node.parent)
     label = html.escape(f"Open dependency explorer for {node.title}", quote=True)
     icon = (
         '<svg class="bp-context-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'

@@ -102,6 +102,11 @@ def test_render_publishes_dependencies_between_the_roadmap_root_and_a_chapter(
     assert {node["title"] for node in full_payload["nodes"]} == {
         "Root result",
         "Chapter",
+    }
+    search_index = json.loads((output / "dependencies/index.json").read_text(encoding="utf-8"))
+    assert {node["title"] for node in search_index["nodes"]} == {
+        "Root result",
+        "Chapter",
         "Chapter result",
     }
 

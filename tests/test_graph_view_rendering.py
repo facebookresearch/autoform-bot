@@ -121,6 +121,7 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
         "nodes": 170,
     }
     assert payload["view"] == {
+        "breadcrumbs": [],
         "focus": None,
         "kind": "full",
         "radius": None,
@@ -187,6 +188,26 @@ def test_isolated_inventory_does_not_spread_the_connected_dag() -> None:
     assert max(positions[node_id]["column"] for node_id in ("root", "result")) == 1
 
 
+def test_high_level_isolates_use_a_readable_balanced_grid() -> None:
+    nodes = tuple(
+        ViewNode(
+            id=f"chapter-{index}",
+            title=f"Chapter {index}",
+            kind="scope",
+            members=(f"chapter-{index}/item",),
+            status_counts=(("planned", 1),),
+            status_key="planned",
+        )
+        for index in range(33)
+    )
+    positions = dag_viewer._positions(
+        GraphView(kind="project", title="Project", nodes=nodes, edges=())
+    )
+
+    assert len({position["column"] for position in positions.values()}) == 4
+    assert max(position["row"] for position in positions.values()) == 8
+
+
 def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_path: Path) -> None:
     nodes = tuple(
         ViewNode(
@@ -214,8 +235,12 @@ def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_pa
     assert {node["id"] for node in payload["nodes"] if node["isolated"]} == {"isolated"}
     script = dag_viewer.viewer_script()
     assert "inventoryNodes" in script
-    assert '" listed · isolates included"' in script
+    assert '" · items without edges included"' in script
     assert "MAX_DOM_NODES = 180" in script
+    assert "MAX_MAP_NODES = 120" in script
+    assert "MIN_READABLE_SCALE = .8" in script
+    assert "fitted < MIN_READABLE_SCALE" in script
+    assert 'params.get("view") === "list" || !state.mapAllowed' in script
     assert '" of " + data.nodes.length + " shown"' in script
     assert '"+" + hidden + " hidden"' in script
 
@@ -224,7 +249,10 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
     container = dag_viewer.render_container(
         'unsafe" data-x="oops',
         script_href='scripts/viewer" onload="oops.js',
-        fallback_links=(("Unsafe <node>", 'roadmap/a" onclick="oops'),),
+        fallback_links=(
+            ("Unsafe <node>", 'roadmap/a" onclick="oops'),
+            ("Unsafe protocol", "javascript:alert(1)"),
+        ),
         fallback_total=5,
     )
     script = dag_viewer.viewer_script()
@@ -234,11 +262,14 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
     assert "Dependency explorer fallback." in container
     assert "Unsafe &lt;node&gt;" in container
     assert 'href="roadmap/a&quot; onclick=&quot;oops"' in container
+    assert "javascript:alert" not in container
     assert "Showing 1 of 5 linked nodes" in container
+    assert 'data-layout="app"' in container
     assert "<style data-autoform-dag-style>" in container
     assert "@media (max-width: 680px)" in container
     assert "@media (prefers-reduced-motion: reduce)" in container
     assert "100svh" in container
+    assert "100dvh" in container
     assert 'refs.canvas.setAttribute("aria-hidden", "true")' in script
     assert 'refs.stage.setAttribute("role", "region")' in script
     assert 'toolbar.setAttribute("role", "toolbar")' in script
@@ -255,7 +286,7 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
     assert "state.pointers.size === 2" in script
     assert "event.type === \"pointerup\" && wasSingle && !state.moved" in script
     assert "touch-action: pan-y" in container
-    assert "touch-action: none" not in container
+    assert '.bp-dag-viewer[data-layout=app] .bp-dag-stage { touch-action: none; }' in container
     assert 'url.origin === window.location.origin' in script
     assert 'if (target === current) return' in script
     assert 'state.selected && !state.selectedStatuses.has(state.selected.status)' in script
@@ -278,14 +309,13 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
 def test_explorer_pages_large_searches_and_relations_and_fits_deep_graphs() -> None:
     script = dag_viewer.viewer_script()
 
-    assert "MIN_SCALE = .002, FIT_MIN_SCALE = .00001" in script
+    assert "MIN_SCALE = .002, MIN_READABLE_SCALE = .8" in script
     assert '"Show all "' not in script
     assert "Math.min(matches.length, state.searchLimit + SEARCH_PAGE)" in script
     assert "Math.min(visible + RELATION_PAGE, ids.length)" in script
     assert "ids.slice(visible, next)" in script
-    assert "old < MIN_SCALE ? FIT_MIN_SCALE : MIN_SCALE" in script
-    assert "clamp(old * factor, floor, 4)" in script
-    assert "height), FIT_MIN_SCALE, 1.35)" in script
+    assert "clamp(old * factor, MIN_SCALE, 4)" in script
+    assert "Math.max(fitted, MIN_READABLE_SCALE), MIN_SCALE, 1.35" in script
 
 
 def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path) -> None:
@@ -308,9 +338,19 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
     )
     output = tmp_path / "budget.json"
     dag_viewer.write_payload(output, view, links={})
+    search = tmp_path / "search.json"
+    dag_viewer.write_search_index(
+        search,
+        view,
+        context_links={node.id: f"chapters/chapter.html#node={node.id}" for node in nodes},
+    )
 
-    assert len(dag_viewer.viewer_script().encode()) < 45_000
+    assert len(dag_viewer.viewer_script().encode()) < 51_000
     assert output.stat().st_size < 300_000
+    assert search.stat().st_size < 100_000
+    search_payload = json.loads(search.read_text(encoding="utf-8"))
+    assert search_payload["schema"] == "autoform-dag-search/v1"
+    assert "layout" not in search_payload["nodes"][0]
 
 
 def test_large_views_fail_over_before_mermaid_hard_limits() -> None:

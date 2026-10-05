@@ -98,6 +98,7 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert not (out / "dependencies/nodes").exists()
     assert (out / "dependencies/full.md").is_file()
     assert (out / "dependencies/full.json").is_file()
+    assert (out / "dependencies/index.json").is_file()
     assert (out / "stylesheets/blueprint.css").is_file()
     assert (out / "javascripts/blueprint-mermaid.js").is_file()
     assert (out / "javascripts/blueprint-live.js").is_file()
@@ -122,8 +123,8 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     project_page = (out / "dependencies.md").read_text(encoding="utf-8")
     assert "graph_view: project" in project_page
     assert 'data-graph-src="dependencies.json"' in project_page
-    assert "Explore all nodes" in project_page
-    assert "dependencies/full.md" in project_page
+    assert 'data-search-src="dependencies/index.json"' in project_page
+    assert "Explore all nodes" not in project_page
     project_payload = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))
     assert project_payload["title"] == "Dependency explorer"
     assert {node["url"] for node in project_payload["nodes"]} == {
@@ -133,14 +134,17 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
         (out / "dependencies/chapters/roadmap.json").read_text(encoding="utf-8")
     )
     assert chapter_payload["title"] == "Roadmap dependencies"
+    assert chapter_payload["view"]["breadcrumbs"][-1] == {"label": "Roadmap", "url": None}
     full_page = (out / "dependencies/full.md").read_text(encoding="utf-8")
     assert 'data-graph-src="full.json"' in full_page
     payload = json.loads((out / "dependencies/full.json").read_text(encoding="utf-8"))
     assert payload["schema"] == "autoform-dag-view/v2"
-    assert payload["title"] == "All dependencies"
-    assert payload["node_count"] == 3
-    assert payload["edge_count"] == 1
+    assert payload["title"] == "Dependency explorer"
+    assert payload["node_count"] == 1
+    assert payload["edge_count"] == 0
     assert all(node["url"] for node in payload["nodes"])
+    search_index = json.loads((out / "dependencies/index.json").read_text(encoding="utf-8"))
+    assert search_index["node_count"] == 3
 
 
 def test_a_graph_page_hides_its_legend_behind_an_icon(tmp_path: Path) -> None:
@@ -426,7 +430,7 @@ def test_cross_references_point_at_anchors_on_the_chapter(tmp_path: Path) -> Non
     assert '<a class="bp-code-link"' in page
     assert 'aria-label="View Project.top in Lean source"' in page
     assert '<svg class="bp-code-icon"' in page
-    assert '<a class="bp-context-link" href="../dependencies/full.html#node=top"' in page
+    assert '<a class="bp-context-link" href="../dependencies/chapters/roadmap.html#node=top"' in page
     assert 'aria-label="Open dependency explorer for Top"' in page
     assert '<details class="bp-dependencies"><summary>Dependencies</summary>' in page
     assert '<span class="bp-key">Statement uses</span>' in page
@@ -649,7 +653,7 @@ def test_the_landing_page_is_the_hero_and_project_explorer_and_nothing_else(
     assert "## Contents" not in overview
     assert '<span class="bp-map-title">Dependency explorer</span>' in overview
     assert 'data-graph-src="dependencies.json"' in overview
-    assert '<a href="dependencies/full.html">all nodes</a>' in overview
+    assert '<a href="dependencies.html">open full-page</a>' in overview
     assert "```mermaid" not in overview
     assert overview.count("blueprint-dag.js") == 1
     assert (tmp_path / "out/dependencies.json").is_file()
@@ -1667,8 +1671,8 @@ def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypa
     assert calls == [chapter]
 
 
-def test_the_shared_explorer_asks_for_its_node_links_once(tmp_path: Path) -> None:
-    """Node neighborhoods share one full-DAG page and one link request."""
+def test_the_hierarchical_explorer_indexes_nodes_without_a_full_graph(tmp_path: Path) -> None:
+    """Global search jumps into a small scope instead of fitting every node."""
     from autoform_cli.graph_pages import focus_page_path, write_graph_pages
 
     project = _project(tmp_path)
@@ -1683,14 +1687,20 @@ def test_the_shared_explorer_asks_for_its_node_links_once(tmp_path: Path) -> Non
 
     write_graph_pages(graph, derive(graph), destination, node_links=node_links)
 
-    pages = {node_id: focus_page_path(destination, node_id) for node_id in ("base", "top")}
+    pages = {
+        node_id: focus_page_path(destination, node_id, parent=graph.nodes[node_id].parent)
+        for node_id in ("base", "top")
+    }
     assert len(set(pages.values())) == 1
-    full_page = pages["base"]
-    assert [page for page, _ in requested].count(full_page) == 1
+    assert pages["base"] == destination / "dependencies/chapters/roadmap.md"
     assert not (destination / "dependencies/nodes").exists()
-    payload = full_page.with_suffix(".json").read_text(encoding="utf-8")
-    for node_id in pages:
-        assert f"roadmap.html#{node_id}" in payload
+    index = json.loads((destination / "dependencies/index.json").read_text(encoding="utf-8"))
+    assert index["schema"] == "autoform-dag-search/v1"
+    assert {node["id"] for node in index["nodes"]} == {"roadmap", "base", "top"}
+    assert {node["url"] for node in index["nodes"] if node["id"] in pages} == {
+        "chapters/roadmap.html#node=base",
+        "chapters/roadmap.html#node=top",
+    }
 
 
 def test_a_node_that_is_the_current_page_links_as_a_bare_fragment(tmp_path: Path) -> None:

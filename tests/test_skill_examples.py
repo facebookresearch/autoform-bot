@@ -54,6 +54,9 @@ def test_human_review_distinguishes_roadmap_progress_from_source_scope(
     assert "autoform dashboard <PROJECT> --site-dir site" in skill
     assert "same site deployed to\nGitHub Pages" in skill
     assert "local-only live claim badges" in skill
+    assert "full-page route" in skill
+    assert "Never begin with a\nfitted all-repository node cloud" in skill
+    assert "smallest\nuseful scope" in skill
     assert "overview, progress, project graph" not in skill
 
 
@@ -89,6 +92,10 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     assert "repeated pathname reads are not a generation boundary" in normalized
     assert "marker schema in its owning feature" in normalized
     assert "match the blob at the stable detected commit" in normalized
+    assert "full-viewport application surfaces" in normalized
+    assert "bounded hierarchical projection" in normalized
+    assert "global search jumps into the smallest useful scope" in normalized
+    assert "fit every theorem in the repository" in normalized
 
 
 def test_development_guidance_uses_progressive_command_reference(repo_root: Path) -> None:
@@ -286,7 +293,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert '<a class="bp-code-link"' in chapter
     assert '<svg class="bp-code-icon"' in chapter
     assert '<a class="bp-context-link"' in chapter
-    assert "dependencies/full.html#node=infimum-loss%2Ftheorems%2Fsupervision-recovery" in chapter
+    assert "dependencies/chapters/infimum-loss.html#node=infimum-loss%2Ftheorems%2Fsupervision-recovery" in chapter
     assert '<details class="bp-dependencies"><summary>Dependencies</summary>' in chapter
     assert '<nav class="bp-book-nav" aria-label="Blueprint chapters">' in chapter
     assert (
@@ -361,13 +368,15 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
         assert document.count("blueprint-dag.js") == 1
 
     full_graph = (site / "dependencies/full.md").read_text(encoding="utf-8")
-    assert "graph_view: full" in full_graph
+    assert "graph_view: project" in full_graph
     assert 'class="bp-dag-viewer"' in full_graph
     assert "```mermaid" not in full_graph
     payload = json.loads((site / "dependencies/full.json").read_text(encoding="utf-8"))
-    assert {node["id"] for node in payload["nodes"]} == set(graph.nodes)
+    assert payload["node_count"] < len(graph.nodes)
+    search_index = json.loads((site / "dependencies/index.json").read_text(encoding="utf-8"))
+    assert {node["id"] for node in search_index["nodes"]} == set(graph.nodes)
     statement_page = (site / "roadmap/infimum-loss/README.md").read_text(encoding="utf-8")
-    assert "dependencies/full.html#node=infimum-loss%2Ftheorems%2Fsupervision-recovery" in statement_page
+    assert "dependencies/chapters/infimum-loss.html#node=infimum-loss%2Ftheorems%2Fsupervision-recovery" in statement_page
 
     # Progress folded into the Book landing and the Graph; no separate page.
     assert not (site / "progress.md").exists()

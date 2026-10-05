@@ -30,10 +30,13 @@ chapter pages, and `blueprint/dependencies.md` in Obsidian. For browser review,
 run `autoform dashboard <PROJECT> --site-dir site` so the same site deployed to
 GitHub Pages is served on loopback with local-only live claim badges. Provide
 the overview, including its progress summary, plus the relevant project,
-chapter, nested-scope, and full-DAG explorer links. Every generated site route
-uses the same virtualized Canvas plus semantic-DOM viewer and hash-routed node
-neighborhoods. The authored vault graph remains Mermaid; never work around a
-large generated view by raising Mermaid's text or edge limits.
+chapter, nested-scope, and statement-context links. Every generated site route
+uses the same Canvas plus semantic-DOM viewer. Open its full-page route and move
+from project clusters to a chapter, a nested scope, then a searched statement
+and its immediate dependencies. Never begin with a
+fitted all-repository node cloud: global search enters the statement's smallest
+useful scope, while breadcrumbs and Back return to the project overview. The authored vault graph remains Mermaid;
+never raise Mermaid's text or edge limits to publish scale.
 
 Guide the review from coarse to fine: declared scope and exclusions, milestone
 book, landing-page progress summary, cross-chapter graph, chapter graph, then

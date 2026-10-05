@@ -10,23 +10,25 @@ from __future__ import annotations
 import heapq
 import html
 import json
+import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from .graph_views import INVENTORY_CHECKED_STATUS, GraphView
 from .status import STATES
 
 SCHEMA = "autoform-dag-view/v2"
+SEARCH_SCHEMA = "autoform-dag-search/v1"
 MAX_LAYOUT_ROWS = 160
 MAX_MERMAID_CHARACTERS = 40_000
 MAX_MERMAID_EDGE_LINES = 450
 
 _NODE_WIDTH = 196
-_NODE_HEIGHT = 44
+_NODE_HEIGHT = 56
 _COLUMN_GAP = 116
-_ROW_GAP = 22
+_ROW_GAP = 24
 
 
 def requires_interactive(view: GraphView, mermaid_source: str) -> bool:
@@ -130,9 +132,14 @@ def _positions(view: GraphView) -> dict[str, dict[str, int]]:
 
     isolated = [node_id for node_id in all_node_ids if node_id not in connected]
     isolate_base = max((position["column"] for position in result.values()), default=-2) + 2
+    # A single 160-row column made a project of 30 chapters fit as unreadable
+    # specks.  Balance inventory-only siblings for a widescreen reading surface;
+    # dependency-connected nodes keep their ranked DAG positions above.
+    cell_aspect = (_NODE_HEIGHT + _ROW_GAP) / (_NODE_WIDTH + _COLUMN_GAP)
+    isolate_columns = max(1, math.ceil(math.sqrt(len(isolated) * cell_aspect * (16 / 9))))
     for slot, node_id in enumerate(isolated):
-        column = isolate_base + slot // MAX_LAYOUT_ROWS
-        row = slot % MAX_LAYOUT_ROWS
+        column = isolate_base + slot % isolate_columns
+        row = slot // isolate_columns
         result[node_id] = {
             "column": column,
             "height": _NODE_HEIGHT,
@@ -165,7 +172,13 @@ def _palette() -> dict[str, dict[str, object]]:
     return palette
 
 
-def write_payload(path: Path, view: GraphView, *, links: Mapping[str, str]) -> Path:
+def write_payload(
+    path: Path,
+    view: GraphView,
+    *,
+    links: Mapping[str, str],
+    breadcrumbs: Iterable[tuple[str, str | None]] = (),
+) -> Path:
     """Write deterministic v2 graph data while preserving the v1 call shape."""
     positions = _positions(view)
     degrees: dict[str, int] = {node.id: 0 for node in view.nodes}
@@ -234,8 +247,56 @@ def write_payload(path: Path, view: GraphView, *, links: Mapping[str, str]) -> P
         "present_statuses": ordered_statuses,
         "schema": SCHEMA,
         "title": view.title,
-        "view": {"focus": view.focus, "kind": view.kind, "radius": view.radius, "scope": view.scope},
+        "view": {
+            "breadcrumbs": [
+                {"label": label, "url": url}
+                for label, url in breadcrumbs
+            ],
+            "focus": view.focus,
+            "kind": view.kind,
+            "radius": view.radius,
+            "scope": view.scope,
+        },
     }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return path
+
+
+def write_search_index(
+    path: Path,
+    view: GraphView,
+    *,
+    context_links: Mapping[str, str],
+) -> Path:
+    """Write the small global index used to jump into a hierarchical view."""
+    palette = _palette()
+    nodes: list[dict[str, object]] = []
+    for node in view.nodes:
+        inventory_checked = node.catalog == "module" and any(
+            key == INVENTORY_CHECKED_STATUS and count for key, count in node.status_counts
+        )
+        status_key = (
+            INVENTORY_CHECKED_STATUS
+            if inventory_checked
+            else node.status_key or (node.status_counts[0][0] if node.status_counts else "planned")
+        )
+        if status_key not in palette:
+            status_key = "planned"
+        nodes.append(
+            {
+                "id": node.id,
+                "kind": node.kind,
+                "status": status_key,
+                "title": node.title,
+                "url": context_links.get(node.id),
+            }
+        )
+    payload = {"node_count": len(nodes), "nodes": nodes, "schema": SEARCH_SCHEMA}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
@@ -251,15 +312,25 @@ def render_container(
     script_href: str | None = None,
     fallback_links: Iterable[tuple[str, str]] = (),
     fallback_total: int | None = None,
+    layout: str = "app",
+    search_href: str | None = None,
 ) -> str:
     """Return a self-contained, progressively enhanced explorer host."""
+    if layout not in {"app", "embedded"}:
+        raise ValueError(f"unsupported dependency explorer layout: {layout}")
     href = html.escape(quote(data_href, safe="/%"), quote=True)
+    search = html.escape(quote(search_href, safe="/%"), quote=True) if search_href else ""
+    search_attr = f' data-search-src="{search}"' if search else ""
     script = (
         f'\n<script defer src="{html.escape(quote(script_href, safe="/%"), quote=True)}"></script>'
         if script_href
         else ""
     )
-    fallback = tuple((label, target) for label, target in fallback_links if target)
+    fallback = tuple(
+        (label, target)
+        for label, target in fallback_links
+        if target and _safe_fallback_href(target)
+    )
     total = max(len(fallback), fallback_total or 0)
     items = "\n".join(
         "    <li>"
@@ -284,11 +355,19 @@ def render_container(
         "<style data-autoform-dag-style>\n"
         f"{_STYLE}\n"
         "</style>\n"
-        f'<div class="bp-dag-viewer" data-graph-src="{href}">\n'
+        f'<div class="bp-dag-viewer" data-graph-src="{href}" data-layout="{layout}"{search_attr}>\n'
         '  <p class="bp-dag-loading" role="status">Loading dependency explorer…</p>\n'
         f"{inventory}"
         f"</div>{script}"
     )
+
+
+def _safe_fallback_href(value: str) -> bool:
+    """Allow only generated relative links in the non-JavaScript fallback."""
+    if any(ord(character) < 32 for character in value) or value.startswith("//"):
+        return False
+    parsed = urlsplit(value)
+    return not parsed.scheme and not parsed.netloc
 
 
 def viewer_script() -> str:
@@ -310,6 +389,19 @@ _STYLE = r"""
   box-shadow: 0 12px 36px rgba(15, 23, 42, .08); isolation: isolate;
   font-family: var(--md-text-font-family, ui-sans-serif, system-ui, sans-serif);
 }
+.bp-dag-viewer[data-layout=app] {
+  position: fixed; z-index: 40; inset: 0; width: 100dvw; max-width: none;
+  height: 100dvh !important; min-height: 0; margin: 0; border: 0; border-radius: 0; box-shadow: none;
+}
+body.bp-dag-app-page { overflow: hidden; }
+body.bp-dag-app-page .md-header, body.bp-dag-app-page .md-tabs,
+body.bp-dag-app-page .md-sidebar, body.bp-dag-app-page .md-footer { display: none; }
+body.bp-dag-app-page .md-main__inner { width: 100%; max-width: none; margin: 0; }
+body.bp-dag-app-page .md-content { max-width: none; }
+body.bp-dag-app-page .md-content__inner { margin: 0; padding: 0; }
+body.bp-dag-app-page .md-content__inner::before,
+body.bp-dag-app-page .md-content__inner > h1,
+body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-viewer *, .bp-dag-viewer *::before, .bp-dag-viewer *::after { box-sizing: border-box; }
 .bp-dag-head { z-index: 8; border-bottom: 1px solid var(--dag-border); background: var(--dag-bg); }
 .bp-dag-context { display: flex; align-items: center; gap: .7rem; min-height: 2.65rem; padding: .45rem .75rem .2rem; }
@@ -355,16 +447,18 @@ _STYLE = r"""
 .bp-dag-isolated { display: inline-flex; align-items: center; gap: .3rem; flex: none; white-space: nowrap; color: var(--dag-muted); }
 .bp-dag-stats { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 9.5rem; margin-left: auto; color: var(--dag-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .bp-dag-hidden-button { min-height: 1.6rem; margin: 0; padding: .08rem .2rem; border: 0; background: transparent; color: var(--dag-link); }
-.bp-dag-body { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 20rem; min-height: 0; }
+.bp-dag-body { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 0; min-height: 0; }
+.bp-dag-viewer.bp-dag-has-selection .bp-dag-body { grid-template-columns: minmax(0, 1fr) 22rem; }
 .bp-dag-main { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--dag-bg); }
 .bp-dag-stage { position: absolute; inset: 0; overflow: hidden; touch-action: pan-y; cursor: grab; overscroll-behavior-x: contain; }
+.bp-dag-viewer[data-layout=app] .bp-dag-stage { touch-action: none; }
 .bp-dag-stage[data-dragging=true] { cursor: grabbing; }
 .bp-dag-canvas, .bp-dag-node-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
 .bp-dag-canvas { display: block; }
 .bp-dag-node-layer { overflow: hidden; pointer-events: none; }
-.bp-dag-node { position: absolute; top: 0; left: 0; display: grid; align-content: center; width: 196px; height: 44px; padding: 5px 9px; overflow: hidden; border: 1.5px solid var(--dag-node-stroke); border-radius: 8px; background: var(--dag-node-fill); color: var(--dag-node-text); box-shadow: 0 2px 5px rgba(15, 23, 42, .08); text-align: left; transform-origin: 0 0; pointer-events: auto; cursor: pointer; will-change: transform; }
-.bp-dag-node-title { overflow: hidden; font-size: 12px; font-weight: 680; line-height: 1.18; text-overflow: ellipsis; white-space: nowrap; }
-.bp-dag-node-meta { overflow: hidden; opacity: .75; font-size: 9px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dag-node { position: absolute; top: 0; left: 0; display: grid; align-content: center; width: 196px; height: 56px; padding: 6px 10px; overflow: hidden; border: 1.5px solid var(--dag-node-stroke); border-radius: 8px; background: var(--dag-node-fill); color: var(--dag-node-text); box-shadow: 0 2px 5px rgba(15, 23, 42, .08); text-align: left; transform-origin: 0 0; pointer-events: auto; cursor: pointer; will-change: transform; }
+.bp-dag-node-title { overflow: hidden; font-size: 14px; font-weight: 680; line-height: 1.18; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dag-node-meta { overflow: hidden; opacity: .75; font-size: 10px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-node[data-selected=true] { border-width: 3px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--dag-link) 24%, transparent), 0 5px 13px rgba(15, 23, 42, .18); }
 .bp-dag-node[data-subdued=true] { opacity: .23; }
 .bp-dag-node[data-kind=scope] { border-radius: 13px; }
@@ -386,7 +480,8 @@ _STYLE = r"""
 .bp-dag-inventory-meta { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: var(--dag-muted); font-size: .68rem; }
 .bp-dag-load-more { justify-self: center; margin: .55rem; }
 .bp-dag-load-more[hidden] { display: none; }
-.bp-dag-inspector { z-index: 7; min-width: 0; overflow: auto; border-left: 1px solid var(--dag-border); background: var(--dag-panel); }
+.bp-dag-inspector { z-index: 7; width: 0; min-width: 0; overflow: hidden; border-left: 0; background: var(--dag-panel); visibility: hidden; }
+.bp-dag-viewer.bp-dag-has-selection .bp-dag-inspector { width: auto; overflow: auto; border-left: 1px solid var(--dag-border); visibility: visible; }
 .bp-dag-inspector-inner { padding: .9rem; }
 .bp-dag-sheet-handle { display: none; }
 .bp-dag-inspector-header { display: flex; align-items: flex-start; gap: .5rem; }
@@ -415,14 +510,15 @@ _STYLE = r"""
 .bp-dag-viewer.bp-dag-enhancing .bp-dag-fallback { display: none; }
 .bp-dag-sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 @media (max-width: 900px) {
-  .bp-dag-viewer { height: max(40rem, calc(100svh - 4.5rem)); }
-  .bp-dag-body { grid-template-columns: minmax(0, 1fr) 17rem; }
+  .bp-dag-viewer:not([data-layout=app]) { height: max(40rem, calc(100svh - 4.5rem)); }
+  .bp-dag-viewer.bp-dag-has-selection .bp-dag-body { grid-template-columns: minmax(0, 1fr) 17rem; }
   .bp-dag-toolbar { flex-wrap: wrap; }
   .bp-dag-search-wrap { max-width: none; }
   .bp-dag-stats { order: 8; width: 100%; min-height: 1.4rem; margin: 0; justify-content: flex-start; }
 }
 @media (max-width: 680px) {
-  .bp-dag-viewer { height: calc(100svh - 1rem); min-height: 34rem; border-radius: 10px; }
+  .bp-dag-viewer:not([data-layout=app]) { height: calc(100svh - 1rem); min-height: 34rem; border-radius: 10px; }
+  .bp-dag-viewer[data-layout=app] { min-height: 28rem; }
   .bp-dag-context { padding-inline: .55rem; }
   .bp-dag-toolbar { gap: .35rem; padding: .35rem .5rem .5rem; }
   .bp-dag-search-wrap { flex-basis: calc(100% - .4rem); order: -2; }
@@ -431,7 +527,7 @@ _STYLE = r"""
   .bp-dag-body { display: block; }
   .bp-dag-main { position: absolute; inset: 0; }
   .bp-dag-inventory { padding-bottom: 3.65rem; }
-  .bp-dag-inspector { position: absolute; z-index: 12; right: .45rem; bottom: .45rem; left: .45rem; max-height: min(58%, 30rem); overflow: auto; border: 1px solid var(--dag-border); border-radius: 13px; box-shadow: 0 -8px 30px rgba(15, 23, 42, .2); transform: translateY(calc(100% - 3.2rem)); transition: transform .2s ease; }
+  .bp-dag-inspector { position: absolute; z-index: 12; right: .45rem; bottom: .45rem; left: .45rem; width: auto; max-height: min(58%, 30rem); overflow: auto; border: 1px solid var(--dag-border); border-radius: 13px; box-shadow: 0 -8px 30px rgba(15, 23, 42, .2); visibility: visible; transform: translateY(calc(100% - 3.2rem)); transition: transform .2s ease; }
   .bp-dag-viewer.bp-dag-sheet-open .bp-dag-inspector { transform: translateY(0); }
   .bp-dag-sheet-handle { display: block; position: sticky; z-index: 2; top: 0; width: 100%; min-height: 3.1rem; padding: .6rem 2.2rem .45rem .7rem; overflow: hidden; border: 0; border-bottom: 1px solid var(--dag-border); background: var(--dag-panel); color: var(--dag-fg); font: inherit; font-size: .75rem; font-weight: 700; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
   .bp-dag-sheet-handle::before { content: ""; position: absolute; top: .35rem; left: 50%; width: 2rem; height: 3px; border-radius: 2px; background: var(--dag-border); transform: translateX(-50%); }
@@ -451,8 +547,8 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
   if (window.__AUTOFORM_DAG_VIEWER_V2__) return;
   window.__AUTOFORM_DAG_VIEWER_V2__ = true;
 
-  var NODE_W = 196, NODE_H = 44, MAX_DOM_NODES = 180, LIST_PAGE = 100;
-  var SEARCH_PAGE = 50, RELATION_PAGE = 50, MIN_SCALE = .002, FIT_MIN_SCALE = .00001, hostSequence = 0;
+  var NODE_W = 196, NODE_H = 56, MAX_DOM_NODES = 180, MAX_MAP_NODES = 120, LIST_PAGE = 100;
+  var SEARCH_PAGE = 50, RELATION_PAGE = 50, MIN_SCALE = .002, MIN_READABLE_SCALE = .8, hostSequence = 0;
   var clamp = function (value, low, high) { return Math.max(low, Math.min(high, value)); };
 
   function element(tag, className, text) {
@@ -477,10 +573,21 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
     } catch (_error) { return null; }
   }
 
+  function sizeAppHost(host) {
+    if (host.getAttribute("data-layout") !== "app") return;
+    var top = Math.max(0, host.getBoundingClientRect().top);
+    host.style.height = Math.max(420, window.innerHeight - top) + "px";
+  }
+
   function start(host) {
     if (host.getAttribute("data-dag-ready") === "true") return;
     host.setAttribute("data-dag-ready", "true");
     host.classList.add("bp-dag-enhancing");
+    if (host.getAttribute("data-layout") === "app") {
+      document.body.classList.add("bp-dag-app-page"); sizeAppHost(host);
+      requestAnimationFrame(function () { sizeAppHost(host); });
+      window.addEventListener("resize", function () { sizeAppHost(host); });
+    }
     var instance = ++hostSequence;
     fetch(host.getAttribute("data-graph-src"), {credentials: "same-origin"}).then(function (response) {
       if (!response.ok) throw new Error("HTTP " + response.status);
@@ -522,9 +629,14 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       if (incident.has(edge.source)) incident.get(edge.source).push(index);
       if (incident.has(edge.target)) incident.get(edge.target).push(index);
     });
+    var isolateIndex = 0;
     data.nodes.forEach(function (node) {
       node.isolated = node.isolated || ((prerequisites.get(node.id) || []).length + (dependents.get(node.id) || []).length === 0);
+      node._isolateIndex = node.isolated ? isolateIndex++ : -1;
     });
+    var mobileIsolateBase = (data.nodes.reduce(function (largest, node) {
+      return node.isolated ? largest : Math.max(largest, Number.isFinite(node.column) ? node.column : 0);
+    }, -2) + 2) * (NODE_H + 72);
     (data.present_statuses || Object.keys(palette)).forEach(function (key) {
       if (statusCounts.has(key) && presentStatuses.indexOf(key) < 0) presentStatuses.push(key);
     });
@@ -532,13 +644,17 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       if (presentStatuses.indexOf(key) < 0) presentStatuses.push(key);
     });
 
+    var mapAllowed = data.nodes.length <= MAX_MAP_NODES;
     var state = {
       active: [], activeDirty: true, activeIds: new Set(), direction: "both", listLimit: LIST_PAGE, mode: "graph", moved: false,
       orientation: "lr", pointers: new Map(), pinch: null, query: "", searchLimit: 12, selected: null,
-      searchCache: [], searchCacheQuery: null, spotlight: null,
+      searchCache: [], searchCacheQuery: null, searchError: null, searchLoading: false,
+      searchNodes: data.nodes, searchPromise: null, spotlight: null,
+      mapAllowed: mapAllowed, readableCrop: false,
       selectedStatuses: new Set(presentStatuses), showIsolated: view.kind !== "full",
       transform: {x: 20, y: 20, scale: 1}
     };
+    if (!mapAllowed) state.mode = "list";
     var refs = {}, overlays = new Map(), scheduled = false, firstResize = true;
 
     buildShell();
@@ -547,6 +663,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
     renderInspector();
     renderInventory(true);
     resize();
+    redirectLegacyFocus();
 
     function buildShell() {
       var head = element("header", "bp-dag-head");
@@ -554,20 +671,23 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       var crumbs = element("nav", "bp-dag-breadcrumb");
       crumbs.setAttribute("aria-label", "Explorer context");
       var crumbList = element("ol");
-      crumbList.appendChild(element("li", "", "Roadmap"));
-      (view.scope ? String(view.scope).split("/").filter(Boolean) : []).forEach(function (part) {
-        crumbList.appendChild(element("li", "", part.replace(/[-_]/g, " ")));
+      var trail = Array.isArray(view.breadcrumbs) && view.breadcrumbs.length ? view.breadcrumbs : [
+        {label: "All mathematics", url: null}
+      ];
+      trail.forEach(function (entry, index) {
+        var item = element("li"), href = safeHref(entry.url);
+        if (href) { var link = element("a", "", entry.label); link.href = href; item.appendChild(link); }
+        else { item.textContent = entry.label; if (index === trail.length - 1) item.setAttribute("aria-current", "page"); }
+        crumbList.appendChild(item);
       });
-      var current = element("li", "", view.kind === "project" ? "Project" : data.title || "Dependencies");
-      current.setAttribute("aria-current", "page");
-      crumbList.appendChild(current); crumbs.appendChild(crumbList); context.appendChild(crumbs);
+      crumbs.appendChild(crumbList); context.appendChild(crumbs);
       context.appendChild(element("span", "bp-dag-view-kind", view.kind || "graph")); head.appendChild(context);
 
       var toolbar = element("div", "bp-dag-toolbar");
       toolbar.setAttribute("role", "toolbar"); toolbar.setAttribute("aria-label", "Dependency explorer controls");
       var searchWrap = element("div", "bp-dag-search-wrap");
       refs.search = element("input", "bp-dag-search");
-      refs.search.type = "search"; refs.search.placeholder = "Find a title or article id";
+      refs.search.type = "search"; refs.search.placeholder = "Search the whole roadmap ( / )";
       refs.search.setAttribute("aria-label", "Search all graph nodes");
       refs.search.setAttribute("aria-expanded", "false");
       refs.search.setAttribute("aria-controls", "bp-dag-search-results-" + instance);
@@ -591,11 +711,13 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
 
       refs.isolatedLabel = element("label", "bp-dag-isolated"); refs.isolated = element("input");
       refs.isolated.type = "checkbox"; refs.isolated.checked = state.showIsolated; refs.isolatedLabel.appendChild(refs.isolated);
-      refs.isolatedLabel.appendChild(document.createTextNode("Show isolated"));
-      refs.isolatedLabel.hidden = !data.nodes.some(function (node) { return node.isolated; }); toolbar.appendChild(refs.isolatedLabel);
+      refs.isolatedLabel.appendChild(document.createTextNode("Show items without edges"));
+      refs.isolatedLabel.hidden = !data.nodes.some(function (node) { return node.isolated; }) ||
+        data.nodes.every(function (node) { return node.isolated; }); toolbar.appendChild(refs.isolatedLabel);
 
       var modes = element("div", "bp-dag-modes"); modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "Explorer view");
-      refs.graphMode = button("bp-dag-mode-button", "Graph"); refs.listMode = button("bp-dag-mode-button", "List");
+      refs.graphMode = button("bp-dag-mode-button", mapAllowed ? "Map" : "Map · too many items");
+      refs.graphMode.disabled = !mapAllowed; refs.listMode = button("bp-dag-mode-button", "Browse");
       modes.appendChild(refs.graphMode); modes.appendChild(refs.listMode); toolbar.appendChild(modes);
 
       var zoomGroup = element("div", "bp-dag-zoom"); zoomGroup.setAttribute("role", "group"); zoomGroup.setAttribute("aria-label", "Zoom controls");
@@ -618,7 +740,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
 
       refs.inventory = element("section", "bp-dag-inventory"); refs.inventory.hidden = true;
       refs.inventory.setAttribute("aria-label", "Complete node inventory");
-      var inventoryHead = element("div", "bp-dag-inventory-head"); inventoryHead.appendChild(element("h2", "", "Node inventory"));
+      var inventoryHead = element("div", "bp-dag-inventory-head"); inventoryHead.appendChild(element("h2", "", "Browse this scope"));
       refs.inventorySummary = element("span", "bp-dag-inventory-summary"); inventoryHead.appendChild(refs.inventorySummary);
       refs.inventoryScroll = element("div", "bp-dag-inventory-scroll"); refs.inventoryList = element("ul", "bp-dag-inventory-list");
       refs.inventoryScroll.appendChild(refs.inventoryList); refs.loadMore = button("bp-dag-load-more", "Show more nodes");
@@ -638,16 +760,17 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
     }
 
     function bindEvents() {
+      refs.search.addEventListener("focus", ensureGlobalSearch);
       refs.search.addEventListener("input", function () {
         state.query = refs.search.value.trim(); state.searchLimit = 12; state.listLimit = LIST_PAGE;
-        renderSearch(); renderInventory(true);
+        renderSearch(); renderInventory(true); if (state.query) ensureGlobalSearch();
       });
       refs.search.addEventListener("keydown", function (event) {
         if (event.key === "Escape") { closeSearch(); return; }
         if (event.key === "ArrowDown") {
           var first = refs.searchResults.querySelector("button"); if (first) { event.preventDefault(); first.focus(); }
         } else if (event.key === "Enter") {
-          var matches = searchMatches(); if (matches.length) { event.preventDefault(); chooseNode(matches[0].node, true); }
+          var matches = searchMatches(); if (matches.length) { event.preventDefault(); activateNode(matches[0].node, true); }
         }
       });
       refs.isolated.addEventListener("change", function () {
@@ -678,6 +801,13 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       });
       window.addEventListener("hashchange", function () { applyLocation(false); });
       window.addEventListener("popstate", function () { applyLocation(false); });
+      document.addEventListener("keydown", function (event) {
+        var tag = event.target && event.target.tagName;
+        if ((event.key === "/" && !/^(INPUT|TEXTAREA|SELECT)$/.test(tag || "")) ||
+            ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k")) {
+          event.preventDefault(); refs.search.focus(); refs.search.select();
+        }
+      });
       if (window.ResizeObserver) new ResizeObserver(resize).observe(refs.stage); else window.addEventListener("resize", resize);
       window.addEventListener("resize", syncSheetAccessibility);
       new MutationObserver(schedule).observe(document.body, {attributes: true, attributeFilter: ["data-md-color-scheme"]});
@@ -691,6 +821,12 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
     }
     function world(node) {
       if (state.orientation === "tb") {
+        if (node.isolated) {
+          var mobileColumns = refs.stage.clientWidth < 540 ? 2 : 3;
+          return {x: (node._isolateIndex % mobileColumns) * (NODE_W + 20),
+            y: mobileIsolateBase + Math.floor(node._isolateIndex / mobileColumns) * (NODE_H + 22),
+            w: node.width, h: node.height};
+        }
         var row = Number.isFinite(node.row) ? node.row : Math.round(node.y / 66);
         var column = Number.isFinite(node.column) ? node.column : Math.round(node.x / 312);
         return {x: row * (NODE_W + 36), y: column * (NODE_H + 72), w: node.width, h: node.height};
@@ -774,10 +910,15 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         maxX = Math.max(maxX, box.x + box.w); maxY = Math.max(maxY, box.y + box.h);
       });
       var pad = 54, width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
-      state.transform.scale = clamp(Math.min((refs.stage.clientWidth - pad * 2) / width,
-        (refs.stage.clientHeight - pad * 2) / height), FIT_MIN_SCALE, 1.35);
-      state.transform.x = (refs.stage.clientWidth - width * state.transform.scale) / 2 - minX * state.transform.scale;
-      state.transform.y = (refs.stage.clientHeight - height * state.transform.scale) / 2 - minY * state.transform.scale; schedule();
+      var fitted = Math.min((refs.stage.clientWidth - pad * 2) / width,
+        (refs.stage.clientHeight - pad * 2) / height);
+      state.readableCrop = fitted < MIN_READABLE_SCALE;
+      state.transform.scale = clamp(Math.max(fitted, MIN_READABLE_SCALE), MIN_SCALE, 1.35);
+      state.transform.x = state.readableCrop ? pad - minX * state.transform.scale :
+        (refs.stage.clientWidth - width * state.transform.scale) / 2 - minX * state.transform.scale;
+      state.transform.y = state.readableCrop ? pad - minY * state.transform.scale :
+        (refs.stage.clientHeight - height * state.transform.scale) / 2 - minY * state.transform.scale;
+      schedule();
     }
     function center(node, minimumScale) {
       if (!node) return; var box = world(node); state.transform.scale = Math.max(state.transform.scale, minimumScale || .82);
@@ -785,8 +926,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       state.transform.y = refs.stage.clientHeight / 2 - (box.y + box.h / 2) * state.transform.scale; schedule();
     }
     function zoomAt(factor, x, y) {
-      var old = state.transform.scale, floor = old < MIN_SCALE ? FIT_MIN_SCALE : MIN_SCALE;
-      var next = clamp(old * factor, floor, 4);
+      var old = state.transform.scale, next = clamp(old * factor, MIN_SCALE, 4);
       state.transform.x = x - (x - state.transform.x) * next / old;
       state.transform.y = y - (y - state.transform.y) * next / old; state.transform.scale = next; schedule();
     }
@@ -880,16 +1020,20 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         control.dataset.subdued = String(Boolean(spotlight && !spotlight.nodes.has(node.id)));
         control.tabIndex = node === state.selected || (!state.selected && index === 0) ? 0 : -1;
       });
-      refs.density.hidden = omitted === 0 && !(visible.length && state.transform.scale < .34);
-      refs.density.textContent = omitted ? "+" + omitted + " node labels hidden at this zoom" :
+      refs.density.hidden = !state.readableCrop && omitted === 0 && !(visible.length && state.transform.scale < .34);
+      refs.density.textContent = state.readableCrop ? "Readable window · pan or Browse to see all " + state.active.length + " items" :
+        omitted ? "+" + omitted + " node labels hidden at this zoom" :
         (visible.length && state.transform.scale < .34 ? "Zoom in to reveal " + visible.length + " node labels" : "");
     }
     function makeNodeControl(node) {
       var control = button("bp-dag-node", ""); control.dataset.autoformNodeId = node.id; control.dataset.kind = node.kind || "node";
-      control.setAttribute("aria-label", node.title + ", " + statusLabel(node.status) + (node.isolated ? ", isolated" : ""));
+      var scopeMeta = node.kind === "scope" ? (node.member_count || 0) + " items · " + statusLabel(node.status) + " · open" :
+        node.kind === "boundary" ? "External scope · open" : null;
+      control.setAttribute("aria-label", node.title + ", " + (scopeMeta || statusLabel(node.status)) +
+        (node.isolated ? ", no dependency edges in this view" : ""));
       control.appendChild(element("span", "bp-dag-node-title", node.title));
-      control.appendChild(element("span", "bp-dag-node-meta", statusLabel(node.status) + " · " + node.id));
-      control.addEventListener("click", function (event) { event.stopPropagation(); selectNode(node, "push", false); });
+      control.appendChild(element("span", "bp-dag-node-meta", scopeMeta || statusLabel(node.status) + " · " + node.id));
+      control.addEventListener("click", function (event) { event.stopPropagation(); activateNode(node, false); });
       control.addEventListener("dblclick", function () { var href = safeHref(node.url); if (href) window.location.href = href; });
       control.addEventListener("keydown", function (event) {
         if (/^Arrow(Left|Right|Up|Down)$/.test(event.key)) {
@@ -920,7 +1064,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       if (event.target.closest && event.target.closest(".bp-dag-node")) return;
       state.pointers.set(event.pointerId, {x: event.clientX, y: event.clientY, type: event.pointerType});
       state.moved = false;
-      if (event.pointerType !== "touch") {
+      if (event.pointerType !== "touch" || host.getAttribute("data-layout") === "app") {
         refs.stage.setPointerCapture(event.pointerId); refs.stage.dataset.dragging = "true";
       } else if (state.pointers.size === 2) {
         refs.stage.setPointerCapture(event.pointerId); refs.stage.dataset.dragging = "true";
@@ -934,7 +1078,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
     function pointerMove(event) {
       if (!state.pointers.has(event.pointerId)) return;
       var previous = state.pointers.get(event.pointerId); state.pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
-      if (event.pointerType === "touch" && state.pointers.size < 2) {
+      if (event.pointerType === "touch" && state.pointers.size < 2 && host.getAttribute("data-layout") !== "app") {
         if (Math.abs(event.clientX - previous.x) + Math.abs(event.clientY - previous.y) > 4) state.moved = true;
         return;
       }
@@ -965,11 +1109,43 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       if (title.indexOf(query) >= 0) return [5, "Title match"]; if (id.indexOf(query) >= 0) return [6, "Id match"];
       return null;
     }
+    function ensureGlobalSearch() {
+      var source = host.getAttribute("data-search-src");
+      if (!source || state.searchPromise || state.searchNodes !== data.nodes) return state.searchPromise;
+      state.searchLoading = true;
+      state.searchPromise = fetch(source, {credentials: "same-origin"}).then(function (response) {
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        return response.json().then(function (index) { return {index: index, url: response.url}; });
+      }).then(function (loaded) {
+        if (!loaded.index || loaded.index.schema !== "autoform-dag-search/v1" || !Array.isArray(loaded.index.nodes))
+          throw new Error("unsupported search index");
+        loaded.index.nodes.forEach(function (node, index) {
+          node._index = index;
+          if (node.url) node.url = new URL(node.url, loaded.url).href;
+        });
+        state.searchNodes = loaded.index.nodes; state.searchCacheQuery = null; state.searchError = null;
+        refs.search.placeholder = "Search " + loaded.index.nodes.length.toLocaleString() + " roadmap entries";
+      }).catch(function (error) {
+        state.searchError = error.message;
+      }).then(function () {
+        state.searchLoading = false; if (state.query) { renderSearch(); renderInventory(true); }
+      });
+      return state.searchPromise;
+    }
+    function redirectLegacyFocus() {
+      var requested = locationParams().get("node");
+      if (!requested || byId.has(requested) || !host.getAttribute("data-search-src")) return;
+      ensureGlobalSearch().then(function () {
+        var target = state.searchNodes.find(function (node) { return node.id === requested; });
+        var href = target && safeHref(target.url);
+        if (href && new URL(href, window.location.href).href !== window.location.href) window.location.replace(href);
+      });
+    }
     function searchMatches() {
       var query = state.query.toLocaleLowerCase(); if (!query) return [];
       if (query === state.searchCacheQuery) return state.searchCache;
       state.searchCacheQuery = query;
-      state.searchCache = data.nodes.map(function (node) {
+      state.searchCache = state.searchNodes.map(function (node) {
         var score = searchScore(node, query); return score ? {node: node, rank: score[0], reason: score[1]} : null;
       }).filter(Boolean).sort(function (a, b) { return a.rank - b.rank || a.node._index - b.node._index; });
       return state.searchCache;
@@ -982,7 +1158,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         choose.appendChild(element("span", "bp-dag-result-title", match.node.title));
         choose.appendChild(element("span", "bp-dag-result-id", match.node.id));
         choose.appendChild(element("span", "bp-dag-result-reason", match.reason));
-        choose.addEventListener("click", function () { chooseNode(match.node, true); }); item.appendChild(choose); list.appendChild(item);
+        choose.addEventListener("click", function () { activateNode(match.node, true); }); item.appendChild(choose); list.appendChild(item);
         choose.addEventListener("keydown", searchResultKeydown);
       });
       refs.searchResults.appendChild(list);
@@ -999,6 +1175,8 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         refs.searchResults.appendChild(more);
       }
       if (!matches.length) refs.searchResults.appendChild(element("p", "bp-dag-overview", "No matching title or article id."));
+      if (state.searchLoading) refs.searchResults.appendChild(element("p", "bp-dag-overview", "Searching the whole roadmap…"));
+      else if (state.searchError) refs.searchResults.appendChild(element("p", "bp-dag-overview", "Whole-roadmap search is unavailable; showing this view."));
       refs.searchResults.hidden = false; refs.search.setAttribute("aria-expanded", "true");
     }
     function searchResultKeydown(event) {
@@ -1013,11 +1191,21 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       else if (event.key === "ArrowUp") { event.preventDefault(); refs.search.focus(); }
     }
     function closeSearch() { refs.searchResults.hidden = true; refs.search.setAttribute("aria-expanded", "false"); }
+    function activateNode(node, moveCamera) {
+      var href = safeHref(node.url);
+      if (!byId.has(node.id) && href) { window.location.href = href; return; }
+      if ((node.kind === "scope" || node.kind === "boundary") && href) { window.location.href = href; return; }
+      chooseNode(node, moveCamera);
+    }
     function chooseNode(node, moveCamera) {
       closeSearch(); if (!state.selectedStatuses.has(node.status)) state.selectedStatuses.add(node.status);
       if (node.isolated) state.showIsolated = true; state.activeDirty = true;
-      state.mode = "graph"; selectNode(node, "push", moveCamera);
-      focusNodeControl(node);
+      state.mode = state.mapAllowed ? "graph" : "list";
+      selectNode(node, "push", moveCamera && state.mapAllowed);
+      if (state.mapAllowed) focusNodeControl(node);
+      else requestAnimationFrame(function () {
+        var target = refs.inspectorInner.querySelector("a, button"); if (target) target.focus();
+      });
     }
     function focusNodeControl(node) {
       requestAnimationFrame(function () { requestAnimationFrame(function () {
@@ -1037,7 +1225,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       state.selected = null; state.direction = "both"; state.activeDirty = true; state.spotlight = null;
       host.classList.remove("bp-dag-has-selection");
       setSheet(false);
-      renderInspector(); renderInventory(true); schedule(); if (updateHistory) writeLocation("push");
+      renderInspector(); renderInventory(true); requestAnimationFrame(fit); if (updateHistory) writeLocation("push");
     }
     function setSheet(open) {
       host.classList.toggle("bp-dag-sheet-open", Boolean(open));
@@ -1050,11 +1238,9 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       var collapsed = mobile && !host.classList.contains("bp-dag-sheet-open");
       if (collapsed) {
         if (refs.inspectorInner.contains(document.activeElement)) refs.sheetHandle.focus();
-        refs.inspectorInner.setAttribute("inert", "");
-        refs.inspectorInner.setAttribute("aria-hidden", "true");
+        refs.inspectorInner.setAttribute("inert", ""); refs.inspectorInner.setAttribute("aria-hidden", "true");
       } else {
-        refs.inspectorInner.removeAttribute("inert");
-        refs.inspectorInner.removeAttribute("aria-hidden");
+        refs.inspectorInner.removeAttribute("inert"); refs.inspectorInner.removeAttribute("aria-hidden");
       }
     }
     function setDirection(direction) {
@@ -1075,6 +1261,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       state.activeDirty = true; writeLocation("replace"); refresh(true);
     }
     function setMode(mode, updateHistory) {
+      if (mode === "graph" && !state.mapAllowed) return;
       state.mode = mode; syncControls(); if (mode === "list") renderInventory(true); else schedule();
       if (updateHistory) writeLocation("replace");
     }
@@ -1142,7 +1329,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         ids.slice(visible, next).forEach(function (id) {
           var related = byId.get(id); if (!related) return;
           var item = element("li"), choose = button("bp-dag-relation-button", related.title);
-          choose.addEventListener("click", function () { chooseNode(related, true); }); item.appendChild(choose); list.appendChild(item);
+        choose.addEventListener("click", function () { activateNode(related, true); }); item.appendChild(choose); list.appendChild(item);
         });
         visible = next;
         more.hidden = visible >= ids.length;
@@ -1167,9 +1354,10 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         row.appendChild(element("span", "bp-dag-inventory-title", node.title));
         row.appendChild(element("span", "bp-dag-inventory-id", node.id));
         row.appendChild(element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (node.isolated ? " · isolated" : "")));
-        row.addEventListener("click", function () { chooseNode(node, true); }); item.appendChild(row); refs.inventoryList.appendChild(item);
+        row.addEventListener("click", function () { activateNode(node, true); }); item.appendChild(row); refs.inventoryList.appendChild(item);
       });
-      refs.inventorySummary.textContent = visible.length + " of " + nodes.length + " listed · isolates included";
+      refs.inventorySummary.textContent = visible.length + " of " + nodes.length + " listed" +
+        (state.mapAllowed ? " · items without edges included" : " · map unavailable above " + MAX_MAP_NODES + " items");
       refs.loadMore.hidden = visible.length >= nodes.length;
       refs.loadMore.textContent = visible.length < nodes.length ? "Show " + Math.min(LIST_PAGE, nodes.length - visible.length) + " more" : "";
       if (resetScroll && refs.inventoryScroll) refs.inventoryScroll.scrollTop = 0;
@@ -1187,7 +1375,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       }));
       else state.selectedStatuses = new Set(presentStatuses);
       state.showIsolated = params.has("isolates") ? params.get("isolates") === "1" : view.kind !== "full";
-      state.mode = params.get("view") === "list" ? "list" : "graph";
+      state.mode = params.get("view") === "list" || !state.mapAllowed ? "list" : "graph";
       state.activeDirty = true; state.spotlight = null;
       if (node) {
         state.selectedStatuses.add(node.status); if (node.isolated && !params.has("isolates")) state.showIsolated = true;
@@ -1226,8 +1414,10 @@ __all__ = [
     "MAX_MERMAID_CHARACTERS",
     "MAX_MERMAID_EDGE_LINES",
     "SCHEMA",
+    "SEARCH_SCHEMA",
     "render_container",
     "requires_interactive",
     "viewer_script",
     "write_payload",
+    "write_search_index",
 ]

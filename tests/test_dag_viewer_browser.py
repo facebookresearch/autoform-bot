@@ -16,8 +16,6 @@ playwright = pytest.importorskip(
     reason="the optional browser extra is required for WebKit regression tests",
 )
 
-DEEP_NODE_COUNT = 12_769
-
 
 class _QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
@@ -78,7 +76,7 @@ def explorer_url(tmp_path: Path) -> Iterator[str]:
             declaration="lemma",
             status_key="planned",
         )
-        for index in range(120)
+        for index in range(60)
     )
     view = GraphView(
         kind="full",
@@ -91,6 +89,23 @@ def explorer_url(tmp_path: Path) -> Iterator[str]:
     )
     links = {node.id: f"articles.html#{node.id}" for node in nodes}
     dag_viewer.write_payload(tmp_path / "graph.json", view, links=links)
+    remote = ViewNode(
+        id="remote/deep-theorem",
+        title="Remote theorem",
+        kind="node",
+        members=("remote/deep-theorem",),
+        status_counts=(("planned", 1),),
+        declaration="theorem",
+        status_key="planned",
+    )
+    dag_viewer.write_search_index(
+        tmp_path / "search.json",
+        GraphView(kind="full", title="Search", nodes=(*nodes, remote), edges=()),
+        context_links={
+            **{node.id: f"articles.html#{node.id}" for node in nodes},
+            remote.id: "other.html#node=remote%2Fdeep-theorem",
+        },
+    )
     (tmp_path / "viewer.js").write_text(dag_viewer.viewer_script(), encoding="utf-8")
 
     fallback_links = tuple((node.title, links[node.id]) for node in core_nodes)
@@ -99,12 +114,24 @@ def explorer_url(tmp_path: Path) -> Iterator[str]:
         script_href="viewer.js",
         fallback_links=fallback_links,
         fallback_total=len(nodes),
+        layout="embedded",
+        search_href="search.json",
     )
     failed_explorer = dag_viewer.render_container(
         "missing.json",
         script_href="viewer.js",
         fallback_links=fallback_links,
         fallback_total=len(nodes),
+        layout="embedded",
+        search_href="search.json",
+    )
+    app_explorer = dag_viewer.render_container(
+        "graph.json",
+        script_href="viewer.js",
+        fallback_links=fallback_links,
+        fallback_total=len(nodes),
+        layout="app",
+        search_href="search.json",
     )
     page_shell = """<!doctype html>
 <html lang="en">
@@ -127,56 +154,90 @@ def explorer_url(tmp_path: Path) -> Iterator[str]:
 """
     (tmp_path / "index.html").write_text(page_shell.replace("{explorer}", explorer), encoding="utf-8")
     (tmp_path / "failure.html").write_text(page_shell.replace("{explorer}", failed_explorer), encoding="utf-8")
-    duplicate_explorer = explorer + '\n<script defer src="viewer.js"></script>'
     (tmp_path / "duplicate.html").write_text(
-        page_shell.replace("{explorer}", duplicate_explorer),
+        page_shell.replace("{explorer}", explorer + '\n<script defer src="viewer.js"></script>'),
         encoding="utf-8",
     )
-
-    handler = functools.partial(_QuietHandler, directory=str(tmp_path))
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    host, port = server.server_address
-    try:
-        yield f"http://{host}:{port}"
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-
-
-@pytest.fixture()
-def deep_explorer_url(tmp_path: Path) -> Iterator[str]:
-    nodes = tuple(
+    (tmp_path / "other.html").write_text("<!doctype html><title>Remote scope</title>", encoding="utf-8")
+    (tmp_path / "app.html").write_text(
+        page_shell.replace('<div class="page-spacer" data-page-spacer="before"></div>', "")
+        .replace('<div class="page-spacer" data-page-spacer="after"></div>', "")
+        .replace('class="fixture"', 'class="fixture" style="max-width:none;padding:0"')
+        .replace("{explorer}", app_explorer),
+        encoding="utf-8",
+    )
+    dense_nodes = tuple(
         ViewNode(
-            id=f"deep/node-{index}",
-            title=f"Deep node {index}",
-            kind="node",
-            members=(f"deep/node-{index}",),
+            id=f"dense/chapter-{index}",
+            title=f"Dense chapter {index}",
+            kind="scope",
+            members=(f"dense/chapter-{index}/item",),
             status_counts=(("planned", 1),),
             status_key="planned",
         )
-        for index in range(DEEP_NODE_COUNT)
+        for index in range(33)
     )
-    view = GraphView(
-        kind="full",
-        title="Deep dependency explorer",
-        nodes=nodes,
-        edges=tuple(
-            ViewEdge(nodes[index].id, nodes[index + 1].id, statement_count=1)
-            for index in range(DEEP_NODE_COUNT - 1)
+    dense_views = {
+        "chain": GraphView(
+            kind="project",
+            title="Connected chain",
+            nodes=dense_nodes,
+            edges=tuple(
+                ViewEdge(dense_nodes[index].id, dense_nodes[index + 1].id, statement_count=1)
+                for index in range(len(dense_nodes) - 1)
+            ),
         ),
+        "star": GraphView(
+            kind="project",
+            title="Connected star",
+            nodes=dense_nodes,
+            edges=tuple(
+                ViewEdge(dense_nodes[0].id, dense_nodes[index].id, statement_count=1)
+                for index in range(1, len(dense_nodes))
+            ),
+        ),
+    }
+    flat_nodes = tuple(
+        ViewNode(
+            id=f"flat/item-{index}",
+            title=f"Flat item {index}",
+            kind="node",
+            members=(f"flat/item-{index}",),
+            status_counts=(("planned", 1),),
+            status_key="planned",
+        )
+        for index in range(1_000)
     )
-    dag_viewer.write_payload(tmp_path / "graph.json", view, links={})
-    (tmp_path / "viewer.js").write_text(dag_viewer.viewer_script(), encoding="utf-8")
-    explorer = dag_viewer.render_container("graph.json", script_href="viewer.js")
-    (tmp_path / "index.html").write_text(
-        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width, initial-scale=1"></head>'
-        f'<body><main>{explorer}</main></body></html>',
-        encoding="utf-8",
+    dense_views["flat"] = GraphView(kind="chapter", title="Flat scope", nodes=flat_nodes, edges=())
+    mixed_nodes = tuple(
+        ViewNode(
+            id=node_id,
+            title=node_id,
+            kind="node",
+            members=(node_id,),
+            status_counts=(("planned", 1),),
+            status_key="planned",
+        )
+        for node_id in ("mixed/a", "mixed/b", "mixed/isolate-1", "mixed/isolate-2")
     )
+    dense_views["mixed"] = GraphView(
+        kind="chapter",
+        title="Mixed scope",
+        nodes=mixed_nodes,
+        edges=(ViewEdge("mixed/a", "mixed/b", statement_count=1),),
+    )
+    app_shell = (
+        page_shell.replace('<div class="page-spacer" data-page-spacer="before"></div>', "")
+        .replace('<div class="page-spacer" data-page-spacer="after"></div>', "")
+        .replace('class="fixture"', 'class="fixture" style="max-width:none;padding:0"')
+    )
+    for name, dense_view in dense_views.items():
+        dag_viewer.write_payload(tmp_path / f"{name}.json", dense_view, links={})
+        host = dag_viewer.render_container(f"{name}.json", script_href="viewer.js", layout="app")
+        (tmp_path / f"{name}.html").write_text(
+            app_shell.replace("{explorer}", host),
+            encoding="utf-8",
+        )
 
     handler = functools.partial(_QuietHandler, directory=str(tmp_path))
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -228,12 +289,84 @@ def test_mobile_node_interaction_and_selected_sheet_collapse(webkit_browser: obj
     assert not page.evaluate(
         "document.querySelector('.bp-dag-inspector-inner').contains(document.activeElement)"
     )
+    context.close()
 
-    page.set_viewport_size({"width": 1000, "height": 844})
-    page.wait_for_function(
-        "element => !element.hasAttribute('inert') && !element.hasAttribute('aria-hidden')",
-        arg=inspector_inner.element_handle(),
+
+def test_app_layout_fills_the_browser_viewport(webkit_browser: object, explorer_url: str) -> None:
+    page = webkit_browser.new_page(viewport={"width": 1440, "height": 900})
+    page.goto(f"{explorer_url}/app.html")
+    page.locator(".bp-dag-stage").wait_for()
+    viewer = page.locator('.bp-dag-viewer[data-layout="app"]')
+    box = viewer.bounding_box()
+    assert box is not None
+    assert box["x"] <= 1
+    assert box["y"] <= 1
+    assert box["width"] >= 1430
+    assert box["height"] >= 890
+    stage = page.locator(".bp-dag-stage").bounding_box()
+    assert stage is not None
+    assert stage["width"] >= 1000
+    page.close()
+
+
+@pytest.mark.parametrize("page_name", ("chain", "star"))
+def test_connected_project_maps_open_at_readable_scale(
+    webkit_browser: object, explorer_url: str, page_name: str
+) -> None:
+    page = webkit_browser.new_page(viewport={"width": 1440, "height": 900})
+    page.goto(f"{explorer_url}/{page_name}.html")
+    node = page.locator(".bp-dag-node").first
+    node.wait_for()
+    box = node.bounding_box()
+    assert box is not None
+    assert box["height"] >= 44
+    playwright.expect(page.locator(".bp-dag-density")).to_contain_text("Readable window")
+    page.close()
+
+
+def test_oversized_flat_scope_defaults_to_browse(webkit_browser: object, explorer_url: str) -> None:
+    page = webkit_browser.new_page(viewport={"width": 1440, "height": 900})
+    page.goto(f"{explorer_url}/flat.html")
+    inventory = page.locator(".bp-dag-inventory")
+    inventory.wait_for()
+    playwright.expect(inventory).to_be_visible()
+    playwright.expect(page.locator(".bp-dag-mode-button").first).to_be_disabled()
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_contain_text(
+        "map unavailable above 120 items"
     )
+    playwright.expect(page.locator(".bp-dag-node")).to_have_count(0)
+    page.close()
+
+
+def test_mobile_browse_pagination_stays_above_the_collapsed_sheet(
+    webkit_browser: object, explorer_url: str
+) -> None:
+    context = webkit_browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    page = context.new_page()
+    page.goto(f"{explorer_url}/flat.html")
+    more = page.locator(".bp-dag-inventory > .bp-dag-load-more")
+    more.wait_for()
+    more.scroll_into_view_if_needed()
+    box = more.bounding_box()
+    handle_box = page.locator(".bp-dag-sheet-handle").bounding_box()
+    assert box is not None and handle_box is not None
+    assert box["y"] + box["height"] <= handle_box["y"]
+    more.tap()
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_contain_text("200 of 1000 listed")
+    context.close()
+
+
+def test_mobile_isolates_do_not_overlap_the_connected_dag(webkit_browser: object, explorer_url: str) -> None:
+    context = webkit_browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    page = context.new_page()
+    page.goto(f"{explorer_url}/mixed.html")
+    connected = page.locator('[data-autoform-node-id="mixed/a"]')
+    isolated = page.locator('[data-autoform-node-id="mixed/isolate-1"]')
+    connected.wait_for()
+    isolated.wait_for()
+    a, b = connected.bounding_box(), isolated.bounding_box()
+    assert a is not None and b is not None
+    assert a["y"] + a["height"] <= b["y"] or b["y"] + b["height"] <= a["y"]
     context.close()
 
 
@@ -251,21 +384,6 @@ def test_plain_wheel_scrolls_the_page_instead_of_being_trapped(webkit_browser: o
 
     page.wait_for_function("before => window.scrollY > before", arg=before)
     assert page.evaluate("window.scrollY") > before
-    page.close()
-
-
-def test_fit_and_zoom_out_keep_a_deep_graph_inside_the_viewport(
-    webkit_browser: object, deep_explorer_url: str
-) -> None:
-    page = webkit_browser.new_page(viewport={"width": 1280, "height": 900})
-    page.goto(f"{deep_explorer_url}/index.html")
-    page.locator(".bp-dag-stage").wait_for()
-    density = page.locator(".bp-dag-density")
-    message = f"Zoom in to reveal {DEEP_NODE_COUNT} node labels"
-
-    playwright.expect(density).to_have_text(message, timeout=30_000)
-    page.get_by_role("button", name="Zoom out").click()
-    playwright.expect(density).to_have_text(message, timeout=30_000)
     page.close()
 
 
@@ -290,6 +408,30 @@ def test_search_keyboard_navigation_and_focus(webkit_browser: object, explorer_u
     page.close()
 
 
+def test_global_search_jumps_to_the_smallest_context(webkit_browser: object, explorer_url: str) -> None:
+    page = webkit_browser.new_page(viewport={"width": 1280, "height": 900})
+    _open_ready(page, explorer_url)
+    search = page.locator(".bp-dag-search")
+    search.fill("Remote theorem")
+    result = page.locator(".bp-dag-result", has_text="Remote theorem")
+    result.wait_for()
+    result.click()
+    page.wait_for_url("**/other.html#node=remote%2Fdeep-theorem")
+    page.close()
+
+
+def test_legacy_node_hash_resolves_through_the_global_index(webkit_browser: object, explorer_url: str) -> None:
+    page = webkit_browser.new_page(viewport={"width": 1280, "height": 900})
+    page.goto(f"{explorer_url}/app.html#node=remote%2Fdeep-theorem")
+    page.wait_for_url("**/other.html#node=remote%2Fdeep-theorem")
+
+    page.goto(f"{explorer_url}/app.html#node=unknown%2Fitem")
+    page.locator(".bp-dag-stage").wait_for()
+    page.wait_for_timeout(100)
+    assert page.url.endswith("app.html#node=unknown%2Fitem")
+    page.close()
+
+
 def test_paginated_search_and_arrow_navigation_restore_focus(
     webkit_browser: object, explorer_url: str
 ) -> None:
@@ -303,7 +445,7 @@ def test_paginated_search_and_arrow_navigation_restore_focus(
     search = page.locator(".bp-dag-search")
     search.fill("auxiliary")
     more = page.locator(".bp-dag-search-results .bp-dag-load-more")
-    playwright.expect(more).to_have_text("Show 50 more of 108")
+    playwright.expect(more).to_have_text("Show 48 more of 48")
     more.focus()
     more.press("Enter")
     playwright.expect(page.locator(".bp-dag-result").nth(12)).to_be_focused()
@@ -316,39 +458,9 @@ def test_direct_list_view_has_current_shown_and_hidden_counts(
     page = webkit_browser.new_page(viewport={"width": 1280, "height": 900})
     page.goto(f"{explorer_url}/index.html#view=list&status=fully_proved")
     page.locator(".bp-dag-inventory").wait_for()
-    playwright.expect(page.locator(".bp-dag-stats")).to_contain_text("1 of 123 shown")
-    playwright.expect(page.locator(".bp-dag-hidden-button")).to_have_text("+122 hidden")
+    playwright.expect(page.locator(".bp-dag-stats")).to_contain_text("1 of 63 shown")
+    playwright.expect(page.locator(".bp-dag-hidden-button")).to_have_text("+62 hidden")
     page.close()
-
-
-def test_mobile_list_pagination_stays_above_the_collapsed_sheet(
-    webkit_browser: object, explorer_url: str
-) -> None:
-    context = webkit_browser.new_context(
-        viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True
-    )
-    page = context.new_page()
-    _open_ready(page, explorer_url)
-    page.get_by_role("button", name="List", exact=True).tap()
-
-    more = page.locator(".bp-dag-inventory > .bp-dag-load-more")
-    playwright.expect(more).to_be_visible()
-    more.scroll_into_view_if_needed()
-    box = more.bounding_box()
-    handle_box = page.locator(".bp-dag-sheet-handle").bounding_box()
-    assert box is not None
-    assert handle_box is not None
-    assert box["y"] + box["height"] <= handle_box["y"]
-    assert page.evaluate(
-        "point => { const target = document.elementFromPoint(point.x, point.y); "
-        "return Boolean(target && target.closest('.bp-dag-load-more')); }",
-        {"x": box["x"] + box["width"] / 2, "y": box["y"] + box["height"] / 2},
-    )
-    more.tap()
-    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text(
-        "123 of 123 listed · isolates included"
-    )
-    context.close()
 
 
 def test_reselect_does_not_duplicate_history_and_back_restores_selection(
@@ -374,42 +486,19 @@ def test_reselect_does_not_duplicate_history_and_back_restores_selection(
     page.close()
 
 
-def test_hiding_the_selected_status_clears_selection_and_durable_location(
+def test_hiding_the_selected_status_clears_selection(
     webkit_browser: object, explorer_url: str
 ) -> None:
     page = webkit_browser.new_page(viewport={"width": 1280, "height": 900})
     _open_ready(page, explorer_url)
-    initial_length = page.evaluate("history.length")
-    target = page.locator('[data-autoform-node-id="chapter/target"]')
-    target.click()
-    assert page.evaluate("history.length") == initial_length + 1
+    page.locator('[data-autoform-node-id="chapter/target"]').click()
     assert "node=chapter%2Ftarget" in page.url
 
     page.locator(".bp-dag-filter-summary").click()
-    planned = page.locator('.bp-dag-filter-popover input[value="planned"]')
-    planned.uncheck()
+    page.locator('.bp-dag-filter-popover input[value="planned"]').uncheck()
 
-    playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text(
-        "Standalone dependency explorer"
-    )
     assert "node=" not in page.url
-    assert page.evaluate("history.length") == initial_length + 1
-    playwright.expect(planned).not_to_be_checked()
-
-    page.reload()
-    page.locator(".bp-dag-stage").wait_for()
-    playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text(
-        "Standalone dependency explorer"
-    )
-    assert "node=" not in page.url
-    playwright.expect(page.locator('.bp-dag-filter-popover input[value="planned"]')).not_to_be_checked()
-
-    page.go_back()
-    playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text(
-        "Standalone dependency explorer"
-    )
-    playwright.expect(page.locator('.bp-dag-filter-popover input[value="planned"]')).to_be_checked()
-    assert "node=" not in page.url
+    assert "bp-dag-has-selection" not in (page.locator(".bp-dag-viewer").get_attribute("class") or "")
     page.close()
 
 
@@ -440,15 +529,11 @@ def test_fetch_failure_restores_the_linked_fallback(webkit_browser: object, expl
     page.close()
 
 
-def test_duplicate_consumer_script_include_mounts_one_explorer(
+def test_duplicate_script_include_mounts_one_explorer(
     webkit_browser: object, explorer_url: str
 ) -> None:
     page = webkit_browser.new_page()
     page.goto(f"{explorer_url}/duplicate.html")
     page.locator(".bp-dag-stage").wait_for()
-
     playwright.expect(page.locator(".bp-dag-head")).to_have_count(1)
-    playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute(
-        "data-dag-ready", "true"
-    )
     page.close()

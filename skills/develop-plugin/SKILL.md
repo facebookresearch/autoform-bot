@@ -7,35 +7,28 @@ description: >-
 
 # Develop Autoform from consumer nudges
 
-Treat Autoform as an example-based plugin in an independent formalization
-repository.
+Autoform is an example-based plugin used in an independent formalization
+repository. State a consumer scenario, observe installed behavior, and name the
+invariant. Treat user nudges as product evidence: preserve the insight, not the transcript,
+as a testable rule so future agents need less steering.
 
-Inspect the worktree; state a consumer scenario, observe installed behavior,
-and name the invariant. Treat user nudges as product evidence: preserve the
-insight, not the transcript, as a trigger, test, and assertion.
-Thus future agents need less steering.
+Keep Cabannes-specific facts in examples and plugin and formalization roots distinct.
+Agents can infer routine details; record fragile constraints.
 
-Keep Cabannes-specific facts in examples. Keep plugin and formalization roots
-distinct. Agents can infer routine details; record only fragile constraints.
+Bind source indexes, revisions, and links with retained descriptors: repeated
+pathname reads are not a generation boundary. Keep marker schema in its owning
+feature. Auto-detected links must match the blob at the stable detected commit.
 
-Source indexes, revisions, and links are one evidence boundary: require retained
-descriptors because repeated pathname reads are not a generation boundary.
-Keep each marker schema in its owning feature. Auto-detected links must match
-the blob at the stable detected commit.
+Client-side scale is a publication contract. Dependency explorers are
+full-viewport application surfaces using bounded hierarchical projections;
+never fit every theorem in the repository; global search jumps into the
+smallest useful scope; omissions have exact counts. Keep Material search
+title-only—one record per page—and shared agent entrypoints concise with on-demand references.
 
-Client-side scale is a publication contract. Keep Material search title-only—one
-record per page. Keep shared agent entrypoints concise and use on-demand references.
+Run focused checks, then normally `make lint`, `make test`, and
+`make check-example`.
 
-Run focused checks, then normally run:
-
-```bash
-make lint
-make test
-make check-example
-```
-
-Run `lake build` when example Lean results change. Validate edited skills and
-the manifest with skill-creator and plugin-creator. Use cachebuster and reinstall
-only for discovery in a new thread. Treat rewritten private
-declaration safety as fail-closed evidence: correlate the official user name to
-its lexical declaration by source coordinates.
+Validate with skill-creator and plugin-creator; reinstall only for discovery in
+a new thread. Treat rewritten
+private declaration safety as fail-closed evidence: correlate the official user
+name to its lexical declaration by source coordinates.
