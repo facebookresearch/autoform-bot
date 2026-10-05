@@ -107,12 +107,19 @@ def test_quick_start_keeps_the_cli_agent_facing(repo_root: Path) -> None:
 
 def test_public_repl_calls_are_documented_as_process_disposable(repo_root: Path) -> None:
     servers = (repo_root / "servers/README.md").read_text(encoding="utf-8")
+    setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
+    lakefile = (
+        repo_root / "skills/setup/assets/cabannes-thesis-project/lakefile.toml"
+    ).read_text(encoding="utf-8")
 
     assert "each public REPL call gets a fresh child" in servers
     assert "no process-owned environment or proof-state handle survives" in servers
     assert "toolchain's `lean --deps-json`" in servers
     assert "unrecognized parser response fails closed" in servers
     assert "package-qualified `@repl/repl` target" in servers
+    assert "`leanprover-community/repl` at an immutable revision" in setup
+    assert "lake build @repl/repl" in setup
+    assert "68a3b3a059787a7db44fb1e6281e4a657efee470" in lakefile
 
 
 def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
