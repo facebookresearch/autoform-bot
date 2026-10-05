@@ -918,12 +918,44 @@ def _fake_header_deps(stdout: str, returncode: int = 0, stderr: str = "") -> lis
     return [sys.executable, "-c", script]
 
 
-def _deps_json(*modules: str, errors: tuple[str, ...] = ()) -> str:
+def _deps_json(
+    *modules: str,
+    errors: tuple[str, ...] = (),
+    is_module: bool = False,
+    prelude: bool = False,
+) -> str:
     entry: dict = {"errors": list(errors)}
     if not errors:
+        imports = []
+        if not prelude:
+            imports.extend(
+                [
+                    {
+                        "module": "Init",
+                        "importAll": False,
+                        "isExported": True,
+                        "isMeta": False,
+                    },
+                    {
+                        "module": "Init",
+                        "importAll": False,
+                        "isExported": True,
+                        "isMeta": True,
+                    },
+                ]
+            )
+        imports.extend(
+            {
+                "module": module,
+                "importAll": False,
+                "isExported": True,
+                "isMeta": False,
+            }
+            for module in modules
+        )
         entry["result"] = {
-            "imports": [{"module": module, "importAll": False} for module in modules],
-            "isModule": False,
+            "imports": imports,
+            "isModule": is_module,
         }
     return json.dumps({"imports": [entry]})
 
@@ -1239,15 +1271,122 @@ def test_run_disposable_checks_the_submitted_header_before_adding_warmup_imports
     )
     checked = []
 
-    def header_modules(command, code, **kwargs):
+    def header_analysis(command, code, **kwargs):
         checked.append(code)
         raise ValueError("stop here")
 
-    monkeypatch.setattr(repl_core, "_lean_header_modules", header_modules)
+    monkeypatch.setattr(repl_core, "_lean_header_analysis", header_analysis)
 
     repl.run_disposable("/- note -/ import Unsafe\n#check Nat")
 
     assert checked == ["/- note -/ import Unsafe\n#check Nat"]
+
+
+@pytest.mark.parametrize(
+    ("deps_output", "code"),
+    [
+        (
+            _deps_json("REPL.Frontend", is_module=True),
+            "module\npublic import REPL.Frontend\n#check Nat",
+        ),
+        (
+            _deps_json("REPL.Frontend", prelude=True),
+            "prelude\nimport REPL.Frontend\n#check Nat",
+        ),
+        (
+            _deps_json("Init", prelude=True),
+            "prelude\nimport Init\n#check Nat",
+        ),
+    ],
+)
+def test_run_disposable_does_not_displace_lean_header_directives(
+    monkeypatch,
+    deps_output,
+    code,
+):
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(
+            allowed_imports=frozenset({"REPL", "Init"}),
+            warmup_imports=frozenset({"REPL"}),
+            header_deps_command=_fake_header_deps(deps_output),
+        )
+    )
+    frames = []
+    monkeypatch.setattr(repl, "start", lambda *args, **kwargs: None)
+
+    def run_frame(code, env_id, timeout, *, deadline=None):
+        frames.append(code)
+        return {"env": 1, "messages": [], "sorries": []}
+
+    monkeypatch.setattr(repl, "_run", run_frame)
+
+    assert repl.run_disposable(code) == {"messages": [], "sorries": []}
+    assert frames == [code]
+
+
+def test_run_disposable_preserves_implicit_warmup_for_ordinary_headers(
+    monkeypatch,
+):
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(
+            allowed_imports=frozenset({"REPL"}),
+            warmup_imports=frozenset({"REPL"}),
+            header_deps_command=_fake_header_deps(_deps_json()),
+        )
+    )
+    frames = []
+    monkeypatch.setattr(repl, "start", lambda *args, **kwargs: None)
+
+    def run_frame(code, env_id, timeout, *, deadline=None):
+        frames.append(code)
+        return {"env": 1, "messages": [], "sorries": []}
+
+    monkeypatch.setattr(repl, "_run", run_frame)
+
+    assert repl.run_disposable("#check Nat") == {
+        "messages": [],
+        "sorries": [],
+    }
+    assert frames == ["import REPL\n#check Nat"]
+
+
+def test_legacy_header_schema_fails_closed_on_warmup_composition(monkeypatch):
+    legacy_output = json.dumps(
+        {
+            "imports": [
+                {
+                    "errors": [],
+                    "imports": [
+                        {"module": "Init", "importAll": False},
+                    ],
+                }
+            ]
+        }
+    )
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(
+            allowed_imports=frozenset({"REPL"}),
+            warmup_imports=frozenset({"REPL"}),
+            header_deps_command=_fake_header_deps(legacy_output),
+        )
+    )
+    frames = []
+    monkeypatch.setattr(repl, "start", lambda *args, **kwargs: None)
+
+    def run_frame(code, env_id, timeout, *, deadline=None):
+        frames.append(code)
+        return {"env": 1, "messages": [], "sorries": []}
+
+    monkeypatch.setattr(repl, "_run", run_frame)
+
+    assert repl.run_disposable("#check Nat") == {
+        "messages": [],
+        "sorries": [],
+    }
+    # The legacy schema has neither isModule nor isMeta, so it cannot prove
+    # that prefixing an import preserves a prelude/module header. Keep the
+    # validated user frame exact instead of consulting a handwritten parser.
+    assert frames == ["#check Nat"]
 
 
 class _PipeProcess:

@@ -76,7 +76,7 @@ MAX_REQUEST_ID_CHARS = 128
 # They keep the daemon's work inside the client's response deadline even when
 # an inactive project must be replaced first.
 LSP_STARTUP_BUDGET = 60.0
-LSP_CLOSE_BUDGET = 65.0
+LSP_CLOSE_BUDGET = 67.0
 
 
 class ProjectResourceBusyError(TimeoutError):
@@ -1003,8 +1003,8 @@ class LeanRuntimeServices:
                 except LspBusyError:
                     raise
                 except (LspProtocolError, TimeoutError, OSError):
-                    session.abort()
                     self.lsp_projects.invalidate(str(root), session)
+                    session.abort()
                     raise
             return format_lsp_diagnostics(diagnostics)
         if method == "lsp.hover":
@@ -1026,8 +1026,8 @@ class LeanRuntimeServices:
                 except LspBusyError:
                     raise
                 except (LspProtocolError, TimeoutError, OSError):
-                    session.abort()
                     self.lsp_projects.invalidate(str(root), session)
+                    session.abort()
                     raise
             return result or "No hover information at this position."
         raise ValueError(f"unknown Lean runtime method: {method}")

@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import os
+import signal
+import subprocess
+import sys
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,9 +18,13 @@ from servers.lsp import server as lsp
 
 class _FakeProcess:
     def __init__(self) -> None:
+        self.pid = 1234
         self.returncode: int | None = None
         self.killed = False
         self.waited = False
+        self.stdin = None
+        self.stdout = None
+        self.stderr = None
 
     def poll(self):
         return self.returncode
@@ -48,7 +56,21 @@ def test_json_rpc_error_response_raises_protocol_error(monkeypatch):
 
 def test_start_aborts_process_when_initialize_fails(monkeypatch):
     process = _FakeProcess()
-    monkeypatch.setattr(lsp.subprocess, "Popen", lambda *args, **kwargs: process)
+    launch_kwargs = {}
+
+    def popen(*args, **kwargs):
+        launch_kwargs.update(kwargs)
+        return process
+
+    def cleanup(candidate, process_group_id, deadline):
+        assert candidate is process
+        assert process_group_id == process.pid
+        assert deadline > lsp.time.monotonic()
+        candidate.kill()
+        candidate.wait()
+
+    monkeypatch.setattr(lsp.subprocess, "Popen", popen)
+    monkeypatch.setattr(lsp, "_kill_subprocesses", cleanup)
 
     session = lsp.LeanLspSession(lsp.LspConfig())
 
@@ -62,7 +84,227 @@ def test_start_aborts_process_when_initialize_fails(monkeypatch):
 
     assert process.killed is True
     assert process.waited is True
+    assert launch_kwargs["start_new_session"] is True
     assert session.process is None
+    assert session.is_clean()
+
+
+def test_start_retries_cleanup_before_releasing_failed_session(monkeypatch):
+    process = _FakeProcess()
+    cleanup_calls = 0
+    delays = []
+
+    monkeypatch.setattr(lsp.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    def cleanup(candidate, process_group_id, deadline):
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        if cleanup_calls == 1:
+            raise RuntimeError("cleanup failed")
+        candidate.kill()
+        candidate.wait()
+
+    monkeypatch.setattr(lsp, "_kill_subprocesses", cleanup)
+    monkeypatch.setattr(lsp.time, "sleep", delays.append)
+    session = lsp.LeanLspSession(lsp.LspConfig())
+    monkeypatch.setattr(
+        session,
+        "_send_request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            lsp.LspProtocolError("initialize rejected")
+        ),
+    )
+
+    with pytest.raises(lsp.LspProtocolError, match="initialize rejected"):
+        session.start()
+
+    assert cleanup_calls == 2
+    assert delays == [lsp.LSP_CLEANUP_RETRY_SECONDS]
+    assert session.is_clean()
+
+
+def test_start_preserves_cleanup_cancellation_after_verified_retry(monkeypatch):
+    process = _FakeProcess()
+    cleanup_calls = 0
+
+    monkeypatch.setattr(lsp.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    def cleanup(candidate, process_group_id, deadline):
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        if cleanup_calls == 1:
+            raise KeyboardInterrupt("cleanup cancelled")
+        candidate.kill()
+        candidate.wait()
+
+    monkeypatch.setattr(lsp, "_kill_subprocesses", cleanup)
+    monkeypatch.setattr(lsp.time, "sleep", lambda _delay: None)
+    session = lsp.LeanLspSession(lsp.LspConfig())
+    monkeypatch.setattr(
+        session,
+        "_send_request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            lsp.LspProtocolError("initialize rejected")
+        ),
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="cleanup cancelled") as raised:
+        session.start()
+
+    assert cleanup_calls == 2
+    assert session.is_clean()
+    if hasattr(raised.value, "add_note"):
+        assert raised.value.__notes__ == [
+            "Lean LSP startup also failed: initialize rejected"
+        ]
+
+
+def test_lsp_cleanup_retains_ownership_until_a_retry_succeeds(monkeypatch):
+    process = _FakeProcess()
+    session = lsp.LeanLspSession(lsp.LspConfig())
+    session.process = process
+    session._process_group_id = process.pid
+    cleanup_calls = 0
+
+    def cleanup(candidate, process_group_id, deadline):
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        assert candidate is process
+        assert process_group_id == process.pid
+        if cleanup_calls == 1:
+            raise RuntimeError("cleanup failed")
+        candidate.kill()
+        candidate.wait()
+
+    monkeypatch.setattr(lsp, "_kill_subprocesses", cleanup)
+    monkeypatch.setattr(
+        session,
+        "_send_request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("graceful failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        session.close()
+
+    assert session.process is process
+    assert session._process_group_id == process.pid
+    assert session._retire_pending is True
+    assert not session.is_alive()
+    assert not session.is_clean()
+
+    session.close()
+
+    assert cleanup_calls == 2
+    assert session.process is None
+    assert session._process_group_id is None
+    assert session.is_clean()
+
+
+def test_lsp_cleanup_accepts_a_pipe_error_only_after_the_fd_is_closed(monkeypatch):
+    class ClosedThenError:
+        closed = False
+
+        def close(self):
+            self.closed = True
+            raise BrokenPipeError("closed with buffered error")
+
+    process = _FakeProcess()
+    process.stdin = ClosedThenError()
+    session = lsp.LeanLspSession(lsp.LspConfig())
+    session.process = process
+    session._process_group_id = process.pid
+
+    def cleanup(candidate, process_group_id, deadline):
+        candidate.kill()
+        candidate.wait()
+
+    monkeypatch.setattr(lsp, "_kill_subprocesses", cleanup)
+
+    session.abort()
+
+    assert process.stdin.closed
+    assert session.is_clean()
+
+
+def test_lsp_cleanup_quarantines_an_fd_that_cannot_be_closed(monkeypatch):
+    class RetryableStream:
+        closed = False
+        fail = True
+
+        def close(self):
+            if self.fail:
+                raise OSError("fd still owned")
+            self.closed = True
+
+    process = _FakeProcess()
+    process.stdin = RetryableStream()
+    session = lsp.LeanLspSession(lsp.LspConfig())
+    session.process = process
+    session._process_group_id = process.pid
+    monkeypatch.setattr(
+        lsp,
+        "_kill_subprocesses",
+        lambda candidate, process_group_id, deadline: (
+            candidate.kill(),
+            candidate.wait(),
+        ),
+    )
+
+    with pytest.raises(OSError, match="fd still owned"):
+        session.abort()
+
+    assert session.process is process
+    assert session._retire_pending
+    assert not session.is_clean()
+
+    process.stdin.fail = False
+    session.abort()
+
+    assert process.stdin.closed
+    assert session.is_clean()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")
+def test_lsp_cleanup_kills_descendant_after_server_wrapper_exits():
+    wrapper = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import subprocess, sys; "
+                "child = subprocess.Popen([sys.executable, '-c', "
+                "'import time; time.sleep(30)']); "
+                "print(child.pid, flush=True)"
+            ),
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    assert wrapper.stdout is not None
+    child_pid = int(wrapper.stdout.readline())
+    wrapper.wait(timeout=2)
+
+    session = lsp.LeanLspSession(lsp.LspConfig())
+    session.process = wrapper
+    session._process_group_id = wrapper.pid
+    try:
+        session.abort()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("LSP descendant survived process-group cleanup")
+        assert session.is_clean()
+    finally:
+        try:
+            os.kill(child_pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def test_diagnostics_wait_through_initial_quiet_period(monkeypatch):

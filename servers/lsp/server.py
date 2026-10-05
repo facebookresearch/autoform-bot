@@ -22,10 +22,14 @@ if TYPE_CHECKING:
 
 from servers import resolve_lean_project_dir
 from servers.lean_client import LeanRuntimeClient
+from servers.repl.core import _kill_subprocesses
 
 logger = getLogger(__name__)
 
 DEFAULT_LSP_TIMEOUT = 60
+DEFAULT_LSP_CLEANUP_SECONDS = 2.0
+LSP_CLEANUP_RETRY_SECONDS = 0.05
+MAX_LSP_CLEANUP_RETRY_SECONDS = 1.0
 MAX_LSP_HEADER_BYTES = 16 * 1024
 MAX_LSP_MESSAGE_BYTES = 16 * 1024 * 1024
 
@@ -53,6 +57,8 @@ class LeanLspSession:
     def __init__(self, config: LspConfig) -> None:
         self.config = config
         self.process: subprocess.Popen | None = None
+        self._process_group_id: int | None = None
+        self._retire_pending = False
         self._request_id = 0
         self._lock = threading.Lock()
         # A session has one stdout stream. Serialize the complete document
@@ -65,15 +71,18 @@ class LeanLspSession:
         env = os.environ.copy()
         env.pop("PYTHONPATH", None)
 
-        self.process = subprocess.Popen(
-            self.config.lake_command,
-            cwd=self.config.cwd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            env=env,
-        )
-
         try:
+            self.process = subprocess.Popen(
+                self.config.lake_command,
+                cwd=self.config.cwd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                env=env,
+                start_new_session=True,
+            )
+            self._process_group_id = self.process.pid
+            self._retire_pending = False
+
             # An initialize response must be an InitializeResult object. A
             # timeout, JSON-RPC error, or malformed result means the backing
             # Lean server is unusable, so do not expose an apparently healthy
@@ -90,31 +99,121 @@ class LeanLspSession:
                 )
 
             self._send_notification("initialized", {})
-        except BaseException:
-            self._abort_process()
+        except BaseException as error:
+            self._abort_until_clean(original_error=error)
             raise
 
+    @staticmethod
+    def _close_process_streams(process: subprocess.Popen) -> BaseException | None:
+        """Close every pipe, retaining any cancellation raised after closure."""
+        cancellation: BaseException | None = None
+        for stream_name in ("stdin", "stdout", "stderr"):
+            stream = getattr(process, stream_name, None)
+            if stream is None or stream.closed:
+                continue
+            try:
+                stream.close()
+            except BaseException as error:
+                if not stream.closed:
+                    # The descriptor may still be owned. Retain the process
+                    # handle so a later close can retry without an fd leak.
+                    raise
+                if not isinstance(error, Exception) and cancellation is None:
+                    cancellation = error
+                else:
+                    logger.warning(
+                        "Lean LSP pipe reported an error after closing",
+                        exc_info=True,
+                    )
+        return cancellation
+
     def _abort_process(self) -> None:
-        """Force-close the backing process without attempting more JSON-RPC."""
-        process, self.process = self.process, None
-        if process is None or process.poll() is not None:
+        """Force-close and verify the complete backing process group."""
+        process = self.process
+        process_group_id = self._process_group_id
+        if process is None:
+            if process_group_id is not None:
+                raise RuntimeError("Lean LSP process-group ownership is inconsistent")
+            self._retire_pending = False
             return
+
+        self._retire_pending = True
+        if process_group_id is None:
+            process_group_id = process.pid
+            self._process_group_id = process_group_id
+
+        cancellation: BaseException | None = None
         try:
-            process.kill()
-            process.wait(timeout=5)
-        except Exception:
-            pass
+            _kill_subprocesses(
+                process,
+                process_group_id,
+                time.monotonic() + DEFAULT_LSP_CLEANUP_SECONDS,
+            )
+            cancellation = self._close_process_streams(process)
+        except BaseException:
+            # Keep both handles so the cache can quarantine this session and a
+            # later close can retry without losing ownership.
+            raise
+        else:
+            self.process = None
+            self._process_group_id = None
+            self._retire_pending = False
+        if cancellation is not None:
+            raise cancellation.with_traceback(cancellation.__traceback__)
+
+    def _abort_until_clean(
+        self,
+        *,
+        original_error: BaseException | None = None,
+    ) -> None:
+        """Retain failed-start ownership until cleanup can be verified."""
+        delay = LSP_CLEANUP_RETRY_SECONDS
+        cancellation: BaseException | None = None
+        while True:
+            try:
+                self._abort_process()
+                break
+            except BaseException as error:
+                if not isinstance(error, Exception) and cancellation is None:
+                    cancellation = error
+                logger.exception(
+                    "Lean LSP startup cleanup remains incomplete; retaining ownership"
+                )
+                time.sleep(delay)
+                delay = min(delay * 2, MAX_LSP_CLEANUP_RETRY_SECONDS)
+        if cancellation is not None:
+            if original_error is not None:
+                add_note = getattr(cancellation, "add_note", None)
+                if add_note is not None:
+                    add_note(f"Lean LSP startup also failed: {original_error}")
+            raise cancellation.with_traceback(cancellation.__traceback__)
 
     def close(self) -> None:
-        """Shut down the language server."""
-        if self.process and self.process.poll() is None:
+        """Shut down gracefully, then verify the whole process group is gone."""
+        process = self.process
+        cancellation: BaseException | None = None
+        if process is not None and not self._retire_pending and process.poll() is None:
             try:
                 self._send_request("shutdown", {})
                 self._send_notification("exit", {})
-                self.process.wait(timeout=5)
+                process.wait(timeout=5)
             except Exception:
-                self._abort_process()
-        self.process = None
+                # A failed graceful exchange is expected to fall through to the
+                # verified process-group cleanup below.
+                pass
+            except BaseException as error:
+                cancellation = error
+        try:
+            self._abort_process()
+        except BaseException as cleanup_error:
+            if cancellation is not None:
+                add_note = getattr(cancellation, "add_note", None)
+                if add_note is not None:
+                    add_note(f"Lean LSP process cleanup also failed: {cleanup_error}")
+                raise cancellation.with_traceback(cancellation.__traceback__)
+            raise
+        if cancellation is not None:
+            raise cancellation.with_traceback(cancellation.__traceback__)
 
     def abort(self) -> None:
         """Discard a protocol stream that can no longer be shared safely."""
@@ -122,7 +221,15 @@ class LeanLspSession:
 
     def is_alive(self) -> bool:
         """Return whether the cached language-server child can accept work."""
-        return self.process is not None and self.process.poll() is None
+        return (
+            self.process is not None
+            and not self._retire_pending
+            and self.process.poll() is None
+        )
+
+    def is_clean(self) -> bool:
+        """Return whether no live or unreaped LSP process group is owned."""
+        return self.process is None and self._process_group_id is None
 
     def get_diagnostics(self, file_path: str) -> list[dict]:
         """Open a file and collect diagnostics from the language server."""

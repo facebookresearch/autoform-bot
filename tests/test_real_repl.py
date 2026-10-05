@@ -56,6 +56,16 @@ def test_disposable_call_matches_the_pinned_repl_protocol():
         ((), "import «REPL.X»\n", "Disallowed imports: «REPL"),
         ((), "import «REPL\n", "Rejected Lean header"),
         ((), "import REPL.Frontend\n#check Nat", None),
+        (
+            ("REPL",),
+            "module\npublic import REPL.Frontend\n",
+            None,
+        ),
+        (
+            ("REPL",),
+            "prelude\nimport REPL.Frontend\n#check Nat",
+            None,
+        ),
     ],
 )
 def test_disposable_imports_are_checked_by_lean_itself(warmup, code, expected_error):
@@ -93,7 +103,9 @@ def test_runtime_calls_do_not_share_lean_state(runtime_dir, monkeypatch):
         response_timeout=300,
         startup_timeout=30,
     )
-    declaration = "theorem autoform_isolation_probe : True := True.intro"
+    declaration = (
+        "theorem autoform_isolation_probe (P : Prop) (h : P) : P := h"
+    )
     try:
         responses = [
             client.request(

@@ -2073,3 +2073,46 @@ def test_failed_lsp_session_is_replaced_on_the_next_call(tmp_path):
         assert sessions[0].closed is True
     finally:
         services.close()
+
+
+def test_failed_lsp_session_is_invalidated_before_abort_cleanup(tmp_path, monkeypatch):
+    from servers.lsp.server import LspProtocolError
+
+    project = make_lake_project(tmp_path, "lsp-abort-order")
+    source = project / "Main.lean"
+    source.write_text("#check Nat\n")
+    events = []
+
+    class Session(FakeLsp):
+        def get_diagnostics(self, file_path):
+            raise LspProtocolError("broken shared stream")
+
+        def abort(self):
+            events.append("abort")
+            raise RuntimeError("cleanup failed")
+
+        def close(self):
+            events.append("close")
+            self.closed = True
+
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=FakePool,
+        lsp_factory=Session,
+        start_sweepers=False,
+    )
+    original_invalidate = services.lsp_projects.invalidate
+
+    def invalidate(project_dir, session):
+        events.append("invalidate")
+        original_invalidate(project_dir, session)
+
+    monkeypatch.setattr(services.lsp_projects, "invalidate", invalidate)
+    try:
+        params = {"project_dir": str(project), "file_path": "Main.lean"}
+        with pytest.raises(RuntimeError, match="cleanup failed"):
+            services.dispatch("lsp.diagnostics", params)
+        assert events[:3] == ["invalidate", "abort", "close"]
+        assert services.lsp_projects.state(str(project)) == "cold"
+    finally:
+        services.close()
