@@ -37,4 +37,5 @@ def on_post_build(*, config) -> None:
     index.write_text(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
+        newline="\n",
     )

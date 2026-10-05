@@ -8,28 +8,23 @@ description: >-
 # Develop Autoform from consumer nudges
 
 Treat Autoform as an example-based plugin in an independent formalization
-repository. Use the Cabannes thesis as executable consumer.
+repository.
 
-Inspect the worktree, state a consumer scenario, observe installed behavior,
+Inspect the worktree; state a consumer scenario, observe installed behavior,
 and name the invariant. Treat user nudges as product evidence: preserve the
-insight, not the transcript, in an owning-skill trigger, rule, focused test,
-and assertion; future agents need less steering.
+insight, not the transcript, as a trigger, test, and assertion.
+Thus future agents need less steering.
 
-Implement reusable behavior. Keep Cabannes-specific facts in examples and
-references. Keep roots distinct. Agents can infer routine details; record only
-fragile constraints.
+Keep Cabannes-specific facts in examples. Keep plugin and formalization roots
+distinct. Agents can infer routine details; record only fragile constraints.
 
-Source indexes, revisions, and links form one evidence boundary. Require
-retained descriptors; repeated pathname reads are not a generation boundary.
-Read bounded generated-output markers before descendants, keeping each marker
-schema in its owning feature. Auto-detected links must match the blob at the
-stable detected commit.
+Source indexes, revisions, and links are one evidence boundary: require retained
+descriptors because repeated pathname reads are not a generation boundary.
+Keep each marker schema in its owning feature. Auto-detected links must match
+the blob at the stable detected commit.
 
-Treat client-side scale as a publication contract. Material search stays
-title-only—one record per page, without section or body records—unless measured
-browser memory proves a wider index safe.
-Keep shared agent entrypoints concise and link command or schema details through
-on-demand references.
+Client-side scale is a publication contract. Keep Material search title-only—one
+record per page. Keep shared agent entrypoints concise and use on-demand references.
 
 Run focused checks, then normally run:
 
@@ -41,6 +36,6 @@ make check-example
 
 Run `lake build` when example Lean results change. Validate edited skills and
 the manifest with skill-creator and plugin-creator. Use cachebuster and reinstall
-only to test installed discovery in a new thread. Report outcome and checks.
-Treat rewritten private declaration safety as fail-closed evidence: correlate
-the official user name to its lexical declaration by source coordinates.
+only for discovery in a new thread. Treat rewritten private
+declaration safety as fail-closed evidence: correlate the official user name to
+its lexical declaration by source coordinates.
