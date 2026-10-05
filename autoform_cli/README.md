@@ -604,22 +604,29 @@ SECONDS` sets the probe's budget, 600 seconds by default. The report lists:
 - helpers that no article names, each with an owner when one exists: the
   article naming its nearest ancestor by name, such as `Foo` for `Foo.aux`;
 - impacted articles without a Markdown dependency path to the revised article;
+- in `unused_statement_dependencies`, the stated articles whose Markdown
+  statement rests on the revised article, directly or through other statement
+  dependencies, but which are not statement-impacted: a dependent whose Lean
+  inlines a revised definition's body instead of naming it shows no use, yet
+  its statement changes meaning with the revision;
 - every deprecated project declaration with its replacement, its users, not
   counting companions Lean generates for it such as `X.eq_1`, and the other
   articles whose `lean:` names it, and in `deprecated_unused` those with no
   users and no such article;
 - the claim targets: the revised article's first, then every impacted
-  article's, every helper owner's, and, for a helper without an owner, a
-  `lean/<slug>-<digest>` key derived from its name, so two revisions touching
-  the same helper contend for the same claim; each helper reports its key as
-  `claim_target`. A revised declaration that no article names is claimed the
-  same way, under its owner's target or its own key.
+  article's, every unused statement dependency's, every helper owner's, and,
+  for a helper without an owner, a `lean/<slug>-<digest>` key derived from its
+  name, so two revisions touching the same helper contend for the same claim;
+  each helper reports its key as `claim_target`. A revised declaration that no
+  article names is claimed the same way, under its owner's target or its own
+  key.
 
-A revision is `contained` when no other article uses it and every helper it
-impacts or revises belongs to the revised article, so its only claim target is
-that article's; it can then be made in place under
-that article's claim. A declaration derived from a revised one without naming
-it in its statement changes with it, but `work impact` does not report that
+A revision is `contained` when no other article uses it, it has no unused
+statement dependency, and every helper it impacts or revises belongs to the
+revised article, so its only claim target is that article's; it can then be
+made in place under that article's claim. A declaration derived from a
+revised one without naming it in its statement changes with it, but `work
+impact` does not report that
 declaration's users: the additive form `to_additive` writes, which goes
 unreported itself, or a direction `alias ⟨mp, mpr⟩ :=` takes of an `Iff`, which
 shows only as proof-impacted. Check such derivations on the revised set by
@@ -932,7 +939,8 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
      deprecated, `sorry`'d X, show "conditional, assumes R" although R's text
      now describes X', and keep X out of `deprecated_unused`, so R could never
      record its proof. The claim set is every article whose frontmatter or
-     Lean changes: R, the statement-impacted articles, and, in that case, the
+     Lean changes: R, the statement-impacted articles, the unused statement
+     dependencies, and, in that case, the
      proof-impacted ones.
    - **In place**, only when X and X' cannot coexist, for example an instance
      or a structure change: the claim set is every `claim_targets` entry.
@@ -952,6 +960,12 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
      uses it. When neither applies, the
      revision is blocked: release the claims and report it. Record what
      happened under `## Execution notes` of each touched article.
+
+   An unused statement dependency, which rules out the contained route, is
+   re-reviewed under X's new meaning like a statement-impacted article: it
+   keeps `statement` only after an Agent Review of its source faithfulness;
+   otherwise it records `statement: retracted`, loses `proof`, and keeps
+   `lean:`.
 3. Claim the route's claim set with one `autoform claim acquire`. When it is
    refused, release everything and report the held claim as the blocker. After
    acquiring, re-run `work impact`; if the set grew, release and start over
