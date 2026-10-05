@@ -242,7 +242,13 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
     assert 'refs.canvas.setAttribute("aria-hidden", "true")' in script
     assert 'refs.stage.setAttribute("role", "region")' in script
     assert 'toolbar.setAttribute("role", "toolbar")' in script
+    assert 'element("div", "bp-dag-main")' in script
+    assert 'element("main", "bp-dag-main")' not in script
     assert 'refs.announcement.setAttribute("aria-live", "polite")' in script
+    assert 'refs.sheetHandle.setAttribute("aria-controls", refs.inspectorInner.id)' in script
+    assert 'refs.inspectorInner.setAttribute("inert", "")' in script
+    assert 'refs.inspectorInner.setAttribute("aria-hidden", "true")' in script
+    assert 'window.addEventListener("resize", syncSheetAccessibility)' in script
     assert "control.dataset.autoformNodeId = node.id" in script
     assert 'key === "ArrowLeft"' in script
     assert "new ResizeObserver(resize)" in script
@@ -252,6 +258,7 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
     assert "touch-action: none" not in container
     assert 'url.origin === window.location.origin' in script
     assert 'if (target === current) return' in script
+    assert 'state.selected && !state.selectedStatuses.has(state.selected.status)' in script
     assert 'w: node.width, h: node.height' in script
     assert 'spotlight.before.has(edge.source) && spotlight.before.has(edge.target)' in script
     assert 'spotlight.after.has(edge.source) && spotlight.after.has(edge.target)' in script
@@ -271,13 +278,14 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
 def test_explorer_pages_large_searches_and_relations_and_fits_deep_graphs() -> None:
     script = dag_viewer.viewer_script()
 
-    assert "SEARCH_PAGE = 50, RELATION_PAGE = 50, MIN_SCALE = .002" in script
+    assert "MIN_SCALE = .002, FIT_MIN_SCALE = .00001" in script
     assert '"Show all "' not in script
     assert "Math.min(matches.length, state.searchLimit + SEARCH_PAGE)" in script
     assert "Math.min(visible + RELATION_PAGE, ids.length)" in script
     assert "ids.slice(visible, next)" in script
-    assert "clamp(old * factor, MIN_SCALE, 4)" in script
-    assert "height), MIN_SCALE, 1.35)" in script
+    assert "old < MIN_SCALE ? FIT_MIN_SCALE : MIN_SCALE" in script
+    assert "clamp(old * factor, floor, 4)" in script
+    assert "height), FIT_MIN_SCALE, 1.35)" in script
 
 
 def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path) -> None:
