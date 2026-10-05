@@ -1256,6 +1256,99 @@ def test_an_interrupt_between_cards_says_what_it_left_filed(
     assert len(load_readbacks(blueprint)) == 2
 
 
+@pytest.mark.parametrize("deleted", [False, True], ids=["edited", "deleted"])
+def test_an_article_edited_while_the_batch_publishes_stops_before_its_card(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], deleted: bool
+) -> None:
+    """Each article is read again just before its card is written."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    other = (blueprint / "roadmap" / "basics" / "other.md").resolve()
+    publish = main.__globals__["publish_readback"]
+
+    def publish_then_edit_the_other_article(card: object) -> Path:
+        path = publish(card)
+        if deleted:
+            other.unlink(missing_ok=True)
+        else:
+            other.write_text(other.read_text(encoding="utf-8") + "\nAn edit.\n", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish_then_edit_the_other_article)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    captured = capsys.readouterr()
+    assert set(load_readbacks(blueprint)) == {(_RESULT_ID, "Review.result")}
+    assert captured.out.endswith(": recorded read-back for Review.result\n")
+    assert "1 of 2 read-back(s) were filed before the failure below" in captured.err
+    assert (
+        f"error: Review.other: article {other} changed after its evidence was checked, so its card was not filed; "
+        "rerun the record, after review prepare if the change is to that evidence\n"
+    ) in captured.err
+
+
+def test_an_article_that_is_a_link_is_read_again_through_the_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An article may be a link to another file inside roadmap/. Pointing the
+    link at a different file changes the article as an edit does, though the
+    file it pointed to is untouched."""
+
+    class CanonicalExtraction(_Extraction):
+        """Names each article by the file it resolves to, as the real extraction does."""
+
+        def __call__(self, *args: object, **kwargs: object) -> SkeletonReport:
+            report = super().__call__(*args, **kwargs)
+            graph = load_graph(args[0])
+            paths = {node.id: node.path.relative_to(graph.blueprint_dir).as_posix() for node in graph.nodes.values()}
+            return replace(report, nodes=tuple(replace(node, article_path=paths[node.node_id]) for node in report.nodes))
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, CanonicalExtraction())
+    chapter = blueprint.resolve() / "roadmap" / "basics"
+    other = chapter / "other.md"
+    text = other.read_text(encoding="utf-8")
+    (chapter / "other-1.txt").write_text(text, encoding="utf-8")
+    (chapter / "other-2.txt").write_text(text.replace("Truth holds.", "Falsehood holds."), encoding="utf-8")
+    other.unlink()
+    other.symlink_to("other-1.txt")
+    prepare = ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle)]
+    assert main(prepare) == 0
+    publish = main.__globals__["publish_readback"]
+
+    def publish_then_point_the_other_article_elsewhere(card: object) -> Path:
+        path = publish(card)
+        other.unlink()
+        other.symlink_to("other-2.txt")
+        return path
+
+    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish_then_point_the_other_article_elsewhere)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    captured = capsys.readouterr()
+    filed = load_readbacks(blueprint)
+    assert set(filed) == {(_RESULT_ID, "Review.result")}
+    assert "1 of 2 read-back(s) were filed before the failure below" in captured.err
+    assert (
+        f"error: Review.other: article {other} changed after its evidence was checked, so its card was not filed; "
+        "rerun the record, after review prepare if the change is to that evidence\n"
+    ) in captured.err
+
+    # The change is to the statement, so the record alone is refused, and
+    # after review prepare it files the rest.
+    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish)
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+    assert "prepared review evidence differs" in capsys.readouterr().err
+    assert main(prepare) == 0
+    assert _record(blueprint, bundle, manifest, tmp_path) == 0
+    after = load_readbacks(blueprint)
+    assert set(after) == {(_OTHER_ID, "Review.other"), (_RESULT_ID, "Review.result")}
+    assert after[(_RESULT_ID, "Review.result")] == filed[(_RESULT_ID, "Review.result")]
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [

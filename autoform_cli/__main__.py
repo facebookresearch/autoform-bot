@@ -833,6 +833,12 @@ def _review_record(args: argparse.Namespace) -> int:
         _refuse_conflicts(_planned_records(args.blueprint_dir, inputs, model=args.model))
         graph = load_graph(args.blueprint_dir)
         before = _record_snapshot(graph, requests)
+        # Each card's article is read again before the card is written, by its
+        # name rather than the file it resolves to, so that a link pointed at
+        # another file is seen.
+        articles = {
+            article_id: (_named_article_path(graph, node_id), digest) for article_id, node_id, _, digest in before
+        }
         # One extraction serves every record in the batch.
         skeleton = extract_skeletons(
             args.blueprint_dir,
@@ -868,6 +874,11 @@ def _review_record(args: argparse.Namespace) -> int:
         # its own compare-and-swap, and filing identical content is a no-op, so
         # a batch interrupted here is completed by running it again.
         for card in cards:
+            # Its article is read again just before the card is written. That
+            # narrows the window without closing it: an edit after this read,
+            # while the card is written, goes unseen, and so does an edit to a
+            # source the article cites, which only the reload above compares.
+            _refuse_changed_article(card, *articles[card.article_id])
             written.append((publish_readback(card), card.declaration))
     except (GraphValidationError, ReviewError, SkeletonError) as exc:
         _report_recorded(written, len(requests))
@@ -1037,6 +1048,42 @@ def _record_snapshot(graph: Graph, requests: tuple[RecordRequest, ...]) -> tuple
         node = matches[0]
         state[request.article_id] = (request.article_id, node.id, str(node.path), node.source_sha256 or "")
     return tuple(sorted(state.values()))
+
+
+def _named_article_path(graph: Graph, node_id: str) -> str:
+    """The path the blueprint names an article by, which for a link is the link.
+
+    ``load_graph`` keeps the file a link resolves to, and reading that file
+    again would miss the link being pointed at another one. The name is the
+    candidate for the article's id that resolves to the loaded file; if none
+    does, the article changed after the load, which the reload after the
+    extraction refuses.
+    """
+
+    roadmap = graph.blueprint_dir / "roadmap"
+    path = str(graph.nodes[node_id].path)
+    names = (roadmap / f"{node_id}.md", roadmap / node_id / "README.md", roadmap / "README.md")
+    return next((str(name) for name in names if os.path.realpath(name) == path), path)
+
+
+def _refuse_changed_article(card: PreparedReadback, path: str, digest: str) -> None:
+    """Refuse to file ``card`` unless its article's file still holds the bytes its evidence was checked against."""
+
+    try:
+        unchanged = hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest
+    except FileNotFoundError:
+        unchanged = False
+    if not unchanged:
+        raise ReviewError(
+            [
+                ReviewFinding(
+                    card.article_id,
+                    "review-snapshot-changed",
+                    f"{card.declaration}: article {path} changed after its evidence was checked, so its card was not "
+                    "filed; rerun the record, after review prepare if the change is to that evidence",
+                )
+            ]
+        )
 
 
 def _prepare_records(

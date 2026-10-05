@@ -825,8 +825,12 @@ blueprint is then reloaded, and nothing is filed if a selected article changed
 while Lean ran or the reloaded blueprint is not the one the extraction saw.
 Every card is built and checked before the first is written,
 so one bad record stops the batch. Publishing then goes card by card, each
-under its own compare-and-swap; a concurrent writer or a failed write (a full
-disk, or an I/O or permission error) can stop it midway. The command says how
+under its own compare-and-swap, and each card's article is read again just
+before it is written; a concurrent writer, an edit to an article whose card is
+not yet written, or a failed write (a full disk, or an I/O or permission error)
+can stop it midway. Only the article's own file is read again, through the
+link if the article is one, and an edit after that read, while the card is
+written, goes unseen. The command says how
 many cards it filed, and because filing identical content is a no-op, running
 the same batch again once the cause is cleared completes it. When the cause is
 a card another writer filed, replaced, or removed meanwhile, the batch's record
