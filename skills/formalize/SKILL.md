@@ -93,6 +93,14 @@ audit <PROJECT>/blueprint --lean-root <PROJECT>`. Resolve every finding this
 work introduced on the claimed article; report unrelated pre-existing findings
 instead of fixing them.
 
+If `<PROJECT>/blueprint/.autoform-review` exists, project CI also runs the
+statement-review gate: `autoform review check` fails on a formalized statement
+until Human Review has filed its read-backs and a person has approved it in
+`review_approved`. Never write either yourself. Add `--review` to the audit,
+report its findings on the claimed article, and hand each newly formalized
+statement to Human Review; until that review lands, the gate stays red wherever
+the result is integrated.
+
 Commit the verified result in its worktree, renew the claim, and rebase onto or
 merge the current shared branch. On the result, run the default `lake build`,
 confirm that dependency readiness is unchanged, and confirm that the claimed

@@ -134,7 +134,7 @@ tree.
    Pages label decides. The
    [CLI reference](../../autoform_cli/README.md#commands) states the full rule. When
    the person does not approve, record `revise` with their reason and hand the
-   change to Roadmap or Orchestrate.
+   change to Roadmap.
 6. Run the review-aware audit again before reporting. Treat missing testimony,
    unresolved extraction, an incomplete bundle, any packet or read-back
    mismatch, and any approval drift as failures. An edit to any reviewed input

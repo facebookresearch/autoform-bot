@@ -76,6 +76,9 @@ from. A refused acquire means another agent owns the article: leave it and
 report it. Claims write refs to the board's remote, which is outward-facing, so
 make sure the request covers them. When a revision changes a statement, remove
 the `statement`, `proof`, and `lean` metadata the new text no longer matches.
+When you remove `lean`, also remove `review_approved` and delete the article's
+read-back cards under `blueprint/readbacks/<article_id>/` for declarations it
+no longer maps, which `review check` otherwise reports as orphaned.
 For a Lean revision requested in Human Review, record the decision in the
 article and remove the assertions it invalidates there and on every dependent
 whose Lean uses the changed declaration, so Formalize takes the work up from its
