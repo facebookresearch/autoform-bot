@@ -432,8 +432,22 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'version: "0.12.1"' in verify
     assert "elan/releases/download/v4.2.3" in verify
     assert "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2" in verify
-    assert "github.ref == 'refs/heads/main'" in workflow
-    assert workflow.count('- "theme/**"') == 2
+    # Pages deploys only a commit that `autoform verify` passed on a push to
+    # this repository's main, and builds that commit rather than main's head.
+    assert "\nname: autoform verify\n" in verify
+    assert 'workflows: ["autoform verify"]' in workflow
+    assert "\n  push:" not in workflow
+    assert "github.ref" not in workflow
+    assert "ref: ${{ github.event.workflow_run.head_sha || github.sha }}" in workflow
+    assert '--ref "$SITE_REF"' in workflow
+    for guard in (
+        "github.event.workflow_run.conclusion == 'success'",
+        "github.event.workflow_run.event == 'push'",
+        "github.event.workflow_run.head_repository.full_name == github.repository",
+    ):
+        # The build job, the artifact upload, and the deploy job.
+        assert workflow.count(guard) == 3
+    assert workflow.count('- "theme/**"') == 1
     assert 'version: "0.12.1"' in workflow
     assert "@main" not in verify
 
