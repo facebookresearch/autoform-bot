@@ -13,7 +13,6 @@ from .core import ReplCleanupError, LeanRepl, LeanReplConfig
 
 logger = getLogger(__name__)
 
-DEFAULT_PORT = 8990
 DEFAULT_RAM_FRACTION = 0.5
 _CLEANUP_RETRY_INITIAL_SECONDS = 0.01
 _CLEANUP_RETRY_MAX_SECONDS = 1.0

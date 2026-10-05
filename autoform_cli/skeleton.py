@@ -18,6 +18,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import signal
 import shutil
 import stat
@@ -1374,7 +1375,13 @@ def _check_artifacts_fresh(
     )
     detail = (result.stderr or result.stdout).strip()
     if result.returncode == _LAKE_NO_BUILD_EXIT:
-        raise SkeletonError([f"Lean build artifacts are stale; run `lake build` before extracting skeletons\n{detail}"])
+        build_command = shlex.join(["lake", "build", *modules])
+        raise SkeletonError(
+            [
+                "Lean build artifacts are stale; run "
+                f"`{build_command}` before extracting skeletons\n{detail}"
+            ]
+        )
     if result.returncode != 0:
         raise SkeletonError(
             [
@@ -2098,6 +2105,7 @@ def extract_graph_skeletons(
     unresolved: list[UnresolvedTarget] = []
     imports: set[str] = set()
     roots: list[str] = []
+    root_modules: dict[str, str] = {}
     for node, names in selected:
         for name in names:
             if node.id in broken_passages:
@@ -2122,6 +2130,7 @@ def extract_graph_skeletons(
             imports.add(module)
             if name not in roots:
                 roots.append(name)
+                root_modules[name] = module
 
     records: dict[str, dict[str, object]] = {}
     snapshot_started_ns: int | None = None
@@ -2150,7 +2159,8 @@ def extract_graph_skeletons(
                     UnresolvedTarget(
                         node.id,
                         name,
-                        "not in the built environment; run `lake build`",
+                        "not in the built environment after importing "
+                        f"{root_modules[name]}; check the `lean:` target and declaring source",
                     )
                 )
                 continue

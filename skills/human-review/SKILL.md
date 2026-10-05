@@ -36,8 +36,9 @@ book, landing-page progress summary, cross-chapter graph, chapter graph, then
 individual node and Lean-source links. Record each human decision as `approve`, `revise`, or
 `block`, with the exact page or node and rationale. Separate validator output
 from the person's judgment. Do not silently apply requested revisions: hand
-mathematical-plan changes to Roadmap, Lean implementation changes to
-Orchestrate, and autonomous rubric scoring to Agent Review.
+mathematical-plan changes and Lean implementation changes to Roadmap, which
+reopens the affected articles for Formalize, and autonomous rubric scoring to
+Agent Review.
 
 Treat the landing page's `Scoped roadmap` percentage as completion among
 formalizable leaf targets that are fully proved, including every dependency

@@ -1,3 +1,7 @@
+---
+article_id: af_6a66262df857f7e0f4cfc87b
+---
+
 # Thesis roadmap
 
 The long-term goal is to identify and formalize the reusable mathematical core

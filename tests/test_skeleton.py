@@ -312,7 +312,7 @@ def test_probe_refuses_stale_artifacts_before_executing_lean(tmp_path: Path, mon
 
     monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
 
-    with pytest.raises(SkeletonError, match="build artifacts are stale"):
+    with pytest.raises(SkeletonError, match=r"run `lake build Skel.Main`"):
         run_probe(probe, tmp_path)
 
     assert calls == [["/bin/lake", "--rehash", "--no-build", "build", "Skel.Main"]]
@@ -1164,7 +1164,8 @@ def test_extraction_reports_names_the_sources_and_the_environment_lack(tmp_path:
 
     assert not report.clean
     assert tuple(issue.message for issue in report.unresolved) == (
-        "basics/ghost: Skel.ghost: not in the built environment; run `lake build`",
+        "basics/ghost: Skel.ghost: not in the built environment after importing "
+        "Skel.Main; check the `lean:` target and declaring source",
         "basics/phantom: Skel.doesNotExist: declaration not found in the Lean sources",
     )
     assert [node.node_id for node in report.nodes] == ["basics/determined", "basics/ghost", "basics/phantom"]
