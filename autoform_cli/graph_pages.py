@@ -278,16 +278,6 @@ def _article_link_ids(view: GraphView) -> tuple[str, ...]:
     return tuple(node.id for node in view.nodes if node.kind == "node")
 
 
-def _article_link_ids(view: GraphView) -> tuple[str, ...]:
-    """Return only view nodes whose links come from published articles.
-
-    Scope and boundary links are derived locally by this module. Asking the
-    renderer for every graph node on every scope page made a repository-wide
-    wiki spend quadratic time constructing links that the diagram never used.
-    """
-    return tuple(node.id for node in view.nodes if node.kind == "node")
-
-
 def _navigation(*items: tuple[str, str]) -> str:
     return " · ".join(f"[{label}]({href})" for label, href in items)
 
