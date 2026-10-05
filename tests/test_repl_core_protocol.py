@@ -737,6 +737,98 @@ def _patch_pipe_reads(monkeypatch, process: _PipeProcess):
     monkeypatch.setattr(repl_core.select, "select", fake_select)
 
 
+def test_disposable_call_uses_one_frame_and_removes_process_handles(monkeypatch):
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(
+            validate_imports=False,
+            warmup_imports=frozenset({"Mathlib"}),
+        )
+    )
+    starts = []
+    calls = []
+    closes = []
+
+    def close(**kwargs):
+        closes.append(kwargs)
+        repl.process = None
+        repl._process_group_id = None
+
+    def start(**kwargs):
+        starts.append(kwargs)
+        repl.process = object()
+        repl._process_group_id = 7
+
+    monkeypatch.setattr(repl, "close", close)
+    monkeypatch.setattr(repl, "start", start)
+
+    def run(code, env_id, timeout):
+        calls.append((code, env_id, timeout))
+        return {
+            "env": 4,
+            "messages": [],
+            "sorries": [{"goal": "False", "proofState": 8}],
+        }
+
+    monkeypatch.setattr(repl, "_run", run)
+
+    assert repl.run_disposable("#check Nat", timeout=3) == {
+        "messages": [],
+        "sorries": [{"goal": "False"}],
+    }
+    assert len(starts) == 1
+    assert starts[0]["warmup_imports"] == ()
+    assert 0 < starts[0]["startup_timeout"] <= 3
+    assert len(calls) == 1
+    assert calls[0][0] == "import Mathlib\n#check Nat"
+    assert calls[0][1] is None
+    assert len(closes) == 2
+
+
+def test_disposable_call_does_not_return_a_result_before_verified_cleanup(monkeypatch):
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(validate_imports=False, warmup_imports=frozenset())
+    )
+    close_calls = 0
+
+    def close(**kwargs):
+        nonlocal close_calls
+        close_calls += 1
+        if close_calls == 2:
+            raise RuntimeError("cleanup failed")
+        repl.process = None
+        repl._process_group_id = None
+
+    monkeypatch.setattr(repl, "close", close)
+    monkeypatch.setattr(repl, "start", lambda **kwargs: None)
+    monkeypatch.setattr(
+        repl,
+        "_run",
+        lambda **kwargs: {"env": 1, "messages": []},
+    )
+
+    with pytest.raises(repl_core.ReplCleanupError, match="was not returned") as error:
+        repl.run_disposable("#check Nat", timeout=1)
+
+    assert error.value.result == {"messages": []}
+
+
+def test_disposable_call_rejects_import_before_starting_a_process(monkeypatch):
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(
+            allowed_imports=frozenset({"Mathlib"}),
+            warmup_imports=frozenset(),
+        )
+    )
+    starts = []
+    monkeypatch.setattr(repl, "start", lambda **kwargs: starts.append(kwargs))
+
+    result = repl.run_disposable("import Unsafe\n#check Nat", timeout=1)
+
+    assert "Disallowed imports: Unsafe" in result["repl_error"]
+    assert starts == []
+    assert repl.is_clean()
+
+
 def test_response_timeout_after_full_write_is_not_retried(monkeypatch):
     repl = repl_core.LeanRepl(
         repl_core.LeanReplConfig(

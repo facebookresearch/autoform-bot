@@ -46,10 +46,9 @@ from servers.lsp.server import (
     LspProtocolError,
     format_lsp_diagnostics,
 )
-from servers.repl.core import DEFAULT_REPL_STARTUP_TIMEOUT, format_repl_response
+from servers.repl.core import format_repl_response
 from servers.repl.pool import (
     DEFAULT_RAM_FRACTION,
-    DEFAULT_STARTUP_STAGGER_SECONDS,
     LeanReplPool,
     LeanReplPoolConfig,
 )
@@ -80,12 +79,8 @@ class ProjectResourceBusyError(TimeoutError):
 
 
 def _repl_creation_budget(worker_count: int) -> float:
-    """Bound victim cleanup, cold startup, and failed-start cleanup."""
-    return (
-        worker_count * DEFAULT_REPL_STARTUP_TIMEOUT
-        + max(0, worker_count - 1) * DEFAULT_STARTUP_STAGGER_SECONDS
-        + 2 * worker_count * REPL_WORKER_CLOSE_BUDGET
-    )
+    """Bound cleanup of an evicted pool; cold slots spawn no subprocesses."""
+    return worker_count * REPL_WORKER_CLOSE_BUDGET
 
 
 def _positive_int(name: str, default: int) -> int:
@@ -218,7 +213,7 @@ class LeanRuntimeConfig:
         ):
             raise ValueError(
                 "AUTOFORM_RUNTIME_RESPONSE_TIMEOUT is too small for the configured "
-                "REPL worker startup and request limits"
+                "REPL pool replacement and request limits"
             )
         if (
             LSP_CLOSE_BUDGET

@@ -589,11 +589,11 @@ def test_per_project_workers_cannot_exceed_node_budget(monkeypatch):
         LeanRuntimeConfig.from_environment()
 
 
-def test_response_budget_includes_replacement_and_failed_pool_cleanup(monkeypatch):
+def test_response_budget_includes_pool_replacement_cleanup(monkeypatch):
     monkeypatch.setenv("AUTOFORM_REPL_TOTAL_WORKERS", "3")
     monkeypatch.setenv("AUTOFORM_REPL_WORKERS_PER_PROJECT", "3")
-    monkeypatch.setenv("AUTOFORM_RUNTIME_RESPONSE_TIMEOUT", "860")
-    with pytest.raises(ValueError, match="REPL worker startup"):
+    monkeypatch.setenv("AUTOFORM_RUNTIME_RESPONSE_TIMEOUT", "299")
+    with pytest.raises(ValueError, match="REPL pool replacement"):
         LeanRuntimeConfig.from_environment()
 
 

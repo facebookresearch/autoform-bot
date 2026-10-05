@@ -15,7 +15,6 @@ logger = getLogger(__name__)
 
 DEFAULT_PORT = 8990
 DEFAULT_RAM_FRACTION = 0.5
-DEFAULT_STARTUP_STAGGER_SECONDS = 2.0
 
 
 @dataclass
@@ -23,7 +22,6 @@ class LeanReplPoolConfig(LeanReplConfig):
     """Configuration for a pool of Lean REPL instances."""
 
     num_repls: int | None = None
-    startup_stagger: float = DEFAULT_STARTUP_STAGGER_SECONDS
 
     def __post_init__(self) -> None:
         if self.num_repls is None:
@@ -37,10 +35,9 @@ class LeanReplPoolConfig(LeanReplConfig):
 
 
 class LeanReplPool:
-    """Pool of Lean REPL instances with queue-based load balancing.
+    """Pool of cold Lean REPL slots with queue-based load balancing.
 
-    Each worker thread owns its own LeanRepl subprocess. Tasks are
-    distributed to idle workers via a FIFO queue.
+    Slots retain Python wrappers, never Lean subprocesses, between calls.
     """
 
     def __init__(self, config: LeanReplPoolConfig) -> None:
@@ -53,23 +50,8 @@ class LeanReplPool:
         self._lock = threading.Lock()
 
         try:
-            for i in range(self.capacity):
-                if i > 0:
-                    import time
-
-                    time.sleep(config.startup_stagger)
+            for _ in range(self.capacity):
                 repl = LeanRepl(config)
-                try:
-                    repl.start()
-                except BaseException:
-                    # LeanRepl.start() currently cleans up its own process, but
-                    # keep the pool transaction safe for alternate/test workers
-                    # and future implementations too.
-                    try:
-                        repl.close()
-                    except Exception:
-                        logger.exception("failed to close REPL after startup error")
-                    raise
                 self._workers.append(repl)
                 self._idle.put(repl)
         except BaseException:
@@ -78,20 +60,29 @@ class LeanReplPool:
 
     def _close_workers(self) -> None:
         """Close every constructed worker, preserving cleanup after one failure."""
+        failed_workers = []
+        first_error: BaseException | None = None
         for worker in reversed(self._workers):
             try:
                 worker.close()
-            except Exception:
+            except BaseException as error:
                 logger.exception("failed to close REPL worker")
-        self._workers.clear()
+                failed_workers.append(worker)
+                if first_error is None:
+                    first_error = error
+        self._workers = list(reversed(failed_workers))
         while True:
             try:
                 self._idle.get_nowait()
             except queue.Empty:
                 break
+        if first_error is not None:
+            raise first_error
 
     def run(self, code: str, **kwargs: Any) -> dict[str, Any]:
         """Run code on an idle REPL within one queue-and-execution timeout."""
+        if self._shutdown:
+            raise RuntimeError("Lean REPL pool is shut down")
         timeout = kwargs.pop("timeout", None)
         deadline = time.monotonic() + timeout if timeout is not None else None
         try:
@@ -102,20 +93,30 @@ class LeanReplPool:
             ) from error
 
         def run_once() -> dict[str, Any]:
-            call_kwargs = dict(kwargs)
+            if kwargs:
+                names = ", ".join(sorted(kwargs))
+                raise TypeError(f"unsupported Lean REPL pool arguments: {names}")
             if deadline is not None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError(
                         f"timed out after {timeout:g}s waiting for an idle Lean REPL"
                     )
-                call_kwargs["timeout"] = remaining
-            return repl.run(code, **call_kwargs)
+                return repl.run_disposable(code, timeout=remaining)
+            return repl.run_disposable(code)
 
         try:
+            if self._shutdown:
+                raise RuntimeError("Lean REPL pool is shut down")
             return run_once()
         finally:
-            self._idle.put(repl)
+            if repl.is_clean() and not self._shutdown:
+                self._idle.put(repl)
+            else:
+                # A cleanup failure keeps its wrapper (and process handle) in
+                # this pool but permanently stops new admission. Runtime
+                # shutdown will retry cleanup; no replacement generation starts.
+                self._shutdown = True
 
     def get_memory_usage(self) -> float:
         """Total memory usage across all REPL instances in GB."""

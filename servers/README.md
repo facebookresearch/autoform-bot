@@ -10,16 +10,17 @@ when useful.
 Plugin hosts start the two stdio MCP processes automatically. They are
 lightweight adapters: the first Lean tool call race-safely starts a detached
 runtime for the current AutoformBot installation, Unix user, and compute node.
-That runtime owns one resident REPL pool and LSP session per active Lean
-project, so sessions using that installation reuse the same warmed processes.
+That runtime owns one REPL admission pool and LSP session per active Lean
+project. LSP sessions stay warm; each public REPL call gets a fresh child and
+no process-owned environment or proof-state handle survives the response.
 Closing the session that started it does not stop it; after a crash, the next
 tool call starts it again. Runtime sockets include a code fingerprint, so an
 in-place upgrade gracefully replaces the older build.
 
-REPL and LSP processes remain lazy. A cold tool call stays pending while Lean
-warms up, so no `/repl-start`, `/lsp-start`, or model-side sleep is needed. Idle
-project processes are closed after 30 minutes by default, while the small
-runtime remains available. Its lifecycle is also explicit:
+REPL children and LSP processes remain lazy. A cold tool call stays pending
+while Lean warms up, so no `/repl-start`, `/lsp-start`, or model-side sleep is
+needed. Idle project state is closed after 30 minutes by default, while the
+small runtime remains available. Its lifecycle is also explicit:
 
 ```bash
 uv run autoform-lean-runtime start

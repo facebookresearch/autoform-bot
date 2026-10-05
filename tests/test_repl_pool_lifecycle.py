@@ -10,34 +10,28 @@ from servers.repl import core as repl_core
 from servers.repl import pool as repl_pool
 
 
-def test_partial_pool_startup_closes_all_constructed_workers(monkeypatch):
+def test_partial_pool_construction_closes_all_constructed_workers(monkeypatch):
     workers = []
 
     class FakeRepl:
         def __init__(self, config):
             self.number = len(workers) + 1
-            self.started = False
             self.closed = False
             workers.append(self)
-
-        def start(self):
-            self.started = True
             if self.number == 2:
-                raise RuntimeError("second worker failed")
+                raise RuntimeError("second slot failed")
 
         def close(self):
             self.closed = True
 
     monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
-    config = repl_pool.LeanReplPoolConfig(num_repls=3, startup_stagger=0)
+    config = repl_pool.LeanReplPoolConfig(num_repls=3)
 
-    with pytest.raises(RuntimeError, match="second worker failed"):
+    with pytest.raises(RuntimeError, match="second slot failed"):
         repl_pool.LeanReplPool(config)
 
     assert len(workers) == 2
-    assert workers[0].started is True
     assert workers[0].closed is True
-    assert workers[1].closed is True
 
 
 def test_shutdown_closes_every_worker_and_drains_idle_queue(monkeypatch):
@@ -48,16 +42,11 @@ def test_shutdown_closes_every_worker_and_drains_idle_queue(monkeypatch):
             self.closed = False
             workers.append(self)
 
-        def start(self):
-            pass
-
         def close(self):
             self.closed = True
 
     monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
-    pool = repl_pool.LeanReplPool(
-        repl_pool.LeanReplPoolConfig(num_repls=2, startup_stagger=0)
-    )
+    pool = repl_pool.LeanReplPool(repl_pool.LeanReplPoolConfig(num_repls=2))
 
     pool.shutdown()
 
@@ -71,16 +60,11 @@ def test_request_timeout_includes_waiting_for_an_idle_worker(monkeypatch):
         def __init__(self, config):
             pass
 
-        def start(self):
-            pass
-
         def close(self):
             pass
 
     monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
-    pool = repl_pool.LeanReplPool(
-        repl_pool.LeanReplPoolConfig(num_repls=1, startup_stagger=0)
-    )
+    pool = repl_pool.LeanReplPool(repl_pool.LeanReplPoolConfig(num_repls=1))
     borrowed = pool._idle.get_nowait()
     try:
         with pytest.raises(TimeoutError, match="waiting for an idle Lean REPL"):
@@ -88,6 +72,69 @@ def test_request_timeout_includes_waiting_for_an_idle_worker(monkeypatch):
     finally:
         pool._idle.put(borrowed)
         pool.shutdown()
+
+
+def test_pool_runs_each_call_disposably_and_reuses_only_a_clean_slot(monkeypatch):
+    workers = []
+
+    class FakeRepl:
+        def __init__(self, config):
+            self.calls = []
+            workers.append(self)
+
+        def run_disposable(self, code, **kwargs):
+            self.calls.append((code, kwargs))
+            return {"messages": []}
+
+        def is_clean(self):
+            return True
+
+        def close(self):
+            pass
+
+        def get_memory_usage(self):
+            return 0.0
+
+    monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
+    pool = repl_pool.LeanReplPool(repl_pool.LeanReplPoolConfig(num_repls=1))
+    try:
+        assert pool.run("#check Nat", timeout=2) == {"messages": []}
+        assert pool.run("#check Int", timeout=2) == {"messages": []}
+    finally:
+        pool.shutdown()
+
+    assert len(workers) == 1
+    assert [call[0] for call in workers[0].calls] == ["#check Nat", "#check Int"]
+
+
+def test_pool_quarantines_every_slot_after_unverified_cleanup(monkeypatch):
+    class FakeRepl:
+        def __init__(self, config):
+            self.dirty = False
+
+        def run_disposable(self, code, **kwargs):
+            self.dirty = True
+            raise repl_core.ReplCleanupError("cleanup failed", {"messages": []})
+
+        def is_clean(self):
+            return not self.dirty
+
+        def close(self):
+            self.dirty = False
+
+        def get_memory_usage(self):
+            return 0.0
+
+    monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
+    pool = repl_pool.LeanReplPool(repl_pool.LeanReplPoolConfig(num_repls=2))
+
+    with pytest.raises(repl_core.ReplCleanupError, match="cleanup failed"):
+        pool.run("#check Nat", timeout=1)
+    with pytest.raises(RuntimeError, match="pool is shut down"):
+        pool.run("#check Int", timeout=1)
+
+    assert pool._idle.qsize() == 1
+    pool.shutdown()
 
 
 def test_repl_retry_recovery_uses_the_original_deadline(monkeypatch):

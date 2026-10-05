@@ -105,6 +105,13 @@ def test_quick_start_keeps_the_cli_agent_facing(repo_root: Path) -> None:
     assert "uv run autoform" not in quick_start
 
 
+def test_public_repl_calls_are_documented_as_process_disposable(repo_root: Path) -> None:
+    servers = (repo_root / "servers/README.md").read_text(encoding="utf-8")
+
+    assert "each public REPL call gets a fresh child" in servers
+    assert "no process-owned environment or proof-state handle survives" in servers
+
+
 def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
     example = repo_root / _EXAMPLE
     blueprint = example / "blueprint"
