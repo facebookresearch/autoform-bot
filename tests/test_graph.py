@@ -249,6 +249,35 @@ def test_rejects_noncanonical_readme_case_with_actionable_error(tmp_path: Path, 
     assert "must be named exactly README.md" in message
 
 
+@pytest.mark.parametrize("relative", ["README.md", "chapter/README.md"])
+def test_rejects_a_readme_linked_to_a_file_with_another_name(tmp_path: Path, relative: str) -> None:
+    """Containment follows the linked file, so this README contained itself.
+
+    Loading then never ended, so the check runs in a subprocess with a timeout.
+    """
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    _roadmap_page(blueprint, "chapter/README.md", "# Chapter\n")
+    page = blueprint / "roadmap" / relative
+    page.rename(page.with_name("intro.txt"))
+    page.symlink_to("intro.txt")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "autoform_cli", "check", str(blueprint)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    target = Path(relative).with_name("intro.txt").as_posix()
+    assert result.returncode == 1
+    assert (
+        f"error: {relative}: links to {target}, which is not named README.md; "
+        "container pages must be named exactly README.md"
+    ) in result.stdout
+
+
 def test_splits_statement_and_proof_dependencies(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "objects.md", "# Objects\n")
