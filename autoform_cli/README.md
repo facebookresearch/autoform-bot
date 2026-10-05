@@ -577,25 +577,26 @@ autoform-visualize blueprint
 ```
 
 Build the publishable site source — a book overview, aggregate progress,
-statement boxes with collapsed dependency details, multi-scale dependency
-maps, and direct links to Lean declarations at the current commit:
+statement boxes with collapsed dependency details, a multi-scale dependency
+explorer, and direct links to Lean declarations at the current commit:
 
 ```bash
 autoform render blueprint --output site-src --lean-root . --require-declarations
 ```
 
 `render` never writes into the vault. It leads the landing page with the project
-map over a summary of what is formalized and what is unblocked, places a compact
+explorer over a summary of what is formalized and what is unblocked, places a compact
 progress summary after each chapter's opening prose, writes `structure.md` so a
 vault's layout can be checked against the book it produces, and shows a source
 icon when a `lean:` declaration resolves to a repository permalink. Its
 `dependencies.md` entry point rolls dependencies through the article hierarchy,
-with links to declaration maps and the complete DAG. Project, chapter, and small
-local maps remain compact Mermaid diagrams. The full graph is a deterministic
-JSON-derived Canvas explorer with search, filters, pan/zoom, and hash-routed
-node neighborhoods, so it does not inherit Mermaid's text, edge, or SVG-size
-ceilings. Every graph article returns to the book, and every formal statement
-links to the shared explorer focused on that item. Point `mkdocs.yml` at
+with links to project, chapter, nested-scope, and full projections. Every generated
+site projection uses the same deterministic JSON-derived Canvas and semantic-DOM
+explorer with search, filters, pan/zoom, and hash-routed node neighborhoods, so
+none inherits Mermaid's text, edge, or SVG-size ceilings. Authored Mermaid remains
+supported in the vault and book, including the bounded graph produced by
+`autoform-visualize`. Every graph article returns to the book, and every formal
+statement links to the shared explorer focused on that item. Point `mkdocs.yml` at
 `docs_dir: site-src` and enable `md_in_html` plus a
 `pymdownx.superfences` mermaid fence; see the [repository
 example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
@@ -751,7 +752,7 @@ and excluded from runtime snapshots and publication.
 
 ## Publication contract
 
-`autoform render` publishes the book, derived progress, and dependency maps at
+`autoform render` publishes the book, derived progress, and one dependency explorer at
 project, chapter, nested-scope, local, and full-graph scales. It never reads a
 `graph.json` or an operational queue. Hidden files are omitted, while symlinks,
 credentials, logs, provider state, and agent/task state inside the blueprint

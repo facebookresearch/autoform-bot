@@ -57,6 +57,26 @@ def test_human_review_distinguishes_roadmap_progress_from_source_scope(
     assert "overview, progress, project graph" not in skill
 
 
+def test_generated_site_docs_describe_one_multiscale_explorer(repo_root: Path) -> None:
+    cli = (repo_root / "autoform_cli/README.md").read_text(encoding="utf-8")
+    review = (repo_root / "skills/human-review/SKILL.md").read_text(encoding="utf-8")
+    example = (repo_root / _EXAMPLE / "README.md").read_text(encoding="utf-8")
+    workflow = (
+        repo_root
+        / _EXAMPLE
+        / ".github/workflows/blueprint-pages.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "Every generated\nsite projection uses the same" in cli
+    assert "Authored Mermaid remains\nsupported in the vault and book" in cli
+    assert "Project, chapter, and small\nlocal maps remain compact Mermaid" not in cli
+    assert "Every generated site route\nuses the same" in review
+    assert "The authored vault graph remains Mermaid" in review
+    assert "Canvas plus semantic-DOM explorer across project" in example
+    assert "one interactive\n      # dependency explorer" in workflow
+    assert "scoped Mermaid maps" not in example
+
+
 def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path) -> None:
     development = (repo_root / "skills" / "develop-plugin" / "SKILL.md").read_text(
         encoding="utf-8"

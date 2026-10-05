@@ -29,10 +29,11 @@ judgment. For vault review, point the user to `blueprint/README.md`, coverage,
 chapter pages, and `blueprint/dependencies.md` in Obsidian. For browser review,
 run `autoform dashboard <PROJECT> --site-dir site` so the same site deployed to
 GitHub Pages is served on loopback with local-only live claim badges. Provide
-the overview, including its progress summary, plus the project graph, relevant
-chapter graph, and full-DAG explorer links. The full graph uses the site's
-virtualized Canvas viewer and hash-routed node neighborhoods; never work around
-a large graph by raising Mermaid's text or edge limits.
+the overview, including its progress summary, plus the relevant project,
+chapter, nested-scope, and full-DAG explorer links. Every generated site route
+uses the same virtualized Canvas plus semantic-DOM viewer and hash-routed node
+neighborhoods. The authored vault graph remains Mermaid; never work around a
+large generated view by raising Mermaid's text or edge limits.
 
 Guide the review from coarse to fine: declared scope and exclusions, milestone
 book, landing-page progress summary, cross-chapter graph, chapter graph, then
