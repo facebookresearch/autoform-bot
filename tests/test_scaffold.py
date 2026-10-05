@@ -350,6 +350,51 @@ def test_generated_ci_rebuilds_opted_in_statement_review_evidence(tmp_path: Path
     )
 
 
+# What a statement-review step mentions: a review or skeleton command, a
+# --review flag, the skeleton report's directory or artifact, or Lean set up
+# for the review.
+_REVIEW_MARKERS = ("autoform review", "autoform skeleton", "--review", "autoform-skeleton", "for statement review")
+# The same opt-in, tested inside a script that must run either way. Only the
+# branch taken when it holds is exempt; an else or elif branch is read too.
+_REVIEW_BRANCH = re.compile(
+    r'^if \[\[ "\$\{AUTOFORM_REVIEW_ENABLED:-\}" == true \]\]; then\n.*?^(?=else$|elif |fi$)', re.MULTILINE | re.DOTALL
+)
+
+
+@pytest.mark.parametrize("name", ["autoform-verify.yml", "blueprint-pages.yml"])
+@pytest.mark.parametrize("copy", ["template", "example"])
+def test_statement_review_steps_run_only_in_projects_that_opted_in(
+    tmp_path: Path, repo_root: Path, copy: str, name: str
+) -> None:
+    """A project without the review marker never extracts a skeleton report,
+    and its Lean-mapped articles need no durable article_id, so a review step
+    that ran there would fail its CI. Steps are found by what they mention, not
+    by name, so a step added later is held to the gate too. Rendering the site
+    must run either way, so its script sets its review arguments only in the
+    branch that runs when the same test holds."""
+
+    yaml = pytest.importorskip("yaml")
+    if copy == "template":
+        scaffold_project(tmp_path, title="Finite Flat")
+        workflows = tmp_path / ".github/workflows"
+    else:
+        workflows = repo_root / "skills/setup/assets/cabannes-thesis-project/.github/workflows"
+    jobs = yaml.safe_load((workflows / name).read_text(encoding="utf-8"))["jobs"]
+    review = [
+        step
+        for job in jobs.values()
+        for step in job.get("steps", [])
+        if any(marker in json.dumps(step) for marker in _REVIEW_MARKERS)
+    ]
+
+    assert "Verify statement reviews" in [step.get("name") for step in review]
+    for step in review:
+        if step.get("if") == "env.AUTOFORM_REVIEW_ENABLED == 'true'":
+            continue
+        rest = json.dumps(dict(step, run=_REVIEW_BRANCH.sub("", step.get("run", ""))))
+        assert not any(marker in rest for marker in _REVIEW_MARKERS), f"{step.get('name')} runs without the opt-in"
+
+
 def test_the_approval_gate_runs_apart_from_the_lean_build(tmp_path: Path) -> None:
     """A review event reruns only the gate, and the gate asks about its own
     pull request; the Lean build keeps one run per ref, so a review arriving
