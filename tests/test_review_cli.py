@@ -281,16 +281,18 @@ def test_check_and_render_derive_the_bundle_from_their_own_extraction(
     assert "bp-readback-current" in pages
 
 
+@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "whitespace"])
 def test_check_and_render_refuse_the_blank_passage_prepare_refuses(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    blank: str,
 ) -> None:
     """A bundle derived without prepare is held to the rules prepare writes by.
-    An article not marked cited may cite only blank lines; prepare refuses that
-    passage, so check and render refuse it too, even with a current card and the
-    approval an unchecked derived bundle would offer, rather than publish an
-    empty passage."""
+    An article not marked cited may cite only blank lines, empty or spaces;
+    prepare refuses that passage, so check and render refuse it too, even with
+    a current card and the approval an unchecked derived bundle would offer,
+    rather than publish an empty passage."""
 
     blueprint = _blueprint(tmp_path)
     article = blueprint / "roadmap/basics/result.md"
@@ -354,9 +356,9 @@ def test_check_and_render_refuse_the_blank_passage_prepare_refuses(
     )
 
     # The card binds the packet, not the passage, so it stays current.
-    cite("   ")
+    cite(blank)
     prepared = load_review_bundle(bundle_path)
-    offered = replace(prepared, articles=(replace(prepared.articles[0], passage="   "),))
+    offered = replace(prepared, articles=(replace(prepared.articles[0], passage=blank),))
     approval = offered.review_hash("af_0123456789abcdef01234567", load_readbacks(blueprint))
     article.write_text(
         article.read_text(encoding="utf-8").replace(
