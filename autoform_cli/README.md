@@ -852,8 +852,9 @@ many cards it filed, and because filing identical content is a no-op, running
 the same batch again once the cause is cleared completes it. When the cause is
 a card another writer filed, replaced, or removed meanwhile, the batch's record
 for it must first name the hash of the card now there, or no hash if there is
-none. When it is an article deleted meanwhile, the article must be restored or
-its records dropped, and one made unreadable must be readable again. A batch
+none. When it is an article deleted meanwhile, or put back as something other
+than a regular file, such as a directory or FIFO, the article must be restored
+or its records dropped, and one made unreadable must be readable again. A batch
 with records whose `article_id` is no longer in
 the blueprint files nothing and names each of them, before it lists any card
 conflict; each must be dropped, or take its `article_id` from the packet

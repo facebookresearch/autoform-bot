@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import threading
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -1521,6 +1522,10 @@ def _replace_with_a_directory(article: Path) -> None:
     article.mkdir()
 
 
+def _make_unreadable(article: Path) -> None:
+    article.chmod(0)
+
+
 _GONE = "so its card was not filed; restore the article, or drop its records, and rerun the record"
 
 
@@ -1529,12 +1534,17 @@ _GONE = "so its card was not filed; restore the article, or drop its records, an
     [
         (_dangle, f"now links to a missing file, {_GONE}"),
         (_replace_chapter_with_a_file, f"was deleted after its evidence was checked, {_GONE}"),
-        (
-            _replace_with_a_directory,
-            "cannot be read (Is a directory), so its card was not filed; rerun the record once it can be read",
+        (_replace_with_a_directory, f"is no longer a regular file, {_GONE}"),
+        pytest.param(
+            _make_unreadable,
+            "cannot be read (Permission denied), so its card was not filed; rerun the record once it can be read",
+            marks=pytest.mark.skipif(
+                os.name != "posix" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+                reason="chmod 000 must make files unreadable",
+            ),
         ),
     ],
-    ids=["a-dangling-link", "chapter-replaced-by-a-file", "replaced-by-a-directory"],
+    ids=["a-dangling-link", "chapter-replaced-by-a-file", "replaced-by-a-directory", "made-unreadable"],
 )
 def test_an_article_that_cannot_be_read_again_names_the_record_and_why(
     tmp_path: Path,
@@ -1564,6 +1574,58 @@ def test_an_article_that_cannot_be_read_again_names_the_record_and_why(
     assert set(load_readbacks(blueprint)) == {(_RESULT_ID, "Review.result")}
     assert "1 of 2 read-back(s) were filed before the failure below" in err
     assert err.endswith(f"error: Review.other: article {other} {what}\n")
+
+
+def _replace_with_a_fifo(article: Path) -> None:
+    article.unlink()
+    os.mkfifo(article)
+
+
+def _link_to_a_fifo(article: Path) -> None:
+    article.unlink()
+    os.mkfifo(article.with_name("other.pipe"))
+    article.symlink_to("other.pipe")
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+@pytest.mark.parametrize("damage", [_replace_with_a_fifo, _link_to_a_fifo], ids=["a-fifo", "a-link-to-a-fifo"])
+def test_a_fifo_put_at_an_article_stops_the_batch_without_blocking_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    damage: Callable[[Path], None],
+) -> None:
+    """Opening a FIFO to read it waits for a writer, so an article that has
+    become one, or a link to one, is refused without being read."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    other = (blueprint / "roadmap" / "basics" / "other.md").resolve()
+    publish = main.__globals__["publish_readback"]
+
+    def publish_then_damage_the_other_article(card: object) -> Path:
+        path = publish(card)
+        damage(other)
+        return path
+
+    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish_then_damage_the_other_article)
+    capsys.readouterr()
+    exits: list[int] = []
+
+    batch = threading.Thread(target=lambda: exits.append(_record(blueprint, bundle, manifest, tmp_path)), daemon=True)
+    batch.start()
+    batch.join(30)
+    blocked = batch.is_alive()
+    if blocked:
+        # A batch stuck opening the FIFO is let go, so the test fails rather than hangs.
+        os.close(os.open(other, os.O_WRONLY))
+        batch.join()
+    assert not blocked
+
+    err = capsys.readouterr().err
+    assert exits == [2]
+    assert set(load_readbacks(blueprint)) == {(_RESULT_ID, "Review.result")}
+    assert "1 of 2 read-back(s) were filed before the failure below" in err
+    assert err.endswith(f"error: Review.other: article {other} is no longer a regular file, {_GONE}\n")
 
 
 def test_an_article_that_is_a_link_is_read_again_through_the_link(

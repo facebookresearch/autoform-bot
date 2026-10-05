@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1105,13 +1106,30 @@ def _named_article_path(graph: Graph, node_id: str) -> str:
 def _refuse_changed_article(card: PreparedReadback, path: str, digest: str) -> None:
     """Refuse to file ``card`` unless its article's file still holds the bytes its evidence was checked against."""
 
+    # Opened without waiting for a writer, so a FIFO put at the path, or a link
+    # to one, is refused unread instead of holding the batch.
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
-        if hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest:
+        descriptor = os.open(path, flags)
+        try:
+            regular = stat.S_ISREG(os.fstat(descriptor).st_mode)
+            content = hashlib.sha256()
+            while regular and (block := os.read(descriptor, 64 * 1024)):
+                content.update(block)
+        finally:
+            os.close(descriptor)
+        if not regular:
+            what = (
+                "is no longer a regular file, so its card was not filed; restore the article, or drop its records, "
+                "and rerun the record"
+            )
+        elif content.hexdigest() == digest:
             return
-        what = (
-            "changed after its evidence was checked, so its card was not filed; rerun the record, after review "
-            "prepare if the change is to that evidence"
-        )
+        else:
+            what = (
+                "changed after its evidence was checked, so its card was not filed; rerun the record, after review "
+                "prepare if the change is to that evidence"
+            )
     except (FileNotFoundError, NotADirectoryError):
         # A link left naming a missing file is still there; only its target is gone.
         gone = "now links to a missing file" if os.path.islink(path) else "was deleted after its evidence was checked"
