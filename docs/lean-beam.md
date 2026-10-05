@@ -32,8 +32,10 @@ use `--claude-mcp` for Claude Code, or both flags for both hosts. Do not install
 Beam's companion agent skill while Autoform excludes its save operations; this
 document is the preview workflow contract. Restart each configured host
 afterward. The setup workflow and CI verify the running process through the
-typed `beam_version` tool; a caller that skips that check has not established
-provenance.
+typed `beam_version` tool. Run `autoform beam doctor --json` to perform that
+check through Beam's public MCP protocol and compare the live runtime with the
+packaged lock; a caller that skips it has not established provenance. A passing
+doctor report does not establish the host controls listed in that report.
 
 For Codex, add this denylist to the existing `[mcp_servers.lean-beam]` table:
 

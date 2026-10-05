@@ -13,6 +13,8 @@ from tempfile import TemporaryFile
 
 import pytest
 
+from autoform_cli.beam import inspect_beam_runtime
+
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("AUTOFORM_RUN_REAL_LEAN_BEAM_TESTS") != "1",
@@ -295,6 +297,11 @@ def test_pinned_beam_explicit_session_contract(repo_root: Path, tmp_path: Path) 
     beam_env = dict(os.environ)
     beam_env["AUTOFORM_BEAM_CANCEL_STARTED"] = str(cancel_started)
     beam_env["AUTOFORM_BEAM_CANCEL_RELEASE"] = str(cancel_release)
+
+    admission = inspect_beam_runtime(beam_command, timeout=REQUEST_TIMEOUT_SECONDS)
+    assert admission.ok, admission.issues
+    assert admission.observed is not None
+    assert admission.observed["source_commit"] == admission.expected["commit"]
     client = McpClient(
         [beam_command],
         cwd=repo_root,

@@ -30,6 +30,7 @@ def test_lean_beam_pin_is_immutable_and_explicit(repo_root: Path) -> None:
     assert lock["commit"] in docs
     assert "remain the default Lean tooling" in normalized_docs
     assert "does not replace or silently disable the default servers" in normalized_docs
+    assert "autoform beam doctor --json" in normalized_docs
     assert ".beam/" in docs
     assert ".beam/" in gitignore_template.splitlines()
     bundled = json.loads((repo_root / ".mcp.json").read_text(encoding="utf-8"))

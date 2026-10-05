@@ -42,7 +42,9 @@ Autoform also carries an opt-in Lean Beam session preview. It is pinned to an
 exact development revision for contract testing and does not replace the
 bundled `autoform-lsp` or `autoform-repl` servers. Enable it only when explicitly
 evaluating Beam and follow the admission, denylist, containment, and recovery
-rules in [the preview contract](docs/lean-beam.md).
+rules in [the preview contract](docs/lean-beam.md). After installing the exact
+pin, run `autoform beam doctor --json` to verify the live MCP runtime against
+Autoform's packaged lock before using any Beam workspace tool.
 
 ## Quick start
 

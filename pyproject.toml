@@ -44,6 +44,9 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["autoform_cli", "servers"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"lean-beam.lock.json" = "autoform_cli/lean-beam.lock.json"
+
 [tool.ruff]
 line-length = 120
 
@@ -58,4 +61,3 @@ constraint-dependencies = [
     "cryptography<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "cryptography>=49; sys_platform != 'darwin' or platform_machine != 'x86_64'",
 ]
-

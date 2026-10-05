@@ -16,6 +16,7 @@ from pathlib import Path
 from . import status
 from .article_identity import plan_article_ids
 from .audit import audit_blueprint
+from .beam import inspect_beam_runtime
 from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_key
 from .doctor import diagnose_project
 from .dashboard import publication_bound_live_state, serve_dashboard
@@ -95,6 +96,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=0,
         help="local port (default: choose an available port)",
     )
+
+    beam = subparsers.add_parser("beam", help="inspect the optional Lean Beam runtime")
+    beam_subparsers = beam.add_subparsers(dest="beam_command", required=True)
+    beam_doctor = beam_subparsers.add_parser(
+        "doctor", help="verify the installed Beam identity against Autoform's preview pin"
+    )
+    beam_doctor.add_argument(
+        "--command",
+        dest="beam_executable",
+        default=os.environ.get("AUTOFORM_LEAN_BEAM_MCP", "lean-beam-mcp"),
+        help="Lean Beam MCP executable (default: lean-beam-mcp on PATH)",
+    )
+    beam_doctor.add_argument("--timeout", type=_positive_seconds, default=15.0)
+    beam_doctor.add_argument("--json", action="store_true", help="write stable machine-readable output")
 
     project = subparsers.add_parser("project", help="inspect local project configuration and releases")
     project_subparsers = project.add_subparsers(dest="project_command", required=True)
@@ -207,6 +222,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _doctor(args)
     if args.command == "dashboard":
         return _dashboard(args)
+    if args.command == "beam":
+        return _beam(args)
     if args.command == "project":
         return _project(args)
     if args.command == "claim":
@@ -374,6 +391,33 @@ def _dashboard(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         return 130
     return 0
+
+
+def _beam(args: argparse.Namespace) -> int:
+    if args.beam_command != "doctor":
+        return 2
+    try:
+        result = inspect_beam_runtime(args.beam_executable, timeout=args.timeout)
+    except (OSError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(result.to_json())
+    else:
+        print(f"Lean Beam: {'PASS' if result.ok else 'FAIL'}")
+        print(f"  command: {result.command or 'not found'}")
+        if result.observed is not None:
+            print(
+                "  identity: "
+                f"{result.observed.get('version')} @ {result.observed.get('source_commit')} "
+                f"({result.observed.get('mcp_protocol')})"
+            )
+        for issue in result.issues:
+            print(f"error[{issue.code}]: {issue.message}", file=sys.stderr)
+        print("  host controls still required:")
+        for control in result.required_host_controls:
+            print(f"    - {control}")
+    return 0 if result.ok else 1
 
 
 def _project(args: argparse.Namespace) -> int:

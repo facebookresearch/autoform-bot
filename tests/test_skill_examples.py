@@ -43,6 +43,7 @@ def test_lean_beam_preview_is_explicit_and_fail_closed(repo_root: Path) -> None:
 
     assert "explicitly opts into the Lean Beam preview" in setup
     assert "exact revision in `lean-beam.lock.json`" in normalized_setup
+    assert "autoform beam doctor --json" in normalized_setup
     assert "technically deny `lean_save` and `lean_close_save`" in normalized_setup
     assert "operating-system containment" in normalized_setup
     assert "leave the preview disabled" in normalized_setup
