@@ -260,33 +260,7 @@ def test_scaffolded_gitignore_covers_agent_bootstrap_output(tmp_path: Path) -> N
     """The first live run committed a stray bootstrap.log."""
 
     scaffold_project(tmp_path, title="Finite Flat")
-    ignored = (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert "*.log" in ignored
-    assert ".beam/" in ignored
-
-
-@pytest.mark.parametrize(
-    ("original", "expected"),
-    [
-        (b"build/\n", b"build/\n.beam/\n"),
-        (b"build/", b"build/\n.beam/\n"),
-        (b"build/\r\n", b"build/\r\n.beam/\r\n"),
-    ],
-)
-def test_scaffold_merges_beam_ignore_without_replacing_existing_rules(
-    original: bytes, expected: bytes, tmp_path: Path
-) -> None:
-    gitignore = tmp_path / ".gitignore"
-    gitignore.write_bytes(original)
-
-    result = scaffold_project(tmp_path, title="Finite Flat")
-    again = scaffold_project(tmp_path, title="Finite Flat")
-
-    assert gitignore.read_bytes() == expected
-    assert ".gitignore" in result.written
-    assert ".gitignore" not in result.skipped
-    assert ".gitignore" not in again.written
-    assert ".gitignore" in again.skipped
+    assert "*.log" in (tmp_path / ".gitignore").read_text(encoding="utf-8")
 
 
 def test_scaffolded_blueprint_tracks_authored_structure(tmp_path: Path) -> None:

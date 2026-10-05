@@ -7,10 +7,8 @@ declaration types rather than relying on memory.
 
 - Search before proving: try `exact?`, `apply?`, and `rw?`, and use `rg` over the pinned Mathlib
   checkout before introducing new lemmas.
-- When the Lean Beam preview is explicitly enabled, follow the
-  [integration contract](../../../docs/lean-beam.md), use `lean_sync` for
-  incremental checks, and do not use `lean_save` or `lean_close_save`. Always
-  finish with the project's normal Lean or Lake build command.
+- Type-check incrementally with the REPL or LSP; finish with the project's normal Lean or Lake
+  build command.
 - Prefer a short proof using a verified existing theorem over recreating library mathematics.
 
 ## Conventions

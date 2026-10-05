@@ -4,6 +4,10 @@ The Autoform CLI validates, visualizes, and publishes the multilevel dependency
 graph embedded in `blueprint/roadmap/`. The Markdown book is the graph: no
 separate authored or generated graph file exists.
 
+This is an agent-facing interface. Normal project work starts from Autoform's
+skills in the user's preferred agent window; those agents invoke these commands
+as needed.
+
 ## Articles and containment
 
 Every Markdown file below `blueprint/roadmap/` is an article node. A
@@ -116,9 +120,8 @@ uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform check blueprint --lean-root .
 ```
 
 Create a new project's vault, site configuration, and CI. The layout is fixed,
-so it is written rather than described. Existing files are left alone except
-that a missing `.beam/` rule is appended to the root `.gitignore`, which makes
-the same command the repair path:
+so it is written rather than described; existing files are left alone, which
+makes the same command the repair path:
 
 ```bash
 autoform init . --title "Finite Flat Group Schemes" \
@@ -127,6 +130,29 @@ autoform init . --title "Finite Flat Group Schemes" \
 
 Pass `--autoform-ref <sha>` to pin the generated workflows at an immutable
 commit, `--force` to overwrite, and `--json` for machine-readable output.
+
+Inspect a Lean project and list Autoform's bundled known-good release pairs:
+
+```bash
+autoform project inspect .
+autoform project inspect path/inside/project --json
+autoform project versions --json
+```
+
+`project inspect` reads the nearest enclosing project's `lean-toolchain`,
+`lake-manifest.json`, and `lakefile.toml` without running Lake, Lean, Git, or
+the network. Compatibility is decided by the toolchain and the Mathlib commit
+the manifest locks, which is what `lake build` uses: `supported` when that pair
+is in the bundled catalog, `unlisted` when it is not, and `indeterminate` when
+either is unknown (no manifest, no Mathlib, a path-based Mathlib, or any file
+error). A `.lake/package-overrides.json` entry for Mathlib replaces the
+manifest's, and a `lakefile.toml` that requests a different Mathlib than the
+lock gets a `lake-manifest-stale` warning. `lakefile.lean` takes precedence, as
+in Lake, but is never evaluated, so its projects stay `indeterminate`. As in
+elan, only the trimmed first line of `lean-toolchain` counts.
+
+`project versions` lists the bundled catalog of known-good Lean and Mathlib
+pairs. It is an allowlist, not a resolver.
 
 Publishing a project runs four steps in order: validate, write the Mermaid
 graph into the vault, render the site source, then strict-build the site.
@@ -138,10 +164,20 @@ uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform render blueprint \
   --output site-src --lean-root . --require-declarations
 uv run --with mkdocs --with mkdocs-material --with mkdocs-literate-nav \
   --with pymdown-extensions mkdocs build --strict
+uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform dashboard . --site-dir site
 ```
 
 Drop `--require-declarations` when reviewing work in progress, where a
 statement may name a Lean declaration that does not exist yet.
+
+`dashboard` serves the exact built MkDocs site on `127.0.0.1`, choosing an
+available port unless `--port` is supplied, and adds a read-only live overlay
+from current author claims. Static content remains the
+same artifact deployed to GitHub Pages; only the loopback server exposes
+`/__autoform/live.json`. The overlay is ephemeral, uses the runtime's temporary
+path-derived node IDs, and is never written into the vault, publication
+manifest, or public site. Re-run render and the MkDocs build to refresh durable
+content; claim badges update while the local server is running.
 
 Validate structure, and optionally check that every `lean:` name really exists
 in the project's Lean sources:
@@ -272,6 +308,179 @@ each one as a `declared-coverage-gap`. That is intended: a roadmap is published
 while it is still being decomposed, and the published `coverage.complete: false`
 is how a reader sees that. Run `autoform audit` in CI when you want mapped rows
 to block a merge.
+
+Extract what a reader must trust for each formalized statement:
+
+```bash
+autoform skeleton blueprint --lean-root .
+autoform skeleton blueprint --lean-root . --node chapter/main-result
+autoform skeleton blueprint --lean-root . --output skeleton.json --packets review-packets --passages review-passages
+```
+
+A theorem means what its statement means. The skeleton of a `lean:`
+declaration is the reading list a person needs to agree that the Lean says what
+the article claims: the elaborated signature, then every project declaration
+the *statement* rests on, transitively, quoted from the sources in dependency
+order. A definition contributes its body as well as its type, because the body
+is part of its meaning; a theorem met along the way contributes only its type
+to the packet. Proof bodies are never emitted. Lean's axiom analysis does
+inspect proof metadata, so changing a proof can change the reported trust
+context. The proof beneath a skeleton may be orders of magnitude longer, and it
+is the kernel's to check, not the reader's. Each skeleton also reports the
+axioms the declaration finally rests on, so a `sorry` shows up as `sorryAx`
+beside the statement, and the
+non-core constants it assumes from Mathlib or another dependency, listed by
+name so a reader can see that a statement uses the library's notion of a limit
+rather than a homemade one.
+
+The closure is computed from elaborated terms, which is why this is the one
+command that runs Lean: it writes a small probe and runs it with
+`lake env lean` against the built project. Before the probe, Lake must confirm
+without rebuilding that every imported module matches its exact source inputs;
+a missing `lake-manifest.json`, stale artifacts, or a source tree that changes
+during extraction makes the command fail. That check rehashes every input and
+rewrites Lake's `.hash` files, so the project's `.lake` directory must be
+writable. A lexical closure would miss what
+`open`, notation, implicit instances, and auto-bound variables bring in, and
+every miss silently shrinks the surface a reader is told to trust. Constructors,
+projections, recursors, `noConfusion` helpers, and matchers are folded onto the
+declaration the reader sees in the source, so a structure appears once, as its
+`structure` block. Only companions that Lean's environment records as generated
+are folded; an internal-looking name alone is not proof of provenance. Names
+outside the project are the trusted base and are not expanded. Rangeless
+internal-detail declarations, including helpers such as `f._unary`, `f._f`,
+and `S.x._default`, are bound by their elaborated material and marked
+`-- source not shown` rather than being passed off as their parent's source.
+An ordinary declaration without its own source, such as one a metaprogram adds
+under an existing name, is refused. A `partial def`
+anywhere in a declaration's trusted closure is refused, as recorded by the Lean
+environment rather than by the source text: its kernel face is an opaque
+constant, so the body a reader would see is not what Lean checks. The command
+exits nonzero when a `lean:` name is absent from the sources or from the built
+environment, or reaches a refused declaration; that name is unresolved for its article only, other articles still extract, and it writes nothing into the vault;
+`--output` records the `autoform-skeleton/v4` report, which contains no
+timestamp or absolute path, for a later render or review to consume. The
+report identifies the exact blueprint, its complete target set, and whether
+the extraction covered all targets or an explicit `--node` selection. It
+quotes each trusted definition's source and records theorem
+dependencies by elaborated signature, so it stands on its own without ever
+copying a theorem proof. Declarations in one project share most of what they
+trust, so the report states each trusted declaration, each external
+constant's semantic material, and each boundary module's identity once, in the
+top-level `trusted`, `semantics`, and `boundary_modules` tables, and each
+declaration names the entries it uses; the probe's own output is shared the
+same way. The probe also states each elaborated subterm of 256 bytes or more
+once, since proof terms repeat large subterms heavily; the report keeps each
+material's full text.
+
+Run skeleton extraction only in a trusted checkout or an operating-system
+sandbox. Lake evaluates `lakefile.lean`, and the generated probe imports project
+code whose initializers, macros, and metaprograms may perform arbitrary IO and
+can forge probe output. The timeout and output cap bound the direct batch
+command; on POSIX, Autoform also terminates its process group. The Lake
+freshness check and the probe each have their own 600-second budget;
+`--timeout SECONDS` sets the probe's, which a large project may need. They are resource
+controls, not a security or authenticity boundary.
+
+Every skeleton carries a full SHA-256 **drift hash**. It is derived from
+canonical elaborated expressions for the root, every trusted declaration, each
+direct external assumption, and each axiom, together with the dependency edges,
+Lean version, and compiled `.olean` identities (every part a module-system
+build writes) for the transitive external boundary. Local source spelling and
+comments do not enter the hash, while macro expansion, synthesized instance
+bodies, types, and definition bodies do. Proof axioms, toolchain changes, and
+unrelated edits in an external module or its imports may also rotate it.
+Only modules whose `.olean` lies in the toolchain's own `lib/lean` count as
+core and stay outside the boundary; a dependency module named `Lake.Foo` is
+external like any other. A dependency library rooted at `Init`, `Lean`, or
+`Std` hides the toolchain's copy from the probe, so extraction stops with an
+error.
+Compiler-generated matcher and recursor bodies stay in the hash even though
+they are folded out of the human reading list.
+An article with several `lean:` names has one hash over all of them, printed as
+the article skeleton. If any of those names is unresolved, the report records
+the article's hash and review hash as null rather than hashing the rest. It
+compares reports across builds; it is not a stable statement identifier,
+reviewer authentication, or an approval key.
+
+Reports and packet manifests also carry an evidence hash over the exact packet
+shown to a reviewer. It identifies those bytes but does not authenticate who
+reviewed them. An article review hash additionally binds the joint packet to the
+cited passage, its locator, and the drift hash, so a review recorded against it
+does not survive a change of meaning that leaves the packet text unchanged. All
+three are advisory provenance checksums when candidate code controls the
+checkout.
+
+`--packets DIR` writes one comment-stripped packet per skeleton, with a
+manifest mapping packets to articles and hashes. The destination must be empty
+or carry Autoform's packet manifest; each run replaces the complete managed
+tree, so removed declarations cannot leave stale packets behind. A concurrent
+change detected before commit aborts publication instead of being overwritten.
+If the isolated old tree changes later, Autoform preserves it at a reported
+recovery path instead of deleting it.
+Packet and passage manifests use their v2 schemas; v1 output trees are still
+recognized and replaced during an upgrade.
+
+An unresolved selected declaration makes the report incomplete and prevents
+all packet and passage publication; `--output` alone can still record that
+diagnostic report. Output destinations must be disjoint and non-symlinked, and
+their parent filesystems must support the temporary files, hard links, and
+atomic renames used for guarded replacement.
+
+A packet holds only what a blind auditor may see: the signature, the same
+signature printed in Lean's raw expression form, the canonical kernel material,
+the statement as written, and the source of every project definition it rests
+on, with every comment and docstring the probe can identify removed, so that a
+reader who is asked what the Lean literally asserts cannot read the author's
+intent into it. Lean's parser, not a separate lexer, locates those comments.
+The probe parses each source in its own environment, which has the notation of
+every module the run imports but not the file's `local` notation.
+A source it cannot parse there (a body that uses `local notation`) is withheld
+if it may hold a comment. Source containing a known non-builtin token with
+`--` or `/-` is also withheld unless that token was globally active through an
+import, since the probe cannot reconstruct when a same-module token was declared
+or where a scoped token was active. A withheld source leaves the declaration's
+signatures and kernel material in the packet and does not make the article
+unresolved. A `local` token containing `--` is invisible to the probe: the
+packet can then show code as a comment or a comment as code.
+
+Every item's signature is also printed raw, bypassing project notation,
+unexpanders, and custom delaborators, so an `infixl " + " => HMul.hMul` cannot
+make a product read as a sum in any signature. Source text is not notation-proof:
+a definition's body, including a definition root's own source, is shown as
+written, where such notation still applies. For those, and for structures and
+generated companions, only the canonical kernel material, shown for every item,
+states the meaning without notation.
+
+Each theorem's packet also carries the statement *as written*, cut before a
+`:=` value or a structure-style `where` value by Lean's parser with its
+enclosing namespaces and the file's opened namespaces in scope. A proof Lean
+cannot parse, for example one using `local notation`, does not stop those cuts.
+The statement sits beside the elaborated signature: the printed form shows
+binders that `variable` and `include` inject and the type every cast lands in;
+the written form shows what the pretty-printer elides. Equation-style forms
+that cannot be parsed outside their file are marked `-- source not shown`.
+
+A statement's source passage can travel with it. A `## Sources` link to a
+non-Markdown file inside the blueprint with a `#L<start>-L<end>` fragment, for
+example `../../../sources/lebl-ra/ch-real-nums.tex#L693-L714`, names the exact
+text the statement came from. External URLs are skipped. A first local locator
+that names no text, because it points outside the blueprint, names a missing
+file or non-UTF-8 text, or names no lines of it, leaves the article's
+declarations unresolved. `--passages DIR` writes those passages beside
+the packets, one per article, in a separate, disjoint managed directory. It
+requires `--packets`. Each article directory also holds `article.lean`, the
+joint packet of every declaration the article
+names, because a source theorem is often formalized by several declarations
+together and each alone is honestly incomplete. A judge of faithfulness is
+given the article packet and its passage; an auditor asked what one
+declaration asserts is given that declaration's packet alone.
+
+When `--output`, `--packets`, and `--passages` are combined, all three outputs
+are staged before publication and a failed commit restores the previous set.
+This is failure atomicity, not simultaneous visibility across paths: each
+rename is atomic, but a reader opening several outputs during publication can
+briefly observe different generations.
 
 Plan durable article identity metadata without changing the blueprint:
 

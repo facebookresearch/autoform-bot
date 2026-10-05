@@ -50,9 +50,8 @@ For a new or incomplete repository:
 override, both workflows, and ignore rules. Do not hand-build any of it and do
 not copy the bundled example: the layout is fixed, and a chapter written as a
 sibling file instead of `<chapter>/README.md` still validates while publishing
-a book with no chapters. `init` never replaces an existing file. It only
-appends a missing `.beam/` rule to the root `.gitignore`; all other existing
-files are left alone and reported. That makes it the repair path. See the
+a book with no chapters. `init` never overwrites an existing file, so it is
+also the repair path; it reports what it left alone. See the
 [CLI reference](../../autoform_cli/README.md#commands) for its flags.
 
 `init` pins the generated workflows to the Autoform commit that ran it, but it
@@ -94,49 +93,16 @@ lake exe cache get   # skip only when the project has no Mathlib dependency
 lake build
 ```
 
-When the user explicitly opts into the Lean Beam preview, verify the installed
-runtime before handing the repository to later skills. Its `beam_version`
-result must match the version, MCP protocol, and source commit in
-`<AUTOFORM_PLUGIN_ROOT>/lean-beam.lock.json`, report `runtime_current: true`,
-and contain no `runtime_error`. Require an explicit finite tool deadline for
-the selected host; Codex exposes `tool_timeout_sec`, but choose its value from
-measured consumer evidence. If the host provides no verified finite deadline,
-leave the preview disabled and report that limitation. Before the first
-workspace call, verify that the host technically denies `lean_save` and
-`lean_close_save`; for Codex, require both names in the server's
-`disabled_tools`. If the host cannot enforce that exclusion, leave the preview
-disabled. Before any workspace-bound call, verify that the Beam MCP owner and
-its Lean child processes run inside an operating-system or container sandbox
-whose filesystem, process, and network permissions match the intended trust
-boundary. The agent host's command sandbox does not establish that. If
-confinement cannot be verified, leave the preview disabled and report the gate.
-Ensure the project root `.gitignore` contains `.beam/`; add the missing line
-without replacing existing ignore rules.
-After the external `lake build` and before the first `lean_sync`, call
-`lean_drop_workspace` with an explicit absolute `workspace.root`, even if this
-workflow has not used Beam yet.
-Treat `dropped: false` with `reason: notFound` as a successful eviction; the
-call does not create a runtime. Discard retained snapshots and handles, then
-call `lean_sync` on one saved project file and retain the returned opaque
-snapshot only for that file version. The root selects a trusted local Lean/Lake
-workspace, not a filesystem sandbox; relative paths can traverse outside it,
-and absolute dependency-source paths may also be outside it. After
-synchronization, use `lean_run_at` to evaluate `Lean.versionString` and compare it with
-`lake env lean --version` from the same workspace. A mismatch disables the
-preview; this compiler check is temporary until Beam exposes the typed workspace
-provenance required by `docs/lean-beam.md`. Do not use `lean_save` or
-`lean_close_save` while the exclusions in
-`<AUTOFORM_PLUGIN_ROOT>/docs/lean-beam.md` remain open. Repeat the eviction after
-every later external build, and never overlap a build with Beam calls. After
-sending request cancellation, call `lean_drop_workspace` under a finite host
-deadline.
-If it returns, discard state and resynchronize; if it does not, terminate and
-restart Beam because the drop is waiting behind the stuck request. Treat a
-host-level timeout without confirmed MCP cancellation as unsettled. If Beam is
-absent or its identity differs from the pin, stop with the exact pinned-install
-instructions; do not fetch mutable `main` or silently substitute another build.
-If the user does not opt in, continue repository setup without Beam and report
-that the interactive integration is disabled.
+When the user explicitly opts into the Lean Beam preview, read and follow
+`<AUTOFORM_PLUGIN_ROOT>/docs/lean-beam.md` before enabling it. Install only the
+exact revision in `lean-beam.lock.json`, verify `beam_version`, require a finite
+host tool deadline and operating-system containment, and technically deny
+`lean_save` and `lean_close_save`. Add `.beam/` to the project root
+`.gitignore`. Never overlap Beam calls with an external build; after each build,
+drop the workspace before synchronizing again. Treat cancellation or transport
+loss as unknown execution state until a bounded workspace drop returns or the
+host restarts Beam. If any admission check fails—or if the user did not opt
+in—leave the preview disabled and continue with Autoform's bundled Lean servers.
 
 Then validate, visualize, render, and strict-build the site, keeping
 `--require-declarations` so a named Lean declaration that does not exist fails

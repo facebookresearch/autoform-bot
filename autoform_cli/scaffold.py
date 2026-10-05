@@ -310,10 +310,8 @@ def scaffold_project(
 ) -> ScaffoldResult:
     """Write the blueprint vault, site config, and CI into *target*.
 
-    Existing files are never replaced unless *force* is set; they come back in
-    ``skipped`` so a repair run reports exactly what it left in place. The one
-    migration is the root ``.gitignore``: a missing ``.beam/`` rule is appended
-    without changing its existing bytes.
+    Existing files are never overwritten unless *force* is set; they come back
+    in ``skipped`` so a repair run reports exactly what it left in place.
     """
 
     requested = Path(target).expanduser()
@@ -404,18 +402,6 @@ def scaffold_project(
                     [f"refusing to write outside the project through a link: {probe}"]
                 )
         if destination.exists() and not force:
-            if relative == "gitignore" and destination.is_file():
-                existing = destination.read_bytes()
-                if b".beam/" not in existing.splitlines():
-                    newline = b"\r\n" if b"\r\n" in existing else b"\n"
-                    separator = b"" if not existing or existing.endswith((b"\n", b"\r")) else newline
-                    _atomic_write(
-                        destination,
-                        existing + separator + b".beam/" + newline,
-                        mode=stat.S_IMODE(destination.stat().st_mode),
-                    )
-                    written.append(_destination(relative))
-                    continue
             skipped.append(_destination(relative))
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)

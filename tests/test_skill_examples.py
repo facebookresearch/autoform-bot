@@ -9,6 +9,7 @@ try:
 except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib
 
+from autoform_cli.audit import audit_blueprint
 from autoform_cli.graph import load_graph
 from autoform_cli.lean import build_linker, declaration_names
 from autoform_cli.render import render_site
@@ -28,57 +29,80 @@ def test_root_readme_uses_the_canonical_repository(repo_root: Path) -> None:
         in readme
     )
     assert "git clone https://github.com/facebookresearch/autoform-bot.git" in readme
-    assert (
-        "https://github.com/facebookresearch/autoform-bot/tree/execution" in readme
-    )
+    assert "historical\n`execution` branch" in readme
+    assert "custom worker/prover stack are deprecated" in readme
     assert "VivienCabannes/autoform-bot" not in readme
 
 
-def test_setup_requires_the_pinned_explicit_lean_beam_contract(repo_root: Path) -> None:
-    setup = (repo_root / "skills" / "setup" / "SKILL.md").read_text(encoding="utf-8")
-    integration = (repo_root / "docs" / "lean-beam.md").read_text(encoding="utf-8")
-    agent_review = (
-        repo_root / "skills" / "agent-review" / "references" / "mathlib-style.md"
-    ).read_text(encoding="utf-8")
+def test_lean_beam_preview_is_explicit_and_fail_closed(repo_root: Path) -> None:
+    setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
+    develop = (repo_root / "skills/develop-plugin/SKILL.md").read_text(encoding="utf-8")
+    integration = (repo_root / "docs/lean-beam.md").read_text(encoding="utf-8")
     normalized_setup = " ".join(setup.split())
     normalized_integration = " ".join(integration.split())
 
-    assert "lean-beam.lock.json" in setup
-    assert "beam_version" in setup
-    assert "absolute `workspace.root`" in setup
-    assert "opaque snapshot" in normalized_setup
-    assert "before the first `lean_sync`" in normalized_setup
-    assert "reason: notFound" in normalized_setup
-    assert "tool_timeout_sec" in setup
-    assert "explicit finite tool deadline" in normalized_setup
-    assert "technically denies `lean_save` and `lean_close_save`" in normalized_setup
-    assert "`disabled_tools`" in setup
-    assert "not a filesystem sandbox" in normalized_setup
-    assert "Before any workspace-bound call" in normalized_setup
-    assert "Beam MCP owner and its Lean child processes" in normalized_setup
+    assert "explicitly opts into the Lean Beam preview" in setup
+    assert "exact revision in `lean-beam.lock.json`" in normalized_setup
+    assert "technically deny `lean_save` and `lean_close_save`" in normalized_setup
+    assert "operating-system containment" in normalized_setup
     assert "leave the preview disabled" in normalized_setup
-    assert "project root `.gitignore` contains `.beam/`" in normalized_setup
-    assert "evaluate `Lean.versionString`" in normalized_setup
-    assert "compare it with `lake env lean --version`" in normalized_setup
-    assert "never overlap a build with Beam calls" in normalized_setup
-    assert "request cancellation" in normalized_setup
-    assert "call `lean_drop_workspace` under a finite host deadline" in normalized_setup
-    assert "host-level timeout without confirmed MCP cancellation" in normalized_setup
-    assert "Do not use `lean_save` or `lean_close_save`" in normalized_setup
-    assert "When the user explicitly opts into the Lean Beam preview" in normalized_setup
-    assert "If the user does not opt in" in normalized_setup
-    assert "There is no Autoform session id" in integration
-    assert "Do not automatically retry" in integration
-    assert "external `lake build`" in integration
-    assert "not a filesystem authorization boundary" in normalized_integration
-    assert "official Codex MCP configuration reference" in integration
-    assert "lists a 60-second default" in normalized_integration
-    assert "host approval policy must not rely on that annotation" in normalized_integration
-    assert "Integration CI covers cooperative MCP cancellation" in normalized_integration
-    assert 'disabled_tools = ["lean_save", "lean_close_save"]' in integration
-    assert "the host must enforce the denylist" in normalized_integration
-    assert "../../../docs/lean-beam.md" in agent_review
-    assert "do not use `lean_save` or `lean_close_save`" in agent_review
+    assert "bundled Lean servers" in setup
+    assert "Beam preview: follow `docs/lean-beam.md`" in develop
+    assert "remain the default Lean tooling" in normalized_integration
+    assert "must not ship the cutover" in normalized_integration
+
+
+def test_human_review_distinguishes_roadmap_progress_from_source_scope(
+    repo_root: Path,
+) -> None:
+    skill = (repo_root / "skills/human-review/SKILL.md").read_text(encoding="utf-8")
+
+    assert "`Scoped roadmap` percentage" in skill
+    assert "formalizable leaf targets" in skill
+    assert "fully proved, including every dependency" in skill
+    assert "bodies for definitions" in skill
+    assert "`mathlib: true` follows the authored status contract" in skill
+    assert "not audit verification" in skill
+    assert "never as whole-source completion" in skill
+    assert "linked coverage contract" in skill
+    assert "statement-only theorem remains incomplete" in skill
+    assert "landing-page progress summary" in skill
+    assert "autoform dashboard <PROJECT> --site-dir site" in skill
+    assert "same site deployed to\nGitHub Pages" in skill
+    assert "local-only live claim badges" in skill
+    assert "overview, progress, project graph" not in skill
+
+
+def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path) -> None:
+    development = (repo_root / "skills" / "develop-plugin" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(development.split())
+
+    assert "private declaration safety as fail-closed evidence" in normalized
+    assert "official user name" in normalized
+    assert "by source coordinates" in normalized
+
+
+def test_agent_review_treats_skeleton_hashes_as_advisory(repo_root: Path) -> None:
+    review = (repo_root / "skills" / "agent-review" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(review.split())
+
+    assert "not reviewer authentication or an approval key" in normalized
+    assert "report as advisory" in normalized
+
+
+def test_quick_start_keeps_the_cli_agent_facing(repo_root: Path) -> None:
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    quick_start = readme.split("## Quick start", 1)[1].split("## Blueprint model", 1)[0]
+    normalized = " ".join(quick_start.split())
+
+    assert "agent window" in normalized
+    assert "users do not need to learn or run its commands" in normalized
+    assert "/autoform:setup" in quick_start
+    assert "uv run autoform" not in quick_start
 
 
 def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
@@ -148,8 +172,6 @@ def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
     assert ".obsidian/" in ignored
     assert "dependencies.md" in ignored
     assert "structure.md" not in ignored
-    project_ignored = (example / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert ".beam/" in project_ignored
 
     overview = (blueprint / "README.md").read_text(encoding="utf-8")
     assert "kind: blueprint" in overview
@@ -170,6 +192,25 @@ def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
     assert toolchain == "leanprover/lean4:v4.32.2"
     assert manifest["require"][0]["rev"] == "v4.32.2"
     assert manifest["lean_lib"][0]["srcDir"] == "src"
+
+
+def test_roadmap_example_is_structural_not_a_completion_fixture(
+    repo_root: Path,
+) -> None:
+    example = repo_root / _EXAMPLE
+    audit = audit_blueprint(example / "blueprint", lean_root=example)
+    assert audit.coverage is not None
+    assert not audit.coverage.complete
+    assert audit.coverage.counts["MAPPED"] > 0
+
+    reference = (
+        repo_root / "skills/roadmap/references/cabannes-thesis-roadmap.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(reference.split())
+    assert "structural example, not a completion fixture" in normalized
+    assert "not a valid finish state" in normalized
+    assert "approved small slice" not in normalized
+    assert "handing ready nodes to Orchestrate" not in normalized
 
 
 def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> None:
@@ -295,8 +336,13 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert not (site / "book.md").exists()
     overview = (site / "README.md").read_text(encoding="utf-8")
     # The landing page states progress as figures; the chapters keep the strip.
-    assert "5 of 7 items settled" in overview
+    assert "Scoped roadmap" in overview
+    assert "5 of 7 targets complete" in overview
     assert ">71%<" in overview
+    assert "Declared source coverage:" in overview
+    assert "1 decomposed · 5 mapped · 1 out" in overview
+    assert 'href="coverage/index.html"' in overview
+    assert "items settled" not in overview
     assert "bp-progress-link" not in overview
     # A chapter strip counts that chapter, so this is 4 of the project's 5.
     milestone = (site / "roadmap/infimum-loss/README.md").read_text(encoding="utf-8")
@@ -400,29 +446,19 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
     for required in (
         "references/cabannes-thesis-roadmap.md",
         "blueprint/roadmap/",
-        "blueprint/coverage/",
-        "blueprint/roadmap/**/*.md",
-        "declaration",
-        "coarse roadmap",
+        "blueprint/coverage/README.md",
+        "blueprint/sources/",
         "## Depends on",
-        "ordered mathematical book",
-        "reading order",
-        "mathematical significance",
-        "pull-request-sized unit",
+        "## Proof depends on",
         "one unique main result",
-        "targeted lookups",
-        "exact verified upstream result",
-        "Reconcile every page whose claims this work has just invalidated",
-        "GitHub pull requests and issues",
-        "Zulip topics",
         "../setup/references/zulip.md",
-        "project-authored specification",
-        "never contact people",
     ):
         assert required in roadmap
     assert "autoform init" in setup
     assert "references/thesis-review-case.md" in agent_review
     assert "references/roadmap-quality.md" in agent_review
+    assert "stale-build refusal" in agent_review
+    assert "drift checksum" in agent_review
     assert "autoform-visualize" in human_review
     assert "`approve`, `revise`, or\n`block`" in human_review
     for required in (
@@ -443,6 +479,8 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
     assert len(develop_plugin.split()) <= 220
     assert "$setup" in setup_metadata
     assert "$roadmap" in roadmap_metadata
+    assert "one invocation" in roadmap_metadata
+    assert "persistent Goal" in roadmap_metadata
     assert "$agent-review" in agent_review_metadata
     assert "$human-review" in human_review_metadata
     assert "$develop-plugin" in develop_plugin_metadata
@@ -455,6 +493,53 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
     assert "coherent pull\nrequest and review unit" in roadmap_example
     assert (repo_root / "skills/agent-review/references/thesis-review-case.md").is_file()
     assert (repo_root / "skills/agent-review/references/roadmap-quality.md").is_file()
+
+
+def test_roadmap_skill_owns_a_complete_pass(repo_root: Path) -> None:
+    """A direct Roadmap invocation is a full job, not one planning checkpoint."""
+
+    roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")
+    normalized = " ".join(roadmap.split())
+
+    for required in (
+        "one complete planning pass",
+        "model-callable Goal lifecycle",
+        "If no compatible Goal can be used",
+        "complete the same pass in the current run",
+        "leave any unrelated Goal unchanged",
+        "Do not ask the user to invoke another command",
+        "internal checkpoints",
+        "Do not pause for approval",
+        "Treat every other `DEFERRED` row as queued work",
+        "Do not stop after discovery",
+        "Mark an active Goal complete only after these conditions hold",
+    ):
+        assert required in normalized
+
+    for obsolete in (
+        "internal/runbooks/planning.md",
+        "Let the user choose whether",
+        "for user approval before",
+        "After approval",
+        "Do not infer missing scope",
+    ):
+        assert obsolete not in roadmap
+
+
+def test_roadmap_skill_commits_the_final_checked_pass(repo_root: Path) -> None:
+    roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")
+    finish = roadmap.split("## Finish", 1)[1]
+    normalized = " ".join(finish.split())
+
+    for required in (
+        "After the final edit",
+        "`autoform check`",
+        "`autoform audit`",
+        "Commit the vault and refreshed graph only after this final validation",
+        "no `MAPPED` rows",
+        "latest commit contains every change from the pass",
+    ):
+        assert required in normalized
 
 
 def test_setup_skill_offers_opt_in_zulip_project_sync(repo_root: Path) -> None:

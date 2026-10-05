@@ -1,12 +1,14 @@
-# Lean Beam integration
+# Lean Beam preview contract
 
-Autoform delegates Lean process ownership and protocol handling to the
-Lean-FRO-maintained preview in
-[`leanprover/lean-beam`](https://github.com/leanprover/lean-beam).
-Autoform does not proxy Lean LSP, parse REPL output, or maintain a second pool
-of Lean processes. One long-lived Beam stdio process owns the reusable Lean
-runtimes; explicit workspace descriptors, source snapshots, and proof handles
-carry all state that matters to callers.
+Autoform's bundled `autoform-lsp` and `autoform-repl` servers remain the default
+Lean tooling. This document defines a separate, explicit preview of the
+Lean-FRO-maintained
+[`leanprover/lean-beam`](https://github.com/leanprover/lean-beam) session API.
+The preview does not replace or silently disable the default servers. In a
+preview session, use Beam as the sole Lean-process owner for that workspace and
+do not interleave calls to the default Autoform servers. Autoform does not proxy
+Beam or parse its private broker protocol; explicit workspace descriptors,
+source snapshots, and proof handles carry all state that matters to callers.
 
 The supported development revision and protocol are recorded in
 [`lean-beam.lock.json`](../lean-beam.lock.json). Install that exact revision
@@ -23,8 +25,8 @@ git checkout --detach d5dc8fe9d3928899bf55968a93d9e309d9fad1bc
   --codex-mcp
 ```
 
-Autoform does not bundle a Beam executable, wrap its protocol, or register a
-second MCP server. Use Beam's own installer to register the canonical
+Autoform does not bundle a Beam executable, wrap its protocol, or automatically
+register a second MCP server. Use Beam's own installer to register the canonical
 `lean-beam` server for the desired host. The command above uses `--codex-mcp`;
 use `--claude-mcp` for Claude Code, or both flags for both hosts. Do not install
 Beam's companion agent skill while Autoform excludes its save operations; this
@@ -58,10 +60,11 @@ either. See the
 
 Lean Beam does not yet publish a Muse MCP registration path. Autoform's native
 Muse skills remain available, but Lean tooling in this preview is unsupported
-there; do not silently substitute the removed Autoform servers.
+there; do not claim that Muse is exercising the Beam contract.
 
 This pin is an exact commit from a draft pull request and is for integration
-development, not release. Autoform must not ship the cutover until Lean Beam
+development, not release. The opt-in preview may coexist with the default
+Autoform servers, but Autoform must not ship the cutover until Lean Beam
 publishes a tagged release containing the opaque source-snapshot work from
 [`leanprover/lean-beam#254`](https://github.com/leanprover/lean-beam/pull/254),
 its release CI is green, and the save and external-build synchronization
@@ -145,7 +148,7 @@ does not return, it is waiting behind the stuck request and the MCP host must
 terminate and restart the Beam process instead. Doing so invalidates every
 handle owned by that process.
 
-Until the upstream save issues are closed, Autoform workflows use `lean_sync`
+Until the upstream save issues are closed, Beam preview workflows use `lean_sync`
 for the interactive diagnostics barrier and an external `lake build` for final
 verification. Do not overlap that build with any Beam call. Workflows do not
 call `lean_save` or `lean_close_save`; the direct Beam server still exposes

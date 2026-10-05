@@ -4,12 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "autoform"
-version = "0.6.0"
-description = "Markdown-blueprint roadmaps with Lean Beam integration"
+version = "0.5.0"
+description = "Markdown-blueprint roadmaps with Lean LSP and REPL servers"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
+    "fastmcp>=3.4.5,<4",
+    "psutil>=5.9",
+    "tomli>=2.0.1; python_version < '3.11'",
     # The blueprint checks predict what the generated MkDocs site publishes.
     # Anchor prediction runs the configured renderer itself rather than
     # approximating it, so these are runtime requirements, not build extras.
@@ -24,8 +27,11 @@ dependencies = [
 [project.scripts]
 autoform = "autoform_cli.__main__:main"
 autoform-visualize = "autoform_cli.visualize:main"
+autoform-lean-runtime = "servers.lean_runtime:main"
 
 [project.optional-dependencies]
+# Kept as an empty compatibility extra for existing plugin launch commands.
+repl = []
 dev = [
     "mkdocs>=1.6,<2",
     "mkdocs-material>=9.5,<10",
@@ -36,7 +42,20 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["autoform_cli"]
+packages = ["autoform_cli", "servers"]
 
 [tool.ruff]
 line-length = 120
+
+[tool.uv]
+# cryptography (pulled in by fastmcp -> authlib/joserfc and mcp -> pyjwt[crypto]) stopped
+# publishing Intel-macOS wheels at 49.0.0. Without a wheel, uv builds it from source, which
+# needs Rust and OpenSSL headers, so the MCP servers fail to start on x86_64 Macs. 48.x lacks
+# security fixes from 49 and 50; Autoform never imports cryptography (only fastmcp's OAuth and
+# JWT auth providers do). The second constraint keeps every other platform on 49 or later:
+# without it, a fresh or upgraded lock picks one version for all platforms, which can only be 48.x.
+constraint-dependencies = [
+    "cryptography<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "cryptography>=49; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+]
+

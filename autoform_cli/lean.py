@@ -12,23 +12,34 @@ and deliberately reports nothing it cannot see rather than guessing.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-_LINE_COMMENT = re.compile(r"--.*$")
-_NAMESPACE = re.compile(r"^\s*namespace\s+(\S+)")
+_NAMESPACE = re.compile(r"^\s*namespace\s+(.+)$")
 _SECTION = re.compile(r"^\s*section\b\s*(\S*)")
 _END = re.compile(r"^\s*end\b\s*(\S*)")
 _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
     r"(?:(?:private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
-    r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom)\s+"
-    r"([^\s:(){}\[\]⦃⦄,]+)"
+    r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom)\s+(.+)$"
 )
 _IGNORED_DIRECTORIES = frozenset({".lake", ".git", "lake-packages", "build"})
+#: Known schemas of the skeleton command's packet and passage manifests.
+PACKET_SCHEMA = "autoform-skeleton-packets/v2"
+PASSAGE_SCHEMA = "autoform-skeleton-passages/v2"
+MANAGED_OUTPUT_SCHEMAS = frozenset(
+    {
+        ("packets", "autoform-skeleton-packets/v1"),
+        ("packets", PACKET_SCHEMA),
+        ("passages", "autoform-skeleton-passages/v1"),
+        ("passages", PASSAGE_SCHEMA),
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +58,7 @@ class SourceIndex:
 
     root: Path
     declarations: dict[str, Declaration]
+    source_digest: str
 
     def find(self, name: str) -> Declaration | None:
         return self.declarations.get(name)
@@ -56,38 +68,65 @@ def index_project(root: str | Path) -> SourceIndex:
     """Scan ``*.lean`` beneath *root* and index declarations by full name."""
     root_path = Path(root).expanduser().resolve()
     declarations: dict[str, Declaration] = {}
+    digest = hashlib.sha256()
     if not root_path.is_dir():
-        return SourceIndex(root=root_path, declarations=declarations)
+        return SourceIndex(root=root_path, declarations=declarations, source_digest=digest.hexdigest())
 
-    for path in sorted(root_path.rglob("*.lean")):
-        if _IGNORED_DIRECTORIES.intersection(path.relative_to(root_path).parts):
-            continue
+    paths: list[Path] = []
+    for directory, names, files in os.walk(root_path):
+        current = Path(directory)
+        names[:] = sorted(
+            name
+            for name in names
+            if name not in _IGNORED_DIRECTORIES
+            and not _is_managed_output(current / name)
+        )
+        paths.extend(current / name for name in files if name.endswith(".lean"))
+
+    for path in sorted(paths):
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError):
             continue
         relative = path.relative_to(root_path)
+        digest.update(relative.as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(text.encode("utf-8"))
+        digest.update(b"\0")
         for declaration in _scan(text, relative):
             # First definition wins, so an earlier file is not masked by a later
             # one when a name is genuinely duplicated across namespaces.
             declarations.setdefault(declaration.name, declaration)
-    return SourceIndex(root=root_path, declarations=declarations)
+    return SourceIndex(root=root_path, declarations=declarations, source_digest=digest.hexdigest())
+
+
+def _is_managed_output(path: Path) -> bool:
+    """Whether ``path`` is an Autoform packet tree rather than project source."""
+
+    manifest = path / "manifest.json"
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and (
+        payload.get("kind"), payload.get("schema")
+    ) in MANAGED_OUTPUT_SCHEMAS
 
 
 def _scan(text: str, relative: Path) -> list[Declaration]:
     found: list[Declaration] = []
     namespaces: list[str] = []
     scopes: list[str | None] = []
-    comment_depth = 0
 
-    for number, raw in enumerate(text.splitlines(), start=1):
-        line, comment_depth = _strip_comments(raw, comment_depth)
+    for number, line in enumerate(_without_lean_comments(text).splitlines(), start=1):
         if not line.strip():
             continue
 
         namespace_match = _NAMESPACE.match(line)
         if namespace_match:
-            name = namespace_match.group(1)
+            name = _name_token(namespace_match.group(1))
+            if name is None:
+                continue
             namespaces.append(name)
             scopes.append(name)
             continue
@@ -107,41 +146,113 @@ def _scan(text: str, relative: Path) -> list[Declaration]:
 
         declaration_match = _DECLARATION.match(line)
         if declaration_match:
-            keyword, name = declaration_match.group(1), declaration_match.group(2)
+            keyword = declaration_match.group(1)
+            name = _name_token(declaration_match.group(2))
+            if name is None:
+                continue
             qualified = ".".join([*namespaces, name])
             found.append(Declaration(qualified, relative, number, keyword))
     return found
 
 
-def _strip_comments(line: str, depth: int) -> tuple[str, int]:
-    """Remove Lean comments from *line*, carrying block-comment depth across."""
+_NAME_TOKEN = re.compile(r"(?:«[^«»]*»|[^\s:(){}\[\]⦃⦄,«»])+")
+
+
+def _name_token(text: str) -> str | None:
+    """Read one possibly guillemet-quoted Lean identifier from ``text``."""
+
+    match = _NAME_TOKEN.match(text)
+    return match.group() if match and text[match.end() : match.end() + 1] not in ("«", "»") else None
+
+
+_RAW_OPEN = re.compile(r'r(#*)"')
+_CHAR_LITERAL = re.compile(r"'(?:\\.|[^'\\\n])*'")
+
+
+def _without_lean_comments(text: str) -> str:
+    """Remove nested Lean comments, keeping strings intact and newlines in place."""
+
     out: list[str] = []
+    stack: list[list] = []  # [closer, interpolated] for a string, [None, depth] for `{…}` in `s!"…"`
     index = 0
-    while index < len(line):
-        pair = line[index : index + 2]
-        if depth:
-            if pair == "-/":
-                depth -= 1
+    while index < len(text):
+        top = stack[-1] if stack else None
+        char = text[index]
+        if top is not None and top[0] is not None:
+            close, interpolated = top
+            if text.startswith(close, index):
+                out.append(close)
+                index += len(close)
+                stack.pop()
+                continue
+            if close in {'"', "'"} and char == "\\":
+                out.append(text[index : index + 2])
                 index += 2
                 continue
-            if pair == "/-":
-                depth += 1
-                index += 2
-                continue
+            if interpolated and char == "{":
+                stack.append([None, 1])
+            out.append(char)
             index += 1
             continue
-        if pair == "/-":
-            depth += 1
-            index += 2
+        if text.startswith("--", index):
+            newline = text.find("\n", index + 2)
+            if newline < 0:
+                break
+            out.append("\n")
+            index = newline + 1
             continue
-        out.append(line[index])
+        if text.startswith("/-", index):
+            # `/--` and `/-!` open a docstring whose body starts after the marker.
+            depth, index = 1, index + (3 if text[index + 2 : index + 3] in {"-", "!"} else 2)
+            out.append(" ")
+            while index < len(text) and depth:
+                pair = text[index : index + 2]
+                if pair in {"-/", "/-"}:
+                    depth += 1 if pair == "/-" else -1
+                    index += 2
+                    continue
+                if text[index] == "\n":
+                    out.append("\n")
+                index += 1
+            continue
+        raw = _RAW_OPEN.match(text, index)
+        if raw:
+            out.append(raw.group())
+            index = raw.end()
+            stack.append(['"' + raw.group(1), False])
+            continue
+        previous = text[index - 1] if index else " "
+        if char == '"':
+            interpolated = previous == "!" and index >= 2 and (text[index - 2].isalnum() or text[index - 2] == "_")
+            stack.append(['"', interpolated])
+        elif char == "«":
+            stack.append(["»", False])
+        elif char == "'" and not (previous.isalnum() or previous in "_'") and _CHAR_LITERAL.match(text, index):
+            stack.append(["'", False])
+        elif top is not None and char in "{}":
+            top[1] += 1 if char == "{" else -1
+            if top[1] == 0:
+                stack.pop()
+        out.append(char)
         index += 1
-    return _LINE_COMMENT.sub("", "".join(out)), depth
+    return "".join(out)
+
+
+def strip_lean_comments(text: str) -> str:
+    """Remove every line and block comment, docstrings included, from Lean source."""
+
+    return "\n".join(
+        line.rstrip() for line in _without_lean_comments(text).splitlines() if line.strip()
+    )
+
+
+_DECLARATION_NAME = re.compile(r"(?:«[^»]*(?:»|$)|[^\s,«])+")
 
 
 def declaration_names(lean: str) -> list[str]:
     """Split a ``lean:`` frontmatter value into individual declaration names."""
-    return [name.strip() for name in lean.replace(",", " ").split() if name.strip()]
+
+    return _DECLARATION_NAME.findall(lean)
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +336,9 @@ def _git(root: str | Path, *arguments: str) -> str | None:
 
 __all__ = [
     "Declaration",
+    "MANAGED_OUTPUT_SCHEMAS",
+    "PACKET_SCHEMA",
+    "PASSAGE_SCHEMA",
     "SourceIndex",
     "SourceLinker",
     "build_linker",
@@ -232,4 +346,5 @@ __all__ = [
     "detect_ref",
     "detect_repository_url",
     "index_project",
+    "strip_lean_comments",
 ]
