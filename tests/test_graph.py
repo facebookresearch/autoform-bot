@@ -142,6 +142,50 @@ def test_rejects_self_edge(tmp_path: Path) -> None:
         load_graph(blueprint)
 
 
+def test_rejects_duplicate_formalized_lean_target_credit(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    for name in ("first", "second"):
+        _node(
+            blueprint,
+            f"{name}.md",
+            f"# {name.title()}\n",
+            declaration="theorem",
+            statement="formalized",
+            proof="formalized",
+            lean="Project.shared",
+        )
+
+    with pytest.raises(
+        GraphValidationError,
+        match="Project.shared: formalized Lean target is credited to multiple articles: first, second",
+    ):
+        load_graph(blueprint)
+
+
+def test_allows_unformalized_migration_reference_to_credited_target(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "landed.md",
+        "# Landed\n",
+        declaration="theorem",
+        statement="formalized",
+        proof="formalized",
+        lean="Project.shared",
+    )
+    _node(
+        blueprint,
+        "migration.md",
+        "# Migration\n",
+        declaration="theorem",
+        lean="Project.shared",
+    )
+
+    graph = load_graph(blueprint)
+
+    assert set(graph.nodes) == {"landed", "migration"}
+
+
 def test_every_roadmap_markdown_file_is_an_article(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _roadmap_page(blueprint, "notes.md", "# Notes\n")
