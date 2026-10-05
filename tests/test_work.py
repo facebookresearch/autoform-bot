@@ -839,8 +839,7 @@ def test_work_assumptions_under_the_open_policy_bounds_each_article(
         "open: chapter/open (Project.open_thm, Project.open_aux)\n"
         "open: chapter/prove (Project.prove)\n"
         "conditional: chapter/reduction assumes chapter/open\n"
-        "open: chapter/uses (Project.uses)\n"
-        "conditional: chapter/uses assumes chapter/open\n"
+        "open: chapter/uses (Project.uses) assumes chapter/open\n"
     )
 
 

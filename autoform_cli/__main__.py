@@ -562,10 +562,13 @@ def _work_assumptions(args: argparse.Namespace) -> int:
         return 0
     print(_human_text(f"Open statements: {'allowed' if contract.open_statements else 'forbidden'}"))
     for article in contract.articles:
+        assumes = f"assumes {', '.join(article.assumes)}"
         if article.open:
-            print(_human_text(f"open: {article.id} ({', '.join(article.declarations)})"))
-        if article.assumes:
-            print(_human_text(f"conditional: {article.id} assumes {', '.join(article.assumes)}"))
+            # An open statement is not conditional: its own proof is missing.
+            line = f"open: {article.id} ({', '.join(article.declarations)})"
+            print(_human_text(f"{line} {assumes}" if article.assumes else line))
+        elif article.assumes:
+            print(_human_text(f"conditional: {article.id} {assumes}"))
     return 0
 
 
