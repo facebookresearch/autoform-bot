@@ -421,6 +421,7 @@ def test_malformed_hashes_and_symlinked_cards_are_not_testimony(tmp_path: Path) 
         ("missing-skeleton-block", "exactly one skeleton block"),
         ("empty-testimony", "nonempty read-back testimony"),
         ("empty-model", "nonempty model label"),
+        ("nested-model", "frontmatter field 'model' must be a JSON double-quoted string"),
         ("wrong-article", "does not match the card path article_id"),
         ("wrong-declaration", "does not match the card path"),
     ],
@@ -460,6 +461,9 @@ def test_incomplete_or_misidentified_cards_are_explicitly_invalid(
         damaged = card[: card.index("## Read-back") + len("## Read-back")] + "\n"
     elif damage == "empty-model":
         damaged = card.replace('model: "m"\n', "model:\n")
+    elif damage == "nested-model":
+        # Decoded, ten thousand nested arrays exceed Python's recursion limit.
+        damaged = card.replace('model: "m"\n', "model: " + "[" * 10_000 + "\n")
     elif damage == "wrong-article":
         damaged = card.replace(_ARTICLE_ID, "af_aaaaaaaaaaaaaaaaaaaaaaaa", 1)
     else:

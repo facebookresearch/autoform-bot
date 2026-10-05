@@ -3944,6 +3944,12 @@ def _split(text: str) -> tuple[dict[str, str], str, tuple[str, ...]]:
         if key not in _FRONTMATTER_FIELDS:
             errors.append(f"unknown frontmatter field {key!r}")
         if key in _QUOTED_FRONTMATTER_FIELDS:
+            # Only a JSON string is accepted, and one opens with a quote.
+            # Anything else is refused undecoded: the decoder recurses once per
+            # nested array, and ten thousand "[" raise RecursionError.
+            if not value.startswith('"'):
+                errors.append(f"frontmatter field {key!r} must be a JSON double-quoted string")
+                continue
             try:
                 decoded = json.loads(value)
             except json.JSONDecodeError:
