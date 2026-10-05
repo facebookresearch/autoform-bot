@@ -1527,6 +1527,13 @@ def _replace_with_a_directory(article: Path) -> None:
     article.mkdir()
 
 
+def _link_to_a_device(article: Path) -> None:
+    # /dev/null reads as empty, so a check that let devices through fails
+    # rather than hangs, as it would reading /dev/zero.
+    article.unlink()
+    article.symlink_to("/dev/null")
+
+
 def _make_unreadable(article: Path) -> None:
     article.chmod(0)
 
@@ -1541,6 +1548,11 @@ _GONE = "so its card was not filed; restore the article, or drop its records, an
         (_replace_chapter_with_a_file, f"was deleted after its evidence was checked, {_GONE}"),
         (_replace_with_a_directory, f"is no longer a regular file, {_GONE}"),
         pytest.param(
+            _link_to_a_device,
+            f"is no longer a regular file, {_GONE}",
+            marks=pytest.mark.skipif(not os.path.exists("/dev/null"), reason="needs /dev/null"),
+        ),
+        pytest.param(
             _make_unreadable,
             "cannot be read (Permission denied), so its card was not filed; rerun the record once it can be read",
             marks=pytest.mark.skipif(
@@ -1549,7 +1561,13 @@ _GONE = "so its card was not filed; restore the article, or drop its records, an
             ),
         ),
     ],
-    ids=["a-dangling-link", "chapter-replaced-by-a-file", "replaced-by-a-directory", "made-unreadable"],
+    ids=[
+        "a-dangling-link",
+        "chapter-replaced-by-a-file",
+        "replaced-by-a-directory",
+        "linked-to-a-device",
+        "made-unreadable",
+    ],
 )
 def test_an_article_that_cannot_be_read_again_names_the_record_and_why(
     tmp_path: Path,
