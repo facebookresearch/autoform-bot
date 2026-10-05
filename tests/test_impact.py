@@ -436,6 +436,28 @@ def test_probe_failures_name_the_impact_probe(
     assert default.value.issues == (message.format(label="skeleton probe"),)
 
 
+def test_impact_probe_freshness_messages_never_mention_skeletons(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
+    monkeypatch.setattr(
+        "autoform_cli.skeleton._run_bounded_command",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 3, stdout="", stderr="Demo is out of date"),
+    )
+    probe = render_impact_probe(imports=["Demo"], project_roots=["Demo"])
+
+    def issues(label: str | None) -> tuple[str, ...]:
+        with pytest.raises(SkeletonError) as caught:
+            skeleton.run_probe(probe, tmp_path, **({} if label is None else {"label": label}))
+        return caught.value.issues
+
+    missing = "lake-manifest.json is missing; run `lake build` before"
+    assert issues("impact probe") == (f"{missing} running the impact probe",)
+    assert issues(None) == (f"{missing} extracting skeletons",)
+    (tmp_path / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
+    stale = "Lean build artifacts are stale; run `lake build` before"
+    assert issues("impact probe") == (f"{stale} running the impact probe\nDemo is out of date",)
+    assert issues(None) == (f"{stale} extracting skeletons\nDemo is out of date",)
+
+
 # --------------------------------------------------------------------------- #
 # Project modules
 # --------------------------------------------------------------------------- #
