@@ -654,6 +654,34 @@ def test_release_many_deletes_no_ref_when_one_lease_goes_stale_before_the_push(
 
 
 @pytest.mark.parametrize("method", ["acquire_many", "renew_many", "release_many"])
+def test_batch_names_a_malformed_lease_as_blocking_and_changes_nothing(
+    tmp_path: Path, board_repo: Path, method: str
+) -> None:
+    board = _board(tmp_path, board_repo, "worker-a")
+    assert board.acquire("mine", ttl=600)
+    _plant_message(board_repo, "broken", "not json")
+    before = _refs(board_repo)
+
+    result = getattr(board, method)(["mine", "broken"])
+
+    assert result == claims.ClaimBatchResult(False, ("broken",), "malformed lease")
+    assert _refs(board_repo) == before
+
+
+def test_acquire_many_names_every_blocking_key_in_batch_order(tmp_path: Path, board_repo: Path) -> None:
+    peer = _board(tmp_path, board_repo, "worker-b")
+    assert peer.acquire("held", ttl=600)
+    _plant_message(board_repo, "broken", "not json")
+    before = _refs(board_repo)
+    board = _board(tmp_path, board_repo, "worker-a")
+
+    result = board.acquire_many(["broken", "free", "held"], ttl=600)
+
+    assert result == claims.ClaimBatchResult(False, ("broken", "held"), "malformed lease or held by another worker")
+    assert _refs(board_repo) == before
+
+
+@pytest.mark.parametrize("method", ["acquire_many", "renew_many", "release_many"])
 @pytest.mark.parametrize(
     ("keys", "error", "match"),
     [

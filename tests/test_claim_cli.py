@@ -174,11 +174,24 @@ def test_claim_cli_multi_node_failure_changes_no_claim(tmp_path: Path, capsys) -
 
     assert main(_args(repo, scratch, "acquire", "a")) == 0
     capsys.readouterr()
+    assert main(_args(repo, scratch, "renew", "a", "b")) == 1
+    assert capsys.readouterr().out == (
+        "error: could not renew a, b; no claim was renewed: not held by this worker: b\n"
+    )
     assert main(_args(repo, scratch, "release", "a", "b")) == 1
     assert capsys.readouterr().out == (
         "error: could not release a, b; no claim was released: not held by this worker: b\n"
     )
     assert _claim_refs(repo) == sorted(CLAIM_REF_PREFIX + author_claim_key(node) for node in ("a", "b"))
+
+
+def test_claim_cli_multi_node_names_a_malformed_claim(tmp_path: Path, capsys) -> None:
+    repo = _bare_repo(tmp_path)
+    _plant_message(repo, author_claim_key("b"), "not json")
+
+    assert main(_args(repo, tmp_path / "scratch", "acquire", "a", "b")) == 1
+    assert capsys.readouterr().out == "error: could not acquire a, b; no claim was acquired: malformed lease: b\n"
+    assert _claim_refs(repo) == [CLAIM_REF_PREFIX + author_claim_key("b")]
 
 
 def test_claim_cli_rejects_duplicate_targets_before_touching_the_board(tmp_path: Path, capsys) -> None:

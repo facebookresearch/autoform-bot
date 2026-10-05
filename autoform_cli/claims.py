@@ -56,8 +56,9 @@ class MalformedLeaseError(ClaimTransportError):
 class ClaimBatchResult:
     """The outcome of an all-or-nothing multi-key claim operation.
 
-    It is true exactly when every key changed. Otherwise no key changed,
-    ``reason`` says why, and ``blocking`` names the keys responsible when known.
+    It is true exactly when the operation succeeded for every key. Otherwise no
+    key changed, ``reason`` says why, and ``blocking`` names the keys
+    responsible when known.
     """
 
     ok: bool
@@ -101,6 +102,11 @@ def _rejected_keys(detail: str, keys_by_ref: Mapping[str, str]) -> tuple[str, ..
         if flag == "!" and any(marker in summary.lower() for marker in _CAS_REJECTIONS):
             refs.add(refspec.rpartition(":")[2])
     return tuple(key for ref, key in keys_by_ref.items() if ref in refs)
+
+
+def _refusal(blocked: Mapping[str, str]) -> ClaimBatchResult:
+    """Refuse a batch before pushing, naming each blocking key in batch order and every reason."""
+    return ClaimBatchResult(False, tuple(blocked), " or ".join(dict.fromkeys(blocked.values())))
 
 
 def _is_finite_number(value: object) -> bool:
@@ -380,7 +386,9 @@ class ClaimBoard:
 
     # The *_many methods read every key with one ls-remote, apply the per-key
     # checks of the single-key method, and change all keys in one atomic push,
-    # so a batch never leaves some of its claims taken and others not.
+    # so a batch never leaves some of its claims taken and others not. Where
+    # the single-key method raises MalformedLeaseError, a batch names that key
+    # as blocking instead, so one refusal can explain every blocked key.
 
     def acquire_many(
         self,
@@ -394,9 +402,15 @@ class ClaimBoard:
         _validate_ttl(ttl)
         self._ensure_scratch()
         olds = self._remote_oids(keys)
-        held = tuple(key for key in keys if self._held_by_peer(key, olds.get(key)))
-        if held:
-            return ClaimBatchResult(False, held, "held by another worker")
+        blocked: dict[str, str] = {}
+        for key in keys:
+            try:
+                if self._held_by_peer(key, olds.get(key)):
+                    blocked[key] = "held by another worker"
+            except MalformedLeaseError:
+                blocked[key] = "malformed lease"
+        if blocked:
+            return _refusal(blocked)
         updates = [(key, olds.get(key), self._make_lease_commit(key, ttl, note)) for key in keys]
         return self._cas_push_refs(updates, atomic=True)
 
@@ -407,13 +421,19 @@ class ClaimBoard:
         self._ensure_scratch()
         olds = self._remote_oids(keys)
         notes: dict[str, str] = {}
+        blocked: dict[str, str] = {}
         for key in keys:
-            lease = self._owned_lease(key, olds.get(key))
-            if lease is not None:
+            try:
+                lease = self._owned_lease(key, olds.get(key))
+            except MalformedLeaseError:
+                blocked[key] = "malformed lease"
+                continue
+            if lease is None:
+                blocked[key] = "not held by this worker"
+            else:
                 notes[key] = str(lease.get("note", ""))
-        lost = tuple(key for key in keys if key not in notes)
-        if lost:
-            return ClaimBatchResult(False, lost, "not held by this worker")
+        if blocked:
+            return _refusal(blocked)
         updates = [(key, olds[key], self._make_lease_commit(key, ttl, notes[key])) for key in keys]
         return self._cas_push_refs(updates, atomic=True)
 
@@ -423,9 +443,15 @@ class ClaimBoard:
         self._ensure_scratch()
         olds = self._remote_oids(keys)
         present = [key for key in keys if key in olds]
-        foreign = tuple(key for key in present if self._owned_lease(key, olds[key]) is None)
-        if foreign:
-            return ClaimBatchResult(False, foreign, "not held by this worker")
+        blocked: dict[str, str] = {}
+        for key in present:
+            try:
+                if self._owned_lease(key, olds[key]) is None:
+                    blocked[key] = "not held by this worker"
+            except MalformedLeaseError:
+                blocked[key] = "malformed lease"
+        if blocked:
+            return _refusal(blocked)
         if not present:
             return ClaimBatchResult(True)
         return self._cas_push_refs([(key, olds[key], "") for key in present], atomic=True)
