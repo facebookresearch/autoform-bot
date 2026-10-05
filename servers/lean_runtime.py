@@ -421,11 +421,9 @@ class ProjectResourceCache(Generic[T]):
             resources = [entry.resource for entry in self._entries.values()]
             self._entries.clear()
             self._condition.notify_all()
-        try:
-            self._close_many(resources)
-        finally:
-            if self._sweeper and self._sweeper is not threading.current_thread():
-                self._sweeper.join()
+        self._close_many(resources)
+        if self._sweeper and self._sweeper is not threading.current_thread():
+            self._sweeper.join()
 
     def _acquire(
         self,
@@ -544,28 +542,11 @@ class ProjectResourceCache(Generic[T]):
                 self._condition.wait(timeout=wait_seconds)
 
             if resources_to_close:
-                try:
-                    self._close_many(resources_to_close)
-                except BaseException:
-                    with self._condition:
-                        if reserved:
-                            self._creating.discard(root)
-                        self._condition.notify_all()
-                    raise
-                finally:
-                    resources_to_close.clear()
+                self._close_many(resources_to_close)
+                resources_to_close.clear()
 
         if resources_to_close:
-            try:
-                self._close_many(resources_to_close)
-            except BaseException:
-                with self._condition:
-                    if reserved:
-                        self._creating.discard(root)
-                    self._condition.notify_all()
-                raise
-            finally:
-                resources_to_close.clear()
+            self._close_many(resources_to_close)
 
         if not reserved:
             return resource
@@ -635,22 +616,8 @@ class ProjectResourceCache(Generic[T]):
                 logger.exception("failed to evict idle Lean project resources")
 
     def _close_many(self, resources: list[T]) -> None:
-        first_error: BaseException | None = None
-        index = 0
-        while index < len(resources):
-            try:
-                while index < len(resources):
-                    self._safe_close(resources[index])
-                    index += 1
-            except BaseException as error:
-                if first_error is None:
-                    first_error = error
-                elif error is not first_error:
-                    add_note = getattr(first_error, "add_note", None)
-                    if add_note is not None:
-                        add_note(f"another Lean resource close was interrupted by: {error}")
-        if first_error is not None:
-            raise first_error.with_traceback(first_error.__traceback__)
+        for resource in resources:
+            self._safe_close(resource)
 
     def _safe_close(self, resource: T) -> None:
         try:
@@ -695,25 +662,7 @@ class LeanRuntimeServices:
                     timeout=self.config.lsp_timeout,
                 )
             )
-            try:
-                session.start()
-            except BaseException as start_error:
-                if not session.is_clean():
-                    try:
-                        session.abort()
-                    except BaseException as cleanup_error:
-                        if not isinstance(start_error, Exception):
-                            add_note = getattr(start_error, "add_note", None)
-                            if add_note is not None:
-                                add_note(
-                                    "Lean LSP startup cleanup was also interrupted by: "
-                                    f"{cleanup_error}"
-                                )
-                            raise start_error.with_traceback(
-                                start_error.__traceback__
-                            ) from cleanup_error
-                        raise cleanup_error from start_error
-                raise
+            session.start()
             return session
 
         self.repl_projects = ProjectResourceCache(
@@ -796,24 +745,9 @@ class LeanRuntimeServices:
                     diagnostics = session.get_diagnostics(str(path))
                 except LspBusyError:
                     raise
-                except BaseException as operation_error:
+                except Exception:
                     self.lsp_projects.invalidate(str(root), session)
-                    try:
-                        session.abort()
-                    except BaseException as cleanup_error:
-                        if cleanup_error is operation_error:
-                            raise
-                        if not isinstance(operation_error, Exception):
-                            add_note = getattr(operation_error, "add_note", None)
-                            if add_note is not None:
-                                add_note(
-                                    "Lean LSP cleanup was also interrupted by: "
-                                    f"{cleanup_error}"
-                                )
-                            raise operation_error.with_traceback(
-                                operation_error.__traceback__
-                            ) from cleanup_error
-                        raise cleanup_error from operation_error
+                    session.abort()
                     raise
             return format_lsp_diagnostics(diagnostics)
         if method == "lsp.hover":
@@ -834,24 +768,9 @@ class LeanRuntimeServices:
                     result = session.hover(str(path), line, character)
                 except LspBusyError:
                     raise
-                except BaseException as operation_error:
+                except Exception:
                     self.lsp_projects.invalidate(str(root), session)
-                    try:
-                        session.abort()
-                    except BaseException as cleanup_error:
-                        if cleanup_error is operation_error:
-                            raise
-                        if not isinstance(operation_error, Exception):
-                            add_note = getattr(operation_error, "add_note", None)
-                            if add_note is not None:
-                                add_note(
-                                    "Lean LSP cleanup was also interrupted by: "
-                                    f"{cleanup_error}"
-                                )
-                            raise operation_error.with_traceback(
-                                operation_error.__traceback__
-                            ) from cleanup_error
-                        raise cleanup_error from operation_error
+                    session.abort()
                     raise
             return result or "No hover information at this position."
         raise ValueError(f"unknown Lean runtime method: {method}")
@@ -872,33 +791,8 @@ class LeanRuntimeServices:
         return result
 
     def close(self) -> None:
-        close_error: BaseException | None = None
-        lsp_close_error: BaseException | None = None
-        try:
-            self.repl_projects.close()
-        except BaseException as error:
-            close_error = error
-        finally:
-            while True:
-                try:
-                    self.lsp_projects.close()
-                except BaseException as error:
-                    if lsp_close_error is None:
-                        lsp_close_error = error
-                    elif error is not lsp_close_error:
-                        add_note = getattr(lsp_close_error, "add_note", None)
-                        if add_note is not None:
-                            add_note(f"Lean LSP cleanup was also interrupted by: {error}")
-                    continue
-                break
-        if close_error is None:
-            close_error = lsp_close_error
-        elif lsp_close_error is not None and lsp_close_error is not close_error:
-            add_note = getattr(close_error, "add_note", None)
-            if add_note is not None:
-                add_note(f"Lean LSP cleanup was also interrupted by: {lsp_close_error}")
-        if close_error is not None:
-            raise close_error.with_traceback(close_error.__traceback__)
+        self.repl_projects.close()
+        self.lsp_projects.close()
 
     def _acquisition_timeout(self, operation_timeout: float) -> float:
         """Reserve enough of the RPC deadline for the admitted tool operation."""

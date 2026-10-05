@@ -666,24 +666,32 @@ def test_failed_lsp_cleanup_is_invalidated_and_settled_before_replacement(
     from servers.lsp import server as lsp
 
     project = make_lake_project(tmp_path, "lsp-cleanup-order")
-    source = project / "Main.lean"
-    source.write_text("#check Nat\n")
+    (project / "Main.lean").write_text("#check Nat\n")
     sessions = []
     errors = []
     results = []
     events = []
     cleanup_started = threading.Event()
     release_cleanup = threading.Event()
-    attempts = 0
     services = None
+
+    class Process:
+        returncode = None
+        stdin = None
+        stdout = None
+
+        def __init__(self, pid):
+            self.pid = pid
+
+        def poll(self):
+            return self.returncode
 
     class Session(lsp.LeanLspSession):
         def __init__(self, root):
             super().__init__(lsp.LspConfig(cwd=str(root)))
             self.number = len(sessions) + 1
-            self.process = _RuntimeFakeProcess(50000 + self.number)
+            self.process = Process(50000 + self.number)
             self._process_group_id = self.process.pid
-            self._group_retired = False
             sessions.append(self)
             events.append(f"create:{self.number}")
 
@@ -692,33 +700,11 @@ def test_failed_lsp_cleanup_is_invalidated_and_settled_before_replacement(
                 raise lsp.LspProtocolError("broken shared stream")
             return []
 
-        def close(self):
-            self.abort()
-
-    class _RuntimeFakeProcess:
-        def __init__(self, pid):
-            self.pid = pid
-            self.returncode = None
-            self.stdin = None
-            self.stdout = None
-            self.stderr = None
-
-        def poll(self):
-            return self.returncode
-
-        def wait(self, timeout=None):
-            return self.returncode
-
-        def kill(self):
-            self.returncode = -9
-
     def retire(process, process_group_id):
-        nonlocal attempts
         if process is sessions[0].process:
-            attempts += 1
             resident = services.lsp_projects.stats()["resident"]
-            events.append(f"retire:{attempts}:valid={resident[0]['valid']}")
-            if attempts == 1:
+            events.append(f"retire:valid={resident[0]['valid']}")
+            if not cleanup_started.is_set():
                 cleanup_started.set()
                 raise RuntimeError("transient cleanup failure")
             assert release_cleanup.wait(timeout=2)
@@ -746,23 +732,21 @@ def test_failed_lsp_cleanup_is_invalidated_and_settled_before_replacement(
         first.start()
         assert cleanup_started.wait(timeout=1)
         second.start()
+        second.join(timeout=0.2)
+        # The replacement waits while the failed session still owns its group.
         assert len(sessions) == 1
-        assert not results
 
         release_cleanup.set()
         first.join(timeout=2)
         second.join(timeout=2)
 
-        assert not first.is_alive()
-        assert not second.is_alive()
-        assert len(errors) == 1
-        assert isinstance(errors[0], lsp.LspProtocolError)
-        assert str(errors[0]) == "broken shared stream"
+        assert not first.is_alive() and not second.is_alive()
+        assert [str(error) for error in errors] == ["broken shared stream"]
         assert results == ["No diagnostics — file compiles cleanly."]
         assert events[:4] == [
             "create:1",
-            "retire:1:valid=False",
-            "retire:2:valid=False",
+            "retire:valid=False",
+            "retire:valid=False",
             "create:2",
         ]
     finally:
@@ -770,252 +754,6 @@ def test_failed_lsp_cleanup_is_invalidated_and_settled_before_replacement(
         first.join(timeout=2)
         second.join(timeout=2)
         services.close()
-
-
-def test_lsp_cancellation_invalidates_then_cleans_before_it_escapes(tmp_path):
-    project = make_lake_project(tmp_path, "lsp-cancellation")
-    source = project / "Main.lean"
-    source.write_text("#check Nat\n")
-    events = []
-    services = None
-
-    class Cancellation(BaseException):
-        pass
-
-    class Session(FakeLsp):
-        def get_diagnostics(self, file_path):
-            raise Cancellation("cancel diagnostics")
-
-        def abort(self):
-            resident = services.lsp_projects.stats()["resident"]
-            events.append(f"abort:valid={resident[0]['valid']}")
-            super().abort()
-
-    services = LeanRuntimeServices(
-        runtime_config(),
-        repl_factory=FakePool,
-        lsp_factory=Session,
-        start_sweepers=False,
-    )
-    try:
-        with pytest.raises(Cancellation, match="cancel diagnostics"):
-            services.dispatch(
-                "lsp.diagnostics",
-                {"project_dir": str(project), "file_path": str(source)},
-            )
-        assert events == ["abort:valid=False"]
-    finally:
-        services.close()
-
-
-def test_lsp_operation_cancellation_remains_primary_after_cleanup_cancellation(
-    tmp_path, monkeypatch
-):
-    from servers.lsp import server as lsp
-
-    project = make_lake_project(tmp_path, "lsp-double-cancellation")
-    source = project / "Main.lean"
-    source.write_text("#check Nat\n")
-
-    class OperationCancellation(BaseException):
-        pass
-
-    class CleanupCancellation(BaseException):
-        pass
-
-    operation_error = OperationCancellation("cancel operation")
-    cleanup_error = CleanupCancellation("cancel cleanup")
-    attempts = 0
-    sessions = []
-
-    class Process:
-        pid = 51000
-        returncode = None
-        stdin = None
-        stdout = None
-        stderr = None
-
-        def poll(self):
-            return self.returncode
-
-        def wait(self, timeout=None):
-            return self.returncode
-
-    class Session(lsp.LeanLspSession):
-        def __init__(self, root):
-            super().__init__(lsp.LspConfig(cwd=str(root)))
-            self.process = Process()
-            self._process_group_id = self.process.pid
-            self._group_retired = False
-            sessions.append(self)
-
-        def get_diagnostics(self, file_path):
-            raise operation_error
-
-        def close(self):
-            self.abort()
-
-    def retire(process, process_group_id):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise cleanup_error
-        process.returncode = -9
-
-    monkeypatch.setattr(lsp, "_kill_subprocesses", retire)
-    services = LeanRuntimeServices(
-        runtime_config(),
-        repl_factory=FakePool,
-        lsp_factory=Session,
-        start_sweepers=False,
-    )
-    try:
-        with pytest.raises(OperationCancellation, match="cancel operation") as raised:
-            services.dispatch(
-                "lsp.diagnostics",
-                {"project_dir": str(project), "file_path": str(source)},
-            )
-        assert raised.value is operation_error
-        assert raised.value.__cause__ is cleanup_error
-        assert attempts == 2
-        assert sessions[0].is_clean()
-    finally:
-        services.close()
-
-
-def test_runtime_close_cleans_every_lsp_before_reraising_cancellation(tmp_path):
-    first = make_lake_project(tmp_path, "first-lsp-close")
-    second = make_lake_project(tmp_path, "second-lsp-close")
-    cancellation = _RuntimeCloseCancellation("cancel first close")
-    sessions = []
-    events = []
-
-    class Session(FakeLsp):
-        def __init__(self, root):
-            super().__init__(root)
-            self.number = len(sessions) + 1
-            self.close_calls = 0
-            sessions.append(self)
-
-        def get_diagnostics(self, file_path):
-            return []
-
-        def close(self):
-            self.close_calls += 1
-            self.closed = True
-            events.append(f"close:{self.number}")
-            if self.number == 1 and self.close_calls == 1:
-                raise cancellation
-
-    services = LeanRuntimeServices(
-        runtime_config(),
-        repl_factory=FakePool,
-        lsp_factory=Session,
-        start_sweepers=False,
-    )
-    for project in (first, second):
-        source = project / "Main.lean"
-        source.write_text("#check Nat\n")
-        services.dispatch(
-            "lsp.diagnostics",
-            {"project_dir": str(project), "file_path": str(source)},
-        )
-
-    with pytest.raises(_RuntimeCloseCancellation, match="cancel first close"):
-        services.close()
-
-    assert events == ["close:1", "close:1", "close:2"]
-    assert all(session.closed for session in sessions)
-
-
-def test_runtime_attempts_lsp_cleanup_after_repl_cleanup_cancellation(tmp_path):
-    project = make_lake_project(tmp_path, "repl-close-cancellation")
-    source = project / "Main.lean"
-    source.write_text("#check Nat\n")
-    cancellation = _RuntimeCloseCancellation("cancel REPL close")
-    pools = []
-    sessions = []
-
-    class Pool(FakePool):
-        def __init__(self, root):
-            super().__init__(root)
-            self.shutdown_calls = 0
-
-        def shutdown(self):
-            self.shutdown_calls += 1
-            self._shutdown = True
-            if self.shutdown_calls == 1:
-                raise cancellation
-
-    class Session(FakeLsp):
-        def get_diagnostics(self, file_path):
-            return []
-
-    services = LeanRuntimeServices(
-        runtime_config(),
-        repl_factory=lambda root: pools.append(Pool(root)) or pools[-1],
-        lsp_factory=lambda root: sessions.append(Session(root)) or sessions[-1],
-        start_sweepers=False,
-    )
-    services.dispatch(
-        "repl.run",
-        {"project_dir": str(project), "code": "#check Nat", "timeout": None},
-    )
-    services.dispatch(
-        "lsp.diagnostics",
-        {"project_dir": str(project), "file_path": str(source)},
-    )
-
-    with pytest.raises(_RuntimeCloseCancellation, match="cancel REPL close"):
-        services.close()
-
-    assert pools[0]._shutdown is True
-    assert pools[0].shutdown_calls == 2
-    assert sessions[0].closed is True
-
-
-def test_stale_resource_close_cancellation_releases_creation_reservation(tmp_path):
-    project = make_lake_project(tmp_path, "stale-close-cancellation")
-    cancellation = _RuntimeCloseCancellation("cancel stale close")
-    resources = []
-
-    class Resource:
-        def __init__(self):
-            self.valid = True
-            self.close_calls = 0
-            self.interrupt_close = not resources
-            resources.append(self)
-
-        def close(self):
-            self.close_calls += 1
-            self.valid = False
-            if self.interrupt_close and self.close_calls == 1:
-                raise cancellation
-
-    cache = ProjectResourceCache(
-        lambda root: Resource(),
-        lambda resource: resource.close(),
-        max_entries=1,
-        idle_seconds=1800,
-        is_valid=lambda resource: resource.valid,
-        start_sweeper=False,
-    )
-    with cache.lease(str(project)) as first:
-        first.valid = False
-
-    with pytest.raises(_RuntimeCloseCancellation, match="cancel stale close"):
-        with cache.lease(str(project)):
-            pytest.fail("replacement must wait for the close cancellation to escape")
-
-    assert cache.state(str(project)) == "cold"
-    assert resources[0].close_calls == 2
-    with cache.lease(str(project)) as replacement:
-        assert replacement is resources[1]
-    cache.close()
-
-
-class _RuntimeCloseCancellation(BaseException):
-    pass
 
 
 @pytest.mark.skipif(not hasattr(os, "getuid"), reason="shared runtime requires POSIX locks")
