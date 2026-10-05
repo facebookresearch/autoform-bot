@@ -35,6 +35,7 @@ _FRONTMATTER_KEYS = frozenset(
         "not_ready",
         "origin",
         "discussion",
+        "open_statements",
     }
 )
 _FORMALIZED = "formalized"
@@ -102,6 +103,10 @@ class Graph:
 
     blueprint_dir: Path
     nodes: dict[str, Node]
+    #: ``open_statements: allowed`` in ``roadmap/README.md``: a theorem's
+    #: statement may land with a ``sorry`` proof. Absent or ``forbidden`` keeps
+    #: the strict policy, where CI rejects every ``sorry``.
+    open_statements: bool = False
 
     @property
     def edge_count(self) -> int:
@@ -146,6 +151,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     issues.extend(discovery_issues)
     article_ids: dict[str, str] = {}
     source_hashes = {source.id: source.source_sha256 for source in sources}
+    policy_page = (blueprint / "roadmap" / "README.md").resolve()
+    open_statements = False
 
     for source in sources:
         canonical = source.path.resolve()
@@ -173,6 +180,14 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     )
                 else:
                     article_ids[article_id] = node.id
+            policy = node.metadata.get("open_statements")
+            if policy is not None:
+                if canonical != policy_page:
+                    issues.append(
+                        f"{node.id}: open_statements is a project policy; set it only in roadmap/README.md"
+                    )
+                else:
+                    open_statements = policy == "allowed"
             parsed.append(node)
 
     if issues:
@@ -232,7 +247,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         issues.extend(_find_rollup_cycles(nodes))
     if issues:
         raise GraphValidationError(issues)
-    return Graph(blueprint_dir=blueprint, nodes=nodes)
+    return Graph(blueprint_dir=blueprint, nodes=nodes, open_statements=open_statements)
 
 
 def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
@@ -479,6 +494,10 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
     if key == "origin":
         if folded not in {"cited", "bridged", "background"}:
             return value, f"{location}: 'origin' accepts cited, bridged, or background"
+        return folded, None
+    if key == "open_statements":
+        if folded not in {"allowed", "forbidden"}:
+            return value, f"{location}: 'open_statements' accepts allowed or forbidden"
         return folded, None
     return value, None
 

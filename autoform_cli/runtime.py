@@ -64,9 +64,12 @@ class RuntimeStatus:
     proved: bool
     fully_proved: bool
     defined: bool
+    assumes: tuple[str, ...]
+    waiting_on: tuple[str, ...]
 
-    def as_dict(self) -> dict[str, bool | str]:
+    def as_dict(self) -> dict[str, bool | str | list[str]]:
         return {
+            "assumes": list(self.assumes),
             "can_prove": self.can_prove,
             "can_state": self.can_state,
             "defined": self.defined,
@@ -74,6 +77,7 @@ class RuntimeStatus:
             "proved": self.proved,
             "state": self.state,
             "stated": self.stated,
+            "waiting_on": list(self.waiting_on),
         }
 
 
@@ -157,6 +161,7 @@ class RuntimeGraph:
     dispatchable_count: int
     dependency_count: int
     maximum_depth: int
+    open_statements: bool = False
 
     def get(self, node_id: str) -> RuntimeNode | None:
         """Return a node without exposing mutable lookup state."""
@@ -175,6 +180,7 @@ class RuntimeGraph:
             "formalizable_count": self.formalizable_count,
             "maximum_depth": self.maximum_depth,
             "nodes": [node.as_dict() for node in self.nodes],
+            "open_statements": self.open_statements,
             "schema": self.schema,
             "source_revision": self.source_revision,
         }
@@ -317,12 +323,6 @@ def build_runtime_graph(
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         node_status = statuses[node_id]
-        can_state = all(statuses[dependency].stated for dependency in node.statement_dependencies)
-        can_prove = (
-            node_status.stated
-            and can_state
-            and all(statuses[dependency].proved for dependency in node.proof_dependencies)
-        )
         lean_targets: list[RuntimeLeanTarget] = []
         for name in declaration_names(node.lean or ""):
             declaration = lean_index.find(name) if lean_index is not None else None
@@ -352,12 +352,14 @@ def build_runtime_graph(
                 ),
                 status=RuntimeStatus(
                     state=node_status.key,
-                    can_state=can_state,
-                    can_prove=can_prove,
+                    can_state=node_status.can_state,
+                    can_prove=node_status.can_prove,
                     stated=node_status.stated,
                     proved=node_status.proved,
                     fully_proved=node_status.fully_proved,
                     defined=is_definition(node) and node_status.stated,
+                    assumes=node_status.assumes,
+                    waiting_on=node_status.waiting_on,
                 ),
                 origin=node.origin,
                 source_targets=node.sources,
@@ -380,6 +382,7 @@ def build_runtime_graph(
         dispatchable_count=sum(node.dispatchable for node in nodes),
         dependency_count=sum(len(node.dependencies) for node in nodes),
         maximum_depth=max((node.depth for node in nodes), default=0),
+        open_statements=graph.open_statements,
     )
     _validate_runtime(runtime)
     return runtime

@@ -1275,3 +1275,58 @@ def test_a_node_that_is_the_current_page_links_as_a_bare_fragment(tmp_path: Path
         "chapter": "#",
         "chapter/x": "#x",
     }
+
+
+def _conditional_project(tmp_path: Path, policy: str) -> Path:
+    """`_project` with Top proved from an open statement, under the given policy."""
+    project = _project(tmp_path)
+    roadmap = project / "blueprint" / "roadmap"
+    (roadmap / "README.md").write_text(
+        f"---\nopen_statements: {policy}\n---\n\n# Roadmap\n\n"
+        "## Definitions\n\n- [Base](base.md)\n\n"
+        "## Results\n\n- [Open](open.md)\n- [Top](top.md)\n",
+        encoding="utf-8",
+    )
+    (roadmap / "open.md").write_text(
+        "---\ndeclaration: theorem\nstatement: formalized\n---\n\n"
+        "# Open\n\nA statement whose proof is still sorry.\n\n## Depends on\n\n- [Base](base.md)\n",
+        encoding="utf-8",
+    )
+    top = roadmap / "top.md"
+    top.write_text(
+        top.read_text(encoding="utf-8") + "\n## Proof depends on\n\n- [Open](open.md)\n", encoding="utf-8"
+    )
+    return project
+
+
+def test_a_conditional_proof_names_the_open_statements_it_assumes(tmp_path: Path) -> None:
+    project = _conditional_project(tmp_path, "allowed")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    top = page[page.index('id="top"'):]
+
+    assert '<div class="bp-thmwrapper theorem-style-plain bp-conditional" id="top"' in page
+    assert '●<span class="bp-mark-label">conditionally proved</span>' in top
+    assert (
+        '<span class="bp-key">Assumes</span><span class="bp-value">'
+        '<a class="bp-ref bp-ref-can_prove" href="#open">Theorem 1 (Open)</a>'
+        " (open statements whose Lean proofs are still sorry)</span>"
+    ) in top
+    # Only the conditional proof carries the row; the open statement assumes nothing.
+    assert page.count('<span class="bp-key">Assumes</span>') == 1
+
+    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
+    assert ".bp-ref-conditional::before, .bp-swatch-conditional { background: #E9DFFC; border-color: #6B3FCF; }" in css
+    assert "[data-md-color-scheme=slate] .bp-ref-conditional::before" in css
+    assert ".bp-conditional .bp-mark { color: #6B3FCF; }" in css
+
+
+def test_the_strict_policy_shows_the_same_proof_as_proved_with_no_assumptions(tmp_path: Path) -> None:
+    project = _conditional_project(tmp_path, "forbidden")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    assert '<div class="bp-thmwrapper theorem-style-plain bp-proved" id="top"' in page
+    assert '<span class="bp-key">Assumes</span>' not in page

@@ -34,7 +34,7 @@ from .skeleton import (
     write_packets,
     write_skeleton_report,
 )
-from .work import WORK_SCHEMA, WorkError, list_ready_work, work_context
+from .work import WORK_SCHEMA, WorkError, assumption_contract, list_ready_work, work_context
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -132,6 +132,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     work_context_parser.add_argument(
         "--json", action="store_true", help="write stable machine-readable output"
     )
+    work_assumptions = work_subparsers.add_parser(
+        "assumptions", help="list open statements and the open statements each stated article rests on"
+    )
+    work_assumptions.add_argument(
+        "target", nargs="?", default=".", help="project root or blueprint directory"
+    )
+    work_assumptions.add_argument("--json", action="store_true", help="write stable machine-readable output")
     claim = subparsers.add_parser("claim", help="coordinate temporary node ownership through Git refs")
     claim_subparsers = claim.add_subparsers(dest="claim_command", required=True)
     for operation in ("acquire", "renew", "release"):
@@ -429,6 +436,8 @@ def _project(args: argparse.Namespace) -> int:
 
 
 def _work(args: argparse.Namespace) -> int:
+    if args.work_command == "assumptions":
+        return _work_assumptions(args)
     # Only loading the roadmap can fail on the project's paths; printing the
     # result stays outside, so an output error is not reported as one.
     try:
@@ -455,12 +464,16 @@ def _work(args: argparse.Namespace) -> int:
         if args.json:
             print(frontier.to_json())
             return 0
+        if frontier.open_statements:
+            print("Open statements: allowed (a statement may land with a sorry proof)")
         if not frontier.items:
             print("No ready formalization work.")
             return 0
         for item in frontier.items:
             durable = f" [{item.article_id}]" if item.article_id else ""
             print(_human_text(f"{item.phase}: {item.node_id}{durable} - {item.title}"))
+            if item.assumes:
+                print(_human_text("  assumes: " + ", ".join(item.assumes)))
         return 0
 
     if args.json:
@@ -485,6 +498,10 @@ def _work(args: argparse.Namespace) -> int:
     print(_human_text(f"{item.title} ({item.node_id})"))
     print(f"State: {item.state}")
     print(f"Phase: {phase}")
+    if item.open_statements:
+        print("Open statements: allowed")
+        if item.assumes:
+            print(_human_text("Assumes: " + ", ".join(item.assumes)))
     print(_human_text(f"Claim target: {item.claim_target}"))
     if item.blockers:
         print(_human_text("Blocked by: " + ", ".join(item.blockers)))
@@ -498,6 +515,30 @@ def _work(args: argparse.Namespace) -> int:
     for target in item.lean_targets:
         location = f" ({target.source_file})" if target.source_file else ""
         print(_human_text(f"Lean: {target.declaration}{location}"))
+    return 0
+
+
+def _work_assumptions(args: argparse.Namespace) -> int:
+    # As in `_work`, only loading the roadmap is reported as a path error.
+    try:
+        contract = assumption_contract(args.target)
+    except (GraphValidationError, RuntimeProjectionError) as error:
+        for issue in error.issues:
+            print(f"error: {_human_text(issue)}", file=sys.stderr)
+        return 2
+    except (OSError, RuntimeError, ValueError):
+        print("error: project or blueprint path cannot be read", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(contract.to_json())
+        return 0
+    print(_human_text(f"Open statements: {'allowed' if contract.open_statements else 'forbidden'}"))
+    for article in contract.articles:
+        if article.open:
+            print(_human_text(f"open: {article.id} ({', '.join(article.declarations)})"))
+        if article.assumes:
+            print(_human_text(f"conditional: {article.id} assumes {', '.join(article.assumes)}"))
     return 0
 
 

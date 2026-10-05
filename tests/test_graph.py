@@ -399,3 +399,54 @@ def test_a_chapter_whose_articles_are_all_in_buckets_is_still_refused(tmp_path: 
         load_graph(tmp_path / "blueprint")
 
     assert "orphan: chapter directory holds 1 article(s) but no README.md" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("value", "allowed"),
+    [
+        (None, False),
+        ("allowed", True),
+        ("forbidden", False),
+        ('"allowed"', True),
+        ("'forbidden'", False),
+        ("ALLOWED", True),
+        ("Forbidden", False),
+    ],
+)
+def test_open_statements_is_read_from_the_roadmap_root(
+    tmp_path: Path, value: str | None, allowed: bool
+) -> None:
+    """Absent means forbidden; values unquote and casefold like every other scalar."""
+    blueprint = tmp_path / "blueprint"
+    policy = "" if value is None else f"open_statements: {value}\n"
+    _roadmap_page(blueprint, "README.md", f"---\n{policy}---\n\n# Roadmap\n")
+    _node(blueprint, "result.md", "# Result\n", declaration="theorem")
+
+    assert load_graph(blueprint).open_statements is allowed
+
+
+def test_rejects_an_open_statements_value_other_than_allowed_or_forbidden(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "---\nopen_statements: yes\n---\n\n# Roadmap\n")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues == ("roadmap:2: 'open_statements' accepts allowed or forbidden",)
+
+
+@pytest.mark.parametrize(("relative", "node_id"), [("result.md", "result"), ("chapter/README.md", "chapter")])
+def test_open_statements_set_outside_the_roadmap_root_is_refused(
+    tmp_path: Path, relative: str, node_id: str
+) -> None:
+    """The policy belongs to the project, so a chapter or article cannot opt in on its own."""
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "---\n---\n\n# Roadmap\n")
+    _node(blueprint, relative, "# Result\n", open_statements="forbidden")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues == (
+        f"{node_id}: open_statements is a project policy; set it only in roadmap/README.md",
+    )
