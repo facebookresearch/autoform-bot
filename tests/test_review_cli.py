@@ -1690,7 +1690,8 @@ def test_an_article_that_is_a_link_is_read_again_through_the_link(
             report = super().__call__(*args, **kwargs)
             graph = load_graph(args[0])
             paths = {node.id: node.path.relative_to(graph.blueprint_dir).as_posix() for node in graph.nodes.values()}
-            return replace(report, nodes=tuple(replace(node, article_path=paths[node.node_id]) for node in report.nodes))
+            nodes = tuple(replace(node, article_path=paths[node.node_id]) for node in report.nodes)
+            return replace(report, nodes=nodes)
 
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, CanonicalExtraction())
     chapter = blueprint.resolve() / "roadmap" / "basics"
