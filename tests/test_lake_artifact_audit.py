@@ -680,6 +680,15 @@ theorem type_sorry : (sorry : Prop) := sorry
 
 theorem uses_dependency_sorry : True := Dep.dep_sorry
 
+mutual
+theorem evenA : ∀ n : Nat, n + 0 = n
+  | 0 => rfl
+  | n + 1 => by have := oddB n; sorry
+theorem oddB : ∀ n : Nat, 0 + n = n
+  | 0 => rfl
+  | n + 1 => by have := evenA n; omega
+end
+
 theorem native : 10 + 10 = 20 := by native_decide
 
 theorem uses_native : 10 + 10 = 20 := native
@@ -827,6 +836,7 @@ def test_open_probe_rejects_sorry_outside_an_open_statement_body(
             _article("where", ["Fixture.where_sorry"], is_open=True, allowed=["Fixture.where_sorry"]),
             _article("type", ["Fixture.type_sorry"], is_open=True, allowed=["Fixture.type_sorry"]),
             _article("missing", ["Fixture.missing"]),
+            _article("even", ["Fixture.evenA"], is_open=True, allowed=["Fixture.evenA"]),
         ),
     )
 
@@ -834,6 +844,10 @@ def test_open_probe_rejects_sorry_outside_an_open_statement_body(
     assert audited.returncode != 0, output
     for message in (
         "Fixture.helper_sorry contains sorry but is not an open statement",
+        "Fixture.evenA._f contains sorry but is not an open statement: only a theorem that an open "
+        "article's lean: names may keep a sorry, written directly in its own proof, not in a helper, "
+        "where clause or definition; Lean compiles a recursive proof into auxiliaries such as _f and "
+        "_unary, so a recursive open statement's proof must be exactly sorry",
         "Fixture.where_sorry.aux contains sorry but is not an open statement",
         "Fixture.type_sorry has sorry in its statement",
         "Fixture.uses_dependency_sorry uses Dep.dep_sorry, which is outside the root package and depends on sorry",

@@ -587,7 +587,7 @@ run_cmd do
     if typeConstants.contains ``sorryAx then
       errors := errors.push m!"{{declName}} has sorry in its statement; state the claim in full and keep sorry only in the proof"
     else if valueConstants.contains ``sorryAx && !openSet.contains declName then
-      errors := errors.push m!"{{declName}} contains sorry but is not an open statement: only a theorem that an open article's lean: names may keep a sorry, written directly in its own proof, not in a helper, where clause or definition"
+      errors := errors.push m!"{{declName}} contains sorry but is not an open statement: only a theorem that an open article's lean: names may keep a sorry, written directly in its own proof, not in a helper, where clause or definition; Lean compiles a recursive proof into auxiliaries such as _f and _unary, so a recursive open statement's proof must be exactly sorry"
     let mut external : Array Name := #[]
     for used in typeConstants ++ valueConstants do
       if used == ``sorryAx || isRoot used || external.contains used then
