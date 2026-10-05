@@ -677,6 +677,9 @@ def _run_artifact_audit(
                 config.verify()
                 packed.verify()
                 probe_evidence.verify()
+                final_blueprint = _capture_blueprint(blueprint_tree)
+                if final_blueprint.generation_revision != blueprint_snapshot.generation_revision:
+                    raise AuditInputError("blueprint changed during artifact validation")
                 final_inputs = _capture_project_inputs(
                     project,
                     build_directory=configuration.build_directory,
@@ -690,9 +693,6 @@ def _run_artifact_audit(
                 )
                 if final_artifacts != root_evidence.artifacts:
                     raise AuditInputError("root-package artifacts changed during artifact validation")
-                final_blueprint = _capture_blueprint(blueprint_tree)
-                if final_blueprint.generation_revision != blueprint_snapshot.generation_revision:
-                    raise AuditInputError("blueprint changed during artifact validation")
             finally:
                 probe_evidence.close()
 

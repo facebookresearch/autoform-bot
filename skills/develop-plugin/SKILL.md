@@ -1,35 +1,33 @@
 ---
 name: develop-plugin
 description: >-
-  Develop AutoformBot's CLI, servers, skills, manifests, tests, example, or
-  installation for consumer-project defects.
+  Maintain AutoformBot for consumer-project defects.
 ---
 
-# Develop Autoform from consumer nudges
+# Develop Autoform
 
-Treat Autoform as an example-based plugin installed in an
-independent formalization repository. Use the Cabannes thesis as an executable consumer example.
+Treat Autoform as an example-based plugin for an independent formalization. Use
+the Cabannes thesis only as its executable example.
 
-Inspect the worktree, state a consumer scenario, and observe installed behavior.
+Inspect the worktree. State a consumer scenario and observe installed behavior.
 Name a refactor's invariant.
 
-Treat user nudges during real work as product evidence. Distill reusable ones
-into the owning skill as a trigger, decision rule, and action.
-Ensure future agents need less steering.
-Preserve the insight, not the transcript or consumer choice.
-Add a focused test and acceptance assertion in `tests/test_skill_examples.py`.
+Treat user nudges as product evidence. Encode reusable triggers, decisions, and
+actions in the owning skill so future agents need less steering. Preserve the
+insight, not the transcript. Add a focused `tests/test_skill_examples.py` assertion.
 
-Implement reusable plugin behavior. Keep Cabannes-specific facts in the example
-and references; demonstrate outcomes without special-casing them.
+Keep behavior reusable and Cabannes-specific facts in its example or references.
 
 Keep plugin and formalization roots distinct. Agents can infer routine details;
-keep shared agent entrypoints concise and link command/schema details as on-demand references.
+keep shared agent entrypoints concise and link details as on-demand references.
 
-Source indexes, revisions, and links form one evidence boundary. Require
-retained descriptors; repeated pathname reads are not a generation boundary.
-Read bounded generated-output markers before descendants, keeping each marker
-schema in its owning feature. Auto-detected links must match the blob at the
-stable detected commit.
+Indexes, revisions, and links share an evidence boundary. Retain descriptors;
+repeated pathname reads are not a generation boundary. Read bounded output
+markers before descendants and keep each marker schema in its owning feature.
+Auto-detected links must match the blob at the stable detected commit.
+
+Treat rewritten private declaration safety as fail-closed evidence: correlate
+the official user name to its lexical declaration by source coordinates.
 
 Run focused checks, then normally run:
 
@@ -39,8 +37,6 @@ make test
 make check-example
 ```
 
-Run `lake build` when example Lean results change. Validate edited skills and
-the manifest with skill-creator and plugin-creator. Use cachebuster and reinstall
-only to test installed discovery in a new thread. Report outcome and checks.
-Treat rewritten private declaration safety as fail-closed evidence: correlate
-the official user name to its lexical declaration by source coordinates.
+Run `lake build` for changed example Lean results. Validate skills and manifests
+with skill-creator and plugin-creator. Use cachebuster/reinstall only to test
+discovery in a new thread. Report checks.
