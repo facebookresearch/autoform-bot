@@ -240,6 +240,7 @@ _LONE = (
     ("macros", "reason"),
     [
         ("{", "tex-macros.json: not valid JSON"),
+        pytest.param('{"RR": ' + "[" * 100_000 + "]" * 100_000 + "}", "tex-macros.json: not valid JSON", id="nested"),
         ('{"RR": "x", "RR": "y"}', "'RR' is defined twice"),
         ('["RR"]', "tex-macros.json: must be a JSON object from macro names to definitions"),
         ('{"R R": "x"}', "'R R' is not a macro name; use letters only"),

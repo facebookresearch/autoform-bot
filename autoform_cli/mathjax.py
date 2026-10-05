@@ -212,7 +212,7 @@ def _tex_macros(data: bytes | None) -> tuple[dict[str, object], list[str]]:
         return {}, []
     try:
         macros = json.loads(data.decode("utf-8"), object_pairs_hook=_unique_names)
-    except (UnicodeDecodeError, ValueError) as exc:
+    except (RecursionError, UnicodeDecodeError, ValueError) as exc:
         return {}, [f"{TEX_MACROS}: not valid JSON: {exc}"]
     if not isinstance(macros, dict):
         return {}, [f"{TEX_MACROS}: must be a JSON object from macro names to definitions"]

@@ -601,7 +601,7 @@ def load_review_bundle(path: str | Path) -> ReviewBundle:
 
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, RecursionError, UnicodeError, json.JSONDecodeError) as exc:
         raise ReviewError(
             [ReviewFinding("", "review-bundle-invalid", f"cannot read review bundle {path}: {exc}")]
         ) from exc
@@ -1168,10 +1168,11 @@ def load_record_manifest(path: str | Path) -> tuple[RecordRequest, ...]:
 
     manifest = Path(path).expanduser()
     # ValueError covers malformed JSON, bytes that are not UTF-8, and a
-    # repeated key.
+    # repeated key; RecursionError, arrays or objects nested deeper than the
+    # decoder recurses.
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8"), object_pairs_hook=_strict_json_object)
-    except (OSError, ValueError) as exc:
+    except (OSError, RecursionError, ValueError) as exc:
         raise ReviewError([ReviewFinding("manifest", "review-records-invalid", f"cannot read {manifest}: {exc}")]) from exc
     if not isinstance(payload, dict) or payload.keys() != {"records", "schema"}:
         raise ReviewError([ReviewFinding("manifest", "review-records-invalid", f"{manifest} is not a records manifest")])

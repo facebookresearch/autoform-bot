@@ -1489,6 +1489,30 @@ def test_a_malformed_manifest_is_refused_before_any_lean_work(
     assert extraction.scopes == [None]  # only `review prepare` extracted
 
 
+@pytest.mark.parametrize("damaged", ["manifest", "bundle"])
+def test_a_manifest_or_bundle_nested_too_deep_to_decode_is_refused_before_any_lean_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], damaged: str
+) -> None:
+    """Decoded, a hundred thousand nested arrays are deeper than the JSON decoder goes, on Python 3.10 to 3.14 alike."""
+
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    path = {"manifest": manifest, "bundle": bundle}[damaged]
+    path.write_text('{"schema": ' + "[" * 100_000 + "]" * 100_000 + "}", encoding="utf-8")
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    named = f"review bundle {bundle}" if damaged == "bundle" else str(manifest)
+    err = capsys.readouterr().err
+    # The cause reads "maximum recursion depth exceeded" up to 3.13 and
+    # "Stack overflow (used N kB)" on 3.14; the words after it are the same.
+    assert err.startswith(f"error: cannot read {named}: ")
+    assert err.endswith(" while decoding a JSON array from a unicode string\n")
+    assert extraction.scopes == [None]  # only `review prepare` extracted
+    assert load_readbacks(blueprint) == {}
+
+
 def _long_link_chain(directory: Path, target: Path) -> str:
     """A short path in ``directory`` that reaches ``target`` through links whose
     resolved form is longer than PATH_MAX.
