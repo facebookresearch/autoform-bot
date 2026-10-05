@@ -427,9 +427,9 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
             issues.append(f"{node_id}: node file escapes the roadmap directory")
             continue
         if path.name == "README.md" and canonical.name != "README.md":
-            # Containment is inferred from the file a page resolves to, so a
-            # README.md linked to another name would contain itself, and
-            # inferring it would never end.
+            # Containment is looked up by the path each README.md resolves to,
+            # so one linked to another name would contain nothing, and the
+            # pages beside it would attach to the root.
             relative = path.relative_to(roadmap_root).as_posix()
             issues.append(
                 f"{relative}: links to {canonical.relative_to(roadmap_root).as_posix()}, which is not named "
@@ -509,7 +509,8 @@ def _article_parents(parsed: list[_ParsedNode]) -> dict[str, str | None]:
             candidate = candidate.parent
         parent: str | None = None
         while candidate != candidate.parent:
-            readme = (candidate / "README.md").resolve()
+            # Not resolved: node paths are canonical, so a README.md link, as above the roadmap, contains nothing.
+            readme = candidate / "README.md"
             if readme in by_path:
                 parent = by_path[readme]
                 break

@@ -279,6 +279,43 @@ def test_rejects_a_readme_linked_to_a_file_with_another_name(tmp_path: Path, rel
     ) in result.stdout
 
 
+@pytest.mark.parametrize(
+    ("link", "target"),
+    [
+        ("blueprint/README.md", "roadmap/README.md"),
+        ("blueprint/README.md", "roadmap/chapter/README.md"),
+        ("README.md", "blueprint/roadmap/README.md"),
+    ],
+)
+def test_a_readme_link_above_the_roadmap_contains_nothing(tmp_path: Path, link: str, target: str) -> None:
+    """The search for a container climbed past the roadmap and followed this link back into it.
+
+    A page then contained itself, or its own container, and loading never ended,
+    so the load runs in a subprocess with a timeout.
+    """
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    _node(blueprint, "chapter/result.md", "# Result\n")
+    (tmp_path / link).symlink_to(target)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys\n"
+            "from autoform_cli.graph import load_graph\n"
+            "print(sorted((node.id, node.parent) for node in load_graph(sys.argv[1]).nodes.values()))",
+            str(blueprint),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.stdout == f"{[('chapter', 'roadmap'), ('chapter/result', 'chapter'), ('roadmap', None)]}\n"
+
+
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
 @pytest.mark.parametrize("relative", ["", "chapter"], ids=["roadmap", "chapter"])
 def test_a_roadmap_directory_that_cannot_be_listed_is_refused(tmp_path: Path, relative: str) -> None:
