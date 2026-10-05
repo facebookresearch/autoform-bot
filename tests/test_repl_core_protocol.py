@@ -881,15 +881,12 @@ def _deps_json(
     return json.dumps({"imports": [entry]})
 
 
-def _header_modules(command: list[str]) -> list[str]:
-    return repl_core._lean_header_modules(
-        command,
-        "import Mathlib",
-        cwd=None,
-        env=dict(os.environ),
-        deadline=time.monotonic() + 10,
-        max_output_bytes=1024 * 1024,
-    )
+def _header_modules(command: list[str], **config) -> list[str]:
+    repl = repl_core.LeanRepl(repl_core.LeanReplConfig(header_deps_command=command, **config))
+    try:
+        return list(repl._check_header("import Mathlib", time.monotonic() + 10).modules)
+    finally:
+        repl.close()
 
 
 def test_header_check_accepts_current_and_legacy_lean_schemas():
@@ -940,18 +937,12 @@ def test_header_parser_launcher_ignores_a_path_shadow(tmp_path):
 
     write_parser(trusted_bin / "lean", "Mathlib")
     write_parser(shadow_bin / "lean", "Unsafe")
-    env = dict(os.environ)
-    env["LEAN_SYSROOT"] = str(trusted_bin.parent)
-    env["PATH"] = f"{shadow_bin}{os.pathsep}{env.get('PATH', '')}"
+    env = {
+        "LEAN_SYSROOT": str(trusted_bin.parent),
+        "PATH": f"{shadow_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+    }
 
-    modules = repl_core._lean_header_modules(
-        [sys.executable, "-c", repl_core._LEAN_HEADER_LAUNCHER],
-        "import Mathlib",
-        cwd=None,
-        env=env,
-        deadline=time.monotonic() + 10,
-        max_output_bytes=1024 * 1024,
-    )
+    modules = _header_modules([sys.executable, "-c", repl_core._LEAN_HEADER_LAUNCHER], env=env)
 
     assert modules == ["Mathlib"]
 
@@ -961,8 +952,8 @@ def test_header_parser_launcher_ignores_a_path_shadow(tmp_path):
     [
         (_deps_json(errors=("bad header",)), "bad header"),
         ("not json", "unrecognized output"),
-        ('{"imports": [], "imports": []}', "duplicate JSON key"),
-        ('{"imports": NaN}', "nonstandard JSON constant"),
+        ('{"imports": [], "imports": []}', "unrecognized output"),
+        ('{"imports": NaN}', "unrecognized output"),
     ],
 )
 def test_header_check_fails_closed_on_rejected_or_unknown_output(output, message):
@@ -1008,11 +999,11 @@ def test_disposable_call_checks_submitted_header_before_warmup_prefix(monkeypatc
     )
     checked = []
 
-    def header_analysis(command, code, **kwargs):
+    def check_header(code, deadline):
         checked.append(code)
         raise ValueError("stop")
 
-    monkeypatch.setattr(repl_core, "_lean_header_analysis", header_analysis)
+    monkeypatch.setattr(repl, "_check_header", check_header)
 
     repl.run_disposable("/- note -/ import Unsafe\n#check Nat")
 

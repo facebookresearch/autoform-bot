@@ -172,9 +172,7 @@ class LeanRuntimeConfig:
                 "AUTOFORM_REPL_TOTAL_WORKERS"
             )
         repl_project_limit = min(max_projects, total_workers // workers_per_project)
-        repl_command = tuple(
-            shlex.split(os.environ.get("LEAN_REPL_CMD", "lake exe @repl/repl"))
-        )
+        repl_command = tuple(shlex.split(os.environ.get("LEAN_REPL_CMD", "lake exe @repl/repl")))
         lsp_command = tuple(shlex.split(os.environ.get("LEAN_LSP_CMD", "lake serve")))
         if not repl_command:
             raise ValueError("LEAN_REPL_CMD must not be empty")
