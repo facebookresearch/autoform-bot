@@ -2100,7 +2100,9 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
     reads as a link, heading, footnote, or alert, or shows otherwise than the
     site does, formulas included; no invisible or reordering characters; no
     math delimiters
-    outside the formulas the renderer marked; in those, only the TeX listed in
+    outside the formulas the renderer marked; in those, and in the text
+    between each two dollar signs a reader taking them in turn would pair,
+    only the TeX listed in
     :data:`_TESTIMONY_TEX`, well formed, read by :class:`_TexLayout` for
     arguments that show something, spacing that does not overlap symbols, and
     bounded spacing, rows, and cells; and at least one visible letter or digit.
@@ -2187,14 +2189,25 @@ def _testimony_errors(text: str) -> tuple[str, ...]:
         )
     # MathJax reads no text of a card outside the formulas the renderer
     # marked, so TeX left in text shows as typed; where GitHub reads it as a
-    # formula, the comparison with GitHub's reading refuses it.
+    # formula, the comparison with GitHub's reading refuses it. Which dollar
+    # signs GitHub pairs in a card it shows was seen only in its Markdown
+    # API, so the text between two dollar signs that a reader taking each in
+    # turn would pair is read as a formula too. The site shows ``\%`` in
+    # text with its backslash and GitHub without, so a percent sign there is
+    # put right with code, not ``\%``.
+    marked = [piece.strip()[2:-2] for piece, kind in pieces if kind == "math"]
+    typed = _dollar_formulas(document)
     layout = _TexLayout()
-    for piece, kind in pieces:
-        if kind == "math":
-            layout.read(piece.strip()[2:-2])
+    for tex in marked + typed:
+        layout.read(tex)
     errors.extend(layout.messages())
-    if any(_TEX_COMMENT.search(piece) for piece, kind in pieces if kind == "math"):
+    if any(_TEX_COMMENT.search(tex) for tex in marked):
         errors.append("TeX comments are not allowed: they drop the rest of their line; write \\% for a percent sign")
+    if any(_TEX_COMMENT.search(tex) for tex in typed):
+        errors.append(
+            "percent signs between two dollar signs in text are not allowed: read as a formula, they would drop the "
+            "rest of the line; put dollar signs meant as typed in code"
+        )
     if not _shows_letter_or_digit("".join(document.itertext())):
         errors.append("testimony renders no visible text: it must show at least one letter or digit")
     return tuple(dict.fromkeys(errors))
@@ -2224,6 +2237,91 @@ def _testimony_pieces(document: object) -> list[tuple[str, str]]:
 
     walk(document, "text")
     return pieces
+
+
+#: Which dollar signs a reader taking them in turn may take for delimiters:
+#: every one; none right after a backslash, as GitHub reads them; or none
+#: after an odd number of backslashes, as MathJax reads them.
+_DOLLAR_DELIMITERS = (re.compile(r"\$"), re.compile(r"(?<!\\)\$"), re.compile(r"(?<!\\)(?:\\\\)*\$"))
+#: Where a reader taking dollar signs in turn may start again, as the
+#: elements it reads across and whether it reads each line apart: one reads
+#: across emphasis, code, and line breaks; MathJax, across line breaks
+#: only; and GitHub's Markdown API, across none, each line apart.
+_DOLLAR_STRETCHES = (
+    (frozenset({"em", "strong", "span", "code", "br"}), False),
+    (frozenset({"br"}), False),
+    (frozenset(), True),
+)
+
+
+def _dollar_formulas(document: object) -> list[str]:
+    """The text between each two dollar signs of ``document`` that a reader
+    taking every one in turn would pair, in a paragraph, list item, or table
+    cell, in each reading of :data:`_DOLLAR_DELIMITERS` and of
+    :data:`_DOLLAR_STRETCHES`. A formula the renderer marked stands for its
+    own two dollar signs, and dollar signs in code are left out, as is text
+    that is only space."""
+
+    found: dict[tuple[int, int], str] = {}
+    opened: tuple[int, list[str]] | None = None
+    position = 0
+
+    def add(text: str, delimiter: re.Pattern[str], lines: bool) -> None:
+        nonlocal opened, position
+        for number, line in enumerate(text.split("\n") if lines else [text]):
+            if number:
+                opened, position = None, position + 1
+            start = 0
+            for match in delimiter.finditer(line):
+                if opened is None:
+                    opened = (position + match.end(), [])
+                else:
+                    opened[1].append(line[start : match.end() - 1])
+                    found[opened[0], position + match.end()] = "".join(opened[1])
+                    opened = None
+                start = match.end()
+            if opened is not None:
+                opened[1].append(line[start:])
+            position += len(line)
+
+    def walk(node: object, delimiter: re.Pattern[str], across: frozenset[str], lines: bool) -> None:
+        nonlocal opened
+        tag = getattr(node, "tag", None)
+        if not isinstance(tag, str):
+            return
+        tag = tag.lower()
+        inline = tag in across
+        if not inline:
+            opened = None
+        if "arithmatex" in node.attrib.get("class", "").split():  # type: ignore[attr-defined]
+            if tag == "span":
+                add("$$", delimiter, lines)
+            if not inline:
+                opened = None
+            return
+        if tag == "code":
+            if opened is not None:
+                opened[1].append("".join(node.itertext()).replace("$", ""))  # type: ignore[attr-defined]
+            return
+        if tag == "pre":
+            return
+        if tag == "br":
+            add("\n", delimiter, lines)
+        if node.text:  # type: ignore[attr-defined]
+            add(node.text, delimiter, lines)  # type: ignore[attr-defined]
+        for child in node:  # type: ignore[attr-defined]
+            walk(child, delimiter, across, lines)
+            if child.tail:
+                add(child.tail, delimiter, lines)
+        if not inline:
+            opened = None
+
+    # A pair two readings share is read once, so its spacing counts once.
+    for across, lines in _DOLLAR_STRETCHES:
+        for delimiter in _DOLLAR_DELIMITERS:
+            opened, position = None, 0
+            walk(document, delimiter, across, lines)
+    return [tex for tex in found.values() if tex.strip()]
 
 
 def _vault_markup_errors(text: str, code: list[str]) -> list[str]:
@@ -2651,6 +2749,15 @@ def _github_formulas(document: object, lines: list[str]) -> list[str]:
                 read += dollars(item, at) if isinstance(item, str) else [item]
                 at += item.count("\n") if isinstance(item, str) else 0
             items = read
+        elif emphasis:
+            # Nor was $$ in a line seen in emphasis.
+            at = line
+            for item in items:
+                if isinstance(item, str):
+                    for number, part in enumerate(item.split("\n")):
+                        if "$$" in part:
+                            doubt(at + number, "two dollar signs together")
+                    at += item.count("\n")
         last = None
         node.text = ""  # type: ignore[attr-defined]
         for item in items:

@@ -566,7 +566,16 @@ hold at most 2,048 characters, 8 em of space, 9 `&` in a row, 16 `\\` in an
 environment and 32 in all, 16 empty
 cells, and no empty row, nested at most 16 deep with scripts 8 deep; a
 testimony may hold at most 64 em of space, the space in the rows of an
-environment counted once per column.
+environment counted once per column. Text between two dollar signs is held
+to the same rules, as in `$ P \color{white}{Q} $`, which the site shows as
+typed but a card on GitHub might show as a formula. The dollar signs of a
+paragraph, list item, or table cell, a formula's own two among them, are
+paired in turn three ways: across emphasis, code, and line breaks; across
+line breaks only, as MathJax reads a page; and apart in each line of text
+between two elements, as GitHub's Markdown API reads them. Each way
+is read with every dollar sign a delimiter, with none right after a
+backslash, and with none after an odd number of backslashes. So dollar
+signs meant as typed go in code.
 Testimony must also show at least one letter or digit. Before any card is parsed its
 testimony must fit limits well above what real read-backs use: 32 KiB, 500
 lines, 1,024 math delimiters, 512 backticks in runs of at most 16, 64 opening

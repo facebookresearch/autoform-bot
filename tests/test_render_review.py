@@ -947,6 +947,8 @@ def test_a_double_integral_spelled_with_negative_space_is_refused_with_a_hint() 
         r"See \ref{x} here.",
         r"See \eqref{x} here.",
         "A path C:" + "\\" * 4 + "$x and more.",
+        r"So $ P \land Q $ holds.",
+        r"Since $ x $ holds (see \ref{a}), $ y $ follows.",
     ],
 )
 def test_tex_in_text_shows_as_typed_and_is_accepted(testimony: str) -> None:
@@ -955,6 +957,97 @@ def test_tex_in_text_shows_as_typed_and_is_accepted(testimony: str) -> None:
     typed."""
 
     assert _testimony_errors(testimony) == ()
+
+
+@pytest.mark.parametrize(
+    ("testimony", "command"),
+    [
+        (r"$ P \color{transparent}{\land Q} $", r"\color"),
+        (r"$ P \color{transparent}{\land Q}$", r"\color"),
+        (r"$P \color{transparent}{\land Q} $", r"\color"),
+        (r"$ P \color{white}{\land Q} $", r"\color"),
+        (r"$ P \color{white}{\land Q}$", r"\color"),
+        (r"$P \color{white}{\land Q} $", r"\color"),
+        (r"$ P \textcolor{white}{\land Q} $", r"\textcolor"),
+        (r"$ P \textcolor{white}{\land Q}$", r"\textcolor"),
+        (r"$P \textcolor{white}{\land Q} $", r"\textcolor"),
+        (r"$ P \color{white}{\land Q} $x$", r"\color"),
+        (r"$P \textcolor{white}{\land Q} $x$", r"\textcolor"),
+        (r"For all $ P \color{white}{\land Q} $`x`$, done.", r"\color"),
+        (r"$ P *\color{white}{\land Q}* $", r"\color"),
+        (r"$ P **\color{white}{\land Q}** $", r"\color"),
+        (r"$ `x` P \color{white}{\land Q} $", r"\color"),
+        (r"$ `P \color{white}{\land Q}` $", r"\color"),
+        ("$ P  \n" r"\color{white}{\land Q} $", r"\color"),
+        (r"$ a *b* $ \color{white}{\land Q} $", r"\color"),
+        (r"$ a `x`$ \color{white}{\land Q} $", r"\color"),
+        (r"$ a *$ \color{white}{\land Q} $* b $", r"\color"),
+        (r"$x$ and $ a *b* $ \color{white}{\land Q} $", r"\color"),
+        (r"Cost \$5 and *more*: $ P \color{white}{\land Q} $", r"\color"),
+        (r"Cost \$5 for `f`: $ P \textcolor{white}{\land Q} $", r"\textcolor"),
+        ("a $ b\n" r"c $ \color{white}{\land Q} $", r"\color"),
+        ("$ a  \n" r"b $ \color{white}{\land Q} $", r"\color"),
+        (r"- $ P \color{white}{\land Q} $", r"\color"),
+        ("| a |\n|---|\n" r"| $ P \color{white}{\land Q} $ |", r"\color"),
+        (r"\\$ x $ \color{white}{\land Q} $ y", r"\color"),
+        (r"\\\\$ x $ \color{white}{\land Q} $ y", r"\color"),
+        (r"\\$ x $ \color{white}{\land Q} \\\\$ y", r"\color"),
+        (r"$P \color{transparent}{\land Q}$", r"\color"),
+        (r"$`P \color{white}{\land Q}`$", r"\color"),
+        (r"$$ P \color{white}{\land Q} $$", r"\color"),
+    ],
+)
+def test_tex_between_two_dollar_signs_is_held_to_the_allowlist(testimony: str, command: str) -> None:
+    """A space just inside a dollar sign keeps the renderer, and GitHub as
+    emulated, from reading a formula, and so do emphasis, code, or a line
+    break between two dollar signs, and a formula that takes the second for
+    its own; the site shows such text as typed. How GitHub pairs dollar signs
+    in a card it shows was not checked, and read as a formula the text would
+    hide the coloured part, so it is held to the allowlist as the formulas
+    the renderer marks are, whether or not a dollar sign after a backslash
+    is taken for a delimiter, and whether the dollar signs are paired across
+    elements and lines or apart in each stretch of text, as MathJax pairs
+    them, and in each line of that, as GitHub's Markdown API does."""
+
+    assert _testimony_errors(testimony) == (f"TeX outside the read-back allowlist is not allowed: {command}",)
+
+
+_COMMENT = (
+    "percent signs between two dollar signs in text are not allowed: read as a formula, they would drop the rest "
+    "of the line; put dollar signs meant as typed in code"
+)
+
+
+@pytest.mark.parametrize(
+    ("testimony", "message"),
+    [
+        (r"So $ P % \land Q $ holds.", _COMMENT),
+        ("$ P % \\land Q\nR $", _COMMENT),
+        (
+            "$ P " + r"\quad" * 9 + " Q $",
+            "TeX spacing over 8 em in one formula is not allowed: it pushes symbols apart or out of view",
+        ),
+        (
+            "$ P " + r"\\!" * 2 + " Q $",
+            "repeated negative TeX spacing is not allowed: it slides symbols over one another",
+        ),
+    ],
+)
+def test_tex_between_two_dollar_signs_is_held_to_every_rule_for_a_formula(testimony: str, message: str) -> None:
+    r"""Read as a formula, a comment would drop the rest of the line and
+    spacing would push symbols out of view or over one another. The text is
+    read after Markdown's escapes, as GitHub reads a formula, so ``\\!``
+    there is the negative space ``\!``."""
+
+    assert _testimony_errors(testimony) == (message,)
+
+
+def test_a_percent_sign_between_two_dollar_signs_in_text_is_refused_with_advice_that_fixes_it() -> None:
+    r"""Writing ``\%`` there would not do: the site shows the backslash, and
+    GitHub hides it."""
+
+    assert _testimony_errors("Pay $5 or 50% of $10.") == (_COMMENT,)
+    assert _testimony_errors("Pay `$5` or 50% of `$10`.") == ()
 
 
 @pytest.mark.parametrize(
@@ -1425,6 +1518,11 @@ def test_the_read_back_guide_states_the_rules_the_validator_applies() -> None:
             "In a formula in a table cell write `\\vert` for `|` and `\\Vert` for `\\|`",
             "| a |\n|---|\n| $x \\| y$ |",
             "| a |\n|---|\n| $x \\vert y \\Vert z$ |",
+        ),
+        (
+            "put dollar signs meant as typed in code",
+            "It costs \\$5, see \\ref{x}, or \\$10.",
+            "It costs `$5`, see \\ref{x}, or `$10`.",
         ),
         ("or `\\!` at the start or end of a formula", "Let $`\\!x`$ hold.", "Let $`x\\!y`$ hold."),
         (
@@ -2040,6 +2138,7 @@ _DOUBT = "formulas GitHub may read otherwise are not allowed: "
         ("W0\n\n$$ $$", "on line 3, a displayed formula that holds nothing", "W0"),
         ("W0 $x$ and\n$y$> z.", "on line 2, > right after a formula", "W0 $x$ and\n$`y`$> z."),
         ("W0 *a $`x`$ b* W1", "on line 1, a formula in emphasis", "W0 *a* $`x`$ *b* W1"),
+        ("W0 *a $$ x $$ b* W1", "on line 1, two dollar signs together", "W0 *a* $`x`$ *b* W1"),
         ("W0\n\n> ```math\n> d\n> ```", "on line 3, a math fence other than ```math alone", "W0\n\n```math\nd\n```"),
         ("~~~math\ng\n~~~", "on line 1, a math fence other than ```math alone", "```math\ng\n```"),
         ("```math extra\ne\n```", "on line 1, a math fence other than ```math alone", "```math\ne\n```"),
