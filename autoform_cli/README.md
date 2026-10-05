@@ -803,9 +803,10 @@ fresh, and its packets match the ones `review prepare` wrote from a full
 extraction.
 
 `--manifest` files a batch against one extraction: one Lake freshness check,
-one helper build, and one probe for each module that declares a batch
-declaration. One record per card would pay the freshness check, the helper
-build, and a probe each, two Lean starts per card. A coordinator builds it
+one helper build, and one probe for each module that declares a `lean:`
+target of a batch article. One record per card would pay the freshness check,
+the helper build, and its article's probes each, at least two Lean starts per
+card. A coordinator builds it
 from the packet manifest `review prepare` writes: each record takes an entry's
 `article_id` and `declaration`, its `packet` made relative to the records
 manifest's directory (the packet manifest's paths are relative to the packets
@@ -825,8 +826,8 @@ manifest sits beside `review-packets`:
 Paths are relative to the manifest's directory and may not leave it: an
 absolute path, a `..` component, or a link that points outside is refused. A
 record may carry its own `expected_card_hash`, a declaration may appear once,
-and no object may repeat a key. Every packet and
-testimony is read and checked against the bundle before Lean starts. So is
+and no object may repeat a key. Every packet is read and checked against the
+bundle, and every testimony read and validated, before Lean starts. So is
 every card the batch would write over: a re-review lands on the path of the
 card it supersedes, which it may replace only by naming that card's hash, and
 the batch lists every card that needs one, with the hash, before extracting,
