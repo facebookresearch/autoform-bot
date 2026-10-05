@@ -8,7 +8,7 @@ permissions:
 
 env:
   AUTOFORM_SOURCE: "https://github.com/VivienCabannes/autoform-bot.git"
-  AUTOFORM_REF: "b385fbf64c1e7c8526977aaf8f886e3da2bb561a"
+  AUTOFORM_REF: "e1317a35eee4e737154532d178deff9ece23d050"
 
 concurrency:
   group: blueprint-pages-${{ github.ref }}
