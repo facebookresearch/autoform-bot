@@ -1565,16 +1565,9 @@ def _prepare_records(
     for item in inputs:
         request = item.request
         node = next(node for node in graph.nodes.values() if node.article_id == request.article_id)
-        current_node = skeleton.node(node.id)
-        current = None if current_node is None else next(
-            (item for item in current_node.declarations if item.name == request.declaration),
-            None,
-        )
-        if current is None:
-            # Keep selection failures under the same structured error surface
-            # as stale or malformed review evidence.
-            findings.append(_review_selection_finding(request.article_id, request.declaration))
-            continue
+        # validate_review_article matched this article's extracted declarations
+        # to the bundle's, where _record_inputs found this one.
+        current = next(item for item in skeleton.declarations(node.id) if item.name == request.declaration)
         try:
             cards.append(
                 prepare_readback(
