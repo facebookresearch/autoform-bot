@@ -851,14 +851,19 @@ def _deps_json(*modules: str, errors: tuple[str, ...] = ()) -> str:
     return json.dumps({"imports": [entry]})
 
 
-def _header_modules(command: list[str]) -> list[str]:
+def _header_modules(
+    command: list[str],
+    *,
+    deadline: float | None = None,
+    max_output_bytes: int = 1024 * 1024,
+) -> list[str]:
     return repl_core._lean_header_modules(
         command,
         "import Mathlib",
         cwd=None,
         env=dict(os.environ),
-        deadline=time.monotonic() + 10,
-        max_output_bytes=1024 * 1024,
+        deadline=time.monotonic() + 10 if deadline is None else deadline,
+        max_output_bytes=max_output_bytes,
     )
 
 
@@ -987,6 +992,75 @@ def test_disposable_call_checks_submitted_header_before_warmup_prefix(monkeypatc
     repl.run_disposable("/- note -/ import Unsafe\n#check Nat")
 
     assert checked == ["/- note -/ import Unsafe\n#check Nat"]
+
+
+def test_header_check_kills_a_command_that_outlives_the_deadline():
+    started = time.monotonic()
+
+    with pytest.raises(TimeoutError):
+        _header_modules(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            deadline=started + 0.2,
+        )
+
+    assert time.monotonic() - started < 5
+
+
+def test_header_check_rejects_output_over_the_combined_limit():
+    with pytest.raises(ValueError, match="output exceeded 1024 bytes"):
+        _header_modules(
+            _fake_header_deps("x" * 1025),
+            max_output_bytes=1024,
+        )
+
+
+def test_header_check_reaps_descendants_after_success(tmp_path):
+    process_record = tmp_path / "processes.json"
+    script = (
+        "import json, os, subprocess, sys; "
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(30)'], stdout=subprocess.DEVNULL, "
+        "stderr=subprocess.DEVNULL); "
+        f"open({str(process_record)!r}, 'w').write(json.dumps("
+        "{'child': child.pid, 'group': os.getpgrp()})); "
+        "sys.stdin.read(); "
+        f"sys.stdout.write({_deps_json('Mathlib')!r})"
+    )
+
+    assert _header_modules([sys.executable, "-c", script]) == ["Mathlib"]
+    process_ids = json.loads(process_record.read_text())
+    assert not repl_core._process_group_has_live_members(process_ids["group"])
+
+
+def test_disposable_call_retries_header_cleanup_before_reuse(monkeypatch):
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(
+            warmup_imports=frozenset(),
+            header_deps_command=_fake_header_deps(_deps_json("Mathlib")),
+        )
+    )
+    real_kill = repl_core._kill_subprocesses
+    cleanup_calls = 0
+
+    def fail_once(process, process_group_id, deadline=None):
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        if cleanup_calls == 1:
+            raise RuntimeError("injected cleanup failure")
+        return real_kill(process, process_group_id, deadline)
+
+    monkeypatch.setattr(repl_core, "_kill_subprocesses", fail_once)
+    monkeypatch.setattr(
+        repl,
+        "start",
+        lambda *args, **kwargs: pytest.fail("unclean header must not start Lean"),
+    )
+
+    response = repl.run_disposable("import Mathlib\n#check Nat")
+
+    assert "header parser cleanup failed" in response["repl_error"]
+    assert cleanup_calls == 2
+    assert repl.is_clean()
 
 
 def test_response_timeout_after_full_write_is_not_retried(monkeypatch):

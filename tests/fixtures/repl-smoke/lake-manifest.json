@@ -1,0 +1,16 @@
+{"version": "1.2.0",
+ "packagesDir": ".lake/packages",
+ "packages":
+ [{"url": "https://github.com/leanprover-community/repl.git",
+   "type": "git",
+   "subDir": null,
+   "scope": "",
+   "rev": "68a3b3a059787a7db44fb1e6281e4a657efee470",
+   "name": "repl",
+   "manifestFile": "lake-manifest.json",
+   "inputRev": "68a3b3a059787a7db44fb1e6281e4a657efee470",
+   "inherited": false,
+   "configFile": "lakefile.toml"}],
+ "name": "AutoformReplSmoke",
+ "lakeDir": ".lake",
+ "fixedToolchain": false}
