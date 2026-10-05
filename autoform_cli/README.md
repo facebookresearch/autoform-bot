@@ -786,9 +786,12 @@ fresh, and its packets match the ones `review prepare` wrote from a full
 extraction.
 
 `--manifest` files a batch against one extraction, where one record per card
-would pay a Lake freshness check and a Lean start each. The manifest reuses
-the packet manifest's field names, so a coordinator derives it from the one
-`review prepare` writes by adding the testimony for each packet:
+would pay a Lake freshness check and a Lean start each. A coordinator builds it
+from the packet manifest `review prepare` writes: each record takes an entry's
+`article_id` and `declaration`, its `packet` made relative to the records
+manifest's directory (the packet manifest's paths are relative to the packets
+directory), and a `testimony`. A record refuses the entry's other fields. This
+manifest sits beside `review-packets`:
 
 ```json
 {
