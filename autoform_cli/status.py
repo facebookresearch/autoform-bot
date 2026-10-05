@@ -143,9 +143,10 @@ def derive(graph: Graph) -> dict[str, NodeStatus]:
     rejects every ``sorry``, so a theorem's statement lands only with its proof:
     both phases wait for the statement prerequisites to be stated and the proof
     prerequisites to be proved. When ``roadmap/README.md`` sets
-    ``open_statements: allowed``, a statement may land with a ``sorry`` proof, so
-    a statement waits only for its statement prerequisites and a proof for every
-    prerequisite to be stated.
+    ``open_statements: allowed``, a theorem's statement may land with a ``sorry``
+    proof, so a statement waits only for its statement prerequisites and a proof
+    for every prerequisite to be stated. A definition has no ``sorry`` to land
+    with, so its statement waits for every prerequisite to be stated.
     """
     open_policy = graph.open_statements
     statuses: dict[str, NodeStatus] = {}
@@ -174,9 +175,11 @@ def derive(graph: Graph) -> dict[str, NodeStatus]:
                 unmet.append(other)
         assumes: tuple[str, ...] = ()
         if open_policy:
-            can_state = not unstated
+            # A definition cannot land open: writing it down is its proof, so
+            # its body uses its proof prerequisites, and they must be stated.
+            can_state = not unstated and not (definition and unmet)
             can_prove = stated and not unstated and not unmet
-            waiting = unstated + unmet if stated else unstated
+            waiting = unstated + unmet if stated or definition else unstated
             # Mathlib and unstated nodes reach nothing, so they get no entry,
             # except a theorem whose statement a revision retracted while its
             # `lean:` still names the old declaration: that declaration and its

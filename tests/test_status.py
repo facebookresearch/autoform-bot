@@ -312,6 +312,35 @@ def test_assumptions_reach_what_the_lean_proof_can_reach(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize("policy", ["forbidden", "allowed"])
+def test_a_definition_is_stated_only_once_its_proof_prerequisites_are(tmp_path: Path, policy: str) -> None:
+    """A definition's body is its proof, so it cannot land open with a missing prerequisite.
+
+    ``gap`` is an unstated theorem and ``open`` a stated one with no proof.
+    Under the open policy ``open`` counts as stated, so only ``gap`` blocks.
+    """
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "README.md", open_statements=policy)
+    _node(blueprint, "gap.md", declaration="theorem")
+    _node(blueprint, "open.md", declaration="theorem", statement="formalized")
+    _node(
+        blueprint,
+        "blocked.md",
+        "## Proof depends on\n\n- [Gap](gap.md)\n- [Open](open.md)\n",
+        declaration="definition",
+    )
+    _node(blueprint, "ready.md", "## Proof depends on\n\n- [Open](open.md)\n", declaration="definition")
+
+    readiness = _readiness(derive(load_graph(blueprint)))
+
+    if policy == "allowed":
+        assert readiness["blocked"] == ("planned", False, False, ("gap",), ("open",))
+        assert readiness["ready"] == ("can_state", True, False, (), ("open",))
+    else:
+        assert readiness["blocked"] == ("planned", False, False, ("gap", "open"), ())
+        assert readiness["ready"] == ("planned", False, False, ("open",), ())
+
+
+@pytest.mark.parametrize("policy", ["forbidden", "allowed"])
 def test_a_retracted_theorem_still_naming_its_lean_stays_an_open_statement(tmp_path: Path, policy: str) -> None:
     """A retracted statement's declaration, and any sorry in it, stay in the build until it is restated.
 

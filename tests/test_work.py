@@ -616,6 +616,27 @@ def test_open_blockers_wait_only_for_prerequisites_to_be_stated(tmp_path: Path) 
     assert "chapter/main" in {item.node_id for item in list_ready_work(project).items}
 
 
+def test_open_work_holds_a_definition_until_its_proof_prerequisites_are_stated(tmp_path: Path) -> None:
+    """A definition cannot land open, so its body needs every prerequisite's declaration."""
+    project = _policy_project(tmp_path, "allowed")
+    _article(
+        project,
+        "data.md",
+        title="Data",
+        metadata=["article_id: af_000000000000000000000013", "declaration: definition"],
+        proof_depends="state.md",
+    )
+
+    _, data = work_context(project, "chapter/data")
+    assert (data.phase, data.blockers) == (None, ("chapter/state",))
+    assert "chapter/data" not in {item.node_id for item in list_ready_work(project).items}
+
+    # An open statement is stated, so it is enough.
+    _edit(project, "data.md", "- [dependency](state.md)", "- [dependency](open.md)")
+    _, data = work_context(project, "chapter/data")
+    assert (data.phase, data.blockers, data.assumes) == ("statement", (), ("chapter/open",))
+
+
 def test_strict_work_text_is_unchanged(tmp_path: Path, capsys) -> None:
     project = _policy_project(tmp_path, None)
     revision = load_runtime_graph(project).source_revision
