@@ -52,6 +52,7 @@ def _project(tmp_path: Path) -> Path:
         project,
         "chapter/section/base.md",
         title="Base",
+        article_id="af_000000000000000000000001",
         declaration="definition",
         statement="formalized",
         lean="Project.base",
@@ -61,6 +62,7 @@ def _project(tmp_path: Path) -> Path:
         project,
         "chapter/section/result.md",
         title="Result",
+        article_id="af_000000000000000000000002",
         declaration="theorem",
         statement="formalized",
         proof="formalized",
@@ -108,6 +110,8 @@ def test_preserves_hierarchy_typed_dependencies_and_dispatchability(tmp_path: Pa
 
     assert chapter is not None and not chapter.formalizable and not chapter.dispatchable
     assert base is not None and base.dispatchable
+    assert base.article_id == "af_000000000000000000000001"
+    assert len(base.source_sha256) == 64
     assert base.status.state == "fully_proved"
     assert base.status.defined
     assert result is not None
@@ -197,6 +201,9 @@ def test_serialization_is_deterministic_relative_and_deeply_immutable(tmp_path: 
 
     assert json.loads(runtime.to_json()) == payload
     assert runtime.to_json() == load_runtime_graph(project).to_json()
+    base = next(node for node in payload["nodes"] if node["id"] == "chapter/section/base")
+    assert base["article_id"] == "af_000000000000000000000001"
+    assert base["source_sha256"] == runtime.get("chapter/section/base").source_sha256
     assert str(tmp_path) not in runtime.to_json()
     assert all(not Path(node.article_path).is_absolute() for node in runtime.nodes)
     assert isinstance(runtime.nodes, tuple)

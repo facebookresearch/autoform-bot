@@ -6,11 +6,11 @@ publishes progress views, and prepares human or agent review. The plugin and
 CLI use the identifier `autoform`; the canonical repository is
 [`facebookresearch/autoform-bot`](https://github.com/facebookresearch/autoform-bot).
 
-The `main` branch provides repository setup, roadmap planning, publication,
-human and agent review, and shared Lean LSP/REPL tools. The historical
+The `main` branch provides repository setup, roadmap planning, Markdown-native
+formalization of ready roadmap leaves, publication, human and agent review, and
+shared Lean LSP/REPL tools. The historical
 `execution` branch and its custom worker/prover stack are deprecated and are
-not an installation target. New formalization execution work belongs on
-`main` as a Markdown-native workflow over the same blueprint.
+not an installation target.
 
 ## Prerequisites
 
@@ -48,6 +48,7 @@ or run its commands.
 | --- | --- | --- |
 | Set up the blueprint and publication files | `/autoform:setup` | `$setup` |
 | Build a source-grounded roadmap | `/autoform:roadmap` | `$roadmap` |
+| Formalize ready roadmap leaves | `/autoform:formalize` | `$formalize` |
 | Prepare a person-led review | `/autoform:human-review` | `$human-review` |
 | Run an independent agent review | `/autoform:agent-review` | `$agent-review` |
 
@@ -100,6 +101,7 @@ plugin development and debugging, not as a required user workflow.
 | `autoform audit` | Audit completeness and checked facts. |
 | `autoform doctor` | Diagnose the local blueprint contract. |
 | `autoform skeleton` | Extract what a reader must trust for each formalized statement. |
+| `autoform work` | Inspect the Markdown-derived formalization frontier and node context. |
 | `autoform claim` | Coordinate temporary ownership through Git refs. |
 | `autoform dashboard` | Serve the built publication locally with live claim badges. |
 | `autoform render` | Generate publishable MkDocs source. |

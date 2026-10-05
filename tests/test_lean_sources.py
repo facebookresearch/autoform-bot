@@ -516,6 +516,26 @@ def test_snapshot_retries_a_root_replaced_while_it_is_bound(
     assert swapped
     assert attempts == 2
     assert snapshot.index.find("canonical") is not None
+@pytest.mark.parametrize("git_entry", ["file", "directory"])
+def test_nested_checkouts_are_not_indexed_as_project_source(
+    tmp_path: Path, git_entry: str
+) -> None:
+    # A Git worktree or submodule has a .git file; a nested clone has a directory.
+    (tmp_path / ".git").mkdir()
+    worktree = tmp_path / ".claude/worktrees/worker"
+    (worktree / "Project").mkdir(parents=True)
+    if git_entry == "file":
+        (worktree / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    else:
+        (worktree / ".git").mkdir()
+    (worktree / "Project/Basic.lean").write_text(
+        "def toplevel : Nat := 3\ndef workerOnly : Nat := 0\n", encoding="utf-8"
+    )
+
+    index = _index(tmp_path)
+
+    assert index.find("toplevel").path == Path("Project/Basic.lean")
+    assert index.find("workerOnly") is None
 
 
 @pytest.mark.parametrize(
@@ -2310,6 +2330,12 @@ def test_oversized_managed_manifest_leaves_its_directory_indexed_at_its_read_bou
 
     assert observed_lengths == [65]
     assert index.find("oversizedPacket") is not None
+
+
+def test_irreducible_definitions_are_indexed(tmp_path: Path) -> None:
+    index = _index(tmp_path, "namespace A\nirreducible_def b : Nat := 1\nend A\n")
+
+    assert index.find("A.b").keyword == "irreducible_def"
 
 
 def test_anonymous_instances_are_not_mistaken_for_names(tmp_path: Path) -> None:

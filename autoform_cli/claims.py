@@ -343,10 +343,6 @@ class ClaimBoard:
                 removed += 1
         return removed
 
-    def gc(self) -> int:
-        """Compatibility alias for :meth:`cleanup`."""
-        return self.cleanup()
-
     def heartbeat(
         self,
         key: str,

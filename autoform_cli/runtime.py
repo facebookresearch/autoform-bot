@@ -96,6 +96,8 @@ class RuntimeNode:
     """One immutable article record exposed to runtime consumers."""
 
     id: str
+    article_id: str | None
+    source_sha256: str | None
     title: str
     article_path: str
     parent: str | None
@@ -118,6 +120,7 @@ class RuntimeNode:
 
     def as_dict(self) -> dict[str, object]:
         return {
+            "article_id": self.article_id,
             "article_path": self.article_path,
             "assertions": self.assertions.as_dict(),
             "catalog": self.catalog,
@@ -135,6 +138,7 @@ class RuntimeNode:
             "parent": self.parent,
             "proof_dependencies": list(self.proof_dependencies),
             "source_targets": list(self.source_targets),
+            "source_sha256": self.source_sha256,
             "statement_dependencies": list(self.statement_dependencies),
             "status": self.status.as_dict(),
             "title": self.title,
@@ -371,10 +375,11 @@ def build_runtime_graph(
             if source_file is not None and not _is_portable_relative_path(source_file):
                 raise RuntimeProjectionError([f"{node.id}: Lean source file escapes the Lean root"])
             lean_targets.append(RuntimeLeanTarget(name, source_file))
-
         runtime_nodes.append(
             RuntimeNode(
                 id=node.id,
+                article_id=node.article_id,
+                source_sha256=node.source_sha256,
                 title=node.title,
                 article_path=article_paths[node.id],
                 parent=node.parent,

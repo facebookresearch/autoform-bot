@@ -18,7 +18,7 @@ from .render import (
     PUBLICATION_SCHEMA,
     publication_source_revision,
 )
-from .runtime import RuntimeGraph, RuntimeProjectionError
+from .runtime import RuntimeGraph, RuntimeNode, RuntimeProjectionError
 
 
 LIVE_SCHEMA = "autoform-live/v1"
@@ -32,26 +32,34 @@ class ClaimReader(Protocol):
 def build_live_state(runtime: RuntimeGraph, leases: list[dict[str, object]]) -> dict[str, object]:
     """Project live author claims onto nodes without creating durable state."""
 
-    claims_by_key = {
-        author_claim_key(getattr(node, "article_id", None) or node.id): node
-        for node in runtime.nodes
-    }
+    # The claim CLI hashes whatever target it is given, so a path-ID claim on an
+    # article that has an article_id is a separate lease. Show both, each with
+    # the target it was taken on.
+    claims_by_key: dict[str, tuple[RuntimeNode, str]] = {}
+    for node in runtime.nodes:
+        article_id = getattr(node, "article_id", None)
+        for target in (node.id, article_id) if article_id else (node.id,):
+            claims_by_key[author_claim_key(target)] = (node, target)
     claims: list[dict[str, object]] = []
     for lease in leases:
         key = lease.get("_key")
-        node = claims_by_key.get(key) if isinstance(key, str) else None
+        match = claims_by_key.get(key) if isinstance(key, str) else None
         if (
-            node is None
+            match is None
             or lease.get("_malformed") is not False
             or lease.get("_expired") is not False
             or not isinstance(lease.get("owner"), str)
         ):
             continue
+        node, target = match
         item: dict[str, object] = {
             "node_id": node.id,
             "title": node.title,
             "owner": lease["owner"],
+            "claim_target": target,
         }
+        if getattr(node, "article_id", None):
+            item["article_id"] = node.article_id
         for field in ("expires_at", "note"):
             value = lease.get(field)
             if isinstance(value, (int, float, str)) and not isinstance(value, bool):

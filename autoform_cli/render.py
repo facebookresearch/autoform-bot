@@ -931,12 +931,6 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
     return ordered
 
 
-
-
-
-
-
-
 def _append_book_navigation(pages: list[Path]) -> None:
     """Add previous/next links to the bottom of Blueprint pages, never global nav."""
     if len(pages) < 2:
@@ -993,26 +987,6 @@ def _book_navigation_link(
     )
 
 
-def _inject_after_title(text: str, block: str) -> str:
-    """Place a generated overview immediately after the document's first H1."""
-    lines = text.splitlines()
-    fence: tuple[str, int] | None = None
-    for index, line in enumerate(lines):
-        fence_match = _FENCE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if fence is None:
-                fence = (marker[0], len(marker))
-            elif marker[0] == fence[0] and len(marker) >= fence[1]:
-                fence = None
-            continue
-        heading = _HEADING.match(line) if fence is None else None
-        if heading is not None and len(heading.group(1)) == 1:
-            merged = [*lines[: index + 1], "", block.rstrip(), "", *lines[index + 1 :]]
-            return "\n".join(merged) + ("\n" if text.endswith("\n") else "")
-    return text.rstrip() + "\n\n" + block.rstrip() + "\n"
-
-
 def _inject_after_lead(text: str, block: str) -> str:
     """Place chapter metadata after its opening prose and before the first section."""
     lines = text.splitlines()
@@ -1037,7 +1011,6 @@ def _inject_after_lead(text: str, block: str) -> str:
             merged = [*lines[:index], "", block.rstrip(), "", *lines[index:]]
             return "\n".join(merged) + ("\n" if text.endswith("\n") else "")
     return text.rstrip() + "\n\n" + block.rstrip() + "\n"
-
 
 
 def _next_target(
@@ -1111,7 +1084,6 @@ def _next_target(
             "</div>"
         )
     return ""
-
 
 
 STRUCTURE_PAGE = "structure.md"
@@ -1589,21 +1561,8 @@ def _render_overview_summary(
         '<div class="bp-progress-kicker">Formalization progress</div>'
         f'<div class="bp-progress-total">{item_summary}</div>'
         f'<div class="bp-progress-states">{states}</div>'
-        f""
         "</div>"
     )
-
-
-
-def _status_phrase(node_statuses: Iterable[status.NodeStatus]) -> str:
-    counts = {state.key: 0 for state in status.STATES}
-    for node_status in node_statuses:
-        counts[node_status.key] += 1
-    return " · ".join(f"{counts[state.key]} {state.label}" for state in status.STATES if counts[state.key])
-
-
-def _markdown_table_cell(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("|", "\\|").replace("[", "\\[").replace("]", "\\]")
 
 
 def _first_h1(text: str) -> str | None:
@@ -1633,17 +1592,6 @@ def _document_body(text: str) -> str:
             continue
         kept.append(line)
     return "\n".join(kept).strip()
-
-
-def _shift_headings(text: str, levels: int) -> str:
-    def shift(line: str) -> str:
-        heading = _HEADING.match(line)
-        if heading is None:
-            return line
-        level = min(len(heading.group(1)) + levels, 6)
-        return f"{'#' * level} {heading.group(2)}"
-
-    return _outside_fences(text, shift)
 
 
 def _anchor(node_id: str, group: str) -> str:

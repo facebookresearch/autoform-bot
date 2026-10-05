@@ -45,7 +45,7 @@ _END = re.compile(r"^\s*end\b\s*(\S*)")
 _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
     r"(?:(?:public|private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
-    r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom)\s+(.+)$"
+    r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom|irreducible_def)\s+(.+)$"
 )
 _IGNORED_DIRECTORIES = frozenset(
     {
@@ -411,7 +411,9 @@ def _lean_tree_selection(
             if _is_managed_output_manifest_name(path.name)
             else None
         ),
-        record_omitted=False,
+        # Omitted marker entries let the immutable snapshot classify nested Git
+        # checkouts without consulting live pathnames after capture.
+        record_omitted=True,
         limits=limits,
         opaque_markers=(
             OpaqueDirectoryMarker(
@@ -500,6 +502,13 @@ def _indexed_source_snapshot(
         for relative in snapshot.opaque_directories
         if relative
     }
+    ignored_roots.update(
+        marker.parent
+        for relative, kind in snapshot.omitted
+        if kind in {"directory", "file"}
+        and len((marker := PurePosixPath(relative)).parts) > 1
+        and unicodedata.normalize("NFC", marker.name).casefold() == ".git"
+    )
     for parent in sorted(
         managed_output_manifests,
         key=lambda path: (len(path.parts), path.as_posix()),
@@ -522,8 +531,12 @@ def _indexed_source_snapshot(
     # any other ``.lean`` link, live or dangling, is refused.
     tolerated_links = frozenset(
         relative
-        for relative, _target in snapshot.symlinks
-        if PurePosixPath(relative).suffix.casefold() == ".lean"
+        for relative, kind in (
+            *((relative, "symlink") for relative, _target in snapshot.symlinks),
+            *snapshot.omitted,
+        )
+        if kind == "symlink"
+        and PurePosixPath(relative).suffix.casefold() == ".lean"
         and not in_ignored_root(relative)
         and PurePosixPath(relative).name.startswith(".#")
     )
@@ -627,7 +640,11 @@ def _lean_generation_revision(
     )
     special = tuple(entry for entry in snapshot.special if retained_entry(entry[0]))
     placeholders = tuple(path for path in snapshot.placeholders if retained_entry(path))
-    omitted = tuple(entry for entry in snapshot.omitted if retained_entry(entry[0]))
+    omitted = tuple(
+        entry
+        for entry in snapshot.omitted
+        if retained_entry(entry[0]) and entry[0] not in tolerated_links
+    )
     retained_paths = {
         PurePosixPath(relative)
         for relative, _value in (*files, *symlinks, *special, *omitted)
