@@ -333,10 +333,15 @@ def test_mobile_list_pagination_stays_above_the_collapsed_sheet(
 
     more = page.locator(".bp-dag-inventory > .bp-dag-load-more")
     playwright.expect(more).to_be_visible()
+    more.scroll_into_view_if_needed()
     box = more.bounding_box()
+    handle_box = page.locator(".bp-dag-sheet-handle").bounding_box()
     assert box is not None
+    assert handle_box is not None
+    assert box["y"] + box["height"] <= handle_box["y"]
     assert page.evaluate(
-        "point => Boolean(document.elementFromPoint(point.x, point.y).closest('.bp-dag-load-more'))",
+        "point => { const target = document.elementFromPoint(point.x, point.y); "
+        "return Boolean(target && target.closest('.bp-dag-load-more')); }",
         {"x": box["x"] + box["width"] / 2, "y": box["y"] + box["height"] / 2},
     )
     more.tap()
