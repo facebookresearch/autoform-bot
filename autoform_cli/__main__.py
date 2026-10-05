@@ -32,6 +32,7 @@ from .graph import Graph, GraphValidationError, load_graph
 from .lean import build_linker, declaration_names
 from .project import ProjectCatalogError, inspect_project, load_release_catalog
 from .readback import (
+    TESTIMONY_MAX_BYTES,
     PreparedReadback,
     Readback,
     load_readbacks,
@@ -957,9 +958,29 @@ def _record_inputs(bundle: ReviewBundle, requests: tuple[RecordRequest, ...]) ->
                 )
             )
             continue
+        # At most one byte past the limit is read, which marks a testimony
+        # over it, so a huge file costs no more than a testimony does.
         try:
-            testimony = request.testimony.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
+            with request.testimony.open("rb") as handle:
+                raw = handle.read(TESTIMONY_MAX_BYTES + 1)
+        except OSError as exc:
+            findings.append(_unreadable_input(request, "testimony", request.testimony, exc))
+            continue
+        if len(raw) > TESTIMONY_MAX_BYTES:
+            findings.append(
+                ReviewFinding(
+                    request.article_id,
+                    "review-record-invalid",
+                    f"{request.declaration}: unsafe read-back testimony: {request.testimony} is over the "
+                    f"{TESTIMONY_MAX_BYTES}-byte limit",
+                )
+            )
+            continue
+        try:
+            # Decoded as a text file is read: "\r\n" and a lone "\r" end a
+            # line as "\n" does.
+            testimony = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        except UnicodeError as exc:
             findings.append(_unreadable_input(request, "testimony", request.testimony, exc))
             continue
         # Equal to the bundle's text, so already valid UTF-8.

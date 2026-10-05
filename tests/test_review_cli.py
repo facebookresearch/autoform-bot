@@ -12,7 +12,7 @@ import pytest
 from autoform_cli.__main__ import _current_review, main
 from autoform_cli.graph import Graph, load_graph
 from autoform_cli.markdown import site_converter
-from autoform_cli.readback import load_readbacks, readback_path, render_testimony
+from autoform_cli.readback import TESTIMONY_MAX_BYTES, load_readbacks, readback_path, render_testimony
 from autoform_cli.render import PublicationError, render_site
 from autoform_cli.review import REVIEW_PACKET_SCHEMA, load_review_bundle, validate_review_bundle
 from autoform_cli.skeleton import (
@@ -1433,6 +1433,61 @@ def test_every_unreadable_input_is_named_before_any_lean_work(
     assert f"{records[1]['declaration']}: cannot read the testimony" in err
     assert extraction.scopes == [None]  # only `review prepare` extracted
     assert load_readbacks(blueprint) == {}
+
+
+@pytest.mark.parametrize("over", [False, True], ids=["at-the-limit", "past-the-limit"])
+def test_a_testimony_is_read_no_further_than_one_byte_past_its_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], over: bool
+) -> None:
+    """The bytes after the first one over the limit are not read as testimony;
+    here they are not even UTF-8, and they run on to 64 MiB, which reading the
+    file whole would hold in memory."""
+
+    import tracemalloc
+
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    testimony = manifest.resolve().parent / "Review.result.md"
+    testimony.write_bytes(b"a" * TESTIMONY_MAX_BYTES + (b"a" + b"\xff" * 64 if over else b""))
+    if over:
+        os.truncate(testimony, 64 * 1024 * 1024)  # sparse: no disk, only memory if read
+    capsys.readouterr()
+
+    tracemalloc.start()
+    try:
+        assert _record(blueprint, bundle, manifest, tmp_path) == (2 if over else 0)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    err = capsys.readouterr().err
+    if over:
+        assert err == (
+            f"error: Review.result: unsafe read-back testimony: {testimony} is over the "
+            f"{TESTIMONY_MAX_BYTES}-byte limit\n"
+        )
+        assert peak < 2 * 1024 * 1024
+        assert extraction.scopes == [None]  # only `review prepare` extracted
+        assert load_readbacks(blueprint) == {}
+    else:
+        assert err == ""
+        assert (_RESULT_ID, "Review.result") in load_readbacks(blueprint)
+
+
+def test_a_testimony_ends_a_line_at_crlf_or_cr_as_at_lf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read as a text file is, so the card says the same whichever line endings the file was saved with."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    (manifest.parent / "Review.result.md").write_bytes(b"The statement\r\nReview.result\rasserts True.\r\n")
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 0
+
+    card = load_readbacks(blueprint)[(_RESULT_ID, "Review.result")]
+    assert card.text == "The statement\nReview.result\nasserts True."
+    # The card is parsed as text, so its text alone would not show a "\r" filed.
+    assert b"\r" not in card.path.read_bytes()
 
 
 def test_record_takes_a_manifest_or_one_record_but_not_both(
