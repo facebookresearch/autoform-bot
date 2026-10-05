@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.graph import Graph, Node
-from autoform_cli.graph_views import project_view
-from autoform_cli.render import render_site
-from autoform_cli.status import derive
+from cli.graph import Graph, Node
+from cli.graph_views import project_view
+from cli.render import render_site
+from cli.status import derive
 
 
 def _render(blueprint: Path, output: Path) -> None:

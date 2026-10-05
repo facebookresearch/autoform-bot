@@ -86,7 +86,7 @@ marks a formalizable article. Inline relative links under `## Depends on` and
 `## Proof depends on` define dependency edges; reference-style links do not.
 
 Markdown is the source of truth; Mermaid graphs and MkDocs pages are derived
-views. See the [blueprint format and CLI reference](autoform_cli/README.md) for
+views. See the [blueprint format and CLI reference](cli/README.md) for
 complete frontmatter, hierarchy, status, and validation rules.
 
 ## Agent-facing CLI and publication

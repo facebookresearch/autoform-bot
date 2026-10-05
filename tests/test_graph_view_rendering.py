@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
-from autoform_cli.mermaid import render_view_diagram
+from cli.graph_views import GraphView, ViewEdge, ViewNode
+from cli.mermaid import render_view_diagram
 
 
 def test_project_view_renders_status_distribution_and_aggregated_edges() -> None:

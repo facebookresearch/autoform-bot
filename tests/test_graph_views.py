@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import graph_views
-from autoform_cli.graph import Graph, Node
-from autoform_cli.graph_views import chapter_view, focus_view, focus_views, full_view, project_view, scope_view
-from autoform_cli.status import derive
+from cli import graph_views
+from cli.graph import Graph, Node
+from cli.graph_views import chapter_view, focus_view, focus_views, full_view, project_view, scope_view
+from cli.status import derive
 
 
 def _graph(tmp_path: Path) -> Graph:

@@ -16,9 +16,9 @@ from pathlib import Path
 import pytest
 import psutil
 
-from autoform_cli.__main__ import main
-from autoform_cli.lean import PACKET_SCHEMA, PASSAGE_SCHEMA, index_project
-from autoform_cli.skeleton import (
+from cli.__main__ import main
+from cli.lean import PACKET_SCHEMA, PASSAGE_SCHEMA, index_project
+from cli.skeleton import (
     DeclarationSkeleton,
     NodeSkeleton,
     PACKET_MANIFEST,
@@ -299,7 +299,7 @@ def test_probe_refuses_to_render_nothing() -> None:
 @pytest.fixture
 def probe(tmp_path: Path, monkeypatch) -> str:
     (tmp_path / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
+    monkeypatch.setattr("cli.skeleton.shutil.which", lambda executable: "/bin/lake")
     return render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
 
 
@@ -310,7 +310,7 @@ def test_probe_refuses_stale_artifacts_before_executing_lean(tmp_path: Path, mon
         calls.append(command)
         return subprocess.CompletedProcess(command, 3, stdout="target is out-of-date", stderr="")
 
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
+    monkeypatch.setattr("cli.skeleton._run_bounded_command", fake_run)
 
     with pytest.raises(SkeletonError, match="build artifacts are stale"):
         run_probe(probe, tmp_path)
@@ -326,7 +326,7 @@ def test_probe_reports_a_failed_freshness_check_apart_from_stale_artifacts(
             command, 1, stdout="error: permission denied (error code: 13)", stderr=""
         )
 
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
+    monkeypatch.setattr("cli.skeleton._run_bounded_command", fake_run)
 
     with pytest.raises(SkeletonError, match="must be writable") as refused:
         run_probe(probe, tmp_path)
@@ -454,7 +454,7 @@ def test_bounded_command_interruption_kills_the_process(tmp_path: Path, monkeypa
             time.sleep(0.01)
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton.time.monotonic", interrupt_after_start)
+    monkeypatch.setattr("cli.skeleton.time.monotonic", interrupt_after_start)
 
     with pytest.raises(KeyboardInterrupt) as interrupted:
         _bounded(tmp_path, program)
@@ -492,7 +492,7 @@ def test_bounded_command_termination_signal_kills_the_process_group(
         "import signal, sys; from pathlib import Path; "
         "signal.signal(signal.SIGHUP, signal.SIG_DFL); "
         "signal.signal(signal.SIGINT, signal.default_int_handler); "
-        "from autoform_cli.skeleton import _run_bounded_command; "
+        "from cli.skeleton import _run_bounded_command; "
         "_run_bounded_command(sys.argv[1:], cwd=Path.cwd(), timeout=60, context='test command')"
     )
     env = os.environ.copy()
@@ -570,8 +570,8 @@ def test_bounded_command_finishes_failure_teardown_when_signalled_during_it(
     survivors = tree
     try:
         with monkeypatch.context() as patch:
-            patch.setattr("autoform_cli.skeleton.time.monotonic", time_out_once_both_run)
-            patch.setattr("autoform_cli.skeleton._terminate_process_tree", signal_then_terminate)
+            patch.setattr("cli.skeleton.time.monotonic", time_out_once_both_run)
+            patch.setattr("cli.skeleton._terminate_process_tree", signal_then_terminate)
             with pytest.raises(SkeletonError) as failure:
                 _bounded(tmp_path, program, timeout=60)
         deadline = monotonic() + 5
@@ -601,7 +601,7 @@ def test_bounded_command_cleanup_reserves_time_and_reuses_final_deadline(
         _join_readers(readers, deadline=deadline)
         return False
 
-    monkeypatch.setattr("autoform_cli.skeleton._join_readers", report_stuck_readers)
+    monkeypatch.setattr("cli.skeleton._join_readers", report_stuck_readers)
 
     with pytest.raises(SkeletonError, match="output pipes open"):
         _bounded(tmp_path, "pass")
@@ -622,8 +622,8 @@ def test_probe_freshness_and_execution_have_separate_budgets(tmp_path: Path, mon
         return subprocess.CompletedProcess(command, 0, stdout="probe output", stderr="")
 
     times = iter((100.0, 101.0))
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
-    monkeypatch.setattr("autoform_cli.skeleton.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("cli.skeleton._run_bounded_command", fake_run)
+    monkeypatch.setattr("cli.skeleton.time.monotonic", lambda: next(times))
 
     assert run_probe(probe, tmp_path, timeout=10, freshness_timeout=20) == "probe output"
     assert calls == [20, 9.0]
@@ -635,8 +635,8 @@ def test_a_probe_timeout_names_the_flag_that_raises_it(tmp_path: Path, monkeypat
     def slow_probe(command, **kwargs):
         return bounded([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
 
-    monkeypatch.setattr("autoform_cli.skeleton._check_artifacts_fresh", lambda *args, **kwargs: None)
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", slow_probe)
+    monkeypatch.setattr("cli.skeleton._check_artifacts_fresh", lambda *args, **kwargs: None)
+    monkeypatch.setattr("cli.skeleton._run_bounded_command", slow_probe)
 
     with pytest.raises(SkeletonError) as caught:
         run_probe(probe, tmp_path, timeout=1)
@@ -650,16 +650,16 @@ def test_probe_records_file_is_held_to_the_output_limit(tmp_path: Path, monkeypa
         Path(env[PROBE_OUTPUT_ENV]).write_text("x" * 2048, encoding="utf-8")
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    monkeypatch.setattr("autoform_cli.skeleton._check_artifacts_fresh", lambda *args, **kwargs: None)
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", flooding_probe)
-    monkeypatch.setattr("autoform_cli.skeleton.DEFAULT_PROBE_OUTPUT_LIMIT", 1024)
+    monkeypatch.setattr("cli.skeleton._check_artifacts_fresh", lambda *args, **kwargs: None)
+    monkeypatch.setattr("cli.skeleton._run_bounded_command", flooding_probe)
+    monkeypatch.setattr("cli.skeleton.DEFAULT_PROBE_OUTPUT_LIMIT", 1024)
 
     with pytest.raises(SkeletonError, match="1024-byte output limit"):
         run_probe(probe, tmp_path)
 
 
 def test_probe_requires_an_existing_lake_manifest(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
+    monkeypatch.setattr("cli.skeleton.shutil.which", lambda executable: "/bin/lake")
     probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
 
     with pytest.raises(SkeletonError, match="lake-manifest.json is missing"):
@@ -743,7 +743,7 @@ def test_parse_probe_output_expands_fragments_strictly(monkeypatch) -> None:
         parse_probe_output(probe({}, [0]))
     with pytest.raises(SkeletonError, match=f"invalid semantic material for {root['root']}"):
         parse_probe_output(probe({}, text))  # type: ignore[arg-type]
-    monkeypatch.setattr("autoform_cli.skeleton._PROBE_MATERIAL_LIMIT", len(text) - 1)
+    monkeypatch.setattr("cli.skeleton._PROBE_MATERIAL_LIMIT", len(text) - 1)
     with pytest.raises(SkeletonError, match="exceeds"):
         parse_probe_output(probe({"0": [text[:10]], "1": [0, text[10:30]]}, shared_text))
 
@@ -936,7 +936,7 @@ def test_lake_configuration_snapshot_uses_content_not_file_identity(
         values[1] += calls
         return os.stat_result(values)
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.fstat", unstable_file_identity)
+    monkeypatch.setattr("cli.skeleton.os.fstat", unstable_file_identity)
 
     (library,) = lean_libraries(project)
 
@@ -969,7 +969,7 @@ def test_lake_configuration_snapshot_rejects_content_changed_between_reads(
                 lakefile.write_text('name = "Changed"\n', encoding="utf-8")
         return open_file(path, flags, *args)
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.open", change_before_second_read)
+    monkeypatch.setattr("cli.skeleton.os.open", change_before_second_read)
 
     with pytest.raises(SkeletonError, match="changed while it was read"):
         lean_libraries(project)
@@ -1231,7 +1231,7 @@ def test_default_extraction_rejects_input_changed_during_probe(
         os.utime(path, ns=(later, later))
         return _fake_probe_output()
 
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", changing_probe)
+    monkeypatch.setattr("cli.skeleton.run_probe", changing_probe)
 
     with pytest.raises(SkeletonError, match=match):
         extract_skeletons(blueprint, lean_root=project)
@@ -1270,7 +1270,7 @@ def test_extraction_rejects_configuration_changed_while_reading_libraries(tmp_pa
         lakefile.write_bytes(original)
         return _fake_probe_output()
 
-    monkeypatch.setattr("autoform_cli.skeleton.lean_libraries", racing_libraries)
+    monkeypatch.setattr("cli.skeleton.lean_libraries", racing_libraries)
 
     with pytest.raises(SkeletonError, match="configuration changed"):
         extract_skeletons(blueprint, lean_root=project, runner=reverting_runner)
@@ -1290,7 +1290,7 @@ def test_extraction_rejects_a_passage_changed_during_probe(tmp_path: Path, monke
         source.write_text("after\n", encoding="utf-8")
         return _fake_probe_output()
 
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", changing_probe)
+    monkeypatch.setattr("cli.skeleton.run_probe", changing_probe)
 
     with pytest.raises(SkeletonError, match="source passage changed"):
         extract_skeletons(blueprint, lean_root=project)
@@ -1633,7 +1633,7 @@ def _cli(tmp_path: Path, monkeypatch, *arguments: object) -> int:
 
     _project(tmp_path)
     _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
+    monkeypatch.setattr("cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
     command = ["skeleton", tmp_path / "blueprint", "--lean-root", tmp_path / "project", *arguments]
     return main([str(argument) for argument in command])
 
@@ -1644,7 +1644,7 @@ def test_cli_writes_the_artifact_and_fails_on_unresolved_names(tmp_path: Path, c
         tmp_path,
         lean={"determined": "Skel.observation_determined", "phantom": "Skel.doesNotExist"},
     )
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
+    monkeypatch.setattr("cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
     output = tmp_path / "out" / "skeleton.json"
 
     assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--output", str(output)]) == 1
@@ -1669,7 +1669,7 @@ def test_cli_sets_the_probe_timeout(tmp_path: Path, capsys, monkeypatch) -> None
         timeouts.append(timeout)
         return _fake_probe_output()
 
-    monkeypatch.setattr("autoform_cli.__main__.run_probe", fake_run_probe)
+    monkeypatch.setattr("cli.__main__.run_probe", fake_run_probe)
     command = ["skeleton", str(blueprint), "--lean-root", str(project), "--json"]
     assert main([*command, "--timeout", "1800"]) == 0
     assert timeouts == [1800.0]
@@ -1793,7 +1793,7 @@ def test_cli_does_not_publish_packets_when_report_staging_fails(
     def fail_report_stage(report: SkeletonReport, destination: Path):
         raise OSError("simulated report staging failure")
 
-    monkeypatch.setattr("autoform_cli.skeleton._stage_report_output", fail_report_stage)
+    monkeypatch.setattr("cli.skeleton._stage_report_output", fail_report_stage)
 
     result = _cli(tmp_path, monkeypatch, "--packets", packets, "--passages", passages, "--output", output)
 
@@ -1818,7 +1818,7 @@ def test_cli_rolls_back_packet_trees_when_report_commit_fails(
             raise OSError("simulated report commit failure")
         _install_output(source_path, Path(destination))
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_report_install)
+    monkeypatch.setattr("cli.skeleton._install_output", fail_report_install)
 
     result = _cli(tmp_path, monkeypatch, "--packets", packets, "--passages", passages, "--output", output)
 
@@ -1835,7 +1835,7 @@ def test_cli_rolls_back_packet_trees_and_report_when_interrupted_after_report_in
 ) -> None:
     project = _project(tmp_path)
     blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
+    monkeypatch.setattr("cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
     packets = tmp_path / "packets"
     passages = tmp_path / "passages"
     output = tmp_path / "skeleton.json"
@@ -1855,7 +1855,7 @@ def test_cli_rolls_back_packet_trees_and_report_when_interrupted_after_report_in
             raise KeyboardInterrupt
 
     monkeypatch.setattr(
-        "autoform_cli.skeleton._install_output", interrupt_after_report_install
+        "cli.skeleton._install_output", interrupt_after_report_install
     )
 
     with pytest.raises(KeyboardInterrupt):
@@ -1892,7 +1892,7 @@ def test_report_publication_preserves_a_concurrent_replacement_before_install(
             output.write_text("concurrent report\n", encoding="utf-8")
         _install_output(stage, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", replace_before_install)
+    monkeypatch.setattr("cli.skeleton._install_output", replace_before_install)
 
     with pytest.raises(SkeletonError, match="published output changed during rollback"):
         write_skeleton_report(report, output)
@@ -1916,7 +1916,7 @@ def test_report_publication_rolls_back_when_interrupted_after_exclusive_link(
         if "autoform-stage" in Path(source).name and Path(destination) == output:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.link", interrupt_after_link)
+    monkeypatch.setattr("cli.skeleton.os.link", interrupt_after_link)
 
     with pytest.raises(KeyboardInterrupt):
         write_skeleton_report(report, output)
@@ -2090,8 +2090,8 @@ def test_probe_stops_before_its_records_file_exceeds_the_limit(tmp_path: Path, m
             sizes.append(Path(kwargs["env"][PROBE_OUTPUT_ENV]).stat().st_size)
         return result
 
-    monkeypatch.setattr("autoform_cli.skeleton.DEFAULT_PROBE_OUTPUT_LIMIT", limit)
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", inspect_records)
+    monkeypatch.setattr("cli.skeleton.DEFAULT_PROBE_OUTPUT_LIMIT", limit)
+    monkeypatch.setattr("cli.skeleton._run_bounded_command", inspect_records)
     probe = render_probe(
         imports=("Skel.Main",), roots=("Skel.observation_determined",), project_roots=("Skel",)
     )
@@ -3049,7 +3049,7 @@ def test_cli_does_not_publish_packets_for_unresolved_declarations(
         tmp_path,
         lean={"determined": "Skel.observation_determined", "missing": "Skel.absent"},
     )
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
+    monkeypatch.setattr("cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
     packets = tmp_path / "packets"
     report_path = tmp_path / "skeleton.json"
 
@@ -3185,7 +3185,7 @@ def test_packet_publication_rolls_back_both_trees_on_commit_failure(
             raise OSError("simulated passage commit failure")
         _install_output(source_path, Path(destination))
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_passage_install)
+    monkeypatch.setattr("cli.skeleton._install_output", fail_passage_install)
 
     with pytest.raises(SkeletonError, match="could not publish skeleton output"):
         write_packets(report, packets, passages=passages)
@@ -3205,7 +3205,7 @@ def test_packet_publication_rolls_back_both_trees_when_interrupted(
         if "autoform-stage" in source_path.name and Path(destination) == passages:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", interrupt_passage_install)
+    monkeypatch.setattr("cli.skeleton._install_output", interrupt_passage_install)
 
     with pytest.raises(KeyboardInterrupt):
         write_packets(report, packets, passages=passages)
@@ -3226,7 +3226,7 @@ def test_packet_publication_rolls_back_when_interrupted_after_backup_rename(
         if Path(source) == packets and "autoform-backup" in Path(destination).name:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.replace", interrupt_after_backup)
+    monkeypatch.setattr("cli.skeleton.os.replace", interrupt_after_backup)
 
     with pytest.raises(KeyboardInterrupt):
         write_packets(report, packets)
@@ -3248,7 +3248,7 @@ def test_packet_publication_preserves_a_changed_backup_during_cleanup(
             (changed_backup,) = tmp_path.glob(".packets.autoform-backup-*")
             (changed_backup / "concurrent-marker").write_text("keep me\n", encoding="utf-8")
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", change_backup_after_install)
+    monkeypatch.setattr("cli.skeleton._install_output", change_backup_after_install)
 
     with pytest.warns(RuntimeWarning, match="backup changed.*preserved"):
         write_packets(report, packets)
@@ -3275,7 +3275,7 @@ def test_packet_publication_does_not_delete_a_concurrent_replacement(
             raise OSError("simulated passage commit failure")
         _install_output(source_path, destination_path)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", replace_then_fail)
+    monkeypatch.setattr("cli.skeleton._install_output", replace_then_fail)
 
     with pytest.raises(SkeletonError, match="preserved"):
         write_packets(report, packets, passages=passages)
@@ -3299,7 +3299,7 @@ def test_packet_publication_does_not_replace_a_concurrent_empty_directory(
             concurrent_inode = destination.stat().st_ino
         _install_output(stage, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", create_before_install)
+    monkeypatch.setattr("cli.skeleton._install_output", create_before_install)
 
     with pytest.raises(SkeletonError, match="published output changed during rollback"):
         write_packets(report, packets)
@@ -3321,7 +3321,7 @@ def test_packet_publication_preflights_no_replace_before_moving_old_tree(
     def unavailable(source: Path, destination: Path) -> None:
         raise SkeletonError(["atomic no-replace rename is unavailable"])
 
-    monkeypatch.setattr("autoform_cli.skeleton._rename_no_replace", unavailable)
+    monkeypatch.setattr("cli.skeleton._rename_no_replace", unavailable)
 
     with pytest.raises(SkeletonError, match="no-replace rename is unavailable"):
         write_packets(report, packets)
@@ -3343,7 +3343,7 @@ def test_packet_publication_cleans_up_an_interrupted_preflight(
             raise KeyboardInterrupt
 
     monkeypatch.setattr(
-        "autoform_cli.skeleton._install_output", interrupt_after_preflight_install
+        "cli.skeleton._install_output", interrupt_after_preflight_install
     )
 
     with pytest.raises(KeyboardInterrupt):
@@ -3370,8 +3370,8 @@ def test_packet_publication_restores_old_trees_when_quarantine_cleanup_fails(
             raise OSError("simulated quarantine cleanup failure")
         remove_output(path)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_passage_install)
-    monkeypatch.setattr("autoform_cli.skeleton._remove_output", fail_quarantine_cleanup)
+    monkeypatch.setattr("cli.skeleton._install_output", fail_passage_install)
+    monkeypatch.setattr("cli.skeleton._remove_output", fail_quarantine_cleanup)
 
     with pytest.raises(SkeletonError, match="preserved for recovery"):
         write_packets(report, packets, passages=passages)
@@ -3402,8 +3402,8 @@ def test_packet_publication_does_not_overwrite_during_backup_restore(
             concurrent_inode = destination.stat().st_ino
         rename_no_replace(source, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_passage_install)
-    monkeypatch.setattr("autoform_cli.skeleton._rename_no_replace", create_before_restore)
+    monkeypatch.setattr("cli.skeleton._install_output", fail_passage_install)
+    monkeypatch.setattr("cli.skeleton._rename_no_replace", create_before_restore)
 
     with pytest.raises(SkeletonError, match="could not restore skeleton output"):
         write_packets(report, packets, passages=passages)
@@ -3429,7 +3429,7 @@ def test_packet_rollback_restores_backups_when_a_destination_becomes_a_symlink(
             raise OSError("simulated passage install failure")
         _install_output(stage, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", swap_then_fail)
+    monkeypatch.setattr("cli.skeleton._install_output", swap_then_fail)
 
     with pytest.raises(SkeletonError, match="simulated passage install failure") as info:
         write_packets(report, packets, passages=passages)
@@ -3471,7 +3471,7 @@ def test_packet_publication_cleans_up_when_second_stage_fails(
             raise OSError("simulated passage staging failure")
         return stage_output(destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._stage_output", fail_second_stage)
+    monkeypatch.setattr("cli.skeleton._stage_output", fail_second_stage)
 
     with pytest.raises(SkeletonError, match="could not prepare skeleton output"):
         write_packets(report, packets, passages=passages)
@@ -3491,7 +3491,7 @@ def test_packet_publication_detects_a_concurrent_file_edit(tmp_path: Path, monke
         marker.write_text("concurrent edit\n", encoding="utf-8")
         _replace_outputs(outputs)
 
-    monkeypatch.setattr("autoform_cli.skeleton._replace_outputs", edit_then_replace)
+    monkeypatch.setattr("cli.skeleton._replace_outputs", edit_then_replace)
 
     with pytest.raises(SkeletonError, match="changed during publication"):
         write_packets(report, packets)
@@ -3513,7 +3513,7 @@ def test_packet_publication_checks_the_isolated_old_tree_before_install(
             marker.write_text("concurrent edit\n", encoding="utf-8")
         replace(source, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.replace", edit_before_backup)
+    monkeypatch.setattr("cli.skeleton.os.replace", edit_before_backup)
 
     with pytest.raises(SkeletonError, match="changed during publication"):
         write_packets(report, packets)

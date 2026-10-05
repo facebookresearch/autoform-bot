@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from autoform_cli.audit import audit_blueprint
+from cli.audit import audit_blueprint
 
 
 def _ensure_chapter(blueprint: Path, relative: str) -> None:

@@ -9,24 +9,24 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.graph import (
+from cli.graph import (
     Graph,
     Node,
     _find_cycles,
     _find_rollup_cycles,
     load_graph,
 )
-from autoform_cli import graph_pages, graph_views, render
-from autoform_cli.audit import audit_graph
-from autoform_cli.graph_views import chapter_view, group_nodes, project_view, scope_view
-from autoform_cli.render import _book_page_order, render_site
-from autoform_cli.runtime import (
+from cli import graph_pages, graph_views, render
+from cli.audit import audit_graph
+from cli.graph_views import chapter_view, group_nodes, project_view, scope_view
+from cli.render import _book_page_order, render_site
+from cli.runtime import (
     _validate_depths,
     _validate_runtime,
     build_runtime_graph,
     load_runtime_graph,
 )
-from autoform_cli.status import derive, topological_order
+from cli.status import derive, topological_order
 
 
 class _CountingDict(dict):

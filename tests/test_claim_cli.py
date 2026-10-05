@@ -4,8 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
-from autoform_cli.__main__ import main
-from autoform_cli.claims import CLAIM_REF_PREFIX, author_claim_key
+from cli.__main__ import main
+from cli.claims import CLAIM_REF_PREFIX, author_claim_key
 
 
 def _bare_repo(tmp_path: Path) -> Path:

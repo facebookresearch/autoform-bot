@@ -9,11 +9,11 @@ try:
 except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib
 
-from autoform_cli.audit import audit_blueprint
-from autoform_cli.graph import load_graph
-from autoform_cli.lean import build_linker, declaration_names
-from autoform_cli.render import render_site
-from autoform_cli.status import derive
+from cli.audit import audit_blueprint
+from cli.graph import load_graph
+from cli.lean import build_linker, declaration_names
+from cli.render import render_site
+from cli.status import derive
 
 
 _HREF = re.compile(r'href="([^"]+)"')
@@ -34,7 +34,7 @@ def test_root_readme_uses_the_canonical_repository(repo_root: Path) -> None:
     assert "VivienCabannes/autoform-bot" not in readme
 
 
-def test_managed_lean_beam_server_is_fail_closed(repo_root: Path) -> None:
+def test_managed_lean_beam_launcher_is_fail_closed(repo_root: Path) -> None:
     setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
     develop = (repo_root / "skills/develop-plugin/SKILL.md").read_text(encoding="utf-8")
     integration = (repo_root / "docs/lean-beam.md").read_text(encoding="utf-8")
@@ -88,8 +88,8 @@ def test_development_guidance_uses_progressive_command_reference(repo_root: Path
     development = (repo_root / "skills/develop-plugin/SKILL.md").read_text(
         encoding="utf-8"
     )
-    cli_reference = (repo_root / "autoform_cli/README.md").read_text(encoding="utf-8")
-    inspection_reference = (repo_root / "autoform_cli/project/README.md").read_text(
+    cli_reference = (repo_root / "cli/README.md").read_text(encoding="utf-8")
+    inspection_reference = (repo_root / "cli/project/README.md").read_text(
         encoding="utf-8"
     )
     normalized = " ".join(development.split())
@@ -650,7 +650,7 @@ def test_setup_skill_offers_opt_in_zulip_project_sync(repo_root: Path) -> None:
 
 
 def test_skills_teach_the_shipped_frontmatter_model(repo_root: Path) -> None:
-    """Agent instructions must match what `autoform_cli.graph` actually parses.
+    """Agent instructions must match what `cli.graph` actually parses.
 
     `kind` and `status` were removed from the frontmatter contract, so a skill
     that still teaches either makes agents author keys the parser rejects.
@@ -694,9 +694,9 @@ def test_cli_reference_documents_only_commands_that_exist(repo_root: Path) -> No
     """
     import pytest
 
-    from autoform_cli.__main__ import main
+    from cli.__main__ import main
 
-    reference = (repo_root / "autoform_cli/README.md").read_text(encoding="utf-8")
+    reference = (repo_root / "cli/README.md").read_text(encoding="utf-8")
     documented = _documented_invocations(reference)
     assert {("check",), ("audit",), ("render",), ("claim", "acquire")} <= documented
 
@@ -718,9 +718,9 @@ def test_skills_delegate_the_command_line_to_the_reference(repo_root: Path) -> N
         text = skill.read_text(encoding="utf-8")
         assert "uv run --project" not in text, (
             f"{skill.relative_to(repo_root)} restates a CLI invocation; "
-            "link to autoform_cli/README.md#commands instead"
+            "link to cli/README.md#commands instead"
         )
-        if "autoform_cli/README.md" in text:
+        if "cli/README.md" in text:
             citing += 1
     assert citing >= 3
 
@@ -761,10 +761,10 @@ def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None
         "{{AUTOFORM_SOURCE_YAML}}": '"https://github.com/VivienCabannes/autoform-bot.git"',
         "{{AUTOFORM_REF_YAML}}": '"43097b2c07e68df899d6b8bca7849d091c294754"',
     }
-    template_dir = repo_root / "autoform_cli/templates/github/workflows"
+    template_dir = repo_root / "cli/templates/github/workflows"
     example_dir = repo_root / _EXAMPLE / ".github/workflows"
     assert (
-        repo_root / "autoform_cli/templates/github/autoform_audit.py"
+        repo_root / "cli/templates/github/autoform_audit.py"
     ).read_bytes() == (repo_root / _EXAMPLE / ".github/autoform_audit.py").read_bytes()
 
     for name in ("autoform-verify.yml", "blueprint-pages.yml"):
@@ -795,7 +795,7 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
             and line.split(":", 1)[0].strip() not in substituted
         ]
 
-    template = (repo_root / "autoform_cli/templates/mkdocs.yml").read_text(encoding="utf-8")
+    template = (repo_root / "cli/templates/mkdocs.yml").read_text(encoding="utf-8")
     example = (
         repo_root / "skills/setup/assets/cabannes-thesis-project/mkdocs.yml"
     ).read_text(encoding="utf-8")

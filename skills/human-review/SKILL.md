@@ -18,7 +18,7 @@ derived review views.
 Regenerate the review views from `<PROJECT>`: validate the blueprint, refresh
 the Mermaid graph with `autoform-visualize` so Obsidian shows current
 dependencies, render the site source, then strict-build the site. Follow the
-publication sequence in the [CLI reference](../../autoform_cli/README.md#commands),
+publication sequence in the [CLI reference](../../cli/README.md#commands),
 but omit `--require-declarations`: review happens while statements are still
 unformalized, and a missing declaration is something for the reviewer to see
 rather than a reason to refuse to render.

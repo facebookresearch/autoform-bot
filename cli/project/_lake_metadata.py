@@ -3,7 +3,7 @@
 This module mirrors only the Lake syntax and resolution fields that Autoform
 reports, following the Lake 4.32.2 behavior used by the current release
 catalog. It performs no filesystem, process, Git, or network I/O;
-orchestration and diagnostics remain in :mod:`autoform_cli.project.inspect`.
+orchestration and diagnostics remain in :mod:`cli.project.inspect`.
 """
 
 from __future__ import annotations

@@ -39,7 +39,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
     assert set(claude["mcpServers"]) == expected
     assert "hooks" not in claude
 
-    expected_modules = {"lean-beam": "autoform_cli.beam_server"}
+    expected_modules = {"lean-beam": "cli.beam_launcher"}
     for config in (codex, claude):
         for name, module in expected_modules.items():
             assert config["mcpServers"][name]["args"][-2:] == ["-m", module]
@@ -101,22 +101,23 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
         assert {
-            "autoform_cli/__main__.py",
-            "autoform_cli/beam.py",
-            "autoform_cli/beam_server.py",
-            "autoform_cli/graph.py",
-            "autoform_cli/probes/skeleton_probe.lean",
-            "autoform_cli/project/README.md",
-            "autoform_cli/project/_lake_metadata.py",
-            "autoform_cli/project/_snapshot.py",
-            "autoform_cli/visualize.py",
-            "autoform_cli/project/releases.json",
+            "cli/__main__.py",
+            "cli/beam.py",
+            "cli/beam_launcher.py",
+            "cli/graph.py",
+            "cli/probes/skeleton_probe.lean",
+            "cli/project/README.md",
+            "cli/project/_lake_metadata.py",
+            "cli/project/_snapshot.py",
+            "cli/visualize.py",
+            "cli/project/releases.json",
         } <= names
+        assert not any(name.startswith("autoform_cli/") for name in names)
         assert not any(name.startswith("servers/") for name in names)
-        assert "autoform_cli/lake.py" not in names
-        assert "autoform_cli/templates/github/autoform_audit.py" in names
-        assert "autoform_cli/assets/blueprint-live.js" in names
-        assert "autoform_cli/lean-beam.lock.json" in names
+        assert "cli/lake.py" not in names
+        assert "cli/templates/github/autoform_audit.py" in names
+        assert "cli/assets/blueprint-live.js" in names
+        assert "cli/lean-beam.lock.json" in names
         assert not any(
             name.startswith(("scripts/", "autoform/", "visualization/", "servers/lean/", "servers/search/"))
             for name in names
@@ -145,7 +146,7 @@ import sys
 from pathlib import Path
 site = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(site))
-from autoform_cli import beam, graph, visualize
+from cli import beam, graph, visualize
 assert Path(beam.__file__).resolve().is_relative_to(site)
 assert Path(graph.__file__).resolve().is_relative_to(site)
 assert Path(visualize.__file__).resolve().is_relative_to(site)

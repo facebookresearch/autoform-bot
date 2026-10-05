@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.graph import Graph, Node, load_graph
-from autoform_cli.runtime import (
+from cli.graph import Graph, Node, load_graph
+from cli.runtime import (
     RUNTIME_AUTHORITY,
     RUNTIME_SCHEMA,
     RuntimeProjectionError,

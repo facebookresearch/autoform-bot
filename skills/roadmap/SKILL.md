@@ -12,7 +12,7 @@ description: >-
 Maintain an ordered mathematical book whose formalizable leaves form a
 dependency DAG of coherent, pull-request-sized units. Markdown under
 `blueprint/` is the source of truth. Consult the
-[format and command reference](../../autoform_cli/README.md) only when exact
+[format and command reference](../../cli/README.md) only when exact
 syntax or CLI usage is needed, and the
 [worked example](references/cabannes-thesis-roadmap.md) only when a concrete
 source-to-DAG pattern would help.

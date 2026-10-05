@@ -8,17 +8,17 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.coverage import COVERAGE_DISPOSITIONS
-from autoform_cli.graph import load_graph
-from autoform_cli.lean import _normalize_remote
-from autoform_cli.render import (
+from cli.coverage import COVERAGE_DISPOSITIONS
+from cli.graph import load_graph
+from cli.lean import _normalize_remote
+from cli.render import (
     PUBLICATION_MANIFEST,
     PublicationError,
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
     render_site,
 )
-from autoform_cli.status import STATES, derive
+from cli.status import STATES, derive
 
 
 def _project(tmp_path: Path) -> Path:
@@ -203,7 +203,7 @@ def test_the_site_publishes_no_second_copy_of_the_vault(tmp_path: Path) -> None:
 
 def test_the_vault_graph_keeps_a_visible_legend(tmp_path: Path) -> None:
     """Obsidian never loads this stylesheet, so a hover note is unreachable there."""
-    from autoform_cli.visualize import export_graph
+    from cli.visualize import export_graph
 
     project = _project(tmp_path)
     document = export_graph(project / "blueprint").read_text(encoding="utf-8")
@@ -603,7 +603,7 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     script = (tmp_path / "out/javascripts/blueprint-mermaid.js").read_text(encoding="utf-8")
     live = (tmp_path / "out/javascripts/blueprint-live.js").read_text(encoding="utf-8")
     packaged_live = (
-        Path(__file__).resolve().parent.parent / "autoform_cli/assets/blueprint-live.js"
+        Path(__file__).resolve().parent.parent / "cli/assets/blueprint-live.js"
     ).read_text(encoding="utf-8")
 
     # Facebook's surface greys and Meta blue, not Material's defaults, and both
@@ -1134,7 +1134,7 @@ def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path
     "0 of 1 targets complete, 1 ready now", so the site described work before any
     had been planned.
     """
-    from autoform_cli.scaffold import scaffold_project
+    from cli.scaffold import scaffold_project
 
     project = tmp_path / "project"
     scaffold_project(project, title="Empty")
@@ -1152,7 +1152,7 @@ def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path
 def test_a_directory_link_uses_tree_even_when_the_repo_url_says_blob() -> None:
     """Deriving the directory URL by replacing the first `/blob/` rewrote the
     repository's own path when that happened to contain one."""
-    from autoform_cli.render import _SourceBase
+    from cli.render import _SourceBase
 
     base = _SourceBase("https://git.example/blob/x/repo", "abc", "blueprint/sources")
 
@@ -1164,7 +1164,7 @@ def test_a_directory_link_uses_tree_even_when_the_repo_url_says_blob() -> None:
 
 def _count_relative_links(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     """Record the target of every `mermaid.relative_link` call."""
-    from autoform_cli import mermaid
+    from cli import mermaid
 
     calls: list[Path] = []
     relative_link = mermaid.relative_link
@@ -1180,7 +1180,7 @@ def _count_relative_links(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
 def test_node_links_resolve_each_target_page_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Building a link per node resolved paths on disk once per node on every
     page, which made render time grow with the square of the node count."""
-    from autoform_cli.render import _anchored_links
+    from cli.render import _anchored_links
 
     chapter, other, page = tmp_path / "a.md", tmp_path / "b" / "README.md", tmp_path / "page.md"
     targets = {f"a/{index}": (chapter, f"n{index}") for index in range(20)}
@@ -1209,7 +1209,7 @@ def test_node_links_resolve_each_target_page_once(tmp_path: Path, monkeypatch: p
 def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A page uses the few node links it contains, so rewriting it should not
     build a link for every node in the graph."""
-    from autoform_cli.render import _rewrite_links
+    from cli.render import _rewrite_links
 
     blueprint, destination = tmp_path / "blueprint", tmp_path / "out"
     source_dir = blueprint / "roadmap"
@@ -1247,7 +1247,7 @@ def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypa
 def test_a_focus_page_asks_for_its_node_links_once(tmp_path: Path) -> None:
     """Each request builds a link for every node, so asking twice per focus
     page doubled the cost of the largest group of generated pages."""
-    from autoform_cli.graph_pages import focus_page_path, write_graph_pages
+    from cli.graph_pages import focus_page_path, write_graph_pages
 
     project = _project(tmp_path)
     graph = load_graph(project / "blueprint")
@@ -1269,7 +1269,7 @@ def test_a_focus_page_asks_for_its_node_links_once(tmp_path: Path) -> None:
 def test_a_node_that_is_the_current_page_links_as_a_bare_fragment(tmp_path: Path) -> None:
     """A container article has no anchor of its own, and an empty href would
     drop the link, so its own page links to the top of itself."""
-    from autoform_cli.render import _anchored_links
+    from cli.render import _anchored_links
 
     page = tmp_path / "chapter" / "README.md"
 

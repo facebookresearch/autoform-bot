@@ -50,7 +50,7 @@
           "--locked",
           "python",
           "-m",
-          "autoform_cli.beam_server"
+          "cli.beam_launcher"
         ]
       }
     ],

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.graph import load_graph
-from autoform_cli.status import derive, summarize
+from cli.graph import load_graph
+from cli.status import derive, summarize
 
 
 def _node(blueprint: Path, relative: str, body: str = "", **metadata: str) -> None:

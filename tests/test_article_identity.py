@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.__main__ import main
-from autoform_cli.article_identity import plan_article_ids
-from autoform_cli.graph import GraphValidationError, load_graph
+from cli.__main__ import main
+from cli.article_identity import plan_article_ids
+from cli.graph import GraphValidationError, load_graph
 
 
 def _article(path: Path, title: str, article_id: str | None = None) -> None:

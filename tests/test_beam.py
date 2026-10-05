@@ -5,9 +5,9 @@ import os
 import subprocess
 from pathlib import Path
 
-import autoform_cli.beam as beam_module
-from autoform_cli import __main__ as cli
-from autoform_cli.beam import (
+import cli.beam as beam_module
+from cli import __main__ as cli
+from cli.beam import (
     BEAM_INSPECTION_SCHEMA,
     BeamInspection,
     BeamIssue,

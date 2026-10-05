@@ -9,7 +9,7 @@
   "mcpServers": {
     "lean-beam": {
       "command": "uv",
-      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--locked", "python", "-m", "autoform_cli.beam_server"],
+      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--locked", "python", "-m", "cli.beam_launcher"],
       "cwd": "${CLAUDE_PLUGIN_ROOT}",
       "description": "Pinned Lean Beam session API; Autoform installs and verifies the exact runtime on first start"
     }

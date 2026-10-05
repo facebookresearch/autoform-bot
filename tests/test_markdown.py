@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.markdown import (
+from cli.markdown import (
     SITE_EXTENSION_CONFIGS,
     SITE_EXTENSIONS,
     content,
@@ -78,7 +78,7 @@ def test_the_extension_config_matches_the_scaffolded_mkdocs_yml() -> None:
     """
 
     template = (
-        Path(__file__).resolve().parents[1] / "autoform_cli/templates/mkdocs.yml"
+        Path(__file__).resolve().parents[1] / "cli/templates/mkdocs.yml"
     ).read_text(encoding="utf-8")
     block = template[template.index("markdown_extensions:") :]
     block = block[: block.index("\nextra_css:")]
@@ -313,7 +313,7 @@ def test_anchors_follow_headings_and_explicit_ids(tmp_path: Path) -> None:
 
 
 def test_anchor_rendering_is_cached_by_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import autoform_cli.markdown as markdown_module
+    import cli.markdown as markdown_module
 
     path = tmp_path / "article.md"
     path.write_text("# Alpha\n", encoding="utf-8")

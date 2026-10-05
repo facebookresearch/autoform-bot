@@ -13,7 +13,7 @@ from types import ModuleType
 import pytest
 
 
-_TEMPLATE = Path("autoform_cli/templates/github/autoform_audit.py")
+_TEMPLATE = Path("cli/templates/github/autoform_audit.py")
 
 
 def _load_helper(repo_root: Path) -> ModuleType:

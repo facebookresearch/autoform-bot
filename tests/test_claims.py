@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import claims
+from cli import claims
 
 
 def _git(*args: str, cwd: Path | None = None, input_text: str | None = None) -> str:

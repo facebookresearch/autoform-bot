@@ -7,8 +7,8 @@ import os
 import sys
 from pathlib import Path
 
-import autoform_cli.project.inspect as project_inspect
-from autoform_cli.project import inspect_project
+import cli.project.inspect as project_inspect
+from cli.project import inspect_project
 
 
 def main() -> int:

@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-import autoform_cli.project.inspect as project_inspect
-import autoform_cli.project._snapshot as project_snapshot
-from autoform_cli.__main__ import _human_text, main
-from autoform_cli.project import (
+import cli.project.inspect as project_inspect
+import cli.project._snapshot as project_snapshot
+from cli.__main__ import _human_text, main
+from cli.project import (
     PROJECT_INSPECTION_SCHEMA,
     RELEASE_CATALOG_SCHEMA,
     ProjectCatalogError,

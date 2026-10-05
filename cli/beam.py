@@ -74,7 +74,7 @@ class BeamInstallError(RuntimeError):
 def load_beam_lock() -> dict[str, object]:
     """Load the one preview lock from a wheel or source checkout."""
 
-    resource = files("autoform_cli").joinpath(_LOCK_NAME)
+    resource = files("cli").joinpath(_LOCK_NAME)
     try:
         text = resource.read_text(encoding="utf-8")
     except FileNotFoundError:

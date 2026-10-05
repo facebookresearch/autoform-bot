@@ -14,7 +14,7 @@ from tempfile import TemporaryFile
 
 import pytest
 
-from autoform_cli.beam import inspect_beam_runtime
+from cli.beam import inspect_beam_runtime
 
 
 pytestmark = pytest.mark.skipif(
@@ -305,7 +305,7 @@ def test_pinned_beam_explicit_session_contract(repo_root: Path, tmp_path: Path) 
     assert admission.observed is not None
     assert admission.observed["source_commit"] == admission.expected["commit"]
     client = McpClient(
-        [sys.executable, "-m", "autoform_cli.beam_server"],
+        [sys.executable, "-m", "cli.beam_launcher"],
         cwd=repo_root,
         env=beam_env,
     )

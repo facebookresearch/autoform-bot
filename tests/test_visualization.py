@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import mermaid
-from autoform_cli.graph import load_graph
-from autoform_cli.status import STATES, derive
-from autoform_cli.visualize import GENERATED_STRUCTURE_MARKER, export_graph, export_structure, main
+from cli import mermaid
+from cli.graph import load_graph
+from cli.status import STATES, derive
+from cli.visualize import GENERATED_STRUCTURE_MARKER, export_graph, export_structure, main
 
 
 def _state(key: str):
@@ -334,7 +334,7 @@ def test_marker_inside_authored_content_does_not_claim_ownership(tmp_path: Path)
 def test_atomic_write_failure_preserves_the_previous_graph(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from autoform_cli import visualize
+    from cli import visualize
 
     blueprint = tmp_path / "blueprint"
     _write_node(blueprint / "roadmap" / "only.md", "Only")
@@ -358,7 +358,7 @@ def test_atomic_write_failure_preserves_the_previous_graph(
 def test_atomic_write_failure_preserves_the_previous_structure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from autoform_cli import visualize
+    from cli import visualize
 
     blueprint = tmp_path / "blueprint"
     _write_node(blueprint / "roadmap" / "only.md", "Only")

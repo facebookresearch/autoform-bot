@@ -9,7 +9,7 @@ test:
 	uv run pytest -q
 
 lint:
-	uv run ruff check autoform_cli tests
+	uv run ruff check cli tests
 
 check-example:
 	uv run autoform check $(THESIS_EXAMPLE)/blueprint --lean-root $(THESIS_EXAMPLE)

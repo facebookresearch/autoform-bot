@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.doctor import diagnose_project
+from cli.doctor import diagnose_project
 
 
 def _article(
@@ -208,7 +208,7 @@ def test_invalid_lean_root_is_a_sanitized_lean_failure(tmp_path: Path) -> None:
 
 def test_doctor_loads_the_canonical_graph_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _clean_project(tmp_path)
-    from autoform_cli import doctor
+    from cli import doctor
 
     original = doctor.load_graph
     calls = 0

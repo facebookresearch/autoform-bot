@@ -660,7 +660,7 @@ doctor, separate from any future Deicyde fleet or machine-capability preflight.
 
 ## Runtime contract
 
-`autoform_cli.runtime` projects the canonical Markdown graph into the versioned,
+`cli.runtime` projects the canonical Markdown graph into the versioned,
 deeply immutable in-memory schema `autoform-runtime/v1`. Its declared authority
 is `markdown-articles`: the adapter copies hierarchy, typed statement and proof
 dependencies, authored assertions, derived progress, provenance, and optional

@@ -27,8 +27,8 @@ dependencies = [
 ]
 
 [project.scripts]
-autoform = "autoform_cli.__main__:main"
-autoform-visualize = "autoform_cli.visualize:main"
+autoform = "cli.__main__:main"
+autoform-visualize = "cli.visualize:main"
 
 [project.optional-dependencies]
 dev = [
@@ -41,10 +41,10 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["autoform_cli"]
+packages = ["cli"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"lean-beam.lock.json" = "autoform_cli/lean-beam.lock.json"
+"lean-beam.lock.json" = "cli/lean-beam.lock.json"
 
 [tool.ruff]
 line-length = 120

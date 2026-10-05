@@ -64,7 +64,7 @@ class Node:
     Only the ``statement``/``proof``/``mathlib``/``not_ready`` assertions are
     recorded here. Everything a reader thinks of as progress -- ready to state,
     ready to prove, fully proved -- is derived from the graph by
-    :mod:`autoform_cli.status`, so it can never go stale.
+    :mod:`cli.status`, so it can never go stale.
     """
 
     id: str

@@ -1,6 +1,6 @@
 {imports}
 -- Autoform skeleton probe. This file is a Python-format template: `{{`/`}}` are
--- literal braces and single-brace fields are filled by autoform_cli.skeleton.
+-- literal braces and single-brace fields are filled by cli.skeleton.
 -- It is written to a temporary file and run with `lake env lean` inside the
 -- built project; it never modifies the project.
 import Lean.Util.CollectAxioms

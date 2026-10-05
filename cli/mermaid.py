@@ -2,7 +2,7 @@
 
 Mermaid was chosen over a bespoke SVG because the same fenced block renders in
 Obsidian, on GitHub, and on the published site. Colours follow
-:mod:`autoform_cli.status`: fill tracks proof progress, stroke tracks statement
+:mod:`cli.status`: fill tracks proof progress, stroke tracks statement
 progress, exactly as ``leanblueprint`` draws its dependency graph.
 """
 

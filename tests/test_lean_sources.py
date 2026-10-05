@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.lean import SourceLinker, declaration_names, index_project, strip_lean_comments
+from cli.lean import SourceLinker, declaration_names, index_project, strip_lean_comments
 
 
 _SOURCE = """import Mathlib

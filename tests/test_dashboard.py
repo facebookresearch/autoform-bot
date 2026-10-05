@@ -10,8 +10,8 @@ from urllib.request import urlopen
 
 import pytest
 
-from autoform_cli.claims import ClaimTransportError, author_claim_key
-from autoform_cli.dashboard import (
+from cli.claims import ClaimTransportError, author_claim_key
+from cli.dashboard import (
     DashboardHandler,
     LIVE_ENDPOINT,
     LIVE_SCHEMA,
@@ -20,7 +20,7 @@ from autoform_cli.dashboard import (
     publication_bound_live_state,
     serve_dashboard,
 )
-from autoform_cli.render import publication_source_revision
+from cli.render import publication_source_revision
 
 
 def _runtime():
@@ -167,7 +167,7 @@ def test_localhost_is_bound_as_literal_loopback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from autoform_cli import dashboard
+    from cli import dashboard
 
     site = tmp_path / "site"
     asset = site / "javascripts/blueprint-live.js"
@@ -208,7 +208,7 @@ def test_dashboard_cli_resolves_project_site_and_stays_loopback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from autoform_cli import __main__ as cli
+    from cli import __main__ as cli
 
     project = tmp_path / "project"
     (project / "blueprint/roadmap").mkdir(parents=True)

@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from autoform_cli.__main__ import main
-from autoform_cli.runtime import load_runtime_graph
+from cli.__main__ import main
+from cli.runtime import load_runtime_graph
 
 
 def _clean_blueprint(tmp_path: Path) -> Path:

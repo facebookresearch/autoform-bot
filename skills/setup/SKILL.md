@@ -52,7 +52,7 @@ not copy the bundled example: the layout is fixed, and a chapter written as a
 sibling file instead of `<chapter>/README.md` still validates while publishing
 a book with no chapters. `init` never overwrites an existing file, so it is
 also the repair path; it reports what it left alone. See the
-[CLI reference](../../autoform_cli/README.md#commands) for its flags.
+[CLI reference](../../cli/README.md#commands) for its flags.
 
 `init` pins the generated workflows to the Autoform commit that ran it, but it
 can only do that when Autoform is running from a Git checkout. Installed as a
@@ -107,7 +107,7 @@ in—stop and report the failed Lean-tooling admission instead of substituting a
 Then validate, visualize, render, and strict-build the site, keeping
 `--require-declarations` so a named Lean declaration that does not exist fails
 here rather than in CI. The exact invocations, including how to resolve
-`<AUTOFORM_PLUGIN_ROOT>`, are in the [CLI reference](../../autoform_cli/README.md#commands);
+`<AUTOFORM_PLUGIN_ROOT>`, are in the [CLI reference](../../cli/README.md#commands);
 do not restate them here.
 
 `render` writes a derived tree; the vault stays the source of truth. Ignore

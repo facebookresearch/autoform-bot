@@ -117,7 +117,7 @@ def _marketplace_checkout() -> Path | None:
     checkout = Path(location).expanduser()
     # Insist it is a checkout of *this* project, and is itself the root of one
     # rather than a directory sitting somewhere inside an unrelated repository.
-    if not (checkout / "autoform_cli" / "scaffold.py").is_file():
+    if not (checkout / "cli" / "scaffold.py").is_file():
         return None
     return _checkout_root(checkout)
 
@@ -182,7 +182,7 @@ def plugin_pin() -> tuple[str, str]:
 
     Returns empty strings when neither is available. An earlier version fell
     back to `facebookresearch/autoform-bot@main` instead. That commit predates
-    `autoform_cli` entirely, so every project scaffolded through the plugin got
+    `cli` entirely, so every project scaffolded through the plugin got
     CI that installed a build with no `autoform` command and failed at the first
     step, with nothing in the workflow to explain why. A wrong pin is worse than
     no pin: guessing here is what made the failure silent.

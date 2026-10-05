@@ -6,7 +6,7 @@ every project definition that statement rests on. Proofs are the kernel's
 problem. The closure comes from elaborated terms, read back from a small probe
 run with ``lake env lean``, never from source text. The output is deterministic
 and path-free, and nothing here writes into the vault. The rationale is in the
-``autoform skeleton`` section of ``autoform_cli/README.md``.
+``autoform skeleton`` section of ``cli/README.md``.
 """
 
 from __future__ import annotations

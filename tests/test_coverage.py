@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from autoform_cli.coverage import COVERAGE_SCHEMA, load_coverage
+from cli.coverage import COVERAGE_SCHEMA, load_coverage
 
 
 def _article(blueprint: Path, relative: str) -> None:

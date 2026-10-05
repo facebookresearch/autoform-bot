@@ -2,7 +2,7 @@
   "mcpServers": {
     "lean-beam": {
       "command": "uv",
-      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--locked", "python", "-m", "autoform_cli.beam_server"],
+      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--locked", "python", "-m", "cli.beam_launcher"],
       "cwd": "${CLAUDE_PLUGIN_ROOT}",
       "startup_timeout_sec": 1800,
       "tool_timeout_sec": 300,
