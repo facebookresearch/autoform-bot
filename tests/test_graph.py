@@ -279,6 +279,7 @@ def test_splits_statement_and_proof_dependencies(tmp_path: Path) -> None:
     ("metadata", "message"),
     [
         ({"statement": "yes"}, "accepts only 'formalized'"),
+        ({"statement": "bogus"}, "'statement' accepts only 'formalized' or 'retracted'"),
         ({"proof": "sorry"}, "accepts only 'formalized'"),
         ({"mathlib": "maybe"}, "accepts only true or false"),
         ({"not_ready": "1"}, "accepts only true or false"),
@@ -291,6 +292,41 @@ def test_rejects_invalid_assertions(tmp_path: Path, metadata: dict[str, str], me
 
     with pytest.raises(GraphValidationError, match=message):
         load_graph(blueprint)
+
+
+def test_records_a_retracted_statement(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", "# Result\n", declaration="theorem", statement="Retracted", lean="Ns.result")
+
+    node = load_graph(blueprint).nodes["result"]
+
+    assert (node.statement_retracted, node.statement_formalized, node.proof_formalized) == (True, False, False)
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        ({}, "result: statement: retracted needs the lean: declaration it retracts; without lean:, omit statement"),
+        (
+            {"lean": "Ns.result", "proof": "formalized"},
+            "result: proof: formalized needs statement: formalized, not retracted",
+        ),
+        (
+            {"lean": "Ns.result", "mathlib": "true"},
+            "result: a mathlib: true article cannot record statement: retracted",
+        ),
+    ],
+)
+def test_rejects_a_retracted_statement_that_cannot_keep_its_declaration(
+    tmp_path: Path, metadata: dict[str, str], message: str
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", "# Result\n", declaration="theorem", statement="retracted", **metadata)
+
+    with pytest.raises(GraphValidationError) as raised:
+        load_graph(blueprint)
+
+    assert raised.value.issues == (message,)
 
 
 def test_records_origin_and_source_links_without_treating_them_as_edges(tmp_path: Path) -> None:

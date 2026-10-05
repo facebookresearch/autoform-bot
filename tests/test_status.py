@@ -349,8 +349,8 @@ def test_a_retracted_theorem_still_naming_its_lean_stays_an_open_statement(tmp_p
     """
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "README.md", open_statements=policy)
-    _node(blueprint, "retracted.md", declaration="theorem", lean="Ns.retracted")
-    _node(blueprint, "old.md", declaration="def", lean="Ns.old")
+    _node(blueprint, "retracted.md", declaration="theorem", statement="retracted", lean="Ns.retracted")
+    _node(blueprint, "old.md", declaration="def", statement="retracted", lean="Ns.old")
     _node(blueprint, "gone.md", declaration="theorem")
     _node(
         blueprint,
@@ -377,7 +377,14 @@ def test_a_retracted_definition_still_passes_on_what_its_body_reaches(tmp_path: 
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "README.md", open_statements=policy)
     _node(blueprint, "open.md", declaration="theorem", statement="formalized", lean="Ns.open")
-    _node(blueprint, "old.md", "## Proof depends on\n\n- [Open](open.md)\n", declaration="def", lean="Ns.old")
+    _node(
+        blueprint,
+        "old.md",
+        "## Proof depends on\n\n- [Open](open.md)\n",
+        declaration="def",
+        statement="retracted",
+        lean="Ns.old",
+    )
     _node(
         blueprint,
         "uses.md",
@@ -394,6 +401,27 @@ def test_a_retracted_definition_still_passes_on_what_its_body_reaches(tmp_path: 
         assert (statuses["uses"].key, statuses["uses"].assumes) == ("conditional", ("open",))
     else:
         assert (statuses["uses"].key, statuses["uses"].assumes) == ("proved", ())
+
+
+def test_a_never_stated_theorem_naming_a_draft_lean_is_not_an_open_statement(tmp_path: Path) -> None:
+    """A draft ``lean:`` name is not an assumption: only a stated or retracted theorem is open."""
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "README.md", open_statements="allowed")
+    _node(blueprint, "draft.md", declaration="theorem", lean="Ns.draft")
+    _node(
+        blueprint,
+        "uses.md",
+        "## Proof depends on\n\n- [Draft](draft.md)\n",
+        declaration="theorem",
+        statement="formalized",
+        proof="formalized",
+        lean="Ns.uses",
+    )
+
+    statuses = derive(load_graph(blueprint))
+
+    assert statuses["draft"].key == "can_state"
+    assert (statuses["uses"].key, statuses["uses"].assumes) == ("proved", ())
 
 
 @pytest.mark.parametrize("open_statements", [False, True])

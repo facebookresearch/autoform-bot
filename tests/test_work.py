@@ -343,6 +343,7 @@ def test_work_cli_emits_stable_json(tmp_path: Path, capsys) -> None:
         "open_statements": False,
         "phase": "proof",
         "ready": True,
+        "revision": False,
         "source_targets": [],
         "state": "can_prove",
         "title": "Prove me",
@@ -528,7 +529,7 @@ def _policy_project(tmp_path: Path, policy: str | None) -> Path:
         metadata=["article_id: af_00000000000000000000000e", "declaration: theorem"],
         depends="reduction.md",
     )
-    # Neither belongs in the assumption contract: one is upstream, the other names no declaration.
+    # The contract lists the upstream article, never open, but not the one that names no declaration.
     _article(
         project,
         "upstream.md",
@@ -731,7 +732,7 @@ def test_open_work_list_names_the_policy_even_when_nothing_is_ready(tmp_path: Pa
 
 def _contract_article(
     node_id: str,
-    article_id: str,
+    article_id: str | None,
     state: str,
     declarations: list[str],
     *,
@@ -770,6 +771,7 @@ def test_work_assumptions_under_the_strict_policy_lists_articles_with_nothing_op
             ),
             _contract_article("chapter/prove", "af_000000000000000000000003", "can_prove", ["Project.prove"]),
             _contract_article("chapter/reduction", "af_00000000000000000000000c", "proved", ["Project.reduction"]),
+            _contract_article("chapter/upstream", None, "mathlib", ["Project.upstream"]),
             _contract_article("chapter/uses", "af_00000000000000000000000d", "can_prove", ["Project.uses"]),
         ],
     }
@@ -817,6 +819,7 @@ def test_work_assumptions_under_the_open_policy_bounds_each_article(
                 assumes=("chapter/open",),
                 allowed=open_declarations,
             ),
+            _contract_article("chapter/upstream", None, "mathlib", ["Project.upstream"]),
             _contract_article(
                 "chapter/uses",
                 "af_00000000000000000000000d",
@@ -849,7 +852,7 @@ def test_work_assumptions_keeps_a_retracted_theorem_while_its_lean_names_the_old
 ) -> None:
     """Roadmap retracts a statement but keeps `lean:`; the old sorry stays declared until Formalize restates it."""
     project = _policy_project(tmp_path, policy)
-    _edit(project, "open.md", "statement: formalized\n", "")
+    _edit(project, "open.md", "statement: formalized\n", "statement: retracted\n")
     allowed = ("Project.open_aux", "Project.open_thm") if policy == "allowed" else ()
 
     assert cli.main(["work", "assumptions", str(project), "--json"]) == 0
@@ -887,6 +890,94 @@ def test_work_assumptions_bounds_a_proof_recorded_without_its_statement(
         assumes=("chapter/open",) if policy == "allowed" else (),
         allowed=allowed,
     )
+
+
+def test_work_assumptions_does_not_open_a_never_stated_theorem_naming_a_draft_lean(tmp_path: Path, capsys) -> None:
+    """A draft `lean:` name on a theorem that was never stated is no assumption, so CI rejects its sorry."""
+    project = _policy_project(tmp_path, "allowed")
+    _edit(project, "open.md", "statement: formalized\n", "")
+
+    assert cli.main(["work", "assumptions", str(project), "--json"]) == 0
+    articles = {article["id"]: article for article in json.loads(capsys.readouterr().out)["articles"]}
+
+    assert articles["chapter/open"] == _contract_article(
+        "chapter/open", "af_00000000000000000000000b", "can_state", ["Project.open_thm", "Project.open_aux"]
+    )
+    assert articles["chapter/reduction"] == _contract_article(
+        "chapter/reduction", "af_00000000000000000000000c", "proved", ["Project.reduction"]
+    )
+    assert not any(
+        name in article["allowed_open_declarations"]
+        for article in articles.values()
+        for name in ("Project.open_thm", "Project.open_aux")
+    )
+
+
+def test_work_assumptions_text_labels_only_conditional_articles_as_conditional(tmp_path: Path, capsys) -> None:
+    """A conditional article without `lean:` is named too; an unproved one that assumes something is not conditional."""
+    project = _policy_project(tmp_path, "allowed")
+    _article(
+        project,
+        "bare.md",
+        title="Bare",
+        metadata=["declaration: theorem", "statement: formalized", "proof: formalized"],
+        proof_depends="open.md",
+    )
+    _article(
+        project,
+        "old.md",
+        title="Old",
+        metadata=["declaration: def", "statement: retracted", "lean: Project.old"],
+        proof_depends="open.md",
+    )
+
+    assert cli.main(["work", "assumptions", str(project), "--json"]) == 0
+    articles = {article["id"]: article for article in json.loads(capsys.readouterr().out)["articles"]}
+    assert "chapter/bare" not in articles
+    assert articles["chapter/old"] == _contract_article(
+        "chapter/old",
+        None,
+        "can_state",
+        ["Project.old"],
+        assumes=("chapter/open",),
+        allowed=("Project.open_aux", "Project.open_thm"),
+    )
+
+    # chapter/corollary assumes chapter/open too, but names no declaration and is not proved.
+    assert cli.main(["work", "assumptions", str(project)]) == 0
+    assert capsys.readouterr().out == (
+        "Open statements: allowed\n"
+        "conditional: chapter/bare assumes chapter/open\n"
+        "unproved: chapter/old assumes chapter/open\n"
+        "open: chapter/open (Project.open_thm, Project.open_aux)\n"
+        "open: chapter/prove (Project.prove)\n"
+        "conditional: chapter/reduction assumes chapter/open\n"
+        "open: chapter/uses (Project.uses) assumes chapter/open\n"
+    )
+
+
+def test_work_flags_a_retracted_article_as_a_revision(tmp_path: Path, capsys) -> None:
+    project = _policy_project(tmp_path, "allowed")
+    _edit(project, "open.md", "statement: formalized\n", "statement: retracted\n")
+
+    assert cli.main(["work", "list", str(project), "--json"]) == 0
+    items = {item["node_id"]: item for item in json.loads(capsys.readouterr().out)["items"]}
+    assert (items["chapter/open"]["phase"], items["chapter/open"]["revision"]) == ("statement", True)
+    assert {node_id for node_id, item in items.items() if item["revision"]} == {"chapter/open"}
+
+    assert cli.main(["work", "list", str(project)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    revision = "  revision: start from `autoform work impact`"
+    opened = lines.index("statement: chapter/open [af_00000000000000000000000b] - Open")
+    assert lines[opened + 1] == revision
+    assert lines.count(revision) == 1
+
+    for selector, flagged in (("chapter/open", True), ("chapter/prove", False)):
+        assert cli.main(["work", "context", selector, str(project), "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["item"]["revision"] is flagged
+        assert cli.main(["work", "context", selector, str(project)]) == 0
+        context = capsys.readouterr().out.splitlines()
+        assert ("Revision: the statement was retracted; start from `autoform work impact`" in context) is flagged
 
 
 def test_work_assumptions_reports_errors_on_stderr_with_exit_2(

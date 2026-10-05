@@ -342,3 +342,28 @@ def test_open_runtime_records_the_policy_and_what_each_proof_assumes(tmp_path: P
     assert (waiting["assumes"], waiting["waiting_on"]) == ([], ["chapter/section/gap"])
     assert statuses["open"]["state"] == "can_prove"
     assert statuses["open"]["assumes"] == []
+
+
+def test_runtime_assertions_record_a_retracted_statement(tmp_path: Path) -> None:
+    project = _policy_project(tmp_path, "allowed")
+    _article(
+        project,
+        "chapter/section/open.md",
+        title="Open",
+        declaration="theorem",
+        statement="retracted",
+        lean="Project.open_thm",
+    )
+
+    payload = json.loads(load_runtime_graph(project).to_json())
+    nodes = {node["id"].removeprefix("chapter/section/"): node for node in payload["nodes"]}
+
+    assert nodes["open"]["assertions"] == {
+        "not_ready": False,
+        "proof_formalized": False,
+        "statement_formalized": False,
+        "statement_retracted": True,
+    }
+    assert nodes["reduction"]["assertions"]["statement_retracted"] is False
+    # The old declaration stays in the build, so the reduction still rests on it.
+    assert nodes["reduction"]["status"]["assumes"] == ["chapter/section/open"]

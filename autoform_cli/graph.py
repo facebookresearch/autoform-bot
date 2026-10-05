@@ -39,6 +39,7 @@ _FRONTMATTER_KEYS = frozenset(
     }
 )
 _FORMALIZED = "formalized"
+_RETRACTED = "retracted"
 _TRUE = frozenset({"true", "yes"})
 _FALSE = frozenset({"false", "no"})
 
@@ -78,6 +79,10 @@ class Node:
     lean: str | None = None
     declaration: str | None = None
     statement_formalized: bool = False
+    #: ``statement: retracted``: a revision retracted the statement while
+    #: ``lean:`` still names the old declaration, which stays in the build
+    #: until Formalize restates the article.
+    statement_retracted: bool = False
     proof_formalized: bool = False
     mathlib: bool = False
     mathlib_declaration: str | None = None
@@ -227,6 +232,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             declaration=metadata.get("declaration"),
             lean=metadata.get("lean"),
             statement_formalized=metadata.get("statement") == _FORMALIZED,
+            statement_retracted=metadata.get("statement") == _RETRACTED,
             proof_formalized=metadata.get("proof") == _FORMALIZED,
             mathlib=metadata.get("mathlib") in _TRUE,
             mathlib_declaration=metadata.get("mathlib_declaration"),
@@ -472,6 +478,16 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
             continue
         metadata[key] = value
 
+    if metadata.get("statement") == _RETRACTED:
+        if "lean" not in metadata:
+            issues.append(
+                f"{node_id}: statement: retracted needs the lean: declaration it retracts;"
+                " without lean:, omit statement"
+            )
+        if metadata.get("proof") == _FORMALIZED:
+            issues.append(f"{node_id}: proof: formalized needs statement: formalized, not retracted")
+        if metadata.get("mathlib") in _TRUE:
+            issues.append(f"{node_id}: a mathlib: true article cannot record statement: retracted")
     return metadata, end + 1, issues
 
 
@@ -483,7 +499,13 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
         if not ARTICLE_ID_PATTERN.fullmatch(value):
             return value, f"{location}: malformed article_id {value!r}"
         return value, None
-    if key in {"statement", "proof"}:
+    if key == "statement":
+        if folded not in {_FORMALIZED, _RETRACTED}:
+            return value, (
+                f"{location}: 'statement' accepts only {_FORMALIZED!r} or {_RETRACTED!r}; omit the key otherwise"
+            )
+        return folded, None
+    if key == "proof":
         if folded != _FORMALIZED:
             return value, f"{location}: {key!r} accepts only {_FORMALIZED!r}; omit the key otherwise"
         return folded, None

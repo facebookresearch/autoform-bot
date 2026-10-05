@@ -42,6 +42,7 @@ class RuntimeAssertions:
     """Authored facts copied from article frontmatter."""
 
     statement_formalized: bool
+    statement_retracted: bool
     proof_formalized: bool
     not_ready: bool
 
@@ -50,6 +51,7 @@ class RuntimeAssertions:
             "not_ready": self.not_ready,
             "proof_formalized": self.proof_formalized,
             "statement_formalized": self.statement_formalized,
+            "statement_retracted": self.statement_retracted,
         }
 
 
@@ -347,6 +349,7 @@ def build_runtime_graph(
                 dependencies=node.dependencies,
                 assertions=RuntimeAssertions(
                     statement_formalized=node.statement_formalized,
+                    statement_retracted=node.statement_retracted,
                     proof_formalized=node.proof_formalized,
                     not_ready=node.not_ready,
                 ),

@@ -46,6 +46,9 @@ class WorkItem:
     lean_targets: tuple[WorkLeanTarget, ...]
     assumes: tuple[str, ...] = ()
     open_statements: bool = False
+    #: The article records ``statement: retracted``: a revision retracted its
+    #: statement, so the work starts from ``autoform work impact``.
+    revision: bool = False
 
     @property
     def ready(self) -> bool:
@@ -65,6 +68,7 @@ class WorkItem:
             "open_statements": self.open_statements,
             "phase": self.phase,
             "ready": self.ready,
+            "revision": self.revision,
             "source_targets": list(self.source_targets),
             "state": self.state,
             "title": self.title,
@@ -137,6 +141,7 @@ def _item(node: RuntimeNode, *, open_statements: bool) -> WorkItem:
         ),
         assumes=node.status.assumes,
         open_statements=open_statements,
+        revision=node.assertions.statement_retracted,
     )
 
 
@@ -252,9 +257,13 @@ def assumption_contract(project_or_blueprint: str | Path) -> AssumptionContract:
 
     CI audits the Lean build against this: an open article's own declarations
     may keep a ``sorry`` proof, and every other article may reach only the open
-    statements its Markdown dependencies declare. A theorem whose statement a
-    revision retracted stays open while its ``lean:`` names the old declaration.
-    Under the strict policy no article is open and nothing is allowed.
+    statements its Markdown dependencies declare. A theorem recording
+    ``statement: retracted`` stays open while its ``lean:`` names the old
+    declaration; a theorem that was never stated is not open, even with a
+    ``lean:`` name, so CI rejects its ``sorry``. Mathlib articles are listed too,
+    never open and allowed nothing, so CI can check that their names exist and
+    reach no open statement. Under the strict policy no article is open and
+    nothing is allowed.
     """
     runtime = load_runtime_graph(project_or_blueprint)
     declarations = {
@@ -263,12 +272,13 @@ def assumption_contract(project_or_blueprint: str | Path) -> AssumptionContract:
     }
     articles: list[AssumptionArticle] = []
     for node in sorted(runtime.nodes, key=lambda candidate: candidate.id):
-        if node.mathlib or not declarations[node.id]:
+        if not declarations[node.id]:
             continue
         is_open = (
             runtime.open_statements
             and not node.status.proved
-            and (node.status.stated or not is_definition(node))
+            and not is_definition(node)
+            and (node.status.stated or node.assertions.statement_retracted)
         )
         allowed = {name for assumed in node.status.assumes for name in declarations.get(assumed, ())}
         if is_open:
