@@ -634,7 +634,7 @@ def test_impact_probe_freshness_messages_never_mention_skeletons(tmp_path: Path,
     assert issues("impact probe") == (f"{missing} running the impact probe",)
     assert issues(None) == (f"{missing} extracting skeletons",)
     (tmp_path / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
-    stale = "Lean build artifacts are stale; run `lake build` before"
+    stale = "Lean build artifacts are stale; run `lake build Demo` before"
     assert issues("impact probe") == (f"{stale} running the impact probe\nDemo is out of date",)
     assert issues(None) == (f"{stale} extracting skeletons\nDemo is out of date",)
 

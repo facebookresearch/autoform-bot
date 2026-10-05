@@ -24,6 +24,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
     review_dir = repo_root / "skills" / "agent-review"
     references = {
         "faithfulness.md",
+        "readback-faithfulness.md",
         "proof-integrity.md",
         "code-quality.md",
         "mathlib-style.md",
@@ -50,14 +51,20 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
             assert config["mcpServers"][name]["args"][-2:] == ["-m", module]
 
     codex_manifest = json.loads((repo_root / ".codex-plugin/plugin.json").read_text())
-    assert len(codex_manifest["interface"]["defaultPrompt"]) == 6
+    interface = codex_manifest["interface"]
+    assert len(interface["shortDescription"]) <= 30
+    assert interface["category"] == "Developer Tools"
+    default_prompts = interface["defaultPrompt"]
+    assert len(default_prompts) == 3
+    assert all(len(prompt) <= 128 and "\n" not in prompt for prompt in default_prompts)
     assert any(
-        "one invocation" in prompt and "persistent Goal" in prompt
-        for prompt in codex_manifest["interface"]["defaultPrompt"]
+        "source-grounded Autoform roadmap" in prompt and "persistent Goal" in prompt
+        for prompt in default_prompts
     )
+    assert any("Formalize the ready Markdown roadmap frontier" in prompt for prompt in default_prompts)
     assert not any(
         "claim-backed workers" in prompt
-        for prompt in codex_manifest["interface"]["defaultPrompt"]
+        for prompt in default_prompts
     )
     muse = json.loads((repo_root / ".muse-plugin/plugin.json").read_text())
     assert [command["id"] for command in muse["capabilities"]["commands"]] == [
@@ -103,6 +110,9 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
             "autoform_cli/__main__.py",
             "autoform_cli/graph.py",
             "autoform_cli/probes/skeleton_probe.lean",
+            "autoform_cli/project/README.md",
+            "autoform_cli/project/_lake_metadata.py",
+            "autoform_cli/project/_snapshot.py",
             "autoform_cli/visualize.py",
             "autoform_cli/project/releases.json",
             "servers/lean_client.py",
@@ -126,7 +136,7 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
             next(name for name in names if name.endswith(".dist-info/METADATA"))
         ).decode()
         assert "Requires-Dist: psutil>=5.9" in metadata
-        assert "Requires-Dist: tomli>=2.0.1; python_version < '3.11'" in metadata
+        assert "Requires-Dist: tomli<2.4,>=2.3.1" in metadata
         assert "Provides-Extra: repl" in metadata
         archive.extractall(site)
 

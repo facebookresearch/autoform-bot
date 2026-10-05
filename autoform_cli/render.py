@@ -300,6 +300,7 @@ def render_site(
     # blueprint chapter carries many statements in sequence. Each keeps an
     # anchor so every cross-reference still lands on the statement itself.
     groups = _group_nodes(graph)
+    containers = _containers(graph)
     anchors = {
         node_id: _anchor(node_id, group)
         for group, node_ids in groups.items()
@@ -315,7 +316,7 @@ def render_site(
         {
             node_id: (destination / node.path.relative_to(blueprint), "")
             for node_id, node in graph.nodes.items()
-            if graph.children(node_id) or not node.formalizable
+            if node_id in containers or not node.formalizable
         }
     )
     node_sources = {
@@ -340,7 +341,7 @@ def render_site(
         # Narrative articles remain book pages. Only formalizable leaves are
         # consolidated into their containing article with stable anchors.
         article = node_paths.get(source.resolve())
-        if article is not None and article.formalizable and not graph.children(article.id):
+        if article is not None and article.formalizable and article.id not in containers:
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         if source.suffix.lower() == ".md":
@@ -394,6 +395,7 @@ def render_site(
             repo_root=repo_root,
             destination=destination,
             node_sources=node_sources,
+            containers=containers,
             sources_base=sources_base,
         )
         page.write_text(chapter, encoding="utf-8")
@@ -634,13 +636,19 @@ def _group_nodes(graph: Graph) -> dict[str, list[str]]:
     nearest narrative container, so nested sections remain real book sections.
     """
     grouped: dict[str, list[str]] = {}
+    containers = _containers(graph)
     for node_id in status.topological_order(graph):
         node = graph.nodes[node_id]
-        if not node.formalizable or graph.children(node_id):
+        if not node.formalizable or node_id in containers:
             continue
         group = node.parent or "roadmap"
         grouped.setdefault(group, []).append(node_id)
     return grouped
+
+
+def _containers(graph: Graph) -> frozenset[str]:
+    """Index which articles contain others, so loops need not rescan the graph."""
+    return frozenset(node.parent for node in graph.nodes.values() if node.parent is not None)
 
 
 def _group_page(group: str) -> Path:
@@ -657,10 +665,11 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
     ordered: list[Path] = []
     seen_outputs: set[Path] = set()
     visited_sources: set[Path] = set()
+    containers = _containers(graph)
     book_sources = {
         node.path.resolve()
         for node in graph.nodes.values()
-        if graph.children(node.id) or not node.formalizable
+        if node.id in containers or not node.formalizable
     }
     pending = [blueprint / "README.md"]
     while pending:
@@ -704,12 +713,6 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
         _outside_fences(source.read_text(encoding="utf-8"), collect)
         pending.extend(reversed(linked_sources))
     return ordered
-
-
-
-
-
-
 
 
 def _append_book_navigation(pages: list[Path]) -> None:
@@ -768,26 +771,6 @@ def _book_navigation_link(
     )
 
 
-def _inject_after_title(text: str, block: str) -> str:
-    """Place a generated overview immediately after the document's first H1."""
-    lines = text.splitlines()
-    fence: tuple[str, int] | None = None
-    for index, line in enumerate(lines):
-        fence_match = _FENCE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if fence is None:
-                fence = (marker[0], len(marker))
-            elif marker[0] == fence[0] and len(marker) >= fence[1]:
-                fence = None
-            continue
-        heading = _HEADING.match(line) if fence is None else None
-        if heading is not None and len(heading.group(1)) == 1:
-            merged = [*lines[: index + 1], "", block.rstrip(), "", *lines[index + 1 :]]
-            return "\n".join(merged) + ("\n" if text.endswith("\n") else "")
-    return text.rstrip() + "\n\n" + block.rstrip() + "\n"
-
-
 def _inject_after_lead(text: str, block: str) -> str:
     """Place chapter metadata after its opening prose and before the first section."""
     lines = text.splitlines()
@@ -814,7 +797,6 @@ def _inject_after_lead(text: str, block: str) -> str:
     return text.rstrip() + "\n\n" + block.rstrip() + "\n"
 
 
-
 def _next_target(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
@@ -833,10 +815,11 @@ def _next_target(
     linking to it makes the reader hunt, so the card carries the statement, its
     chapter, and its dependency view.
     """
+    containers = _containers(graph)
     for node_id in status.topological_order(graph):
         node_status = statuses.get(node_id)
         node = graph.nodes[node_id]
-        if node_status is None or graph.children(node_id) or not node.formalizable:
+        if node_status is None or node_id in containers or not node.formalizable:
             continue
         if node_status.key not in {"can_prove", "can_state"}:
             continue
@@ -887,7 +870,6 @@ def _next_target(
             "</div>"
         )
     return ""
-
 
 
 STRUCTURE_PAGE = "structure.md"
@@ -1163,7 +1145,7 @@ _COVERAGE_SUMMARY_ORDER = tuple(
 )
 
 
-def _is_countable(graph: Graph, node_id: str) -> bool:
+def _is_countable(graph: Graph, node_id: str, containers: frozenset[str]) -> bool:
     """Whether *node_id* is a formalization target the dashboards should count.
 
     A leaf, and a leaf that declares something. Counting every leaf made a
@@ -1172,11 +1154,12 @@ def _is_countable(graph: Graph, node_id: str) -> bool:
     result, and the site claimed work existed before any had been planned.
     """
 
-    return not graph.children(node_id) and graph.nodes[node_id].formalizable
+    return node_id not in containers and graph.nodes[node_id].formalizable
 
 
 def _countable(graph: Graph) -> list[str]:
-    return [node_id for node_id in graph.nodes if _is_countable(graph, node_id)]
+    containers = _containers(graph)
+    return [node_id for node_id in graph.nodes if _is_countable(graph, node_id, containers)]
 
 
 def _completion_percentage(done: int, total: int) -> int:
@@ -1289,13 +1272,14 @@ def _render_overview_summary(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     *,
+    containers: frozenset[str],
     node_ids: list[str] | None = None,
 ) -> str:
     """Render the compact, honest progress strip shown at the start of the book."""
     selected_ids = [
         node_id
         for node_id in (node_ids if node_ids is not None else graph.nodes)
-        if _is_countable(graph, node_id)
+        if _is_countable(graph, node_id, containers)
     ]
     definitions = sum(is_definition(graph.nodes[node_id]) for node_id in selected_ids)
     results = len(selected_ids) - definitions
@@ -1320,21 +1304,8 @@ def _render_overview_summary(
         '<div class="bp-progress-kicker">Formalization progress</div>'
         f'<div class="bp-progress-total">{item_summary}</div>'
         f'<div class="bp-progress-states">{states}</div>'
-        f""
         "</div>"
     )
-
-
-
-def _status_phrase(node_statuses: Iterable[status.NodeStatus]) -> str:
-    counts = {state.key: 0 for state in status.STATES}
-    for node_status in node_statuses:
-        counts[node_status.key] += 1
-    return " · ".join(f"{counts[state.key]} {state.label}" for state in status.STATES if counts[state.key])
-
-
-def _markdown_table_cell(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("|", "\\|").replace("[", "\\[").replace("]", "\\]")
 
 
 def _first_h1(text: str) -> str | None:
@@ -1364,17 +1335,6 @@ def _document_body(text: str) -> str:
             continue
         kept.append(line)
     return "\n".join(kept).strip()
-
-
-def _shift_headings(text: str, levels: int) -> str:
-    def shift(line: str) -> str:
-        heading = _HEADING.match(line)
-        if heading is None:
-            return line
-        level = min(len(heading.group(1)) + levels, 6)
-        return f"{'#' * level} {heading.group(2)}"
-
-    return _outside_fences(text, shift)
 
 
 def _anchor(node_id: str, group: str) -> str:
@@ -1565,6 +1525,7 @@ def _render_chapter(
     repo_root: Path,
     destination: Path,
     node_sources: dict[Path, str],
+    containers: frozenset[str],
     sources_base: "_SourceBase | None" = None,
 ) -> tuple[str, int, list[str]]:
     """Render one narrative article with statements at its authored link slots."""
@@ -1597,6 +1558,7 @@ def _render_chapter(
     chapter_summary = _render_overview_summary(
         graph,
         statuses,
+        containers=containers,
         node_ids=node_ids,
     )
     if narrative is None:

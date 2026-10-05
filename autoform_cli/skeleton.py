@@ -18,6 +18,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import signal
 import shutil
 import stat
@@ -33,6 +34,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 import psutil
+import tomli
 
 from .graph import Graph, GraphValidationError, Node, load_graph
 from .lean import (
@@ -43,11 +45,6 @@ from .lean import (
     declaration_names,
     index_project,
 )
-
-try:  # Python 3.11+
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10
-    import tomli as tomllib  # type: ignore[no-redef]
 
 SKELETON_SCHEMA = "autoform-skeleton/v4"
 SEMANTIC_SCHEMA = "autoform-lean-expr/v4"
@@ -1208,9 +1205,13 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
     else:
         raise SkeletonError([f"no lakefile.toml or lakefile.lean in {root}"])
     try:
-        config = tomllib.loads(text.decode("utf-8"))
-    except (UnicodeError, tomllib.TOMLDecodeError) as exc:
+        config = tomli.loads(text.decode("utf-8"))
+    except (UnicodeError, tomli.TOMLDecodeError) as exc:
         raise SkeletonError([f"cannot parse the Lake configuration of {root}: {exc}"]) from exc
+    except (RecursionError, ValueError) as exc:
+        raise SkeletonError(
+            [f"cannot safely parse the Lake configuration of {root}: it exceeds the parser's limits"]
+        ) from exc
 
     libraries: list[LeanLibrary] = []
     for entry in config.get("lean_lib", []) or []:
@@ -1388,8 +1389,12 @@ def _check_artifacts_fresh(
     )
     detail = (result.stderr or result.stdout).strip()
     if result.returncode == _LAKE_NO_BUILD_EXIT:
+        build_command = shlex.join(["lake", "build", *modules])
         raise SkeletonError(
-            [f"Lean build artifacts are stale; run `lake build` before {_probe_purpose(label)}\n{detail}"]
+            [
+                "Lean build artifacts are stale; run "
+                f"`{build_command}` before {_probe_purpose(label)}\n{detail}"
+            ]
         )
     if result.returncode != 0:
         raise SkeletonError(
@@ -2116,6 +2121,7 @@ def extract_graph_skeletons(
     unresolved: list[UnresolvedTarget] = []
     imports: set[str] = set()
     roots: list[str] = []
+    root_modules: dict[str, str] = {}
     for node, names in selected:
         for name in names:
             if node.id in broken_passages:
@@ -2140,6 +2146,7 @@ def extract_graph_skeletons(
             imports.add(module)
             if name not in roots:
                 roots.append(name)
+                root_modules[name] = module
 
     records: dict[str, dict[str, object]] = {}
     snapshot_started_ns: int | None = None
@@ -2168,7 +2175,8 @@ def extract_graph_skeletons(
                     UnresolvedTarget(
                         node.id,
                         name,
-                        "not in the built environment; run `lake build`",
+                        "not in the built environment after importing "
+                        f"{root_modules[name]}; check the `lean:` target and declaring source",
                     )
                 )
                 continue

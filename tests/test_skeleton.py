@@ -312,7 +312,7 @@ def test_probe_refuses_stale_artifacts_before_executing_lean(tmp_path: Path, mon
 
     monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
 
-    with pytest.raises(SkeletonError, match="build artifacts are stale"):
+    with pytest.raises(SkeletonError, match=r"run `lake build Skel.Main`"):
         run_probe(probe, tmp_path)
 
     assert calls == [["/bin/lake", "--rehash", "--no-build", "build", "Skel.Main"]]
@@ -879,6 +879,36 @@ def test_a_package_without_library_targets_is_its_own_library(tmp_path: Path) ->
     assert library.src_dir == project.resolve()
 
 
+@pytest.mark.parametrize(
+    "toml_11",
+    [
+        pytest.param('leanOptions = { autoImplicit = false, }\n', id="inline-trailing-comma"),
+        pytest.param('leanOptions = {\n  autoImplicit = false\n}\n', id="inline-multiline"),
+        pytest.param('note = "\\e"\n', id="escape-e"),
+        pytest.param('note = "\\x41"\n', id="escape-x"),
+    ],
+)
+def test_lake_toml_1_1_extensions_are_rejected_on_every_python(tmp_path: Path, toml_11: str) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "lakefile.toml").write_text('name = "Solo"\n' + toml_11, encoding="utf-8")
+
+    # Lake 4.32.2 reads TOML 1.0 and rejects every spelling in this matrix.
+    with pytest.raises(SkeletonError, match="cannot parse the Lake configuration"):
+        lean_libraries(project)
+
+
+def test_lake_toml_parser_limits_fail_closed(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "lakefile.toml").write_text(
+        f'name = "Solo"\nunknown = {"9" * 5_000}\n', encoding="utf-8"
+    )
+
+    with pytest.raises(SkeletonError, match="cannot safely parse.*exceeds the parser's limits"):
+        lean_libraries(project)
+
+
 def test_a_project_without_a_lakefile_is_refused(tmp_path: Path) -> None:
     with pytest.raises(SkeletonError):
         lean_libraries(tmp_path)
@@ -1134,7 +1164,8 @@ def test_extraction_reports_names_the_sources_and_the_environment_lack(tmp_path:
 
     assert not report.clean
     assert tuple(issue.message for issue in report.unresolved) == (
-        "basics/ghost: Skel.ghost: not in the built environment; run `lake build`",
+        "basics/ghost: Skel.ghost: not in the built environment after importing "
+        "Skel.Main; check the `lean:` target and declaring source",
         "basics/phantom: Skel.doesNotExist: declaration not found in the Lean sources",
     )
     assert [node.node_id for node in report.nodes] == ["basics/determined", "basics/ghost", "basics/phantom"]
