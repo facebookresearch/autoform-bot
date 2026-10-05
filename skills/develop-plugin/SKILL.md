@@ -25,6 +25,12 @@ and references; demonstrate outcomes without special-casing them.
 Keep plugin and formalization roots distinct. Agents can infer routine details;
 keep shared agent entrypoints concise and link command/schema details as on-demand references.
 
+Source indexes, revisions, and links form one evidence boundary. Require
+retained descriptors; repeated pathname reads are not a generation boundary.
+Read bounded generated-output markers before descendants, keeping each marker
+schema in its owning feature. Auto-detected links must match the blob at the
+stable detected commit.
+
 Run focused checks, then normally run:
 
 ```bash

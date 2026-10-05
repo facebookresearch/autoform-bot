@@ -551,6 +551,19 @@ absent from the sources, as `leanblueprint checkdecls` does for LaTeX
 blueprints. It validates structure and leaves mathematical correctness to the
 agent and the Lean kernel.
 
+Source-aware `--lean-root` inspection requires directory-descriptor traversal.
+Platforms without that capability, including Windows, fail closed instead of
+treating repeated pathname reads as one filesystem generation. Declaration
+locations and source revisions come from the same retained capture. Recognized
+skeleton packet/passages directories are identified by their bounded managed
+manifest before descendants are read; publication-output policy remains with
+the publication feature rather than this source layer.
+
+Automatically detected Git permalinks are emitted only for captured files whose
+bytes equal the blob at the stable detected commit. Dirty, untracked, missing,
+or concurrently checked-out files keep local declaration locations but receive
+no URL. An explicitly supplied ref remains a caller attestation.
+
 The Markdown files are the source of truth. Graphs and sites are derived views
 that may be regenerated at any time.
 

@@ -22,7 +22,7 @@ from urllib.parse import quote, unquote, urlsplit
 from . import graph_pages, graph_views, mermaid, status
 from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage
 from .graph import Graph, Node, load_graph
-from .lean import SourceLinker, build_linker, declaration_names
+from .lean import SourceLinker, build_linker, declaration_names, index_failure_message
 from .status import is_definition
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
@@ -279,7 +279,10 @@ def render_site(
     # <repo>/docs/blueprint would otherwise be described as <repo>/blueprint,
     # and every generated permalink would 404.
     repo_root = Path(lean_root).expanduser().resolve() if lean_root is not None else blueprint.parent
-    linker = build_linker(repo_root, repository_url=repository_url, ref=ref)
+    try:
+        linker = build_linker(repo_root, repository_url=repository_url, ref=ref)
+    except OSError as error:
+        raise PublicationError([index_failure_message(error)]) from error
     numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
     sources_base = _sources_base(blueprint, repo_root, linker)
