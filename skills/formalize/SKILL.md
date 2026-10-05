@@ -60,18 +60,40 @@ articles may legitimately change the graph-wide source revision.
 Read the complete article, cited sources, dependency articles, and existing Lean
 target. Preserve the exact mathematical statement. Work only on the selected
 phase: do not modify another article or its Lean declarations, or weaken a
-public statement. Search the pinned Mathlib checkout before adding helpers, and
-use the shared Lean LSP and REPL with `<PROJECT>` as the project path. Finish
-with the focused Lake target. Declare the result in a module the library root
-imports, or that the lakefile's globs cover, because the default build is the
-only one CI compiles and audits. Check the recorded declaration with `#print
-axioms`; do not accept `sorry`, new axioms, unsafe shortcuts, a weaker theorem,
-unused hypotheses, or an unrelated declaration.
+public statement. The one exception is revising a declaration other articles'
+Lean uses: start from `autoform work impact` and make only the edits the
+[revision contract](../../autoform_cli/README.md#revision-contract) requires,
+under the claims it requires. Search the pinned Mathlib checkout before adding
+helpers, and use the shared Lean LSP and REPL with `<PROJECT>` as the project
+path. Finish with the focused Lake target. Declare the result in a module the
+library root imports, or that the lakefile's globs cover, because the default
+build is the only one CI compiles and audits. Check the recorded declaration
+with `#print axioms`; do not accept `sorry`, new axioms, unsafe shortcuts, a
+weaker theorem, unused hypotheses, or an unrelated declaration, except as the
+open-statement policy below allows.
 
-The statement phase writes the declaration. Project CI rejects `sorry`, so for a
-theorem it also writes the complete proof; that is why `work list` offers the
-phase only once the proof prerequisites are proved. The proof phase completes
-the proof of an already recorded statement without changing that statement.
+`roadmap/README.md` sets the project's policy. Under the default strict policy,
+project CI rejects `sorry`: the statement phase writes the declaration and, for
+a theorem, the complete proof, which is why `work list` offers the phase only
+once the proof prerequisites are proved. Under `open_statements: allowed`, the
+statement phase writes the faithful statement with a proof body of exactly
+`sorry`, or the full proof, and records only `statement: formalized`. That
+`sorry` goes in the declaration's own body, never in its type, a helper, a
+definition, or a `where` clause. In both policies the proof phase completes the
+proof of an already recorded statement without changing that statement.
+
+Under the open policy a proof may use the open statements of its declared
+dependencies, direct or transitive. The article then shows as conditionally
+proved, and `#print axioms` lists the `sorryAx` it inherits from them without
+saying from where. `autoform work assumptions` lists the open statements the
+Markdown lets this article assume. Before landing, record `proof: formalized`
+in the worktree (until then the audit treats the article as open), reproduce
+the CI audit as the [open statements
+reference](../../autoform_cli/README.md#open-statements) shows, and require a
+`conditional` or `sorry-free` line for each recorded declaration and a passing
+summary. An open statement the Markdown does not declare as a dependency fails
+CI: send the missing dependency to Roadmap or stop using it. Never describe a
+conditional proof as complete, fully proved, or sorry-free.
 
 After the focused build passes, require an independent Agent Review of every
 changed statement or proof for source faithfulness, dependency correctness, and
