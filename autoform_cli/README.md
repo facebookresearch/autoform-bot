@@ -316,7 +316,9 @@ valid contract with `MAPPED` rows publishes normally even though `audit` reports
 each one as a `declared-coverage-gap`. That is intended: a roadmap is published
 while it is still being decomposed, and the published `coverage.complete: false`
 is how a reader sees that. Run `autoform audit` in CI when you want mapped rows
-to block a merge.
+to block a merge. Once articles record `review_approved`, run it after the Lean
+build with `--lean-root . --review`, or it reports each approved article as
+`review-bundle-missing`.
 
 Extract what a reader must trust for each formalized statement:
 
@@ -764,6 +766,7 @@ autoform review check blueprint --lean-root . --bundle review.json
 autoform audit blueprint --lean-root . --review-bundle review.json
 autoform render blueprint --lean-root . --review-bundle review.json
 autoform review check blueprint --lean-root .
+autoform audit blueprint --lean-root . --review
 autoform render blueprint --lean-root . --review
 autoform review check blueprint --lean-root . --authenticate github
 autoform render blueprint --lean-root . --review --authenticate github
@@ -839,8 +842,8 @@ check with `review-snapshot-changed` rather than mixing old and new evidence;
 run it again once the blueprint is idle. These are comparisons, not a lock: an
 article or card that changes and is restored between two of them goes unseen,
 and the restored state is what gets judged; an edit after the last comparison
-does not affect a verdict already reached. `audit --review-bundle`, `render --review`, and
-`render --review-bundle` make the same check, then judge or show the cards it
+does not affect a verdict already reached. `audit --review`, `audit --review-bundle`,
+`render --review`, and `render --review-bundle` make the same check, then judge or show the cards it
 validated rather than reading them again. They load the articles again to audit
 or render them, and an edit to any article or cited source since the check
 fails them with `review-snapshot-changed` too: every skeleton report records a
@@ -852,8 +855,8 @@ audit or render is the bytes that second load read, as for a plain `audit` or
 hashed, never a reconstructed or comment-bearing approximation. Read-back
 cards are absorbed into their article and are not published as standalone
 pages. Without `--bundle`, `review check` derives the bundle from its own
-extraction, and `render --review` does the same: each extracts the tree once
-instead of once to prepare and again to check. Either may instead read a
+extraction, and `render --review` and `audit --review` do the same: each extracts the tree once
+instead of once to prepare and again to check. `review check` and `render` may instead read a
 report `autoform skeleton --output` wrote, with `--skeleton-report FILE` in
 place of `--lean-root` for `review check` and beside it for `render`; the
 report must cover every article and carry the hash of the blueprint being
@@ -1507,7 +1510,12 @@ text and an explicit dependency section, that asserted proof and Mathlib facts
 are internally consistent, and that cited work resolves to local source
 material without escaping the blueprint. Coverage files are checked for broken
 links and explicitly declared gaps. With `--lean-root`, local declaration names
-and declaration kinds are checked against the Lean source index.
+and declaration kinds are checked against the Lean source index. With
+`--review`, which derives review evidence in the same run, or
+`--review-bundle FILE`, which reads a prepared bundle, either one with
+`--lean-root`, it also reports the findings `review check` reports. Without
+either, every article that records `review_approved` is reported as
+`review-bundle-missing`.
 
 ### Structure
 

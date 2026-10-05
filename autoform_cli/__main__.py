@@ -104,10 +104,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     audit.add_argument("blueprint_dir")
     audit.add_argument("--lean-root", type=Path, help="Lean project to resolve local targets against")
     audit.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    audit.add_argument(
+    audit_review = audit.add_mutually_exclusive_group()
+    audit_review.add_argument(
         "--review-bundle",
         type=Path,
         help="prepared review evidence; re-extracted and checked against the current Lean project",
+    )
+    audit_review.add_argument(
+        "--review",
+        action="store_true",
+        help="check review approvals against evidence derived in this run, without a prepared bundle",
     )
     _add_probe_timeout_argument(audit)
 
@@ -483,9 +489,10 @@ def _audit(args: argparse.Namespace) -> int:
     skeleton = None
     bundle = None
     cards = None
-    if args.review_bundle is not None:
+    if args.review_bundle is not None or args.review:
         if args.lean_root is None:
-            print("error: --review-bundle requires --lean-root", file=sys.stderr)
+            flag = "--review" if args.review else "--review-bundle"
+            print(f"error: {flag} requires --lean-root", file=sys.stderr)
             return 2
         try:
             _, skeleton, bundle, cards = _current_review(

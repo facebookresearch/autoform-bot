@@ -496,6 +496,18 @@ def test_render_takes_one_source_of_review_evidence(tmp_path: Path, capsys: pyte
     assert "--review requires --lean-root" in capsys.readouterr().err
 
 
+def test_audit_takes_one_source_of_review_evidence(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    blueprint = _blueprint(tmp_path)
+
+    with pytest.raises(SystemExit) as refused:
+        main(["audit", str(blueprint), "--review", "--review-bundle", str(tmp_path / "review.json")])
+    assert refused.value.code == 2
+    assert "argument --review-bundle: not allowed with argument --review" in capsys.readouterr().err
+
+    assert main(["audit", str(blueprint), "--review"]) == 2
+    assert capsys.readouterr().err == "error: --review requires --lean-root\n"
+
+
 @pytest.mark.parametrize(
     ("command", "expected_status"),
     [
@@ -503,6 +515,7 @@ def test_render_takes_one_source_of_review_evidence(tmp_path: Path, capsys: pyte
             ["audit", "blueprint", "--lean-root", ".", "--review-bundle", "review.json"],
             2,
         ),
+        (["audit", "blueprint", "--lean-root", ".", "--review"], 2),
         (["render", "blueprint", "--lean-root", ".", "--review"], 1),
     ],
 )
@@ -1325,15 +1338,18 @@ def test_render_shows_the_statement_its_review_validated(
     assert "Every object is equal to itself." in pages
 
 
-def _audit(blueprint: Path, root: Path) -> int:
-    """Audit against the bundle `_prepared_batch` wrote, over Lean sources that
-    declare both targets, so that only review evidence can fail it."""
+def _audit(blueprint: Path, root: Path, *, evidence: tuple[str, ...] | None = None) -> int:
+    """Audit over Lean sources that declare both targets, so that only review
+    evidence can fail it. That evidence is the bundle `_prepared_batch` wrote,
+    unless ``evidence`` gives other flags."""
 
     (root / "Review.lean").write_text(
         "namespace Review\n\ntheorem result : True := trivial\n\ntheorem other : True := trivial\n\nend Review\n",
         encoding="utf-8",
     )
-    return main(["audit", str(blueprint), "--lean-root", str(root), "--review-bundle", str(root / "review.json")])
+    if evidence is None:
+        evidence = ("--review-bundle", str(root / "review.json"))
+    return main(["audit", str(blueprint), "--lean-root", str(root), *evidence])
 
 
 def _after_the_check(monkeypatch: pytest.MonkeyPatch, change: Callable[[], None]) -> None:
@@ -1394,6 +1410,73 @@ def test_audit_refuses_articles_edited_after_the_review_check(
     out = capsys.readouterr().out
     assert "review-snapshot-changed: the blueprint changed after its review evidence was extracted" in out
     assert "OK:" not in out
+
+
+def test_audit_review_derives_the_evidence_review_check_derives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Where review check passes without a prepared bundle, audit --review
+    passes too, deriving the evidence from one extraction of its own. Given no
+    evidence, audit still fails every approved article, and says how to supply it."""
+
+    extraction = _Extraction()
+    blueprint = _approved_batch(tmp_path, monkeypatch, extraction)
+    assert _check(blueprint, tmp_path) == 0
+    capsys.readouterr()
+
+    assert _audit(blueprint, tmp_path, evidence=()) == 1
+    missing = (
+        "review_approved is present but no review evidence was supplied; pass --review to derive it in this run, "
+        "or --review-bundle with a prepared bundle, each with --lean-root"
+    )
+    assert [line for line in capsys.readouterr().out.splitlines() if line.startswith("error:")] == [
+        f"error: roadmap/basics/{name}.md: review-bundle-missing: {missing}" for name in ("other", "result")
+    ]
+
+    extraction.scopes.clear()
+    assert _audit(blueprint, tmp_path, evidence=("--review",)) == 0
+    assert "OK: roadmap audit passed" in capsys.readouterr().out
+    assert extraction.scopes == [None]
+
+
+def test_audit_review_reports_a_stale_card_as_review_check_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Once Review.result states something else, its card testifies about a
+    meaning no longer extracted. audit --review reports for it exactly what
+    review check reports, at the article's path."""
+
+    extraction = _Extraction()
+    blueprint = _approved_batch(tmp_path, monkeypatch, extraction)
+    signature = "Review.result : False"
+    meaning = '{"generated":[],"root":{"safety":"safe","type":{"const":{"str":[null,"False"]},"levels":[]}}}'
+
+    def restated(*args: object, **kwargs: object) -> SkeletonReport:
+        report = extraction(*args, **kwargs)
+        nodes = []
+        for node in report.nodes:
+            if node.node_id == "basics/result":
+                (declaration,) = node.declarations
+                declaration = replace(declaration, signature=signature, raw_signature=signature, semantic=meaning)
+                node = replace(node, declarations=(declaration,))
+            nodes.append(node)
+        return replace(report, nodes=tuple(nodes))
+
+    monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", restated)
+    capsys.readouterr()
+
+    assert main(["review", "check", str(blueprint), "--lean-root", str(tmp_path), "--json"]) == 1
+    checked = json.loads(capsys.readouterr().out)["findings"]
+    assert _audit(blueprint, tmp_path, evidence=("--review", "--json")) == 1
+    audited = json.loads(capsys.readouterr().out)["findings"]
+
+    assert [(item["node_id"], item["code"]) for item in checked] == [
+        ("basics/result", "readback-invalid"),
+        ("basics/result", "review-approval-unverifiable"),
+    ]
+    assert [(item["article_path"], item["code"], item["reason"]) for item in audited] == [
+        (f"roadmap/{item['node_id']}.md", item["code"], item["reason"]) for item in checked
+    ]
 
 
 def test_a_pasted_current_hash_is_only_self_approved(

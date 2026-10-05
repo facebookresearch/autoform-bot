@@ -270,7 +270,8 @@ def _review_findings(
             AuditFinding(
                 _relative_path(node.path, graph.blueprint_dir),
                 "review-bundle-missing",
-                "review_approved is present but no prepared review bundle was supplied",
+                "review_approved is present but no review evidence was supplied; pass --review to derive it "
+                "in this run, or --review-bundle with a prepared bundle, each with --lean-root",
             )
             for node in approved
         ]
