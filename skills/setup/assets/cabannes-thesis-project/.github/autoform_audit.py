@@ -565,6 +565,8 @@ run_cmd do
   let mut errors : Array MessageData := #[]
   let mut hitCache : Std.HashMap Name (Array Name) := {{}}
   let mut externalSorry : Std.HashMap Name Bool := {{}}
+  -- Declarations with an error get no info line that reads as a clean result.
+  let mut failed : Std.HashSet Name := {{}}
   for declName in roots do
     let some info := env.find? declName | continue
     let reported := errors.size
@@ -604,9 +606,12 @@ run_cmd do
     hitCache := cache
     if errors.size == reported && usedAxioms.contains ``sorryAx && hits.isEmpty then
       errors := errors.push m!"{{declName}} depends on sorry outside every declared open statement"
+    if errors.size != reported then
+      failed := failed.insert declName
   let mut openCount : Nat := 0
   let mut conditionalCount : Nat := 0
   for (declName, article, isOpen, allowedOpen) in articles do
+    let reported := errors.size
     match env.find? declName with
     | none =>
       errors := errors.push m!"{{declName}} [{{article}}] is not a declaration of the Lean build; fix the article's lean: name or build the module that declares it"
@@ -634,13 +639,15 @@ run_cmd do
             logInfo m!"open statement (proof is sorry): {{declName}} [{{article}}]"
           else if (← Lean.collectAxioms declName).contains ``sorryAx then
             logInfo m!"open statement (proof depends on sorry elsewhere): {{declName}} [{{article}}]"
-          else
+          else if errors.size == reported && !failed.contains declName then
             logInfo m!"open statement (proof is sorry-free; record proof: formalized): {{declName}} [{{article}}]"
         else if !hits.isEmpty then
           conditionalCount := conditionalCount + 1
-          logInfo m!"conditional: {{declName}} [{{article}}] rests on open statement(s) {{autoformOpenAuditNameList hits}}"
+          if errors.size == reported && !failed.contains declName then
+            logInfo m!"conditional: {{declName}} [{{article}}] rests on open statement(s) {{autoformOpenAuditNameList hits}}"
         else unless (← Lean.collectAxioms declName).contains ``sorryAx do
-          logInfo m!"sorry-free: {{declName}} [{{article}}]"
+          if errors.size == reported && !failed.contains declName then
+            logInfo m!"sorry-free: {{declName}} [{{article}}]"
   for error in errors do
     logError error
   if roots.isEmpty then

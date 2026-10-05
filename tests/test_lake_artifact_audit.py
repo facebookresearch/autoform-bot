@@ -680,6 +680,14 @@ theorem type_sorry : (sorry : Prop) := sorry
 
 theorem uses_dependency_sorry : True := Dep.dep_sorry
 
+theorem native : 10 + 10 = 20 := by native_decide
+
+theorem uses_native : 10 + 10 = 20 := native
+
+theorem native_reduction : 1 + 1 = 2 := by have := native; exact open_stmt
+
+theorem native_open : 3 + 3 = 6 := by native_decide
+
 end Fixture
 """
 
@@ -833,6 +841,39 @@ def test_open_probe_rejects_sorry_outside_an_open_statement_body(
         "root-package declarations failed the open-statement audit",
     ):
         assert message in output
+
+
+def test_open_probe_logs_no_clean_result_for_a_failing_declaration(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    audited = _audit(
+        helper,
+        open_projects["bad"],
+        _contract(
+            _OPEN_ARTICLE,
+            _article("reduction", ["Fixture.reduction"]),
+            _article("uses-native", ["Fixture.uses_native"]),
+            _article("native-reduction", ["Fixture.native_reduction"], allowed=["Fixture.open_stmt"]),
+            _article("native-open", ["Fixture.native_open"], is_open=True, allowed=["Fixture.native_open"]),
+            _article("clean", ["Fixture.clean"]),
+        ),
+    )
+
+    output = audited.stdout + audited.stderr
+    assert audited.returncode != 0, output
+    for message in (
+        "Fixture.reduction [reduction] rests on open statement(s) Fixture.open_stmt, which",
+        "Fixture.uses_native depends on unexpected axiom",
+        "Fixture.native_reduction depends on unexpected axiom",
+        "Fixture.native_open depends on unexpected axiom",
+        "open statement (proof is sorry): Fixture.open_stmt [open]",
+        "sorry-free: Fixture.clean [clean]",
+    ):
+        assert message in output
+    for name in ("reduction", "uses_native", "native_reduction", "native_open"):
+        for line in output.splitlines():
+            if f"Fixture.{name} [" in line:
+                assert not line.startswith(("sorry-free:", "conditional:", "open statement (")), line
 
 
 @pytest.mark.parametrize("project", ["hijack", "forged"])
