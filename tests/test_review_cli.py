@@ -851,7 +851,13 @@ def test_an_article_gone_since_prepare_is_named_rather_than_the_bundle(
     edit: Callable[[Path], None],
     during_the_record: bool,
 ) -> None:
-    """The bundle still has the declaration; the blueprint no longer has its article_id."""
+    """The bundle still has the declaration; the blueprint no longer has its article_id.
+
+    The fake extraction makes no check of its own, so an edit during it reaches
+    the reload after it, as one made after the real extraction's check would.
+    The real extraction reports an edit during it first, as any blueprint change
+    (test_an_article_gone_during_a_record_extraction_is_named_when_the_record_runs_again).
+    """
 
     calls: list[int] = []
 
@@ -1021,6 +1027,41 @@ def test_any_blueprint_edit_during_a_record_extraction_files_nothing(
 
     assert _record(blueprint, bundle, alone, project) == 0
     assert set(load_readbacks(blueprint)) == {(_RESULT_ID, "Review.result")}
+
+
+@pytest.mark.parametrize("edit", [_delete_other, _renumber_other], ids=["deleted", "renumbered"])
+def test_an_article_gone_during_a_record_extraction_is_named_when_the_record_runs_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], edit: Callable[[Path], None]
+) -> None:
+    """The extraction reports this edit as it does any other, so running the record
+    again, rather than filing, names the record whose article_id it took away."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "lakefile.toml").write_text('name = "Review"\n', encoding="utf-8")
+    probes: list[int] = []
+
+    def probe_while_other_goes(graph: Graph, *, node_ids: tuple[str, ...] | None, **_: object) -> SkeletonReport:
+        probes.append(1)
+        if len(probes) == 1:
+            edit(blueprint)
+        return replace(_Extraction()(graph.blueprint_dir, node_ids=node_ids), blueprint_hash=blueprint_hash(graph))
+
+    # The real extraction, with only the Lean probe replaced.
+    monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", extract_skeletons)
+    monkeypatch.setattr("autoform_cli.skeleton.extract_graph_skeletons", probe_while_other_goes)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, project) == 2
+    assert capsys.readouterr().err == (
+        "error: the blueprint changed while skeletons were being extracted; retry after the project is idle\n"
+    )
+
+    assert _record(blueprint, bundle, manifest, project) == 2
+    assert f"error: Review.other: article_id {_OTHER_ID} is no longer in the blueprint" in capsys.readouterr().err
+    assert len(probes) == 1  # the rerun stopped before extracting
+    assert load_readbacks(blueprint) == {}
 
 
 def test_a_record_files_nothing_if_any_article_changes_after_its_extraction(

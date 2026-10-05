@@ -797,7 +797,9 @@ an unrelated article that changed since `review prepare` does not block the
 record. Any blueprint change during the extraction itself does, even in an
 article the record does not touch, and another article's empty or duplicated
 `lean:` list stops the extraction. Either way nothing is filed; running the
-record again once the blueprint is idle completes it. A record probes only the
+record again once the blueprint is idle completes it, unless the change took
+away an `article_id` the record names; the rerun then names that record. A
+record probes only the
 modules of the articles it files, so only those modules need to be built and
 fresh, and its packets match the ones `review prepare` wrote from a full
 extraction.
