@@ -76,14 +76,16 @@ from. A refused acquire means another agent owns the article: leave it and
 report it. Claims write refs to the board's remote, which is outward-facing, so
 make sure the request covers them. When a revision changes a statement, remove
 its `statement` and `proof` metadata but keep `lean:`, which Formalize needs to
-run `autoform work impact`. Retract only that article and the dependents whose
-Markdown text the revision rewrites, claiming them all in one acquire; the
-Lean-side impact decides every other dependent. For a Lean revision requested
-in Human Review, record the decision in the article, then follow the [revision
-contract](../../autoform_cli/README.md#revision-contract): run `work impact`,
-claim the whole set it names atomically, and take the route it allows. For a
-large source, divide independent sections among available agents while
-retaining one owner for global coverage and dependency consistency.
+run `autoform work impact`; under the open policy a retracted theorem stays an
+open statement, so whatever rests on it stays conditionally proved. Retract only
+that article and the dependents whose Markdown text the revision rewrites,
+claiming them all in one acquire; the Lean-side impact decides every other
+dependent. For a Lean revision requested in Human Review, record the decision in
+the article and leave the Lean change to Formalize, which follows the [revision
+contract](../../autoform_cli/README.md#revision-contract); this skill edits
+only Markdown. For a large source, divide independent sections among available
+agents while retaining one owner for global coverage and dependency
+consistency.
 
 `open_statements` in `roadmap/README.md` is a project policy; absent means
 strict. `allowed` lets a theorem's statement land with a `sorry` proof, so
@@ -91,6 +93,8 @@ dependents can be stated and proved before it is; the cost is conditionally
 proved results that stay incomplete until those proofs land. Change it only on
 the user's request and only once CI meets the
 [open statements](../../autoform_cli/README.md#open-statements) requirements.
+Turn it back off only once no open statement remains: the strict audit rejects
+every `sorry`, and strict status shows a proof resting on one as proved.
 
 Reconcile every affected source and milestone page, the coverage contract,
 `blueprint/README.md`, and the repository `README.md`.

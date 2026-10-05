@@ -63,7 +63,9 @@ phase: do not modify another article or its Lean declarations, or weaken a
 public statement. The one exception is revising a declaration other articles'
 Lean uses: start from `autoform work impact` and make only the edits the
 [revision contract](../../autoform_cli/README.md#revision-contract) requires,
-under the claims it requires. Search the pinned Mathlib checkout before adding
+under the claims it requires. A statement phase whose `lean:` already names a
+compiled declaration that other articles use, as a Roadmap retraction leaves
+it, is such a revision. Search the pinned Mathlib checkout before adding
 helpers, and use the shared Lean LSP and REPL with `<PROJECT>` as the project
 path. Finish with the focused Lake target. Declare the result in a module the
 library root imports, or that the lakefile's globs cover, because the default
@@ -76,24 +78,29 @@ open-statement policy below allows.
 project CI rejects `sorry`: the statement phase writes the declaration and, for
 a theorem, the complete proof, which is why `work list` offers the phase only
 once the proof prerequisites are proved. Under `open_statements: allowed`, the
-statement phase writes the faithful statement with a proof body of exactly
-`sorry`, or the full proof, and records only `statement: formalized`. That
-`sorry` goes in the declaration's own body, never in its type, a helper, a
-definition, or a `where` clause. In both policies the proof phase completes the
+statement phase of a theorem writes the faithful statement with a proof body of
+exactly `sorry` and records `statement: formalized`, or writes the full proof
+and, on acceptance, records both assertions. That `sorry` is the declaration's
+whole body: never part of its type, a helper, a definition, or a `where` clause,
+and never one case of a recursive proof, which Lean can compile into
+auxiliaries such as `_f` that CI rejects. A definition is never left open: its
+body is its proof, so `work list` offers its statement phase only once its
+proof prerequisites are stated. In both policies the proof phase completes the
 proof of an already recorded statement without changing that statement.
 
-Under the open policy a proof may use the open statements of its declared
-dependencies, direct or transitive. The article then shows as conditionally
-proved, and `#print axioms` lists the `sorryAx` it inherits from them without
-saying from where. `autoform work assumptions` lists the open statements the
-Markdown lets this article assume. Before landing, record `proof: formalized`
-in the worktree (until then the audit treats the article as open), reproduce
-the CI audit as the [open statements
-reference](../../autoform_cli/README.md#open-statements) shows, and require a
-`conditional` or `sorry-free` line for each recorded declaration and a passing
-summary. An open statement the Markdown does not declare as a dependency fails
-CI: send the missing dependency to Roadmap or stop using it. Never describe a
-conditional proof as complete, fully proved, or sorry-free.
+Under the open policy a proof may use the open statements its Markdown
+dependencies reach: each open dependency with whatever its statement
+prerequisites reach, and everything a proved dependency reaches, but not an
+open dependency's proof prerequisites. `autoform work assumptions --json` lists
+the exact `allowed_open_declarations`. The article then shows as conditionally
+proved, and `#print axioms` lists the `sorryAx` it inherits without saying from
+where. Before landing, record `proof: formalized` in the worktree (until then
+the audit treats the article as open), reproduce the CI audit as the [open
+statements reference](../../autoform_cli/README.md#open-statements) shows, and
+require a `conditional` or `sorry-free` line for each recorded declaration and
+a passing summary. An open statement the Markdown does not declare as a
+dependency fails CI: send the missing dependency to Roadmap or stop using it.
+Never describe a conditional proof as complete, fully proved, or sorry-free.
 
 After the focused build passes, require an independent Agent Review of every
 changed statement or proof for source faithfulness, dependency correctness, and
