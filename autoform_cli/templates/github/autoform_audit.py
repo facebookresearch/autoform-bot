@@ -462,9 +462,10 @@ open Lean Elab Command
 -- No namespace: inside one, Lean resolves a name to a constant under that
 -- namespace before any other, so a root module could define, say,
 -- `<namespace>.Json.parse` and silently replace the parser. At the top level a
--- root constant with a helper's name fails as already declared, and one that
--- matches a library name makes the reference ambiguous; both fail closed. The
--- parser is fully qualified, so a project's own `Json.parse` does not even do that.
+-- root constant with a helper's name makes the helper's definition fail as
+-- already declared, and the audit below then refuses to run; one that matches a
+-- library name makes the reference ambiguous. Both fail closed. The parser is
+-- fully qualified, so a project's own `Json.parse` does not even do that.
 
 /-- A name spelled as its components: strings, and numbers for numeric ones. -/
 def autoformOpenAuditNameOf (json : Json) : Except String Name := do
@@ -538,10 +539,39 @@ partial def autoformOpenAuditOpenHits (env : Environment) (isRoot : Name → Boo
   modify (·.insert node hits)
   return hits
 
+/-- Whether a node rests on a root declaration that failed the audit, through the
+same edges as `autoformOpenAuditOpenHits`: a declaration whose `where` clause or
+other auxiliary failed gets no line that reads as a clean result. -/
+partial def autoformOpenAuditReachesFailed (env : Environment) (isRoot : Name → Bool)
+    (openSet : Std.HashSet Name) (failed : Std.HashSet Name) (node : Name) :
+    StateM (Std.HashMap Name Bool) Bool := do
+  if let some known := (← get).get? node then
+    return known
+  modify (·.insert node false)
+  let mut broken := failed.contains node
+  for used in autoformOpenAuditEdges env openSet node do
+    if broken then
+      break
+    if used == ``sorryAx || !isRoot used then
+      continue
+    let target := autoformOpenAuditBlockOf env used
+    if target == node then
+      continue
+    broken := failed.contains used || (← autoformOpenAuditReachesFailed env isRoot openSet failed target)
+  modify (·.insert node broken)
+  return broken
+
 def autoformOpenAuditNameList (names : Array Name) : MessageData :=
   MessageData.joinSep (names.toList.map MessageData.ofName) ", "
 
 run_cmd do
+  -- A helper whose definition failed as already declared would resolve to the
+  -- imported constant of that name instead.
+  for helper in [``autoformOpenAuditNameOf, ``autoformOpenAuditReadArticles, ``autoformOpenAuditBlockOf,
+      ``autoformOpenAuditEdges, ``autoformOpenAuditOpenHits, ``autoformOpenAuditReachesFailed,
+      ``autoformOpenAuditNameList] do
+    if ((← getEnv).getModuleIdxFor? helper).isSome then
+      throwError "{{helper}} is declared by an imported module instead of this probe; rename that declaration so the audit can run"
   let targetModules : List Name := [{target_modules}]
   let allowed : List Name := [``propext, ``Classical.choice, ``Quot.sound]
   let articles ← match autoformOpenAuditReadArticles {articles} with
@@ -565,8 +595,10 @@ run_cmd do
   let mut errors : Array MessageData := #[]
   let mut hitCache : Std.HashMap Name (Array Name) := {{}}
   let mut externalSorry : Std.HashMap Name Bool := {{}}
-  -- Declarations with an error get no info line that reads as a clean result.
+  -- Declarations with an error, and those resting on one, get no info line that
+  -- reads as a clean result.
   let mut failed : Std.HashSet Name := {{}}
+  let mut brokenCache : Std.HashMap Name Bool := {{}}
   for declName in roots do
     let some info := env.find? declName | continue
     let reported := errors.size
@@ -622,9 +654,13 @@ run_cmd do
         else
           logInfo m!"sorry-free: {{declName}} [{{article}}]"
       else
-        let (hits, cache) := Id.run ((autoformOpenAuditOpenHits env isRoot openSet
-          (autoformOpenAuditBlockOf env declName)).run hitCache)
+        let block := autoformOpenAuditBlockOf env declName
+        let (hits, cache) := Id.run ((autoformOpenAuditOpenHits env isRoot openSet block).run hitCache)
         hitCache := cache
+        let (reachesFailed, cache) := Id.run
+          ((autoformOpenAuditReachesFailed env isRoot openSet failed block).run brokenCache)
+        brokenCache := cache
+        let broken := failed.contains declName || reachesFailed
         let undeclared := hits.filter (fun hit => !allowedOpen.contains hit)
         unless undeclared.isEmpty do
           errors := errors.push m!"{{declName}} [{{article}}] rests on open statement(s) {{autoformOpenAuditNameList undeclared}}, which its article's Markdown dependencies do not reach; add the dependency to the article or stop using them"
@@ -639,14 +675,14 @@ run_cmd do
             logInfo m!"open statement (proof is sorry): {{declName}} [{{article}}]"
           else if (← Lean.collectAxioms declName).contains ``sorryAx then
             logInfo m!"open statement (proof depends on sorry elsewhere): {{declName}} [{{article}}]"
-          else if errors.size == reported && !failed.contains declName then
+          else if errors.size == reported && !broken then
             logInfo m!"open statement (proof is sorry-free; record proof: formalized): {{declName}} [{{article}}]"
         else if !hits.isEmpty then
           conditionalCount := conditionalCount + 1
-          if errors.size == reported && !failed.contains declName then
+          if errors.size == reported && !broken then
             logInfo m!"conditional: {{declName}} [{{article}}] rests on open statement(s) {{autoformOpenAuditNameList hits}}"
         else unless (← Lean.collectAxioms declName).contains ``sorryAx do
-          if errors.size == reported && !failed.contains declName then
+          if errors.size == reported && !broken then
             logInfo m!"sorry-free: {{declName}} [{{article}}]"
   for error in errors do
     logError error

@@ -697,6 +697,11 @@ theorem native_reduction : 1 + 1 = 2 := by have := native; exact open_stmt
 
 theorem native_open : 3 + 3 = 6 := by native_decide
 
+theorem where_conditional : 1 + 1 = 2 ∧ True := ⟨open_stmt, aux⟩
+where aux : True := sorry
+
+theorem helper_conditional : 1 + 1 = 2 ∧ True := ⟨open_stmt, helper_sorry⟩
+
 end Fixture
 """
 
@@ -717,6 +722,22 @@ def {parser} (_ : String) : Except String Lean.Json :=
   Lean.Json.parse {table}
 """
 
+# A root constant with a helper's name, so the probe's own definition fails.
+_CLASH_LEAN = """import Lean.Data.Json
+
+namespace Fixture
+
+theorem cheat : 2 + 2 = 5 := sorry
+
+theorem fully : 2 + 2 = 5 := cheat
+
+end Fixture
+
+def autoformOpenAuditReadArticles (_ : String) :
+    Except String (Array (Lean.Name × String × Bool × Array Lean.Name)) :=
+  .ok #[(`Fixture.cheat, "x", true, #[`Fixture.cheat])]
+"""
+
 
 @pytest.fixture(scope="module")
 def open_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[Path, Path]]:
@@ -735,6 +756,7 @@ def open_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[P
         # precedence over the library parser.
         ("hijack", _FORGED_LEAN.format(parser="AutoformOpenStatementAudit.Json.parse", table=_FORGED_TABLE)),
         ("forged", _FORGED_LEAN.format(parser="Json.parse", table=_FORGED_TABLE)),
+        ("clash", _CLASH_LEAN),
     ):
         project = root / name
         _write(project / "lean-toolchain", "leanprover/lean4:v4.32.2\n")
@@ -869,6 +891,8 @@ def test_open_probe_logs_no_clean_result_for_a_failing_declaration(
             _article("uses-native", ["Fixture.uses_native"]),
             _article("native-reduction", ["Fixture.native_reduction"], allowed=["Fixture.open_stmt"]),
             _article("native-open", ["Fixture.native_open"], is_open=True, allowed=["Fixture.native_open"]),
+            _article("where-conditional", ["Fixture.where_conditional"], allowed=["Fixture.open_stmt"]),
+            _article("helper-conditional", ["Fixture.helper_conditional"], allowed=["Fixture.open_stmt"]),
             _article("clean", ["Fixture.clean"]),
         ),
     )
@@ -880,11 +904,14 @@ def test_open_probe_logs_no_clean_result_for_a_failing_declaration(
         "Fixture.uses_native depends on unexpected axiom",
         "Fixture.native_reduction depends on unexpected axiom",
         "Fixture.native_open depends on unexpected axiom",
+        "Fixture.where_conditional.aux contains sorry but is not an open statement",
+        "Fixture.helper_sorry contains sorry but is not an open statement",
         "open statement (proof is sorry): Fixture.open_stmt [open]",
         "sorry-free: Fixture.clean [clean]",
     ):
         assert message in output
-    for name in ("reduction", "uses_native", "native_reduction", "native_open"):
+    names = ("reduction", "uses_native", "native_reduction", "native_open", "where_conditional", "helper_conditional")
+    for name in names:
         for line in output.splitlines():
             if f"Fixture.{name} [" in line:
                 assert not line.startswith(("sorry-free:", "conditional:", "open statement (")), line
@@ -904,6 +931,24 @@ def test_open_probe_reads_its_table_with_the_library_parser(
     assert audited.returncode != 0, output
     assert "Fixture.cheat contains sorry but is not an open statement" in output
     assert "Fixture.fully depends on sorry outside every declared open statement" in output
+    assert "kernel trust clean" not in output
+
+
+def test_open_probe_refuses_a_helper_name_an_imported_module_declares(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    audited = _audit(
+        helper,
+        open_projects["clash"],
+        _contract(_article("fully", ["Fixture.fully"]), _article("cheat", ["Fixture.cheat"])),
+    )
+
+    output = audited.stdout + audited.stderr
+    assert audited.returncode != 0, output
+    assert (
+        "autoformOpenAuditReadArticles is declared by an imported module instead of this probe; "
+        "rename that declaration so the audit can run"
+    ) in output
     assert "kernel trust clean" not in output
 
 
