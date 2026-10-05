@@ -1110,10 +1110,13 @@ def _refuse_changed_article(card: PreparedReadback, path: str, digest: str) -> N
             "changed after its evidence was checked, so its card was not filed; rerun the record, after review "
             "prepare if the change is to that evidence"
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, NotADirectoryError):
+        # A link left naming a missing file is still there; only its target is gone.
+        gone = "now links to a missing file" if os.path.islink(path) else "was deleted after its evidence was checked"
+        what = f"{gone}, so its card was not filed; restore the article, or drop its records, and rerun the record"
+    except OSError as exc:
         what = (
-            "was deleted after its evidence was checked, so its card was not filed; restore the article, or drop "
-            "its records, and rerun the record"
+            f"cannot be read ({exc.strerror or exc}), so its card was not filed; rerun the record once it can be read"
         )
     raise ReviewError(
         [ReviewFinding(card.article_id, "review-snapshot-changed", f"{card.declaration}: article {path} {what}")]

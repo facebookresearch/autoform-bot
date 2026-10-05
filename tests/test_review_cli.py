@@ -1365,6 +1365,68 @@ def test_an_article_edited_while_the_batch_publishes_stops_before_its_card(
     assert load_readbacks(blueprint)[(_RESULT_ID, "Review.result")].path.read_bytes() == filed
 
 
+def _dangle(article: Path) -> None:
+    article.unlink()
+    article.symlink_to("missing.md")
+
+
+def _replace_chapter_with_a_file(article: Path) -> None:
+    for child in article.parent.iterdir():
+        child.unlink()
+    article.parent.rmdir()
+    article.parent.write_text("", encoding="utf-8")
+
+
+def _replace_with_a_directory(article: Path) -> None:
+    article.unlink()
+    article.mkdir()
+
+
+_GONE = "so its card was not filed; restore the article, or drop its records, and rerun the record"
+
+
+@pytest.mark.parametrize(
+    ("damage", "what"),
+    [
+        (_dangle, f"now links to a missing file, {_GONE}"),
+        (_replace_chapter_with_a_file, f"was deleted after its evidence was checked, {_GONE}"),
+        (
+            _replace_with_a_directory,
+            "cannot be read (Is a directory), so its card was not filed; rerun the record once it can be read",
+        ),
+    ],
+    ids=["a-dangling-link", "chapter-replaced-by-a-file", "replaced-by-a-directory"],
+)
+def test_an_article_that_cannot_be_read_again_names_the_record_and_why(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    damage: Callable[[Path], None],
+    what: str,
+) -> None:
+    """Whatever stops an article being read again before its card is written,
+    the error names the record it stops at."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    other = (blueprint / "roadmap" / "basics" / "other.md").resolve()
+    publish = main.__globals__["publish_readback"]
+
+    def publish_then_damage_the_other_article(card: object) -> Path:
+        path = publish(card)
+        damage(other)
+        return path
+
+    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish_then_damage_the_other_article)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    err = capsys.readouterr().err
+    assert set(load_readbacks(blueprint)) == {(_RESULT_ID, "Review.result")}
+    assert "1 of 2 read-back(s) were filed before the failure below" in err
+    assert err.endswith(f"error: Review.other: article {other} {what}\n")
+
+
 def test_an_article_that_is_a_link_is_read_again_through_the_link(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
