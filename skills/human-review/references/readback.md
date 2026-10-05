@@ -93,13 +93,13 @@ whose TeX GitHub takes as written, with no letter, digit, `_`, or `\` just
 before it: `` $`\{x\}`$ ``, not `$\{x\}$`; `` $`n`$th ``, not `$n$th`;
 `` $`2*3*4`$ ``, not `$2*3*4$`. Never use `\(...\)` or `\[...\]`: write
 `$x$`, not `\(x\)`. Keep dollar signs out of formulas and `$$` out of lines of
-text. In text write `\$` for a dollar sign, and put dollar signs meant as
-typed in code: in a paragraph, list item, or table cell, the text between
-two dollar signs that a reader taking them in turn would pair is held to
-the rules for formulas below, whether that reader reads on across
-emphasis, code, and line ends, starts again at emphasis, code, and
-formulas, as MathJax does, or at line ends too, as GitHub does, and
-whether a backslash before a dollar sign counts or not.
+text. In text put dollar signs meant as typed in code: in a paragraph,
+list item, or table cell, the text between two dollar signs that a reader
+taking them in turn would pair is held to the rules for formulas below,
+whether that reader reads on across emphasis, code, and line ends, starts
+again at emphasis, code, and formulas, as MathJax does, or at line ends
+too, as GitHub does, and whether a backslash before a dollar sign counts
+or not.
 
 Everything you write must be visible as written. Do not use invisible
 characters such as zero-width spaces, or stack more than two accents above or
