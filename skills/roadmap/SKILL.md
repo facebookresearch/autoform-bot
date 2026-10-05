@@ -78,7 +78,10 @@ make sure the request covers them. When a revision changes a statement whose
 article has `lean:`, retract it: replace `statement: formalized` with
 `statement: retracted`, remove `proof: formalized`, and keep `lean:`, which
 Formalize needs to run `autoform work impact`; an article without `lean:` just
-loses `statement` and `proof`. Under the open policy a retracted theorem stays
+loses `statement` and `proof`. When the project's CI pins an `AUTOFORM_REF`
+older than the marker, its `autoform check` rejects `statement: retracted`:
+remove `statement` and `proof` and keep `lean:` until the pin moves, and report
+the old pin. Under the open policy a retracted theorem stays
 an open statement, so whatever rests on it stays conditionally proved. Retract
 only that article and the dependents whose Markdown text the revision rewrites,
 claiming them all in one acquire; the Lean-side impact decides every other

@@ -84,7 +84,7 @@ An article asserts only facts a human or agent verified:
 | Key | Meaning |
 | --- | --- |
 | `statement: formalized` | The Lean statement exists and compiles. |
-| `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. |
+| `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. CI's `autoform check` at an older `AUTOFORM_REF` rejects the marker, so move the pin first; until then, retract by removing `statement` and `proof` and keeping `lean:`. |
 | `proof: formalized` | The Lean proof compiles. Under the open policy it may rest on open statements, and the article is then conditional; only the derived `fully_proved` means complete and `sorry`-free. |
 | `mathlib: true` | The result is upstreamed into Mathlib. |
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
@@ -111,8 +111,8 @@ lands only with its proof; under `open_statements: allowed` it may land with a
 `proved` and `fully_proved` differ on purpose: a theorem whose own proof
 compiles but which rests on unfinished work is green, not dark green.
 `conditional`, labelled "conditionally proved", is the open policy's case of
-that: the article is proved, but it reaches an open statement, a theorem whose
-`lean:` names a declaration and which is stated or retracted but not proved
+that: the article is proved, but it reaches an open statement, a theorem that
+is stated or retracted but not proved
 (see [Open statements](#open-statements)), through its dependencies. An open
 dependency counts together with whatever its statement prerequisites reach, and
 a proved dependency passes on
@@ -763,8 +763,9 @@ By default a project runs the strict policy: CI rejects every `sorry`, so a
 theorem's statement lands only together with its proof, and a statement waits
 until the proof's prerequisites are proved. `open_statements: allowed` in
 `roadmap/README.md` lets a theorem's statement land with a `sorry` proof. Such
-an article, a theorem with `lean:` whose statement is formalized and whose proof
-is not, is an open statement. A proof that uses open statements is conditional:
+an article, a theorem whose statement is formalized and whose proof is not, is
+an open statement; CI audits it only through the declarations its `lean:`
+names. A proof that uses open statements is conditional:
 it compiles and records `proof: formalized`, but is reported as conditionally
 proved, never as fully proved. Status, `work`, and the site derive that from
 the Markdown dependencies and CI from what the Lean uses, so CI can print
@@ -921,13 +922,17 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
      statements](#open-statements)). When X's proof is sorry-free,
      proof-impacted articles keep everything, since their proofs still use the
      valid old X; migrating them to X' is later work. While it is still
-     `sorry`, they lose `proof: formalized` but keep `statement` and `lean:`,
-     so they return to the frontier as proof phases and migrate to X';
-     otherwise they would keep resting on the deprecated, `sorry`'d X, show
-     "conditional, assumes R" although R's text now describes X', and keep X
-     out of `deprecated_unused`, so R could never record its proof. The claim
-     set is every article whose frontmatter changes: R, the statement-impacted
-     articles, and, in that case, the proof-impacted ones.
+     `sorry`, proof-impacted theorems lose `proof: formalized` but keep
+     `statement` and `lean:`, so they return to the frontier as proof phases
+     and migrate to X'. A stated definition counts as proved whatever its
+     `proof:` says, so a proof-impacted definition is migrated to X' in the
+     same commit or, when that is not possible, retracted like a
+     statement-impacted article. Otherwise they would keep resting on the
+     deprecated, `sorry`'d X, show "conditional, assumes R" although R's text
+     now describes X', and keep X out of `deprecated_unused`, so R could never
+     record its proof. The claim set is every article whose frontmatter or
+     Lean changes: R, the statement-impacted articles, and, in that case, the
+     proof-impacted ones.
    - **In place**, only when X and X' cannot coexist, for example an instance
      or a structure change: the claim set is every `claim_targets` entry.
      Repair every impacted declaration in one commit whose default build
