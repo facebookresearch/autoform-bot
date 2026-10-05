@@ -102,7 +102,7 @@ require a finite host tool deadline and operating-system containment, and techni
 drop the workspace before synchronizing again. Treat cancellation or transport
 loss as unknown execution state until a bounded workspace drop returns or the
 host restarts Beam. If any admission check fails—or if the user did not opt
-in—leave Beam unused and continue with Autoform's bundled Lean servers.
+in—stop and report the failed Lean-tooling admission instead of substituting another server.
 
 Then validate, visualize, render, and strict-build the site, keeping
 `--require-declarations` so a named Lean declaration that does not exist fails

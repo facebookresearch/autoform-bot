@@ -1,6 +1,6 @@
 {
   "name": "autoform",
-  "version": "0.5.0+codex.20260812000640",
+  "version": "0.6.0+codex.20261005000000",
   "description": "Set up Lean repositories, build source-grounded Markdown roadmaps, and support human or agent review.",
   "author": {
     "name": "Vivien Cabannes"
@@ -11,7 +11,7 @@
   "interface": {
     "displayName": "AutoForm Bot",
     "shortDescription": "Lean setup, roadmaps, review, and runtime tools",
-    "longDescription": "AutoForm separates repository setup from source-grounded roadmap construction, keeps the plan in an Obsidian-compatible Markdown vault, publishes it with GitHub Pages, and provides visual and agent review. Its MCP surface includes the existing LSP and REPL servers plus an automatically installed, exactly pinned Lean Beam server.",
+    "longDescription": "AutoForm separates repository setup from source-grounded roadmap construction, keeps the plan in an Obsidian-compatible Markdown vault, publishes it with GitHub Pages, and provides visual and agent review. Lean Beam is its single automatically installed, exactly pinned Lean MCP runtime.",
     "developerName": "Vivien Cabannes",
     "category": "Coding",
     "capabilities": [

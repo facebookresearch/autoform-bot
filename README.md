@@ -7,7 +7,7 @@ CLI use the identifier `autoform`; the canonical repository is
 [`facebookresearch/autoform-bot`](https://github.com/facebookresearch/autoform-bot).
 
 The `main` branch provides repository setup, roadmap planning, publication,
-human and agent review, and shared Lean LSP/REPL tools. The historical
+human and agent review, and an automatically managed Lean Beam server. The historical
 `execution` branch and its custom worker/prover stack are deprecated and are
 not an installation target. New formalization execution work belongs on
 `main` as a Markdown-native workflow over the same blueprint.
@@ -35,13 +35,12 @@ codex plugin marketplace add facebookresearch/autoform-bot --ref main
 codex plugin add autoform@autoform
 ```
 
-Start a new agent session so the skills and MCP servers reload. A native Muse
+Start a new agent session so the skills and Lean Beam MCP server reload. A native Muse
 manifest is included, but Muse installation is not covered here.
 
-Autoform also registers a pinned Lean Beam session server alongside
-`autoform-lsp` and `autoform-repl`. On first start, Autoform fetches, builds,
-and installs the exact commit in `lean-beam.lock.json` into Autoform-owned user
-state, verifies its live MCP identity, and then executes Beam directly. Run
+Autoform registers Lean Beam as its Lean MCP runtime. On first start, Autoform
+fetches, builds, and installs the exact commit in `lean-beam.lock.json` into
+Autoform-owned user state, verifies its live MCP identity, and then executes Beam directly. Run
 `autoform beam doctor --json` for the same admission report and follow the
 denylist, containment, and recovery rules in
 [the integration contract](docs/lean-beam.md).
@@ -136,7 +135,7 @@ claims. It never publishes worker information or creates another graph.
 
 - [Cabannes thesis example](skills/setup/assets/cabannes-thesis-project/README.md)
 - [Roadmap example](skills/roadmap/references/cabannes-thesis-roadmap.md)
-- [Lean server architecture and operations](servers/README.md)
+- [Managed Lean Beam server contract](docs/lean-beam.md)
 
 ## Development
 

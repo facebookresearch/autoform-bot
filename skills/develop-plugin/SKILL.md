@@ -39,4 +39,4 @@ only to test installed discovery in a new thread. Report outcome and checks.
 Treat rewritten private declaration safety as fail-closed evidence: correlate
 the official user name to its lexical declaration by source coordinates.
 
-Beam preview: follow `docs/lean-beam.md`.
+Lean: follow `docs/lean-beam.md`; Beam owns processes.

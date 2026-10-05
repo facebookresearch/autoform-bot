@@ -46,11 +46,10 @@ def test_managed_lean_beam_server_is_fail_closed(repo_root: Path) -> None:
     assert "autoform beam doctor --json" in normalized_setup
     assert "technically deny `lean_save` and `lean_close_save`" in normalized_setup
     assert "operating-system containment" in normalized_setup
-    assert "leave Beam unused" in normalized_setup
-    assert "bundled Lean servers" in setup
-    assert "Beam preview: follow `docs/lean-beam.md`" in develop
-    assert "registers Lean Beam alongside" in normalized_integration
-    assert "must not ship the cutover" in normalized_integration
+    assert "stop and report the failed Lean-tooling admission" in normalized_setup
+    assert "Lean: follow `docs/lean-beam.md`" in develop
+    assert "single Lean MCP server" in normalized_integration
+    assert "Beam owns processes" in develop
 
 
 def test_human_review_distinguishes_roadmap_progress_from_source_scope(

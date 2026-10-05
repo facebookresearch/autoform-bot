@@ -1,15 +1,12 @@
 # Lean Beam managed server contract
 
-Autoform registers Lean Beam alongside its bundled `autoform-lsp` and
-`autoform-repl` servers. This document defines the managed preview of the
+Autoform registers Lean Beam as its single Lean MCP server. This document defines the managed integration with the
 Lean-FRO-maintained
 [`leanprover/lean-beam`](https://github.com/leanprover/lean-beam) session API.
 On first MCP start, Autoform fetches and checks out the exact locked commit,
 runs Beam's own installer into Autoform-owned user state, verifies the live
 `beam_version` identity, and `exec`s the upstream server. Autoform does not
-proxy Lean operations or parse Beam's private broker protocol. In a Beam
-session, do not interleave calls to the older Autoform servers for the same
-workspace.
+proxy Lean operations or parse Beam's private broker protocol.
 
 The supported development revision and protocol are recorded in
 [`lean-beam.lock.json`](../lean-beam.lock.json). The managed install lives under
@@ -51,22 +48,18 @@ either. See the
 Autoform supplies the MCP registration for Codex, Claude, and Muse; Beam still
 owns the actual server protocol and process after the launcher verifies it.
 
-This pin is an exact commit from a draft pull request and is for integration
-development, not release. The managed preview may coexist with the default
-Autoform servers, but Autoform must not ship the cutover until Lean Beam
-publishes a tagged release containing the opaque source-snapshot work from
-[`leanprover/lean-beam#254`](https://github.com/leanprover/lean-beam/pull/254),
-its release CI is green, and the save and external-build synchronization
-defects in
+This pin is an exact commit from a draft pull request rather than a tagged Beam
+release. It contains the opaque source-snapshot work from
+[`leanprover/lean-beam#254`](https://github.com/leanprover/lean-beam/pull/254).
+The remaining save and external-build synchronization defects in
 [`#255`](https://github.com/leanprover/lean-beam/issues/255) and
-[`#256`](https://github.com/leanprover/lean-beam/issues/256) are resolved in
-that release. Setup also needs a public typed way to verify the selected
-workspace toolchain and bundle, tracked in
-[`#257`](https://github.com/leanprover/lean-beam/issues/257).
-Release also requires accurate effect annotations. At this pin, `lean_run_at`
+[`#256`](https://github.com/leanprover/lean-beam/issues/256), plus typed
+workspace provenance tracked in
+[`#257`](https://github.com/leanprover/lean-beam/issues/257), remain relevant to
+the integration. At this pin, `lean_run_at`
 is advertised as read-only even though Lean tactics and metaprograms can perform
 arbitrary IO; host approval policy must not rely on that annotation.
-Until then, CI and preview setup additionally evaluate `Lean.versionString`
+CI and Setup additionally evaluate `Lean.versionString`
 inside each workspace and compare it with `lake env lean --version`. That
 checks which compiler served the request, but it is not a typed
 workspace-identity API for agents.

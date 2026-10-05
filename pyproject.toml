@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "autoform"
-version = "0.5.0"
-description = "Markdown-blueprint roadmaps with Lean LSP and REPL servers"
+version = "0.6.0"
+description = "Markdown-blueprint roadmaps with managed Lean Beam tooling"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
-    "fastmcp>=3.4.5,<4",
+    "mcp>=1.29,<2",
     "psutil>=5.9",
     "tomli>=2.0.1; python_version < '3.11'",
     # The blueprint checks predict what the generated MkDocs site publishes.
@@ -27,11 +27,7 @@ dependencies = [
 [project.scripts]
 autoform = "autoform_cli.__main__:main"
 autoform-visualize = "autoform_cli.visualize:main"
-autoform-lean-runtime = "servers.lean_runtime:main"
-
 [project.optional-dependencies]
-# Kept as an empty compatibility extra for existing plugin launch commands.
-repl = []
 dev = [
     "mkdocs>=1.6,<2",
     "mkdocs-material>=9.5,<10",
@@ -42,7 +38,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["autoform_cli", "servers"]
+packages = ["autoform_cli"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "lean-beam.lock.json" = "autoform_cli/lean-beam.lock.json"

@@ -1,15 +1,5 @@
 {
   "mcpServers": {
-    "autoform-lsp": {
-      "command": "uv",
-      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "python", "-m", "servers.lsp.server"],
-      "cwd": "${CLAUDE_PLUGIN_ROOT}"
-    },
-    "autoform-repl": {
-      "command": "uv",
-      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--extra", "repl", "python", "-m", "servers.repl.server"],
-      "cwd": "${CLAUDE_PLUGIN_ROOT}"
-    },
     "lean-beam": {
       "command": "uv",
       "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--locked", "python", "-m", "autoform_cli.beam_server"],

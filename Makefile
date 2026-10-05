@@ -3,13 +3,13 @@
 THESIS_EXAMPLE := skills/setup/assets/cabannes-thesis-project
 
 setup:
-	uv sync --extra dev --extra repl
+	uv sync --extra dev
 
 test:
 	uv run pytest -q
 
 lint:
-	uv run ruff check autoform_cli servers tests
+	uv run ruff check autoform_cli tests
 
 check-example:
 	uv run autoform check $(THESIS_EXAMPLE)/blueprint --lean-root $(THESIS_EXAMPLE)

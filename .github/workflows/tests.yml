@@ -20,8 +20,8 @@ jobs:
           version: "0.12.1"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-      - run: uv sync --extra dev --extra repl
-      - run: uv run ruff check autoform_cli servers tests
+      - run: uv sync --extra dev
+      - run: uv run ruff check autoform_cli tests
       - run: uv run pytest -q
       - run: make check-example
 
@@ -37,7 +37,7 @@ jobs:
           python-version: "3.13"
           enable-cache: true
       - name: Install locked development environment
-        run: timeout --signal=TERM --kill-after=30s 3m uv sync --frozen --extra dev --extra repl
+        run: timeout --signal=TERM --kill-after=30s 3m uv sync --frozen --extra dev
       - name: Install pinned Elan
         run: |
           set -euo pipefail
@@ -71,7 +71,7 @@ jobs:
           version: "0.12.1"
           python-version: "3.13"
           enable-cache: true
-      - run: uv sync --frozen --extra dev --extra repl
+      - run: uv sync --frozen --extra dev
       - name: Exercise bounded subprocesses and transactional output
         run: >-
           uv run pytest -q
@@ -120,7 +120,7 @@ jobs:
         env:
           BEAM_BIN_HOME: ${{ runner.temp }}/autoform-beam/bin
           BEAM_INSTALL_ROOT: ${{ runner.temp }}/autoform-beam/runtime
-      - run: uv sync --frozen --extra dev --extra repl
+      - run: uv sync --frozen --extra dev
       - name: Exercise the pinned public session contract
         run: uv run pytest -q tests/test_real_lean_beam.py
         env:
