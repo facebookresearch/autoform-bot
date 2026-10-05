@@ -553,6 +553,45 @@ def test_revisions_touching_one_unowned_helper_contend_for_its_claim() -> None:
     assert json.loads(right.to_json())["helpers"][0]["claim_targets"] == [key]
 
 
+def test_a_revised_declaration_no_article_names_is_claimed_like_a_helper() -> None:
+    records = _records(
+        _rec("A.R", "def"),
+        _rec("A.R.aux", "def", parent="A.R"),
+        _rec("A.S", "def"),
+        _rec("A.T", "inductive"),
+        _rec("A.T.aux", "def", parent="A.T"),
+        _rec("A.U", "def"),
+        _rec("A.U.aux", "def", parent="A.U"),
+        _rec("A.loose", "def"),
+    )
+    articles = [
+        _article("r", "A.R"),
+        _article("s", "A.S"),
+        _article("t", "A.T"),
+        _article("u-b", "A.U"),
+        _article("u-a", "A.U"),
+    ]
+
+    from_r = _impact(records, articles, "r", ["A.loose"])
+    from_s = _impact(records, articles, "s", ["A.loose"])
+    owned = _impact(records, articles, "r", ["A.T.aux"])
+    shared = _impact(records, articles, "r", ["A.U.aux"])
+    own = _impact(records, articles, "r", ["A.R.aux"])
+
+    # Nothing uses A.loose, yet two revisions of it contend for the claim
+    # keyed by its name; a revised declaration other articles own is claimed
+    # under every one of them, and one the revised article owns adds no claim.
+    assert from_r.claim_targets == ("r", _lean_key("A.loose"))
+    assert from_s.claim_targets == ("s", _lean_key("A.loose"))
+    assert not from_r.contained
+    assert owned.claim_targets == ("r", "t")
+    assert not owned.contained
+    assert shared.claim_targets == ("r", "u-a", "u-b")
+    assert not shared.contained
+    assert own.claim_targets == ("r",)
+    assert own.contained
+
+
 def test_an_unowned_helper_claim_key_is_ref_safe_for_any_name() -> None:
     names = ("_private.Demo.Extra.0.A.priv", "A.«weird name»", "«∀»", "A." + "long" * 20)
     records = _records(_rec("A.base", "def"), *(_rec(name, type_uses=("A.base",)) for name in names))
@@ -1017,8 +1056,9 @@ def test_cli_declaration_flag_replaces_the_article_s_names(tmp_path: Path, monke
     report = json.loads(output.out)
     assert report["article"] == {"id": "chapter/empty", "article_id": None, "claim_target": "chapter/empty"}
     assert report["declarations"] == ["Demo.gone"]
-    assert report["contained"] is True
-    assert report["claim_targets"] == ["chapter/empty"]
+    # No article names Demo.gone, so revising it claims its own key too.
+    assert report["contained"] is False
+    assert report["claim_targets"] == ["chapter/empty", _lean_key("Demo.gone")]
 
 
 def test_cli_text_escapes_terminal_control_characters(tmp_path: Path, monkeypatch, capsys) -> None:

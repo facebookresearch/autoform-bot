@@ -534,8 +534,11 @@ statement-impacted and proof-impacted articles, unnamed helpers, missing
 Markdown dependency paths, deprecated declarations and their users, whether
 the change is contained, and the complete `claim_targets` set. Helpers shared
 by several articles contribute every owner's claim; an unowned helper gets a
-stable `lean/<slug>-<digest>` target. Project locality is an exact inventory of
-regular repository source modules, never a namespace-prefix guess.
+stable `lean/<slug>-<digest>` target. A `--declaration` no article names is
+claimed the same way, under every owner's target or its own key, so a revision
+is contained only when the revised article's target is its only claim target.
+Project locality is an exact inventory of regular repository source modules,
+never a namespace-prefix guess.
 
 The command snapshots and rereads both the roadmap and repository Lean sources
 around the probe. JSON uses `autoform-impact/v1` and binds its answer to the

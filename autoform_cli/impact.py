@@ -444,14 +444,13 @@ class ImpactReport:
 
         A helper the revised article owns, such as a structure's generated
         constructor or recursor, is repaired under that article's claim, so it
-        does not count; any other helper, owned or not, does.
+        does not count; any other helper, owned or not, does, and so does a
+        revised declaration that belongs to another article or to none. The
+        revision is contained exactly when its only claim target is the
+        revised article's.
         """
 
-        return not (
-            self.statement_impacted
-            or self.proof_impacted
-            or any(set(helper.owners) != {self.article.id} for helper in self.helpers)
-        )
+        return self.claim_targets == (self.article.claim_target,)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -594,10 +593,15 @@ def compute_impact(
     )
 
     # A helper is repaired under every owning article's claim; an unowned
-    # helper contributes the key derived from its own name.
+    # helper contributes the key derived from its own name. A revised
+    # declaration no article names is claimed the same way.
     others = {item.claim_target for item in impacted} | {
         target for helper in helpers for target in helper.claim_targets
     }
+    for name in revised_names:
+        if name not in named:
+            owners = _owners(records[name], records, named)
+            others |= {by_id[owner].claim_target for owner in owners if owner in by_id} or {_helper_claim_key(name)}
     claim_targets = (revised.claim_target, *sorted(others - {revised.claim_target}))
     return ImpactReport(
         source_revision=source_revision,
