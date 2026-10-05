@@ -796,10 +796,11 @@ and the exact packet bytes before filing a card. Validation is per article, so
 an unrelated article that changed since `review prepare` does not block the
 record. Any blueprint change during the extraction itself does, even in an
 article the record does not touch, and another article's empty or duplicated
-`lean:` list stops the extraction. Either way nothing is filed; running the
-record again once the blueprint is idle completes it, unless the change took
-away an `article_id` the record names; the rerun then names that record. A
-record probes only the
+`lean:` list stops the extraction. Either way nothing is filed, and running
+the record again once the blueprint is idle completes it, unless the change took
+away an `article_id` the record names, which the rerun then names, or changed
+the evidence of an article it records, which the rerun reports as differing
+from the prepared evidence. A record probes only the
 modules of the articles it files, so only those modules need to be built and
 fresh, and its packets match the ones `review prepare` wrote from a full
 extraction.
@@ -852,7 +853,7 @@ many cards it filed, and because filing identical content is a no-op, running
 the same batch again once the cause is cleared completes it. When the cause is
 a card another writer filed, replaced, or removed meanwhile, the batch's record
 for it must first name the hash of the card now there, or no hash if there is
-none. When it is an article deleted meanwhile, or put back as something other
+none. When it is an article deleted meanwhile, or replaced by something other
 than a regular file, such as a directory or FIFO, the article must be restored
 or its records dropped, and one made unreadable must be readable again. A batch
 with records whose `article_id` is no longer in
