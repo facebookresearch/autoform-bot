@@ -304,10 +304,15 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
         assert linked.is_file(), href
 
     graph_page = (site / "dependencies.md").read_text(encoding="utf-8")
-    assert "```mermaid" in graph_page
+    assert "```mermaid" not in graph_page
+    assert 'class="bp-dag-viewer"' in graph_page
+    assert 'data-graph-src="dependencies.json"' in graph_page
     assert "graph_view: project" in graph_page
-    assert '"dependencies/chapters/infimum-loss.html"' in graph_page
-    assert '"dependencies/chapters/full-supervision.html"' in graph_page
+    project_payload = json.loads((site / "dependencies.json").read_text(encoding="utf-8"))
+    assert {node["url"] for node in project_payload["nodes"]} == {
+        "dependencies/chapters/full-supervision.html",
+        "dependencies/chapters/infimum-loss.html",
+    }
 
     chapter_graph = (site / "dependencies/chapters/infimum-loss.md").read_text(
         encoding="utf-8"
@@ -317,12 +322,23 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     )
     assert "graph_view: chapter" in chapter_graph
     assert "graph_view: chapter" in support_graph
+    chapter_payloads = {
+        group: json.loads((site / f"dependencies/chapters/{group}.json").read_text(encoding="utf-8"))
+        for group in ("infimum-loss", "full-supervision")
+    }
     for node_id in formalizable:
         anchor = node_id.split("/", 1)[1].replace("/", "-")
         group = node_id.split("/", 1)[0]
-        target_graph = chapter_graph if group == "infimum-loss" else support_graph
-        assert f'"../../roadmap/{group}/index.html#{anchor}"' in target_graph
+        urls = {node["id"]: node["url"] for node in chapter_payloads[group]["nodes"]}
+        assert urls[node_id] == f"../../roadmap/{group}/index.html#{anchor}"
     assert not (site / "dependencies/nodes").exists()
+
+    generated_graph_pages = [site / "dependencies.md", *(site / "dependencies").rglob("*.md")]
+    for generated_page in generated_graph_pages:
+        document = generated_page.read_text(encoding="utf-8")
+        assert "```mermaid" not in document
+        assert 'class="bp-dag-viewer"' in document
+        assert document.count("blueprint-dag.js") == 1
 
     full_graph = (site / "dependencies/full.md").read_text(encoding="utf-8")
     assert "graph_view: full" in full_graph
@@ -337,6 +353,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert not (site / "progress.md").exists()
     assert not (site / "book.md").exists()
     overview = (site / "README.md").read_text(encoding="utf-8")
+    assert 'data-graph-src="dependencies.json"' in overview
     # The landing page states progress as figures; the chapters keep the strip.
     assert "Scoped roadmap" in overview
     assert "5 of 7 targets complete" in overview

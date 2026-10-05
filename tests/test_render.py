@@ -92,7 +92,9 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert not (out / "progress.md").exists()
     assert not (out / "book.md").exists()
     assert (out / "dependencies.md").is_file()
+    assert (out / "dependencies.json").is_file()
     assert (out / "dependencies/chapters/roadmap.md").is_file()
+    assert (out / "dependencies/chapters/roadmap.json").is_file()
     assert not (out / "dependencies/nodes").exists()
     assert (out / "dependencies/full.md").is_file()
     assert (out / "dependencies/full.json").is_file()
@@ -108,15 +110,34 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert not (project / "blueprint" / "dependencies.md").exists()
     assert "## Depends on" in (project / "blueprint/roadmap/top.md").read_text(encoding="utf-8")
 
-    project_map = (out / "dependencies.md").read_text(encoding="utf-8")
-    assert "graph_view: project" in project_map
-    assert '"dependencies/chapters/roadmap.html"' in project_map
-    full_map = (out / "dependencies/full.md").read_text(encoding="utf-8")
-    assert 'class="bp-dag-viewer"' in full_map
-    assert 'data-graph-src="full.json"' in full_map
-    assert "```mermaid" not in full_map
+    graph_pages = [out / "dependencies.md", *(out / "dependencies").rglob("*.md")]
+    for graph_page in graph_pages:
+        document = graph_page.read_text(encoding="utf-8")
+        assert 'class="bp-dag-viewer"' in document
+        assert "```mermaid" not in document
+        assert "blueprint-mermaid.js" not in document
+        assert document.count("blueprint-dag.js") == 1
+        assert graph_page.with_suffix(".json").is_file()
+
+    project_page = (out / "dependencies.md").read_text(encoding="utf-8")
+    assert "graph_view: project" in project_page
+    assert 'data-graph-src="dependencies.json"' in project_page
+    assert "Explore all nodes" in project_page
+    assert "dependencies/full.md" in project_page
+    project_payload = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))
+    assert project_payload["title"] == "Dependency explorer"
+    assert {node["url"] for node in project_payload["nodes"]} == {
+        "dependencies/chapters/roadmap.html"
+    }
+    chapter_payload = json.loads(
+        (out / "dependencies/chapters/roadmap.json").read_text(encoding="utf-8")
+    )
+    assert chapter_payload["title"] == "Roadmap dependencies"
+    full_page = (out / "dependencies/full.md").read_text(encoding="utf-8")
+    assert 'data-graph-src="full.json"' in full_page
     payload = json.loads((out / "dependencies/full.json").read_text(encoding="utf-8"))
-    assert payload["schema"] == "autoform-dag-view/v1"
+    assert payload["schema"] == "autoform-dag-view/v2"
+    assert payload["title"] == "All dependencies"
     assert payload["node_count"] == 3
     assert payload["edge_count"] == 1
     assert all(node["url"] for node in payload["nodes"])
@@ -139,12 +160,16 @@ def test_a_graph_page_hides_its_legend_behind_an_icon(tmp_path: Path) -> None:
     assert 'class="bp-legend-icon"' in page
     # The legend itself is still there, just not laid out on the page.
     assert 'class="bp-legend-grid"' in page
-    assert page.index("bp-legend-icon") < page.index("```mermaid")
+    assert page.index("bp-legend-icon") < page.index("bp-dag-viewer")
     assert "<button" in page and 'aria-describedby="bp-legend-note"' in page
     assert ".bp-legend-tip:focus-within .bp-legend-note" in css
 
 
-def test_large_chapter_uses_canvas_payload_instead_of_unbounded_mermaid(tmp_path: Path) -> None:
+@pytest.mark.parametrize("node_count", (2, 502), ids=("small", "large"))
+def test_small_and_large_chapters_use_the_same_json_explorer(
+    tmp_path: Path,
+    node_count: int,
+) -> None:
     blueprint = tmp_path / "blueprint"
     chapter = blueprint / "roadmap/large"
     chapter.mkdir(parents=True)
@@ -158,7 +183,7 @@ def test_large_chapter_uses_canvas_payload_instead_of_unbounded_mermaid(tmp_path
         "| Large | MAPPED | Synthetic scale fixture |\n",
         encoding="utf-8",
     )
-    for index in range(502):
+    for index in range(node_count):
         dependency = (
             f"\n## Depends on\n\n- [Previous](node-{index - 1}.md)\n"
             if index
@@ -173,10 +198,12 @@ def test_large_chapter_uses_canvas_payload_instead_of_unbounded_mermaid(tmp_path
 
     page = (tmp_path / "out/dependencies/chapters/large.md").read_text(encoding="utf-8")
     assert 'class="bp-dag-viewer"' in page
+    assert 'data-graph-src="large.json"' in page
     assert "```mermaid" not in page
+    assert page.count("blueprint-dag.js") == 1
     payload = json.loads((tmp_path / "out/dependencies/chapters/large.json").read_text(encoding="utf-8"))
-    assert payload["node_count"] == 502
-    assert payload["edge_count"] == 501
+    assert payload["node_count"] == node_count
+    assert payload["edge_count"] == node_count - 1
 
 
 def test_the_structure_page_shows_the_tree_not_the_content(tmp_path: Path) -> None:
@@ -282,28 +309,40 @@ def test_the_site_carries_its_own_mark(tmp_path: Path) -> None:
     assert root.find("{http://www.w3.org/2000/svg}title").text == "Autoform"
 
 
-def _chapter_map_links(page: Path) -> set[str]:
-    return set(re.findall(r'"(dependencies/chapters/[^"]+)\.html"', page.read_text("utf-8")))
+def _chapter_explorer_links(page: Path) -> set[str]:
+    payload_path = page.parent / "dependencies.json" if page.name == "README.md" else page.with_suffix(".json")
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    return {
+        match.group(1)
+        for node in payload["nodes"]
+        if isinstance(node.get("url"), str)
+        and (match := re.fullmatch(r"(dependencies/chapters/.+)\.html", node["url"]))
+    }
 
 
-def test_the_home_page_project_map_links_to_chapter_pages_that_exist(tmp_path: Path) -> None:
-    """The home map and the Graph tab draw the same view but built links apart.
+def test_the_home_page_and_dependency_page_share_one_project_explorer(tmp_path: Path) -> None:
+    """The home page and Graph tab must consume the same project payload.
 
     A project-view node is a chapter, so its id is namespaced `scope:<group>`,
-    and only the Graph tab stripped that before naming the page. The home map
-    asked for `dependencies/chapters/scope:<group>.html`, which is nothing.
+    and only the Graph tab stripped that before naming the page. The old home
+    preview asked for `dependencies/chapters/scope:<group>.html`, which is nothing.
     """
     _render(tmp_path)
     out = tmp_path / "out"
 
-    links = _chapter_map_links(out / "README.md")
-    assert links, "the home page should carry a project map"
-    assert links == _chapter_map_links(out / "dependencies.md")
+    overview = (out / "README.md").read_text(encoding="utf-8")
+    dependencies = (out / "dependencies.md").read_text(encoding="utf-8")
+    assert 'data-graph-src="dependencies.json"' in overview
+    assert 'data-graph-src="dependencies.json"' in dependencies
+    assert overview.count("blueprint-dag.js") == 1
+    links = _chapter_explorer_links(out / "README.md")
+    assert links, "the landing page should carry the project explorer"
+    assert links == _chapter_explorer_links(out / "dependencies.md")
     for link in links:
         assert (out / f"{link}.md").is_file(), f"home page links to a missing page: {link}"
 
 
-def test_the_home_page_project_map_survives_named_chapters(tmp_path: Path) -> None:
+def test_the_home_page_project_explorer_survives_named_chapters(tmp_path: Path) -> None:
     """The flat project exercises the `or 'roadmap'` fallback, not the prefix."""
     project = _project(tmp_path)
     chapter = project / "blueprint" / "roadmap" / "structure"
@@ -321,7 +360,7 @@ def test_the_home_page_project_map_survives_named_chapters(tmp_path: Path) -> No
 
     render_site(project / "blueprint", out, lean_root=project)
 
-    links = _chapter_map_links(out / "README.md")
+    links = _chapter_explorer_links(out / "README.md")
     assert "dependencies/chapters/structure" in links
     assert not any("scope:" in link for link in links)
     for link in links:
@@ -547,8 +586,16 @@ def test_module_catalog_is_separate_from_formalization_progress(
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
     assert "2 of 2 targets complete" in overview
     assert "3 of 3 targets complete" not in overview
-    assert '<div class="bp-figure-label">Module inventories</div>' in overview
+    assert (
+        '<div class="bp-figure bp-figure-neutral"><div class="bp-figure-value">1</div>'
+        '<div class="bp-figure-label">Module inventories</div>'
+        in overview
+    )
     assert not (tmp_path / "out/roadmap/catalog.md").exists()
+    project_payload = json.loads((tmp_path / "out/dependencies.json").read_text(encoding="utf-8"))
+    roadmap = project_payload["nodes"][0]
+    assert roadmap["member_count"] == 3
+    assert roadmap["status_counts"] == {"fully_proved": 2, "inventory_checked": 1}
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert '<span class="bp-thmcaption">Module</span><span class="bp-thmlabel">1</span>' in chapter
     assert "A checked inventory of an existing Lean module." in chapter
@@ -582,7 +629,9 @@ def test_partial_module_catalog_is_not_reported_as_dispatchable_work(tmp_path: P
     ) in overview
 
 
-def test_the_landing_page_is_the_hero_and_the_map_and_nothing_else(tmp_path: Path) -> None:
+def test_the_landing_page_is_the_hero_and_project_explorer_and_nothing_else(
+    tmp_path: Path,
+) -> None:
     """A blueprint's subject is the shape of the project, not its front matter.
 
     The map used to sit below the authored prose and the status breakdown,
@@ -598,6 +647,12 @@ def test_the_landing_page_is_the_hero_and_the_map_and_nothing_else(tmp_path: Pat
     assert overview.index("bp-hero") < overview.index('class="bp-map"')
     assert "bp-landing-prose" not in overview
     assert "## Contents" not in overview
+    assert '<span class="bp-map-title">Dependency explorer</span>' in overview
+    assert 'data-graph-src="dependencies.json"' in overview
+    assert '<a href="dependencies/full.html">all nodes</a>' in overview
+    assert "```mermaid" not in overview
+    assert overview.count("blueprint-dag.js") == 1
+    assert (tmp_path / "out/dependencies.json").is_file()
     # The legend travels with the map instead of becoming a section of its own.
     assert "## Status breakdown" not in overview
     assert overview.index("bp-map-legend") > overview.index("bp-map-head")
@@ -616,6 +671,10 @@ def test_book_navigation_is_bottom_only_and_never_crosses_into_project_views(tmp
     graph_page = (tmp_path / "out/dependencies.md").read_text(encoding="utf-8")
     assert "bp-book-nav" not in graph_page
     assert "bp-book-nav" not in dependencies
+    summary = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
+    assert summary.count("[Dependency explorer](dependencies.md)") == 1
+    assert "Full dependency graph" not in summary
+    assert "dependencies/full.md" not in summary
 
 
 def test_links_naming_a_node_file_follow_it_onto_the_chapter(tmp_path: Path) -> None:
@@ -706,6 +765,25 @@ def test_stale_generated_files_are_not_republished(tmp_path: Path) -> None:
     assert not (tmp_path / "out/dependencies.html").exists()
     assert (tmp_path / "out/dependencies.md").is_file()
     assert not (tmp_path / "out/progress.md").exists()
+
+
+def test_authored_mermaid_survives_while_generated_graph_pages_use_the_explorer(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    (project / "blueprint/notes.md").write_text(
+        "# Notes\n\n```mermaid\ngraph LR\n  authored --> diagram\n```\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert "```mermaid" in (tmp_path / "out/notes.md").read_text(encoding="utf-8")
+    graph_pages = [
+        tmp_path / "out/dependencies.md",
+        *(tmp_path / "out/dependencies").rglob("*.md"),
+    ]
+    assert all("```mermaid" not in page.read_text(encoding="utf-8") for page in graph_pages)
 
 
 def test_both_colour_schemes_are_published(tmp_path: Path) -> None:

@@ -267,8 +267,8 @@ def render_site(
     """Write deterministic, read-only projections of the Markdown blueprint.
 
     Authored Markdown remains the only graph authority. The output joins three
-    reader surfaces over it: a book, derived progress, and multiscale dependency
-    maps. Publication excludes hidden and operational files, rejects symlinks,
+    reader surfaces over it: a book, derived progress, and a multiscale dependency
+    explorer. Publication excludes hidden and operational files, rejects symlinks,
     and never embeds timestamps or machine-specific paths.
     """
     blueprint = Path(blueprint_dir).expanduser().resolve()
@@ -1279,8 +1279,7 @@ def _render_summary_nav(
     lines.extend(
         [
             "- Graph",
-            "    - [Dependency maps](dependencies.md)",
-            "    - [Full dependency graph](dependencies/full.md)",
+            "    - [Dependency explorer](dependencies.md)",
             f"    - [Vault structure]({STRUCTURE_PAGE})",
         ]
     )
@@ -1314,7 +1313,7 @@ def _render_landing_page(
         # The sidebar lists the open tab's pages, and this tab holds only this
         # page, so on the landing page it is a column of one word. The tabs
         # already carry the reader to Book and Graph, so it goes, and the hero
-        # and map get the width instead.
+        # and explorer get the width instead.
         "hide:",
         "  - navigation",
         "  - toc",
@@ -1344,50 +1343,38 @@ def _render_landing_page(
     ]
     target_statuses = {node_id: statuses[node_id] for node_id in _countable(graph)}
     breakdown = mermaid.render_legend(target_statuses)
-    project = graph_views.project_view(graph, statuses)
-    if project.nodes:
-        # Clicking a chapter on the home page opens that chapter's dependency
-        # map: the home map is a preview of the Graph tab, not a second index.
-        # A project-view node is a whole chapter, so its id is namespaced
-        # `scope:<group>`; the page is named for the group alone. Stripping has
-        # to precede the empty-group fallback, or the root chapter asks for
-        # `scope:.html` -- a truthy id, and so never the fallback it needs.
-        links = {
-            node.id: mermaid.relative_link(
-                destination
-                / "dependencies/chapters"
-                / f"{node.id.removeprefix('scope:') or 'roadmap'}.md",
-                page,
-                ".html",
-            )
-            for node in project.nodes
-        }
-        # The map is the subject of this page, not an appendix to it: a reader
-        # arriving at a blueprint wants the shape of the project first. It runs
-        # the full width, and the legend rides along as its caption rather than
-        # as a section of its own further down.
-        parts.extend(
-            [
-                "",
-                '<div class="bp-map" markdown="1">',
-                '<div class="bp-map-head">',
-                '<span class="bp-map-title">Project map</span>',
-                '<span class="bp-map-hint">Select a chapter to open its dependencies</span>',
-                "</div>",
-                "",
-                mermaid.render_view_diagram(project, links=links, include_classdefs=False),
-                "",
-                f'<div class="bp-map-legend" markdown="1">\n\n{breakdown}\n\n</div>'
-                if breakdown
-                else "",
-                "</div>",
-            ]
-        )
-    elif breakdown:
-        parts.extend(["", "## Status breakdown", "", breakdown])
+    # dependencies.json is the project projection written by graph_pages. The
+    # landing page deliberately mounts that exact payload and host instead of
+    # maintaining a second, Mermaid-only preview of the same graph.
+    parts.extend(
+        [
+            "",
+            '<div class="bp-map" markdown="1">',
+            '<div class="bp-map-head">',
+            '<span class="bp-map-title">Dependency explorer</span>',
+            '<span class="bp-map-hint">Explore chapters and their dependencies · '
+            '<a href="dependencies/full.html">all nodes</a></span>',
+            "</div>",
+            "",
+            dag_viewer.render_container(
+                "dependencies.json",
+                script_href=mermaid.relative_link(destination / DAG_SCRIPT, page, ".js"),
+                fallback_links=(
+                    ("Open the dependency explorer", "dependencies.html"),
+                    ("Browse all nodes", "dependencies/full.html"),
+                ),
+                fallback_total=2,
+            ),
+            "",
+            f'<div class="bp-map-legend" markdown="1">\n\n{breakdown}\n\n</div>'
+            if breakdown
+            else "",
+            "</div>",
+        ]
+    )
     # The authored body is a contents list and links to the roadmap, coverage
     # contract and dependency view. The hero retains a compact coverage summary;
-    # repeating the full list here would only push the map down the page. Its
+    # repeating the full list here would only push the explorer down the page. Its
     # opening sentence is already the hero's lead.
     parts.append("</div>")
     return "\n".join(part for part in parts if part is not None).rstrip() + "\n"

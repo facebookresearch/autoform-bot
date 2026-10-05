@@ -86,15 +86,24 @@ def test_render_publishes_dependencies_between_the_roadmap_root_and_a_chapter(
     output = tmp_path / "site-src"
     _render(blueprint, output)
 
-    project_map = (output / "dependencies.md").read_text(encoding="utf-8")
-    chapter_map = (output / "dependencies/chapters/chapter.md").read_text(encoding="utf-8")
-    full_map = (output / "dependencies/full.md").read_text(encoding="utf-8")
-    assert "1 roadmap entry across 1 chapter" in project_map
-    assert '"../../dependencies.html"' in chapter_map
-    assert "External chapter: Root result" in chapter_map
-    assert 'class="bp-dag-viewer"' in full_map
-    payload = json.loads((output / "dependencies/full.json").read_text(encoding="utf-8"))
-    assert {node["title"] for node in payload["nodes"]} == {"Root result", "Chapter", "Chapter result"}
+    project_page = (output / "dependencies.md").read_text(encoding="utf-8")
+    chapter_page = (output / "dependencies/chapters/chapter.md").read_text(encoding="utf-8")
+    full_page = (output / "dependencies/full.md").read_text(encoding="utf-8")
+    assert "1 roadmap entry across 1 chapter" in project_page
+    assert 'class="bp-dag-viewer"' in chapter_page
+    chapter_payload = json.loads(
+        (output / "dependencies/chapters/chapter.json").read_text(encoding="utf-8")
+    )
+    boundary = next(node for node in chapter_payload["nodes"] if node["kind"] == "boundary")
+    assert boundary["title"] == "Root result"
+    assert boundary["url"] == "../../dependencies.html"
+    assert 'class="bp-dag-viewer"' in full_page
+    full_payload = json.loads((output / "dependencies/full.json").read_text(encoding="utf-8"))
+    assert {node["title"] for node in full_payload["nodes"]} == {
+        "Root result",
+        "Chapter",
+        "Chapter result",
+    }
 
 
 def test_nested_container_keeps_its_own_narrative_and_statements(tmp_path: Path) -> None:

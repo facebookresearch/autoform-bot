@@ -34,6 +34,9 @@ autoform-lean-runtime = "servers.lean_runtime:main"
 [project.optional-dependencies]
 # Kept as an empty compatibility extra for existing plugin launch commands.
 repl = []
+browser = [
+    "playwright==1.62.0",
+]
 dev = [
     "mkdocs>=1.6,<2",
     "mkdocs-material>=9.5,<10",

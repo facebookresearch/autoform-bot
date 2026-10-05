@@ -1,15 +1,16 @@
-"""Publish scalable graph projections beside the textbook blueprint.
+"""Publish scalable dependency-explorer projections beside the textbook.
 
 One Markdown DAG supports several reading scales: chapters collapsed into a
-project map, declarations within one chapter with external chapters collapsed
-to boundaries, a theorem's one-hop neighborhood, and an optional full graph.
-Every projection links back to the same book anchors and never becomes another
-source of graph state.
+project overview, declarations within one chapter with external chapters
+collapsed to boundaries, nested scopes, and the full graph. Every projection
+uses the same explorer, links back to the same book anchors, and never becomes
+another source of graph state.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import quote
 
@@ -84,10 +85,13 @@ def write_graph_pages(
             view=project,
             statuses=_selected_statuses(graph, statuses, project),
             links=project_links,
-            heading="Dependency maps",
+            heading="Dependency explorer",
             lead=(
                 f"{project_item_count} roadmap entr{'y' if project_item_count == 1 else 'ies'} across "
                 f"{len(groups)} chapter{'s' if len(groups) != 1 else ''}."
+            ),
+            navigation=_navigation(
+                ("Explore all nodes", _markdown_link(full_page, project_page)),
             ),
             site_root=destination,
         )
@@ -110,8 +114,7 @@ def write_graph_pages(
             else destination / "roadmap" / group / "README.md"
         )
         navigation = _navigation(
-            ("Project map", _markdown_link(project_page, chapter_page)),
-            ("Full dependency graph", _markdown_link(full_page, chapter_page)),
+            ("Dependency explorer", _markdown_link(project_page, chapter_page)),
             ("Open textbook chapter", _markdown_link(book_page, chapter_page)),
         )
         written.append(
@@ -120,10 +123,10 @@ def write_graph_pages(
                 view=view,
                 statuses=_selected_statuses(graph, statuses, view),
                 links=links,
-                heading=view.title,
+                heading=_dependency_heading(view),
                 lead=(
-                    f"This map contains {len(groups[group])} roadmap entries in this chapter. "
-                    "Dashed chapter boxes stand for external prerequisites or dependents."
+                    f"This view contains {len(groups[group])} roadmap entries in this chapter. "
+                    "Collapsed chapter nodes stand for external prerequisites or dependents."
                 ),
                 navigation=navigation,
                 site_root=destination,
@@ -151,14 +154,14 @@ def write_graph_pages(
                 view=view,
                 statuses=_selected_statuses(graph, statuses, view),
                 links=links,
-                heading=view.title,
+                heading=_dependency_heading(view),
                 lead=(
-                    "This map shows the container's direct articles. Nested containers "
+                    "This view shows the container's direct articles. Nested containers "
                     "are collapsed and clickable; dependency edges are rolled up from their leaves."
                 ),
                 navigation=_navigation(
-                    ("Parent map", _markdown_link(parent_page, scope_page)),
-                    ("Full dependency graph", _markdown_link(full_page, scope_page)),
+                    ("Parent view", _markdown_link(parent_page, scope_page)),
+                    ("Dependency explorer", _markdown_link(project_page, scope_page)),
                 ),
                 site_root=destination,
             )
@@ -168,26 +171,21 @@ def write_graph_pages(
     # article, including containers whose presentation kind is ``scope``.
     full_links = node_links(full_page, (node.id for node in complete.nodes))
     full_data = full_page.with_suffix(".json")
-    dag_viewer.write_payload(full_data, complete, links=full_links)
     written.append(
         _write_page(
             full_page,
             view=complete,
             statuses=statuses,
             links=full_links,
-            heading=complete.title,
+            heading="All dependencies",
             lead=(
                 f"{len(graph.nodes)} nodes · {graph.edge_count} dependencies. Arrows point from a "
                 "prerequisite to what depends on it; dashed arrows are needed only by proofs. "
-                "Drag to pan, scroll to zoom, and search to focus a node."
+                "Drag with a mouse, pinch with two fingers, or use Control/Command plus scroll to zoom."
             ),
             navigation=_navigation(
-                ("Project map", _markdown_link(project_page, full_page)),
+                ("Dependency explorer", _markdown_link(project_page, full_page)),
                 ("Download graph data", full_data.name),
-            ),
-            diagram=dag_viewer.render_container(
-                full_data.name,
-                script_href=_viewer_script_link(full_page, destination),
             ),
             site_root=destination,
         )
@@ -218,19 +216,22 @@ def _write_page(
     site_root: Path,
     navigation: str = "",
     extra: str = "",
-    diagram: str | None = None,
 ) -> Path:
-    if diagram is None:
-        candidate = mermaid.render_view_diagram(view, links=dict(links), include_classdefs=False)
-        if dag_viewer.requires_interactive(view, candidate):
-            payload = page.with_suffix(".json")
-            dag_viewer.write_payload(payload, view, links=links)
-            diagram = dag_viewer.render_container(
-                payload.name,
-                script_href=_viewer_script_link(page, site_root),
-            )
-        else:
-            diagram = candidate
+    # Size used to pick between a Mermaid diagram and the Canvas explorer.
+    # Keeping every projection on one payload-and-host path gives readers one
+    # interaction model and prevents the two renderers from drifting apart.
+    payload = page.with_suffix(".json")
+    dag_viewer.write_payload(payload, replace(view, title=heading), links=links)
+    explorer = dag_viewer.render_container(
+        payload.name,
+        script_href=_viewer_script_link(page, site_root),
+        fallback_links=(
+            (node.title, links[node.id])
+            for node in view.nodes[:50]
+            if links.get(node.id)
+        ),
+        fallback_total=len(view.nodes),
+    )
     sections = [
         "---",
         "kind: graph",
@@ -243,9 +244,9 @@ def _write_page(
     if navigation:
         sections.extend([navigation, ""])
     # The legend rides on the lead sentence rather than sitting under the
-    # diagram: it answers a question the reader asks once, not on every page.
+    # explorer: it answers a question the reader asks once, not on every page.
     tip = mermaid.render_legend_tip(statuses)
-    sections.extend([f"{lead} {tip}".rstrip(), "", diagram, ""])
+    sections.extend([f"{lead} {tip}".rstrip(), "", explorer, ""])
     if extra:
         sections.extend([extra, ""])
     page.parent.mkdir(parents=True, exist_ok=True)
@@ -268,12 +269,18 @@ def _selected_statuses(
     }
 
 
+def _dependency_heading(view: GraphView) -> str:
+    """Name a projected explorer view without carrying over Mermaid-era copy."""
+    subject = view.title.removesuffix(" dependency map")
+    return f"{subject} dependencies"
+
+
 def _article_link_ids(view: GraphView) -> tuple[str, ...]:
     """Return only view nodes whose links come from published articles.
 
     Scope and boundary links are derived locally by this module. Asking the
     renderer for every graph node on every scope page made a repository-wide
-    wiki spend quadratic time constructing links that the diagram never used.
+    wiki spend quadratic time constructing links that the projection never used.
     """
     return tuple(node.id for node in view.nodes if node.kind == "node")
 
@@ -291,7 +298,7 @@ def _published_link(target: Path, page: Path) -> str:
 
 
 def _viewer_script_link(page: Path, site_root: Path) -> str:
-    """Link the viewer asset without inferring structure from authored ids."""
+    """Link the viewer asset from an explicit publication root."""
 
     return mermaid.relative_link(
         site_root / "javascripts/blueprint-dag.js",
