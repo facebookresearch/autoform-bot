@@ -29,8 +29,8 @@ permissions:
   contents: read
 
 env:
-  AUTOFORM_SOURCE: "https://github.com/VivienCabannes/autoform-bot.git"
-  AUTOFORM_REF: "43097b2c07e68df899d6b8bca7849d091c294754"
+  AUTOFORM_SOURCE: "https://github.com/facebookresearch/autoform-bot.git"
+  AUTOFORM_REF: "c994d83f9fab1f40d69b2f279d4c62ca937a0186"
 
 # Pushes, dispatches, and scheduled runs on the default branch share one
 # group, so their builds run one at a time, and a scheduled run decides only
