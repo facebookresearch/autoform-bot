@@ -6,15 +6,11 @@ publishes progress views, and prepares human or agent review. The plugin and
 CLI use the identifier `autoform`; the canonical repository is
 [`facebookresearch/autoform-bot`](https://github.com/facebookresearch/autoform-bot).
 
-The default `main` branch provides repository setup, roadmap planning,
-publication, human and agent review, and shared Lean LSP/REPL tools. It does
-**not** include autonomous orchestration.
-
-Autonomous execution is an opt-in overlay on the
-[`execution`](https://github.com/facebookresearch/autoform-bot/tree/execution)
-branch. It adds orchestration, claim-backed workers, specialist agents, and
-prover adapters on top of `main`. Use `main` unless you are explicitly
-evaluating that execution stack.
+The `main` branch provides repository setup, roadmap planning, publication,
+human and agent review, and shared Lean LSP/REPL tools. The historical
+`execution` branch and its custom worker/prover stack are deprecated and are
+not an installation target. New formalization execution work belongs on
+`main` as a Markdown-native workflow over the same blueprint.
 
 ## Prerequisites
 
@@ -44,35 +40,27 @@ manifest is included, but Muse installation is not covered here.
 
 ## Quick start
 
-Work from an existing Lean repository. First scaffold the blueprint and site
-configuration from an Autoform checkout. The project must declare
-`leanprover-community/repl` at an immutable revision compatible with its Lean
-toolchain; verify it first with `lake build @repl/repl` (the Setup skill selects
-and checks this pin):
+Work from an existing Lean repository and use the host skills from its agent
+window. The skills invoke Autoform's CLI themselves; users do not need to learn
+or run its commands.
 
-```bash
-uv run autoform init /path/to/lean-project \
-  --autoform-ref <full-commit-sha>
-```
-
-This creates `blueprint/`, `mkdocs.yml`, and `requirements-docs.txt`. GitHub
-workflows are created only when Autoform has an immutable commit pin. The Setup
-skill can inspect and repair this infrastructure, but its new-project Lean
-bootstrap helper is not packaged on `main`; start from an existing Lean project
-and use `autoform init` for the blueprint and publication files.
-
-Next use the host skills from the Lean project:
-
-| Goal | Claude Code | Codex |
+| Task | Claude Code | Codex |
 | --- | --- | --- |
+| Set up the blueprint and publication files | `/autoform:setup` | `$setup` |
 | Build a source-grounded roadmap | `/autoform:roadmap` | `$roadmap` |
 | Prepare a person-led review | `/autoform:human-review` | `$human-review` |
 | Run an independent agent review | `/autoform:agent-review` | `$agent-review` |
 
-For example: “Build a roadmap for Sections 2–4 of `paper.pdf`; confirm the scope
-and completion criteria before writing articles.” Keep the source in the
-repository or provide an accessible path. Human and agent review are
-alternatives; review the roadmap before treating it as an execution plan.
+Before using Autoform's REPL server, the project must declare
+`leanprover-community/repl` at an immutable revision compatible with its Lean
+toolchain and pass `lake build @repl/repl`. The Setup skill selects and checks
+that pin.
+
+For example: “Build a complete roadmap for Sections 2–4 of `paper.pdf`.” Keep
+the source in the repository or provide an accessible path. Roadmap treats
+coarse planning as an internal checkpoint unless staged review was requested;
+when possible, the skill uses a compatible model-callable Goal itself. Human
+and agent review remain available before execution.
 
 ## Blueprint model
 
@@ -99,7 +87,10 @@ Markdown is the source of truth; Mermaid graphs and MkDocs pages are derived
 views. See the [blueprint format and CLI reference](autoform_cli/README.md) for
 complete frontmatter, hierarchy, status, and validation rules.
 
-## CLI and publication
+## Agent-facing CLI and publication
+
+Skills use these commands to make and verify changes. They are documented for
+plugin development and debugging, not as a required user workflow.
 
 | Command | Purpose |
 | --- | --- |
@@ -107,7 +98,9 @@ complete frontmatter, hierarchy, status, and validation rules.
 | `autoform check` | Validate Markdown structure and dependencies. |
 | `autoform audit` | Audit completeness and checked facts. |
 | `autoform doctor` | Diagnose the local blueprint contract. |
+| `autoform skeleton` | Extract what a reader must trust for each formalized statement. |
 | `autoform claim` | Coordinate temporary ownership through Git refs. |
+| `autoform dashboard` | Serve the built publication locally with live claim badges. |
 | `autoform render` | Generate publishable MkDocs source. |
 | `autoform-visualize` | Generate the Mermaid dependency graph. |
 
@@ -119,6 +112,7 @@ uv run autoform-visualize /path/to/project/blueprint
 uv run autoform render /path/to/project/blueprint \
   --output /path/to/project/site-src \
   --lean-root /path/to/project --require-declarations
+uv run autoform dashboard /path/to/project --site-dir site
 ```
 
 From a consumer project, resolve the installed plugin root and prefix commands
@@ -132,6 +126,8 @@ blueprint-to-declaration match as a separate contract.
 
 `render` writes MkDocs source, not a deployed site. The generated Pages workflow
 deploys from `main` only after GitHub Pages is enabled in repository settings.
+`dashboard` serves that same built site on loopback and overlays current Git-ref
+claims. It never publishes worker information or creates another graph.
 
 ## Documentation
 

@@ -20,15 +20,40 @@ Select the rubric from the artifact under review.
   and [Mathlib style](references/mathlib-style.md). Compile the relevant target,
   inspect the proof chain, and compare the complete public statement with the
   original source.
+- For a read-back, an auditor's English account of what Lean declarations
+  assert, read [read-back faithfulness](references/readback-faithfulness.md).
+  A trusted coordinator supplies its hash-bound review item. Judge only the
+  supplied testimony against the cited source passage, without opening Lean,
+  and return exactly the reference's JSON verdict.
 
 Keep objective evidence separate from judgment. Never claim compilation,
 declaration resolution, axiom cleanliness, source coverage, or dependency
 correctness without showing how it was checked. If required sources are absent,
 return insufficient evidence rather than guessing.
 
+Except in the isolated read-back-judge role, regenerate skeleton evidence from
+the exact candidate after its Lean build.
+Do that only in a trusted checkout or an operating-system sandbox: the command
+evaluates Lake configuration and project Lean metaprograms, and its resource
+bounds are not a security boundary.
+A read-back judge must not regenerate or inspect that evidence; its coordinator
+does so before dispatch.
+Treat a stale-build refusal as insufficient evidence; never approve a current
+source excerpt paired with an older compiled declaration. Record the skeleton
+hash as a drift checksum for the elaborated declaration and trust context, and
+the evidence hash for the exact packet that was read. For a
+source-faithfulness verdict, record the article review hash that binds the joint
+packet to the cited passage, its locator, and the skeleton hash. These hashes
+are provenance evidence, not reviewer authentication or an approval key.
+A read-back verdict also copies its raw read-back hashes as specified by its
+rubric.
+Candidate code runs during extraction and can forge process output, so treat
+its report as advisory when the checkout is not trusted.
+
 Report findings first, ordered by severity and tied to files or nodes. Then give
 the rubric scores, weighted verdict, commands run, unresolved questions, and a
-short remediation list. Do not edit the reviewed work unless the user separately
+short remediation list. The read-back rubric's exact JSON output replaces this
+general report layout. Do not edit the reviewed work unless the user separately
 asks for fixes.
 
 Use the short [Cabannes thesis review case](references/thesis-review-case.md)

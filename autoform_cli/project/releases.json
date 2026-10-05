@@ -1,0 +1,13 @@
+{
+  "schema": "autoform-project-release-catalog/v1",
+  "releases": [
+    {
+      "id": "lean-v4.32.2-mathlib-v4.32.2",
+      "recommended": true,
+      "lean_toolchain": "leanprover/lean4:v4.32.2",
+      "mathlib_git": "https://github.com/leanprover-community/mathlib4",
+      "mathlib_rev": "v4.32.2",
+      "mathlib_commit": "905b95818eb32af7874a58b427f50c1711a5e96c"
+    }
+  ]
+}

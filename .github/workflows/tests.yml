@@ -11,6 +11,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       matrix:
         python-version: ["3.10", "3.13"]
@@ -27,7 +28,9 @@ jobs:
       - run: make check-example
 
   real-repl:
+    name: real REPL (fixture toolchain)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -45,3 +48,68 @@ jobs:
       - run: uv run pytest -q tests/test_real_repl.py
         env:
           AUTOFORM_RUN_REAL_REPL_TESTS: "1"
+
+  real-lean:
+    name: real Lean (fixture toolchain)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          python-version: "3.13"
+          enable-cache: true
+      - name: Install locked development environment
+        run: timeout --signal=TERM --kill-after=30s 3m uv sync --frozen --extra dev --extra repl
+      - name: Install pinned Elan
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=15s 2m curl -sSfL \
+            https://github.com/leanprover/elan/releases/download/v4.2.3/elan-x86_64-unknown-linux-gnu.tar.gz \
+            -o elan.tar.gz
+          echo "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2  elan.tar.gz" \
+            | sha256sum --check --strict
+          tar xzf elan.tar.gz
+          ./elan-init -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Install the fixture's Lean toolchain
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 10m \
+            elan toolchain install "$(tr -d '\r\n' < tests/fixtures/skeleton-project/lean-toolchain)"
+          command -v lake
+      - name: Run the skeleton suite against real Lean
+        run: >-
+          timeout --signal=TERM --kill-after=30s 25m uv run pytest -q
+          tests/test_skeleton.py
+          tests/test_project_inspect.py::test_stale_inherited_mathlib_is_ignored_by_real_lake
+        env:
+          AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
+
+  windows-hardening:
+    name: Windows inspection, subprocess, and publication hardening
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --frozen --extra dev --extra repl
+      - name: Exercise inspection, bounded subprocesses, and transactional output
+        run: >-
+          uv run pytest -q
+          tests/test_project_inspect.py
+          tests/test_skeleton.py::test_bounded_command_rejects_excess_output
+          tests/test_skeleton.py::test_bounded_command_caps_stdout_and_stderr_together
+          tests/test_skeleton.py::test_bounded_command_rejects_invalid_utf8
+          tests/test_skeleton.py::test_bounded_command_timeout_kills_descendants
+          tests/test_skeleton.py::test_bounded_command_rejects_a_successful_parent_with_a_live_descendant
+          tests/test_skeleton.py::test_bounded_command_interruption_kills_the_process
+          tests/test_skeleton.py::test_packet_publication_rolls_back_both_trees_on_commit_failure
+          tests/test_skeleton.py::test_packet_publication_rolls_back_when_interrupted_after_backup_rename
+          tests/test_skeleton.py::test_packet_publication_restores_old_trees_when_quarantine_cleanup_fails
+          tests/test_skeleton.py::test_packet_publication_does_not_overwrite_during_backup_restore

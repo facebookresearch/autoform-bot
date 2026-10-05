@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 from . import graph_pages, graph_views, mermaid, status
-from .coverage import CoverageSummary, load_coverage
+from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage
 from .graph import Graph, Node, load_graph
 from .lean import SourceLinker, build_linker, declaration_names
 from .status import is_definition
@@ -88,7 +88,16 @@ DECLARATION_LABELS = {
 
 STYLESHEET = "stylesheets/blueprint.css"
 MERMAID_SCRIPT = "javascripts/blueprint-mermaid.js"
+LIVE_SCRIPT = "javascripts/blueprint-live.js"
 LOGO = "assets/autoform.svg"
+_ASSET_DIR = Path(__file__).resolve().parent / "assets"
+
+
+def _static_asset(name: str) -> str:
+    try:
+        return (_ASSET_DIR / name).read_text(encoding="utf-8")
+    except OSError as error:
+        raise PublicationError([f"packaged render asset is unavailable: {name}"]) from error
 
 
 def _logo() -> str:
@@ -291,6 +300,7 @@ def render_site(
     # blueprint chapter carries many statements in sequence. Each keeps an
     # anchor so every cross-reference still lands on the statement itself.
     groups = _group_nodes(graph)
+    containers = _containers(graph)
     anchors = {
         node_id: _anchor(node_id, group)
         for group, node_ids in groups.items()
@@ -306,7 +316,7 @@ def render_site(
         {
             node_id: (destination / node.path.relative_to(blueprint), "")
             for node_id, node in graph.nodes.items()
-            if graph.children(node_id) or not node.formalizable
+            if node_id in containers or not node.formalizable
         }
     )
     node_sources = {
@@ -331,7 +341,7 @@ def render_site(
         # Narrative articles remain book pages. Only formalizable leaves are
         # consolidated into their containing article with stable anchors.
         article = node_paths.get(source.resolve())
-        if article is not None and article.formalizable and not graph.children(article.id):
+        if article is not None and article.formalizable and article.id not in containers:
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         if source.suffix.lower() == ".md":
@@ -357,6 +367,7 @@ def render_site(
                 overview.read_text(encoding="utf-8"),
                 graph=graph,
                 statuses=statuses,
+                coverage=coverage,
                 groups=groups,
                 group_pages=group_pages,
                 page=overview,
@@ -384,6 +395,7 @@ def render_site(
             repo_root=repo_root,
             destination=destination,
             node_sources=node_sources,
+            containers=containers,
             sources_base=sources_base,
         )
         page.write_text(chapter, encoding="utf-8")
@@ -430,6 +442,7 @@ def render_site(
     for relative, contents in (
         (STYLESHEET, _stylesheet()),
         (MERMAID_SCRIPT, _mermaid_script()),
+        (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
         (LOGO, _logo()),
     ):
         asset = destination / relative
@@ -577,6 +590,12 @@ def _source_revision(blueprint: Path) -> str:
     return digest.hexdigest()
 
 
+def publication_source_revision(blueprint_dir: str | Path) -> str:
+    """Return the deterministic source hash stored in ``publication.json``."""
+
+    return _source_revision(Path(blueprint_dir).expanduser().resolve())
+
+
 def _write_publication_manifest(
     destination: Path,
     blueprint: Path,
@@ -597,7 +616,7 @@ def _write_publication_manifest(
         },
         "schema": "autoform-publication/v1",
         "source": "blueprint/roadmap Markdown",
-        "source_revision": _source_revision(blueprint),
+        "source_revision": publication_source_revision(blueprint),
         "git_ref": linker.ref,
         "nodes": len(graph.nodes),
         "dependencies": graph.edge_count,
@@ -617,13 +636,19 @@ def _group_nodes(graph: Graph) -> dict[str, list[str]]:
     nearest narrative container, so nested sections remain real book sections.
     """
     grouped: dict[str, list[str]] = {}
+    containers = _containers(graph)
     for node_id in status.topological_order(graph):
         node = graph.nodes[node_id]
-        if not node.formalizable or graph.children(node_id):
+        if not node.formalizable or node_id in containers:
             continue
         group = node.parent or "roadmap"
         grouped.setdefault(group, []).append(node_id)
     return grouped
+
+
+def _containers(graph: Graph) -> frozenset[str]:
+    """Index which articles contain others, so loops need not rescan the graph."""
+    return frozenset(node.parent for node in graph.nodes.values() if node.parent is not None)
 
 
 def _group_page(group: str) -> Path:
@@ -640,25 +665,27 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
     ordered: list[Path] = []
     seen_outputs: set[Path] = set()
     visited_sources: set[Path] = set()
+    containers = _containers(graph)
     book_sources = {
         node.path.resolve()
         for node in graph.nodes.values()
-        if graph.children(node.id) or not node.formalizable
+        if node.id in containers or not node.formalizable
     }
-
-    def visit(source: Path) -> None:
-        source = source.resolve()
+    pending = [blueprint / "README.md"]
+    while pending:
+        source = pending.pop().resolve()
         try:
             relative = source.relative_to(blueprint)
         except ValueError:
-            return
+            continue
         output = (destination / relative).resolve()
         if output.is_file() and output not in seen_outputs:
             seen_outputs.add(output)
             ordered.append(output)
         if source in visited_sources or not source.is_file():
-            return
+            continue
         visited_sources.add(source)
+        linked_sources: list[Path] = []
 
         def collect(line: str) -> str:
             for match in _MARKDOWN_LINK.finditer(line):
@@ -680,12 +707,11 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
                     continue
                 if candidate not in book_sources:
                     continue
-                visit(candidate)
+                linked_sources.append(candidate)
             return line
 
         _outside_fences(source.read_text(encoding="utf-8"), collect)
-
-    visit(blueprint / "README.md")
+        pending.extend(reversed(linked_sources))
     return ordered
 
 
@@ -816,10 +842,11 @@ def _next_target(
     linking to it makes the reader hunt, so the card carries the statement, its
     chapter, and its dependency view.
     """
+    containers = _containers(graph)
     for node_id in status.topological_order(graph):
         node_status = statuses.get(node_id)
         node = graph.nodes[node_id]
-        if node_status is None or graph.children(node_id) or not node.formalizable:
+        if node_status is None or node_id in containers or not node.formalizable:
             continue
         if node_status.key not in {"can_prove", "can_state"}:
             continue
@@ -861,7 +888,7 @@ def _next_target(
             else ""
         )
         return (
-            '<div class="bp-next-target">'
+            f'<div class="bp-next-target" data-autoform-node-id="{html.escape(node.id, quote=True)}">'
             '<div class="bp-next-kicker">Next up</div>'
             f'<div class="bp-next-title">{heading}</div>'
             f'<div class="bp-next-why">{why}</div>'
@@ -915,9 +942,21 @@ def _render_structure_page(
             if parent != Path("."):
                 directories.add(parent)
 
-    def row(indent: int, label: str, kind: str, mark: str, extra: str = "") -> str:
+    def row(
+        indent: int,
+        label: str,
+        kind: str,
+        mark: str,
+        extra: str = "",
+        node_id: str | None = None,
+    ) -> str:
+        identity = (
+            f' data-autoform-node-id="{html.escape(node_id, quote=True)}"'
+            if node_id is not None
+            else ""
+        )
         return (
-            f'<span class="bp-tree-path{extra}" '
+            f'<span class="bp-tree-path{extra}"{identity} '
             f'style="padding-left: {indent * 1.1:.1f}rem">{label}</span>'
             f'<span class="bp-tree-kind">{kind}</span>'
             f'<span class="bp-tree-mark">{mark}</span>'
@@ -948,6 +987,7 @@ def _render_structure_page(
                 html.escape(node.declaration or node.kind),
                 f'<span class="bp-swatch bp-swatch-{state.key}"></span>'
                 f'<span class="bp-tree-state">{html.escape(state.label)}</span>',
+                node_id=node.id,
             )
         )
 
@@ -1022,6 +1062,7 @@ def _render_landing_page(
     *,
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
+    coverage: CoverageSummary,
     groups: dict[str, list[str]],
     group_pages: dict[str, Path],
     page: Path,
@@ -1052,7 +1093,16 @@ def _render_landing_page(
         "",
         '<div class="bp-landing" markdown="1">',
         "",
-        _render_hero(title, body, graph, statuses),
+        _render_hero(
+            title,
+            body,
+            graph,
+            statuses,
+            coverage=coverage,
+            coverage_href=_as_published(
+                mermaid.relative_link(destination / coverage.source_path, page, ".html")
+            ),
+        ),
         "",
         _next_target(
             graph,
@@ -1105,34 +1155,60 @@ def _render_landing_page(
         )
     elif breakdown:
         parts.extend(["", "## Status breakdown", "", breakdown])
-    # The authored body is a contents list and links to the roadmap, the
-    # coverage notes and the dependency view. The tabs are all three, so
-    # repeating them here only pushes the map up the page for nothing. Its
+    # The authored body is a contents list and links to the roadmap, coverage
+    # contract and dependency view. The hero retains a compact coverage summary;
+    # repeating the full list here would only push the map down the page. Its
     # opening sentence is already the hero's lead.
     parts.append("</div>")
     return "\n".join(part for part in parts if part is not None).rstrip() + "\n"
 
 
-#: States that count as finished work for the headline percentage.
-_SETTLED_STATES = frozenset({"mathlib", "fully_proved", "proved", "defined", "stated"})
 #: States a contributor could pick up today.
 _ACTIONABLE_STATES = frozenset({"can_prove", "can_state"})
+# Presentation starts with work expanded into the roadmap, then follows the
+# parser's canonical order. Deriving this tuple keeps newly added dispositions
+# visible instead of silently dropping them from the landing page.
+_COVERAGE_SUMMARY_ORDER = tuple(
+    sorted(COVERAGE_DISPOSITIONS, key=lambda disposition: disposition != "DECOMPOSED")
+)
 
 
-def _is_countable(graph: Graph, node_id: str) -> bool:
+def _is_countable(graph: Graph, node_id: str, containers: frozenset[str]) -> bool:
     """Whether *node_id* is a formalization target the dashboards should count.
 
     A leaf, and a leaf that declares something. Counting every leaf made a
-    freshly scaffolded vault report "0 of 1 items settled, 1 ready now": the
+    freshly scaffolded vault report "0 of 1 targets complete, 1 ready now": the
     roadmap landing page has no children yet, so it counted as an unstarted
     result, and the site claimed work existed before any had been planned.
     """
 
-    return not graph.children(node_id) and graph.nodes[node_id].formalizable
+    return node_id not in containers and graph.nodes[node_id].formalizable
 
 
 def _countable(graph: Graph) -> list[str]:
-    return [node_id for node_id in graph.nodes if _is_countable(graph, node_id)]
+    containers = _containers(graph)
+    return [node_id for node_id in graph.nodes if _is_countable(graph, node_id, containers)]
+
+
+def _completion_percentage(done: int, total: int) -> int:
+    """Round progress while reserving both endpoints for the exact endpoints."""
+
+    if not total or not done:
+        return 0
+    if done == total:
+        return 100
+    return max(1, min(99, round(100 * done / total)))
+
+
+def _coverage_summary(coverage: CoverageSummary) -> str:
+    """Describe declared source dispositions without inventing a percentage."""
+
+    counts = coverage.counts
+    return " · ".join(
+        f"{counts[disposition]} {disposition.casefold()}"
+        for disposition in _COVERAGE_SUMMARY_ORDER
+        if counts[disposition]
+    )
 
 
 def _render_hero(
@@ -1140,6 +1216,9 @@ def _render_hero(
     body: str,
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
+    *,
+    coverage: CoverageSummary,
+    coverage_href: str,
 ) -> str:
     """Open with the project's name, its one-line claim, and where it stands.
 
@@ -1150,17 +1229,19 @@ def _render_hero(
     """
     leaves = _countable(graph)
     selected = {node_id: statuses[node_id] for node_id in leaves}
-    done = sum(
-        count for state, count in status.summarize(selected) if state.key in _SETTLED_STATES
-    )
+    # A target is complete only when it and every prerequisite are proved.
+    # ``proved`` alone covers its own proof, definition body, or authored
+    # Mathlib marker; ``fully_proved`` also closes the dependency chain.
+    done = sum(node_status.fully_proved for node_status in selected.values())
     actionable = sum(
         count for state, count in status.summarize(selected) if state.key in _ACTIONABLE_STATES
     )
     total = len(leaves)
-    share = round(100 * done / total) if total else 0
+    share = _completion_percentage(done, total)
+    target_label = "target" if total == 1 else "targets"
 
     figures = [
-        ("Formalized", f"{share}%", f"{done} of {total} items settled"),
+        ("Scoped roadmap", f"{share}%", f"{done} of {total} {target_label} complete"),
         ("Ready now", str(actionable), "unblocked, waiting for an author"),
         ("Chapters", str(len(graph_views.group_nodes(graph))), "top-level milestones"),
     ]
@@ -1170,6 +1251,14 @@ def _render_hero(
         f'<div class="bp-figure-note">{html.escape(note)}</div></div>'
         for label, value, note in figures
     )
+    coverage_line = (
+        '<div class="bp-hero-coverage">'
+        '<span class="bp-hero-coverage-label">Declared source coverage:</span> '
+        f'<span class="bp-hero-coverage-counts">{html.escape(_coverage_summary(coverage))}</span> '
+        f'<a class="bp-hero-coverage-link" href="{html.escape(coverage_href, quote=True)}">'
+        "View coverage contract</a>"
+        "</div>"
+    )
     lead = _lead_sentence(body)
     return (
         '<div class="bp-hero">'
@@ -1178,10 +1267,10 @@ def _render_hero(
         f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
         + (f'<p class="bp-hero-lead">{lead}</p>' if lead else "")
         + f'<div class="bp-hero-figures">{stats}</div>'
-        f'<div class="bp-hero-bar" role="img" '
-        f'aria-label="{share}% of items formalized">'
+        f'<div class="bp-hero-bar" aria-hidden="true">'
         f'<span style="width: {share}%"></span></div>'
-        "</div>"
+        + coverage_line
+        + "</div>"
     )
 
 
@@ -1211,13 +1300,14 @@ def _render_overview_summary(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     *,
+    containers: frozenset[str],
     node_ids: list[str] | None = None,
 ) -> str:
     """Render the compact, honest progress strip shown at the start of the book."""
     selected_ids = [
         node_id
         for node_id in (node_ids if node_ids is not None else graph.nodes)
-        if _is_countable(graph, node_id)
+        if _is_countable(graph, node_id, containers)
     ]
     definitions = sum(is_definition(graph.nodes[node_id]) for node_id in selected_ids)
     results = len(selected_ids) - definitions
@@ -1311,23 +1401,37 @@ def _anchored_links(
     page: Path,
     *,
     extension: str = ".html",
+    hrefs: dict[Path, str] | None = None,
 ) -> dict[str, str]:
     """Link every node to its statement on the published chapter page.
 
     Use ``.md`` for links MkDocs will parse -- it validates and rewrites those
     itself -- and ``.html`` for raw HTML and Mermaid, which it never sees. A
-    statement on the current page is just a fragment.
+    statement on the current page is just a fragment. Calls for the same page
+    and extension can share *hrefs*, so each target page is linked once across
+    all of them.
     """
     resolved_page = page.resolve()
+    # Many nodes share a chapter page, and resolving a path walks the disk, so
+    # each target page is linked once. The current page is cached as "" and
+    # links as a bare fragment.
+    if hrefs is None:
+        hrefs = {}
     links: dict[str, str] = {}
     for node_id, (target, anchor) in targets.items():
-        if target.resolve() == resolved_page:
-            links[node_id] = f"#{anchor}" if anchor else "#"
-        else:
-            href = mermaid.relative_link(target, page, extension)
-            if extension == ".html":
-                href = _as_published(href)
+        href = hrefs.get(target)
+        if href is None:
+            if target.resolve() == resolved_page:
+                href = ""
+            else:
+                href = mermaid.relative_link(target, page, extension)
+                if extension == ".html":
+                    href = _as_published(href)
+            hrefs[target] = href
+        if href:
             links[node_id] = f"{href}#{anchor}" if anchor else href
+        else:
+            links[node_id] = f"#{anchor}" if anchor else "#"
     return links
 
 
@@ -1362,7 +1466,10 @@ def _rewrite_links(
     have to be recomputed from there. And source notes are not published at
     all when *sources_base* says where to reach them in the repository.
     """
-    anchored = _anchored_links(targets, page, extension=".md")
+    # Most pages name a few nodes, so each node link is built where it is used.
+    # A coverage page can name most of the graph, so one cache serves the whole
+    # text and each target page it reaches is linked once.
+    page_hrefs: dict[Path, str] = {}
 
     def moved_target(raw: str) -> str | None:
         """Where *raw* should point once published, or None to leave it alone."""
@@ -1373,7 +1480,7 @@ def _rewrite_links(
         candidate = (source_dir / unquote(path)).resolve()
         node_id = node_sources.get(candidate)
         if node_id is not None:
-            href = anchored[node_id]
+            href = _anchored_links({node_id: targets[node_id]}, page, extension=".md", hrefs=page_hrefs)[node_id]
             if not targets[node_id][1] and separator:
                 href = f"{'' if href == '#' else href}#{fragment}"
             return href
@@ -1470,6 +1577,7 @@ def _render_chapter(
     repo_root: Path,
     destination: Path,
     node_sources: dict[Path, str],
+    containers: frozenset[str],
     sources_base: "_SourceBase | None" = None,
 ) -> tuple[str, int, list[str]]:
     """Render one narrative article with statements at its authored link slots."""
@@ -1502,6 +1610,7 @@ def _render_chapter(
     chapter_summary = _render_overview_summary(
         graph,
         statuses,
+        containers=containers,
         node_ids=node_ids,
     )
     if narrative is None:
@@ -1625,7 +1734,9 @@ def _render_environment(
     mark = "✓" if node_status.key in {"fully_proved", "mathlib"} else "●"
 
     lines = [
-        f'<div class="bp-thmwrapper {style} bp-{node_status.key}" id="{html.escape(anchor, quote=True)}" markdown="1">',
+        f'<div class="bp-thmwrapper {style} bp-{node_status.key}" '
+        f'id="{html.escape(anchor, quote=True)}" '
+        f'data-autoform-node-id="{html.escape(node.id, quote=True)}" markdown="1">',
         '<div class="bp-thmheading">',
         f'<span class="bp-thmcaption">{html.escape(caption)}</span>'
         f'<span class="bp-thmlabel">{html.escape(number)}</span>'
@@ -2076,6 +2187,23 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-hero-bar > span {{ display: block; height: 100%; background: var(--bp-sweep); }}
 
+.bp-hero-coverage {{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.65rem;
+  margin-top: 0.75rem;
+  font-size: 0.72rem;
+  color: var(--bp-muted);
+}}
+.bp-hero-coverage-label {{ font-weight: 700; color: var(--bp-fg); }}
+.bp-hero-coverage-link {{
+  margin-left: auto;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}}
+
 /* The map is the page's subject, so it gets a panel of its own and the
    legend rides with it instead of becoming a section further down. */
 .bp-map {{
@@ -2230,6 +2358,28 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   margin-top: 0.2rem;
 }}
 .bp-next-actions {{ font-family: {sans}; font-size: 0.85rem; margin-top: 0.5rem; }}
+
+.bp-live-claimed {{ outline: 2px solid #2D88FF; outline-offset: 2px; }}
+.bp-live-badge {{
+  margin-left: 0.55rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid #2D88FF;
+  border-radius: 999px;
+  color: #2D88FF;
+  font-family: {sans};
+  font-size: 0.68rem;
+  font-weight: 700;
+}}
+.bp-live-activity {{
+  margin: 1rem 0 1.5rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--bp-rule);
+  border-radius: 0.6rem;
+  background: var(--bp-surface);
+}}
+.bp-live-activity-title {{ font-weight: 700; margin-bottom: 0.35rem; }}
+.bp-live-row, .bp-live-empty, .bp-live-error {{ font-size: 0.85rem; color: var(--bp-muted); }}
+.bp-live-error {{ color: #D93025; }}
 
 /* On a graph page the legend hangs off an icon at the end of the lead. It
    opens on hover and on focus, so the button is reachable by keyboard; there
@@ -2481,6 +2631,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 
 __all__ = [
     "DECLARATION_LABELS",
+    "LIVE_SCRIPT",
     "LOGO",
     "MERMAID_SCRIPT",
     "PUBLICATION_MANIFEST",
@@ -2488,4 +2639,5 @@ __all__ = [
     "STYLESHEET",
     "RenderReport",
     "render_site",
+    "publication_source_revision",
 ]

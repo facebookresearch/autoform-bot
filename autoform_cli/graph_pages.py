@@ -21,7 +21,7 @@ from .graph_views import (
     full_view,
     group_nodes,
     project_view,
-    scope_view,
+    scope_views,
 )
 from .status import NodeStatus
 
@@ -48,7 +48,8 @@ def write_graph_pages(
     project_page = destination / "dependencies.md"
     full_page = destination / "dependencies/full.md"
     chapter_pages = {group: destination / "dependencies/chapters" / f"{group or 'roadmap'}.md" for group in groups}
-    containers = [node_id for node_id in graph.nodes if graph.children(node_id)]
+    scope_maps = scope_views(graph, statuses)
+    containers = list(scope_maps)
     scope_pages = {
         node_id: (
             project_page
@@ -96,7 +97,7 @@ def write_graph_pages(
     )
 
     for group, chapter_page in chapter_pages.items():
-        view = chapter_view(graph, statuses, group)
+        view = scope_maps[group] if group in scope_maps else chapter_view(graph, statuses, group)
         links = dict(node_links(chapter_page))
         for node in view.nodes:
             if node.kind == "boundary":
@@ -135,7 +136,7 @@ def write_graph_pages(
         if scope in {"roadmap", *chapter_pages}:
             continue
         scope_page = scope_pages[scope]
-        view = scope_view(graph, statuses, scope)
+        view = scope_maps[scope]
         links = dict(node_links(scope_page))
         for node in view.nodes:
             if node.kind == "scope":
@@ -183,7 +184,8 @@ def write_graph_pages(
         view = local_views[node_id]
         parent = graph.nodes[node_id].parent
         chapter_page = scope_pages.get(parent or article_groups[node_id], chapter_pages[article_groups[node_id]])
-        statement_href = _markdown_document_link(node_links(focus_page)[node_id])
+        focus_links = node_links(focus_page)
+        statement_href = _markdown_document_link(focus_links[node_id])
         navigation = _navigation(
             ("Project map", _markdown_link(project_page, focus_page)),
             ("Chapter map", _markdown_link(chapter_page, focus_page)),
@@ -195,7 +197,7 @@ def write_graph_pages(
                 focus_page,
                 view=view,
                 statuses=_selected_statuses(statuses, view),
-                links=node_links(focus_page),
+                links=focus_links,
                 heading=view.title,
                 lead=(
                     "This local map shows one dependency hop in either direction. "
