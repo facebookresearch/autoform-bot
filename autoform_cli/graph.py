@@ -370,6 +370,8 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
     }
     section: str | None = None
     execution_notes_seen = False
+    statement_open = False
+    statement_text_seen = False
     fence: tuple[str, int] | None = None
     body = _HTML_COMMENT.sub("", "\n".join(lines[body_start:]))
 
@@ -399,6 +401,9 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
                 title_count += 1
                 if title is None:
                     title = heading_text
+                    statement_open = True
+            elif title is not None:
+                statement_open = False
             if heading_key == "execution notes":
                 section = None
                 execution_notes_seen = True
@@ -406,10 +411,16 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
                     issues.append(
                         f"{node_id}: Execution notes must be a top-level H2 section"
                     )
+                if not statement_text_seen:
+                    issues.append(
+                        f"{node_id}: Execution notes must follow the article's mathematical statement"
+                    )
                 continue
             if level <= 2:
                 section = heading_key if level == 2 and heading_key in targets else None
             continue
+        if statement_open and line.strip():
+            statement_text_seen = True
         if section is not None:
             for match in _LINK.finditer(_INLINE_CODE.sub("", line)):
                 target = match.group(1)

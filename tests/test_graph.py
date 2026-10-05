@@ -164,6 +164,36 @@ def test_execution_notes_must_be_the_final_article_section(tmp_path: Path) -> No
         load_graph(blueprint)
 
 
+def test_execution_notes_must_follow_the_mathematical_statement(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "result.md",
+        "# Result\n\n## Execution notes\n\nTry induction.\n",
+    )
+
+    with pytest.raises(
+        GraphValidationError,
+        match="Execution notes must follow the article's mathematical statement",
+    ):
+        load_graph(blueprint)
+
+
+def test_final_execution_notes_do_not_change_dependencies(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n\nA base statement.\n")
+    _node(
+        blueprint,
+        "result.md",
+        "# Result\n\nA result statement.\n\n## Depends on\n\n[Base](base.md)\n\n"
+        "## Execution notes\n\nTry induction.\n",
+    )
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["result"].dependencies == ("base",)
+
+
 def test_rejects_self_edge(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "self.md", "# Self\n## Depends on\n[Self](self.md)\n")
