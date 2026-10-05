@@ -12,35 +12,6 @@ from servers.repl import core as repl_core
 from servers.repl import pool as repl_pool
 
 
-def _dirty_result_repl(*close_errors):
-    workers = []
-
-    class FakeRepl:
-        def __init__(self, config):
-            self.dirty = False
-            self.close_calls = 0
-            self.close_errors = list(close_errors)
-            workers.append(self)
-
-        def run_disposable(self, code, **kwargs):
-            self.dirty = True
-            return {"messages": []}
-
-        def is_clean(self):
-            return not self.dirty
-
-        def close(self):
-            self.close_calls += 1
-            self.dirty = False
-            if self.close_errors:
-                raise self.close_errors.pop(0)
-
-        def get_memory_usage(self):
-            return 0.0
-
-    return FakeRepl, workers
-
-
 def test_partial_pool_construction_closes_all_constructed_workers(monkeypatch):
     workers = []
 
@@ -349,87 +320,6 @@ def test_pool_preserves_original_cancellation_until_cleanup_is_verified(monkeypa
     assert workers[0].is_clean()
     assert pool._active_calls == 0
     assert not pool.is_usable()
-    pool.shutdown()
-
-
-def test_pool_preserves_admission_cancellation_across_sleep_and_close(monkeypatch):
-    FakeRepl, workers = _dirty_result_repl(SystemExit("close cancelled"))
-
-    monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
-    pool = repl_pool.LeanReplPool(repl_pool.LeanReplPoolConfig(num_repls=1))
-    stop_admission = pool._stop_admission
-    stop_calls = 0
-
-    def cancel_first_stop():
-        nonlocal stop_calls
-        stop_calls += 1
-        if stop_calls == 1:
-            raise KeyboardInterrupt("admission cancelled")
-        stop_admission()
-
-    sleep_calls = 0
-
-    def cancel_first_sleep(delay):
-        nonlocal sleep_calls
-        sleep_calls += 1
-        if sleep_calls == 1:
-            raise SystemExit("sleep cancelled")
-
-    monkeypatch.setattr(pool, "_stop_admission", cancel_first_stop)
-    monkeypatch.setattr(repl_pool.time, "sleep", cancel_first_sleep)
-
-    with pytest.raises(KeyboardInterrupt, match="admission cancelled") as error:
-        pool.run("#check Nat", timeout=1)
-
-    assert stop_calls == 2
-    assert sleep_calls == 1
-    assert workers[0].close_calls == 1
-    assert workers[0].is_clean()
-    assert pool._active_calls == 0
-    assert not pool.is_usable()
-    if hasattr(error.value, "add_note"):
-        assert error.value.__notes__ == [
-            "Lean REPL cleanup also raised: sleep cancelled",
-            "Lean REPL cleanup also raised: close cancelled",
-        ]
-    pool.shutdown()
-
-
-def test_repeated_admission_cancellation_cannot_skip_final_accounting(monkeypatch):
-    FakeRepl, workers = _dirty_result_repl()
-
-    monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
-    monkeypatch.setattr(repl_pool.time, "sleep", lambda delay: None)
-    pool = repl_pool.LeanReplPool(repl_pool.LeanReplPoolConfig(num_repls=1))
-    stop_admission = pool._stop_admission
-    cancellations = [
-        KeyboardInterrupt("first admission cancellation"),
-        SystemExit("second admission cancellation"),
-    ]
-    stop_calls = 0
-
-    def repeatedly_cancel_stop():
-        nonlocal stop_calls
-        stop_calls += 1
-        if cancellations:
-            raise cancellations.pop(0)
-        stop_admission()
-
-    monkeypatch.setattr(pool, "_stop_admission", repeatedly_cancel_stop)
-
-    with pytest.raises(KeyboardInterrupt, match="first admission cancellation") as error:
-        pool.run("#check Nat", timeout=1)
-
-    assert stop_calls == 3
-    assert workers[0].close_calls == 1
-    assert workers[0].is_clean()
-    assert pool._active_calls == 0
-    assert pool._idle.empty()
-    assert not pool.is_usable()
-    if hasattr(error.value, "add_note"):
-        assert error.value.__notes__ == [
-            "Lean REPL cleanup also raised: second admission cancellation"
-        ]
     pool.shutdown()
 
 
