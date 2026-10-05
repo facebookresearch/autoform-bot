@@ -395,7 +395,14 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
     issues: list[str] = []
     sources: list[_NodeSource] = []
     roadmap_root = roadmap_root.resolve()
-    entries = sorted(roadmap_root.rglob("*"))
+
+    def unlistable(exc: OSError) -> None:
+        issues.append(f"cannot list roadmap directory {exc.filename}: {exc.strerror}")
+
+    # Unlike a glob, a walk reports each directory it cannot list.
+    entries = sorted(
+        Path(directory, name) for directory, _, files in os.walk(roadmap_root, onerror=unlistable) for name in files
+    )
     for path in entries:
         if path.is_file() and path.name.casefold() == "readme.md" and path.name != "README.md":
             relative = path.relative_to(roadmap_root).as_posix()

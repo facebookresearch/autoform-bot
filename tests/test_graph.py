@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -276,6 +277,24 @@ def test_rejects_a_readme_linked_to_a_file_with_another_name(tmp_path: Path, rel
         f"error: {relative}: links to {target}, which is not named README.md; "
         "container pages must be named exactly README.md"
     ) in result.stdout
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
+@pytest.mark.parametrize("relative", ["", "chapter"], ids=["roadmap", "chapter"])
+def test_a_roadmap_directory_that_cannot_be_listed_is_refused(tmp_path: Path, relative: str) -> None:
+    """A glob skipped it, and its articles were missing from the graph without a word."""
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    _node(blueprint, "chapter/result.md", "# Result\n")
+    directory = (blueprint / "roadmap" / relative).resolve()
+    directory.chmod(0)
+    try:
+        with pytest.raises(GraphValidationError) as caught:
+            load_graph(blueprint)
+    finally:
+        directory.chmod(0o755)
+
+    assert f"cannot list roadmap directory {directory}: Permission denied" in caught.value.issues
 
 
 def test_splits_statement_and_proof_dependencies(tmp_path: Path) -> None:

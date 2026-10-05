@@ -907,6 +907,33 @@ def test_every_record_whose_article_id_is_gone_is_named_in_one_run(
     assert load_readbacks(blueprint) == {}
 
 
+def test_a_chapter_that_cannot_be_listed_is_named_rather_than_its_articles_called_gone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Its articles are still there, so dropping their records or preparing again cannot help."""
+
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("permissions do not bind root")
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    chapter = (blueprint / "roadmap" / "basics").resolve()
+    chapter.chmod(0)
+    try:
+        capsys.readouterr()
+        assert _record(blueprint, bundle, manifest, tmp_path) == 2
+        recorded = capsys.readouterr().err
+        assert main(["review", "check", str(blueprint), "--lean-root", str(tmp_path), "--bundle", str(bundle)]) == 2
+        checked = capsys.readouterr().err
+    finally:
+        chapter.chmod(0o755)
+
+    for err in (recorded, checked):
+        assert f"error: cannot list roadmap directory {chapter}: Permission denied\n" in err
+        assert "no longer in the blueprint" not in err
+    assert extraction.scopes == [None]  # only `review prepare` extracted
+    assert load_readbacks(blueprint) == {}
+
+
 @pytest.mark.parametrize("edit", [_delete_other, _renumber_other], ids=["deleted", "renumbered"])
 def test_a_record_whose_article_id_is_gone_files_once_it_does_what_the_refusal_says(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], edit: Callable[[Path], None]
