@@ -83,9 +83,9 @@ An article asserts only facts a human or agent verified:
 
 | Key | Meaning |
 | --- | --- |
-| `statement: formalized` | The Lean statement exists and compiles. |
+| `statement: formalized` | The Lean statement exists and compiles. Requires `lean:`. |
 | `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. CI's `autoform check` at an older `AUTOFORM_REF` rejects the marker, so move the pin first; until then, retract by removing `statement` and `proof` and keeping `lean:`. |
-| `proof: formalized` | The Lean proof compiles. Under the open policy it may rest on open statements, and the article is then conditional; only the derived `fully_proved` means complete and `sorry`-free. |
+| `proof: formalized` | The Lean proof compiles. Requires `statement: formalized` and `lean:`. Under the open policy it may rest on open statements, and the article is then conditional; only the derived `fully_proved` means complete and `sorry`-free. |
 | `mathlib: true` | The result is upstreamed into Mathlib. |
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
 | `lean: Ns.decl` | Declaration name(s) that discharge the article. |
@@ -533,12 +533,11 @@ target. The article revision hashes that article's bytes alone. A Lean target's
 local scan does not find the declaration. The scan skips build output and nested
 checkouts, meaning any subdirectory with a `.git` entry, such as a worker's
 worktree or a submodule. Blockers are unmet dependency IDs or one of
-`roadmap:not-a-formalizable-leaf`, `roadmap:proof-without-statement`,
-`roadmap:missing-article-id`, `roadmap:missing-article-revision`, and
-`roadmap:not-ready`. The claim target prefers durable `article_id` metadata.
-`work list` fails explicitly if an unfinished formalizable leaf lacks one; plan
-the missing IDs with `autoform migrate article-ids` and add them to the
-frontmatter. `work context` may still select that article by its path ID to
+`roadmap:not-a-formalizable-leaf`, `roadmap:missing-article-id`,
+`roadmap:missing-article-revision`, and `roadmap:not-ready`. The claim target
+prefers durable `article_id` metadata. `work list` fails explicitly if an
+unfinished formalizable leaf lacks one; plan the missing IDs with `autoform
+migrate article-ids` and add them to the frontmatter. `work context` may still select that article by its path ID to
 report the migration blocker. An item whose article records `statement:
 retracted` is a revision: it carries `revision` true in JSON, and the text of
 `work list` adds a `revision:` line and `work context` a `Revision:` line saying
@@ -702,8 +701,10 @@ example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 
 `autoform check` rejects cycles, missing targets, escaping paths,
 self-dependencies, cycles introduced at any rolled-up containment level,
-missing or multiple H1 titles, unsupported frontmatter keys, and assertion
-values it does not recognize. With `--lean-root` it also fails on a `lean:` name
+missing or multiple H1 titles, unsupported frontmatter keys, assertion values
+it does not recognize, and assertions the Lean cannot back: `proof: formalized`
+without `statement: formalized`, or either without a `lean:` name, even beside
+`mathlib: true`. With `--lean-root` it also fails on a `lean:` name
 absent from the sources, as `leanblueprint checkdecls` does for LaTeX
 blueprints. It validates structure and leaves mathematical correctness to the
 agent and the Lean kernel.
@@ -715,8 +716,8 @@ that may be regenerated at any time.
 
 `autoform audit` reports structured findings at blueprint-relative paths. It
 checks that formalizable articles are declaration-sized leaves with statement
-text and an explicit dependency section, that asserted proof and Mathlib facts
-are internally consistent, and that cited work resolves to local source
+text and an explicit dependency section, that asserted Mathlib facts are
+internally consistent, and that cited work resolves to local source
 material without escaping the blueprint. Coverage files are checked for broken
 links and explicitly declared gaps. With `--lean-root`, local declaration names
 and declaration kinds are checked against the Lean source index.

@@ -303,7 +303,14 @@ def _policy_project(tmp_path: Path, policy: str | None) -> Path:
         **theorem,
     )
     _article(project, "chapter/section/gap.md", title="Gap", declaration="theorem")
-    _article(project, "chapter/section/waiting.md", title="Waiting", proof_dependencies=("gap.md",), **theorem)
+    _article(
+        project,
+        "chapter/section/waiting.md",
+        title="Waiting",
+        lean="Project.waiting",
+        proof_dependencies=("gap.md",),
+        **theorem,
+    )
     return project
 
 

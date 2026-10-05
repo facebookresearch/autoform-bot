@@ -105,7 +105,7 @@ def _blockers(node: RuntimeNode) -> tuple[str, ...]:
     if not node.dispatchable:
         return ("roadmap:not-a-formalizable-leaf",)
     if node.status.proved:
-        return () if node.status.stated else ("roadmap:proof-without-statement",)
+        return ()
     metadata_blockers: list[str] = []
     if node.article_id is None:
         metadata_blockers.append("roadmap:missing-article-id")

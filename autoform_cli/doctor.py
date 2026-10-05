@@ -31,7 +31,6 @@ _LEAN_FINDING_CODES = frozenset(
         "lean-target-deprecated",
         "lean-target-kind-mismatch",
         "lean-target-not-found",
-        "missing-lean-target",
     }
 )
 _CHECK_NAMES = ("blueprint", "runtime", "graph", "references", "audit", "lean targets")

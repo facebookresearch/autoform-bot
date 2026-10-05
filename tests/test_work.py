@@ -220,21 +220,6 @@ def test_finished_articles_and_containers_need_no_identity(tmp_path: Path) -> No
     assert chapter.blockers == ("roadmap:not-a-formalizable-leaf",)
 
 
-def test_proof_without_statement_returns_to_roadmap(tmp_path: Path) -> None:
-    project = _project(tmp_path)
-    _edit(
-        project,
-        "state.md",
-        "declaration: theorem\n",
-        "declaration: theorem\nproof: formalized\nlean: Project.state\n",
-    )
-
-    assert "chapter/state" not in {item.node_id for item in list_ready_work(project).items}
-    _, item = work_context(project, "chapter/state")
-    assert item.phase is None
-    assert item.blockers == ("roadmap:proof-without-statement",)
-
-
 def test_article_revision_tracks_only_its_own_article(tmp_path: Path) -> None:
     project = _project(tmp_path)
     article = project / "blueprint/roadmap/chapter/state.md"
@@ -536,7 +521,7 @@ def _policy_project(tmp_path: Path, policy: str | None) -> Path:
         title="Upstream",
         metadata=["declaration: theorem", "mathlib: true", "lean: Project.upstream"],
     )
-    _article(project, "unnamed.md", title="Unnamed", metadata=["declaration: def", "statement: formalized"])
+    _article(project, "unnamed.md", title="Unnamed", metadata=[])
     return project
 
 
@@ -870,28 +855,6 @@ def test_work_assumptions_keeps_a_retracted_theorem_while_its_lean_names_the_old
     assert articles["chapter/reduction"]["allowed_open_declarations"] == list(allowed)
 
 
-@pytest.mark.parametrize("policy", ["forbidden", "allowed"])
-def test_work_assumptions_bounds_a_proof_recorded_without_its_statement(
-    tmp_path: Path, capsys, policy: str
-) -> None:
-    """`proof: formalized` without `statement: formalized` still declares Lean the CI probe must bound."""
-    project = _policy_project(tmp_path, policy)
-    _edit(project, "reduction.md", "statement: formalized\n", "")
-    allowed = ("Project.open_aux", "Project.open_thm") if policy == "allowed" else ()
-
-    assert cli.main(["work", "assumptions", str(project), "--json"]) == 0
-    articles = {article["id"]: article for article in json.loads(capsys.readouterr().out)["articles"]}
-
-    assert articles["chapter/reduction"] == _contract_article(
-        "chapter/reduction",
-        "af_00000000000000000000000c",
-        "conditional" if policy == "allowed" else "proved",
-        ["Project.reduction"],
-        assumes=("chapter/open",) if policy == "allowed" else (),
-        allowed=allowed,
-    )
-
-
 def test_work_assumptions_does_not_open_a_never_stated_theorem_naming_a_draft_lean(tmp_path: Path, capsys) -> None:
     """A draft `lean:` name on a theorem that was never stated is no assumption, so CI rejects its sorry."""
     project = _policy_project(tmp_path, "allowed")
@@ -914,13 +877,13 @@ def test_work_assumptions_does_not_open_a_never_stated_theorem_naming_a_draft_le
 
 
 def test_work_assumptions_text_labels_only_conditional_articles_as_conditional(tmp_path: Path, capsys) -> None:
-    """A conditional article without `lean:` is named too; an unproved one that assumes something is not conditional."""
+    """An unproved article that assumes something is not conditional."""
     project = _policy_project(tmp_path, "allowed")
     _article(
         project,
         "bare.md",
         title="Bare",
-        metadata=["declaration: theorem", "statement: formalized", "proof: formalized"],
+        metadata=["declaration: theorem", "statement: formalized", "proof: formalized", "lean: Project.bare"],
         proof_depends="open.md",
     )
     _article(
@@ -933,7 +896,7 @@ def test_work_assumptions_text_labels_only_conditional_articles_as_conditional(t
 
     assert cli.main(["work", "assumptions", str(project), "--json"]) == 0
     articles = {article["id"]: article for article in json.loads(capsys.readouterr().out)["articles"]}
-    assert "chapter/bare" not in articles
+    assert articles["chapter/bare"]["state"] == "conditional"
     assert articles["chapter/old"] == _contract_article(
         "chapter/old",
         None,
