@@ -607,6 +607,13 @@ def load_review_bundle(path: str | Path) -> ReviewBundle:
         # An escape such as "\ud800" decodes to half of a surrogate pair, which
         # the evidence hash cannot encode as UTF-8.
         json.dumps(data, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        # Named rather than placed: its position is in the text just encoded,
+        # not in the file.
+        reason = f"it escapes a lone surrogate, {exc.object[exc.start]!r}, which UTF-8 cannot encode"
+        raise ReviewError(
+            [ReviewFinding("", "review-bundle-invalid", f"cannot read review bundle {path}: {reason}")]
+        ) from exc
     except (OSError, RecursionError, ValueError) as exc:
         raise ReviewError(
             [ReviewFinding("", "review-bundle-invalid", f"cannot read review bundle {path}: {exc}")]
