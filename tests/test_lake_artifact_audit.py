@@ -411,6 +411,9 @@ def test_workflows_audit_open_statements_only_when_the_roadmap_allows_them(repo_
         assert 'if [ "$policy" = "allowed" ]; then' in text
         assert "autoform work assumptions blueprint --json > \"$contract\"" in text
         assert 'python3 .github/autoform_audit.py --open-statements "$contract"' in text
+        assert 'python3 .github/autoform_audit.py --targets "$contract"' in text
+        # Both policies need the contract, so it is written before the branch.
+        assert text.index("autoform work assumptions") < text.index('if [ "$policy" = "allowed" ]; then')
 
 
 def _roadmap(blueprint: Path, text: str | bytes) -> None:
@@ -579,6 +582,73 @@ def test_contract_validation_fails_closed(
         helper.load_assumption_contract(path)
 
 
+def test_target_contract_lists_each_strict_article_declaration(helper: ModuleType, tmp_path: Path) -> None:
+    contract = _contract_file(
+        tmp_path / "contract.json",
+        _contract(_article("a", ["Fixture.a", "Fixture.a"]), _article("m", ["Nat.add_comm"]), open_statements=False),
+    )
+
+    entries = helper.load_target_contract(contract)
+
+    assert [(entry.name, entry.article, entry.is_open, entry.allowed) for entry in entries] == [
+        ("Fixture.a", "a", False, ()),
+        ("Nat.add_comm", "m", False, ()),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("contract", "message"),
+    [
+        (_contract(), "allows open statements; the strict audit accepts only a contract under the strict policy"),
+        (_contract(open_statements="false"), "allows open statements"),
+        ({**_contract(open_statements=False), "schema": "x"}, "not an autoform-assumptions/v1 object"),
+        (
+            _contract(_article("a", ["Fixture.a"], is_open=True), open_statements=False),
+            "records a as open or resting on open statements, which the strict policy does not allow",
+        ),
+        (
+            _contract(_article("a", ["Fixture.a"], allowed=["Fixture.a"]), open_statements=False),
+            "records a as open or resting on open statements",
+        ),
+        (
+            _contract({**_article("a", ["Fixture.a"]), "assumes": ["b"]}, open_statements=False),
+            "records a as open or resting on open statements",
+        ),
+        (_contract(_article("a", ["Fixture..a"]), open_statements=False), "invalid Lean declaration"),
+    ],
+)
+def test_target_contract_refuses_anything_but_the_strict_policy(
+    helper: ModuleType, tmp_path: Path, contract: object, message: str
+) -> None:
+    path = _contract_file(tmp_path / "contract.json", contract)
+
+    with pytest.raises(helper.AuditInputError, match=message):
+        helper.load_target_contract(path)
+
+
+def test_strict_probe_embeds_its_targets_and_guards_its_helpers(helper: ModuleType, tmp_path: Path) -> None:
+    contract = _contract_file(
+        tmp_path / "contract.json",
+        _contract(_article('odd "id"', ["Fixture.«a.b c»", "Fixture.x.1"]), open_statements=False),
+    )
+
+    probe = helper.render_probe(("Fixture",), helper.load_target_contract(contract))
+
+    table = next(line for line in probe.splitlines() if "ReadTargets " in line and " with" in line)
+    literal = table.split("ReadTargets ", 1)[1].rsplit(" with", 1)[0]
+    assert json.loads(json.loads(literal)) == [
+        [["Fixture", "a.b c"], 'odd "id"'],
+        [["Fixture", "x", 1], 'odd "id"'],
+    ]
+    assert "for helper in [``autoformAuditNameOf, ``autoformAuditReadTargets] do" in probe
+    assert "is not a declaration of the Lean build" in probe
+    old_form = helper.render_probe(("Fixture",))
+    assert 'autoformAuditReadTargets "[]" with' in old_form
+    for text in (probe, old_form, helper.render_open_probe(("Fixture",), ())):
+        assert "Lean.Environment.replay rootConstants base" in text
+        assert "kernel replay of the root package failed" in text
+
+
 def test_open_probe_spells_names_as_components(helper: ModuleType, tmp_path: Path) -> None:
     contract = _contract_file(
         tmp_path / "contract.json",
@@ -634,10 +704,20 @@ def test_helper_cli_forms(repo_root: Path, tmp_path: Path) -> None:
     )
     assert "autoformOpenAuditReadArticles" in probe.read_text(encoding="utf-8")
 
+    targeted = run("--targets", str(contract), "Fixture", str(archive), str(probe))
+    assert targeted.returncode == 1
+    assert targeted.stderr.startswith("error: ") and "allows open statements" in targeted.stderr
+
     _contract_file(contract, _contract(open_statements=False))
     forbidden = run("--open-statements", str(contract), "Fixture", str(archive), str(probe))
     assert forbidden.returncode == 1
     assert "does not allow open statements" in forbidden.stderr
+
+    _contract_file(contract, _contract(_article("a", ["Fixture.a", "Fixture.b"]), open_statements=False))
+    targeted = run("--targets", str(contract), "Fixture", str(archive), str(probe))
+    assert targeted.returncode == 0, targeted.stderr
+    assert targeted.stdout == "prepared kernel-trust audit for 1 root-package module(s) and 2 lean: target(s)\n"
+    assert "autoformAuditReadTargets" in probe.read_text(encoding="utf-8")
 
     for arguments in (
         (),
@@ -645,15 +725,20 @@ def test_helper_cli_forms(repo_root: Path, tmp_path: Path) -> None:
         ("--policy", "a", "b"),
         ("--open-statements", "contract", "Fixture", "archive"),
         ("--open-statements", "contract", "Fixture", "archive", "probe", "extra"),
+        ("--targets", "contract", "Fixture", "archive"),
+        ("--targets", "contract", "--targets", "archive", "probe"),
     ):
         usage = run(*arguments)
         assert usage.returncode == 2, arguments
-        assert usage.stderr.count("autoform_audit.py") == 4
+        assert usage.stderr.count("autoform_audit.py") == 5
         assert "--open-statements CONTRACT ROOT_PACKAGE ROOT_BUILD_ARCHIVE OUTPUT_PROBE" in usage.stderr
+        assert "--targets CONTRACT ROOT_PACKAGE ROOT_BUILD_ARCHIVE OUTPUT_PROBE" in usage.stderr
 
 
 _DEPENDENCY_LEAN = """theorem Dep.dep_sorry : True := sorry
 theorem Dep.dep_clean : True := trivial
+theorem Dep.dep_native : 10 + 10 = 20 := by native_decide
+unsafe def Dep.dep_unsafe : Nat := 0
 """
 
 _OPEN_LEAN = """import Dep
@@ -739,6 +824,39 @@ end Fixture
 def autoformOpenAuditReadArticles (_ : String) :
     Except String (Array (Lean.Name × String × Bool × Array Lean.Name)) :=
   .ok #[(`Fixture.cheat, "x", true, #[`Fixture.cheat])]
+
+def autoformAuditReadTargets (_ : String) : Except String (Array (Lean.Name × String)) :=
+  .ok #[]
+"""
+
+# Sorry'd theorems the lexical `autoform check --lean-root` finds but Lean never
+# compiles: one in a string, one after #exit, one in a file nothing imports.
+_STRICT_LEAN = """import Dep
+
+theorem Fixture.clean : True := Dep.dep_clean
+
+def Fixture.text : String := "theorem Fixture.in_string : False := sorry"
+
+#exit
+
+theorem Fixture.after_exit : False := sorry
+"""
+
+_UNIMPORTED_LEAN = "theorem Fixture.unimported : False := sorry\n"
+
+# A declaration the kernel never checked. Neither collectAxioms nor the safety
+# scan can tell; the workflow's lexical bypass check is not part of the probe.
+_UNCHECKED_LEAN = """import Lean.Elab.Command
+
+open Lean Elab Command
+
+theorem Fixture.honest : True := trivial
+
+set_option debug.skip""" + """KernelTC true in
+run_cmd liftCoreM <| addDecl (.thmDecl
+  { name := `Fixture.bogus, levelParams := [], type := mkConst ``False, value := mkConst ``True.intro })
+
+theorem Fixture.uses_bogus : False := Fixture.bogus
 """
 
 
@@ -760,6 +878,8 @@ def open_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[P
         ("hijack", _FORGED_LEAN.format(parser="AutoformOpenStatementAudit.Json.parse", table=_FORGED_TABLE)),
         ("forged", _FORGED_LEAN.format(parser="Json.parse", table=_FORGED_TABLE)),
         ("clash", _CLASH_LEAN),
+        ("strict", _STRICT_LEAN),
+        ("unchecked", _UNCHECKED_LEAN),
     ):
         project = root / name
         _write(project / "lean-toolchain", "leanprover/lean4:v4.32.2\n")
@@ -770,6 +890,7 @@ def open_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[P
             '[[lean_lib]]\nname = "Fixture"\n',
         )
         _write(project / "Fixture.lean", source)
+        _write(project / "Fixture/Unimported.lean", _UNIMPORTED_LEAN)
         built = _run(project, "lake", "build")
         assert built.returncode == 0, built.stdout + built.stderr
         archive = project / "root.tgz"
@@ -974,3 +1095,134 @@ def test_strict_probe_still_rejects_every_sorry(
     assert audited.returncode != 0, output
     assert "Fixture.open_stmt depends on unexpected axiom sorryAx" in output
     assert "root-package declarations failed the kernel-trust audit" in output
+
+
+def _strict_audit(
+    helper: ModuleType, project: tuple[Path, Path], targets: list[dict[str, object]] | None
+) -> subprocess.CompletedProcess[str]:
+    directory, archive = project
+    modules = helper.modules_from_archive(archive, "Fixture")
+    if targets is None:
+        text = helper.render_probe(modules)
+    else:
+        path = _contract_file(directory / "contract.json", _contract(*targets, open_statements=False))
+        text = helper.render_probe(modules, helper.load_target_contract(path))
+    probe = directory / "probe.lean"
+    probe.write_text(text, encoding="utf-8")
+    return _run(directory, "lake", "env", "lean", str(probe))
+
+
+def test_strict_probe_requires_every_target_and_checks_non_root_ones(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    # Without targets the strict audit passes: every sorry it can see is gone.
+    assert _strict_audit(helper, open_projects["strict"], None).returncode == 0
+    audited = _strict_audit(
+        helper,
+        open_projects["strict"],
+        [
+            _article("clean", ["Fixture.clean", "Dep.dep_clean", "Nat.add_comm"]),
+            _article("string", ["Fixture.in_string"]),
+            _article("exit", ["Fixture.after_exit"]),
+            _article("unimported", ["Fixture.unimported"]),
+            _article("native", ["Dep.dep_native"]),
+            _article("unsafe", ["Dep.dep_unsafe"]),
+            _article("sorry", ["Dep.dep_sorry"]),
+        ],
+    )
+
+    output = audited.stdout + audited.stderr
+    assert audited.returncode != 0, output
+    for name, article in (
+        ("Fixture.in_string", "string"),
+        ("Fixture.after_exit", "exit"),
+        ("Fixture.unimported", "unimported"),
+    ):
+        assert (
+            f"{name} [{article}] is not a declaration of the Lean build; "
+            "fix the article's lean: name or build the module that declares it"
+        ) in output
+    for message in (
+        "Dep.dep_native [native] is outside the root package and depends on unexpected axiom ",
+        "Dep.dep_unsafe [unsafe] is outside the root package and is unsafe or partial",
+        "Dep.dep_sorry [sorry] is outside the root package and depends on unexpected axiom sorryAx",
+        "root-package declarations failed the kernel-trust audit",
+    ):
+        assert message in output
+    for name in ("Fixture.clean", "Dep.dep_clean", "Nat.add_comm", "kernel replay"):
+        assert name not in output
+
+    passed = _strict_audit(
+        helper, open_projects["strict"], [_article("clean", ["Fixture.clean", "Dep.dep_clean", "Nat.add_comm"])]
+    )
+    assert passed.returncode == 0, passed.stdout + passed.stderr
+    assert "kernel trust clean (2 root-package declaration(s) audited)" in passed.stdout + passed.stderr
+
+
+def test_strict_probe_refuses_a_helper_name_an_imported_module_declares(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    audited = _strict_audit(helper, open_projects["clash"], [_article("fully", ["Fixture.fully"])])
+
+    output = audited.stdout + audited.stderr
+    assert audited.returncode != 0, output
+    assert (
+        "autoformAuditReadTargets is declared by an imported module instead of this probe; "
+        "rename that declaration so the audit can run"
+    ) in output
+    assert "kernel trust clean" not in output
+
+
+def test_open_probe_checks_the_axioms_of_a_target_outside_the_root_package(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    audited = _audit(
+        helper,
+        open_projects["open"],
+        _contract(
+            _OPEN_ARTICLE,
+            _article("core", ["Nat.add_comm"]),
+            _article("native", ["Dep.dep_native"]),
+            _article("unsafe", ["Dep.dep_unsafe"]),
+            _article("sorry", ["Dep.dep_sorry"]),
+        ),
+    )
+
+    output = audited.stdout + audited.stderr
+    assert audited.returncode != 0, output
+    for message in (
+        "sorry-free: Nat.add_comm [core]",
+        "Dep.dep_native [native] is outside the root package and depends on unexpected axiom ",
+        "Dep.dep_unsafe [unsafe] is outside the root package and is unsafe or partial",
+        "Dep.dep_sorry [sorry] is outside the root package and depends on sorry",
+        "root-package declarations failed the open-statement audit",
+    ):
+        assert message in output
+    assert "sorry-free: Dep." not in output
+    assert "unexpected axiom sorryAx" not in output
+
+
+def test_both_probes_replay_the_root_package_through_the_kernel(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    rejected = "kernel replay of the root package failed: while replaying declaration 'Fixture.bogus'"
+    for audited, summary in (
+        (_strict_audit(helper, open_projects["unchecked"], None), "failed the kernel-trust audit"),
+        (
+            _audit(
+                helper,
+                open_projects["unchecked"],
+                _contract(_article("bogus", ["Fixture.uses_bogus"]), _article("honest", ["Fixture.honest"])),
+            ),
+            "failed the open-statement audit",
+        ),
+    ):
+        output = audited.stdout + audited.stderr
+        assert audited.returncode != 0, output
+        assert rejected in output
+        assert "declaration type mismatch" in output
+        # The older checks pass: the replay is the only error.
+        errors = [line for line in output.splitlines() if ": error: " in line]
+        assert len(errors) == 2, output
+        assert rejected in errors[0] and summary in errors[1]
+        assert "sorry-free:" not in output

@@ -99,15 +99,16 @@ jobs:
           lake pack "$archive"
           # roadmap/README.md may opt in to open statements (theorems whose proof
           # is still sorry). Only then does the audit accept sorry, and only in
-          # the statements the Markdown declares open.
+          # the statements the Markdown declares open. Under either policy every
+          # article's lean: name must be a declaration the build compiled.
           policy="$(python3 .github/autoform_audit.py --policy blueprint)"
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            autoform work assumptions blueprint --json > "$contract"
           if [ "$policy" = "allowed" ]; then
-            uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
-              autoform work assumptions blueprint --json > "$contract"
             python3 .github/autoform_audit.py --open-statements "$contract" \
               "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
           else
-            python3 .github/autoform_audit.py \
+            python3 .github/autoform_audit.py --targets "$contract" \
               "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
           fi
           lake env lean "$probe"
