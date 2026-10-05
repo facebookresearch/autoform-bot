@@ -537,8 +537,13 @@ by several articles contribute every owner's claim; an unowned helper gets a
 stable `lean/<slug>-<digest>` target. A `--declaration` no article names is
 claimed the same way, under every owner's target or its own key, so a revision
 is contained only when the revised article's target is its only claim target.
-Project locality is an exact inventory of regular repository source modules,
-never a namespace-prefix guess.
+`unused_statement_dependencies` lists the stated articles whose Markdown
+statement rests on the revised article, directly or through other statement
+dependencies, that are not statement-impacted: the probe follows names, so a
+dependent whose Lean inlines a revised definition's body shows no use although
+its statement changes meaning. They join `claim_targets`, so they too rule out
+`contained`. Project locality is an exact inventory of regular repository
+source modules, never a namespace-prefix guess.
 
 The command snapshots and rereads both the roadmap and repository Lean sources
 around the probe. JSON uses `autoform-impact/v1` and binds its answer to the
