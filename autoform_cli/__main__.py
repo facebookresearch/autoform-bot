@@ -143,7 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     claim_subparsers = claim.add_subparsers(dest="claim_command", required=True)
     for operation in ("acquire", "renew", "release"):
         command = claim_subparsers.add_parser(operation)
-        command.add_argument("node_id")
+        command.add_argument("node_id", nargs="+", help="claim target(s); several change all-or-nothing")
         _add_claim_board_arguments(command)
         if operation in {"acquire", "renew"}:
             command.add_argument("--ttl", type=int, default=CLAIM_TTL_S)
@@ -585,7 +585,36 @@ def _claim(args: argparse.Namespace) -> int:
             print(f"removed {board.cleanup()} expired claim(s)")
             return 0
 
-        key = author_claim_key(args.node_id)
+        past_tense = {"acquire": "acquired", "renew": "renewed", "release": "released"}
+        if len(args.node_id) > 1:
+            # Several targets change in one atomic push, so a failure holds none of them.
+            targets: dict[str, str] = {}
+            for node_id in args.node_id:
+                key = author_claim_key(node_id)
+                if key in targets:
+                    print(f"error: duplicate claim target: {node_id}", file=sys.stderr)
+                    return 2
+                targets[key] = node_id
+            if operation == "acquire":
+                result = board.acquire_many(list(targets), ttl=args.ttl, note=args.note)
+            elif operation == "renew":
+                result = board.renew_many(list(targets), ttl=args.ttl)
+            else:
+                result = board.release_many(list(targets))
+            if result:
+                for key, node_id in targets.items():
+                    print(f"{past_tense[operation]} {node_id} ({key})")
+                return 0
+            blocking = ", ".join(targets.get(key, key) for key in result.blocking)
+            reason = f"{result.reason}: {blocking}" if blocking else result.reason
+            print(
+                f"error: could not {operation} {', '.join(args.node_id)}; "
+                f"no claim was {past_tense[operation]}: {reason}"
+            )
+            return 1
+
+        node_id = args.node_id[0]
+        key = author_claim_key(node_id)
         if operation == "acquire":
             succeeded = board.acquire(key, ttl=args.ttl, note=args.note)
         elif operation == "renew":
@@ -593,10 +622,9 @@ def _claim(args: argparse.Namespace) -> int:
         else:
             succeeded = board.release(key)
         if succeeded:
-            past_tense = {"acquire": "acquired", "renew": "renewed", "release": "released"}
-            print(f"{past_tense[operation]} {args.node_id} ({key})")
+            print(f"{past_tense[operation]} {node_id} ({key})")
             return 0
-        print(f"error: could not {operation} {args.node_id}; ownership is held or unverifiable")
+        print(f"error: could not {operation} {node_id}; ownership is held or unverifiable")
         return 1
     except (ClaimTransportError, ValueError) as exc:
         print(f"error: {exc}")
