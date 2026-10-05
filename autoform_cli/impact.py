@@ -347,6 +347,7 @@ class ImpactArticle:
     dependencies: tuple[str, ...] = ()
     statement_dependencies: tuple[str, ...] = ()
     stated: bool = False
+    mathlib: bool = False
 
     @property
     def claim_target(self) -> str:
@@ -436,9 +437,10 @@ class ImpactReport:
     proof_impacted: tuple[ImpactedArticle, ...]
     helpers: tuple[ImpactHelper, ...]
     undeclared_dependencies: tuple[str, ...]
-    #: Stated articles whose Markdown statement rests on the revised article,
-    #: through statement edges only, that are not statement-impacted: their Lean
-    #: may inline a revised definition's body instead of naming it.
+    #: Stated articles other than Mathlib ones whose Markdown statement rests on
+    #: the revised article, through statement edges only, that are not
+    #: statement-impacted: their Lean may inline a revised definition's body
+    #: instead of naming it.
     unused_statement_dependencies: tuple[str, ...]
     deprecated: tuple[DeprecatedConstant, ...]
     deprecated_unused: tuple[str, ...]
@@ -452,9 +454,9 @@ class ImpactReport:
         constructor or recursor, is repaired under that article's claim, so it
         does not count; any other helper, owned or not, does, and so does a
         revised declaration that belongs to another article or to none, or a
-        stated article whose Markdown statement rests on the revised one, even
-        when its Lean shows no use. The revision is contained exactly when its
-        only claim target is the revised article's.
+        stated article, other than a Mathlib one, whose Markdown statement rests
+        on the revised one, even when its Lean shows no use. The revision is
+        contained exactly when its only claim target is the revised article's.
         """
 
         return self.claim_targets == (self.article.claim_target,)
@@ -586,12 +588,15 @@ def compute_impact(
     undeclared = sorted(item.id for item in impacted if not _reaches(item.id, revised.id, by_id))
     # The probe sees only names, so a dependent whose Lean inlines a revised
     # definition's body instead of naming it would keep its statement under the
-    # old meaning; its Markdown statement dependency is the only trace.
+    # old meaning; its Markdown statement dependency is the only trace. A
+    # Mathlib article's statement is a Mathlib declaration, which cannot use the
+    # revised one, and the loader refuses to retract it, so it is left out.
     statement_ids = {item.id for item in statement_impacted}
     unused = sorted(
         article.id
         for article in articles
         if article.stated
+        and not article.mathlib
         and article.id != revised.id
         and article.id not in statement_ids
         and _reaches(article.id, revised.id, by_id, statement_only=True)
@@ -813,6 +818,7 @@ def revision_impact(
             tuple(node.dependencies),
             tuple(node.statement_dependencies),
             node.status.stated,
+            node.mathlib,
         )
         for node in runtime.nodes
     }

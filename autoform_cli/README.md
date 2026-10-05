@@ -542,8 +542,10 @@ statement rests on the revised article, directly or through other statement
 dependencies, that are not statement-impacted: the probe follows names, so a
 dependent whose Lean inlines a revised definition's body shows no use although
 its statement changes meaning. They join `claim_targets`, so they too rule out
-`contained`. Project locality is an exact inventory of regular repository
-source modules, never a namespace-prefix guess.
+`contained`. A `mathlib: true` article is left out: its statement is a Mathlib
+declaration, which cannot use the revised one, and it cannot record
+`statement: retracted`. Project locality is an exact inventory of regular
+repository source modules, never a namespace-prefix guess.
 
 The command snapshots and rereads both the roadmap and repository Lean sources
 around the probe. JSON uses `autoform-impact/v1` and binds its answer to the
