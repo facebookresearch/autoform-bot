@@ -21,12 +21,15 @@ from fastmcp.server import FastMCP
 
 from servers import resolve_lean_project_dir
 from servers.lean_client import LeanRuntimeClient
+from servers.repl.core import _kill_subprocesses
 
 logger = getLogger(__name__)
 
 DEFAULT_LSP_TIMEOUT = 60
 MAX_LSP_HEADER_BYTES = 16 * 1024
 MAX_LSP_MESSAGE_BYTES = 16 * 1024 * 1024
+LSP_CLEANUP_RETRY_INITIAL_SECONDS = 0.01
+LSP_CLEANUP_RETRY_MAX_SECONDS = 1.0
 
 
 class LspProtocolError(RuntimeError):
@@ -35,6 +38,10 @@ class LspProtocolError(RuntimeError):
 
 class LspBusyError(TimeoutError):
     """A queued operation could not enter the shared LSP session in time."""
+
+
+class LspCleanupError(LspProtocolError):
+    """The owned language-server process group could not be retired."""
 
 
 @dataclass
@@ -52,8 +59,14 @@ class LeanLspSession:
     def __init__(self, config: LspConfig) -> None:
         self.config = config
         self.process: subprocess.Popen | None = None
+        self._process_group_id: int | None = None
+        self._group_retired = True
+        self._poisoned = False
+        self._retire_pending = False
+        self._pending_cancellation: BaseException | None = None
         self._request_id = 0
         self._lock = threading.Lock()
+        self._lifecycle_lock = threading.Lock()
         # A session has one stdout stream. Serialize the complete document
         # lifecycle so concurrent MCP calls cannot race two readers against
         # that stream or consume one another's diagnostics/responses.
@@ -61,67 +74,313 @@ class LeanLspSession:
 
     def start(self) -> None:
         """Start the language server process."""
-        env = os.environ.copy()
-        env.pop("PYTHONPATH", None)
-
-        self.process = subprocess.Popen(
-            self.config.lake_command,
-            cwd=self.config.cwd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            env=env,
-        )
-
+        if os.name != "posix":
+            raise RuntimeError("Lean LSP transport requires a POSIX platform")
+        spawned_process: subprocess.Popen | None = None
         try:
-            # An initialize response must be an InitializeResult object. A
-            # timeout, JSON-RPC error, or malformed result means the backing
-            # Lean server is unusable, so do not expose an apparently healthy
-            # MCP server on top of it.
-            result = self._send_request("initialize", {
-                "processId": os.getpid(),
-                "capabilities": {},
-                "rootUri": Path(self.config.cwd).resolve().as_uri(),
-            })
-            if not isinstance(result, dict):
-                raise LspProtocolError(
-                    "LSP initialize returned a non-object result: "
-                    f"{result!r}"
-                )
+            with self._lifecycle_lock:
+                if not self.is_clean():
+                    raise RuntimeError("Lean LSP session already owns a process")
+                env = os.environ.copy()
+                env.pop("PYTHONPATH", None)
+                try:
+                    spawned_process = subprocess.Popen(
+                        self.config.lake_command,
+                        cwd=self.config.cwd,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        env=env,
+                        start_new_session=True,
+                    )
+                    self.process = spawned_process
+                    self._group_retired = False
+                    self._poisoned = True
+                    self._retire_pending = True
+                    self._publish_process_group(spawned_process)
 
-            self._send_notification("initialized", {})
-        except BaseException:
-            self._abort_process()
-            raise
+                    # An initialize response must be an InitializeResult object. A
+                    # timeout, JSON-RPC error, or malformed result means the backing
+                    # Lean server is unusable, so do not expose an apparently healthy
+                    # MCP server on top of it.
+                    result = self._send_request("initialize", {
+                        "processId": os.getpid(),
+                        "capabilities": {},
+                        "rootUri": Path(self.config.cwd).resolve().as_uri(),
+                    })
+                    if not isinstance(result, dict):
+                        raise LspProtocolError(
+                            "LSP initialize returned a non-object result: "
+                            f"{result!r}"
+                        )
+
+                    self._send_notification("initialized", {})
+                except BaseException as start_error:
+                    if self.process is None and spawned_process is not None:
+                        self.process = spawned_process
+                    if spawned_process is not None and self._process_group_id is None:
+                        self._group_retired = False
+                    self._poisoned = True
+                    self._retire_pending = True
+                    self._remember_cancellation(start_error)
+                    try:
+                        self._retire_until_clean("after startup failure")
+                    except BaseException as cleanup_error:
+                        if cleanup_error is start_error:
+                            raise
+                        raise cleanup_error from start_error
+                    raise
+        except BaseException as start_error:
+            if self.is_clean():
+                raise
+            if self.process is None and spawned_process is not None:
+                self.process = spawned_process
+                self._group_retired = False
+            self._poisoned = True
+            self._retire_pending = True
+            self._recover_interrupted_retirement(
+                start_error,
+                "after interrupted startup",
+            )
+
+    def _publish_process_group(self, process: subprocess.Popen) -> None:
+        """Publish complete ownership immediately after a successful spawn."""
+        self._process_group_id = process.pid
+        self._group_retired = False
+        self._poisoned = False
+        self._retire_pending = False
 
     def _abort_process(self) -> None:
-        """Force-close the backing process without attempting more JSON-RPC."""
-        process, self.process = self.process, None
-        if process is None or process.poll() is not None:
+        """Force-close the complete owned process group and verify cleanup."""
+        if self.is_clean():
+            self._raise_pending_cancellation()
             return
-        try:
-            process.kill()
-            process.wait(timeout=5)
-        except Exception:
-            pass
+        self._poisoned = True
+        self._retire_pending = True
+        self._complete_retirement("after abort")
 
     def close(self) -> None:
         """Shut down the language server."""
-        if self.process and self.process.poll() is None:
-            try:
-                self._send_request("shutdown", {})
-                self._send_notification("exit", {})
-                self.process.wait(timeout=5)
-            except Exception:
-                self._abort_process()
-        self.process = None
+        try:
+            with self._lifecycle_lock:
+                try:
+                    self._poisoned = True
+                    if self.is_clean():
+                        self._raise_pending_cancellation()
+                        return
+                    process = self.process
+                    already_retiring = self._retire_pending
+                    self._retire_pending = True
+                    if not already_retiring and process is not None:
+                        if process.poll() is None:
+                            self._send_request("shutdown", {})
+                            self._send_notification("exit", {})
+                            process.wait(timeout=5)
+                except BaseException as error:
+                    self._remember_cancellation(error)
+                    self._poisoned = True
+                    if not self.is_clean():
+                        self._retire_pending = True
+                    if isinstance(error, Exception):
+                        logger.warning(
+                            "graceful Lean LSP shutdown failed; enforcing cleanup",
+                            exc_info=True,
+                        )
+                self._complete_retirement("during close")
+        except BaseException as error:
+            if self.is_clean():
+                raise
+            self._recover_interrupted_retirement(error, "during interrupted close")
 
     def abort(self) -> None:
         """Discard a protocol stream that can no longer be shared safely."""
-        self._abort_process()
+        try:
+            with self._lifecycle_lock:
+                try:
+                    self._poisoned = True
+                    self._abort_process()
+                except BaseException as error:
+                    if self.is_clean():
+                        raise
+                    self._remember_cancellation(error)
+                    self._poisoned = True
+                    self._retire_pending = True
+                    self._complete_retirement("after interrupted abort")
+        except BaseException as error:
+            if self.is_clean():
+                raise
+            self._recover_interrupted_retirement(error, "after interrupted abort")
 
     def is_alive(self) -> bool:
         """Return whether the cached language-server child can accept work."""
-        return self.process is not None and self.process.poll() is None
+        return (
+            self.process is not None
+            and not self._poisoned
+            and not self._retire_pending
+            and self.process.poll() is None
+        )
+
+    def is_clean(self) -> bool:
+        """Return whether this object owns no process, group, or open pipes."""
+        return (
+            self.process is None
+            and self._process_group_id is None
+            and not self._retire_pending
+        )
+
+    def _mark_retire_pending(self) -> None:
+        """Poison the protocol stream before another admitted operation sees it."""
+        self._poisoned = True
+        self._retire_pending = True
+
+    def _require_usable_after_admission(self) -> None:
+        if self._poisoned or self._retire_pending:
+            raise LspProtocolError("Lean LSP session is retiring after a failed operation")
+
+    def _remember_cancellation(self, error: BaseException) -> None:
+        if isinstance(error, Exception):
+            return
+        if self._pending_cancellation is None:
+            self._pending_cancellation = error
+            return
+        add_note = getattr(self._pending_cancellation, "add_note", None)
+        if add_note is not None and error is not self._pending_cancellation:
+            add_note(f"Lean LSP cleanup was also interrupted by: {error}")
+
+    def _raise_pending_cancellation(self) -> None:
+        error, self._pending_cancellation = self._pending_cancellation, None
+        if error is not None:
+            raise error.with_traceback(error.__traceback__)
+
+    @staticmethod
+    def _close_process_streams(process: subprocess.Popen) -> None:
+        first_error: Exception | None = None
+        first_cancellation: BaseException | None = None
+        for name in ("stdin", "stdout", "stderr"):
+            stream = getattr(process, name, None)
+            if stream is None:
+                continue
+            try:
+                stream.close()
+            except BaseException as error:
+                if isinstance(error, Exception):
+                    if first_error is None:
+                        first_error = error
+                elif first_cancellation is None:
+                    first_cancellation = error
+                else:
+                    add_note = getattr(first_cancellation, "add_note", None)
+                    if add_note is not None:
+                        add_note(f"Lean LSP pipe cleanup was also interrupted by: {error}")
+            else:
+                setattr(process, name, None)
+        if first_cancellation is not None:
+            if first_error is not None:
+                add_note = getattr(first_cancellation, "add_note", None)
+                if add_note is not None:
+                    add_note(f"Lean LSP pipe cleanup also failed: {first_error}")
+            raise first_cancellation
+        if first_error is not None:
+            raise LspCleanupError("failed to close Lean LSP process pipes") from first_error
+
+    def _retire_owned_process_once(self) -> None:
+        process = self.process
+        process_group_id = self._process_group_id
+        if process is None and process_group_id is None:
+            self._retire_pending = False
+            return
+        if process is None:
+            raise LspCleanupError("Lean LSP process ownership is incomplete")
+        if not self._group_retired:
+            if process_group_id is None:
+                try:
+                    process_group_id = process.pid
+                except Exception as error:
+                    raise LspCleanupError(
+                        "Lean LSP process-group id is unavailable"
+                    ) from error
+                self._process_group_id = process_group_id
+            try:
+                assert process_group_id is not None
+                _kill_subprocesses(process, process_group_id)
+            except Exception as error:
+                raise LspCleanupError(
+                    "failed to retire the Lean LSP process group"
+                ) from error
+            # Publish verified retirement before clearing the PGID. If a
+            # cancellation lands between these stores, the retry sees this
+            # flag and cannot signal a subsequently reused process-group id.
+            self._group_retired = True
+        self._process_group_id = None
+        self._close_process_streams(process)
+        if all(getattr(process, name, None) is None for name in ("stdin", "stdout", "stderr")):
+            self.process = None
+        self._retire_pending = False
+
+    def _retire_owned_process(self) -> None:
+        """Retry cancellation-like interruptions, but expose cleanup failures."""
+        while not self.is_clean():
+            try:
+                self._retire_owned_process_once()
+            except Exception:
+                raise
+            except BaseException as error:
+                self._remember_cancellation(error)
+        self._raise_pending_cancellation()
+
+    def _retire_until_clean(self, context: str) -> None:
+        """Retain ownership and retry until every child and pipe is clean."""
+        delay = LSP_CLEANUP_RETRY_INITIAL_SECONDS
+        while not self.is_clean():
+            try:
+                self._retire_owned_process()
+            except LspCleanupError:
+                logger.exception("Lean LSP cleanup failed %s; retrying", context)
+            except BaseException:
+                # `_retire_owned_process` releases a remembered cancellation only
+                # after cleanup is verified.
+                if self.is_clean():
+                    raise
+                raise
+            if self.is_clean():
+                break
+            try:
+                time.sleep(delay)
+            except BaseException as error:
+                self._remember_cancellation(error)
+            delay = min(delay * 2, LSP_CLEANUP_RETRY_MAX_SECONDS)
+        self._raise_pending_cancellation()
+
+    def _complete_retirement(self, context: str) -> None:
+        """Do not let an interruption escape while this object still owns state."""
+        while not self.is_clean():
+            try:
+                self._retire_until_clean(context)
+            except BaseException as error:
+                if self.is_clean():
+                    raise
+                self._remember_cancellation(error)
+                if isinstance(error, Exception):
+                    logger.exception("Lean LSP retirement failed %s; retrying", context)
+        self._raise_pending_cancellation()
+
+    def _recover_interrupted_retirement(
+        self,
+        error: BaseException,
+        context: str,
+    ) -> None:
+        """Reacquire lifecycle ownership until cancellation-safe cleanup finishes."""
+        self._remember_cancellation(error)
+        while not self.is_clean():
+            try:
+                with self._lifecycle_lock:
+                    self._poisoned = True
+                    self._retire_pending = True
+                    self._complete_retirement(context)
+            except BaseException as retry_error:
+                if self.is_clean():
+                    raise
+                self._remember_cancellation(retry_error)
+        self._raise_pending_cancellation()
 
     def get_diagnostics(self, file_path: str) -> list[dict]:
         """Open a file and collect diagnostics from the language server."""
@@ -131,12 +390,17 @@ class LeanLspSession:
                 f"timed out after {self.config.timeout:g}s waiting for the Lean LSP session"
             )
         try:
+            self._require_usable_after_admission()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise LspBusyError(
                     f"timed out after {self.config.timeout:g}s waiting for the Lean LSP session"
                 )
-            return self._get_diagnostics(file_path, timeout=remaining)
+            try:
+                return self._get_diagnostics(file_path, timeout=remaining)
+            except BaseException:
+                self._mark_retire_pending()
+                raise
         finally:
             self._operation_lock.release()
 
@@ -164,25 +428,25 @@ class LeanLspSession:
             timeout=self._remaining(deadline, operation_timeout),
         )
 
+        diagnostics: list[dict] | None = None
+        operation_error: BaseException | None = None
         try:
             # An empty published diagnostic list means the file is clean. No
             # publication at all is a timeout/error and must never be conflated
             # with that valid empty result.
-            return self._collect_diagnostics(
+            diagnostics = self._collect_diagnostics(
                 uri,
                 timeout=self._remaining(deadline, operation_timeout),
             )
-        finally:
-            try:
-                remaining = deadline - time.monotonic()
-                if remaining > 0:
-                    self._send_notification(
-                        "textDocument/didClose",
-                        {"textDocument": {"uri": uri}},
-                        timeout=remaining,
-                    )
-            except Exception:
-                logger.warning("failed to close LSP document %s", uri, exc_info=True)
+        except BaseException as error:
+            operation_error = error
+        close_error = self._close_document(uri, deadline)
+        if operation_error is not None:
+            self._raise_operation_error(operation_error, close_error)
+        if close_error is not None:
+            raise close_error
+        assert diagnostics is not None
+        return diagnostics
 
     def hover(self, file_path: str, line: int, character: int) -> str | None:
         """Get hover information at a position."""
@@ -192,12 +456,17 @@ class LeanLspSession:
                 f"timed out after {self.config.timeout:g}s waiting for the Lean LSP session"
             )
         try:
+            self._require_usable_after_admission()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise LspBusyError(
                     f"timed out after {self.config.timeout:g}s waiting for the Lean LSP session"
                 )
-            return self._hover(file_path, line, character, timeout=remaining)
+            try:
+                return self._hover(file_path, line, character, timeout=remaining)
+            except BaseException:
+                self._mark_retire_pending()
+                raise
         finally:
             self._operation_lock.release()
 
@@ -225,6 +494,8 @@ class LeanLspSession:
             },
             timeout=self._remaining(deadline, timeout),
         )
+        result: Any = None
+        operation_error: BaseException | None = None
         try:
             result = self._send_request(
                 "textDocument/hover",
@@ -234,23 +505,56 @@ class LeanLspSession:
                 },
                 timeout=self._remaining(deadline, timeout),
             )
-        finally:
-            try:
-                remaining = deadline - time.monotonic()
-                if remaining > 0:
-                    self._send_notification(
-                        "textDocument/didClose",
-                        {"textDocument": {"uri": uri}},
-                        timeout=remaining,
-                    )
-            except Exception:
-                logger.warning("failed to close LSP document %s", uri, exc_info=True)
+        except BaseException as error:
+            operation_error = error
+        close_error = self._close_document(uri, deadline)
+        if operation_error is not None:
+            self._raise_operation_error(operation_error, close_error)
+        if close_error is not None:
+            raise close_error
         if result and "contents" in result:
             contents = result["contents"]
             if isinstance(contents, dict):
                 return contents.get("value", "")
             return str(contents)
         return None
+
+    def _close_document(self, uri: str, deadline: float) -> BaseException | None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return TimeoutError(
+                "Lean LSP operation deadline expired before closing the document"
+            )
+        try:
+            self._send_notification(
+                "textDocument/didClose",
+                {"textDocument": {"uri": uri}},
+                timeout=remaining,
+            )
+        except BaseException as error:
+            return error
+        return None
+
+    @staticmethod
+    def _raise_operation_error(
+        operation_error: BaseException,
+        close_error: BaseException | None,
+    ) -> None:
+        if close_error is not None and close_error is not operation_error:
+            if isinstance(operation_error, Exception) and not isinstance(
+                close_error, Exception
+            ):
+                add_note = getattr(close_error, "add_note", None)
+                if add_note is not None:
+                    add_note(f"the Lean LSP operation also failed: {operation_error}")
+                raise close_error.with_traceback(close_error.__traceback__) from operation_error
+            add_note = getattr(operation_error, "add_note", None)
+            if add_note is not None:
+                add_note(f"closing the Lean LSP document also failed: {close_error}")
+            raise operation_error.with_traceback(
+                operation_error.__traceback__
+            ) from close_error
+        raise operation_error.with_traceback(operation_error.__traceback__)
 
     def _send_request(self, method: str, params: dict, *, timeout: float = 30) -> Any:
         """Send a JSON-RPC request and wait for response."""
