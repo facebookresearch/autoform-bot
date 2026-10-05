@@ -361,10 +361,17 @@ _REVIEW_BRANCH = re.compile(
 )
 
 
-@pytest.mark.parametrize("name", ["autoform-verify.yml", "blueprint-pages.yml"])
+@pytest.mark.parametrize(
+    ("name", "gated"),
+    [
+        ("autoform-verify.yml", "Verify statement reviews"),
+        ("blueprint-pages.yml", "Verify statement reviews"),
+        ("autoform-review-gate.yml", "Authenticate changed approvals"),
+    ],
+)
 @pytest.mark.parametrize("copy", ["template", "example"])
 def test_statement_review_steps_run_only_in_projects_that_opted_in(
-    tmp_path: Path, repo_root: Path, copy: str, name: str
+    tmp_path: Path, repo_root: Path, copy: str, name: str, gated: str
 ) -> None:
     """A project without the review marker never extracts a skeleton report,
     and its Lean-mapped articles need no durable article_id, so a review step
@@ -387,7 +394,7 @@ def test_statement_review_steps_run_only_in_projects_that_opted_in(
         if any(marker in json.dumps(step) for marker in _REVIEW_MARKERS)
     ]
 
-    assert "Verify statement reviews" in [step.get("name") for step in review]
+    assert gated in [step.get("name") for step in review]
     for step in review:
         if step.get("if") == "env.AUTOFORM_REVIEW_ENABLED == 'true'":
             continue
