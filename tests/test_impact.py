@@ -296,9 +296,9 @@ def test_deprecated_constants_report_users_through_internal_details() -> None:
     # An internal user stands for its own users, unless nothing uses it: a
     # constant something still mentions is never reported as safe to delete.
     assert [item.as_dict() for item in report.deprecated] == [
-        {"name": "A.old", "replacement": "A.new", "users": ["A.user", "A.wrapped"]},
-        {"name": "A.older", "replacement": None, "users": ["A.stray._proof_1"]},
-        {"name": "A.unused", "replacement": "A.new", "users": []},
+        {"name": "A.old", "replacement": "A.new", "users": ["A.user", "A.wrapped"], "articles": []},
+        {"name": "A.older", "replacement": None, "users": ["A.stray._proof_1"], "articles": []},
+        {"name": "A.unused", "replacement": "A.new", "users": [], "articles": []},
     ]
     assert report.deprecated_unused == ("A.unused",)
     assert report.contained
@@ -316,9 +316,175 @@ def test_a_contained_revision_says_it_can_be_revised_in_place() -> None:
     assert format_impact(report) == [
         "Revising A.leaf of chapter/leaf [af_leaf]",
         "Graph source revision: rev",
-        "Contained: no other article or helper uses A.leaf, so it can be revised in place.",
+        "Contained: nothing outside chapter/leaf uses A.leaf, so it can be revised in place.",
         "Claim targets: af_leaf",
     ]
+
+
+def test_private_declarations_resolve_by_their_user_facing_names() -> None:
+    privT = "_private.Demo.B.0.A.privT"
+    records = _records(
+        _rec("A.base", "def"),
+        _rec(privT, module="Demo.B", type_uses=("A.base",), user_name="A.privT"),
+        _rec(f"{privT}.aux", module="Demo.B", type_uses=("A.base",), user_name="A.privT.aux", parent=privT),
+        _rec("_private.Demo.C.0.A.privU", "def", module="Demo.C", user_name="A.privU"),
+        _rec("A.privU", "def", type_uses=("A.base",)),
+    )
+    articles = [
+        _article("base", "A.base"),
+        _article("priv", "A.privT", article_id="af_priv"),
+        _article("u", "A.privU"),
+    ]
+
+    report = _impact(records, articles, "base")
+
+    # The article names the private theorem as its source does, so it is
+    # impacted and owns the theorem's `where` helper; an exact kernel name
+    # wins over a private constant with the same user-facing name.
+    assert _ids(report.statement_impacted) == ["priv", "u"]
+    assert report.statement_impacted[0].declarations == ("A.privT",)
+    assert [(helper.name, helper.owner) for helper in report.helpers] == [(f"{privT}.aux", "priv")]
+    assert report.claim_targets == ("base", "af_priv", "u")
+    revised = _impact(records, articles, "base", ["A.privT"])
+    assert revised.declarations == ("A.privT",)
+    assert revised.helpers == ()
+
+
+def test_a_helper_of_an_unnamed_private_declaration_claims_the_article_naming_its_owner() -> None:
+    privT = "_private.Demo.B.0.A.privT"
+    records = _records(
+        _rec("A.base", "def"),
+        _rec(privT, module="Demo.B", user_name="A.privT"),
+        _rec(f"{privT}.aux", module="Demo.B", type_uses=("A.base",), user_name="A.privT.aux", parent=privT),
+    )
+    articles = [_article("base", "A.base"), _article("priv", "A.privT", article_id="af_priv")]
+
+    report = _impact(records, articles, "base")
+
+    assert report.statement_impacted == ()
+    assert [(helper.name, helper.owner) for helper in report.helpers] == [(f"{privT}.aux", "priv")]
+    assert report.claim_targets == ("base", "af_priv")
+
+
+def test_a_name_several_private_declarations_share_is_refused() -> None:
+    records = _records(
+        _rec("A.base", "def"),
+        _rec("_private.Demo.B.0.A.dup", module="Demo.B", user_name="A.dup"),
+        _rec("_private.Demo.C.0.A.dup", module="Demo.C", user_name="A.dup"),
+    )
+    articles = [_article("base", "A.base"), _article("dup", "A.dup")]
+    message = "names several private declarations: _private.Demo.B.0.A.dup, _private.Demo.C.0.A.dup"
+
+    with pytest.raises(ImpactError, match=f"^dup: lean: A\\.dup {message}$"):
+        _impact(records, articles, "base")
+    with pytest.raises(ImpactError, match=f"^A\\.dup {message}$"):
+        _impact(records, articles, "dup")
+
+
+def test_an_alias_shares_its_target_s_statement() -> None:
+    records = _records(
+        _rec("A.plain"),
+        _rec("A.alias", value_uses=("A.plain",), alias_of="A.plain"),
+        _rec("A.usesAlias", value_uses=("A.alias",)),
+        _rec("A.statesAlias", type_uses=("A.alias",)),
+    )
+    articles = [
+        _article("plain", "A.plain"),
+        _article("uses-alias", "A.usesAlias"),
+        _article("states-alias", "A.statesAlias"),
+    ]
+
+    report = _impact(records, articles, "plain")
+
+    # The alias copied A.plain's type, so revising A.plain revises the alias,
+    # what states anything about it, and every proof that uses it.
+    assert _ids(report.statement_impacted) == ["states-alias"]
+    assert _ids(report.proof_impacted) == ["uses-alias"]
+    assert [(helper.name, helper.impact) for helper in report.helpers] == [("A.alias", "statement")]
+    assert report.claim_targets == ("plain", "states-alias", "uses-alias")
+
+
+def test_a_deprecated_constant_s_own_companions_are_not_its_users() -> None:
+    records = _records(
+        _rec("A.old", "def", deprecated=True),
+        _rec("A.old.eq_1", type_uses=("A.old",), uses_deprecated=("A.old",), internal=True, parent="A.old"),
+        _rec("A.oldThm", deprecated=True),
+        _rec(
+            "A.oldThm._simp_1",
+            value_uses=("A.oldThm",),
+            uses_deprecated=("A.oldThm",),
+            internal=True,
+            parent="A.oldThm",
+        ),
+        _rec("A.viaSimp", value_uses=("A.oldThm._simp_1",)),
+        _rec("A.other"),
+    )
+    articles = [_article("other", "A.other")]
+
+    report = _impact(records, articles, "other")
+
+    # Deleting A.old deletes its equation lemma, but a real user of a
+    # companion still uses the constant behind it.
+    assert [(item.name, item.users) for item in report.deprecated] == [("A.old", ()), ("A.oldThm", ("A.viaSimp",))]
+    assert report.deprecated_unused == ("A.old",)
+
+
+def test_a_deprecated_constant_another_article_names_is_not_unused() -> None:
+    records = _records(
+        _rec("A.new"),
+        _rec("A.old", deprecated=True, replacement="A.new"),
+        _rec("A.mine", deprecated=True, replacement="A.new"),
+        _rec("A.used", deprecated=True),
+        _rec("A.user", value_uses=("A.used",), uses_deprecated=("A.used",)),
+    )
+    articles = [
+        _article("new", "A.new", "A.mine"),
+        _article("b", "A.old"),
+        _article("a", "A.old", "A.used"),
+        _article("user", "A.user"),
+    ]
+
+    report = _impact(records, articles, "new", ["A.new"])
+
+    # The revised article drops A.mine from lean: in the commit deleting it.
+    assert [item.as_dict() for item in report.deprecated] == [
+        {"name": "A.mine", "replacement": "A.new", "users": [], "articles": []},
+        {"name": "A.old", "replacement": "A.new", "users": [], "articles": ["a", "b"]},
+        {"name": "A.used", "replacement": None, "users": ["A.user"], "articles": ["a"]},
+    ]
+    assert report.deprecated_unused == ("A.mine",)
+    assert format_impact(report)[-5:] == [
+        "Deprecated:",
+        "  A.mine -> A.new: no users, safe to delete",
+        "  A.old -> A.new: named by a, b",
+        "  A.used: used by A.user; named by a",
+        "Claim targets: new",
+    ]
+
+
+def test_helpers_the_revised_article_owns_keep_a_revision_contained() -> None:
+    records = _records(
+        _rec("A.S", "inductive", value_uses=("A.S.mk",)),
+        _rec("A.S.mk", "constructor", type_uses=("A.S",), parent="A.S"),
+        _rec("A.S.rec", "recursor", type_uses=("A.S", "A.S.mk"), parent="A.S"),
+        _rec("A.T", "inductive"),
+        _rec("A.T.aux", type_uses=("A.T",), parent="A.T"),
+        _rec("A.loose", type_uses=("A.T",)),
+    )
+    articles = [_article("s", "A.S"), _article("t", "A.T"), _article("other", "A.T")]
+
+    owned = _impact(records, articles, "s")
+    shared = _impact(records, articles, "t")
+
+    # A structure's generated companions are repaired under its own claim and
+    # are still listed; a helper owned by another article or by none is not.
+    assert owned.contained
+    assert [(helper.name, helper.owner) for helper in owned.helpers] == [("A.S.mk", "s"), ("A.S.rec", "s")]
+    assert owned.claim_targets == ("s",)
+    assert format_impact(owned)[2] == "Contained: nothing outside s uses A.S, so it can be revised in place."
+    assert not shared.contained
+    assert [(helper.name, helper.owner) for helper in shared.helpers] == [("A.T.aux", "other"), ("A.loose", None)]
+    assert shared.claim_targets == ("t", "other")
 
 
 # --------------------------------------------------------------------------- #
@@ -340,6 +506,8 @@ def _payload(name: str, **fields: object) -> dict[str, object]:
         "replacement": None,
         "uses_deprecated": [],
         "value_missing": False,
+        "user_name": None,
+        "alias_of": None,
     }
     record.update(fields)
     return record
@@ -355,6 +523,7 @@ def test_probe_output_is_read_from_marker_lines() -> None:
             "warning: unrelated Lean output",
             _line(_payload("A.b", type_uses=["A.a"], parent="A")),
             _line(_payload("A.a", kind="def", instance=True)),
+            _line(_payload("_private.Demo.0.A.c", value_uses=["A.b"], user_name="A.c", alias_of="A.b")),
             "",
         ]
     )
@@ -364,7 +533,16 @@ def test_probe_output_is_read_from_marker_lines() -> None:
     assert records == {
         "A.a": ConstantRecord(name="A.a", kind="def", module="Demo", instance=True),
         "A.b": ConstantRecord(name="A.b", kind="theorem", module="Demo", type_uses=("A.a",), parent="A"),
+        "_private.Demo.0.A.c": ConstantRecord(
+            name="_private.Demo.0.A.c",
+            kind="theorem",
+            module="Demo",
+            value_uses=("A.b",),
+            user_name="A.c",
+            alias_of="A.b",
+        ),
     }
+    assert records["_private.Demo.0.A.c"].meaning_uses == ("A.b",)
 
 
 @pytest.mark.parametrize(
@@ -376,6 +554,9 @@ def test_probe_output_is_read_from_marker_lines() -> None:
         ([_line(_payload("A.a", value_uses=[1]))], "malformed 'value_uses' field"),
         ([_line(_payload("A.a", kind="lemma"))], "malformed record for 'A.a'"),
         ([_line(_payload(""))], "malformed record for ''"),
+        ([_line(_payload("A.a", user_name=""))], "malformed record for 'A.a'"),
+        ([_line(_payload("A.a", user_name=1))], "malformed 'user_name' field"),
+        ([_line(_payload("A.a", alias_of="A.b"))], "malformed record for 'A.a'"),
         ([_line(_payload("A.a")), _line(_payload("A.a"))], "emitted A.a twice"),
         (["no records here"], "found no project-local constants"),
         ([_line(_payload("A.a", value_missing=True))], "could not read the value of A.a"),
@@ -659,8 +840,8 @@ def test_cli_writes_the_impact_report_as_canonical_json(tmp_path: Path, monkeypa
         ],
         "undeclared_dependencies": ["chapter/loose"],
         "deprecated": [
-            {"name": "Demo.gone", "replacement": None, "users": []},
-            {"name": "Demo.old", "replacement": "Demo.base_eq", "users": ["Demo.loose"]},
+            {"name": "Demo.gone", "replacement": None, "users": [], "articles": []},
+            {"name": "Demo.old", "replacement": "Demo.base_eq", "users": ["Demo.loose"], "articles": []},
         ],
         "deprecated_unused": ["Demo.gone"],
         "claim_targets": [_BASE_ID, _USES_ID, "chapter/loose"],
@@ -833,7 +1014,12 @@ def test_helpers_are_located_by_source_name_in_their_module_s_file(tmp_path: Pat
         monkeypatch,
         [
             *_STUB_RECORDS,
-            _payload("_private.Demo.Extra.0.Demo.secret", module="Demo.Extra", type_uses=["Demo.base"]),
+            _payload(
+                "_private.Demo.Extra.0.Demo.secret",
+                module="Demo.Extra",
+                type_uses=["Demo.base"],
+                user_name="Demo.secret",
+            ),
             _payload("Demo.twin", type_uses=["Demo.base"]),
             _payload("Demo.made", module="Demo.Made", type_uses=["Demo.base"]),
             _payload("Demo.lost", module="Demo.Made", type_uses=["Demo.base"]),
@@ -953,6 +1139,47 @@ end Imp
 """
 
 
+_IMP_ALIAS = """\
+import Lean
+
+open Lean Elab Command
+
+/-- The theorem branch of Batteries' `alias`: the alias copies the target's
+type, and its value is the target constant. -/
+elab "imp_alias " n:ident " := " t:ident : command => do
+  let target ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo t
+  let info ← getConstInfo target
+  liftCoreM <| addDecl <| .thmDecl { info.toConstantVal with
+    name := (← getCurrNamespace) ++ n.getId
+    value := mkConst target (info.levelParams.map mkLevelParam) }
+"""
+
+_IMP_MORE = """\
+import Imp.Alias
+
+namespace Imp
+
+def seed : Nat := 2
+
+private theorem privSeed : seed = 2 := aux
+where aux : seed = 2 := rfl
+
+theorem seedEq : seed = 2 := rfl
+
+imp_alias seedAlias := seedEq
+
+theorem usesAlias : seed = 2 ∧ True := ⟨seedAlias, trivial⟩
+
+@[simp, deprecated seedEq (since := "2026-10-05")]
+def oldSeed : Nat := 2
+
+structure Box where
+  v : Nat
+
+end Imp
+"""
+
+
 def _imp_project(root: Path) -> Path:
     """A built Lean project whose glob selects a module its root never imports."""
 
@@ -966,6 +1193,8 @@ def _imp_project(root: Path) -> Path:
     (lean_root / "Imp.lean").write_text("import Imp.Basic\n", encoding="utf-8")
     (lean_root / "Imp" / "Basic.lean").write_text(_IMP_BASIC, encoding="utf-8")
     (lean_root / "Imp" / "Extra.lean").write_text(_IMP_EXTRA, encoding="utf-8")
+    (lean_root / "Imp" / "Alias.lean").write_text(_IMP_ALIAS, encoding="utf-8")
+    (lean_root / "Imp" / "More.lean").write_text(_IMP_MORE, encoding="utf-8")
     build = subprocess.run(["lake", "build"], cwd=lean_root, capture_output=True, text=True, timeout=600, check=False)
     assert build.returncode == 0, build.stdout + build.stderr
     return lean_root
@@ -1025,17 +1254,19 @@ def test_the_probe_reads_a_built_project(tmp_path: Path, monkeypatch, capsys) ->
         ("Imp.usesOld", "theorem", "statement", "Imp/Extra.lean", 10, None),
     ]
     assert report["undeclared_dependencies"] == ["chapter/simp"]
+    # The equation lemma `@[simp]` gives oldSeed goes when oldSeed does.
     assert report["deprecated"] == [
-        {"name": "Imp.oldEq", "replacement": "Imp.base_eq", "users": ["Imp.usesOld"]},
-        {"name": "Imp.oldUnused", "replacement": "Imp.base_eq", "users": []},
+        {"name": "Imp.oldEq", "replacement": "Imp.base_eq", "users": ["Imp.usesOld"], "articles": []},
+        {"name": "Imp.oldSeed", "replacement": "Imp.seedEq", "users": [], "articles": []},
+        {"name": "Imp.oldUnused", "replacement": "Imp.base_eq", "users": [], "articles": []},
     ]
-    assert report["deprecated_unused"] == ["Imp.oldUnused"]
+    assert report["deprecated_unused"] == ["Imp.oldSeed", "Imp.oldUnused"]
     assert report["claim_targets"] == ["chapter/base", "chapter/proved", "chapter/simp", "chapter/uses"]
     assert report["source_revision"] == source_revision
 
     (probed,) = outputs
     records = parse_impact_output(probed)
-    assert {record.module for record in records.values()} == {"Imp.Basic", "Imp.Extra"}
+    assert {record.module for record in records.values()} == {"Imp.Alias", "Imp.Basic", "Imp.Extra", "Imp.More"}
     simp_lemma = next(record for record in records.values() if record.parent == "Imp.P_iff")
     assert simp_lemma.internal and simp_lemma.type_uses == ("Imp.P",)
     assert records["Imp.usesOld"].uses_deprecated == ("Imp.oldEq",)
@@ -1056,3 +1287,35 @@ def test_the_probe_reads_a_built_project(tmp_path: Path, monkeypatch, capsys) ->
     apart = compute_impact(records, articles, articles[4], ["Imp.apart"], source_revision="rev")
     assert apart.contained
     assert apart.claim_targets == ("chapter/apart",)
+
+    # Articles name a private theorem as its source does; its `where` helper
+    # is owned through the private name.
+    priv = "_private.Imp.More.0.Imp.privSeed"
+    assert records[priv].user_name == "Imp.privSeed"
+    assert records[f"{priv}.aux"].parent == priv
+    more = [
+        ImpactArticle("chapter/seed", None, ("Imp.seed",)),
+        ImpactArticle("chapter/priv", None, ("Imp.privSeed",)),
+        ImpactArticle("chapter/seed-eq", None, ("Imp.seedEq",)),
+        ImpactArticle("chapter/uses-alias", None, ("Imp.usesAlias",)),
+        ImpactArticle("chapter/box", None, ("Imp.Box",)),
+    ]
+    seed = compute_impact(records, more, more[0], ["Imp.seed"], source_revision="rev")
+    assert _ids(seed.statement_impacted) == ["chapter/priv", "chapter/seed-eq", "chapter/uses-alias"]
+    assert [(helper.name, helper.owner) for helper in seed.helpers] == [
+        ("Imp.seedAlias", None),
+        (f"{priv}.aux", "chapter/priv"),
+    ]
+    assert compute_impact(records, more, more[1], ["Imp.privSeed"], source_revision="rev").contained
+    # The alias's type copies seedEq's without mentioning it.
+    assert records["Imp.seedAlias"].alias_of == "Imp.seedEq"
+    assert "Imp.seedEq" not in records["Imp.seedAlias"].type_uses
+    seed_eq = compute_impact(records, more, more[2], ["Imp.seedEq"], source_revision="rev")
+    assert seed_eq.statement_impacted == ()
+    assert _ids(seed_eq.proof_impacted) == ["chapter/uses-alias"]
+    assert [(helper.name, helper.impact) for helper in seed_eq.helpers] == [("Imp.seedAlias", "statement")]
+    # A structure's generated companions belong to its own article.
+    box = compute_impact(records, more, more[4], ["Imp.Box"], source_revision="rev")
+    assert box.contained
+    assert box.helpers
+    assert {helper.owner for helper in box.helpers} == {"chapter/box"}

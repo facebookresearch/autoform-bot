@@ -57,7 +57,11 @@ Theorem values are read too (`allowOpaque`), since proofs break when the
 statements they use change; an inductive's constructors stand in for a value.
 `internal` is judged on the user-facing name: a private declaration someone
 wrote is not an internal detail, while the companions Lean generates for it
-(`_proof_1`, `match_1`, `_simp_1`) still are. -/
+(`_proof_1`, `match_1`, `_simp_1`) still are. `user_name` is that name for a
+private constant, which is how articles and `--declaration` name it.
+`alias_of` is the local constant a theorem's value is exactly, as for
+Batteries' `alias`: such a theorem copies its target's type, so its statement
+changes with the target's although its type never mentions it. -/
 def record (env : Environment) (isLocal : Name → Bool) (c : Name) (info : ConstantInfo)
     (module : Name) : Json :=
   let value := info.value? (allowOpaque := true)
@@ -68,6 +72,9 @@ def record (env : Environment) (isLocal : Name → Bool) (c : Name) (info : Cons
   let valueMissing := match info with
     | .thmInfo _ | .defnInfo _ | .opaqueInfo _ => value.isNone
     | _                                        => false
+  let aliasOf := match info, value.map (·.consumeMData) with
+    | .thmInfo _, some (.const target _) => if isLocal target then some target else none
+    | _, _                               => none
   let usesDeprecated := (typeConstants ++ valueConstants).foldl
     (fun acc d => if Linter.isDeprecated env d && !acc.contains d then acc.push d else acc) #[]
   Json.mkObj [
@@ -75,10 +82,12 @@ def record (env : Environment) (isLocal : Name → Bool) (c : Name) (info : Cons
     ("kind", Json.str (kindOf info)),
     ("instance", Json.bool (isInstanceCore env c)),
     ("internal", Json.bool (privateToUserName c).isInternalDetail),
+    ("user_name", if isPrivateName c then nameJson (privateToUserName c) else Json.null),
     ("module", nameJson module),
     ("parent", ((parentOf env c).map nameJson).getD Json.null),
     ("type_uses", namesJson (typeConstants.filter isLocal)),
     ("value_uses", namesJson (valueConstants.filter isLocal)),
+    ("alias_of", (aliasOf.map nameJson).getD Json.null),
     ("deprecated", Json.bool (Linter.isDeprecated env c)),
     ("replacement", ((Linter.getDeprecatedNewName env c).map nameJson).getD Json.null),
     ("uses_deprecated", namesJson usesDeprecated),

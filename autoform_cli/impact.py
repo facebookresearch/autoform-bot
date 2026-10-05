@@ -54,6 +54,10 @@ class ConstantRecord:
     ``internal`` is ``Name.isInternalDetail`` of the user-facing name, so a
     private declaration someone wrote is not internal, while the companions
     Lean generates (``_proof_1``, ``match_1``, ``_simp_1``) are.
+    ``user_name`` is the user-facing name of a private constant, which is how
+    articles and ``--declaration`` name it, and ``None`` for any other.
+    ``alias_of`` is the local constant a theorem's value is exactly, as for
+    Batteries' ``alias``, whose type is copied from that constant's.
     """
 
     name: str
@@ -68,15 +72,22 @@ class ConstantRecord:
     replacement: str | None = None
     uses_deprecated: tuple[str, ...] = ()
     value_missing: bool = False
+    user_name: str | None = None
+    alias_of: str | None = None
 
     @property
     def meaning_uses(self) -> tuple[str, ...]:
-        """The local constants this constant's meaning rests on."""
+        """The local constants this constant's meaning rests on.
 
-        return self.type_uses + self.value_uses if self.kind in _VALUE_IS_MEANING else self.type_uses
+        An alias's statement is its target's, so it changes with the target's.
+        """
+
+        uses = self.type_uses + self.value_uses if self.kind in _VALUE_IS_MEANING else self.type_uses
+        return (*uses, self.alias_of) if self.alias_of is not None else uses
 
 
 _RECORD_FIELDS: dict[str, tuple[type, ...]] = {
+    "alias_of": (str, type(None)),
     "deprecated": (bool,),
     "instance": (bool,),
     "internal": (bool,),
@@ -86,6 +97,7 @@ _RECORD_FIELDS: dict[str, tuple[type, ...]] = {
     "parent": (str, type(None)),
     "replacement": (str, type(None)),
     "type_uses": (list,),
+    "user_name": (str, type(None)),
     "uses_deprecated": (list,),
     "value_missing": (bool,),
     "value_uses": (list,),
@@ -133,7 +145,13 @@ def _constant_record(payload: object) -> ConstantRecord:
             isinstance(value, list) and not all(isinstance(item, str) for item in value)
         ):
             raise SkeletonError([f"the impact probe emitted a malformed {field!r} field"])
-    if not payload["name"] or not payload["module"] or payload["kind"] not in _KINDS:
+    if (
+        not payload["name"]
+        or not payload["module"]
+        or payload["kind"] not in _KINDS
+        or payload["user_name"] == ""
+        or payload["alias_of"] not in (None, *payload["value_uses"])
+    ):
         raise SkeletonError([f"the impact probe emitted a malformed record for {payload['name']!r}"])
     return ConstantRecord(
         name=payload["name"],
@@ -148,6 +166,8 @@ def _constant_record(payload: object) -> ConstantRecord:
         replacement=payload["replacement"],
         uses_deprecated=tuple(payload["uses_deprecated"]),
         value_missing=payload["value_missing"],
+        user_name=payload["user_name"],
+        alias_of=payload["alias_of"],
     )
 
 
@@ -330,14 +350,26 @@ class ImpactHelper:
 
 @dataclass(frozen=True, slots=True)
 class DeprecatedConstant:
-    """A local deprecated constant, its replacement, and the local constants that use it."""
+    """A local deprecated constant, its replacement, and what still refers to it.
+
+    ``users`` are the local constants that use it; ``articles`` are the
+    articles other than the revised one whose ``lean:`` names it. The revised
+    article does not count, since it drops the name in the commit that deletes
+    the constant.
+    """
 
     name: str
     replacement: str | None
     users: tuple[str, ...]
+    articles: tuple[str, ...]
 
     def as_dict(self) -> dict[str, object]:
-        return {"name": self.name, "replacement": self.replacement, "users": list(self.users)}
+        return {
+            "name": self.name,
+            "replacement": self.replacement,
+            "users": list(self.users),
+            "articles": list(self.articles),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,9 +389,18 @@ class ImpactReport:
 
     @property
     def contained(self) -> bool:
-        """Whether nothing outside the revised article is impacted."""
+        """Whether nothing outside the revised article is impacted.
 
-        return not (self.statement_impacted or self.proof_impacted or self.helpers)
+        A helper the revised article owns, such as a structure's generated
+        constructor or recursor, is repaired under that article's claim, so it
+        does not count; any other helper, owned or not, does.
+        """
+
+        return not (
+            self.statement_impacted
+            or self.proof_impacted
+            or any(helper.owner != self.article.id for helper in self.helpers)
+        )
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -406,14 +447,16 @@ def compute_impact(
     directly or through internal-detail constants, such as the ``_simp_1``
     companion ``simp`` uses or the ``_proof_1`` a definition's nested proof
     becomes. Definitions belong in P too: their nested proofs can stop
-    elaborating although their meaning is unchanged.
+    elaborating although their meaning is unchanged. A theorem whose value is
+    exactly another constant, as Batteries' ``alias`` makes, has that
+    constant's statement, so it joins M with it.
     """
 
-    by_key = {_name_key(name): name for name in records}
+    resolve = _resolver(records)
     revised_names: dict[str, str] = {}
     missing: list[str] = []
     for name in declarations:
-        record_name = by_key.get(_name_key(name))
+        record_name = resolve(name)
         if record_name is None:
             missing.append(name)
         else:
@@ -445,7 +488,7 @@ def compute_impact(
     statement_impacted: list[ImpactedArticle] = []
     proof_impacted: list[ImpactedArticle] = []
     for article in articles:
-        resolved = [(name, by_key.get(_name_key(name))) for name in article.declarations]
+        resolved = [(name, resolve(name, f"{article.id}: lean: ")) for name in article.declarations]
         for _, record_name in resolved:
             if record_name is not None:
                 named.setdefault(record_name, []).append(article.id)
@@ -484,6 +527,7 @@ def compute_impact(
             record.name,
             record.replacement,
             _users_through_internal(record.name, deprecated_users.get(record.name, set()), users, records),
+            tuple(sorted(set(named.get(record.name, ())) - {revised.id})),
         )
         for record in sorted(records.values(), key=lambda item: item.name)
         if record.deprecated
@@ -502,9 +546,35 @@ def compute_impact(
         helpers=tuple(helpers),
         undeclared_dependencies=tuple(undeclared),
         deprecated=deprecated,
-        deprecated_unused=tuple(item.name for item in deprecated if not item.users),
+        deprecated_unused=tuple(item.name for item in deprecated if not item.users and not item.articles),
         claim_targets=claim_targets,
     )
+
+
+def _resolver(records: Mapping[str, ConstantRecord]) -> Callable[..., str | None]:
+    """Resolve a user-facing name to a record: its exact name, else the private constant it names.
+
+    Articles and ``--declaration`` name a private constant as its source does,
+    without the ``_private`` prefix the probe's names carry. A name several
+    private constants share is refused rather than guessed.
+    """
+
+    exact = {_name_key(name): name for name in records}
+    private: dict[tuple[object, ...], list[str]] = {}
+    for record in records.values():
+        if record.user_name is not None:
+            private.setdefault(_name_key(record.user_name), []).append(record.name)
+
+    def resolve(name: str, context: str = "") -> str | None:
+        key = _name_key(name)
+        if key in exact:
+            return exact[key]
+        candidates = sorted(private.get(key, ()))
+        if len(candidates) > 1:
+            raise ImpactError(f"{context}{name} names several private declarations: {', '.join(candidates)}")
+        return candidates[0] if candidates else None
+
+    return resolve
 
 
 def _reverse_closure(
@@ -539,6 +609,20 @@ def _owner(record: ConstantRecord, records: Mapping[str, ConstantRecord], named:
     return None
 
 
+def _descends_from(record: ConstantRecord, ancestor: str, records: Mapping[str, ConstantRecord]) -> bool:
+    """Whether ``ancestor`` is on the ``parent`` chain of ``record``."""
+
+    seen: set[str] = set()
+    parent = record.parent
+    while parent is not None and parent not in seen:
+        if parent == ancestor:
+            return True
+        seen.add(parent)
+        ancestor_record = records.get(parent)
+        parent = ancestor_record.parent if ancestor_record is not None else None
+    return False
+
+
 def _reaches(start: str, target: str, articles: Mapping[str, ImpactArticle]) -> bool:
     """Whether ``start`` reaches ``target`` through Markdown dependencies."""
 
@@ -564,7 +648,9 @@ def _users_through_internal(
     """The local users of ``name``; an internal-detail user stands for its own users.
 
     An internal-detail user nothing else uses is kept, so that a constant is
-    never reported unused while something still mentions it.
+    never reported unused while something still mentions it, unless it is a
+    companion of ``name`` itself, such as its ``eq_1`` or ``_simp_1``, which
+    goes when ``name`` does.
     """
 
     found: set[str] = set()
@@ -576,7 +662,7 @@ def _users_through_internal(
             continue
         seen.add(user)
         further = users.get(user, set()) - {user}
-        if records[user].internal and further:
+        if records[user].internal and (further or _descends_from(records[user], name, records)):
             work.extend(sorted(further))
         else:
             found.add(user)
@@ -653,7 +739,7 @@ def _locator(libraries: tuple[LeanLibrary, ...], root: Path) -> Locator:
         if index is None:
             index = index_project(root)
         module_path = path_of(record.module, libraries, root)
-        declaration = index.find(record.name.removeprefix(f"_private.{record.module}.0."))
+        declaration = index.find(record.user_name or record.name)
         if declaration is not None and module_path in (None, declaration.path.as_posix()):
             return declaration.path.as_posix(), declaration.line
         return module_path, None
@@ -670,7 +756,9 @@ def format_impact(report: ImpactReport) -> list[str]:
         f"Graph source revision: {report.source_revision}",
     ]
     if report.contained:
-        lines.append(f"Contained: no other article or helper uses {names}, so it can be revised in place.")
+        lines.append(
+            f"Contained: nothing outside {report.article.id} uses {names}, so it can be revised in place."
+        )
     for title, impacted in (
         ("Statement impacted", report.statement_impacted),
         ("Proof impacted", report.proof_impacted),
@@ -695,8 +783,10 @@ def format_impact(report: ImpactReport) -> list[str]:
         lines.append("Deprecated:")
         for item in report.deprecated:
             replacement = f" -> {item.replacement}" if item.replacement else ""
-            users = f"used by {', '.join(item.users)}" if item.users else "no users, safe to delete"
-            lines.append(f"  {item.name}{replacement}: {users}")
+            uses = [f"used by {', '.join(item.users)}"] if item.users else []
+            if item.articles:
+                uses.append(f"named by {', '.join(item.articles)}")
+            lines.append(f"  {item.name}{replacement}: {'; '.join(uses) or 'no users, safe to delete'}")
     lines.append("Claim targets: " + ", ".join(report.claim_targets))
     return lines
 
