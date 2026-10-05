@@ -799,12 +799,12 @@ the reviewer. `review record` rechecks the selected current article
 and the exact packet bytes before filing a card. Validation is per article, so
 an unrelated article that changed since `review prepare` does not block the
 record. Any blueprint change during the extraction itself does, even in an
-article the record does not touch, and another article's empty or duplicated
-`lean:` list stops the extraction. Either way nothing is filed, and running
-the record again once the blueprint is idle completes it, unless the change took
+article the record does not touch. Nothing is then filed, and running the
+record again once the blueprint is idle completes it, unless the change took
 away an `article_id` the record names, which the rerun then names, or changed
-the evidence of an article it records, which the rerun reports as differing
-from the prepared evidence. A record probes only the
+or removed the evidence of an article it records, which the rerun then refuses.
+Another article's empty or duplicated `lean:` list stops every extraction, so
+nothing is filed until that list is fixed. A record probes only the
 modules of the articles it files, so only those modules need to be built and
 fresh, and its packets match the ones `review prepare` wrote from a full
 extraction.
