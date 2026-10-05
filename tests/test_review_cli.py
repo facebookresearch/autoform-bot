@@ -1640,16 +1640,31 @@ def test_a_malformed_manifest_is_refused_before_any_lean_work(
     assert extraction.scopes == [None]  # only `review prepare` extracted
 
 
+def _too_deep_to_decode(text: str) -> bool:
+    try:
+        json.loads(text)
+    except RecursionError:
+        return True
+    return False
+
+
 @pytest.mark.parametrize("damaged", ["manifest", "bundle"])
 def test_a_manifest_or_bundle_nested_too_deep_to_decode_is_refused_before_any_lean_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], damaged: str
 ) -> None:
-    """Decoded, a hundred thousand nested arrays are deeper than the JSON decoder goes, on Python 3.10 to 3.14 alike."""
+    """Decoded, a hundred thousand nested arrays are deeper than the JSON decoder
+    goes: about 1,000 levels on Python 3.10 and 3.11, and 10,000 on 3.12 and 3.13.
+    From 3.14 it goes as deep as the stack allows, about 37,000 levels in 8 MiB,
+    and a stack that holds all of them skips the test."""
 
+    nested = '{"schema": ' + "[" * 100_000 + "]" * 100_000 + "}"
+    # Decoded here, nearer the stack's base than the command decodes it.
+    if not _too_deep_to_decode(nested):
+        pytest.skip("this stack holds a hundred thousand nested arrays")
     extraction = _Extraction()
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
     path = {"manifest": manifest, "bundle": bundle}[damaged]
-    path.write_text('{"schema": ' + "[" * 100_000 + "]" * 100_000 + "}", encoding="utf-8")
+    path.write_text(nested, encoding="utf-8")
     capsys.readouterr()
 
     assert _record(blueprint, bundle, manifest, tmp_path) == 2

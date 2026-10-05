@@ -464,7 +464,8 @@ def test_incomplete_or_misidentified_cards_are_explicitly_invalid(
     elif damage == "empty-model":
         damaged = card.replace('model: "m"\n', "model:\n")
     elif damage.startswith("nested-"):
-        # Decoded, a hundred thousand nested arrays are deeper than the JSON decoder goes, on Python 3.10 to 3.14 alike.
+        # Decoded, a hundred thousand nested arrays are deeper than the JSON decoder goes on Python 3.10 to 3.13,
+        # and on 3.14, which goes as deep as the stack allows, in the 8 MiB stacks CI runs with.
         field = damage.removeprefix("nested-")
         recorded = {"article_id": _ARTICLE_ID, "declaration": declaration.name, "model": "m"}[field]
         damaged = card.replace(f"{field}: {json.dumps(recorded)}\n", f"{field}: " + "[" * 100_000 + "\n")

@@ -235,12 +235,24 @@ _LONE = (
     "into one command; double it or remove it"
 )
 
+# Deeper than the JSON decoder goes on Python 3.10 to 3.13. From 3.14 it goes as
+# deep as the stack allows, about 37,000 levels in 8 MiB.
+_NESTED = '{"RR": ' + "[" * 100_000 + "]" * 100_000 + "}"
+
+
+def _too_deep_to_decode(text: str) -> bool:
+    try:
+        json.loads(text)
+    except RecursionError:
+        return True
+    return False
+
 
 @pytest.mark.parametrize(
     ("macros", "reason"),
     [
         ("{", "tex-macros.json: not valid JSON"),
-        pytest.param('{"RR": ' + "[" * 100_000 + "]" * 100_000 + "}", "tex-macros.json: not valid JSON", id="nested"),
+        pytest.param(_NESTED, "tex-macros.json: not valid JSON", id="nested"),
         ('{"RR": "x", "RR": "y"}', "'RR' is defined twice"),
         ('["RR"]', "tex-macros.json: must be a JSON object from macro names to definitions"),
         ('{"R R": "x"}', "'R R' is not a macro name; use letters only"),
@@ -263,6 +275,9 @@ _LONE = (
 def test_project_macros_that_cannot_be_used_are_refused(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], macros: str, reason: str
 ) -> None:
+    # Decoded here, nearer the stack's base than check and render decode it.
+    if macros == _NESTED and not _too_deep_to_decode(macros):
+        pytest.skip("this stack holds a hundred thousand nested arrays")
     blueprint = _vault(tmp_path, macros=macros)
 
     assert main(["check", str(blueprint)]) == 1
