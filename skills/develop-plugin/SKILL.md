@@ -28,6 +28,8 @@ stable detected commit.
 Treat client-side scale as a publication contract. Material search stays
 title-only—one record per page, without section or body records—unless measured
 browser memory proves a wider index safe.
+Keep shared agent entrypoints concise and link command or schema details through
+on-demand references.
 
 Run focused checks, then normally run:
 

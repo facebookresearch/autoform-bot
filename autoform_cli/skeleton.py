@@ -33,6 +33,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 import psutil
+import tomli
 
 from .graph import Graph, GraphValidationError, Node, load_graph
 from .lean import (
@@ -44,11 +45,6 @@ from .lean import (
     index_failure_message,
     index_project,
 )
-
-try:  # Python 3.11+
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10
-    import tomli as tomllib  # type: ignore[no-redef]
 
 SKELETON_SCHEMA = "autoform-skeleton/v4"
 SEMANTIC_SCHEMA = "autoform-lean-expr/v4"
@@ -1208,9 +1204,13 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
     else:
         raise SkeletonError([f"no lakefile.toml or lakefile.lean in {root}"])
     try:
-        config = tomllib.loads(text.decode("utf-8"))
-    except (UnicodeError, tomllib.TOMLDecodeError) as exc:
+        config = tomli.loads(text.decode("utf-8"))
+    except (UnicodeError, tomli.TOMLDecodeError) as exc:
         raise SkeletonError([f"cannot parse the Lake configuration of {root}: {exc}"]) from exc
+    except (RecursionError, ValueError) as exc:
+        raise SkeletonError(
+            [f"cannot safely parse the Lake configuration of {root}: it exceeds the parser's limits"]
+        ) from exc
 
     libraries: list[LeanLibrary] = []
     for entry in config.get("lean_lib", []) or []:

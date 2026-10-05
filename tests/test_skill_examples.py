@@ -71,6 +71,24 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     assert "match the blob at the stable detected commit" in normalized
 
 
+def test_development_guidance_uses_progressive_command_reference(repo_root: Path) -> None:
+    development = (repo_root / "skills/develop-plugin/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    cli_reference = (repo_root / "autoform_cli/README.md").read_text(encoding="utf-8")
+    inspection_reference = (repo_root / "autoform_cli/project/README.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(development.split())
+
+    assert "plugin and formalization roots distinct" in normalized
+    assert "shared agent entrypoints concise" in normalized
+    assert "on-demand references" in normalized
+    assert "[project-inspection reference](project/README.md)" in cli_reference
+    assert "| `target-unreadable` |" not in cli_reference
+    assert "| `target-unreadable` |" in inspection_reference
+
+
 def test_agent_review_treats_skeleton_hashes_as_advisory(repo_root: Path) -> None:
     review = (repo_root / "skills" / "agent-review" / "SKILL.md").read_text(
         encoding="utf-8"
@@ -484,6 +502,73 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
     assert "coherent pull\nrequest and review unit" in roadmap_example
     assert (repo_root / "skills/agent-review/references/thesis-review-case.md").is_file()
     assert (repo_root / "skills/agent-review/references/roadmap-quality.md").is_file()
+
+
+def test_readback_faithfulness_contract_is_hash_bound_and_machine_readable(
+    repo_root: Path,
+) -> None:
+    skill = (repo_root / "skills/agent-review/SKILL.md").read_text(encoding="utf-8")
+    rubric = (
+        repo_root / "skills/agent-review/references/readback-faithfulness.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(rubric.split())
+
+    assert "isolated read-back-judge role" in skill
+    assert "exact JSON output replaces this\ngeneral report layout" in skill
+    for required in (
+        "trusted coordinator",
+        "blind auditor",
+        "faithfulness judge",
+        "packet hash",
+        "article packet hash",
+        "article review hash",
+        "read-back hash is required",
+    ):
+        assert required in normalized
+
+    def template(marker: str) -> dict[str, object]:
+        fenced = rubric.split(f"<!-- {marker} -->\n```json\n", 1)[1]
+        return json.loads(fenced.split("\n```", 1)[0])
+
+    item = template("readback-faithfulness-item-template")
+    verdict = template("readback-faithfulness-verdict-template")
+    provenance = {
+        "item",
+        "declarations",
+        "article_skeleton_hash",
+        "article_packet_hash",
+        "article_review_hash",
+        "passage_hash",
+    }
+    assert item["schema"] == "autoform-readback-faithfulness-item/v1"
+    assert verdict["schema"] == "autoform-readback-faithfulness-verdict/v1"
+    assert provenance <= item.keys() and provenance <= verdict.keys()
+    assert item["declarations"] == verdict["declarations"]
+    declaration = item["declarations"][0]
+    assert set(declaration) == {
+        "id",
+        "skeleton_hash",
+        "packet_hash",
+        "read_back_hash",
+    }
+
+    category_rows = {}
+    table = rubric.split("## Categories and decisions", 1)[1].split("## Exact output", 1)[0]
+    for line in table.splitlines():
+        match = re.match(r"\| `([^`]+)` \| `([^`]+)` \|", line)
+        if match:
+            category_rows[match.group(1)] = match.group(2)
+    assert category_rows["elaboration"] == "agrees"
+    assert category_rows["equivalent-reformulation"] == "review"
+    for category in (
+        "hypothesis-missing",
+        "hypothesis-added",
+        "conclusion-weaker",
+        "conclusion-stronger",
+    ):
+        assert category_rows[category] == "disagrees"
+    assert category_rows["evidence-missing"] == "unknown"
+    assert "hypothesis-missing: generalizes" not in rubric
 
 
 def test_roadmap_skill_owns_a_complete_pass(repo_root: Path) -> None:
