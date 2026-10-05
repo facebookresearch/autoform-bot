@@ -20,6 +20,7 @@ from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_k
 from .doctor import diagnose_project
 from .dashboard import publication_bound_live_state, serve_dashboard
 from .graph import GraphValidationError, load_graph
+from .impact import ImpactError, format_impact, revision_impact
 from .lean import build_linker, declaration_names
 from .project import ProjectCatalogError, inspect_project, load_release_catalog
 from .render import PublicationError, render_site
@@ -139,6 +140,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         "target", nargs="?", default=".", help="project root or blueprint directory"
     )
     work_assumptions.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    work_impact = work_subparsers.add_parser(
+        "impact", help="show which articles and helpers a revision of an article's Lean declarations affects"
+    )
+    work_impact.add_argument("selector", help="path-derived node id or durable article_id")
+    work_impact.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+    work_impact.add_argument(
+        "--lean-root", type=Path, required=True, metavar="PATH", help="the built Lean project"
+    )
+    work_impact.add_argument(
+        "--declaration",
+        action="append",
+        default=[],
+        dest="declarations",
+        metavar="NAME",
+        help="revise this project-local constant instead of the article's lean: declarations (repeatable)",
+    )
+    work_impact.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    work_impact.add_argument(
+        "--timeout",
+        type=_positive_seconds,
+        metavar="SECONDS",
+        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g}); "
+        "the Lake freshness check before it has its own budget",
+    )
     claim = subparsers.add_parser("claim", help="coordinate temporary node ownership through Git refs")
     claim_subparsers = claim.add_subparsers(dest="claim_command", required=True)
     for operation in ("acquire", "renew", "release"):
@@ -438,6 +463,8 @@ def _project(args: argparse.Namespace) -> int:
 def _work(args: argparse.Namespace) -> int:
     if args.work_command == "assumptions":
         return _work_assumptions(args)
+    if args.work_command == "impact":
+        return _work_impact(args)
     # Only loading the roadmap can fail on the project's paths; printing the
     # result stays outside, so an output error is not reported as one.
     try:
@@ -539,6 +566,40 @@ def _work_assumptions(args: argparse.Namespace) -> int:
             print(_human_text(f"open: {article.id} ({', '.join(article.declarations)})"))
         if article.assumes:
             print(_human_text(f"conditional: {article.id} assumes {', '.join(article.assumes)}"))
+    return 0
+
+
+def _work_impact(args: argparse.Namespace) -> int:
+    try:
+        report = revision_impact(
+            args.target,
+            args.selector,
+            lean_root=args.lean_root,
+            declarations=args.declarations,
+            timeout=args.timeout,
+        )
+    except (GraphValidationError, RuntimeProjectionError) as error:
+        for issue in error.issues:
+            print(f"error: {_human_text(issue)}", file=sys.stderr)
+        return 2
+    except (WorkError, ImpactError) as error:
+        print(f"error: {_human_text(error)}", file=sys.stderr)
+        return 2
+    except SkeletonError as error:
+        # Probe failures carry Lean's multi-line output; escape it line by line.
+        for issue in error.issues:
+            for index, line in enumerate(str(issue).splitlines() or [""]):
+                print(("error: " if index == 0 else "") + _human_text(line), file=sys.stderr)
+        return 2
+    except (OSError, RuntimeError, ValueError):
+        print("error: project, blueprint, or Lean root path cannot be read", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(report.to_json())
+        return 0
+    for line in format_impact(report):
+        print(_human_text(line))
     return 0
 
 
