@@ -995,6 +995,8 @@ def test_tex_in_text_shows_as_typed_and_is_accepted(testimony: str) -> None:
         (r"$P \color{transparent}{\land Q}$", r"\color"),
         (r"$`P \color{white}{\land Q}`$", r"\color"),
         (r"$$ P \color{white}{\land Q} $$", r"\color"),
+        (r"*$* $ P \color{white}{\land Q}" "\n$ done.", r"\color"),
+        (r"Text \\$ P \color{white}{\land Q} $ done.", r"\color"),
     ],
 )
 def test_tex_between_two_dollar_signs_is_held_to_the_allowlist(testimony: str, command: str) -> None:
