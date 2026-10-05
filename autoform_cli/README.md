@@ -849,7 +849,11 @@ many cards it filed, and because filing identical content is a no-op, running
 the same batch again once the cause is cleared completes it. When the cause is
 a card another writer filed, replaced, or removed meanwhile, the batch's record
 for it must first name the hash of the card now there, or no hash if there is
-none.
+none. When it is an article deleted meanwhile, the article must be restored or
+its records dropped. A batch with records whose `article_id` is no longer in
+the blueprint files nothing and names each of them; each must be dropped, or
+take its `article_id` and packet from the packet manifest a new `review
+prepare` writes.
 
 `review check`, `audit`, and `render` re-extract the
 current Lean evidence and reject unresolved, partial, foreign, or stale

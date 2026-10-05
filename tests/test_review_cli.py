@@ -870,11 +870,69 @@ def test_an_article_gone_since_prepare_is_named_rather_than_the_bundle(
     err = capsys.readouterr().err
     assert load_readbacks(blueprint) == {}
     assert (
-        f"error: Review.other: article_id {_OTHER_ID} is no longer in the blueprint, or now names another "
-        "declaration; rerun review prepare\n"
+        f"error: Review.other: article_id {_OTHER_ID} is no longer in the blueprint; drop the record, or rerun "
+        "review prepare and take its article_id and packet from the new packet manifest\n"
     ) in err
     assert "prepared review bundle" not in err
     assert len(calls) == (2 if during_the_record else 1)
+
+
+def test_every_record_whose_article_id_is_gone_is_named_in_one_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """So all of them can be dropped or updated before the record runs again."""
+
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    _renumber_other(blueprint)
+    result = blueprint / "roadmap" / "basics" / "result.md"
+    result.write_text(result.read_text(encoding="utf-8").replace(_RESULT_ID, "af_" + "2" * 24), encoding="utf-8")
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    err = capsys.readouterr().err
+    for declaration, article_id in (("Review.result", _RESULT_ID), ("Review.other", _OTHER_ID)):
+        assert f"error: {declaration}: article_id {article_id} is no longer in the blueprint; drop the record" in err
+    assert extraction.scopes == [None]  # only `review prepare` extracted
+    assert load_readbacks(blueprint) == {}
+
+
+@pytest.mark.parametrize("edit", [_delete_other, _renumber_other], ids=["deleted", "renumbered"])
+def test_a_record_whose_article_id_is_gone_files_once_it_does_what_the_refusal_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], edit: Callable[[Path], None]
+) -> None:
+    """Rerunning review prepare alone leaves the record naming the old article_id;
+    the record is dropped, or takes the new article_id and packet from the new
+    packet manifest."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    edit(blueprint)
+    capsys.readouterr()
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+    assert (
+        "drop the record, or rerun review prepare and take its article_id and packet from the new packet manifest"
+    ) in capsys.readouterr().err
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    packets = manifest.parent / "review-packets"
+    prepare = ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle)]
+    if edit is _renumber_other:
+        assert main([*prepare, "--packets", str(packets)]) == 0
+        capsys.readouterr()
+        assert _record(blueprint, bundle, manifest, tmp_path) == 2
+        assert "error: prepared review bundle has no declaration 'Review.other'" in capsys.readouterr().err
+        entries = json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"]
+        (entry,) = [entry for entry in entries if entry["declaration"] == "Review.other"]
+        (record,) = [record for record in records if record["declaration"] == "Review.other"]
+        record.update(article_id=entry["article_id"], packet=f"review-packets/{entry['packet']}")
+    else:
+        records = [record for record in records if record["declaration"] != "Review.other"]
+    manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 0
+    assert {declaration for _, declaration in load_readbacks(blueprint)} == {
+        record["declaration"] for record in records
+    }
 
 
 def test_any_blueprint_edit_during_a_record_extraction_files_nothing(
@@ -1285,10 +1343,26 @@ def test_an_article_edited_while_the_batch_publishes_stops_before_its_card(
     assert set(load_readbacks(blueprint)) == {(_RESULT_ID, "Review.result")}
     assert captured.out.endswith(": recorded read-back for Review.result\n")
     assert "1 of 2 read-back(s) were filed before the failure below" in captured.err
+    if not deleted:
+        assert (
+            f"error: Review.other: article {other} changed after its evidence was checked, so its card was not "
+            "filed; rerun the record, after review prepare if the change is to that evidence\n"
+        ) in captured.err
+        return
     assert (
-        f"error: Review.other: article {other} changed after its evidence was checked, so its card was not filed; "
-        "rerun the record, after review prepare if the change is to that evidence\n"
+        f"error: Review.other: article {other} was deleted after its evidence was checked, so its card was not "
+        "filed; restore the article, or drop its records, and rerun the record\n"
     ) in captured.err
+
+    # Without its record the batch finishes, and leaves the card it filed as it is.
+    filed = load_readbacks(blueprint)[(_RESULT_ID, "Review.result")].path.read_bytes()
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    records = [record for record in records if record["declaration"] != "Review.other"]
+    manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
+    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish)
+    assert _record(blueprint, bundle, manifest, tmp_path) == 0
+    assert set(load_readbacks(blueprint)) == {(_RESULT_ID, "Review.result")}
+    assert load_readbacks(blueprint)[(_RESULT_ID, "Review.result")].path.read_bytes() == filed
 
 
 def test_an_article_that_is_a_link_is_read_again_through_the_link(

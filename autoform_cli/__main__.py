@@ -1060,14 +1060,19 @@ def _record_snapshot(graph: Graph, requests: tuple[RecordRequest, ...]) -> tuple
     """What each selected article is right now: its node, file, and source hash."""
 
     state: dict[str, tuple[str, str, str, str]] = {}
+    gone: list[ReviewFinding] = []
     for request in requests:
         if request.article_id in state:
             continue
         matches = [node for node in graph.nodes.values() if node.article_id == request.article_id]
         if len(matches) != 1:
-            raise ReviewError([_record_selection_finding(request.article_id, request.declaration)])
+            # Every such record is named, so one run lists all there are to drop or update.
+            gone.append(_record_selection_finding(request.article_id, request.declaration))
+            continue
         node = matches[0]
         state[request.article_id] = (request.article_id, node.id, str(node.path), node.source_sha256 or "")
+    if gone:
+        raise ReviewError(gone)
     return tuple(sorted(state.values()))
 
 
@@ -1091,20 +1096,20 @@ def _refuse_changed_article(card: PreparedReadback, path: str, digest: str) -> N
     """Refuse to file ``card`` unless its article's file still holds the bytes its evidence was checked against."""
 
     try:
-        unchanged = hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest
-    except FileNotFoundError:
-        unchanged = False
-    if not unchanged:
-        raise ReviewError(
-            [
-                ReviewFinding(
-                    card.article_id,
-                    "review-snapshot-changed",
-                    f"{card.declaration}: article {path} changed after its evidence was checked, so its card was not "
-                    "filed; rerun the record, after review prepare if the change is to that evidence",
-                )
-            ]
+        if hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest:
+            return
+        what = (
+            "changed after its evidence was checked, so its card was not filed; rerun the record, after review "
+            "prepare if the change is to that evidence"
         )
+    except FileNotFoundError:
+        what = (
+            "was deleted after its evidence was checked, so its card was not filed; restore the article, or drop "
+            "its records, and rerun the record"
+        )
+    raise ReviewError(
+        [ReviewFinding(card.article_id, "review-snapshot-changed", f"{card.declaration}: article {path} {what}")]
+    )
 
 
 def _prepare_records(
@@ -1411,13 +1416,13 @@ def _review_selection_finding(article_id: str, declaration: str) -> ReviewFindin
 
 
 def _record_selection_finding(article_id: str, declaration: str) -> ReviewFinding:
-    """The bundle has this declaration, but the current blueprint no longer maps its article_id to it."""
+    """The bundle has this declaration, but the current blueprint no longer has its article_id."""
 
     return ReviewFinding(
         article_id,
         "review-selection-missing",
-        f"{declaration}: article_id {article_id} is no longer in the blueprint, or now names another declaration; "
-        "rerun review prepare",
+        f"{declaration}: article_id {article_id} is no longer in the blueprint; drop the record, or rerun review "
+        "prepare and take its article_id and packet from the new packet manifest",
     )
 
 
