@@ -1258,12 +1258,16 @@ def test_an_unsafe_card_is_listed_with_the_rest_before_lean_runs(
     assert f"expected_card_hash={filed!r}" in err
 
 
+@pytest.mark.parametrize("gone", [False, True], ids=["every-article-present", "a-record-gone"])
 def test_a_platform_that_cannot_publish_is_refused_once_before_lean_runs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], gone: bool
 ) -> None:
     extraction = _Extraction()
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
     extractions = len(extraction.scopes)
+    if gone:
+        # Refused ahead of a gone record's advice, which only helps where cards can be filed.
+        _renumber_other(blueprint)
     # As on Windows: no fcntl.
     monkeypatch.setattr("autoform_cli.readback.fcntl", None)
     capsys.readouterr()

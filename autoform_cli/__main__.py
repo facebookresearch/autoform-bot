@@ -829,6 +829,9 @@ def _review_record(args: argparse.Namespace) -> int:
         # any Lean work: a missing file or a changed packet stops the batch
         # without an extraction.
         inputs = _record_inputs(bundle, requests)
+        # So is a platform that cannot publish, ahead of advice that only helps
+        # where cards can be filed.
+        readback_conflicts([])
         # So is every record whose article_id the blueprint no longer has,
         # ahead of the card check: the hash that check asks for cannot help it.
         graph = load_graph(args.blueprint_dir)
