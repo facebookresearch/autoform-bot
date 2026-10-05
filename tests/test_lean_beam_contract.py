@@ -27,15 +27,13 @@ def test_lean_beam_pin_is_immutable_and_explicit(repo_root: Path) -> None:
         encoding="utf-8"
     )
     assert f"ref: {lock['commit']}" in workflow
-    assert lock["commit"] in docs
-    assert "remain the default Lean tooling" in normalized_docs
-    assert "does not replace or silently disable the default servers" in normalized_docs
+    assert "registers Lean Beam alongside" in normalized_docs
+    assert "does not proxy Lean operations" in normalized_docs
     assert "autoform beam doctor --json" in normalized_docs
     assert ".beam/" in docs
     assert ".beam/" in gitignore_template.splitlines()
     bundled = json.loads((repo_root / ".mcp.json").read_text(encoding="utf-8"))
-    assert set(bundled["mcpServers"]) == {"autoform-lsp", "autoform-repl"}
+    assert set(bundled["mcpServers"]) == {"autoform-lsp", "autoform-repl", "lean-beam"}
     assert "lean-beam-preview:" in workflow
     for toolchain in lock["tested_toolchains"]:
         assert toolchain in workflow
-        assert toolchain in docs

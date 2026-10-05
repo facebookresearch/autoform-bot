@@ -7,6 +7,7 @@ import os
 import selectors
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -295,6 +296,7 @@ def test_pinned_beam_explicit_session_contract(repo_root: Path, tmp_path: Path) 
     cancel_started = tmp_path / "cancel-started"
     cancel_release = tmp_path / "cancel-release"
     beam_env = dict(os.environ)
+    beam_env["AUTOFORM_LEAN_BEAM_MCP"] = beam_command
     beam_env["AUTOFORM_BEAM_CANCEL_STARTED"] = str(cancel_started)
     beam_env["AUTOFORM_BEAM_CANCEL_RELEASE"] = str(cancel_release)
 
@@ -303,7 +305,7 @@ def test_pinned_beam_explicit_session_contract(repo_root: Path, tmp_path: Path) 
     assert admission.observed is not None
     assert admission.observed["source_commit"] == admission.expected["commit"]
     client = McpClient(
-        [beam_command],
+        [sys.executable, "-m", "autoform_cli.beam_server"],
         cwd=repo_root,
         env=beam_env,
     )

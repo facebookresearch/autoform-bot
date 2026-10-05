@@ -68,6 +68,20 @@
           "-m",
           "servers.repl.server"
         ]
+      },
+      {
+        "id": "lean-beam",
+        "transport": "stdio",
+        "command": [
+          "uv",
+          "run",
+          "--project",
+          ".",
+          "--locked",
+          "python",
+          "-m",
+          "autoform_cli.beam_server"
+        ]
       }
     ],
     "reminders": []

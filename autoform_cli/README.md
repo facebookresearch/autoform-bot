@@ -154,16 +154,17 @@ elan, only the trimmed first line of `lean-toolchain` counts.
 `project versions` lists the bundled catalog of known-good Lean and Mathlib
 pairs. It is an allowlist, not a resolver.
 
-Verify an explicitly installed Lean Beam preview before using its tools:
+Install or verify Autoform's managed Lean Beam runtime:
 
 ```bash
 autoform beam doctor --json
 ```
 
-`beam doctor` launches `lean-beam-mcp` directly, calls its public
+By default, `beam doctor` installs the exact packaged pin into Autoform-owned
+user state when missing, launches `lean-beam-mcp`, calls its public
 `beam_version` MCP tool, and compares the observed version, source commit,
 protocol, runtime-current state, and clean-source state with Autoform's packaged
-preview lock. Pass `--command /absolute/path/to/lean-beam-mcp` to select an
+preview lock. Pass `--command /absolute/path/to/lean-beam-mcp` to inspect another
 installation and `--timeout SECONDS` to bound the probe. A zero exit confirms
 runtime identity only; the report lists the host denylist, deadline,
 containment, and build-serialization controls that still require enforcement.

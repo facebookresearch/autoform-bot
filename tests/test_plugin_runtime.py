@@ -35,7 +35,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
 
     codex = json.loads((repo_root / ".mcp.json").read_text())
     claude = json.loads((repo_root / ".claude-plugin" / "plugin.json").read_text())
-    expected = {"autoform-lsp", "autoform-repl"}
+    expected = {"autoform-lsp", "autoform-repl", "lean-beam"}
     assert set(codex["mcpServers"]) == expected
     assert set(claude["mcpServers"]) == expected
     assert "hooks" not in claude
@@ -43,6 +43,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
     expected_modules = {
         "autoform-lsp": "servers.lsp.server",
         "autoform-repl": "servers.repl.server",
+        "lean-beam": "autoform_cli.beam_server",
     }
     for config in (codex, claude):
         for name, module in expected_modules.items():
@@ -68,6 +69,17 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
     ]
     for command in muse["capabilities"]["commands"]:
         assert (repo_root / command["path"]).is_file()
+    assert [server["id"] for server in muse["capabilities"]["mcpServers"]] == [
+        "autoform-lsp",
+        "autoform-repl",
+        "lean-beam",
+    ]
+
+    beam = codex["mcpServers"]["lean-beam"]
+    assert beam["startup_timeout_sec"] == 1800
+    assert beam["tool_timeout_sec"] == 300
+    assert beam["disabled_tools"] == ["lean_save", "lean_close_save"]
+    assert beam["default_tools_approval_mode"] == "prompt"
 
 
 def test_mcp_launchers_use_plugin_only_as_the_uv_project(repo_root):
@@ -103,6 +115,7 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
             "autoform_cli/probes/skeleton_probe.lean",
             "autoform_cli/visualize.py",
             "autoform_cli/project/releases.json",
+            "autoform_cli/beam_server.py",
             "servers/lean_client.py",
             "servers/lean_runtime.py",
             "servers/lsp/server.py",

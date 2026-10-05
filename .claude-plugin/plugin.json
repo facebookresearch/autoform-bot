@@ -18,6 +18,12 @@
       "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--extra", "repl", "python", "-m", "servers.repl.server"],
       "cwd": "${CLAUDE_PLUGIN_ROOT}",
       "description": "Shared node-local Lean snippet execution; each call requires project_dir"
+    },
+    "lean-beam": {
+      "command": "uv",
+      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--locked", "python", "-m", "autoform_cli.beam_server"],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}",
+      "description": "Pinned Lean Beam session API; Autoform installs and verifies the exact runtime on first start"
     }
   }
 }

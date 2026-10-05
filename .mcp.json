@@ -9,6 +9,15 @@
       "command": "uv",
       "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--extra", "repl", "python", "-m", "servers.repl.server"],
       "cwd": "${CLAUDE_PLUGIN_ROOT}"
+    },
+    "lean-beam": {
+      "command": "uv",
+      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--locked", "python", "-m", "autoform_cli.beam_server"],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}",
+      "startup_timeout_sec": 1800,
+      "tool_timeout_sec": 300,
+      "disabled_tools": ["lean_save", "lean_close_save"],
+      "default_tools_approval_mode": "prompt"
     }
   }
 }

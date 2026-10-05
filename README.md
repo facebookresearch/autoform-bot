@@ -38,13 +38,13 @@ codex plugin add autoform@autoform
 Start a new agent session so the skills and MCP servers reload. A native Muse
 manifest is included, but Muse installation is not covered here.
 
-Autoform also carries an opt-in Lean Beam session preview. It is pinned to an
-exact development revision for contract testing and does not replace the
-bundled `autoform-lsp` or `autoform-repl` servers. Enable it only when explicitly
-evaluating Beam and follow the admission, denylist, containment, and recovery
-rules in [the preview contract](docs/lean-beam.md). After installing the exact
-pin, run `autoform beam doctor --json` to verify the live MCP runtime against
-Autoform's packaged lock before using any Beam workspace tool.
+Autoform also registers a pinned Lean Beam session server alongside
+`autoform-lsp` and `autoform-repl`. On first start, Autoform fetches, builds,
+and installs the exact commit in `lean-beam.lock.json` into Autoform-owned user
+state, verifies its live MCP identity, and then executes Beam directly. Run
+`autoform beam doctor --json` for the same admission report and follow the
+denylist, containment, and recovery rules in
+[the integration contract](docs/lean-beam.md).
 
 ## Quick start
 

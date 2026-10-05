@@ -1,55 +1,43 @@
-# Lean Beam preview contract
+# Lean Beam managed server contract
 
-Autoform's bundled `autoform-lsp` and `autoform-repl` servers remain the default
-Lean tooling. This document defines a separate, explicit preview of the
+Autoform registers Lean Beam alongside its bundled `autoform-lsp` and
+`autoform-repl` servers. This document defines the managed preview of the
 Lean-FRO-maintained
 [`leanprover/lean-beam`](https://github.com/leanprover/lean-beam) session API.
-The preview does not replace or silently disable the default servers. In a
-preview session, use Beam as the sole Lean-process owner for that workspace and
-do not interleave calls to the default Autoform servers. Autoform does not proxy
-Beam or parse its private broker protocol; explicit workspace descriptors,
-source snapshots, and proof handles carry all state that matters to callers.
+On first MCP start, Autoform fetches and checks out the exact locked commit,
+runs Beam's own installer into Autoform-owned user state, verifies the live
+`beam_version` identity, and `exec`s the upstream server. Autoform does not
+proxy Lean operations or parse Beam's private broker protocol. In a Beam
+session, do not interleave calls to the older Autoform servers for the same
+workspace.
 
 The supported development revision and protocol are recorded in
-[`lean-beam.lock.json`](../lean-beam.lock.json). Install that exact revision
-from a clean checkout with Lean Beam's own installer. This example registers
-the canonical server for Codex.
+[`lean-beam.lock.json`](../lean-beam.lock.json). The managed install lives under
+`$XDG_DATA_HOME/autoform/lean-beam/<commit>` (or
+`~/.local/share/autoform/lean-beam/<commit>`); set `AUTOFORM_BEAM_HOME` to
+override that root. The first start needs Git, Elan, network access to the
+public Lean Beam repository, and enough time to build both tested toolchains.
 
-```bash
-git clone https://github.com/leanprover/lean-beam.git
-cd lean-beam
-git checkout --detach d5dc8fe9d3928899bf55968a93d9e309d9fad1bc
-./scripts/install-beam.sh --dont-ask \
-  --toolchain leanprover/lean4:v4.32.2 \
-  --toolchain leanprover/lean4:v4.33.0 \
-  --codex-mcp
-```
+Autoform's launcher delegates installation to the pinned checkout's own
+`install-beam.sh`, but does not ask that installer to modify host configuration
+or install Beam's companion skill. Run `autoform beam doctor --json` to start or
+reuse the managed install, call the public `beam_version` tool, and compare the
+live runtime with Autoform's packaged lock. A passing doctor report establishes
+runtime identity, not the host controls listed in that report.
 
-Autoform does not bundle a Beam executable, wrap its protocol, or automatically
-register a second MCP server. Use Beam's own installer to register the canonical
-`lean-beam` server for the desired host. The command above uses `--codex-mcp`;
-use `--claude-mcp` for Claude Code, or both flags for both hosts. Do not install
-Beam's companion agent skill while Autoform excludes its save operations; this
-document is the preview workflow contract. Restart each configured host
-afterward. The setup workflow and CI verify the running process through the
-typed `beam_version` tool. Run `autoform beam doctor --json` to perform that
-check through Beam's public MCP protocol and compare the live runtime with the
-packaged lock; a caller that skips it has not established provenance. A passing
-doctor report does not establish the host controls listed in that report.
-
-For Codex, add this denylist to the existing `[mcp_servers.lean-beam]` table:
+Autoform's Codex registration includes this denylist:
 
 ```toml
 disabled_tools = ["lean_save", "lean_close_save"]
 ```
 
 Use a host's equivalent technical denylist when it has one. If the selected
-host cannot enforce the exclusion, leave the preview disabled until the
-upstream save defects are fixed.
+host cannot enforce the exclusion, do not call the save tools until the
+upstream defects are fixed.
 
-Run `autoform init` to append `.beam/` to an existing root `.gitignore`, or add
-the rule manually before first use. Beam's workspace state is derived local
-data and must not appear in commits.
+New Autoform scaffolds include `.beam/` in the root `.gitignore`. Add the rule
+manually before first use in an existing project. Beam's workspace state is
+derived local data and must not appear in commits.
 
 Keep a finite caller-visible tool deadline. Codex documents
 `[mcp_servers.lean-beam].tool_timeout_sec` as the per-server tool deadline and
@@ -60,12 +48,11 @@ sends MCP cancellation or terminates the server, so expiry does not establish
 either. See the
 [official Codex MCP configuration reference](https://learn.chatgpt.com/docs/extend/mcp#other-configuration-options).
 
-Lean Beam does not yet publish a Muse MCP registration path. Autoform's native
-Muse skills remain available, but Lean tooling in this preview is unsupported
-there; do not claim that Muse is exercising the Beam contract.
+Autoform supplies the MCP registration for Codex, Claude, and Muse; Beam still
+owns the actual server protocol and process after the launcher verifies it.
 
 This pin is an exact commit from a draft pull request and is for integration
-development, not release. The opt-in preview may coexist with the default
+development, not release. The managed preview may coexist with the default
 Autoform servers, but Autoform must not ship the cutover until Lean Beam
 publishes a tagged release containing the opaque source-snapshot work from
 [`leanprover/lean-beam#254`](https://github.com/leanprover/lean-beam/pull/254),

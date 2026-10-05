@@ -34,22 +34,22 @@ def test_root_readme_uses_the_canonical_repository(repo_root: Path) -> None:
     assert "VivienCabannes/autoform-bot" not in readme
 
 
-def test_lean_beam_preview_is_explicit_and_fail_closed(repo_root: Path) -> None:
+def test_managed_lean_beam_server_is_fail_closed(repo_root: Path) -> None:
     setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
     develop = (repo_root / "skills/develop-plugin/SKILL.md").read_text(encoding="utf-8")
     integration = (repo_root / "docs/lean-beam.md").read_text(encoding="utf-8")
     normalized_setup = " ".join(setup.split())
     normalized_integration = " ".join(integration.split())
 
-    assert "explicitly opts into the Lean Beam preview" in setup
+    assert "managed Lean Beam server" in setup
     assert "exact revision in `lean-beam.lock.json`" in normalized_setup
     assert "autoform beam doctor --json" in normalized_setup
     assert "technically deny `lean_save` and `lean_close_save`" in normalized_setup
     assert "operating-system containment" in normalized_setup
-    assert "leave the preview disabled" in normalized_setup
+    assert "leave Beam unused" in normalized_setup
     assert "bundled Lean servers" in setup
     assert "Beam preview: follow `docs/lean-beam.md`" in develop
-    assert "remain the default Lean tooling" in normalized_integration
+    assert "registers Lean Beam alongside" in normalized_integration
     assert "must not ship the cutover" in normalized_integration
 
 

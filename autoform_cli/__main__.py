@@ -105,8 +105,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     beam_doctor.add_argument(
         "--command",
         dest="beam_executable",
-        default=os.environ.get("AUTOFORM_LEAN_BEAM_MCP", "lean-beam-mcp"),
-        help="Lean Beam MCP executable (default: lean-beam-mcp on PATH)",
+        default=os.environ.get("AUTOFORM_LEAN_BEAM_MCP"),
+        help="Lean Beam MCP executable (default: Autoform's managed exact-pin install)",
     )
     beam_doctor.add_argument("--timeout", type=_positive_seconds, default=15.0)
     beam_doctor.add_argument("--json", action="store_true", help="write stable machine-readable output")

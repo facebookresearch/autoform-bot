@@ -93,16 +93,16 @@ lake exe cache get   # skip only when the project has no Mathlib dependency
 lake build
 ```
 
-When the user explicitly opts into the Lean Beam preview, read and follow
-`<AUTOFORM_PLUGIN_ROOT>/docs/lean-beam.md` before enabling it. Install only the
-exact revision in `lean-beam.lock.json`, run `autoform beam doctor --json`,
+Before using the managed Lean Beam server, read and follow
+`<AUTOFORM_PLUGIN_ROOT>/docs/lean-beam.md`. Run `autoform beam doctor --json`;
+the registered launcher installs only the exact revision in `lean-beam.lock.json` and reports its live identity. Then
 require a finite host tool deadline and operating-system containment, and technically deny
 `lean_save` and `lean_close_save`. Add `.beam/` to the project root
 `.gitignore`. Never overlap Beam calls with an external build; after each build,
 drop the workspace before synchronizing again. Treat cancellation or transport
 loss as unknown execution state until a bounded workspace drop returns or the
 host restarts Beam. If any admission check fails—or if the user did not opt
-in—leave the preview disabled and continue with Autoform's bundled Lean servers.
+in—leave Beam unused and continue with Autoform's bundled Lean servers.
 
 Then validate, visualize, render, and strict-build the site, keeping
 `--require-declarations` so a named Lean declaration that does not exist fails
