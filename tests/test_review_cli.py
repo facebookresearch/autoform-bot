@@ -944,14 +944,15 @@ def test_a_record_whose_article_id_is_gone_files_once_it_does_what_the_refusal_s
     }
 
 
-def test_a_gone_record_whose_packet_changed_files_only_with_a_testimony_of_the_new_packet(
+def test_a_gone_record_whose_packet_changed_files_only_once_it_names_the_new_packet(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Packets are named by their content, so when the statement changes with the
     article_id, the new packet manifest names another packet. The record that
     takes only the new article_id still names the packet its testimony was
     written from, which the new review prepare removed, and nothing is filed
-    until it names the new packet and a testimony written from that."""
+    until it names the new packet. That its testimony is then written from the
+    new packet is advice the record cannot check."""
 
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
     unchanged = _node
