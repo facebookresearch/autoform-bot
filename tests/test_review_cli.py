@@ -935,6 +935,54 @@ def test_a_record_whose_article_id_is_gone_files_once_it_does_what_the_refusal_s
     }
 
 
+def test_a_re_review_whose_article_id_is_gone_is_named_before_its_card_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A card's path is keyed by its article_id, so the card a re-review would
+    replace stays under the old one: the record is named as gone rather than
+    asked for that card's hash, and files under the new article_id without it."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    assert _record(blueprint, bundle, manifest, tmp_path) == 0
+    filed = load_readbacks(blueprint)
+    for testimony in manifest.parent.glob("Review.*.md"):
+        testimony.write_text(testimony.read_text(encoding="utf-8") + "Revised.\n", encoding="utf-8")
+    _renumber_other(blueprint)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+    err = capsys.readouterr().err
+    assert f"error: Review.other: article_id {_OTHER_ID} is no longer in the blueprint" in err
+    assert "already exists with different content" not in err
+
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    for record in records:
+        record["expected_card_hash"] = filed[(record["article_id"], record["declaration"])].file_hash
+    manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+    assert (
+        "rerun review prepare and take its article_id and packet from the new packet manifest and drop its "
+        "expected_card_hash\n"
+    ) in capsys.readouterr().err
+
+    packets = manifest.parent / "review-packets"
+    prepare = ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle)]
+    assert main([*prepare, "--packets", str(packets)]) == 0
+    entries = json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"]
+    (entry,) = [entry for entry in entries if entry["declaration"] == "Review.other"]
+    (record,) = [record for record in records if record["declaration"] == "Review.other"]
+    record.update(article_id=entry["article_id"], packet=f"review-packets/{entry['packet']}")
+    del record["expected_card_hash"]
+    manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 0
+    cards = load_readbacks(blueprint)
+    assert set(cards) == set(filed) | {(entry["article_id"], "Review.other")}
+    assert cards[(_OTHER_ID, "Review.other")] == filed[(_OTHER_ID, "Review.other")]
+    assert cards[(_RESULT_ID, "Review.result")].file_hash != filed[(_RESULT_ID, "Review.result")].file_hash
+
+
 def test_any_blueprint_edit_during_a_record_extraction_files_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

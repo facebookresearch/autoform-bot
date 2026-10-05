@@ -851,9 +851,10 @@ a card another writer filed, replaced, or removed meanwhile, the batch's record
 for it must first name the hash of the card now there, or no hash if there is
 none. When it is an article deleted meanwhile, the article must be restored or
 its records dropped. A batch with records whose `article_id` is no longer in
-the blueprint files nothing and names each of them; each must be dropped, or
-take its `article_id` and packet from the packet manifest a new `review
-prepare` writes.
+the blueprint files nothing and names each of them, before it lists any card
+conflict; each must be dropped, or take its `article_id` and packet from the
+packet manifest a new `review prepare` writes and drop any
+`expected_card_hash`, which names a card filed under the old `article_id`.
 
 `review check`, `audit`, and `render` re-extract the
 current Lean evidence and reject unresolved, partial, foreign, or stale

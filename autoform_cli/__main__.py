@@ -828,12 +828,14 @@ def _review_record(args: argparse.Namespace) -> int:
         # any Lean work: a missing file or a changed packet stops the batch
         # without an extraction.
         inputs = _record_inputs(bundle, requests)
-        # So is every card that would replace different content without naming
-        # it, or whose existing card cannot be safely read: all of them at
-        # once, rather than one per extraction.
-        _refuse_conflicts(_planned_records(args.blueprint_dir, inputs, model=args.model))
+        # So is every record whose article_id the blueprint no longer has,
+        # ahead of the card check: the hash that check asks for cannot help it.
         graph = load_graph(args.blueprint_dir)
         before = _record_snapshot(graph, requests)
+        # And so is every card that would replace different content without
+        # naming it, or whose existing card cannot be safely read: all of them
+        # at once, rather than one per extraction.
+        _refuse_conflicts(_planned_records(args.blueprint_dir, inputs, model=args.model))
         # Each card's article is read again before the card is written, by its
         # name rather than the file it resolves to, so that a link pointed at
         # another file is seen.
@@ -1075,7 +1077,7 @@ def _record_snapshot(graph: Graph, requests: tuple[RecordRequest, ...]) -> tuple
         matches = [node for node in graph.nodes.values() if node.article_id == request.article_id]
         if len(matches) != 1:
             # Every such record is named, so one run lists all there are to drop or update.
-            gone.append(_record_selection_finding(request.article_id, request.declaration))
+            gone.append(_record_selection_finding(request))
             continue
         node = matches[0]
         state[request.article_id] = (request.article_id, node.id, str(node.path), node.source_sha256 or "")
@@ -1426,14 +1428,17 @@ def _review_selection_finding(article_id: str, declaration: str) -> ReviewFindin
     )
 
 
-def _record_selection_finding(article_id: str, declaration: str) -> ReviewFinding:
+def _record_selection_finding(request: RecordRequest) -> ReviewFinding:
     """The bundle has this declaration, but the current blueprint no longer has its article_id."""
 
+    # A card's path is keyed by its article_id: the card a re-review names
+    # stays under the old one, so a record taking the new one must not name it.
+    drop_hash = " and drop its expected_card_hash" if request.expected_card_hash is not None else ""
     return ReviewFinding(
-        article_id,
+        request.article_id,
         "review-selection-missing",
-        f"{declaration}: article_id {article_id} is no longer in the blueprint; drop the record, or rerun review "
-        "prepare and take its article_id and packet from the new packet manifest",
+        f"{request.declaration}: article_id {request.article_id} is no longer in the blueprint; drop the record, "
+        f"or rerun review prepare and take its article_id and packet from the new packet manifest{drop_hash}",
     )
 
 
