@@ -676,7 +676,7 @@ run_cmd do
           else if (← Lean.collectAxioms declName).contains ``sorryAx then
             logInfo m!"open statement (proof depends on sorry elsewhere): {{declName}} [{{article}}]"
           else if errors.size == reported && !broken then
-            logInfo m!"open statement (proof is sorry-free; record proof: formalized): {{declName}} [{{article}}]"
+            logInfo m!"open statement (proof is sorry-free; restate it if retracted, then record proof: formalized): {{declName}} [{{article}}]"
         else if !hits.isEmpty then
           conditionalCount := conditionalCount + 1
           if errors.size == reported && !broken then

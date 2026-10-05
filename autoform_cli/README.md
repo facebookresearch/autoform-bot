@@ -84,7 +84,8 @@ An article asserts only facts a human or agent verified:
 | Key | Meaning |
 | --- | --- |
 | `statement: formalized` | The Lean statement exists and compiles. |
-| `proof: formalized` | The Lean proof is complete. |
+| `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. |
+| `proof: formalized` | The Lean proof compiles. Under the open policy it may rest on open statements, and the article is then conditional; only the derived `fully_proved` means complete and `sorry`-free. |
 | `mathlib: true` | The result is upstreamed into Mathlib. |
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
 | `lean: Ns.decl` | Declaration name(s) that discharge the article. |
@@ -102,19 +103,19 @@ lands only with its proof; under `open_statements: allowed` it may land with a
 | --- | --- |
 | `can_state` | Every statement prerequisite is stated and every proof prerequisite is proved. Under the open policy a theorem waits for no proof prerequisite, and a definition, whose body is its proof, waits for them to be stated. |
 | `can_prove` | Stated, every statement prerequisite is stated, and every proof prerequisite is proved (strict policy) or stated (open policy). |
-| `proved` | The proof compiles. |
+| `proved` | The article records `proof: formalized`, is a stated definition, or is in Mathlib. |
 | `conditional` | Proved, but the proof rests on an open statement; open policy only. |
 | `fully_proved` | Proved, and every prerequisite is fully proved, recursively. |
-| `defined` | A definition is written but rests on unfinished work. |
+| `defined` | A definition is written but rests on unfinished work; one whose body rests on an open statement is `conditional` instead. |
 
 `proved` and `fully_proved` differ on purpose: a theorem whose own proof
 compiles but which rests on unfinished work is green, not dark green.
 `conditional`, labelled "conditionally proved", is the open policy's case of
-that: the article records `proof: formalized` and its proof compiles, but it
-reaches an open statement, an article whose statement is formalized and whose
-proof is not, or a retracted theorem (see [Open statements](#open-statements)),
-through its dependencies. An open dependency counts together with
-whatever its statement prerequisites reach, and a proved dependency passes on
+that: the article is proved, but it reaches an open statement, a theorem whose
+`lean:` names a declaration and which is stated or retracted but not proved
+(see [Open statements](#open-statements)), through its dependencies. An open
+dependency counts together with whatever its statement prerequisites reach, and
+a proved dependency passes on
 everything it reaches. The site colours it violet, never green, and lists those
 open statements in an `Assumes` row on the article page. It is never
 `fully_proved`, which keeps its meaning in both policies; a conditional result
@@ -538,7 +539,11 @@ worktree or a submodule. Blockers are unmet dependency IDs or one of
 `work list` fails explicitly if an unfinished formalizable leaf lacks one; plan
 the missing IDs with `autoform migrate article-ids` and add them to the
 frontmatter. `work context` may still select that article by its path ID to
-report the migration blocker. Both commands are read-only projections of
+report the migration blocker. An item whose article records `statement:
+retracted` is a revision: it carries `revision` true in JSON, and the text of
+`work list` adds a `revision:` line and `work context` a `Revision:` line saying
+to start from `autoform work impact` (see the [revision
+contract](#revision-contract)). Both commands are read-only projections of
 Markdown.
 
 Under the open policy the text output of `work list` starts with an `Open
@@ -558,14 +563,18 @@ autoform work assumptions blueprint --json
 ```
 
 `work assumptions` prints the policy, one `open:` line per open statement with
-its declarations and the open statements it assumes, if any, and one
-`conditional:` line per other article whose Lean rests on open statements.
+its declarations and the open statements it assumes, if any, one
+`conditional:` line per conditional article, and one `unproved:` line per other
+listed article that assumes open statements, such as a retracted definition
+whose body reaches one.
 `--json` writes the `autoform-assumptions/v1` contract that CI audits the build
-against: every article whose `lean:` names a declaration, stated or not, except
-`mathlib: true` ones, with `open`, `assumes`, and `allowed_open_declarations`,
-the declarations of the open statements its Lean may reach, plus its own when
-it is open. Under the strict policy every such article is listed with `open`
-false and nothing allowed. It reads Markdown only and needs no Lean build.
+against: every article whose `lean:` names a declaration, stated or not, with
+`open`, `assumes`, and `allowed_open_declarations`, the declarations of the
+open statements its Lean may reach, plus its own when it is open. A `mathlib:
+true` article is listed with state `mathlib`, `open` false, and nothing assumed
+or allowed, so CI checks that its names exist and reach no open statement. Under
+the strict policy every such article is listed with `open` false and nothing
+allowed. It reads Markdown only and needs no Lean build.
 
 Ask what revising an article's Lean declarations would affect before editing
 them:
@@ -601,7 +610,10 @@ SECONDS` sets the probe's budget, 600 seconds by default. The report lists:
   articles whose `lean:` names it, and in `deprecated_unused` those with no
   users and no such article;
 - the claim targets: the revised article's first, then every impacted
-  article's and every helper owner's.
+  article's, every helper owner's, and, for a helper without an owner, a
+  `lean/<slug>-<digest>` key derived from its name, so two revisions touching
+  the same helper contend for the same claim; each helper reports its key as
+  `claim_target`.
 
 A revision is `contained` when no other article uses it and every helper it
 impacts belongs to the revised article; it can then be made in place under
@@ -610,7 +622,12 @@ it in its statement changes with it, but `work impact` does not report that
 declaration's users: the additive form `to_additive` writes, which goes
 unreported itself, or a direction `alias ⟨mp, mpr⟩ :=` takes of an `Iff`, which
 shows only as proof-impacted. Check such derivations on the revised set by
-hand. `--json` writes `autoform-impact/v1`. The [revision
+hand. The probe compares only types and values, so it cannot see a change to an
+instance's priority or scope, to an attribute such as `@[simp]` or `@[ext]`, or
+to notation: such a revision is never contained, whatever `contained` says, and
+its claim targets are incomplete, so treat every stated article whose Lean
+imports the changed module, directly or not, as statement-impacted. `--json`
+writes `autoform-impact/v1`. The [revision
 contract](#revision-contract) says what to do with the answer.
 
 Plan durable article identity metadata without changing the blueprint:
@@ -744,21 +761,30 @@ By default a project runs the strict policy: CI rejects every `sorry`, so a
 theorem's statement lands only together with its proof, and a statement waits
 until the proof's prerequisites are proved. `open_statements: allowed` in
 `roadmap/README.md` lets a theorem's statement land with a `sorry` proof. Such
-an article, statement formalized and proof not, is an open statement. A proof
-that uses open statements is conditional: it compiles and records `proof:
-formalized`, but status, `work`, the site, and CI report it as conditionally
-proved, never as fully proved. The policy lets dependents be stated and proved
-against a faithful statement before its proof exists; the price is conditional
+an article, a theorem with `lean:` whose statement is formalized and whose proof
+is not, is an open statement. A proof that uses open statements is conditional:
+it compiles and records `proof: formalized`, but is reported as conditionally
+proved, never as fully proved. Status, `work`, and the site derive that from
+the Markdown dependencies and CI from what the Lean uses, so CI can print
+`sorry-free` for an article the site shows as conditional, when its Markdown
+depends on an open statement its Lean does not use. CI is never the looser of
+the two, since a Lean reach the Markdown does not declare fails. The policy lets
+dependents be stated and proved against a faithful statement before its proof
+exists; the price is conditional
 results that stay incomplete until every open statement they rest on is proved.
 
-A theorem that loses `statement` while its `lean:` still names a declaration,
-as a retraction or a revision leaves it, stays an open statement: that Lean,
+A retracted theorem, one recording `statement: retracted` as a revision leaves
+it, stays an open statement: the Lean its `lean:` names,
 `sorry` or not, still compiles into whatever uses it. The audit keeps accepting
-its `sorry`, and what rests on it stays conditional, until its proof is
-recorded or its `lean:` is removed. A definition is never open: its body
+its `sorry`, and what rests on it stays conditional, until Formalize restates
+and proves it, or the marker and `lean:` are removed. A theorem that was never
+stated is not open even when it has `lean:`: a draft name does not become an
+assumption, and CI rejects its `sorry`. A definition is never open: its body
 is its proof, CI rejects a `sorry` in it, and its statement phase waits until
-its proof prerequisites are stated. Turn the policy back off only once no open
-statement remains, since the strict audit rejects every `sorry` and strict
+its proof prerequisites are stated. A retracted definition is not open either,
+but what rests on it still assumes the open statements its body reaches. Turn
+the policy back off only once no open statement remains, since the strict audit
+rejects every `sorry` and strict
 status shows a proof resting on one as proved, not conditional.
 
 Write an open statement's proof as exactly `sorry`. The audit accepts a `sorry`
@@ -797,7 +823,7 @@ of the last three, which read as passing:
 ```text
 open statement (proof is sorry): NAME [ID]
 open statement (proof depends on sorry elsewhere): NAME [ID]
-open statement (proof is sorry-free; record proof: formalized): NAME [ID]
+open statement (proof is sorry-free; restate it if retracted, then record proof: formalized): NAME [ID]
 conditional: NAME [ID] rests on open statement(s) A, B
 sorry-free: NAME [ID]
 ```
@@ -842,8 +868,10 @@ cleanup. A heartbeat verifies ownership on entry and permanently records any
 later refusal or transport uncertainty as lost ownership.
 
 A claim key is a slug and digest of any string, not a validated node id, so a
-shared resource is locked the same way a node is. Parallel agents get one Git
-worktree each and serialize `lake build` behind a `lake-build` claim, because
+shared resource is locked the same way a node is, as is a Lean helper no
+article owns under the `lean/<slug>-<digest>` key `work impact` reports.
+Parallel agents get one Git worktree each and serialize `lake build` behind a
+`lake-build` claim, because
 builds share the elan toolchain and the Mathlib cache even when the checkouts
 are separate.
 
@@ -876,37 +904,55 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
    `--declaration` when only some of R's declarations, or a helper, change.
 2. Choose the route:
    - **Contained** (`contained: true`): revise X in place under R's claim.
+     `contained` ignores R's own declarations, so re-check R's other
+     declarations that use X as well.
    - **Expand, migrate, contract**, the default whenever anything uses X: add
      X' with the revised statement, leave X unchanged and mark it
      `@[deprecated X' (since := "YYYY-MM-DD")]`, and point R's `lean:` at X'.
      Under the open policy, while X's proof is still `sorry`, R's `lean:`
      names X beside X', so the audit keeps accepting that `sorry` as an open
      statement, and R records `proof` only after step 4 deletes X.
-     Statement-impacted articles lose `statement` and `proof` but keep `lean:`,
-     so they return to the frontier; under the open policy a statement-impacted
+     Statement-impacted articles replace `statement: formalized` with
+     `statement: retracted`, lose `proof`, and keep `lean:`, so they return to
+     the frontier as revisions; under the open policy a statement-impacted
      theorem stays an open statement meanwhile (see [open
-     statements](#open-statements)). Proof-impacted articles keep everything,
-     since their proofs still use the valid old X; migrating them to X' is
-     later work. Claim R and the statement-impacted articles, whose
-     frontmatter changes.
+     statements](#open-statements)). When X's proof is sorry-free,
+     proof-impacted articles keep everything, since their proofs still use the
+     valid old X; migrating them to X' is later work. While it is still
+     `sorry`, they lose `proof: formalized` but keep `statement` and `lean:`,
+     so they return to the frontier as proof phases and migrate to X';
+     otherwise they would keep resting on the deprecated, `sorry`'d X, show
+     "conditional, assumes R" although R's text now describes X', and keep X
+     out of `deprecated_unused`, so R could never record its proof. The claim
+     set is every article whose frontmatter changes: R, the statement-impacted
+     articles, and, in that case, the proof-impacted ones.
    - **In place**, only when X and X' cannot coexist, for example an instance
-     or a structure change: claim every `claim_targets` entry and repair every
-     impacted declaration in one commit whose default build passes. A
-     statement-impacted article keeps `statement` only after an Agent Review of
-     its source faithfulness under X's new meaning; otherwise it loses
-     `statement` and `proof` but keeps `lean:`. A repaired dependent proof
-     keeps `proof: formalized` only after an Agent Review of the repair;
-     otherwise it loses `proof`. A theorem's proof that cannot be repaired
-     becomes exactly `sorry` under the open policy; otherwise delete the
-     declaration and remove its article's `lean:`, `statement`, and `proof`,
-     which works only when nothing else uses it. When neither applies, the
+     or a structure change: the claim set is every `claim_targets` entry.
+     Repair every impacted declaration in one commit whose default build
+     passes. A change `work impact` cannot see, to an instance's priority or
+     scope, an attribute, or notation, also takes this route whatever
+     `contained` says, and its `claim_targets` are incomplete: add every stated
+     article whose Lean imports the changed module and treat it as
+     statement-impacted. A statement-impacted article keeps `statement` only
+     after an Agent Review of its source faithfulness under X's new meaning;
+     otherwise it records `statement: retracted`, loses `proof`, and keeps
+     `lean:`. A repaired dependent proof keeps `proof: formalized` only after
+     an Agent Review of the repair; otherwise it loses `proof`. A theorem's
+     proof that cannot be repaired becomes exactly `sorry` under the open
+     policy; otherwise delete the declaration and remove its article's
+     `lean:`, `statement`, and `proof`, which works only when nothing else
+     uses it. When neither applies, the
      revision is blocked: release the claims and report it. Record what
      happened under `## Execution notes` of each touched article.
-3. Claim the whole set with one `autoform claim acquire`. When it is refused,
-   release everything and report the held claim as the blocker. After
+3. Claim the route's claim set with one `autoform claim acquire`. When it is
+   refused, release everything and report the held claim as the blocker. After
    acquiring, re-run `work impact`; if the set grew, release and start over
-   with the larger set. Under the open policy, reproduce the CI audit as [open
-   statements](#open-statements) shows before landing. Land one commit, then
+   with the larger set. After rebasing onto the current shared branch and
+   rebuilding, re-run it once more; if the set grew, acquire the whole larger
+   set in one command under the no-hold-and-wait rule of the [claim
+   contract](#claim-contract) and repair the new targets before landing. Under
+   the open policy, reproduce the CI audit as [open statements](#open-statements)
+   shows before landing. Land one commit, then
    release every claim.
 4. Contract: delete a deprecated X once it appears in `deprecated_unused` of
    `work impact R . --lean-root .`, meaning no declaration uses it and no
@@ -918,13 +964,18 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
    attribute list; point it at the replacement. The check is lexical, so it
    misses a later `attribute [deprecated] X`, which the deprecated list of
    `work impact` does see. Under the open policy the finding is expected for a
-   superseded X that step 2 keeps in R's `lean:` until step 4.
-6. When Roadmap revises an article's statement text, it removes that article's
-   `statement` and `proof` but keeps `lean:`, which `work impact` needs. It
-   retracts only that article and the dependents whose Markdown text the
-   revision rewrites; the Lean-side impact decides every other dependent.
-   Roadmap edits only Markdown: it records the decision, releases its claims,
-   and leaves the Lean revision to Formalize.
+   superseded X that step 2 keeps in R's `lean:` until step 4, so `autoform
+   audit --lean-root` and `autoform doctor --lean-root` fail in that window by
+   design, while CI, which runs neither, passes.
+6. When Roadmap revises an article, its statement text or only its Lean, it
+   records the decision and retracts the article: it replaces `statement:
+   formalized` with `statement: retracted`, removes `proof: formalized`, and
+   keeps `lean:`, which `work impact` needs, so the article returns to the
+   frontier as a revision; an article without `lean:` just loses `statement`
+   and `proof`. It retracts only that article and the dependents whose
+   Markdown text the revision rewrites; the Lean-side impact decides every
+   other dependent. Roadmap edits only Markdown: it releases its claims and
+   leaves the Lean revision to Formalize.
 
 ## Local runtime doctor
 

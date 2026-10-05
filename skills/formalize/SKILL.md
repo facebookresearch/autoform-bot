@@ -63,9 +63,10 @@ phase: do not modify another article or its Lean declarations, or weaken a
 public statement. The one exception is revising a declaration other articles'
 Lean uses: start from `autoform work impact` and make only the edits the
 [revision contract](../../autoform_cli/README.md#revision-contract) requires,
-under the claims it requires. A statement phase whose `lean:` already names a
-compiled declaration that other articles use, as a Roadmap retraction leaves
-it, is such a revision. Search the pinned Mathlib checkout before adding
+under the claims it requires. A work item flagged `revision`, whose article
+records `statement: retracted`, is such a revision; restating it replaces
+`statement: retracted` with `statement: formalized`. Never add a new use of a
+deprecated declaration. Search the pinned Mathlib checkout before adding
 helpers, and use the shared Lean LSP and REPL with `<PROJECT>` as the project
 path. Finish with the focused Lake target. Declare the result in a module the
 library root imports, or that the lakefile's globs cover, because the default
@@ -119,15 +120,20 @@ changing the DAG.
 
 Run `autoform check <PROJECT>/blueprint --lean-root <PROJECT>` and `autoform
 audit <PROJECT>/blueprint --lean-root <PROJECT>`. Resolve every finding this
-work introduced on the claimed article; report unrelated pre-existing findings
-instead of fixing them.
+work introduced on the claimed article, except `lean-target-deprecated` for a
+superseded declaration that an expand, migrate, contract revision keeps in the
+revised article's `lean:` until it is deleted; report unrelated pre-existing
+findings instead of fixing them.
 
 Commit the verified result in its worktree, renew the claim, and rebase onto or
 merge the current shared branch. On the result, run the default `lake build`,
 confirm that dependency readiness is unchanged, and confirm that the claimed
 article differs from its starting `article_revision` only by this worker's
 edits; if integration changed the candidate, repeat the review, check, and
-audit. Keep the article claim until every checkout on the claim board can see
+audit. For a revision, also re-run `autoform work impact` on the rebuilt result;
+if the route's claim set grew, acquire the whole larger set in one command under
+the no-hold-and-wait rule and repair the new targets before landing. Keep the
+article claim until every checkout on the claim board can see
 the verified commit: on the shared branch and, for an `origin` board, pushed,
 since other clones read their frontier from the remote. Without authority to
 update or push that branch, or when integration fails, keep the claim and report
