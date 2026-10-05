@@ -164,7 +164,13 @@ def test_audit_requires_mathlib_declaration_and_declaration_intent_on_evidenced_
 
 def test_audit_accepts_an_explicit_non_dispatchable_module_catalog(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Existing module | INVENTORIED | "
+        "[Catalog](../roadmap/existing-module.md) |",
+    )
     ledger = blueprint / "sources" / "existing-module.md"
     ledger.parent.mkdir(parents=True)
     ledger.write_text("# Existing module declarations\n", encoding="utf-8")

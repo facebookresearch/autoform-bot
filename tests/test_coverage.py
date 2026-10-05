@@ -22,7 +22,13 @@ def _role_article(blueprint: Path, relative: str, **metadata: str) -> None:
     path = blueprint / "roadmap" / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     properties = [*(f"{key}: {value}" for key, value in metadata.items())]
-    path.write_text("\n".join(["---", *properties, "---", "", "# Roadmap article", ""]), encoding="utf-8")
+    lines = ["---", *properties, "---", "", "# Roadmap article", ""]
+    if metadata.get("catalog") == "module":
+        ledger = blueprint / "sources" / f"{path.stem}-ledger.md"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text("# Module declaration ledger\n", encoding="utf-8")
+        lines.extend(["## Sources", "", f"- [Ledger](../sources/{ledger.name})", ""])
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def _contract(blueprint: Path, rows: str) -> Path:

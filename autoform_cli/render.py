@@ -31,7 +31,12 @@ from ._tree_snapshot import (
     TreeSnapshotError,
     bind_directory_tree,
 )
-from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage
+from .coverage import (
+    COVERAGE_DISPOSITIONS,
+    CoverageSummary,
+    load_coverage,
+    validate_coverage_roles,
+)
 from .graph import Graph, Node, load_graph
 from .lean import SourceLinker, build_linker, declaration_names, index_failure_message
 from .status import is_definition
@@ -1197,13 +1202,9 @@ def _render_structure_page(
             row(
                 depth,
                 f"{label} <span class='bp-tree-title'>{html.escape(node.title)}</span>",
-                html.escape(
-                    f"{node.catalog} catalog"
-                    if node.catalog is not None
-                    else node.declaration or node.kind
-                ),
-                f'<span class="bp-swatch bp-swatch-{state.key}"></span>'
-                f'<span class="bp-tree-state">{html.escape(state.label)}</span>',
+                html.escape(kind),
+                f'<span class="bp-swatch bp-swatch-{state_key}"></span>'
+                f'<span class="bp-tree-state">{html.escape(state_label)}</span>',
                 node_id=node.id,
             )
         )
@@ -1405,16 +1406,12 @@ _COVERAGE_SUMMARY_ORDER = tuple(
 def _is_countable(graph: Graph, node_id: str, containers: frozenset[str]) -> bool:
     """Whether *node_id* is a formalization target the dashboards should count.
 
-    Declaration leaves are targets. A catalog may instead summarize an
-    existing formalized module on a narrative leaf, so an explicit checked
-    status also makes that leaf countable. Bare navigation and prose leaves do
-    not count: a freshly scaffolded roadmap must not invent unfinished targets.
+    Declaration leaves are targets. Module catalogs are inventory evidence,
+    not mathematical formalization targets. Bare navigation and prose leaves
+    do not count either.
     """
     node = graph.nodes[node_id]
-    asserted_status = node.statement_formalized or node.proof_formalized or node.mathlib
-    return node_id not in containers and (
-        node.formalizable or (node.catalog is not None and asserted_status)
-    )
+    return node_id not in containers and node.formalizable
 
 
 def _countable(graph: Graph) -> list[str]:
@@ -1573,15 +1570,12 @@ def _render_overview_summary(
         for node_id in candidates
         if _is_countable(graph, node_id, containers)
     ]
-    catalogs = sum(graph.nodes[node_id].catalog is not None for node_id in selected_ids)
-    definitions = sum(
-        graph.nodes[node_id].catalog is None and is_definition(graph.nodes[node_id])
-        for node_id in selected_ids
+    inventory_count = len(
+        _module_inventories(graph, containers=containers, node_ids=candidates)
     )
-    results = len(selected_ids) - definitions - catalogs
+    definitions = sum(is_definition(graph.nodes[node_id]) for node_id in selected_ids)
+    results = len(selected_ids) - definitions
     item_parts = []
-    if catalogs:
-        item_parts.append(f"{catalogs} module catalog{'s' if catalogs != 1 else ''}")
     if definitions:
         item_parts.append(f"{definitions} definition{'s' if definitions != 1 else ''}")
     if results:
@@ -1925,14 +1919,18 @@ def _render_chapter(
         linked += node_linked
         unresolved.extend(node_unresolved)
 
-    summary_node_ids = [
-        *node_ids,
-        *(
-            node_id
-            for node_id, node in graph.nodes.items()
-            if node.catalog == "module" and (node.parent or "roadmap") == group
-        ),
-    ]
+    summary_node_ids = list(
+        dict.fromkeys(
+            (
+                *node_ids,
+                *(
+                    node_id
+                    for node_id, node in graph.nodes.items()
+                    if node.catalog == "module" and (node.parent or "roadmap") == group
+                ),
+            )
+        )
+    )
     chapter_summary = _render_overview_summary(
         graph,
         statuses,
@@ -2063,11 +2061,18 @@ def _render_environment(
 
     # amsthm distinguishes the two: a proposition is set in italics, a
     # definition upright. leanblueprint keeps that distinction on the web.
-    style = "theorem-style-definition" if is_definition(node) else "theorem-style-plain"
-    mark = "✓" if node_status.key in {"fully_proved", "mathlib"} else "●"
+    inventory_checked = node.catalog == "module" and node_status.fully_proved
+    display_key = "planned" if inventory_checked else node_status.key
+    display_label = "inventory checked" if inventory_checked else node_status.label
+    style = (
+        "theorem-style-definition"
+        if node.catalog == "module" or is_definition(node)
+        else "theorem-style-plain"
+    )
+    mark = "✓" if inventory_checked or node_status.key in {"fully_proved", "mathlib"} else "●"
 
     lines = [
-        f'<div class="bp-thmwrapper {style} bp-{node_status.key}" '
+        f'<div class="bp-thmwrapper {style} bp-{display_key}" '
         f'id="{html.escape(anchor, quote=True)}" '
         f'data-autoform-node-id="{html.escape(node.id, quote=True)}" markdown="1">',
         '<div class="bp-thmheading">',
@@ -2078,8 +2083,8 @@ def _render_environment(
         f"{context_link}"
         f"{source_link}"
         f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}">#</a>'
-        f'<span class="bp-mark" title="{html.escape(node_status.label, quote=True)}">'
-        f'{mark}<span class="bp-mark-label">{html.escape(node_status.label)}</span></span>',
+        f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}">'
+        f'{mark}<span class="bp-mark-label">{html.escape(display_label)}</span></span>',
         "</div>",
         '<div class="bp-thmcontent" markdown="1">',
         "",

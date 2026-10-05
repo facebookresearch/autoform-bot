@@ -82,8 +82,9 @@ proof task. A completed catalog records every exact compiled public name in
 `lean:` and links a declaration ledger under `blueprint/sources/` from its exact
 `## Sources` section; it may assert
 `statement: formalized` and `proof: formalized` when the complete module has
-been checked. It then contributes honestly to progress and graph status while
-remaining a readable catalog page.
+been checked. It contributes to the neutral inventory metric and graph status
+while remaining a readable catalog page, but stays outside the mathematical
+`Scoped roadmap` completion percentage.
 
 `check --lean-root` and `audit --lean-root` resolve every compiled name the
 catalog lists and audit validates the local ledger link. They cannot prove that

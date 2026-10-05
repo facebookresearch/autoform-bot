@@ -78,4 +78,3 @@ extra_javascript:
   - https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js
   - javascripts/blueprint-mermaid.js
   - javascripts/blueprint-live.js
-  - javascripts/blueprint-dag.js

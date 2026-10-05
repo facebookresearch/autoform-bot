@@ -411,11 +411,15 @@ def test_check_cli(tmp_path: Path) -> None:
 def test_check_cli_separates_module_inventories_from_target_statuses(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "result.md", "# Result\n", declaration="theorem")
+    ledger = blueprint / "sources/catalog.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Catalog declarations\n", encoding="utf-8")
     _node(
         blueprint,
         "catalog.md",
-        "# Existing module\n",
+        "# Existing module\n\n## Sources\n\n- [Ledger](../sources/catalog.md)\n",
         catalog="module",
+        lean="Project.catalogEntry",
         statement="formalized",
         proof="formalized",
     )

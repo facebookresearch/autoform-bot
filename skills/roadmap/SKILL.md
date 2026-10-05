@@ -59,6 +59,11 @@ work:
 - record each module and declaration name, together with any separate literary
   provenance, under `blueprint/sources/`.
 
+Treat exact inventory reconciliation and mathematical exposition as independent
+completeness axes. A declaration ledger answers what exists and where; prose
+explains the mathematics. A catalog ledger can close the inventory axis, but it
+does not make an area `DECOMPOSED`.
+
 A future-work slice cannot stand in for a repository-wide inventory. Keep
 existing, wishlist, conjectural, and planned mathematics in the same book and
 DAG. `DECOMPOSED` means represented by roadmap articles, not unfinished, so it
@@ -83,11 +88,12 @@ Read [Setup's Zulip workflow](../setup/references/zulip.md) only for requested
 Zulip work.
 
 Enumerate the entire adopted boundary in `blueprint/coverage/README.md`.
-`MAPPED` is unfinished, `DECOMPOSED` links to roadmap nodes, `DEFERRED` records
-an explicit user decision or concrete external blocker, and `OUT` explains an
-exclusion. Treat every other `DEFERRED` row as queued work; never defer merely
-to shorten the run. Because `coverage.complete` only checks declared rows,
-compare the table with the source structure yourself.
+`MAPPED` is unfinished, `DECOMPOSED` links mathematical exposition,
+`INVENTORIED` links exact module catalogs, `DEFERRED` records an explicit user
+decision or concrete external blocker, and `OUT` explains an exclusion. Treat
+every other `DEFERRED` row as queued work; never defer merely to shorten the
+run. Because `coverage.complete` only checks declared rows, compare the table
+with the source structure yourself.
 
 Write milestone pages under `blueprint/roadmap/` by mathematical significance,
 then one fine article per coherent unit with one unique main result. For an
@@ -97,12 +103,11 @@ into fictional future work. Ground each statement and proof sketch in the
 source. Put genuine statement prerequisites under `## Depends on` and
 proof-only prerequisites under `## Proof depends on`.
 
-A source-complete repository inventory may instead use a leaf with
-`catalog: module` to group peer declarations from one existing Lean module,
-provided an exact declaration ledger is linked and every private/supporting
-exclusion is explicit. A catalog leaf omits `declaration` and is not
-dispatchable as one proof task; refine it into declaration-sized children when
-the mathematical DAG or implementation handoff needs that granularity.
+Use `catalog: module` only as a source inventory for one existing Lean module,
+with an exact declaration ledger and explicit private/supporting exclusions.
+It may accompany exposition, but names, signatures, status tables, and imports
+do not replace reader-facing mathematical prose. A catalog leaf omits
+`declaration` and is never dispatchable proof work.
 
 Assert `statement: formalized`, `proof: formalized`, or `mathlib: true` only
 after exact verification. For declaration leaves, record exact compiled names
@@ -138,10 +143,11 @@ refreshed graph only after this final validation; pushing is outward-facing and
 requires a user request.
 
 Finish only when the adopted boundary has no `MAPPED` rows, every `DECOMPOSED`
-area links to a source-grounded fine DAG or exact catalog ledger, affected pages
-and the graph agree, and the latest commit contains every change from the pass.
-Do not stop after discovery, a coarse proposal, one chapter, or unchanged
+area links source-grounded expositional articles, every `INVENTORIED` area links
+exact catalogs, every in-scope declaration is reconciled, affected pages and
+the graph agree, and the latest commit contains every change from the pass. Do
+not stop after discovery, a coarse proposal, one chapter, or unchanged
 validation. Report the material delta, evidence, existing/formalized versus
-wishlist/conjectural/planned counts, declaration-reconciliation gaps, remaining
-explicit blockers, and the next execution frontier. Mark an active Goal
-complete only after these conditions hold.
+wishlist/conjectural/planned counts, reconciliation gaps, remaining blockers,
+and the next execution frontier. Mark an active Goal complete only after these
+conditions hold.

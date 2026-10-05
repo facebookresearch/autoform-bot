@@ -80,7 +80,6 @@ class Node:
     kind: str = "node"
     lean: str | None = None
     declaration: str | None = None
-    catalog: str | None = None
     statement_formalized: bool = False
     proof_formalized: bool = False
     mathlib: bool = False
@@ -124,26 +123,6 @@ class Graph:
 
     blueprint_dir: Path
     nodes: dict[str, Node]
-    _children_by_parent: dict[str | None, tuple[str, ...]] = field(
-        init=False,
-        repr=False,
-        compare=False,
-    )
-    _children_node_count: int = field(init=False, repr=False, compare=False)
-
-    def __post_init__(self) -> None:
-        self._rebuild_children()
-
-    def _rebuild_children(self) -> None:
-        grouped: dict[str | None, list[str]] = {}
-        for node in self.nodes.values():
-            grouped.setdefault(node.parent, []).append(node.id)
-        object.__setattr__(
-            self,
-            "_children_by_parent",
-            {parent: tuple(children) for parent, children in grouped.items()},
-        )
-        object.__setattr__(self, "_children_node_count", len(self.nodes))
 
     @property
     def edge_count(self) -> int:
@@ -151,12 +130,7 @@ class Graph:
 
     def children(self, node_id: str) -> tuple[str, ...]:
         """Return the direct contained articles of *node_id*."""
-        # ``Graph`` historically preserves a caller's plain mutable node dict.
-        # Refresh after additions/removals while keeping the normal validated,
-        # stable graph lookup O(1).
-        if len(self.nodes) != self._children_node_count:
-            self._rebuild_children()
-        return self._children_by_parent.get(node_id, ())
+        return tuple(node.id for node in self.nodes.values() if node.parent == node_id)
 
 
 @dataclass(frozen=True, slots=True)

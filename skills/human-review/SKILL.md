@@ -43,10 +43,10 @@ mathematical-plan changes to Roadmap, Lean implementation changes to
 Orchestrate, and autonomous rubric scoring to Agent Review.
 
 Treat the landing page's `Scoped roadmap` percentage as completion among
-formalizable leaf targets and module catalogs carrying checked formalization
-assertions and evidence. Catalogs are inventory summaries, never
-dispatchable proof tasks. Completion includes every dependency recursively and
-requires proofs for theorems and bodies for definitions. A target marked
+formalizable leaf targets only. Module catalogs are non-dispatchable source
+inventories reported by a separate neutral metric. Completion includes every
+dependency recursively and requires proofs for theorems and bodies for definitions.
+A target marked
 `mathlib: true` follows the authored status contract; the marker is an author
 assertion, not audit verification that the declaration is in Mathlib. Treat the
 percentage never as whole-source completion. Read the adjacent declared source

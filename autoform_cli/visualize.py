@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Sequence
 
 from . import graph_views, mermaid, status
-from .graph import GraphValidationError, load_graph
+from .graph import Graph, GraphValidationError, load_graph
 
 
 GENERATED_STRUCTURE_MARKER = "---\nkind: structure\nautoform_generated: true\n---"
@@ -105,7 +105,7 @@ def export_graph(
             target = graph.nodes[node.members[0]].path
         links[node.id] = mermaid.relative_link(target, destination, link_extension)
     diagram = mermaid.render_view_diagram(view, links=links)
-    legend = mermaid.render_legend(statuses)
+    legend = mermaid.render_legend(_target_statuses(graph, statuses))
     sections = [
         "---",
         "kind: graph",
@@ -170,7 +170,9 @@ def export_structure(blueprint_dir: Path, output: Path | None = None) -> Path:
         if node is None:
             lines.append(f"{indent}- [{entry.name}]({entry.as_posix()}) · prose")
             continue
-        kind = f"{node.catalog} catalog" if node.catalog is not None else node.declaration or node.kind
+        inventory_checked = node.catalog == "module" and statuses[node.id].fully_proved
+        kind = "module inventory" if node.catalog == "module" else node.declaration or node.kind
+        state_label = "inventory checked" if inventory_checked else statuses[node.id].label
         lines.append(
             f"{indent}- [{node.title}]({entry.as_posix()}) · {kind} · {state_label}"
         )

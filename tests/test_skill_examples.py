@@ -40,10 +40,10 @@ def test_human_review_distinguishes_roadmap_progress_from_source_scope(
     skill = (repo_root / "skills/human-review/SKILL.md").read_text(encoding="utf-8")
 
     assert "`Scoped roadmap` percentage" in skill
-    assert "formalizable leaf targets" in skill
-    assert "module catalogs carrying checked formalization" in skill
-    assert "Completion includes every dependency recursively" in skill
-    assert "never\ndispatchable proof tasks" in skill
+    assert "formalizable leaf targets only" in skill
+    assert "Module catalogs are non-dispatchable source" in skill
+    assert "separate neutral metric" in skill
+    assert "Completion includes every\ndependency recursively" in skill
     assert "bodies for definitions" in skill
     assert "`mathlib: true` follows the authored status contract" in skill
     assert "not audit verification" in skill

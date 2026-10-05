@@ -37,7 +37,6 @@ class ViewNode:
     members: tuple[str, ...]
     status_counts: tuple[tuple[str, int], ...]
     declaration: str | None = None
-    catalog: str | None = None
     status_key: str | None = None
     focus: bool = False
     catalog: str | None = None
@@ -132,8 +131,8 @@ def project_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
             title=group_title(graph, group),
             kind="scope",
             members=grouped.get(group, ()),
-            status_counts=_status_counts(grouped.get(group, ()), statuses),
-            status_key=_rollup_status_key(grouped.get(group, ()), statuses),
+            status_counts=_status_counts(graph, grouped.get(group, ()), statuses),
+            status_key=_rollup_status_key(graph, grouped.get(group, ()), statuses),
         )
         for group in scopes
     )
@@ -177,8 +176,8 @@ def chapter_view(graph: Graph, statuses: dict[str, NodeStatus], group: str) -> G
             title=group_title(graph, external),
             kind="boundary",
             members=tuple(sorted(external_members)),
-            status_counts=_status_counts(external_members, statuses),
-            status_key=_rollup_status_key(external_members, statuses),
+            status_counts=_status_counts(graph, external_members, statuses),
+            status_key=_rollup_status_key(graph, external_members, statuses),
         )
         for external, external_members in sorted(boundaries.items())
     )
@@ -298,8 +297,8 @@ def _scope_view(
                     title=article.title,
                     kind="scope",
                     members=members[child],
-                    status_counts=_status_counts(members[child], statuses),
-                    status_key=_rollup_status_key(members[child], statuses),
+                    status_counts=_status_counts(graph, members[child], statuses),
+                    status_key=_rollup_status_key(graph, members[child], statuses),
                 )
             )
         else:
@@ -336,8 +335,8 @@ def _scope_view(
                 title=group_title(graph, external),
                 kind="boundary",
                 members=tuple(sorted(external_members)),
-                status_counts=_status_counts(external_members, statuses),
-                status_key=_rollup_status_key(external_members, statuses),
+                status_counts=_status_counts(graph, external_members, statuses),
+                status_key=_rollup_status_key(graph, external_members, statuses),
             )
         )
     return GraphView(
@@ -463,8 +462,8 @@ def full_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
             title=node.title,
             kind="scope",
             members=(node.id, *descendants[node.id]),
-            status_counts=_status_counts(descendants[node.id], statuses),
-            status_key=_rollup_status_key(descendants[node.id], statuses),
+            status_counts=_status_counts(graph, descendants[node.id], statuses),
+            status_key=_rollup_status_key(graph, descendants[node.id], statuses),
         )
         if node.id in children
         else node
@@ -551,7 +550,9 @@ def _theorem_node(node: Node, node_status: NodeStatus) -> ViewNode:
         status_counts=((display_status, 1),),
         declaration=node.declaration,
         catalog=node.catalog,
-        status_key=node_status.key,
+        # A checked inventory is deliberately neutral: it records source
+        # accounting, not completion of a mathematical target.
+        status_key="planned" if display_status == INVENTORY_CHECKED_STATUS else display_status,
     )
 
 
@@ -587,17 +588,6 @@ def _rollup_status_key(
         (key, count) for key, count in counts if key != INVENTORY_CHECKED_STATUS
     )
     return target_counts[-1][0] if target_counts else "planned"
-
-
-def _rollup_status_key(
-    node_ids: Iterable[str],
-    statuses: dict[str, NodeStatus],
-) -> str:
-    """Use the least-complete descendant as a container's honest status."""
-    counts = _status_counts(node_ids, statuses)
-    return counts[-1][0] if counts else "planned"
-
-
 def _scope_node_id(group: str) -> str:
     return f"scope:{group or 'roadmap'}"
 

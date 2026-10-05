@@ -521,7 +521,7 @@ def test_single_target_uses_singular_completion_copy(tmp_path: Path) -> None:
     assert "1 of 1 targets complete" not in overview
 
 
-def test_module_catalog_leaf_counts_as_complete_without_becoming_dispatchable(
+def test_module_catalog_is_separate_from_formalization_progress(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
@@ -535,16 +535,24 @@ def test_module_catalog_leaf_counts_as_complete_without_becoming_dispatchable(
         "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
         encoding="utf-8",
     )
+    coverage = project / "blueprint/coverage/README.md"
+    coverage.write_text(
+        coverage.read_text(encoding="utf-8")
+        + "| Existing module | INVENTORIED | [Catalog](../roadmap/catalog.md) |\n",
+        encoding="utf-8",
+    )
 
     render_site(project / "blueprint", tmp_path / "out")
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert "3 of 3 targets complete" in overview
+    assert "2 of 2 targets complete" in overview
+    assert "3 of 3 targets complete" not in overview
+    assert '<div class="bp-figure-label">Module inventories</div>' in overview
     assert not (tmp_path / "out/roadmap/catalog.md").exists()
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert '<span class="bp-thmcaption">Module</span><span class="bp-thmlabel">1</span>' in chapter
     assert "A checked inventory of an existing Lean module." in chapter
-    assert "1 module catalog" in chapter
+    assert "1 module inventory" in chapter
 
 
 def test_partial_module_catalog_is_not_reported_as_dispatchable_work(tmp_path: Path) -> None:
@@ -556,6 +564,12 @@ def test_partial_module_catalog_is_not_reported_as_dispatchable_work(tmp_path: P
         "---\ncatalog: module\nlean: Project.Base\nstatement: formalized\n---\n\n"
         "# Existing module\n\nAn incomplete module inventory.\n\n"
         "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
+        encoding="utf-8",
+    )
+    coverage = project / "blueprint/coverage/README.md"
+    coverage.write_text(
+        coverage.read_text(encoding="utf-8")
+        + "| Existing module | INVENTORIED | [Catalog](../roadmap/catalog.md) |\n",
         encoding="utf-8",
     )
 

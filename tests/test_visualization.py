@@ -282,13 +282,20 @@ def test_the_vault_gets_a_structure_page_obsidian_can_read(tmp_path: Path) -> No
 
 def test_vault_views_label_checked_catalogs_as_module_inventories(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
+    ledger = blueprint / "sources/catalog.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Catalog declarations\n", encoding="utf-8")
+    catalog = blueprint / "roadmap/catalog.md"
     _write_node(
-        blueprint / "roadmap/catalog.md",
+        catalog,
         "Existing module",
         catalog="module",
+        lean="Existing.module",
         statement="formalized",
         proof="formalized",
     )
+    with catalog.open("a", encoding="utf-8") as stream:
+        stream.write("\n## Sources\n\n- [Ledger](../sources/catalog.md)\n")
 
     graph_page = export_graph(blueprint).read_text(encoding="utf-8")
     structure_page = export_structure(blueprint).read_text(encoding="utf-8")
