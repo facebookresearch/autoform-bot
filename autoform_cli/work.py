@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .runtime import RuntimeNode, load_runtime_graph
+from .status import is_definition
 
 
 WORK_SCHEMA = "autoform-work/v1"
@@ -247,12 +248,13 @@ class AssumptionContract:
 
 
 def assumption_contract(project_or_blueprint: str | Path) -> AssumptionContract:
-    """Record which open statements each stated article's Lean code may reach.
+    """Record which open statements each article's Lean code may reach.
 
     CI audits the Lean build against this: an open article's own declarations
     may keep a ``sorry`` proof, and every other article may reach only the open
-    statements its Markdown dependencies declare. Under the strict policy no
-    article is open and nothing is allowed.
+    statements its Markdown dependencies declare. A theorem whose statement a
+    revision retracted stays open while its ``lean:`` names the old declaration.
+    Under the strict policy no article is open and nothing is allowed.
     """
     runtime = load_runtime_graph(project_or_blueprint)
     declarations = {
@@ -261,9 +263,13 @@ def assumption_contract(project_or_blueprint: str | Path) -> AssumptionContract:
     }
     articles: list[AssumptionArticle] = []
     for node in sorted(runtime.nodes, key=lambda candidate: candidate.id):
-        if node.mathlib or not node.status.stated or not declarations[node.id]:
+        if node.mathlib or not declarations[node.id]:
             continue
-        is_open = runtime.open_statements and node.status.stated and not node.status.proved
+        is_open = (
+            runtime.open_statements
+            and not node.status.proved
+            and (node.status.stated or not is_definition(node))
+        )
         allowed = {name for assumed in node.status.assumes for name in declarations.get(assumed, ())}
         if is_open:
             allowed.update(declarations[node.id])

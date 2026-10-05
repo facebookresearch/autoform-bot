@@ -103,9 +103,10 @@ class NodeStatus:
     """The derived progress of a single node.
 
     ``waiting_on`` names the prerequisites that keep an unproved node from its
-    next phase, in authored order. ``assumes`` names the open statements (stated,
-    not proved) a proof of this node rests on; it is empty unless the project
-    allows open statements.
+    next phase, in authored order. ``assumes`` names the open statements (not
+    proved, but stated or a theorem still naming its ``lean:`` declaration) a
+    proof of this node rests on; it is empty unless the project allows open
+    statements.
     """
 
     node_id: str
@@ -176,13 +177,16 @@ def derive(graph: Graph) -> dict[str, NodeStatus]:
             can_state = not unstated
             can_prove = stated and not unstated and not unmet
             waiting = unstated + unmet if stated else unstated
-            # Mathlib and unstated nodes reach nothing, so they get no entry.
+            # Mathlib and unstated nodes reach nothing, so they get no entry,
+            # except a theorem whose statement a revision retracted while its
+            # `lean:` still names the old declaration: that declaration and its
+            # sorry stay in the build until Formalize restates it.
             if not node.mathlib:
                 reached = frozenset().union(*(reaches.get(other, frozenset()) for other in node.dependencies))
                 assumes = tuple(sorted(reached))
                 if proved:
                     reaches[node_id] = reached
-                elif stated:
+                elif stated or (node.lean and not definition):
                     reaches[node_id] = frozenset({node_id}).union(
                         *(reaches.get(other, frozenset()) for other in node.statement_dependencies)
                     )

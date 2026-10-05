@@ -823,6 +823,30 @@ def test_work_assumptions_under_the_open_policy_bounds_each_article(
     )
 
 
+@pytest.mark.parametrize("policy", ["forbidden", "allowed"])
+def test_work_assumptions_keeps_a_retracted_theorem_while_its_lean_names_the_old_declaration(
+    tmp_path: Path, capsys, policy: str
+) -> None:
+    """Roadmap retracts a statement but keeps `lean:`; the old sorry stays declared until Formalize restates it."""
+    project = _policy_project(tmp_path, policy)
+    _edit(project, "open.md", "statement: formalized\n", "")
+    allowed = ("Project.open_aux", "Project.open_thm") if policy == "allowed" else ()
+
+    assert cli.main(["work", "assumptions", str(project), "--json"]) == 0
+    articles = {article["id"]: article for article in json.loads(capsys.readouterr().out)["articles"]}
+
+    assert articles["chapter/open"] == _contract_article(
+        "chapter/open",
+        "af_00000000000000000000000b",
+        "can_state",
+        ["Project.open_thm", "Project.open_aux"],
+        open_=policy == "allowed",
+        allowed=allowed,
+    )
+    assert articles["chapter/reduction"]["state"] == ("conditional" if policy == "allowed" else "proved")
+    assert articles["chapter/reduction"]["allowed_open_declarations"] == list(allowed)
+
+
 def test_work_assumptions_reports_errors_on_stderr_with_exit_2(
     tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
 ) -> None:

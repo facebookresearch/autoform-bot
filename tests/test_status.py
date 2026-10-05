@@ -311,6 +311,37 @@ def test_assumptions_reach_what_the_lean_proof_can_reach(tmp_path: Path) -> None
     assert statuses["up"].assumes == ()
 
 
+@pytest.mark.parametrize("policy", ["forbidden", "allowed"])
+def test_a_retracted_theorem_still_naming_its_lean_stays_an_open_statement(tmp_path: Path, policy: str) -> None:
+    """A retracted statement's declaration, and any sorry in it, stay in the build until it is restated.
+
+    A definition carries no sorry the audit would accept, so a retracted one is
+    not open.
+    """
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "README.md", open_statements=policy)
+    _node(blueprint, "retracted.md", declaration="theorem", lean="Ns.retracted")
+    _node(blueprint, "old.md", declaration="def", lean="Ns.old")
+    _node(blueprint, "gone.md", declaration="theorem")
+    _node(
+        blueprint,
+        "reduction.md",
+        "## Proof depends on\n\n- [Retracted](retracted.md)\n- [Old](old.md)\n- [Gone](gone.md)\n",
+        declaration="theorem",
+        statement="formalized",
+        proof="formalized",
+        lean="Ns.reduction",
+    )
+
+    statuses = derive(load_graph(blueprint))
+
+    assert statuses["retracted"].key == "can_state"
+    if policy == "allowed":
+        assert (statuses["reduction"].key, statuses["reduction"].assumes) == ("conditional", ("retracted",))
+    else:
+        assert (statuses["reduction"].key, statuses["reduction"].assumes) == ("proved", ())
+
+
 @pytest.mark.parametrize("open_statements", [False, True])
 def test_a_missing_dependency_counts_as_neither_stated_nor_proved(
     tmp_path: Path, open_statements: bool
