@@ -1591,6 +1591,26 @@ def _link_to_a_fifo(article: Path) -> None:
     article.symlink_to("other.pipe")
 
 
+def test_an_article_longer_than_one_read_is_read_again_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The article is read again in blocks of 64 KiB, so one several blocks
+    long must match as a whole for its card to be filed."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    other = blueprint / "roadmap" / "basics" / "other.md"
+    other.write_text(other.read_text(encoding="utf-8") + "\n" + "A remark. " * 20_000 + "\n", encoding="utf-8")
+    assert other.stat().st_size > 3 * 64 * 1024
+    packets = manifest.parent / "review-packets"
+    prepare = ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle)]
+    assert main([*prepare, "--packets", str(packets)]) == 0
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 0
+
+    assert set(load_readbacks(blueprint)) == {(_RESULT_ID, "Review.result"), (_OTHER_ID, "Review.other")}
+
+
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
 @pytest.mark.parametrize("damage", [_replace_with_a_fifo, _link_to_a_fifo], ids=["a-fifo", "a-link-to-a-fifo"])
 def test_a_fifo_put_at_an_article_stops_the_batch_without_blocking_it(
