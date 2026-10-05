@@ -68,6 +68,9 @@ class FakePool:
     def get_memory_usage(self):
         return 0.25
 
+    def is_usable(self):
+        return not self._shutdown
+
     def shutdown(self):
         self._shutdown = True
 
@@ -155,6 +158,94 @@ def test_shared_runtime_disables_ambiguous_repl_retries(tmp_path, monkeypatch):
         )
         assert configs[0].max_retries == 0
     finally:
+        services.close()
+
+
+def test_quarantined_repl_pool_is_replaced_only_after_active_cleanup(tmp_path):
+    project = make_lake_project(tmp_path, "cleanup-before-replacement")
+    cleanup_started = threading.Event()
+    allow_cleanup = threading.Event()
+    second_started = threading.Event()
+    second_finished = threading.Event()
+    pools = []
+
+    class RetiringPool(FakePool):
+        def __init__(self, root):
+            super().__init__(root)
+            self.number = len(pools) + 1
+            self.cleanup_complete = False
+            self.shutdown_calls = 0
+            pools.append(self)
+
+        def run(self, code, **kwargs):
+            self.calls.append((code, kwargs))
+            if self.number == 1:
+                self._shutdown = True
+                cleanup_started.set()
+                assert allow_cleanup.wait(timeout=2)
+                self.cleanup_complete = True
+            return {"messages": []}
+
+        def shutdown(self):
+            if self.number == 1:
+                assert self.cleanup_complete
+            self.shutdown_calls += 1
+            self._shutdown = True
+
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=RetiringPool,
+        lsp_factory=FakeLsp,
+        start_sweepers=False,
+    )
+    results = []
+    errors = []
+
+    def dispatch(code, *, started=None, finished=None):
+        if started is not None:
+            started.set()
+        try:
+            results.append(
+                services.dispatch(
+                    "repl.run",
+                    {"project_dir": str(project), "code": code, "timeout": 1},
+                )
+            )
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            if finished is not None:
+                finished.set()
+
+    first = threading.Thread(target=dispatch, args=("#check Nat",))
+    first.start()
+    assert cleanup_started.wait(timeout=1)
+
+    second = threading.Thread(
+        target=dispatch,
+        args=("#check Int",),
+        kwargs={"started": second_started, "finished": second_finished},
+    )
+    second.start()
+    assert second_started.wait(timeout=1)
+    assert not second_finished.wait(timeout=0.1)
+    assert len(pools) == 1
+    assert pools[0].shutdown_calls == 0
+
+    allow_cleanup.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+    try:
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert errors == []
+        assert results == ["Compiles successfully", "Compiles successfully"]
+        assert len(pools) == 2
+        assert pools[0].cleanup_complete
+        assert pools[0].shutdown_calls == 1
+        assert pools[1].calls == [("#check Int", {"timeout": 1.0})]
+    finally:
+        allow_cleanup.set()
         services.close()
 
 

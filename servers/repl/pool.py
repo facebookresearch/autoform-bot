@@ -9,12 +9,14 @@ from dataclasses import dataclass
 from logging import getLogger
 from typing import Any
 
-from .core import LeanRepl, LeanReplConfig
+from .core import ReplCleanupError, LeanRepl, LeanReplConfig
 
 logger = getLogger(__name__)
 
 DEFAULT_PORT = 8990
 DEFAULT_RAM_FRACTION = 0.5
+_CLEANUP_RETRY_INITIAL_SECONDS = 0.01
+_CLEANUP_RETRY_MAX_SECONDS = 1.0
 
 
 @dataclass
@@ -83,6 +85,100 @@ class LeanReplPool:
         if first_error is not None:
             raise first_error
 
+    def is_usable(self) -> bool:
+        """Return whether this pool may admit another public call."""
+        with self._condition:
+            return not self._shutdown and not self._closed
+
+    def _stop_admission(self) -> None:
+        with self._condition:
+            self._shutdown = True
+            self._condition.notify_all()
+
+    @staticmethod
+    def _remember_cleanup_base_error(
+        remembered: BaseException | None,
+        error: BaseException,
+    ) -> BaseException | None:
+        """Retain cancellation-like cleanup failures until ownership is settled."""
+        if isinstance(error, Exception):
+            return remembered
+        if remembered is None:
+            return error
+        add_note = getattr(remembered, "add_note", None)
+        if add_note is not None:
+            add_note(f"Lean REPL cleanup also raised: {error}")
+        return remembered
+
+    def _settle_worker(
+        self,
+        worker: LeanRepl,
+        *,
+        quarantine: bool,
+    ) -> BaseException | None:
+        """Retain and retry a worker until it verifiably owns no process."""
+        if quarantine:
+            self._stop_admission()
+
+        cleanup_base_error: BaseException | None = None
+        delay = _CLEANUP_RETRY_INITIAL_SECONDS
+        while True:
+            try:
+                clean = worker.is_clean()
+            except BaseException as error:
+                logger.error(
+                    "failed to verify Lean REPL worker cleanup",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+                cleanup_base_error = self._remember_cleanup_base_error(
+                    cleanup_base_error,
+                    error,
+                )
+                clean = False
+
+            if clean:
+                return cleanup_base_error
+
+            if not quarantine:
+                self._stop_admission()
+                quarantine = True
+
+            try:
+                worker.close()
+            except BaseException as error:
+                logger.error(
+                    "failed to retire quarantined Lean REPL worker; retrying",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+                cleanup_base_error = self._remember_cleanup_base_error(
+                    cleanup_base_error,
+                    error,
+                )
+
+            try:
+                clean = worker.is_clean()
+            except BaseException as error:
+                logger.error(
+                    "failed to verify quarantined Lean REPL worker cleanup",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+                cleanup_base_error = self._remember_cleanup_base_error(
+                    cleanup_base_error,
+                    error,
+                )
+                clean = False
+            if clean:
+                return cleanup_base_error
+
+            try:
+                time.sleep(delay)
+            except BaseException as error:
+                cleanup_base_error = self._remember_cleanup_base_error(
+                    cleanup_base_error,
+                    error,
+                )
+            delay = min(delay * 2, _CLEANUP_RETRY_MAX_SECONDS)
+
     def run(self, code: str, **kwargs: Any) -> dict[str, Any]:
         """Run code on an idle REPL within one queue-and-execution timeout."""
         timeout = kwargs.pop("timeout", None)
@@ -108,6 +204,7 @@ class LeanReplPool:
             assert repl is not None
             return repl.run_disposable(code)
 
+        worker_settled = False
         try:
             while repl is None:
                 with self._condition:
@@ -125,21 +222,64 @@ class LeanReplPool:
                     repl = self._idle.get(timeout=wait)
                 except queue.Empty:
                     continue
-            with self._condition:
-                if self._shutdown:
-                    raise RuntimeError("Lean REPL pool is shut down")
-            return run_once()
+            call_result: dict[str, Any] | None = None
+            call_error: BaseException | None = None
+            try:
+                with self._condition:
+                    if self._shutdown:
+                        raise RuntimeError("Lean REPL pool is shut down")
+                call_result = run_once()
+            except BaseException as error:
+                call_error = error
+
+            cleanup_base_error = self._settle_worker(
+                repl,
+                quarantine=isinstance(call_error, ReplCleanupError),
+            )
+            worker_settled = True
+
+            if call_error is not None and not isinstance(call_error, Exception):
+                if cleanup_base_error is not None and cleanup_base_error is not call_error:
+                    add_note = getattr(call_error, "add_note", None)
+                    if add_note is not None:
+                        add_note(
+                            "Lean REPL cleanup also raised: "
+                            f"{cleanup_base_error}"
+                        )
+                raise call_error.with_traceback(call_error.__traceback__)
+            if cleanup_base_error is not None:
+                if call_error is not None:
+                    add_note = getattr(cleanup_base_error, "add_note", None)
+                    if add_note is not None:
+                        add_note(f"Lean REPL call also failed: {call_error}")
+                raise cleanup_base_error.with_traceback(
+                    cleanup_base_error.__traceback__
+                )
+            if isinstance(call_error, ReplCleanupError):
+                return call_error.result
+            if call_error is not None:
+                raise call_error.with_traceback(call_error.__traceback__)
+            if call_result is None:
+                raise RuntimeError("Lean REPL worker returned no result")
+            return call_result
         finally:
+            emergency_cleanup_error: BaseException | None = None
+            if repl is not None and not worker_settled:
+                emergency_cleanup_error = self._settle_worker(
+                    repl,
+                    quarantine=True,
+                )
+                worker_settled = True
             with self._condition:
                 if repl is not None:
-                    if repl.is_clean() and not self._shutdown:
+                    if worker_settled and not self._shutdown:
                         self._idle.put(repl)
-                    elif not repl.is_clean():
-                        # Preserve the dirty wrapper for shutdown cleanup, but
-                        # stop every subsequent admission and replacement.
-                        self._shutdown = True
                 self._active_calls -= 1
                 self._condition.notify_all()
+            if emergency_cleanup_error is not None:
+                raise emergency_cleanup_error.with_traceback(
+                    emergency_cleanup_error.__traceback__
+                )
 
     def get_memory_usage(self) -> float:
         """Total memory usage across all REPL instances in GB."""

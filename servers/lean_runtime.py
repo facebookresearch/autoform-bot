@@ -668,6 +668,7 @@ class LeanRuntimeServices:
             lambda pool: pool.shutdown(),
             max_entries=self.config.repl_project_limit,
             idle_seconds=self.config.idle_seconds,
+            is_valid=lambda pool: pool.is_usable(),
             start_sweeper=start_sweepers,
         )
         self.lsp_projects = ProjectResourceCache(
