@@ -96,6 +96,8 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
             declaration=None if index == 0 else "theorem",
             catalog="module" if index == 0 else None,
             status_key="planned",
+            summary="A reader-facing mathematical summary." if index == 0 else None,
+            lean="Project.node" if index == 0 else None,
         )
         for index in range(170)
     )
@@ -124,8 +126,10 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
         "breadcrumbs": [],
         "focus": None,
         "kind": "full",
+        "presentation": "dag",
         "radius": None,
         "scope": None,
+        "summary": None,
     }
     assert payload["present_statuses"] == ["planned", "inventory_checked"]
     assert payload["nodes"][0]["title"] == "Unsafe <script>"
@@ -135,6 +139,8 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
     assert payload["nodes"][0]["member_count"] == 1
     assert "members" not in payload["nodes"][0]
     assert payload["nodes"][0]["status_counts"] == {"inventory_checked": 1}
+    assert payload["nodes"][0]["summary"] == "A reader-facing mathematical summary."
+    assert payload["nodes"][0]["lean"] == "Project.node"
     assert payload["nodes"][0]["isolated"] is False
     assert payload["palette"]["inventory_checked"]["label"] == "inventory checked"
     assert payload["palette"]["inventory_checked"]["neutral"] is True
@@ -188,24 +194,35 @@ def test_isolated_inventory_does_not_spread_the_connected_dag() -> None:
     assert max(positions[node_id]["column"] for node_id in ("root", "result")) == 1
 
 
-def test_high_level_isolates_use_a_readable_balanced_grid() -> None:
+def test_high_level_topics_use_a_weighted_knowledge_atlas(tmp_path: Path) -> None:
     nodes = tuple(
         ViewNode(
             id=f"chapter-{index}",
             title=f"Chapter {index}",
             kind="scope",
-            members=(f"chapter-{index}/item",),
+            members=tuple(f"chapter-{index}/item-{item}" for item in range(index + 1)),
             status_counts=(("planned", 1),),
             status_key="planned",
+            area="Foundations" if index < 10 else "Applications",
         )
         for index in range(33)
     )
-    positions = dag_viewer._positions(
-        GraphView(kind="project", title="Project", nodes=nodes, edges=())
-    )
+    view = GraphView(kind="project", title="Project", nodes=nodes, edges=())
+    positions = dag_viewer._positions(view)
+    output = tmp_path / "atlas.json"
+    dag_viewer.write_payload(output, view, links={})
+    payload = json.loads(output.read_text(encoding="utf-8"))
 
-    assert len({position["column"] for position in positions.values()}) == 4
-    assert max(position["row"] for position in positions.values()) == 8
+    assert payload["view"]["presentation"] == "atlas"
+    assert {(region["label"], region["count"]) for region in payload["regions"]} == {
+        ("Applications", 23),
+        ("Foundations", 10),
+    }
+    assert len({(position["x"], position["y"]) for position in positions.values()}) == len(nodes)
+    assert all(position["width"] == position["height"] for position in positions.values())
+    assert max(position["width"] for position in positions.values()) > min(
+        position["width"] for position in positions.values()
+    )
 
 
 def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_path: Path) -> None:
@@ -345,7 +362,7 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
         context_links={node.id: f"chapters/chapter.html#node={node.id}" for node in nodes},
     )
 
-    assert len(dag_viewer.viewer_script().encode()) < 51_000
+    assert len(dag_viewer.viewer_script().encode()) < 56_000
     assert output.stat().st_size < 300_000
     assert search.stat().st_size < 100_000
     search_payload = json.loads(search.read_text(encoding="utf-8"))

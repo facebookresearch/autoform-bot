@@ -127,20 +127,20 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert "data-search-src" not in project_page  # Material reserves and strips this prefix.
     assert "Explore all nodes" not in project_page
     project_payload = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))
-    assert project_payload["title"] == "Dependency explorer"
+    assert project_payload["title"] == "Mathematics atlas"
     assert {node["url"] for node in project_payload["nodes"]} == {
         "dependencies/chapters/roadmap.html"
     }
     chapter_payload = json.loads(
         (out / "dependencies/chapters/roadmap.json").read_text(encoding="utf-8")
     )
-    assert chapter_payload["title"] == "Roadmap dependencies"
+    assert chapter_payload["title"] == "Roadmap knowledge map"
     assert chapter_payload["view"]["breadcrumbs"][-1] == {"label": "Roadmap", "url": None}
     full_page = (out / "dependencies/full.md").read_text(encoding="utf-8")
     assert 'data-graph-src="full.json"' in full_page
     payload = json.loads((out / "dependencies/full.json").read_text(encoding="utf-8"))
     assert payload["schema"] == "autoform-dag-view/v2"
-    assert payload["title"] == "Dependency explorer"
+    assert payload["title"] == "Mathematics atlas"
     assert payload["node_count"] == 1
     assert payload["edge_count"] == 0
     assert all(node["url"] for node in payload["nodes"])
@@ -652,7 +652,7 @@ def test_the_landing_page_is_the_hero_and_project_explorer_and_nothing_else(
     assert overview.index("bp-hero") < overview.index('class="bp-map"')
     assert "bp-landing-prose" not in overview
     assert "## Contents" not in overview
-    assert '<span class="bp-map-title">Dependency explorer</span>' in overview
+    assert '<span class="bp-map-title">Mathematics atlas</span>' in overview
     assert 'data-graph-src="dependencies.json"' in overview
     assert '<a href="dependencies.html">open full-page</a>' in overview
     assert "```mermaid" not in overview

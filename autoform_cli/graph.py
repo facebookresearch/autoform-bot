@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import MISSING, dataclass, fields
+from html import unescape
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -20,11 +21,14 @@ _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _LINK = re.compile(r"(?<!!)\[[^\]]+\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+[^)]*)?\)")
 _HTML_COMMENT = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
 _INLINE_CODE = re.compile(r"(`+).*?\1")
+_MARKDOWN_LINK_TEXT = re.compile(r"!?\[([^\]]+)\]\([^)]*\)")
+_HTML_TAG = re.compile(r"<[^>]+>")
 _LEAN_DECLARATION_NAME = re.compile(r"(?:«[^»]*(?:»|$)|[^\s,«])+")
 ARTICLE_ID_PATTERN = re.compile(r"af_[0-9a-f]{24}\Z")
 _FRONTMATTER_KEYS = frozenset(
     {
         "article_id",
+        "area",
         "catalog",
         "declaration",
         "lean",
@@ -94,6 +98,8 @@ class Node:
     article_id: str | None = None
     source_sha256: str | None = None
     catalog: str | None = None
+    summary: str | None = None
+    area: str | None = None
 
     @property
     def formalizable(self) -> bool:
@@ -152,6 +158,7 @@ class _ParsedNode:
     proof_targets: tuple[str, ...]
     source_targets: tuple[str, ...]
     metadata: dict[str, str]
+    summary: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,6 +277,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             depth=_article_depth(parsed_node.id, parents),
             article_id=metadata.get("article_id"),
             source_sha256=source_hashes[parsed_node.id],
+            summary=parsed_node.summary,
+            area=metadata.get("area"),
         )
 
     if not issues:
@@ -483,8 +492,56 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         tuple(targets[_PROOF_SECTION]),
         tuple(targets[_SOURCES_SECTION]),
         metadata,
+        _extract_summary(body),
     )
     return parsed, []
+
+
+def _extract_summary(body: str, *, limit: int = 420) -> str | None:
+    """Return the first reader-facing prose paragraph from a roadmap article."""
+    paragraph: list[str] = []
+    excluded = False
+    fence: tuple[str, int] | None = None
+    for raw in body.splitlines():
+        fence_match = _FENCE.match(raw)
+        if fence_match:
+            marker = fence_match.group(1)
+            if fence is None:
+                fence = (marker[0], len(marker))
+            elif marker[0] == fence[0] and len(marker) >= fence[1]:
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        heading = _HEADING.match(raw)
+        if heading:
+            if paragraph:
+                break
+            excluded = len(heading.group(1)) == 2 and heading.group(2).strip().casefold() in {
+                _STATEMENT_SECTION,
+                _PROOF_SECTION,
+                _SOURCES_SECTION,
+            }
+            continue
+        text = raw.strip()
+        if not text:
+            if paragraph:
+                break
+            continue
+        if excluded or text.startswith(("- ", "* ", "+ ", "> ", "|", "$$", "\\[", "<div")):
+            continue
+        text = _MARKDOWN_LINK_TEXT.sub(r"\1", text)
+        text = _HTML_TAG.sub("", text).replace("**", "").replace("__", "")
+        text = unescape(text).strip()
+        if text:
+            paragraph.append(text)
+    if not paragraph:
+        return None
+    summary = " ".join(" ".join(paragraph).split())
+    if len(summary) <= limit:
+        return summary
+    clipped = summary[: limit - 1].rsplit(" ", 1)[0]
+    return (clipped or summary[: limit - 1]).rstrip() + "…"
 
 
 def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], int, list[str]]:

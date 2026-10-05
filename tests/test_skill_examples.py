@@ -57,6 +57,10 @@ def test_human_review_distinguishes_roadmap_progress_from_source_scope(
     assert "full-page route" in skill
     assert "Never begin with a\nfitted all-repository node cloud" in skill
     assert "smallest\nuseful scope" in skill
+    assert "mathematical knowledge map, not navigation chrome" in skill
+    assert "provenance, and pagination folders remain facets" in skill
+    assert "Containment\nuses regions or hulls, dependency uses typed arrows" in skill
+    assert "no authored\ndependency edges says so" in skill
     assert "overview, progress, project graph" not in skill
 
 
@@ -119,10 +123,11 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     assert "repeated pathname reads are not a generation boundary" in normalized
     assert "marker schema in its owning feature" in normalized
     assert "match the blob at the stable detected commit" in normalized
-    assert "full-viewport application surfaces" in normalized
-    assert "bounded hierarchical projection" in normalized
-    assert "global search jumps into the smallest useful scope" in normalized
-    assert "fit every theorem in the repository" in normalized
+    assert "Full-viewport knowledge maps" in normalized
+    assert "authored mathematical areas and prose drive regions and reading panels" in normalized
+    assert "containment and dependency stay distinct" in normalized
+    assert "provenance folders are facets, never geometry" in normalized
+    assert "Never fit the whole repository" in normalized
 
 
 def test_development_guidance_uses_progressive_command_reference(repo_root: Path) -> None:
@@ -366,6 +371,12 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'data-graph-src="dependencies.json"' in graph_page
     assert "graph_view: project" in graph_page
     project_payload = json.loads((site / "dependencies.json").read_text(encoding="utf-8"))
+    assert project_payload["view"]["presentation"] == "atlas"
+    assert {region["label"] for region in project_payload["regions"]} == {
+        "Foundations",
+        "Learning Theory",
+    }
+    assert all(node["summary"] for node in project_payload["nodes"])
     assert {node["url"] for node in project_payload["nodes"]} == {
         "dependencies/chapters/full-supervision.html",
         "dependencies/chapters/infimum-loss.html",

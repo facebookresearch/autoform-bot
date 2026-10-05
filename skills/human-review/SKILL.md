@@ -38,6 +38,12 @@ fitted all-repository node cloud: global search enters the statement's smallest
 useful scope, while breadcrumbs and Back return to the project overview. The authored vault graph remains Mermaid;
 never raise Mermaid's text or edge limits to publish scale.
 
+Judge the explorer as a mathematical knowledge map, not navigation chrome.
+Authored mathematical regions and prose should control the atlas and reading
+panel; repository, provenance, and pagination folders remain facets. Containment
+uses regions or hulls, dependency uses typed arrows, and a level with no authored
+dependency edges says so instead of fabricating relations.
+
 Guide the review from coarse to fine: declared scope and exclusions, milestone
 book, landing-page progress summary, cross-chapter graph, chapter graph, then
 individual node and Lean-source links. Record each human decision as `approve`,

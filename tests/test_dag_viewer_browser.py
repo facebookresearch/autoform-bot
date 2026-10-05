@@ -226,13 +226,51 @@ def explorer_url(tmp_path: Path) -> Iterator[str]:
         nodes=mixed_nodes,
         edges=(ViewEdge("mixed/a", "mixed/b", statement_count=1),),
     )
+    atlas_nodes = (
+        ViewNode(
+            id="atlas/topology",
+            title="Topology",
+            kind="scope",
+            members=tuple(f"atlas/topology/item-{index}" for index in range(80)),
+            status_counts=(("fully_proved", 60), ("planned", 20)),
+            status_key="planned",
+            summary="Topology studies continuity, deformation, and invariants preserved by continuous maps.",
+            area="Geometry & Topology",
+        ),
+        ViewNode(
+            id="atlas/algebra",
+            title="Algebra",
+            kind="scope",
+            members=tuple(f"atlas/algebra/item-{index}" for index in range(40)),
+            status_counts=(("fully_proved", 40),),
+            status_key="fully_proved",
+            summary="Algebra organizes structures and the maps that preserve them.",
+            area="Algebra",
+        ),
+        ViewNode(
+            id="atlas/analysis",
+            title="Analysis",
+            kind="scope",
+            members=tuple(f"atlas/analysis/item-{index}" for index in range(20)),
+            status_counts=(("can_prove", 20),),
+            status_key="can_prove",
+            summary="Analysis studies limits, approximation, measure, and functional spaces.",
+            area="Analysis & Probability",
+        ),
+    )
+    dense_views["atlas"] = GraphView(kind="project", title="Knowledge atlas", nodes=atlas_nodes, edges=())
     app_shell = (
         page_shell.replace('<div class="page-spacer" data-page-spacer="before"></div>', "")
         .replace('<div class="page-spacer" data-page-spacer="after"></div>', "")
         .replace('class="fixture"', 'class="fixture" style="max-width:none;padding:0"')
     )
     for name, dense_view in dense_views.items():
-        dag_viewer.write_payload(tmp_path / f"{name}.json", dense_view, links={})
+        links = (
+            {node.id: f"other.html#node={node.id}" for node in dense_view.nodes}
+            if name == "atlas"
+            else {}
+        )
+        dag_viewer.write_payload(tmp_path / f"{name}.json", dense_view, links=links)
         host = dag_viewer.render_container(f"{name}.json", script_href="viewer.js", layout="app")
         (tmp_path / f"{name}.html").write_text(
             app_shell.replace("{explorer}", host),
@@ -321,6 +359,32 @@ def test_connected_project_maps_open_at_readable_scale(
     assert box is not None
     assert box["height"] >= 44
     playwright.expect(page.locator(".bp-dag-density")).to_contain_text("Readable window")
+    page.close()
+
+
+def test_atlas_bubbles_open_authored_mathematical_context(
+    webkit_browser: object, explorer_url: str
+) -> None:
+    page = webkit_browser.new_page(viewport={"width": 1440, "height": 900})
+    page.goto(f"{explorer_url}/atlas.html")
+    topic = page.locator('[data-autoform-node-id="atlas/topology"]')
+    topic.wait_for()
+    assert page.locator(".bp-dag-viewer").evaluate(
+        "element => element.classList.contains('bp-dag-atlas')"
+    )
+    playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text("Knowledge atlas")
+    playwright.expect(page.locator(".bp-dag-inspector")).to_contain_text("Geometry & Topology")
+    playwright.expect(page.locator(".bp-dag-inspector")).to_contain_text(
+        "No cross-topic dependency links are authored"
+    )
+    assert "50%" in topic.evaluate("element => getComputedStyle(element).borderRadius")
+    assert "conic-gradient" in topic.evaluate("element => getComputedStyle(element).backgroundImage")
+    topic.click()
+    playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text("Topology")
+    playwright.expect(page.locator(".bp-dag-summary")).to_contain_text(
+        "continuity, deformation, and invariants"
+    )
+    playwright.expect(page.get_by_role("link", name="Explore topic")).to_be_visible()
     page.close()
 
 

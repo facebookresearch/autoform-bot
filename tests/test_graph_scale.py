@@ -336,13 +336,15 @@ def test_graph_pickles_only_public_types(tmp_path: Path, protocol: int) -> None:
 
 def test_node_loads_the_previous_runtime_pickle_shape(tmp_path: Path) -> None:
     original = Node("root", "Root", tmp_path / "README.md", ())
-    previous_state = original.__getstate__()[:-1]
+    previous_state = original.__getstate__()[:-3]
     restored = object.__new__(Node)
 
     restored.__setstate__(previous_state)
 
     assert restored == original
     assert restored.catalog is None
+    assert restored.summary is None
+    assert restored.area is None
 
 
 def _raises_promptly(call: Callable[[], object]) -> BaseException | None:

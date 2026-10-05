@@ -72,6 +72,7 @@ def test_project_view_collapses_chapters_without_flattening_statuses(tmp_path: P
     ]
     main = view.nodes[1]
     assert main.status_counts == (("can_state", 1), ("planned", 1))
+    assert main.internal_dependency_count == 1
     assert [(edge.source, edge.target, edge.statement_count, edge.proof_count) for edge in view.edges] == [
         ("scope:a", "scope:b", 1, 1),
         ("scope:b", "scope:c", 1, 0),

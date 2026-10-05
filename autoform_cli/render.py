@@ -1323,8 +1323,8 @@ def _render_landing_page(
             "",
             '<div class="bp-map" markdown="1">',
             '<div class="bp-map-head">',
-            '<span class="bp-map-title">Dependency explorer</span>',
-            '<span class="bp-map-hint">Explore chapters and their dependencies · '
+            '<span class="bp-map-title">Mathematics atlas</span>',
+            '<span class="bp-map-hint">Explore mathematical regions, topics, and dependencies · '
             '<a href="dependencies.html">open full-page</a></span>',
             "</div>",
             "",

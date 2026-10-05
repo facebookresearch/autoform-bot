@@ -107,7 +107,7 @@ def write_graph_pages(
             view=project,
             statuses=_selected_statuses(graph, statuses, project),
             links=project_links,
-            heading="Dependency explorer",
+            heading="Mathematics atlas",
             lead=(
                 f"{project_item_count} roadmap entr{'y' if project_item_count == 1 else 'ies'} across "
                 f"{len(groups)} chapter{'s' if len(groups) != 1 else ''}."
@@ -231,7 +231,7 @@ def write_graph_pages(
             view=project,
             statuses=_selected_statuses(graph, statuses, project),
             links=full_project_links,
-            heading="Dependency explorer",
+            heading="Mathematics atlas",
             lead=(
                 f"Browse {len(graph.nodes)} roadmap entries without flattening them into one canvas. "
                 "Search jumps directly to the relevant chapter or nested scope."
@@ -357,7 +357,7 @@ def _selected_statuses(
 def _dependency_heading(view: GraphView) -> str:
     """Name a projected explorer view without carrying over Mermaid-era copy."""
     subject = view.title.removesuffix(" dependency map")
-    return f"{subject} dependencies"
+    return f"{subject} {'dependencies' if view.edges else 'knowledge map'}"
 
 
 def _article_link_ids(view: GraphView) -> tuple[str, ...]:

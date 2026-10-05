@@ -16,7 +16,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-from .graph_views import INVENTORY_CHECKED_STATUS, GraphView
+from .graph_views import INVENTORY_CHECKED_STATUS, GraphView, ViewNode
 from .status import STATES
 
 SCHEMA = "autoform-dag-view/v2"
@@ -39,6 +39,8 @@ def requires_interactive(view: GraphView, mermaid_source: str) -> bool:
 
 def _positions(view: GraphView) -> dict[str, dict[str, int]]:
     """Return stable, bounded-row coordinates without a browser force layout."""
+    if _uses_atlas(view):
+        return _atlas_positions(view)
     all_node_ids = [node.id for node in view.nodes]
     known = set(all_node_ids)
     if len(known) != len(all_node_ids):
@@ -153,6 +155,106 @@ def _positions(view: GraphView) -> dict[str, dict[str, int]]:
     return result
 
 
+def _uses_atlas(view: GraphView) -> bool:
+    scopes = [node for node in view.nodes if node.kind == "scope"]
+    return bool(scopes) and (not view.edges or any(node.area for node in scopes))
+
+
+def _atlas_positions(view: GraphView) -> dict[str, dict[str, int]]:
+    """Pack weighted topic bubbles inside authored mathematical regions."""
+    gap = 20
+
+    def diameter(node: ViewNode) -> int:
+        count = max(1, len(node.members))
+        if node.kind == "scope":
+            return max(116, min(220, round(104 + 18 * math.log2(count + 1))))
+        if node.kind == "boundary":
+            return 104
+        return 76
+
+    by_area: dict[str, list[tuple[int, ViewNode]]] = defaultdict(list)
+    for index, node in enumerate(view.nodes):
+        by_area[node.area or ""].append((index, node))
+
+    blocks: list[tuple[str, dict[str, dict[str, int]], int, int]] = []
+    for area, indexed in sorted(by_area.items(), key=lambda item: (not item[0], item[0].casefold())):
+        indexed.sort(key=lambda item: (-diameter(item[1]), item[1].title.casefold(), item[1].id))
+        dimensions = {node.id: diameter(node) for _, node in indexed}
+        total_area = sum((dimensions[node.id] + gap) ** 2 for _, node in indexed)
+        target_width = max(
+            max(dimensions.values(), default=_NODE_WIDTH),
+            round(math.sqrt(total_area * 1.35)),
+        )
+        local: dict[str, dict[str, int]] = {}
+        x = 0
+        y = 34 if area else 0
+        row_height = 0
+        row = 0
+        widest = 0
+        for order, node in indexed:
+            size = dimensions[node.id]
+            if x and x + size > target_width:
+                x = 0
+                y += row_height + gap
+                row += 1
+                row_height = 0
+            local[node.id] = {
+                "column": x,
+                "height": size,
+                "order": order,
+                "rank": 0,
+                "row": row,
+                "width": size,
+                "x": x,
+                "y": y,
+            }
+            x += size + gap
+            widest = max(widest, x - gap)
+            row_height = max(row_height, size)
+        blocks.append((area, local, widest, y + row_height))
+
+    total_block_area = sum((width + gap * 2) * (height + gap * 2) for _, _, width, height in blocks)
+    atlas_width = max(1, round(math.sqrt(total_block_area * (16 / 9))))
+    result: dict[str, dict[str, int]] = {}
+    block_x = block_y = block_row_height = 0
+    for _area, local, width, height in blocks:
+        if block_x and block_x + width > atlas_width:
+            block_x = 0
+            block_y += block_row_height + gap * 2
+            block_row_height = 0
+        for node_id, position in local.items():
+            shifted = dict(position)
+            shifted["x"] += block_x
+            shifted["y"] += block_y
+            shifted["column"] = shifted["x"]
+            result[node_id] = shifted
+        block_x += width + gap * 2
+        block_row_height = max(block_row_height, height)
+    return result
+
+
+def _atlas_regions(view: GraphView, positions: Mapping[str, Mapping[str, int]]) -> list[dict[str, object]]:
+    regions: list[dict[str, object]] = []
+    areas = sorted({node.area for node in view.nodes if node.area}, key=str.casefold)
+    for area in areas:
+        members = [node for node in view.nodes if node.area == area]
+        min_x = min(positions[node.id]["x"] for node in members)
+        min_y = min(positions[node.id]["y"] for node in members) - 34
+        max_x = max(positions[node.id]["x"] + positions[node.id]["width"] for node in members)
+        max_y = max(positions[node.id]["y"] + positions[node.id]["height"] for node in members)
+        regions.append(
+            {
+                "count": len(members),
+                "height": max_y - min_y + 24,
+                "label": area,
+                "width": max_x - min_x + 24,
+                "x": min_x - 12,
+                "y": min_y - 12,
+            }
+        )
+    return regions
+
+
 def _palette() -> dict[str, dict[str, object]]:
     palette: dict[str, dict[str, object]] = {
         state.key: {
@@ -205,19 +307,23 @@ def write_payload(
         layout = positions[node.id]
         nodes.append(
             {
+                "area": node.area,
                 "catalog": node.catalog,
                 "column": layout["column"],  # v1 readers can still place nodes.
                 "declaration": node.declaration,
                 "focus": node.focus,
                 "id": node.id,
+                "internal_dependency_count": node.internal_dependency_count,
                 "isolated": degrees[node.id] == 0,
                 "kind": node.kind,
                 "layout": layout,
+                "lean": node.lean,
                 "member_count": len(node.members),
                 "rank": layout["rank"],
                 "row": layout["row"],
                 "status": status_key,
                 "status_counts": {key: count for key, count in node.status_counts},
+                "summary": node.summary,
                 "title": node.title,
                 "url": links.get(node.id),
             }
@@ -245,6 +351,7 @@ def write_payload(
         "nodes": nodes,
         "palette": palette,
         "present_statuses": ordered_statuses,
+        "regions": _atlas_regions(view, positions) if _uses_atlas(view) else [],
         "schema": SCHEMA,
         "title": view.title,
         "view": {
@@ -254,8 +361,10 @@ def write_payload(
             ],
             "focus": view.focus,
             "kind": view.kind,
+            "presentation": "atlas" if _uses_atlas(view) else "dag",
             "radius": view.radius,
             "scope": view.scope,
+            "summary": view.summary,
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -449,6 +558,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-hidden-button { min-height: 1.6rem; margin: 0; padding: .08rem .2rem; border: 0; background: transparent; color: var(--dag-link); }
 .bp-dag-body { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 0; min-height: 0; }
 .bp-dag-viewer.bp-dag-has-selection .bp-dag-body { grid-template-columns: minmax(0, 1fr) 22rem; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-body { grid-template-columns: minmax(0, 62fr) minmax(22rem, 38fr); }
 .bp-dag-main { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--dag-bg); }
 .bp-dag-stage { position: absolute; inset: 0; overflow: hidden; touch-action: pan-y; cursor: grab; overscroll-behavior-x: contain; }
 .bp-dag-viewer[data-layout=app] .bp-dag-stage { touch-action: none; }
@@ -463,6 +573,10 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-node[data-subdued=true] { opacity: .23; }
 .bp-dag-node[data-kind=scope] { border-radius: 13px; }
 .bp-dag-node[data-kind=boundary] { border-style: dashed; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] { display: block; padding: 6px; border: 0; border-radius: 50%; background: var(--dag-status-ring, var(--dag-node-stroke)); text-align: center; }
+.bp-dag-node-core { display: grid; place-content: center; width: 100%; height: 100%; padding: .8rem; border-radius: 50%; background: var(--dag-node-fill); color: var(--dag-node-text); }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] .bp-dag-node-title { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: .35rem; white-space: normal; }
 .bp-dag-density, .bp-dag-empty { position: absolute; z-index: 4; left: 50%; border: 1px solid var(--dag-border); border-radius: 999px; background: color-mix(in srgb, var(--dag-bg) 92%, transparent); color: var(--dag-muted); box-shadow: 0 3px 12px rgba(15, 23, 42, .08); pointer-events: none; }
 .bp-dag-density { bottom: .7rem; padding: .25rem .55rem; transform: translateX(-50%); font-size: .66rem; }
 .bp-dag-empty { top: 50%; padding: .55rem .8rem; transform: translate(-50%, -50%); font-size: .74rem; }
@@ -482,6 +596,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-load-more[hidden] { display: none; }
 .bp-dag-inspector { z-index: 7; width: 0; min-width: 0; overflow: hidden; border-left: 0; background: var(--dag-panel); visibility: hidden; }
 .bp-dag-viewer.bp-dag-has-selection .bp-dag-inspector { width: auto; overflow: auto; border-left: 1px solid var(--dag-border); visibility: visible; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-inspector { width: auto; overflow: auto; border-left: 1px solid var(--dag-border); visibility: visible; }
 .bp-dag-inspector-inner { padding: .9rem; }
 .bp-dag-sheet-handle { display: none; }
 .bp-dag-inspector-header { display: flex; align-items: flex-start; gap: .5rem; }
@@ -494,6 +609,8 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-open { display: inline-flex; align-items: center; justify-content: center; min-height: 2.2rem; padding: .4rem .65rem; border-radius: 8px; background: var(--dag-link); color: #fff !important; font-size: .74rem; font-weight: 700; text-decoration: none !important; }
 .bp-dag-overview { color: var(--dag-muted); font-size: .76rem; line-height: 1.55; }
 .bp-dag-overview strong { color: var(--dag-fg); }
+.bp-dag-summary { margin: .8rem 0; color: var(--dag-fg); font-family: Georgia, "Iowan Old Style", serif; font-size: .88rem; line-height: 1.55; }
+.bp-dag-lean { margin: .6rem 0 0; overflow-wrap: anywhere; color: var(--dag-muted); font: .68rem ui-monospace, SFMono-Regular, Consolas, monospace; }
 .bp-dag-section { margin-top: 1rem; padding-top: .8rem; border-top: 1px solid var(--dag-border); }
 .bp-dag-section h3 { margin: 0 0 .45rem; font-size: .76rem; }
 .bp-dag-pivots { display: grid; grid-template-columns: repeat(3, 1fr); gap: .3rem; }
@@ -512,6 +629,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 @media (max-width: 900px) {
   .bp-dag-viewer:not([data-layout=app]) { height: max(40rem, calc(100svh - 4.5rem)); }
   .bp-dag-viewer.bp-dag-has-selection .bp-dag-body { grid-template-columns: minmax(0, 1fr) 17rem; }
+  .bp-dag-viewer.bp-dag-atlas .bp-dag-body { grid-template-columns: minmax(0, 1fr) 19rem; }
   .bp-dag-toolbar { flex-wrap: wrap; }
   .bp-dag-search-wrap { max-width: none; }
   .bp-dag-stats { order: 8; width: 100%; min-height: 1.4rem; margin: 0; justify-content: flex-start; }
@@ -608,6 +726,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
     host.textContent = "";
     host.classList.remove("bp-dag-enhancing");
     var view = data.view || {kind: "full", scope: null};
+    var atlas = view.presentation === "atlas"; host.classList.toggle("bp-dag-atlas", atlas);
     var palette = data.palette || {};
     var byId = new Map(), prerequisites = new Map(), dependents = new Map(), incident = new Map();
     var statusCounts = new Map(), presentStatuses = [];
@@ -681,7 +800,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         crumbList.appendChild(item);
       });
       crumbs.appendChild(crumbList); context.appendChild(crumbs);
-      context.appendChild(element("span", "bp-dag-view-kind", view.kind || "graph")); head.appendChild(context);
+      context.appendChild(element("span", "bp-dag-view-kind", atlas ? "knowledge atlas" : view.kind || "graph")); head.appendChild(context);
 
       var toolbar = element("div", "bp-dag-toolbar");
       toolbar.setAttribute("role", "toolbar"); toolbar.setAttribute("aria-label", "Dependency explorer controls");
@@ -716,7 +835,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         data.nodes.every(function (node) { return node.isolated; }); toolbar.appendChild(refs.isolatedLabel);
 
       var modes = element("div", "bp-dag-modes"); modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "Explorer view");
-      refs.graphMode = button("bp-dag-mode-button", mapAllowed ? "Map" : "Map · too many items");
+      refs.graphMode = button("bp-dag-mode-button", mapAllowed ? (atlas ? "Atlas" : "Relations") : "Map · too many items");
       refs.graphMode.disabled = !mapAllowed; refs.listMode = button("bp-dag-mode-button", "Browse");
       modes.appendChild(refs.graphMode); modes.appendChild(refs.listMode); toolbar.appendChild(modes);
 
@@ -819,8 +938,18 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       var entry = palette[node.status] || palette.planned || {};
       return entry[isDark() ? "dark" : "light"] || {fill: "#fff", stroke: "#9ca3af", text: "#374151"};
     }
+    function statusRing(node) {
+      var counts = node.status_counts || {}, entries = Object.keys(counts).filter(function (key) { return counts[key] > 0; });
+      var total = entries.reduce(function (sum, key) { return sum + counts[key]; }, 0), cursor = 0, stops = [];
+      entries.forEach(function (key) {
+        var entry = palette[key] || palette.planned || {}, color = entry[isDark() ? "dark" : "light"] || {};
+        var end = cursor + counts[key] / Math.max(1, total) * 360;
+        stops.push((color.stroke || "#9ca3af") + " " + cursor + "deg " + end + "deg"); cursor = end;
+      });
+      return stops.length ? "conic-gradient(" + stops.join(",") + ")" : "var(--dag-node-stroke)";
+    }
     function world(node) {
-      if (state.orientation === "tb") {
+      if (state.orientation === "tb" && !atlas) {
         if (node.isolated) {
           var mobileColumns = refs.stage.clientWidth < 540 ? 2 : 3;
           return {x: (node._isolateIndex % mobileColumns) * (NODE_W + 20),
@@ -909,6 +1038,10 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         var box = world(node); minX = Math.min(minX, box.x); minY = Math.min(minY, box.y);
         maxX = Math.max(maxX, box.x + box.w); maxY = Math.max(maxY, box.y + box.h);
       });
+      if (atlas) (data.regions || []).forEach(function (region) {
+        minX = Math.min(minX, region.x); minY = Math.min(minY, region.y);
+        maxX = Math.max(maxX, region.x + region.width); maxY = Math.max(maxY, region.y + region.height);
+      });
       var pad = 54, width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
       var fitted = Math.min((refs.stage.clientWidth - pad * 2) / width,
         (refs.stage.clientHeight - pad * 2) / height);
@@ -935,6 +1068,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       calculateActive(); var ctx = refs.ctx, ratio = Math.min(2, window.devicePixelRatio || 1);
       var width = refs.stage.clientWidth, height = refs.stage.clientHeight;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height); drawGrid(ctx, width, height);
+      if (atlas) drawRegions(ctx);
       var visible = state.active.filter(function (node) { return inViewport(screen(node), 80); });
       var edgeIndexes = new Set();
       visible.forEach(function (node) { (incident.get(node.id) || []).forEach(function (index) { edgeIndexes.add(index); }); });
@@ -954,6 +1088,23 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       visible.forEach(function (node) { drawPlate(ctx, node, screen(node), !spotlight || spotlight.nodes.has(node.id)); });
       updateOverlays(visible, spotlight);
     }
+    function drawRegions(ctx) {
+      var regionColors = isDark() ?
+        ["#17233a", "#24203b", "#16312d", "#332719", "#2d1f2a", "#1d2d3a", "#2c2b20"] :
+        ["#eaf1fb", "#f0ebfb", "#e8f5f0", "#fbf2df", "#f8eaf0", "#e8f3f8", "#f4f2df"];
+      (data.regions || []).forEach(function (region, index) {
+        var box = {x: region.x * state.transform.scale + state.transform.x,
+          y: region.y * state.transform.scale + state.transform.y,
+          w: region.width * state.transform.scale, h: region.height * state.transform.scale};
+        if (!inViewport(box, 60)) return;
+        ctx.save(); ctx.fillStyle = regionColors[index % regionColors.length];
+        ctx.strokeStyle = isDark() ? "#35435c" : "#b9c7da"; ctx.lineWidth = 1.2;
+        rounded(ctx, box.x, box.y, box.w, box.h, 18); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = isDark() ? "#d9e3f2" : "#30445f"; ctx.font = "700 13px sans-serif";
+        ctx.textAlign = "left"; ctx.fillText(region.label + " · " + region.count, box.x + 13, box.y + 21);
+        ctx.restore();
+      });
+    }
     function drawGrid(ctx, width, height) {
       ctx.save(); ctx.fillStyle = isDark() ? "rgba(255,255,255,.055)" : "rgba(15,23,42,.055)";
       var step = 32, offsetX = ((state.transform.x % step) + step) % step, offsetY = ((state.transform.y % step) + step) % step;
@@ -970,6 +1121,10 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       var color = colors(node), tiny = state.transform.scale < .32;
       ctx.save(); ctx.globalAlpha = highlighted ? (tiny ? .82 : .24) : .07; ctx.fillStyle = color.fill;
       ctx.strokeStyle = color.stroke; ctx.lineWidth = tiny ? 1 : 1.25;
+      if (atlas && node.kind === "scope") {
+        ctx.beginPath(); ctx.arc(box.x + box.w / 2, box.y + box.h / 2, Math.min(box.w, box.h) / 2, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke(); ctx.restore(); return;
+      }
       if (tiny) ctx.fillRect(box.x, box.y, Math.max(3, box.w), Math.max(3, box.h));
       else { rounded(ctx, box.x, box.y, box.w, box.h, 7 * state.transform.scale); ctx.fill(); ctx.stroke(); }
       ctx.restore();
@@ -1017,6 +1172,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         control.style.width = node.width + "px"; control.style.height = node.height + "px";
         control.style.setProperty("--dag-node-fill", color.fill); control.style.setProperty("--dag-node-stroke", color.stroke);
         control.style.setProperty("--dag-node-text", color.text); control.dataset.selected = String(node === state.selected);
+        if (atlas && node.kind === "scope") control.style.setProperty("--dag-status-ring", statusRing(node));
         control.dataset.subdued = String(Boolean(spotlight && !spotlight.nodes.has(node.id)));
         control.tabIndex = node === state.selected || (!state.selected && index === 0) ? 0 : -1;
       });
@@ -1027,12 +1183,15 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
     }
     function makeNodeControl(node) {
       var control = button("bp-dag-node", ""); control.dataset.autoformNodeId = node.id; control.dataset.kind = node.kind || "node";
-      var scopeMeta = node.kind === "scope" ? (node.member_count || 0) + " items · " + statusLabel(node.status) + " · open" :
+      var scopeMeta = node.kind === "scope" ? (node.member_count || 0) + " items · " +
+        (node.internal_dependency_count || 0) + " internal links" :
         node.kind === "boundary" ? "External scope · open" : null;
       control.setAttribute("aria-label", node.title + ", " + (scopeMeta || statusLabel(node.status)) +
         (node.isolated ? ", no dependency edges in this view" : ""));
-      control.appendChild(element("span", "bp-dag-node-title", node.title));
-      control.appendChild(element("span", "bp-dag-node-meta", scopeMeta || statusLabel(node.status) + " · " + node.id));
+      var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : control;
+      content.appendChild(element("span", "bp-dag-node-title", node.title));
+      content.appendChild(element("span", "bp-dag-node-meta", scopeMeta || statusLabel(node.status) + " · " + node.id));
+      if (content !== control) control.appendChild(content);
       control.addEventListener("click", function (event) { event.stopPropagation(); activateNode(node, false); });
       control.addEventListener("dblclick", function () { var href = safeHref(node.url); if (href) window.location.href = href; });
       control.addEventListener("keydown", function (event) {
@@ -1194,7 +1353,8 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
     function activateNode(node, moveCamera) {
       var href = safeHref(node.url);
       if (!byId.has(node.id) && href) { window.location.href = href; return; }
-      if ((node.kind === "scope" || node.kind === "boundary") && href) { window.location.href = href; return; }
+      if (node.kind === "boundary" && href) { window.location.href = href; return; }
+      if (node.kind === "scope" && state.selected === node && href) { window.location.href = href; return; }
       chooseNode(node, moveCamera);
     }
     function chooseNode(node, moveCamera) {
@@ -1269,15 +1429,40 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
     function renderInspector() {
       refs.inspectorInner.textContent = ""; refs.sheetHandle.textContent = state.selected ? state.selected.title : "Graph details";
       if (!state.selected) {
-        refs.inspectorInner.appendChild(element("p", "bp-dag-kicker", "Explorer overview"));
-        refs.inspectorInner.appendChild(element("h2", "", data.title || "Dependencies"));
-        var overview = element("p", "bp-dag-overview"); overview.appendChild(element("strong", "", data.nodes.length + " nodes"));
+        refs.inspectorInner.appendChild(element("p", "bp-dag-kicker", atlas ? "Mathematics knowledge map" : "Dependency explorer"));
+        refs.inspectorInner.appendChild(element("h2", "", data.title || (atlas ? "Mathematics atlas" : "Dependencies")));
+        if (view.summary) refs.inspectorInner.appendChild(element("p", "bp-dag-summary", view.summary));
+        var overview = element("p", "bp-dag-overview"); overview.appendChild(element("strong", "", data.nodes.length + (atlas ? " topics" : " nodes")));
         overview.appendChild(document.createTextNode(" · " + (data.edge_count || data.edges.length) +
-          " dependencies. Select a node to spotlight every path through it.")); refs.inspectorInner.appendChild(overview);
+          " authored dependencies.")); refs.inspectorInner.appendChild(overview);
+        var internalDependencies = data.nodes.reduce(function (total, node) {
+          return total + (node.internal_dependency_count || 0);
+        }, 0);
+        if (internalDependencies) refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
+          internalDependencies + " additional authored dependencies lie inside the visible topics."));
+        if (atlas && !data.edges.length) refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
+          "No cross-topic dependency links are authored at this level. Bubble size shows scope; rings show formalization status. Select a topic to read its mathematical overview."));
+        if (atlas && (data.regions || []).length) {
+          var regionSection = element("section", "bp-dag-section"); regionSection.appendChild(element("h3", "", "Mathematical regions"));
+          var regionRows = element("div", "bp-dag-distribution");
+          data.regions.forEach(function (region) {
+            var regionRow = element("div", "bp-dag-distribution-row"); regionRow.appendChild(element("span", "", region.label));
+            regionRow.appendChild(element("span", "", String(region.count))); regionRows.appendChild(regionRow);
+          });
+          regionSection.appendChild(regionRows); refs.inspectorInner.appendChild(regionSection);
+        }
+        var statusSection = element("section", "bp-dag-section"); statusSection.appendChild(element("h3", "", "Status at this level"));
+        var statusRows = element("div", "bp-dag-distribution");
+        statusCounts.forEach(function (count, key) {
+          var statusRow = element("div", "bp-dag-distribution-row"); statusRow.appendChild(element("span", "", statusLabel(key)));
+          statusRow.appendChild(element("span", "", String(count))); statusRows.appendChild(statusRow);
+        });
+        statusSection.appendChild(statusRows); refs.inspectorInner.appendChild(statusSection);
         if (statusCounts.has("inventory_checked")) refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
           "Inventory checked is neutral: it records inspection, not a mathematical proof."));
         refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
-          "Canvas carries topology; Graph and List expose the same nodes as keyboard-accessible controls.")); return;
+          atlas ? "Click a topic to read it; click it again or use Explore topic to dive in. Browse exposes the same map as a complete accessible list." :
+          "The map carries dependency topology; Relations and Browse expose the same nodes as keyboard-accessible controls.")); return;
       }
       var node = state.selected, header = element("div", "bp-dag-inspector-header"), titleWrap = element("div");
       titleWrap.appendChild(element("p", "bp-dag-kicker", node.kind === "scope" ? "Scope" :
@@ -1290,21 +1475,29 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       refs.inspectorInner.appendChild(pill);
       var href = safeHref(node.url);
       if (href) {
-        var open = element("a", "bp-dag-open", node.kind === "scope" || node.kind === "boundary" ? "Open scope" : "Open article");
+        var open = element("a", "bp-dag-open", node.kind === "scope" || node.kind === "boundary" ? "Explore topic" : "Open article");
         open.href = href; refs.inspectorInner.appendChild(open);
       }
+      if (node.summary) refs.inspectorInner.appendChild(element("p", "bp-dag-summary", node.summary));
+      else if (node.kind === "scope") refs.inspectorInner.appendChild(element("p", "bp-dag-summary",
+        "This topic contains " + (node.member_count || 0) + " roadmap items. Explore it to see its mathematical subtopics and dependency structure."));
+      if (node.lean) refs.inspectorInner.appendChild(element("p", "bp-dag-lean", "Lean: " + node.lean));
+      if (node.kind === "scope" && node.internal_dependency_count) refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
+        node.internal_dependency_count + " authored dependencies connect results inside this topic."));
       var before = prerequisites.get(node.id) || [], after = dependents.get(node.id) || [];
       var path = pathSpotlight(), beforeCount = path ? path.before.size - 1 : 0;
       var afterCount = path ? path.after.size - 1 : 0;
-      var paths = element("section", "bp-dag-section"); paths.appendChild(element("h3", "", "Path spotlight"));
-      var pivots = element("div", "bp-dag-pivots");
-      [["Prerequisites " + beforeCount, "prerequisites", beforeCount], ["All paths", "both", 1],
-        ["Dependents " + afterCount, "dependents", afterCount]].forEach(function (entry) {
-        var pivot = button("bp-dag-pivot", entry[0]); pivot.disabled = !entry[2];
-        pivot.setAttribute("aria-pressed", String(state.direction === entry[1]));
-        pivot.addEventListener("click", function () { setDirection(entry[1]); }); pivots.appendChild(pivot);
-      });
-      paths.appendChild(pivots); refs.inspectorInner.appendChild(paths);
+      if (before.length || after.length) {
+        var paths = element("section", "bp-dag-section"); paths.appendChild(element("h3", "", "Path spotlight"));
+        var pivots = element("div", "bp-dag-pivots");
+        [["Prerequisites " + beforeCount, "prerequisites", beforeCount], ["All paths", "both", 1],
+          ["Dependents " + afterCount, "dependents", afterCount]].forEach(function (entry) {
+          var pivot = button("bp-dag-pivot", entry[0]); pivot.disabled = !entry[2];
+          pivot.setAttribute("aria-pressed", String(state.direction === entry[1]));
+          pivot.addEventListener("click", function () { setDirection(entry[1]); }); pivots.appendChild(pivot);
+        });
+        paths.appendChild(pivots); refs.inspectorInner.appendChild(paths);
+      }
       appendRelations("Direct prerequisites", before); appendRelations("Direct dependents", after);
       var counts = node.status_counts || {};
       var entries = Array.isArray(counts) ? counts : Object.keys(counts).map(function (key) { return [key, counts[key]]; });

@@ -33,6 +33,7 @@ Frontmatter records checked facts:
 ```markdown
 ---
 article_id: af_5b0e4d3c2a1f09e8d7c6b5a4
+area: Analysis & Probability
 declaration: theorem
 origin: cited
 statement: formalized
@@ -77,6 +78,12 @@ target, `bridged` for a result introduced between source targets, and
 Frontmatter is optional. A container article that only supplies prose and
 placement needs none at all; only checked facts are recorded.
 
+The optional `area` field assigns a container to an authored mathematical
+region in the knowledge atlas. Use mathematical areas such as `Foundations` or
+`Geometry & Topology`, never repository or workflow buckets such as
+`MathlibExt` or `catalog-01`. Autoform does not guess areas from paths, imports,
+or titles.
+
 A repository-wide inventory may use a narrative leaf to summarize an existing
 Lean module containing several declarations. Such a leaf sets
 `catalog: module` and omits `declaration`, so it is never dispatched as one
@@ -99,6 +106,7 @@ An article asserts only facts a human or agent verified:
 
 | Key | Meaning |
 | --- | --- |
+| `area: Geometry & Topology` | Authored mathematical region for atlas grouping. |
 | `catalog: module` | A non-dispatchable leaf cataloging one existing Lean module. |
 | `statement: formalized` | The Lean statement exists and compiles. |
 | `proof: formalized` | The Lean proof is complete. |

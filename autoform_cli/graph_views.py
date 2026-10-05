@@ -40,6 +40,10 @@ class ViewNode:
     status_key: str | None = None
     focus: bool = False
     catalog: str | None = None
+    summary: str | None = None
+    lean: str | None = None
+    area: str | None = None
+    internal_dependency_count: int = 0
 
     @property
     def item_count(self) -> int:
@@ -71,6 +75,7 @@ class GraphView:
     scope: str | None = None
     focus: str | None = None
     radius: int | None = None
+    summary: str | None = None
 
     @property
     def member_ids(self) -> tuple[str, ...]:
@@ -133,10 +138,19 @@ def project_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
             members=grouped.get(group, ()),
             status_counts=_status_counts(graph, grouped.get(group, ()), statuses),
             status_key=_rollup_status_key(graph, grouped.get(group, ()), statuses),
+            summary=graph.nodes[group].summary if group in graph.nodes else None,
+            area=graph.nodes[group].area if group in graph.nodes else None,
+            internal_dependency_count=_internal_dependency_count(graph, grouped.get(group, ())),
         )
         for group in scopes
     )
-    return GraphView(kind="project", title="Project dependency map", nodes=nodes, edges=edges)
+    return GraphView(
+        kind="project",
+        title="Project dependency map",
+        nodes=nodes,
+        edges=edges,
+        summary=graph.nodes["roadmap"].summary if "roadmap" in graph.nodes else None,
+    )
 
 
 def chapter_view(graph: Graph, statuses: dict[str, NodeStatus], group: str) -> GraphView:
@@ -187,6 +201,7 @@ def chapter_view(graph: Graph, statuses: dict[str, NodeStatus], group: str) -> G
         nodes=tuple(nodes),
         edges=_edges(edge_counts),
         scope=group,
+        summary=graph.nodes[group].summary if group in graph.nodes else None,
     )
 
 
@@ -299,6 +314,9 @@ def _scope_view(
                     members=members[child],
                     status_counts=_status_counts(graph, members[child], statuses),
                     status_key=_rollup_status_key(graph, members[child], statuses),
+                    summary=article.summary,
+                    area=article.area,
+                    internal_dependency_count=_internal_dependency_count(graph, members[child]),
                 )
             )
         else:
@@ -345,6 +363,7 @@ def _scope_view(
         nodes=tuple(nodes),
         edges=_edges(edge_counts),
         scope=scope,
+        summary=graph.nodes[scope].summary,
     )
 
 
@@ -438,6 +457,10 @@ def _focus_view(
             catalog=node.catalog,
             status_key=node.status_key,
             focus=node.id == node_id,
+            summary=node.summary,
+            lean=node.lean,
+            area=node.area,
+            internal_dependency_count=node.internal_dependency_count,
         )
         for node in view.nodes
     )
@@ -448,6 +471,7 @@ def _focus_view(
         edges=view.edges,
         focus=node_id,
         radius=radius,
+        summary=graph.nodes[node_id].summary,
     )
 
 
@@ -464,12 +488,21 @@ def full_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
             members=(node.id, *descendants[node.id]),
             status_counts=_status_counts(graph, descendants[node.id], statuses),
             status_key=_rollup_status_key(graph, descendants[node.id], statuses),
+            summary=graph.nodes[node.id].summary,
+            area=graph.nodes[node.id].area,
+            internal_dependency_count=_internal_dependency_count(graph, descendants[node.id]),
         )
         if node.id in children
         else node
         for node in view.nodes
     )
-    return GraphView(kind="full", title="Full dependency graph", nodes=nodes, edges=view.edges)
+    return GraphView(
+        kind="full",
+        title="Full dependency graph",
+        nodes=nodes,
+        edges=view.edges,
+        summary=graph.nodes["roadmap"].summary if "roadmap" in graph.nodes else None,
+    )
 
 
 def _node_view(
@@ -553,6 +586,9 @@ def _theorem_node(node: Node, node_status: NodeStatus) -> ViewNode:
         # A checked inventory is deliberately neutral: it records source
         # accounting, not completion of a mathematical target.
         status_key="planned" if display_status == INVENTORY_CHECKED_STATUS else display_status,
+        summary=node.summary,
+        lean=node.lean,
+        area=node.area,
     )
 
 
@@ -575,6 +611,15 @@ def _status_counts(
     if inventories:
         return (*state_counts, (INVENTORY_CHECKED_STATUS, inventories))
     return state_counts
+
+
+def _internal_dependency_count(graph: Graph, node_ids: Iterable[str]) -> int:
+    selected = frozenset(node_ids)
+    return sum(
+        dependency in selected
+        for node_id in selected
+        for dependency in graph.nodes[node_id].dependencies
+    )
 
 
 def _rollup_status_key(

@@ -93,6 +93,30 @@ def test_loads_nested_wiki_and_metadata(tmp_path: Path) -> None:
     assert graph.edge_count == 1
 
 
+def test_extracts_reader_facing_summary_for_the_wiki_inspector(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "topic.md",
+        """# Compactness theorem
+
+This **theorem** identifies [compact objects](source.md) by a finite-cover condition
+and explains why the characterization matters.
+
+## Depends on
+""",
+        area="Geometry & Topology",
+    )
+
+    node = load_graph(blueprint).nodes["topic"]
+
+    assert node.summary == (
+        "This theorem identifies compact objects by a finite-cover condition "
+        "and explains why the characterization matters."
+    )
+    assert node.area == "Geometry & Topology"
+
+
 def test_loads_a_non_dispatchable_module_catalog_status(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     ledger = blueprint / "sources/module.md"
