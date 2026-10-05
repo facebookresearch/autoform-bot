@@ -877,6 +877,12 @@ def _review_record(args: argparse.Namespace) -> int:
         _report_recorded(written, len(requests))
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        # The interrupt still ends the process (exit status 130), once the
+        # cards filed before it are named. A card whose write it lands in may
+        # be filed but not named; running the record again leaves it as it is.
+        _report_recorded(written, len(requests))
+        raise
     _report_recorded(written, len(requests))
     return 0
 

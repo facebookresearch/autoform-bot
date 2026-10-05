@@ -1109,6 +1109,37 @@ def test_a_failed_write_stops_the_batch_until_its_cause_is_cleared(
     assert after[first] == filed[first]
 
 
+def test_an_interrupt_between_cards_says_what_it_left_filed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The interrupt still propagates, after the cards filed before it are named."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    publish = main.__globals__["publish_readback"]
+    published: list[Path] = []
+
+    def interrupted_before_the_second_card(card: object) -> Path:
+        if published:
+            raise KeyboardInterrupt
+        published.append(publish(card))
+        return published[0]
+
+    monkeypatch.setattr("autoform_cli.__main__.publish_readback", interrupted_before_the_second_card)
+    capsys.readouterr()
+
+    with pytest.raises(KeyboardInterrupt):
+        _record(blueprint, bundle, manifest, tmp_path)
+
+    captured = capsys.readouterr()
+    assert captured.out == f"{published[0]}: recorded read-back for {records[0]['declaration']}\n"
+    assert "1 of 2 read-back(s) were filed before the failure below" in captured.err
+
+    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish)
+    assert _record(blueprint, bundle, manifest, tmp_path) == 0
+    assert len(load_readbacks(blueprint)) == 2
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
