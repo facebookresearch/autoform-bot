@@ -4052,7 +4052,8 @@ def _split(text: str) -> tuple[dict[str, str], str, tuple[str, ...]]:
         if key not in _FRONTMATTER_FIELDS:
             errors.append(f"unknown frontmatter field {key!r}")
         if key in _QUOTED_FRONTMATTER_FIELDS:
-            # Only a JSON string is accepted, and one opens with a quote.
+            # Only a JSON string is accepted, and one opens with a quote; a
+            # value that opens with one decodes to a string or not at all.
             # Anything else is refused undecoded: the decoder recurses once per
             # nested array, so enough "[" raise RecursionError.
             if not value.startswith('"'):
@@ -4062,9 +4063,6 @@ def _split(text: str) -> tuple[dict[str, str], str, tuple[str, ...]]:
                 decoded = json.loads(value)
             except json.JSONDecodeError:
                 errors.append(f"frontmatter field {key!r} must be a JSON double-quoted string")
-                continue
-            if not isinstance(decoded, str):
-                errors.append(f"frontmatter field {key!r} must decode to a string")
                 continue
             if key == "model" and not _safe_model_label(decoded):
                 errors.append("frontmatter field 'model' must be printable, single-line text")
