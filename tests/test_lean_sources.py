@@ -92,6 +92,16 @@ def test_targeted_index_prefilters_files_but_preserves_file_context_and_digest(
     assert targeted.source_digest == full.source_digest
 
 
+def test_targeted_index_treats_inline_comments_as_lean_whitespace(
+    tmp_path: Path,
+) -> None:
+    _index(tmp_path, "theorem /- separator -/ target : True := by trivial\n")
+
+    targeted = index_project(tmp_path, names=("target",))
+
+    assert targeted.find("target") is not None
+
+
 def test_attributes_and_modifiers_do_not_hide_a_declaration(tmp_path: Path) -> None:
     assert _index(tmp_path).find("Outer.Inner.gamma") is not None
 
@@ -223,6 +233,24 @@ def test_permalink_pins_the_commit(tmp_path: Path) -> None:
         "https://github.com/owner/repo/blob/deadbeef/Project/Basic.lean#L6"
     )
     assert linker.url("Outer.missing") is None
+
+
+def test_permalink_encodes_ref_and_source_path_segments(tmp_path: Path) -> None:
+    index = _index(
+        tmp_path,
+        "theorem target : True := by trivial\n",
+        name="Project/Hash#File.lean",
+    )
+    linker = SourceLinker(
+        index=index,
+        repository_url="https://github.com/owner/repo",
+        ref="feature/topic",
+    )
+
+    assert linker.url("target") == (
+        "https://github.com/owner/repo/blob/feature%2Ftopic/"
+        "Project/Hash%23File.lean#L1"
+    )
 
 
 def test_no_link_without_repository_coordinates(tmp_path: Path) -> None:

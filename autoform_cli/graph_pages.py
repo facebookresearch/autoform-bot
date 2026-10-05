@@ -21,7 +21,7 @@ from .graph_views import (
     full_view,
     group_nodes,
     project_view,
-    scope_view,
+    scope_views,
 )
 from .status import NodeStatus
 
@@ -46,7 +46,8 @@ def write_graph_pages(
     project_page = destination / "dependencies.md"
     full_page = destination / "dependencies/full.md"
     chapter_pages = {group: destination / "dependencies/chapters" / f"{group or 'roadmap'}.md" for group in groups}
-    containers = [node_id for node_id in graph.nodes if graph.children(node_id)]
+    scope_maps = scope_views(graph, statuses)
+    containers = list(scope_maps)
     scope_pages = {
         node_id: (
             project_page
@@ -88,11 +89,12 @@ def write_graph_pages(
                 f"{project_item_count} item{'s' if project_item_count != 1 else ''} across "
                 f"{len(groups)} chapter{'s' if len(groups) != 1 else ''}."
             ),
+            site_root=destination,
         )
     )
 
     for group, chapter_page in chapter_pages.items():
-        view = chapter_view(graph, statuses, group)
+        view = scope_maps[group] if group in scope_maps else chapter_view(graph, statuses, group)
         links = dict(node_links(chapter_page, _article_link_ids(view)))
         for node in view.nodes:
             if node.kind == "boundary":
@@ -124,6 +126,7 @@ def write_graph_pages(
                     "Dashed chapter boxes stand for external prerequisites or dependents."
                 ),
                 navigation=navigation,
+                site_root=destination,
             )
         )
 
@@ -131,7 +134,7 @@ def write_graph_pages(
         if scope in {"roadmap", *chapter_pages}:
             continue
         scope_page = scope_pages[scope]
-        view = scope_view(graph, statuses, scope)
+        view = scope_maps[scope]
         links = dict(node_links(scope_page, _article_link_ids(view)))
         for node in view.nodes:
             if node.kind == "scope":
@@ -157,6 +160,7 @@ def write_graph_pages(
                     ("Parent map", _markdown_link(parent_page, scope_page)),
                     ("Full dependency graph", _markdown_link(full_page, scope_page)),
                 ),
+                site_root=destination,
             )
         )
     complete = full_view(graph, statuses)
@@ -183,8 +187,9 @@ def write_graph_pages(
             ),
             diagram=dag_viewer.render_container(
                 full_data.name,
-                script_href=_viewer_script_link(full_page),
+                script_href=_viewer_script_link(full_page, destination),
             ),
+            site_root=destination,
         )
     )
 
@@ -210,6 +215,7 @@ def _write_page(
     links: Mapping[str, str],
     heading: str,
     lead: str,
+    site_root: Path,
     navigation: str = "",
     extra: str = "",
     diagram: str | None = None,
@@ -221,7 +227,7 @@ def _write_page(
             dag_viewer.write_payload(payload, view, links=links)
             diagram = dag_viewer.render_container(
                 payload.name,
-                script_href=_viewer_script_link(page),
+                script_href=_viewer_script_link(page, site_root),
             )
         else:
             diagram = candidate
@@ -276,15 +282,9 @@ def _published_link(target: Path, page: Path) -> str:
     return mermaid.relative_link(target, page, ".html")
 
 
-def _viewer_script_link(page: Path) -> str:
-    if page.name == "dependencies.md":
-        site_root = page.parent
-    else:
-        dependencies = next(
-            (parent for parent in page.parents if parent.name == "dependencies"),
-            page.parent,
-        )
-        site_root = dependencies.parent
+def _viewer_script_link(page: Path, site_root: Path) -> str:
+    """Link the viewer asset without inferring structure from authored ids."""
+
     return mermaid.relative_link(
         site_root / "javascripts/blueprint-dag.js",
         page,

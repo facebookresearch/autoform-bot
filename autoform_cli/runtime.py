@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, fields
 from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
@@ -17,7 +17,7 @@ from .graph import Graph, load_graph
 from .lean import declaration_names, index_project
 from .status import derive, is_definition
 
-RUNTIME_SCHEMA = "autoform-runtime/v1"
+RUNTIME_SCHEMA = "autoform-runtime/v2"
 RUNTIME_AUTHORITY = "markdown-articles"
 
 
@@ -101,7 +101,6 @@ class RuntimeNode:
     parent: str | None
     depth: int
     declaration: str | None
-    catalog: str | None
     formalizable: bool
     dispatchable: bool
     statement_dependencies: tuple[str, ...]
@@ -115,6 +114,25 @@ class RuntimeNode:
     mathlib: bool
     mathlib_declarations: tuple[str, ...]
     mathlib_file: str | None
+    catalog: str | None = None
+
+    def __getstate__(self) -> list[object]:
+        """Keep the v2 append-only field compatible with v1 pickles."""
+
+        return [getattr(self, item.name) for item in fields(self)]
+
+    def __setstate__(self, state: list[object]) -> None:
+        node_fields = fields(self)
+        if len(state) > len(node_fields):
+            raise ValueError("RuntimeNode pickle has unsupported fields")
+        for item, value in zip(node_fields, state, strict=False):
+            object.__setattr__(self, item.name, value)
+        for item in node_fields[len(state) :]:
+            if item.default is MISSING:
+                raise ValueError(
+                    f"RuntimeNode pickle is missing required field {item.name!r}"
+                )
+            object.__setattr__(self, item.name, item.default)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -297,6 +315,15 @@ def build_runtime_graph(
                 issues.append(f"{node.id}: source target escapes the blueprint or uses an unsupported location")
         if node.mathlib_file is not None and not _is_portable_relative_path(node.mathlib_file):
             issues.append(f"{node.id}: mathlib file must be a portable relative path")
+        if node.catalog not in {None, "module"}:
+            issues.append(f"{node.id}: unsupported catalog kind")
+        if node.catalog is not None and (
+            node.declaration is not None
+            or node.mathlib
+            or node.mathlib_declaration is not None
+            or node.mathlib_file is not None
+        ):
+            issues.append(f"{node.id}: catalog node carries declaration-specific metadata")
 
     _validate_depths(graph, issues)
     if issues:
@@ -308,7 +335,14 @@ def build_runtime_graph(
         root = Path(lean_root).expanduser().resolve()
         if not root.is_dir():
             raise RuntimeProjectionError(["Lean root does not exist or is not a directory"])
-        lean_index = index_project(root)
+        lean_names = tuple(
+            dict.fromkeys(
+                name
+                for node in graph.nodes.values()
+                for name in declaration_names(node.lean or "")
+            )
+        )
+        lean_index = index_project(root, names=lean_names)
 
     parents = {node.parent for node in graph.nodes.values() if node.parent is not None}
     runtime_nodes: list[RuntimeNode] = []
@@ -339,7 +373,9 @@ def build_runtime_graph(
                 declaration=node.declaration,
                 catalog=node.catalog,
                 formalizable=node.formalizable,
-                dispatchable=node.formalizable and node_id not in parents,
+                dispatchable=(
+                    node.catalog is None and node.formalizable and node_id not in parents
+                ),
                 statement_dependencies=node.statement_dependencies,
                 proof_dependencies=node.proof_dependencies,
                 dependencies=node.dependencies,
@@ -519,6 +555,10 @@ def _validate_runtime(runtime: RuntimeGraph) -> None:
         has_children = node.id in parents_with_children
         if node.dispatchable and (not node.formalizable or has_children):
             issues.append(f"{node.id}: dispatchable node is not a formalizable leaf")
+        if node.catalog is not None and node.dispatchable:
+            issues.append(f"{node.id}: catalog node is dispatchable")
+        if node.catalog not in {None, "module"}:
+            issues.append(f"{node.id}: runtime catalog kind is unsupported")
         if Path(node.article_path).is_absolute() or PureWindowsPath(node.article_path).is_absolute():
             issues.append(f"{node.id}: runtime article path is absolute")
     if runtime.article_count != len(runtime.nodes):

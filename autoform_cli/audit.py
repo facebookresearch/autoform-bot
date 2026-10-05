@@ -12,6 +12,7 @@ import statistics
 from bisect import bisect_right
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from . import status
 from .coverage import CoverageSummary, load_coverage
@@ -139,11 +140,15 @@ def audit_graph(
 
     findings: list[AuditFinding] = []
     derived = status.derive(graph)
+    contained: dict[str, list[str]] = {}
+    for node in graph.nodes.values():
+        if node.parent is not None:
+            contained.setdefault(node.parent, []).append(node.id)
 
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
-        children = graph.children(node_id)
+        children = contained.get(node_id, ())
         article = _read_article(node.path)
 
         if node.formalizable:
@@ -190,7 +195,35 @@ def audit_graph(
                 )
             )
 
-        child_limit = _MAX_ROOT_CHILDREN if node.parent is None else _MAX_DIRECT_CHILDREN
+        if node.catalog and not _has_catalog_ledger(graph, node):
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "catalog-without-ledger",
+                    "module catalog has no local declaration ledger under blueprint/sources",
+                )
+            )
+
+        if (
+            node.catalog
+            and (node.statement_formalized or node.proof_formalized)
+            and not declaration_names(node.lean or "")
+        ):
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "catalog-without-lean-targets",
+                    "formalized module catalog has no exact compiled names in lean frontmatter",
+                )
+            )
+
+        repository_subject_index = (
+            node.id == "roadmap"
+            and node.parent is None
+            and bool(children)
+            and all(graph.nodes[child].path.name == "README.md" for child in children)
+        )
+        child_limit = _MAX_ROOT_CHILDREN if repository_subject_index else _MAX_DIRECT_CHILDREN
         if len(children) > child_limit:
             findings.append(
                 AuditFinding(
@@ -245,6 +278,24 @@ def audit_graph(
     if lean_root is not None:
         findings.extend(_lean_findings(graph, lean_root))
     return _result(findings, coverage=coverage)
+
+
+def _has_catalog_ledger(graph: Graph, node: Node) -> bool:
+    """Whether a catalog links a repository-local declaration ledger."""
+
+    sources = (graph.blueprint_dir / "sources").resolve()
+    for target in node.sources:
+        split = urlsplit(target)
+        if split.scheme or split.netloc or split.query or not split.path:
+            continue
+        try:
+            candidate = (node.path.parent / unquote(split.path)).resolve()
+            candidate.relative_to(sources)
+        except (OSError, ValueError):
+            continue
+        if candidate.is_file():
+            return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -381,7 +432,6 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
         dict.fromkeys(
             name
             for node in graph.nodes.values()
-            if node.catalog is None
             for name in declaration_names(node.lean or "")
         )
     )
@@ -391,8 +441,6 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
-        if node.catalog is not None:
-            continue
         names = declaration_names(node.lean or "")
         if (node.statement_formalized or node.proof_formalized) and not names:
             findings.append(
@@ -429,7 +477,7 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
                 )
             )
 
-        if resolved:
+        if resolved and node.catalog is None:
             sizes[node_id] = sum(spans[declaration.name] for declaration in resolved)
 
     findings.extend(_size_findings(graph, sizes))

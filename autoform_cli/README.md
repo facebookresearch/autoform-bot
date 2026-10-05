@@ -78,10 +78,17 @@ placement needs none at all; only checked facts are recorded.
 A repository-wide inventory may use a narrative leaf to summarize an existing
 Lean module containing several declarations. Such a leaf sets
 `catalog: module` and omits `declaration`, so it is never dispatched as one
-proof task, but may assert
+proof task. A completed catalog records every exact compiled public name in
+`lean:` and links a declaration ledger under `blueprint/sources/` from its exact
+`## Sources` section; it may assert
 `statement: formalized` and `proof: formalized` when the complete module has
 been checked. It then contributes honestly to progress and graph status while
 remaining a readable catalog page.
+
+`check --lean-root` and `audit --lean-root` resolve every compiled name the
+catalog lists and audit validates the local ledger link. They cannot prove that
+the list omitted no newly added public declaration; completeness remains an
+authored assertion pending repository-inventory reconciliation.
 
 ## Assertions and derived status
 
@@ -549,6 +556,11 @@ links to the shared explorer focused on that item. Point `mkdocs.yml` at
 `pymdownx.superfences` mermaid fence; see the [repository
 example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 
+This shared-explorer layout is recorded as `autoform-publication/v2`; it
+replaces the v1 `dependencies/nodes/*.html` focus-page URLs with
+`dependencies/full.html#node=<id>`. Existing v1 output directories remain
+recognized so a normal clean render upgrades them in place.
+
 ## Validation
 
 `autoform check` rejects cycles, missing targets, escaping paths,
@@ -655,7 +667,7 @@ doctor, separate from any future Deicyde fleet or machine-capability preflight.
 ## Runtime contract
 
 `autoform_cli.runtime` projects the canonical Markdown graph into the versioned,
-deeply immutable in-memory schema `autoform-runtime/v1`. Its declared authority
+deeply immutable in-memory schema `autoform-runtime/v2`. Its declared authority
 is `markdown-articles`: the adapter copies hierarchy, typed statement and proof
 dependencies, authored assertions, derived progress, provenance, and optional
 local Lean source locations, but it provides no persistence or write API.

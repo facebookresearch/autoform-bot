@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from autoform_cli import dag_viewer, graph_pages
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
-from autoform_cli.mermaid import render_view_diagram
+from autoform_cli.mermaid import relative_link, render_view_diagram
 
 
 def test_project_view_renders_status_distribution_and_aggregated_edges() -> None:
@@ -119,7 +121,50 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
     assert "innerHTML" not in script
     assert "textContent" in script
     assert "requestAnimationFrame" in script
-    assert "#node=" in script
+    assert 'data.schema !== "autoform-dag-view/v1"' in script
+    assert 'node.kind === "boundary"' in script
+    assert 'params.delete("node")' in script
+    assert 'count > 1' in script
+
+
+def test_payload_layout_uses_dependencies_not_node_tuple_order(tmp_path: Path) -> None:
+    inside = ViewNode("inside", "Inside", "node", ("inside",), (("planned", 1),))
+    boundary = ViewNode(
+        "boundary:outside",
+        "Outside",
+        "boundary",
+        ("outside",),
+        (("fully_proved", 1),),
+    )
+    view = GraphView(
+        kind="chapter",
+        title="Chapter",
+        nodes=(inside, boundary),
+        edges=(ViewEdge(boundary.id, inside.id, statement_count=3),),
+    )
+    output = tmp_path / "view.json"
+
+    dag_viewer.write_payload(output, view, links={})
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    columns = {node["id"]: node["column"] for node in payload["nodes"]}
+    assert columns[boundary.id] < columns[inside.id]
+
+
+def test_payload_rejects_a_cyclic_view(tmp_path: Path) -> None:
+    nodes = (
+        ViewNode("a", "A", "node", ("a",), (("planned", 1),)),
+        ViewNode("b", "B", "node", ("b",), (("planned", 1),)),
+    )
+    view = GraphView(
+        kind="full",
+        title="Cycle",
+        nodes=nodes,
+        edges=(ViewEdge("a", "b", statement_count=1), ViewEdge("b", "a", statement_count=1)),
+    )
+
+    with pytest.raises(ValueError, match="contains a cycle"):
+        dag_viewer.write_payload(tmp_path / "cycle.json", view, links={})
 
 
 def test_large_views_fail_over_before_mermaid_hard_limits() -> None:
@@ -148,12 +193,46 @@ def test_large_views_fail_over_before_mermaid_hard_limits() -> None:
 
 
 def test_viewer_script_links_are_relative_to_the_rendered_site_root(tmp_path: Path) -> None:
-    assert graph_pages._viewer_script_link(tmp_path / "dependencies.md") == "javascripts/blueprint-dag.js"
     assert (
-        graph_pages._viewer_script_link(tmp_path / "dependencies/full.md")
+        graph_pages._viewer_script_link(tmp_path / "dependencies.md", tmp_path)
+        == "javascripts/blueprint-dag.js"
+    )
+    assert (
+        graph_pages._viewer_script_link(tmp_path / "dependencies/full.md", tmp_path)
         == "../javascripts/blueprint-dag.js"
     )
     assert (
-        graph_pages._viewer_script_link(tmp_path / "dependencies/chapters/large.md")
+        graph_pages._viewer_script_link(
+            tmp_path / "dependencies/chapters/dependencies.md",
+            tmp_path,
+        )
         == "../../javascripts/blueprint-dag.js"
     )
+
+
+def test_interactive_graph_urls_encode_authored_path_delimiters(tmp_path: Path) -> None:
+    site = tmp_path / "site"
+    page = site / "dependencies/chapters/hash#chapter.md"
+    node = ViewNode(
+        "node",
+        "x" * (dag_viewer.MAX_MERMAID_CHARACTERS + 1),
+        "node",
+        ("node",),
+        (("planned", 1),),
+    )
+    view = GraphView(kind="chapter", title="Large", nodes=(node,), edges=())
+
+    graph_pages._write_page(
+        page,
+        view=view,
+        statuses={},
+        links={},
+        heading="Large",
+        lead="Large graph.",
+        site_root=site,
+    )
+
+    contents = page.read_text(encoding="utf-8")
+    assert 'data-graph-src="hash%23chapter.json"' in contents
+    assert page.with_suffix(".json").is_file()
+    assert relative_link(page, site / "index.md", ".html") == "dependencies/chapters/hash%23chapter.html"

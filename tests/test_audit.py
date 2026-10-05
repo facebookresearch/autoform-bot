@@ -155,6 +155,33 @@ def test_audit_requires_mathlib_declaration_and_declaration_intent_on_evidenced_
 def test_audit_accepts_an_explicit_non_dispatchable_module_catalog(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
+    ledger = blueprint / "sources" / "existing-module.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Existing module declarations\n", encoding="utf-8")
+    _article(
+        blueprint,
+        "existing-module.md",
+        catalog="module",
+        lean="Existing.alpha",
+        statement="formalized",
+        proof="formalized",
+        sources=("../sources/existing-module.md",),
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Existing.lean").write_text(
+        "namespace Existing\ntheorem alpha : True := by trivial\nend Existing\n",
+        encoding="utf-8",
+    )
+
+    assert audit_blueprint(blueprint, lean_root=lean_root).clean
+
+
+def test_audit_requires_a_local_declaration_ledger_for_module_catalog(
+    tmp_path: Path,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
     _article(
         blueprint,
         "existing-module.md",
@@ -162,10 +189,19 @@ def test_audit_accepts_an_explicit_non_dispatchable_module_catalog(tmp_path: Pat
         statement="formalized",
         proof="formalized",
     )
-    lean_root = tmp_path / "lean"
-    lean_root.mkdir()
 
-    assert audit_blueprint(blueprint, lean_root=lean_root).clean
+    findings = _finding_map(blueprint)["roadmap/existing-module.md"]
+
+    assert findings == [
+        (
+            "catalog-without-lean-targets",
+            "formalized module catalog has no exact compiled names in lean frontmatter",
+        ),
+        (
+            "catalog-without-ledger",
+            "module catalog has no local declaration ledger under blueprint/sources",
+        ),
+    ]
 
 
 def test_audit_validates_local_source_links_without_network_access(tmp_path: Path, monkeypatch) -> None:
@@ -446,6 +482,24 @@ def test_audit_allows_a_wide_repository_subject_index(tmp_path: Path) -> None:
         _article(blueprint, f"subject-{index:02d}/README.md", depends=False)
 
     assert audit_blueprint(blueprint).clean
+
+
+def test_audit_keeps_the_normal_limit_for_flat_root_articles(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    for index in range(25):
+        _article(blueprint, f"unit-{index:02d}.md", declaration="theorem")
+
+    findings = _finding_map(blueprint)["roadmap/README.md"]
+
+    assert findings == [
+        (
+            "overfull-container",
+            "article directly contains 25 articles, more than the 24-article limit; "
+            "group them into chapters",
+        )
+    ]
 
 
 def test_audit_reports_nodes_that_are_large_outliers_for_their_project(tmp_path: Path) -> None:

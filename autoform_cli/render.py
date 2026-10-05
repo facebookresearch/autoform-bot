@@ -12,9 +12,13 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import os
 import re
 import shutil
-from collections.abc import Iterable, Mapping
+import stat
+import tempfile
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
@@ -44,6 +48,10 @@ _SKIPPED_DIRECTORIES = frozenset({".obsidian", ".trash", ".git"})
 #: Transcriptions of the paper being formalised. Vault material, not chapters.
 SOURCES_DIR = "sources"
 PUBLICATION_MANIFEST = "publication.json"
+PUBLICATION_SCHEMA = "autoform-publication/v2"
+SUPPORTED_PUBLICATION_SCHEMAS = frozenset(
+    {"autoform-publication/v1", PUBLICATION_SCHEMA}
+)
 #: Derived views this command rewrites; stale copies must not leak into the site.
 _GENERATED_FILES = frozenset(
     {
@@ -262,6 +270,30 @@ def render_site(
         )
     _validate_publication_tree(blueprint)
 
+    with _captured_blueprint(blueprint) as captured:
+        return _render_captured_site(
+            captured,
+            destination,
+            authored_blueprint=blueprint,
+            lean_root=lean_root,
+            repository_url=repository_url,
+            ref=ref,
+            clean=clean,
+        )
+
+
+def _render_captured_site(
+    blueprint: Path,
+    destination: Path,
+    *,
+    authored_blueprint: Path,
+    lean_root: str | Path | None,
+    repository_url: str | None,
+    ref: str | None,
+    clean: bool,
+) -> RenderReport:
+    """Render exclusively from one captured blueprint generation."""
+
     graph = load_graph(blueprint)
     coverage, coverage_issues = load_coverage(blueprint)
     if coverage_issues:
@@ -279,7 +311,11 @@ def render_site(
     # The repository root, not the vault's parent. A blueprint nested at
     # <repo>/docs/blueprint would otherwise be described as <repo>/blueprint,
     # and every generated permalink would 404.
-    repo_root = Path(lean_root).expanduser().resolve() if lean_root is not None else blueprint.parent
+    repo_root = (
+        Path(lean_root).expanduser().resolve()
+        if lean_root is not None
+        else authored_blueprint.parent
+    )
     lean_names = tuple(
         dict.fromkeys(
             name
@@ -295,7 +331,7 @@ def render_site(
     )
     numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
-    sources_base = _sources_base(blueprint, repo_root, linker)
+    sources_base = _sources_base(authored_blueprint, repo_root, linker)
 
     _prepare_destination(destination, clean=clean)
     source_revision = _source_revision(blueprint)
@@ -315,6 +351,7 @@ def render_site(
     # blueprint chapter carries many statements in sequence. Each keeps an
     # anchor so every cross-reference still lands on the statement itself.
     groups = _group_nodes(graph)
+    containers = _containers(graph)
     anchors = {
         node_id: _anchor(node_id, group)
         for group, node_ids in groups.items()
@@ -330,7 +367,7 @@ def render_site(
         {
             node_id: (destination / node.path.relative_to(blueprint), "")
             for node_id, node in graph.nodes.items()
-            if graph.children(node_id) or not node.formalizable
+            if node_id in containers or (not node.formalizable and node.catalog is None)
         }
     )
     node_sources = {
@@ -355,7 +392,11 @@ def render_site(
         # Narrative articles remain book pages. Only formalizable leaves are
         # consolidated into their containing article with stable anchors.
         article = node_paths.get(source.resolve())
-        if article is not None and article.formalizable and not graph.children(article.id):
+        if (
+            article is not None
+            and (article.formalizable or article.catalog is not None)
+            and article.id not in containers
+        ):
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         if source.suffix.lower() == ".md":
@@ -406,9 +447,11 @@ def render_site(
             targets=targets,
             narrative=narrative,
             blueprint=blueprint,
+            authored_blueprint=authored_blueprint,
             repo_root=repo_root,
             destination=destination,
             node_sources=node_sources,
+            containers=containers,
             sources_base=sources_base,
         )
         page.write_text(chapter, encoding="utf-8")
@@ -466,6 +509,8 @@ def render_site(
         asset = destination / relative
         asset.parent.mkdir(parents=True, exist_ok=True)
         asset.write_text(contents, encoding="utf-8")
+    if _source_revision(authored_blueprint) != source_revision:
+        raise PublicationError(["blueprint changed during publication; retry the render"])
     _write_publication_manifest(
         destination,
         blueprint,
@@ -498,7 +543,7 @@ def _prepare_destination(destination: Path, *, clean: bool) -> None:
     if (
         manifest.is_symlink()
         or not isinstance(publication, dict)
-        or publication.get("schema") != "autoform-publication/v1"
+        or publication.get("schema") not in SUPPORTED_PUBLICATION_SCHEMAS
     ):
         raise PublicationError(
             [
@@ -536,6 +581,91 @@ def _validate_publication_tree(blueprint: Path) -> None:
         raise PublicationError(issues)
 
 
+_CAPTURE_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_BINARY", 0)
+)
+
+
+def _capture_signature(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+@contextmanager
+def _captured_blueprint(blueprint: Path) -> Iterator[Path]:
+    """Materialize one immutable set of authored inputs for publication."""
+
+    with tempfile.TemporaryDirectory(prefix="autoform-blueprint-") as temporary:
+        captured = Path(temporary).resolve() / "blueprint"
+        captured.mkdir()
+        for source in sorted(blueprint.rglob("*")):
+            relative = source.relative_to(blueprint)
+            if (
+                _SKIPPED_DIRECTORIES.intersection(relative.parts)
+                or _is_hidden(relative)
+                or relative.name in _GENERATED_FILES
+            ):
+                continue
+            try:
+                named = source.stat(follow_symlinks=False)
+            except OSError as error:
+                raise PublicationError(
+                    [f"blueprint changed while it was captured: {relative.as_posix()}"]
+                ) from error
+            if stat.S_ISDIR(named.st_mode):
+                (captured / relative).mkdir(parents=True, exist_ok=True)
+                continue
+            if not stat.S_ISREG(named.st_mode):
+                raise PublicationError(
+                    [f"refusing unsupported blueprint entry: {relative.as_posix()}"]
+                )
+
+            descriptor: int | None = None
+            try:
+                descriptor = os.open(source, _CAPTURE_FLAGS)
+                with os.fdopen(descriptor, "rb") as stream:
+                    descriptor = None
+                    opened = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(opened.st_mode):
+                        raise PublicationError(
+                            [f"refusing unsupported blueprint entry: {relative.as_posix()}"]
+                        )
+                    data = stream.read()
+                    closed = os.fstat(stream.fileno())
+                final_named = source.stat(follow_symlinks=False)
+            except PublicationError:
+                raise
+            except (OSError, ValueError) as error:
+                raise PublicationError(
+                    [f"blueprint changed while it was captured: {relative.as_posix()}"]
+                ) from error
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+            if not (
+                _capture_signature(named)
+                == _capture_signature(opened)
+                == _capture_signature(closed)
+                == _capture_signature(final_named)
+            ):
+                raise PublicationError(
+                    [f"blueprint changed while it was captured: {relative.as_posix()}"]
+                )
+            target = captured / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        yield captured
+
+
 def _is_hidden(relative: Path) -> bool:
     return any(part.startswith(".") for part in relative.parts)
 
@@ -556,7 +686,7 @@ def _sources_base(blueprint: Path, repo_root: Path, linker: SourceLinker) -> "_S
     if not linker.repository_url or not linker.ref:
         return None
     try:
-        relative = (blueprint / SOURCES_DIR).resolve().relative_to(repo_root).as_posix()
+        relative = (blueprint / SOURCES_DIR).relative_to(repo_root).as_posix()
     except ValueError:
         # The vault is outside the repository being linked, so no blob URL
         # describes it. Better no link than one that 404s.
@@ -582,7 +712,10 @@ class _SourceBase:
     def href(self, tail: tuple[str, ...]) -> str:
         verb = "blob" if tail else "tree"
         path = "/".join((self.relative, *tail))
-        return f"{self.repository_url}/{verb}/{self.ref}/{quote(path, safe='/')}"
+        return (
+            f"{self.repository_url}/{verb}/{quote(self.ref, safe='')}/"
+            f"{quote(path, safe='/')}"
+        )
 
 
 def _source_href(sources_base: _SourceBase, tail: tuple[str, ...]) -> str:
@@ -634,7 +767,7 @@ def _write_publication_manifest(
             "source_path": coverage.source_path,
             "source_sha256": coverage.source_sha256,
         },
-        "schema": "autoform-publication/v1",
+        "schema": PUBLICATION_SCHEMA,
         "source": "blueprint/roadmap Markdown",
         "source_revision": source_revision,
         "git_ref": linker.ref,
@@ -656,13 +789,19 @@ def _group_nodes(graph: Graph) -> dict[str, list[str]]:
     nearest narrative container, so nested sections remain real book sections.
     """
     grouped: dict[str, list[str]] = {}
+    containers = _containers(graph)
     for node_id in status.topological_order(graph):
         node = graph.nodes[node_id]
-        if not node.formalizable or graph.children(node_id):
+        if not (node.formalizable or node.catalog is not None) or node_id in containers:
             continue
         group = node.parent or "roadmap"
         grouped.setdefault(group, []).append(node_id)
     return grouped
+
+
+def _containers(graph: Graph) -> frozenset[str]:
+    """Index which articles contain others, so loops need not rescan the graph."""
+    return frozenset(node.parent for node in graph.nodes.values() if node.parent is not None)
 
 
 def _group_page(group: str) -> Path:
@@ -679,10 +818,11 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
     ordered: list[Path] = []
     seen_outputs: set[Path] = set()
     visited_sources: set[Path] = set()
+    containers = _containers(graph)
     book_sources = {
         node.path.resolve()
         for node in graph.nodes.values()
-        if graph.children(node.id) or not node.formalizable
+        if node.id in containers or (not node.formalizable and node.catalog is None)
     }
     pending = [blueprint / "README.md"]
     while pending:
@@ -855,10 +995,11 @@ def _next_target(
     linking to it makes the reader hunt, so the card carries the statement, its
     chapter, and its dependency view.
     """
+    containers = _containers(graph)
     for node_id in status.topological_order(graph):
         node_status = statuses.get(node_id)
         node = graph.nodes[node_id]
-        if node_status is None or graph.children(node_id) or not node.formalizable:
+        if node_status is None or node_id in containers or not node.formalizable:
             continue
         if node_status.key not in {"can_prove", "can_state"}:
             continue
@@ -994,7 +1135,11 @@ def _render_structure_page(
             row(
                 depth,
                 f"{label} <span class='bp-tree-title'>{html.escape(node.title)}</span>",
-                html.escape(node.declaration or node.kind),
+                html.escape(
+                    f"{node.catalog} catalog"
+                    if node.catalog is not None
+                    else node.declaration or node.kind
+                ),
                 f'<span class="bp-swatch bp-swatch-{state.key}"></span>'
                 f'<span class="bp-tree-state">{html.escape(state.label)}</span>',
                 node_id=node.id,
@@ -1183,7 +1328,7 @@ _COVERAGE_SUMMARY_ORDER = tuple(
 )
 
 
-def _is_countable(graph: Graph, node_id: str) -> bool:
+def _is_countable(graph: Graph, node_id: str, containers: frozenset[str]) -> bool:
     """Whether *node_id* is a formalization target the dashboards should count.
 
     Declaration leaves are targets. A catalog may instead summarize an
@@ -1193,13 +1338,14 @@ def _is_countable(graph: Graph, node_id: str) -> bool:
     """
     node = graph.nodes[node_id]
     asserted_status = node.statement_formalized or node.proof_formalized or node.mathlib
-    return not graph.children(node_id) and (
+    return node_id not in containers and (
         node.formalizable or (node.catalog is not None and asserted_status)
     )
 
 
 def _countable(graph: Graph) -> list[str]:
-    return [node_id for node_id in graph.nodes if _is_countable(graph, node_id)]
+    containers = _containers(graph)
+    return [node_id for node_id in graph.nodes if _is_countable(graph, node_id, containers)]
 
 
 def _completion_percentage(done: int, total: int) -> int:
@@ -1245,8 +1391,15 @@ def _render_hero(
     # ``proved`` alone covers its own proof, definition body, or authored
     # Mathlib marker; ``fully_proved`` also closes the dependency chain.
     done = sum(node_status.fully_proved for node_status in selected.values())
+    dispatchable = {
+        node_id: statuses[node_id]
+        for node_id in leaves
+        if graph.nodes[node_id].formalizable
+    }
     actionable = sum(
-        count for state, count in status.summarize(selected) if state.key in _ACTIONABLE_STATES
+        count
+        for state, count in status.summarize(dispatchable)
+        if state.key in _ACTIONABLE_STATES
     )
     total = len(leaves)
     share = _completion_percentage(done, total)
@@ -1312,17 +1465,24 @@ def _render_overview_summary(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     *,
+    containers: frozenset[str],
     node_ids: list[str] | None = None,
 ) -> str:
     """Render the compact, honest progress strip shown at the start of the book."""
     selected_ids = [
         node_id
         for node_id in (node_ids if node_ids is not None else graph.nodes)
-        if _is_countable(graph, node_id)
+        if _is_countable(graph, node_id, containers)
     ]
-    definitions = sum(is_definition(graph.nodes[node_id]) for node_id in selected_ids)
-    results = len(selected_ids) - definitions
+    catalogs = sum(graph.nodes[node_id].catalog is not None for node_id in selected_ids)
+    definitions = sum(
+        graph.nodes[node_id].catalog is None and is_definition(graph.nodes[node_id])
+        for node_id in selected_ids
+    )
+    results = len(selected_ids) - definitions - catalogs
     item_parts = []
+    if catalogs:
+        item_parts.append(f"{catalogs} module catalog{'s' if catalogs != 1 else ''}")
     if definitions:
         item_parts.append(f"{definitions} definition{'s' if definitions != 1 else ''}")
     if results:
@@ -1600,6 +1760,8 @@ def _number_nodes(graph: Graph) -> dict[str, str]:
 
 
 def _declaration_label(node: Node) -> str:
+    if node.catalog == "module":
+        return "Module"
     return DECLARATION_LABELS.get((node.declaration or "").casefold(), "Node")
 
 
@@ -1624,9 +1786,11 @@ def _render_chapter(
     targets: dict[str, tuple[Path, str]],
     narrative: str | None,
     blueprint: Path,
+    authored_blueprint: Path,
     repo_root: Path,
     destination: Path,
     node_sources: dict[Path, str],
+    containers: frozenset[str],
     sources_base: "_SourceBase | None" = None,
 ) -> tuple[str, int, list[str]]:
     """Render one narrative article with statements at its authored link slots."""
@@ -1646,6 +1810,7 @@ def _render_chapter(
             links=links,
             page=page,
             blueprint=blueprint,
+            authored_blueprint=authored_blueprint,
             repo_root=repo_root,
             destination=destination,
             node_sources=node_sources,
@@ -1659,6 +1824,7 @@ def _render_chapter(
     chapter_summary = _render_overview_summary(
         graph,
         statuses,
+        containers=containers,
         node_ids=node_ids,
     )
     if narrative is None:
@@ -1735,6 +1901,7 @@ def _render_environment(
     links: Mapping[str, str],
     page: Path,
     blueprint: Path,
+    authored_blueprint: Path,
     repo_root: Path,
     destination: Path,
     node_sources: dict[Path, str],
@@ -1762,7 +1929,13 @@ def _render_environment(
 
     code_links, implementation_rows, linked, unresolved = _lean_presentation(node, linker)
     context_link = _graph_context_link(node, page=page, destination=destination)
-    source_link = _vault_source_link(node, repo_root=repo_root, linker=linker)
+    source_link = _vault_source_link(
+        node,
+        blueprint=blueprint,
+        authored_blueprint=authored_blueprint,
+        repo_root=repo_root,
+        linker=linker,
+    )
     meta_rows = implementation_rows
     if node.discussion:
         meta_rows.append(("Discussion", _discussion_link(node.discussion, linker)))
@@ -1856,7 +2029,14 @@ def _code_icon() -> str:
     )
 
 
-def _vault_source_link(node: Node, *, repo_root: Path, linker) -> str:
+def _vault_source_link(
+    node: Node,
+    *,
+    blueprint: Path,
+    authored_blueprint: Path,
+    repo_root: Path,
+    linker,
+) -> str:
     """Link a statement to the Markdown article it was authored in.
 
     The graph view and the published statement are both derived. This is the
@@ -1865,10 +2045,14 @@ def _vault_source_link(node: Node, *, repo_root: Path, linker) -> str:
     if not linker.repository_url or not linker.ref:
         return ""
     try:
-        relative = node.path.resolve().relative_to(repo_root).as_posix()
+        blueprint_relative = node.path.resolve().relative_to(blueprint)
+        relative = (authored_blueprint / blueprint_relative).relative_to(repo_root).as_posix()
     except ValueError:
         return ""
-    href = f"{linker.repository_url}/blob/{linker.ref}/{relative}"
+    href = (
+        f"{linker.repository_url}/blob/{quote(linker.ref, safe='')}/"
+        f"{quote(relative, safe='/')}"
+    )
     label = html.escape(f"Edit the Markdown source for {node.title}", quote=True)
     icon = (
         '<svg class="bp-source-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
@@ -2751,6 +2935,8 @@ __all__ = [
     "LOGO",
     "MERMAID_SCRIPT",
     "PUBLICATION_MANIFEST",
+    "PUBLICATION_SCHEMA",
+    "SUPPORTED_PUBLICATION_SCHEMAS",
     "PublicationError",
     "STYLESHEET",
     "RenderReport",

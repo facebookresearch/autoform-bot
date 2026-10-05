@@ -17,6 +17,7 @@ from autoform_cli.render import (
     PublicationError,
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
+    publication_source_revision,
     render_site,
 )
 from autoform_cli.status import STATES, derive
@@ -521,9 +522,14 @@ def test_module_catalog_leaf_counts_as_complete_without_becoming_dispatchable(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
+    sources = project / "blueprint/sources"
+    sources.mkdir()
+    (sources / "catalog.md").write_text("# Project.Basic declarations\n", encoding="utf-8")
     (project / "blueprint/roadmap/catalog.md").write_text(
-        "---\ncatalog: module\nstatement: formalized\nproof: formalized\n---\n\n"
-        "# Existing module\n\nA checked inventory of an existing Lean module.\n",
+        "---\ncatalog: module\nlean: Project.Base\nstatement: formalized\n"
+        "proof: formalized\n---\n\n# Existing module\n\n"
+        "A checked inventory of an existing Lean module.\n\n"
+        "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
         encoding="utf-8",
     )
 
@@ -531,7 +537,32 @@ def test_module_catalog_leaf_counts_as_complete_without_becoming_dispatchable(
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
     assert "3 of 3 targets complete" in overview
-    assert (tmp_path / "out/roadmap/catalog.md").is_file()
+    assert not (tmp_path / "out/roadmap/catalog.md").exists()
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert '<span class="bp-thmcaption">Module</span><span class="bp-thmlabel">1</span>' in chapter
+    assert "A checked inventory of an existing Lean module." in chapter
+    assert "1 module catalog" in chapter
+
+
+def test_partial_module_catalog_is_not_reported_as_dispatchable_work(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    sources = project / "blueprint/sources"
+    sources.mkdir()
+    (sources / "catalog.md").write_text("# Project.Base declarations\n", encoding="utf-8")
+    (project / "blueprint/roadmap/catalog.md").write_text(
+        "---\ncatalog: module\nlean: Project.Base\nstatement: formalized\n---\n\n"
+        "# Existing module\n\nAn incomplete module inventory.\n\n"
+        "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out")
+
+    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    assert (
+        '<div class="bp-figure-value">0</div>'
+        '<div class="bp-figure-label">Ready now</div>'
+    ) in overview
 
 
 def test_the_landing_page_is_the_hero_and_the_map_and_nothing_else(tmp_path: Path) -> None:
@@ -772,7 +803,7 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path
         "dependencies": 1,
         "git_ref": "a" * 40,
         "nodes": 3,
-        "schema": "autoform-publication/v1",
+        "schema": "autoform-publication/v2",
         "source": "blueprint/roadmap Markdown",
         "source_revision": manifest["source_revision"],
         "views": ["book", "progress", "project", "chapter", "focus", "full"],
@@ -781,7 +812,7 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path
     assert str(tmp_path).encode() not in b"".join(first.values())
 
 
-def test_render_computes_one_revision_for_both_manifest_states(
+def test_render_verifies_one_stable_revision_for_both_manifest_states(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -805,10 +836,72 @@ def test_render_computes_one_revision_for_both_manifest_states(
 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
-    assert revision_calls == 1
+    assert revision_calls == 2
     assert manifests == [(False, revision), (True, revision)]
     published = json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
     assert published["source_revision"] == revision
+
+
+def test_render_refuses_to_complete_when_blueprint_changes_mid_render(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    output = tmp_path / "out"
+    original_write = render_module._write_publication_manifest
+    changed = False
+
+    def write_manifest(*args, **kwargs) -> None:
+        nonlocal changed
+        original_write(*args, **kwargs)
+        if not kwargs["complete"] and not changed:
+            changed = True
+            with (blueprint / "README.md").open("a", encoding="utf-8") as stream:
+                stream.write("\nChanged during publication.\n")
+
+    monkeypatch.setattr(render_module, "_write_publication_manifest", write_manifest)
+
+    with pytest.raises(PublicationError, match="changed during publication"):
+        render_site(blueprint, output, lean_root=project)
+
+    manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert manifest["complete"] is False
+
+
+def test_render_uses_one_capture_when_authored_sources_change_and_restore(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    overview = blueprint / "README.md"
+    original = overview.read_bytes()
+    output = tmp_path / "out"
+    original_write = render_module._write_publication_manifest
+    original_revision = render_module._source_revision
+    changed = False
+
+    def write_manifest(*args, **kwargs) -> None:
+        nonlocal changed
+        original_write(*args, **kwargs)
+        if not kwargs["complete"] and not changed:
+            changed = True
+            overview.write_bytes(original + b"\nTRANSIENT_ABA\n")
+
+    def source_revision(path: Path) -> str:
+        if path.resolve() == blueprint.resolve() and b"TRANSIENT_ABA" in overview.read_bytes():
+            overview.write_bytes(original)
+        return original_revision(path)
+
+    monkeypatch.setattr(render_module, "_write_publication_manifest", write_manifest)
+    monkeypatch.setattr(render_module, "_source_revision", source_revision)
+
+    render_site(blueprint, output, lean_root=project)
+
+    assert b"TRANSIENT_ABA" not in (output / "README.md").read_bytes()
+    manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert manifest["source_revision"] == publication_source_revision(blueprint)
 
 
 def test_anchored_links_resolve_only_entries_that_are_read(

@@ -12,7 +12,12 @@ from urllib.parse import urlsplit
 
 from .claims import ClaimTransportError, author_claim_key
 from .graph import GraphValidationError
-from .render import LIVE_SCRIPT, PUBLICATION_MANIFEST, publication_source_revision
+from .render import (
+    LIVE_SCRIPT,
+    PUBLICATION_MANIFEST,
+    SUPPORTED_PUBLICATION_SCHEMAS,
+    publication_source_revision,
+)
 from .runtime import RuntimeGraph, RuntimeProjectionError
 
 
@@ -108,7 +113,7 @@ def publication_bound_live_state(
             manifest = json.loads(encoded)
             if (
                 not isinstance(manifest, dict)
-                or manifest.get("schema") != "autoform-publication/v1"
+                or manifest.get("schema") not in SUPPORTED_PUBLICATION_SCHEMAS
                 or manifest.get("complete") is not True
                 or manifest.get("source_revision") != publication_source_revision(blueprint)
             ):

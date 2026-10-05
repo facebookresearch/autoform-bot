@@ -94,7 +94,14 @@ def test_live_loader_does_not_hide_programming_errors() -> None:
         live_state_loader(_runtime, BuggyClaims())()
 
 
-def test_live_overlay_refuses_a_stale_built_publication(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "publication_schema",
+    ["autoform-publication/v1", "autoform-publication/v2"],
+)
+def test_live_overlay_refuses_a_stale_built_publication(
+    tmp_path: Path,
+    publication_schema: str,
+) -> None:
     blueprint = tmp_path / "blueprint"
     roadmap = blueprint / "roadmap"
     roadmap.mkdir(parents=True)
@@ -105,7 +112,7 @@ def test_live_overlay_refuses_a_stale_built_publication(tmp_path: Path) -> None:
     (site / "publication.json").write_text(
         json.dumps(
             {
-                "schema": "autoform-publication/v1",
+                "schema": publication_schema,
                 "complete": True,
                 "source_revision": publication_source_revision(blueprint),
             }

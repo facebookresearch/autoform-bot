@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
@@ -141,9 +141,21 @@ def test_runtime_exposes_a_settled_module_catalog_without_dispatching_it(tmp_pat
 
     assert catalog is not None
     assert catalog.catalog == "module"
+    assert catalog.as_dict()["catalog"] == "module"
     assert not catalog.formalizable
     assert not catalog.dispatchable
     assert catalog.status.state == "fully_proved"
+
+
+def test_runtime_node_loads_the_v1_pickle_shape(tmp_path: Path) -> None:
+    node = load_runtime_graph(_project(tmp_path)).nodes[0]
+    previous_state = node.__getstate__()[:-1]
+    restored = object.__new__(type(node))
+
+    restored.__setstate__(previous_state)
+
+    assert restored == node
+    assert restored.catalog is None
 
 
 def test_exposes_provenance_mathlib_and_optional_lean_locations(tmp_path: Path) -> None:
@@ -297,3 +309,25 @@ def test_adapter_rejects_inconsistent_hand_built_graph_without_host_paths(tmp_pa
         "chapter/section/base: dependency union does not match typed dependencies",
     )
     assert str(tmp_path) not in str(error.value)
+
+
+def test_adapter_rejects_a_hand_built_dispatchable_catalog(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    canonical = load_graph(project / "blueprint")
+    nodes = dict(canonical.nodes)
+    base = nodes["chapter/section/base"]
+    nodes[base.id] = replace(base, catalog="module")
+
+    with pytest.raises(RuntimeProjectionError, match="catalog node carries"):
+        build_runtime_graph(Graph(canonical.blueprint_dir, nodes), project_root=project)
+
+
+def test_adapter_rejects_a_hand_built_unknown_catalog_kind(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    canonical = load_graph(project / "blueprint")
+    nodes = dict(canonical.nodes)
+    roadmap = nodes["roadmap"]
+    nodes[roadmap.id] = replace(roadmap, catalog="book")
+
+    with pytest.raises(RuntimeProjectionError, match="unsupported catalog kind"):
+        build_runtime_graph(Graph(canonical.blueprint_dir, nodes), project_root=project)

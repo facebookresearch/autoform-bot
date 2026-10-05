@@ -155,7 +155,7 @@ def export_structure(blueprint_dir: Path, output: Path | None = None) -> Path:
         if node is None:
             lines.append(f"{indent}- [{entry.name}]({entry.as_posix()}) · prose")
             continue
-        kind = node.declaration or node.kind
+        kind = f"{node.catalog} catalog" if node.catalog is not None else node.declaration or node.kind
         lines.append(
             f"{indent}- [{node.title}]({entry.as_posix()}) · {kind} · {statuses[node.id].label}"
         )

@@ -114,9 +114,10 @@ Review.
 For a `catalog: module` leaf, assertion keys describe the whole tracked module:
 set `statement: formalized` only when all inventoried public declarations
 exist, and `proof: formalized` only when every included implementation or proof
-is complete under the repository's trust policy. Record per-declaration
-compiled-name deferrals in the linked ledger rather than misreporting the
-module as future work.
+is complete under the repository's trust policy. Record every exact compiled
+public name in `lean` and in the declaration ledger linked from the article's
+exact `## Sources` section. A deferred compiled name means the catalog is not
+yet verified and must not carry formalized assertions.
 
 For a large source, divide independent sections among available agents while
 retaining one owner for global coverage, status semantics, and dependency

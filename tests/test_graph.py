@@ -99,6 +99,7 @@ def test_loads_a_non_dispatchable_module_catalog_status(tmp_path: Path) -> None:
         "module.md",
         "# Existing module\n",
         catalog="module",
+        lean="Project.alpha Project.beta",
         statement="formalized",
         proof="formalized",
     )
@@ -108,6 +109,26 @@ def test_loads_a_non_dispatchable_module_catalog_status(tmp_path: Path) -> None:
     assert not node.formalizable
     assert node.statement_formalized
     assert node.proof_formalized
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"declaration": "theorem"},
+        {"mathlib": "true"},
+        {"mathlib_declaration": "Mathlib.result"},
+        {"mathlib_file": "Mathlib/Result.lean"},
+    ],
+)
+def test_module_catalog_rejects_declaration_specific_metadata(
+    tmp_path: Path,
+    metadata: dict[str, str],
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "module.md", "# Existing module\n", catalog="module", **metadata)
+
+    with pytest.raises(GraphValidationError, match="catalog.*cannot be combined"):
+        load_graph(blueprint)
 
 
 def test_resolves_links_relative_to_each_node(tmp_path: Path) -> None:

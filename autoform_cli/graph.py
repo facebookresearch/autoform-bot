@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, fields
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -41,6 +41,9 @@ _FRONTMATTER_KEYS = frozenset(
 _FORMALIZED = "formalized"
 _TRUE = frozenset({"true", "yes"})
 _FALSE = frozenset({"false", "no"})
+_CATALOG_DECLARATION_KEYS = frozenset(
+    {"declaration", "mathlib", "mathlib_declaration", "mathlib_file"}
+)
 
 #: ``## Depends on`` carries the prerequisites needed to *state* a node;
 #: ``## Proof depends on`` carries the extra prerequisites its *proof* needs.
@@ -77,7 +80,6 @@ class Node:
     kind: str = "node"
     lean: str | None = None
     declaration: str | None = None
-    catalog: str | None = None
     statement_formalized: bool = False
     proof_formalized: bool = False
     mathlib: bool = False
@@ -91,11 +93,28 @@ class Node:
     depth: int = 0
     article_id: str | None = None
     source_sha256: str | None = None
+    catalog: str | None = None
 
     @property
     def formalizable(self) -> bool:
         """Whether this article names a concrete Lean declaration."""
         return self.declaration is not None
+
+    def __getstate__(self) -> list[object]:
+        """Keep the public slotted record append-compatible for old pickles."""
+
+        return [getattr(self, item.name) for item in fields(self)]
+
+    def __setstate__(self, state: list[object]) -> None:
+        node_fields = fields(self)
+        if len(state) > len(node_fields):
+            raise ValueError("Node pickle has unsupported fields")
+        for item, value in zip(node_fields, state, strict=False):
+            object.__setattr__(self, item.name, value)
+        for item in node_fields[len(state) :]:
+            if item.default is MISSING:
+                raise ValueError(f"Node pickle is missing required field {item.name!r}")
+            object.__setattr__(self, item.name, item.default)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,26 +123,6 @@ class Graph:
 
     blueprint_dir: Path
     nodes: dict[str, Node]
-    _children_by_parent: dict[str | None, tuple[str, ...]] = field(
-        init=False,
-        repr=False,
-        compare=False,
-    )
-    _children_node_count: int = field(init=False, repr=False, compare=False)
-
-    def __post_init__(self) -> None:
-        self._rebuild_children()
-
-    def _rebuild_children(self) -> None:
-        grouped: dict[str | None, list[str]] = {}
-        for node in self.nodes.values():
-            grouped.setdefault(node.parent, []).append(node.id)
-        object.__setattr__(
-            self,
-            "_children_by_parent",
-            {parent: tuple(children) for parent, children in grouped.items()},
-        )
-        object.__setattr__(self, "_children_node_count", len(self.nodes))
 
     @property
     def edge_count(self) -> int:
@@ -131,12 +130,7 @@ class Graph:
 
     def children(self, node_id: str) -> tuple[str, ...]:
         """Return the direct contained articles of *node_id*."""
-        # ``Graph`` historically preserves a caller's plain mutable node dict.
-        # Refresh after additions/removals while keeping the normal validated,
-        # stable graph lookup O(1).
-        if len(self.nodes) != self._children_node_count:
-            self._rebuild_children()
-        return self._children_by_parent.get(node_id, ())
+        return tuple(node.id for node in self.nodes.values() if node.parent == node_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -480,6 +474,13 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
             issues.append(issue)
             continue
         metadata[key] = value
+
+    if "catalog" in metadata:
+        for key in sorted(_CATALOG_DECLARATION_KEYS.intersection(metadata)):
+            issues.append(
+                f"{node_id}: 'catalog' cannot be combined with declaration-specific "
+                f"frontmatter key {key!r}"
+            )
 
     return metadata, end + 1, issues
 

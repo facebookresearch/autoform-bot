@@ -209,7 +209,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
 
     assert report.unresolved == []
     manifest = json.loads((site / "publication.json").read_text(encoding="utf-8"))
-    assert manifest["schema"] == "autoform-publication/v1"
+    assert manifest["schema"] == "autoform-publication/v2"
     assert manifest["nodes"] == 10
     assert manifest["dependencies"] == 9
     assert manifest["git_ref"] == "0" * 40
@@ -341,7 +341,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "pymdownx.superfences" in mkdocs
     assert "stylesheets/blueprint.css" in mkdocs
     assert "javascripts/blueprint-mermaid.js" in mkdocs
-    assert "javascripts/blueprint-dag.js" in mkdocs
+    assert "javascripts/blueprint-dag.js" not in mkdocs
     # The nav is generated from the vault into SUMMARY.md, so mkdocs.yml has
     # none: a hand-written chapter list would drift from the book.
     assert "\nnav:\n" not in mkdocs

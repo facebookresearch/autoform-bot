@@ -20,6 +20,7 @@ import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 _NAMESPACE = re.compile(r"^\s*namespace\s+(.+)$")
 _SECTION = re.compile(
@@ -122,10 +123,15 @@ def index_project(
 
 
 def _may_declare(text: str, wanted_short: frozenset[str]) -> bool:
-    """Cheaply reject files that cannot contain a requested declaration."""
+    """Reject files that cannot contain a requested declaration.
+
+    Lean comments are whitespace, including when they occur between a command
+    and its declaration name.  The prefilter must therefore inspect the same
+    comment-free surface as the full scanner or it can introduce false misses.
+    """
     if not wanted_short:
         return False
-    for line in text.splitlines():
+    for line in _without_lean_comments(text).splitlines():
         match = _DECLARATION.match(line)
         if match is None:
             continue
@@ -320,7 +326,10 @@ class SourceLinker:
         if declaration is None or not self.repository_url or not self.ref:
             return None
         path = declaration.path.as_posix()
-        return f"{self.repository_url}/blob/{self.ref}/{path}#L{declaration.line}"
+        return (
+            f"{self.repository_url}/blob/{quote(self.ref, safe='')}/"
+            f"{quote(path, safe='/')}#L{declaration.line}"
+        )
 
 
 def build_linker(

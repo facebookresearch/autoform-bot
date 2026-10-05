@@ -16,8 +16,10 @@ from autoform_cli.graph import (
     _find_rollup_cycles,
     load_graph,
 )
+from autoform_cli import graph_pages, graph_views, render
+from autoform_cli.audit import audit_graph
 from autoform_cli.graph_views import chapter_view, group_nodes, project_view, scope_view
-from autoform_cli.render import _book_page_order
+from autoform_cli.render import _book_page_order, render_site
 from autoform_cli.runtime import (
     _validate_depths,
     _validate_runtime,
@@ -332,6 +334,17 @@ def test_graph_pickles_only_public_types(tmp_path: Path, protocol: int) -> None:
     assert restored.children("root") == ("child",)
 
 
+def test_node_loads_the_previous_runtime_pickle_shape(tmp_path: Path) -> None:
+    original = Node("root", "Root", tmp_path / "README.md", ())
+    previous_state = original.__getstate__()[:-1]
+    restored = object.__new__(Node)
+
+    restored.__setstate__(previous_state)
+
+    assert restored == original
+    assert restored.catalog is None
+
+
 def _raises_promptly(call: Callable[[], object]) -> BaseException | None:
     outcome: list[BaseException | None] = []
 
@@ -396,6 +409,231 @@ def test_views_index_containment_once_instead_of_scanning_per_node(
     assert scope_view(graph, statuses, "c003") == expected_scope
     assert chapter_view(graph, statuses, "c003") == expected_scope
     assert len(group_nodes(graph)) == 20
+
+
+def _nested_graph(tmp_path: Path, chapters: int, sections: int, *, seed: int = 0) -> Graph:
+    """Chapters holding sections holding one theorem each, with seeded cross-scope edges."""
+    roadmap = tmp_path / "blueprint" / "roadmap"
+    randomizer = random.Random(seed)
+    nodes = {"roadmap": Node("roadmap", "Roadmap", roadmap / "README.md", ())}
+    leaves: list[str] = []
+    for chapter_index in range(chapters):
+        chapter = f"c{chapter_index:04d}"
+        nodes[chapter] = Node(chapter, chapter, roadmap / chapter / "README.md", (), parent="roadmap", depth=1)
+        for section_index in range(sections):
+            section = f"{chapter}/s{section_index:02d}"
+            nodes[section] = Node(section, section, roadmap / section / "README.md", (), parent=chapter, depth=2)
+            leaf = f"{section}/t"
+            earlier = randomizer.sample(leaves, min(len(leaves), 3))
+            statement = tuple(earlier[:2])
+            proof = tuple(earlier[1:])
+            nodes[leaf] = Node(
+                leaf,
+                leaf,
+                roadmap / f"{leaf}.md",
+                tuple(dict.fromkeys((*statement, *proof))),
+                statement_dependencies=statement,
+                proof_dependencies=proof,
+                parent=section,
+                depth=3,
+                declaration="theorem",
+            )
+            leaves.append(leaf)
+    return Graph(tmp_path / "blueprint", nodes)
+
+
+@pytest.mark.parametrize("include_external", (True, False))
+def test_bulk_scope_views_equal_the_single_scope_view_of_every_container(
+    tmp_path: Path,
+    include_external: bool,
+) -> None:
+    graph = _nested_graph(tmp_path, 6, 4, seed=60)
+    statuses = derive(graph)
+    containers = [node_id for node_id in graph.nodes if graph.children(node_id)]
+
+    views = graph_views.scope_views(graph, statuses, include_external=include_external)
+
+    assert list(views) == containers
+    for scope in containers:
+        assert views[scope] == scope_view(graph, statuses, scope, include_external=include_external)
+
+
+def test_bulk_scope_views_equal_single_scope_views_on_irregular_forests(tmp_path: Path) -> None:
+    roadmap = tmp_path / "blueprint" / "roadmap"
+    randomizer = random.Random(60)
+    for _ in range(40):
+        # Several roots, leaves beside containers, and edges that end on containers.
+        ids = [f"n{index:02d}" for index in range(randomizer.randint(2, 24))]
+        nodes: dict[str, Node] = {}
+        for index, node_id in enumerate(ids):
+            parent = randomizer.choice([None, *ids[:index]]) if index else None
+            earlier = randomizer.sample(ids[:index], min(index, randomizer.randint(0, 3)))
+            nodes[node_id] = Node(
+                node_id,
+                node_id,
+                roadmap / f"{node_id}.md",
+                tuple(earlier),
+                statement_dependencies=tuple(earlier[:1]),
+                proof_dependencies=tuple(earlier),
+                parent=parent,
+            )
+        graph = Graph(tmp_path / "blueprint", nodes)
+        statuses = derive(graph)
+
+        for include_external in (True, False):
+            views = graph_views.scope_views(graph, statuses, include_external=include_external)
+
+            assert list(views) == [node_id for node_id in ids if graph.children(node_id)]
+            for scope, view in views.items():
+                assert view == scope_view(graph, statuses, scope, include_external=include_external)
+
+
+def test_bulk_scope_views_reject_hand_built_containment_cycles(tmp_path: Path) -> None:
+    roadmap = tmp_path / "blueprint" / "roadmap"
+    graph = Graph(
+        tmp_path / "blueprint",
+        {
+            "a": Node("a", "A", roadmap / "a" / "README.md", (), parent="b"),
+            "b": Node("b", "B", roadmap / "b" / "README.md", (), parent="a"),
+        },
+    )
+
+    error = _raises_promptly(lambda: graph_views.scope_views(graph, derive(graph)))
+
+    assert isinstance(error, ValueError)
+    assert "containment is not a forest" in str(error)
+
+
+def _scope_view_lookups(tmp_path: Path, chapters: int) -> int:
+    graph = _nested_graph(tmp_path / str(chapters), chapters, 10)
+    statuses = derive(graph)
+    nodes = _CountingDict(graph.nodes)
+    graph_views.scope_views(Graph(graph.blueprint_dir, nodes), statuses)
+    return nodes.lookups
+
+
+def test_bulk_scope_views_scale_linearly_with_the_number_of_containers(tmp_path: Path) -> None:
+    small = _scope_view_lookups(tmp_path, 20)
+    large = _scope_view_lookups(tmp_path, 40)
+
+    # Doubling the containers doubles the relations too.  Scanning every
+    # relation once per container therefore quadruples the node lookups.
+    assert large <= 2.5 * small
+
+
+def _index_builds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chapters: int) -> dict[str, int]:
+    graph = _nested_graph(tmp_path / str(chapters), chapters, 3)
+    builds = {"_containment_children": 0, "_relations": 0}
+
+    def counted(name: str):
+        original = getattr(graph_views, name)
+
+        def wrapper(*args, **kwargs):
+            builds[name] += 1
+            return original(*args, **kwargs)
+
+        return wrapper
+
+    with monkeypatch.context() as patch:
+        for name in builds:
+            patch.setattr(graph_views, name, counted(name))
+        graph_pages.write_graph_pages(
+            graph,
+            derive(graph),
+            tmp_path / str(chapters) / "site",
+            node_links=lambda page, node_ids: {
+                node_id: "book.html" for node_id in node_ids
+            },
+        )
+    return builds
+
+
+def test_graph_page_publication_builds_whole_graph_indexes_a_fixed_number_of_times(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    small = _index_builds(tmp_path, monkeypatch, 4)
+    large = _index_builds(tmp_path, monkeypatch, 8)
+
+    assert large == small
+    assert max(small.values()) <= 4
+
+
+def _written_blueprint(tmp_path: Path, sections: int = 1) -> Path:
+    blueprint = tmp_path / "blueprint"
+    chapter = blueprint / "roadmap" / "chapter"
+    names = [f"section{index}" for index in range(sections)]
+    for name in names:
+        (chapter / name).mkdir(parents=True)
+    (blueprint / "README.md").write_text("# Book\n\n[Roadmap](roadmap/README.md)\n", encoding="utf-8")
+    (blueprint / "roadmap" / "README.md").write_text("# Roadmap\n\n[Chapter](chapter/README.md)\n", encoding="utf-8")
+    (chapter / "README.md").write_text(
+        "# Chapter\n\n" + "".join(f"[{name}]({name}/README.md)\n" for name in names), encoding="utf-8"
+    )
+    (blueprint / "coverage").mkdir()
+    (blueprint / "coverage" / "README.md").write_text(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        "| Project scope | MAPPED | Source audit pending |\n",
+        encoding="utf-8",
+    )
+    for name in names:
+        section = chapter / name
+        (section / "README.md").write_text(f"# {name}\n\n[A](a.md)\n[B](b.md)\n", encoding="utf-8")
+        (section / "a.md").write_text("---\ndeclaration: theorem\n---\n# A\n\nStatement.\n", encoding="utf-8")
+        (section / "b.md").write_text(
+            "---\ndeclaration: theorem\n---\n# B\n\nUses [A](a.md).\n", encoding="utf-8"
+        )
+    return blueprint
+
+
+def _forbid_child_scans(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unindexed(self: Graph, node_id: str) -> tuple[str, ...]:
+        raise AssertionError(f"scanned the graph for children of {node_id}")
+
+    monkeypatch.setattr(Graph, "children", unindexed)
+
+
+def test_site_rendering_does_not_scan_for_children_per_node(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blueprint = _written_blueprint(tmp_path)
+    _forbid_child_scans(monkeypatch)
+
+    render_site(blueprint, tmp_path / "site")
+
+    assert (tmp_path / "site" / "dependencies" / "scopes" / "chapter" / "section0.md").is_file()
+
+
+def _container_index_builds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sections: int) -> int:
+    blueprint = _written_blueprint(tmp_path / str(sections), sections)
+    builds = 0
+    original = render._containers
+
+    def counted(graph: Graph) -> frozenset[str]:
+        nonlocal builds
+        builds += 1
+        return original(graph)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(render, "_containers", counted)
+        render_site(blueprint, tmp_path / str(sections) / "site")
+    return builds
+
+
+def test_site_rendering_indexes_containers_a_fixed_number_of_times(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _container_index_builds(tmp_path, monkeypatch, 6) == _container_index_builds(tmp_path, monkeypatch, 2)
+
+
+def test_audit_does_not_scan_for_children_per_node(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    graph = load_graph(_written_blueprint(tmp_path))
+    expected = audit_graph(graph)
+    _forbid_child_scans(monkeypatch)
+
+    assert audit_graph(graph) == expected
 
 
 def test_runtime_projection_indexes_children_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
