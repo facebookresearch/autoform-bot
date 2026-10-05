@@ -335,6 +335,7 @@ def _publication(
     # blueprint chapter carries many statements in sequence. Each keeps an
     # anchor so every cross-reference still lands on the statement itself.
     groups = _group_nodes(graph)
+    containers = _containers(graph)
     anchors = {
         node_id: _anchor(node_id, group)
         for group, node_ids in groups.items()
@@ -350,7 +351,7 @@ def _publication(
         {
             node_id: (destination / node.path.relative_to(blueprint), "")
             for node_id, node in graph.nodes.items()
-            if graph.children(node_id) or not node.formalizable
+            if node_id in containers or not node.formalizable
         }
     )
     node_sources = {
@@ -402,7 +403,7 @@ def _publication(
     for node_id, node in graph.nodes.items():
         # The text the graph parsed, so a page shows the article its status
         # and any review disclosure describe.
-        leaf = node.formalizable and not graph.children(node_id)
+        leaf = node.formalizable and node_id not in containers
         text, found = published(
             graph.article_text(node), node.path, targets[node_id][0], taken[node_id], whole=not leaf
         )
@@ -528,12 +529,13 @@ def _site_ids(graph: Graph) -> dict[str, frozenset[str]]:
     """
 
     groups = _group_nodes(graph)
+    containers = _containers(graph)
     boxes = {group: {_anchor(node_id, group) for node_id in node_ids} for group, node_ids in groups.items()}
     added = slugify(_ADDITIONAL_TARGETS, "-")
     return {
         node_id: frozenset(
             boxes.get(
-                node.parent or "roadmap" if node.formalizable and not graph.children(node_id) else node_id,
+                node.parent or "roadmap" if node.formalizable and node_id not in containers else node_id,
                 set(),
             )
             | {added}
@@ -663,6 +665,7 @@ def render_site(
 
     report = RenderReport(output_dir=destination)
     groups, targets, node_sources = site.groups, site.targets, site.node_sources
+    containers = _containers(graph)
     group_pages = {group: destination / _group_page(group) for group in groups}
     for source, content in site.files.items():
         target = destination / source.relative_to(blueprint)
@@ -710,6 +713,7 @@ def render_site(
             repo_root=repo_root,
             destination=destination,
             node_sources=node_sources,
+            containers=containers,
             statements=site.statements,
             skeleton=skeleton,
             review_bundle=review_bundle,
@@ -992,13 +996,19 @@ def _group_nodes(graph: Graph) -> dict[str, list[str]]:
     nearest narrative container, so nested sections remain real book sections.
     """
     grouped: dict[str, list[str]] = {}
+    containers = _containers(graph)
     for node_id in status.topological_order(graph):
         node = graph.nodes[node_id]
-        if not node.formalizable or graph.children(node_id):
+        if not node.formalizable or node_id in containers:
             continue
         group = node.parent or "roadmap"
         grouped.setdefault(group, []).append(node_id)
     return grouped
+
+
+def _containers(graph: Graph) -> frozenset[str]:
+    """Index which articles contain others, so loops need not rescan the graph."""
+    return frozenset(node.parent for node in graph.nodes.values() if node.parent is not None)
 
 
 def _group_page(group: str) -> Path:
@@ -1017,10 +1027,11 @@ def _book_page_order(
     ordered: list[Path] = []
     seen_outputs: set[Path] = set()
     visited_sources: set[Path] = set()
+    containers = _containers(graph)
     book_sources = {
         node.path.resolve()
         for node in graph.nodes.values()
-        if graph.children(node.id) or not node.formalizable
+        if node.id in containers or not node.formalizable
     }
     pending = [blueprint / "README.md"]
     while pending:
@@ -1157,10 +1168,11 @@ def _next_target(
     linking to it makes the reader hunt, so the card carries the statement, its
     chapter, and its dependency view.
     """
+    containers = _containers(graph)
     for node_id in status.topological_order(graph):
         node_status = statuses.get(node_id)
         node = graph.nodes[node_id]
-        if node_status is None or graph.children(node_id) or not node.formalizable:
+        if node_status is None or node_id in containers or not node.formalizable:
             continue
         if node_status.key not in {"can_prove", "can_state"}:
             continue
@@ -1488,7 +1500,7 @@ _COVERAGE_SUMMARY_ORDER = tuple(
 )
 
 
-def _is_countable(graph: Graph, node_id: str) -> bool:
+def _is_countable(graph: Graph, node_id: str, containers: frozenset[str]) -> bool:
     """Whether *node_id* is a formalization target the dashboards should count.
 
     A leaf, and a leaf that declares something. Counting every leaf made a
@@ -1497,11 +1509,12 @@ def _is_countable(graph: Graph, node_id: str) -> bool:
     result, and the site claimed work existed before any had been planned.
     """
 
-    return not graph.children(node_id) and graph.nodes[node_id].formalizable
+    return node_id not in containers and graph.nodes[node_id].formalizable
 
 
 def _countable(graph: Graph) -> list[str]:
-    return [node_id for node_id in graph.nodes if _is_countable(graph, node_id)]
+    containers = _containers(graph)
+    return [node_id for node_id in graph.nodes if _is_countable(graph, node_id, containers)]
 
 
 def _completion_percentage(done: int, total: int) -> int:
@@ -1614,13 +1627,14 @@ def _render_overview_summary(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     *,
+    containers: frozenset[str],
     node_ids: list[str] | None = None,
 ) -> str:
     """Render the compact, honest progress strip shown at the start of the book."""
     selected_ids = [
         node_id
         for node_id in (node_ids if node_ids is not None else graph.nodes)
-        if _is_countable(graph, node_id)
+        if _is_countable(graph, node_id, containers)
     ]
     definitions = sum(is_definition(graph.nodes[node_id]) for node_id in selected_ids)
     results = len(selected_ids) - definitions
@@ -1914,6 +1928,7 @@ def _render_chapter(
     repo_root: Path,
     destination: Path,
     node_sources: dict[Path, str],
+    containers: frozenset[str],
     statements: dict[str, tuple[str, str]],
     skeleton: SkeletonReport | None = None,
     review_bundle: ReviewBundle | None = None,
@@ -1951,6 +1966,7 @@ def _render_chapter(
     chapter_summary = _render_overview_summary(
         graph,
         statuses,
+        containers=containers,
         node_ids=node_ids,
     )
     if narrative is None:

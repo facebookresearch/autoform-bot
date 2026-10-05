@@ -21,7 +21,7 @@ from .graph_views import (
     full_view,
     group_nodes,
     project_view,
-    scope_view,
+    scope_views,
 )
 from .status import NodeStatus
 
@@ -49,7 +49,8 @@ def _pages(
     project_page = destination / "dependencies.md"
     full_page = destination / "dependencies/full.md"
     chapter_pages = {group: destination / "dependencies/chapters" / f"{group or 'roadmap'}.md" for group in groups}
-    containers = [node_id for node_id in graph.nodes if graph.children(node_id)]
+    parents = {node.parent for node in graph.nodes.values() if node.parent is not None}
+    containers = [node_id for node_id in graph.nodes if node_id in parents]
     scope_pages = {
         node_id: (
             project_page
@@ -86,7 +87,8 @@ def write_graph_pages(
     groups = group_nodes(graph)
     local_views = focus_views(graph, statuses)
     project_page, full_page, chapter_pages, scope_pages, focus_pages = _pages(graph, destination)
-    containers = [node_id for node_id in graph.nodes if graph.children(node_id)]
+    scope_maps = scope_views(graph, statuses)
+    containers = list(scope_maps)
     article_groups = {node_id: group for group, node_ids in groups.items() for node_id in node_ids}
     written: list[Path] = []
 
@@ -122,7 +124,7 @@ def write_graph_pages(
     )
 
     for group, chapter_page in chapter_pages.items():
-        view = chapter_view(graph, statuses, group)
+        view = scope_maps[group] if group in scope_maps else chapter_view(graph, statuses, group)
         links = dict(node_links(chapter_page))
         for node in view.nodes:
             if node.kind == "boundary":
@@ -161,7 +163,7 @@ def write_graph_pages(
         if scope in {"roadmap", *chapter_pages}:
             continue
         scope_page = scope_pages[scope]
-        view = scope_view(graph, statuses, scope)
+        view = scope_maps[scope]
         links = dict(node_links(scope_page))
         for node in view.nodes:
             if node.kind == "scope":
