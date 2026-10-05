@@ -352,8 +352,12 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "\nnav:\n" not in mkdocs
     assert "literate-nav" in mkdocs
     assert "navigation.tabs" in mkdocs
+    assert "  - search\n" in mkdocs
+    assert "Material does not implement MkDocs' `indexing: titles`" in mkdocs
+    assert "- hooks/title_only_search.py" in mkdocs
     summary = (site / "SUMMARY.md").read_text(encoding="utf-8")
-    assert summary.startswith("- [Home](README.md)")
+    assert summary.startswith("---\nsearch:\n  exclude: true\n---\n")
+    assert "- [Home](README.md)" in summary
     assert "- Book" in summary
     assert "- Graph" in summary
     assert "[Infimum Loss milestone](roadmap/infimum-loss/README.md)" in summary
@@ -425,6 +429,9 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
         "verified canonical URL",
         "references/zulip.md",
         "separate opt-in outward-facing action",
+        "search index title-only",
+        "one record per content page",
+        "runtime memory",
     ):
         assert required in setup
     for required in (
@@ -738,3 +745,9 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
     ).read_text(encoding="utf-8")
 
     assert significant(example) == significant(template)
+    assert (
+        repo_root / "autoform_cli/templates/hooks/title_only_search.py"
+    ).read_bytes() == (
+        repo_root
+        / "skills/setup/assets/cabannes-thesis-project/hooks/title_only_search.py"
+    ).read_bytes()

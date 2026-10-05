@@ -1230,7 +1230,18 @@ def _render_summary_nav(
     reads this file instead, so the tabs come from the same page order the book
     itself uses.
     """
-    lines = [f"- [Home]({overview.relative_to(destination).as_posix()})", "- Book"]
+    # SUMMARY.md is a navigation manifest, not a searchable content page. A
+    # repository-wide book can make this one generated page larger than every
+    # article, so exclude it before Material constructs its transient index.
+    lines = [
+        "---",
+        "search:",
+        "  exclude: true",
+        "---",
+        "",
+        f"- [Home]({overview.relative_to(destination).as_posix()})",
+        "- Book",
+    ]
     for page in book_pages:
         if page == overview:
             continue

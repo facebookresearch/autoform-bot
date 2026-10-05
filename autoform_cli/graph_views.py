@@ -36,6 +36,7 @@ class ViewNode:
     members: tuple[str, ...]
     status_counts: tuple[tuple[str, int], ...]
     declaration: str | None = None
+    catalog: str | None = None
     status_key: str | None = None
     focus: bool = False
     catalog: str | None = None

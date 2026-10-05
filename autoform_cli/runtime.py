@@ -101,6 +101,7 @@ class RuntimeNode:
     parent: str | None
     depth: int
     declaration: str | None
+    catalog: str | None
     formalizable: bool
     dispatchable: bool
     statement_dependencies: tuple[str, ...]

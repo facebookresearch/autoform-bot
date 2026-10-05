@@ -25,6 +25,10 @@ Read bounded generated-output markers before descendants, keeping each marker
 schema in its owning feature. Auto-detected links must match the blob at the
 stable detected commit.
 
+Treat client-side scale as a publication contract. Material search stays
+title-only—one record per page, without section or body records—unless measured
+browser memory proves a wider index safe.
+
 Run focused checks, then normally run:
 
 ```bash

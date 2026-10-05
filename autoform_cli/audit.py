@@ -450,6 +450,8 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
+        if node.catalog is not None:
+            continue
         names = declaration_names(node.lean or "")
         if (node.statement_formalized or node.proof_formalized) and not names:
             findings.append(

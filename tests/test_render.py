@@ -243,7 +243,9 @@ def test_the_site_publishes_no_second_copy_of_the_vault(tmp_path: Path) -> None:
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
 
     assert not (out / "wiki").exists()
-    assert "Markdown source" not in (out / "SUMMARY.md").read_text(encoding="utf-8")
+    summary = (out / "SUMMARY.md").read_text(encoding="utf-8")
+    assert "Markdown source" not in summary
+    assert summary.startswith("---\nsearch:\n  exclude: true\n---\n")
     # The two things the mirror was there for.
     assert 'id="top"' in chapter
     assert "blueprint/roadmap/top.md" in chapter

@@ -102,6 +102,12 @@ do not restate them here.
 `render` writes a derived tree; the vault stays the source of truth. Ignore
 `site-src/`, `site/`, and `blueprint/dependencies.md`.
 
+Material eagerly builds its client-side Lunr index on full page loads. Keep the
+scaffolded search index title-only: one record per content page, with no section
+anchors or body text, so its size stays proportional to the page count. Treat a
+request for section or full-text indexing as a browser performance change and
+measure its built index and runtime memory before widening this contract.
+
 Publication is opt-in because files under `blueprint/` become public site
 content, together with derived progress, graph pages, and a path-free
 publication manifest. Show that boundary, confirm the exact repository and
