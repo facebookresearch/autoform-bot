@@ -1881,7 +1881,8 @@ def test_a_bundle_with_a_number_too_long_or_a_lone_surrogate_is_refused_as_unrea
     assert code == refused
     assert reported.startswith(f"error: cannot read review bundle {bundle}: ")
     if damage == "a-lone-surrogate":
-        assert reported.endswith(": it escapes a lone surrogate, '\\ud800', which UTF-8 cannot encode\n")
+        reason = "it escapes a lone surrogate, '\\ud800', which UTF-8 cannot encode"
+        assert reported == f"error: cannot read review bundle {bundle}: {reason}\n"
 
 
 def _long_link_chain(directory: Path, target: Path) -> str:
