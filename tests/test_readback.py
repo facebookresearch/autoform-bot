@@ -421,6 +421,8 @@ def test_malformed_hashes_and_symlinked_cards_are_not_testimony(tmp_path: Path) 
         ("missing-skeleton-block", "exactly one skeleton block"),
         ("empty-testimony", "nonempty read-back testimony"),
         ("empty-model", "nonempty model label"),
+        ("nested-article_id", "frontmatter field 'article_id' must be a JSON double-quoted string"),
+        ("nested-declaration", "frontmatter field 'declaration' must be a JSON double-quoted string"),
         ("nested-model", "frontmatter field 'model' must be a JSON double-quoted string"),
         ("wrong-article", "does not match the card path article_id"),
         ("wrong-declaration", "does not match the card path"),
@@ -461,9 +463,11 @@ def test_incomplete_or_misidentified_cards_are_explicitly_invalid(
         damaged = card[: card.index("## Read-back") + len("## Read-back")] + "\n"
     elif damage == "empty-model":
         damaged = card.replace('model: "m"\n', "model:\n")
-    elif damage == "nested-model":
-        # Decoded, ten thousand nested arrays exceed Python's recursion limit.
-        damaged = card.replace('model: "m"\n', "model: " + "[" * 10_000 + "\n")
+    elif damage.startswith("nested-"):
+        # Decoded, a hundred thousand nested arrays are deeper than the JSON decoder goes, on Python 3.10 to 3.14 alike.
+        field = damage.removeprefix("nested-")
+        recorded = {"article_id": _ARTICLE_ID, "declaration": declaration.name, "model": "m"}[field]
+        damaged = card.replace(f"{field}: {json.dumps(recorded)}\n", f"{field}: " + "[" * 100_000 + "\n")
     elif damage == "wrong-article":
         damaged = card.replace(_ARTICLE_ID, "af_aaaaaaaaaaaaaaaaaaaaaaaa", 1)
     else:

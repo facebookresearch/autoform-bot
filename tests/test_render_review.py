@@ -1313,6 +1313,8 @@ def test_brackets_over_the_limit_are_refused_with_a_rewrite_that_is_accepted() -
         ("> " * 32 + "a", "> " * 32 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
         (">\t" * 16 + "a", ">\t" * 16 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
         ("- " * 32 + "a", "- " * 32 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
+        ("+ " * 32 + "a", "+ " * 32 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
+        ("* " * 32 + "a", "* " * 32 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
         ("1. " * 21 + " a", "1. " * 21 + "  a", "testimony nests blocks 65 columns deep, over the limit of 64"),
         (" _a" * 256, " _a" * 257, "testimony has 257 underscores that start a word, over the limit of 256"),
         ("*a* " * 512, "*a* " * 512 + "\\*", "testimony has 1025 asterisks, over the limit of 1024"),
