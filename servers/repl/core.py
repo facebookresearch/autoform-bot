@@ -595,7 +595,9 @@ class LeanReplConfig:
     allowed_imports: frozenset[str] = ALLOWED_IMPORTS
     warmup_imports: frozenset[str] = WARMUP_IMPORTS
 
-    repl_command: list[str] = field(default_factory=lambda: ["lake", "exe", "repl"])
+    repl_command: list[str] = field(
+        default_factory=lambda: ["lake", "exe", "@repl/repl"]
+    )
     header_deps_command: list[str] = field(
         default_factory=lambda: [
             "lake",

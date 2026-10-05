@@ -589,6 +589,16 @@ def test_per_project_workers_cannot_exceed_node_budget(monkeypatch):
         LeanRuntimeConfig.from_environment()
 
 
+def test_default_repl_command_is_package_qualified(monkeypatch):
+    monkeypatch.delenv("LEAN_REPL_CMD", raising=False)
+
+    assert LeanRuntimeConfig.from_environment().repl_command == (
+        "lake",
+        "exe",
+        "@repl/repl",
+    )
+
+
 def test_response_budget_includes_pool_replacement_cleanup(monkeypatch):
     monkeypatch.setenv("AUTOFORM_REPL_TOTAL_WORKERS", "3")
     monkeypatch.setenv("AUTOFORM_REPL_WORKERS_PER_PROJECT", "3")

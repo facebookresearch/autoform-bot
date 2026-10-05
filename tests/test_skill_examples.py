@@ -112,6 +112,7 @@ def test_public_repl_calls_are_documented_as_process_disposable(repo_root: Path)
     assert "no process-owned environment or proof-state handle survives" in servers
     assert "toolchain's `lean --deps-json`" in servers
     assert "unrecognized parser response fails closed" in servers
+    assert "package-qualified `@repl/repl` target" in servers
 
 
 def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
