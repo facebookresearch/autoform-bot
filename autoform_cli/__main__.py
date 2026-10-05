@@ -354,9 +354,19 @@ def _check(args: argparse.Namespace) -> int:
         for name in declaration_names(node.lean or "")
         if linker.location(name) is None
     ]
-    for issue in missing:
+    # The site links the first definition while CI builds and audits whichever
+    # file the build imports, so a name defined twice cannot be published.
+    ambiguous = [
+        f"{node.id}: declaration defined more than once in {args.lean_root}: {name} ("
+        + ", ".join(f"{item.path.as_posix()}:{item.line}" for item in linker.index.duplicates[name])
+        + ")"
+        for node in graph.nodes.values()
+        for name in declaration_names(node.lean or "")
+        if name in linker.index.duplicates
+    ]
+    for issue in missing + ambiguous:
         print(f"error: {issue}")
-    if missing:
+    if missing or ambiguous:
         return 1
     declared = sum(1 for node in graph.nodes.values() if node.lean)
     print(f"    {declared} declaration(s) resolved in the Lean sources")

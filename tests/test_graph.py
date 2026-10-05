@@ -363,6 +363,29 @@ def test_check_cli(tmp_path: Path) -> None:
     assert lines[1].strip() == "1 ready to state"
 
 
+def test_check_cli_refuses_a_lean_name_defined_more_than_once(tmp_path: Path) -> None:
+    """The site would link the first file while CI audits the one the build imports."""
+
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n", lean="Demo.main")
+    (tmp_path / "Demo").mkdir()
+    (tmp_path / "Demo/Main.lean").write_text("namespace Demo\ntheorem main : True := trivial\nend Demo\n")
+    command = [sys.executable, "-m", "autoform_cli", "check", str(blueprint), "--lean-root", str(tmp_path)]
+
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout
+    assert "1 declaration(s) resolved in the Lean sources" in result.stdout
+
+    (tmp_path / "Drafts").mkdir()
+    (tmp_path / "Drafts/Main.lean").write_text("theorem Demo.main : True := trivial\n")
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert (
+        f"error: base: declaration defined more than once in {tmp_path}: Demo.main "
+        "(Demo/Main.lean:2, Drafts/Main.lean:1)"
+    ) in result.stdout.splitlines()
+
+
 def test_check_cli_reports_validation_errors(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "bad.md", "no heading\n")

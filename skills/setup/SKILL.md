@@ -69,7 +69,8 @@ The two workflows it writes are `autoform-verify.yml`, which validates the
 Markdown DAG, builds Lean, rejects unfinished or unsafe proofs, and audits
 theorem axioms on pull requests, and `blueprint-pages.yml`, which validates the
 DAG and its `lean:` declarations, renders the blueprint, builds MkDocs, and
-deploys GitHub Pages. Pass `--autoform-ref` to pin them at an immutable commit.
+deploys GitHub Pages once `autoform verify` has passed on the pushed commit.
+Pass `--autoform-ref` to pin them at an immutable commit.
 
 After it runs, fill in what only a human or a source can supply: the project
 description in `blueprint/README.md`, the coverage contract, and a verified

@@ -150,6 +150,20 @@ autoform init . --title "Finite Flat Group Schemes" \
 Pass `--autoform-ref <sha>` to pin the generated workflows at an immutable
 commit, `--force` to overwrite, and `--json` for machine-readable output.
 
+The generated `blueprint-pages.yml` deploys only what `autoform verify` passed.
+It runs when a verify run on `main` completes, and builds and deploys only when
+that run succeeded for a push to `main` in the same repository; it checks out
+and links the exact commit verify passed, not whatever `main` points at by
+then. A push whose verify fails or is cancelled leaves the previous deployment
+in place. Verify runs on every push to `main` and a `workflow_run` trigger has
+no paths filter, so every verified push redeploys, including one that changes
+nothing the site shows; the old push trigger deployed only for changes under
+`blueprint/`, Lean files, `mkdocs.yml`, `theme/`, or the workflow itself. Pull
+requests touching those paths still build the site without deploying it. A
+manual run (`workflow_dispatch`) also builds without deploying: to redeploy,
+re-run the latest verify run on `main`, since re-running an older one deploys
+that older commit.
+
 Inspect a Lean project and list Autoform's bundled known-good release pairs:
 
 ```bash
@@ -223,6 +237,18 @@ nonterminal; the other three explicitly disposition an area. Audit JSON includes
 canonical rows, counts, and the exact coverage source hash, while
 `publication.json` records aggregate counts without duplicating the authored
 rows.
+
+With `--lean-root`, `check` fails both when a `lean:` name is not found and when
+it is defined more than once, as when an unbuilt draft file repeats a built
+declaration's full name: the site would link the first definition while CI
+audits the one the build imports. The error lists every definition, as in
+`error: chapter/result: declaration defined more than once in .: Demo.main
+(Demo/Main.lean:12, Drafts/Main.lean:3)`. Names in different namespaces never
+collide. A private declaration counts by the name its source writes: two private
+ones with no public one are refused, while a public declaration and private ones
+elsewhere are distinct in Lean and pass. `render`, `audit`, `doctor`, and
+`skeleton` still use the first definition, so run `check --lean-root` before
+them, as the generated Pages workflow does before it renders.
 
 The contract is read as published Markdown and fails closed. A table inside an
 HTML comment, a fenced block, or a four-space-indented block is documentation
