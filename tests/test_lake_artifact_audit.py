@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -414,6 +415,109 @@ def test_workflows_audit_open_statements_only_when_the_roadmap_allows_them(repo_
         assert 'python3 .github/autoform_audit.py --targets "$contract"' in text
         # Both policies need the contract, so it is written before the branch.
         assert text.index("autoform work assumptions") < text.index('if [ "$policy" = "allowed" ]; then')
+
+
+def _audit_step(workflow: Path) -> str:
+    text = workflow.read_text(encoding="utf-8")
+    _, found, step = text.partition("      - name: Audit every root-package declaration\n        run: |\n")
+    assert found
+    lines = []
+    for line in step.splitlines():
+        if line and not line.startswith(" " * 10):
+            break
+        lines.append(line[10:])
+    return "\n".join(lines) + "\n"
+
+
+# Stubs for the step's commands: uvx answers as an AUTOFORM_REF with or without
+# `work assumptions`, or as a failed fetch; python3 stands in for the audit.
+_STUB_UVX = """#!/bin/sh
+case "$STUB_REF" in
+  old)
+    echo "usage: autoform work [-h] {claim,release} ..." >&2
+    echo "autoform work: error: argument command: invalid choice: 'assumptions' (choose from claim, release)" >&2
+    exit 2 ;;
+  offline) echo "error: Failed to fetch the Autoform source" >&2; exit 1 ;;
+esac
+case " $* " in
+  *" --help "*) echo "usage: autoform work assumptions" ;;
+  *) echo '{"articles": []}' ;;
+esac
+"""
+_STUB_LAKE = """#!/bin/sh
+case "$1" in
+  pack) : > "$2" ;;
+  env) printf '%s\\n' "$@" > "$STUB_LOG/lake" ;;
+esac
+"""
+_STUB_PYTHON = """#!/bin/sh
+shift
+if [ "$1" = "--policy" ]; then echo "$STUB_POLICY"; exit 0; fi
+printf '%s\\n' "$@" > "$STUB_LOG/audit"
+case "$1" in --*) cp "$2" "$STUB_LOG/contract" ;; esac
+"""
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
+@pytest.mark.parametrize(
+    ("ref", "policy", "audit"),
+    [
+        ("new", "forbidden", ["--targets", ".json", "Root", ".tgz", ".lean"]),
+        ("new", "allowed", ["--open-statements", ".json", "Root", ".tgz", ".lean"]),
+        ("old", "forbidden", ["Root", ".tgz", ".lean"]),
+        ("old", "allowed", None),
+        ("offline", "forbidden", None),
+    ],
+)
+def test_audit_step_falls_back_only_for_a_ref_without_work_assumptions(
+    repo_root: Path, tmp_path: Path, ref: str, policy: str, audit: list[str] | None
+) -> None:
+    workflow = repo_root / "skills/setup/assets/cabannes-thesis-project/.github/workflows/autoform-verify.yml"
+    script = tmp_path / "step.sh"
+    script.write_text(_audit_step(workflow), encoding="utf-8")
+    stubs = tmp_path / "bin"
+    for name, text in (("uvx", _STUB_UVX), ("lake", _STUB_LAKE), ("python3", _STUB_PYTHON)):
+        _write(stubs / name, text)
+        (stubs / name).chmod(0o755)
+    project, runner_temp, log = tmp_path / "project", tmp_path / "runner-temp", tmp_path / "log"
+    for directory in (project, runner_temp, log):
+        directory.mkdir()
+    env = {
+        "PATH": f"{stubs}{os.pathsep}{os.environ['PATH']}",
+        "RUNNER_TEMP": str(runner_temp),
+        "AUTOFORM_SOURCE": "https://example.invalid/autoform-bot.git",
+        "AUTOFORM_REF": "0" * 40,
+        "AUTOFORM_ROOT_PACKAGE": "Root",
+        "STUB_REF": ref,
+        "STUB_POLICY": policy,
+        "STUB_LOG": str(log),
+    }
+
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
+        cwd=project,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    warned = "::warning::AUTOFORM_REF predates autoform work assumptions" in result.stdout
+    assert warned == (audit is not None and ref == "old")
+    assert list(runner_temp.iterdir()) == []
+    if audit is None:
+        assert result.returncode == 1
+        assert "error:" in result.stderr
+        assert not (log / "audit").exists()
+        assert not (log / "lake").exists()
+        return
+    assert result.returncode == 0, result.stdout + result.stderr
+    recorded = (log / "audit").read_text(encoding="utf-8").splitlines()
+    assert [Path(arg).suffix or arg for arg in recorded] == audit
+    assert (log / "contract").exists() == (ref == "new")
+    if ref == "new":
+        assert json.loads((log / "contract").read_text(encoding="utf-8")) == {"articles": []}
+    assert (log / "lake").read_text(encoding="utf-8").splitlines() == ["env", "lean", recorded[-1]]
 
 
 def _roadmap(blueprint: Path, text: str | bytes) -> None:

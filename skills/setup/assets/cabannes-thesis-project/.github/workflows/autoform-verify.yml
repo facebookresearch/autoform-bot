@@ -92,7 +92,8 @@ jobs:
           archive="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-root-build.XXXXXX.tgz")"
           probe="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-axiom-probe.XXXXXX.lean")"
           contract="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-assumptions.XXXXXX.json")"
-          trap 'rm -f "$archive" "$probe" "$contract"' EXIT
+          errors="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-assumptions.XXXXXX.err")"
+          trap 'rm -f "$archive" "$probe" "$contract" "$errors"' EXIT
           # Lake resolves both manifest languages and package/custom buildDir.
           # `lake pack` archives only the root package's actual build directory,
           # leaving dependency package artifacts outside the audit boundary.
@@ -102,13 +103,26 @@ jobs:
           # the statements the Markdown declares open. Under either policy every
           # article's lean: name must be a declaration the build compiled.
           policy="$(python3 .github/autoform_audit.py --policy blueprint)"
-          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
-            autoform work assumptions blueprint --json > "$contract"
+          autoform="git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          old_ref=""
+          if uvx --from "$autoform" autoform work assumptions --help > /dev/null 2> "$errors"; then
+            uvx --from "$autoform" autoform work assumptions blueprint --json > "$contract"
+          elif [ "$policy" != "allowed" ] && grep -Fq "invalid choice: 'assumptions'" "$errors"; then
+            # This AUTOFORM_REF predates `work assumptions`, so it cannot write
+            # the contract. Any other failure, such as a failed fetch, stops here.
+            echo "::warning::AUTOFORM_REF predates autoform work assumptions, so this audit cannot check that every lean: name was compiled. Move AUTOFORM_REF to a newer commit."
+            old_ref=1
+          else
+            cat "$errors" >&2
+            exit 1
+          fi
           if [ "$policy" = "allowed" ]; then
             python3 .github/autoform_audit.py --open-statements "$contract" \
               "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
-          else
+          elif [ -z "$old_ref" ]; then
             python3 .github/autoform_audit.py --targets "$contract" \
               "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
+          else
+            python3 .github/autoform_audit.py "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
           fi
           lake env lean "$probe"

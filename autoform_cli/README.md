@@ -866,21 +866,23 @@ job that runs no project code, plus CODEOWNERS on `roadmap/README.md` and
 `.github/`; that is a governance decision for each project's maintainers, and
 the generated workflow does neither.
 
-The step runs `autoform work assumptions` from `AUTOFORM_REF` under both
-policies, and the earlier `autoform check` step validates the frontmatter with
-that same pin, so `AUTOFORM_REF` must be a revision that has `autoform work
-assumptions`. Scaffolded workflows pin `AUTOFORM_REF` to the Autoform checkout
-that scaffolded them, so a project scaffolded before open statements existed
-must, before opting in or taking the current workflow, move `AUTOFORM_REF` to a
-commit that has `work assumptions` and replace
+The step runs `autoform work assumptions` from `AUTOFORM_REF`, and the earlier
+`autoform check` step validates the frontmatter with that same pin. Scaffolded
+workflows pin `AUTOFORM_REF` to the Autoform checkout that scaffolded them, so a
+project scaffolded before open statements existed must, before opting in, move
+`AUTOFORM_REF` to a commit that has `work assumptions` and replace
 `.github/workflows/autoform-verify.yml` and `.github/autoform_audit.py` with the
-versions `autoform init` writes at that commit. Every mismatch fails closed: an
-older pin stops at `autoform check` with `unsupported frontmatter key
-'open_statements'` once the roadmap sets the key, and at `autoform work
-assumptions` under either policy, and an older workflow runs the strict audit,
-which rejects every `sorry`. A newer `.github/autoform_audit.py` keeps the older
-workflow's three-argument form, which runs the strict audit without the `lean:`
-name check.
+versions `autoform init` writes at that commit. An opted-in project with an
+older pin fails closed: `autoform check` stops with `unsupported frontmatter key
+'open_statements'`, and the audit step fails without `work assumptions`. Under
+the strict policy that missing command, which argparse reports as `invalid
+choice: 'assumptions'`, is the one failure the step tolerates: it logs a warning
+that `AUTOFORM_REF` predates `autoform work assumptions` and runs the strict
+audit without the `lean:` name check, as earlier workflows did. Any other
+failure there, such as a failed fetch, fails the step. An older workflow runs
+the strict audit, which rejects every `sorry`. A newer
+`.github/autoform_audit.py` keeps the older workflow's three-argument form,
+which runs the strict audit without the `lean:` name check.
 
 To reproduce the CI audit locally after a build, with `ROOT_PACKAGE` the Lake
 package name the workflow reads from `lake translate-config toml`, and
