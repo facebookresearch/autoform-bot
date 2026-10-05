@@ -11,6 +11,7 @@ probe rather than from source text, so uses that only automation such as
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -335,6 +336,9 @@ class ImpactHelper:
     path: str | None
     line: int | None
     owner: str | None
+    #: The owner's claim target, else a key of the helper's own, so that
+    #: revisions touching the same unowned helper contend for one claim.
+    claim_target: str
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -345,6 +349,7 @@ class ImpactHelper:
             "path": self.path,
             "line": self.line,
             "owner": self.owner,
+            "claim_target": self.claim_target,
         }
 
 
@@ -505,6 +510,7 @@ def compute_impact(
     statement_impacted.sort(key=lambda item: item.id)
     proof_impacted.sort(key=lambda item: item.id)
 
+    by_id = {article.id: article for article in articles}
     helpers: list[ImpactHelper] = []
     for name in sorted(meaning | proof):
         record = records[name]
@@ -512,9 +518,10 @@ def compute_impact(
             continue
         path, line = locate(record) if locate is not None else (None, None)
         impact = "statement" if name in meaning else "proof"
-        helpers.append(ImpactHelper(name, record.kind, impact, record.module, path, line, _owner(record, records, named)))
+        owner = _owner(record, records, named)
+        target = by_id[owner].claim_target if owner in by_id else _helper_claim_key(name)
+        helpers.append(ImpactHelper(name, record.kind, impact, record.module, path, line, owner, target))
 
-    by_id = {article.id: article for article in articles}
     impacted = (*statement_impacted, *proof_impacted)
     undeclared = sorted(item.id for item in impacted if not _reaches(item.id, revised.id, by_id))
 
@@ -533,9 +540,9 @@ def compute_impact(
         if record.deprecated
     )
 
-    # A helper is repaired under its owner's claim, so the owner is claimed too.
-    owners = {by_id[helper.owner].claim_target for helper in helpers if helper.owner in by_id}
-    others = {item.claim_target for item in impacted} | owners
+    # A helper is repaired under its owner's claim, so the owner is claimed
+    # too; an unowned helper is repaired under a claim keyed by its own name.
+    others = {item.claim_target for item in impacted} | {helper.claim_target for helper in helpers}
     claim_targets = (revised.claim_target, *sorted(others - {revised.claim_target}))
     return ImpactReport(
         source_revision=source_revision,
@@ -549,6 +556,14 @@ def compute_impact(
         deprecated_unused=tuple(item.name for item in deprecated if not item.users and not item.articles),
         claim_targets=claim_targets,
     )
+
+
+def _helper_claim_key(name: str) -> str:
+    """The claim key of a helper no article owns, shaped like ``claims.author_claim_key``."""
+
+    slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")[:48] or "declaration"
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]
+    return f"lean/{slug}-{digest}"
 
 
 def _resolver(records: Mapping[str, ConstantRecord]) -> Callable[..., str | None]:
@@ -773,7 +788,7 @@ def format_impact(report: ImpactReport) -> list[str]:
             if helper.path and helper.line is not None:
                 where = f"{where}:{helper.line}"
             owner = f"owner {helper.owner}" if helper.owner else "no owner"
-            lines.append(f"  {helper.name} ({helper.kind}, {helper.impact}) {where}; {owner}")
+            lines.append(f"  {helper.name} ({helper.kind}, {helper.impact}) {where}; {owner}; claim {helper.claim_target}")
     if report.undeclared_dependencies:
         lines.append(
             "Impacted without a Markdown dependency path to the revised article: "

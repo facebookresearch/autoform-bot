@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from autoform_cli import __main__ as cli, skeleton
+from autoform_cli import __main__ as cli, claims, skeleton
 from autoform_cli.impact import (
     IMPACT_MARKER,
     IMPACT_SCHEMA,
@@ -64,6 +66,11 @@ def _impact(records, articles, revised: str, declarations=None, **kwargs):
 
 def _ids(items) -> list[str]:
     return [item.id for item in items]
+
+
+def _lean_key(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")[:48] or "declaration"
+    return f"lean/{slug}-{hashlib.sha256(name.encode()).hexdigest()[:16]}"
 
 
 def test_type_uses_impact_statements_and_theorem_values_impact_proofs() -> None:
@@ -191,6 +198,7 @@ def test_helpers_report_location_and_the_article_owning_the_nearest_ancestor() -
             "path": "Demo.lean",
             "line": 1,
             "owner": "shared-a",
+            "claim_target": "shared-a",
         },
         {
             "name": "A.uses.aux",
@@ -200,6 +208,7 @@ def test_helpers_report_location_and_the_article_owning_the_nearest_ancestor() -
             "path": "Demo.lean",
             "line": 2,
             "owner": "uses",
+            "claim_target": "uses",
         },
         {
             "name": "A.uses.aux.deep",
@@ -209,6 +218,7 @@ def test_helpers_report_location_and_the_article_owning_the_nearest_ancestor() -
             "path": "Demo.lean",
             "line": 3,
             "owner": "uses",
+            "claim_target": "uses",
         },
         {
             "name": "_private.Demo.Extra.0.A.priv",
@@ -218,12 +228,14 @@ def test_helpers_report_location_and_the_article_owning_the_nearest_ancestor() -
             "path": None,
             "line": None,
             "owner": None,
+            "claim_target": _lean_key("_private.Demo.Extra.0.A.priv"),
         },
     ]
     assert located == [helper.name for helper in report.helpers]
     assert _ids(report.statement_impacted) == ["uses"]
-    # The helpers are repaired under their owners' claims, so shared-a is claimed too.
-    assert report.claim_targets == ("base", "shared-a", "uses")
+    # The helpers are repaired under their owners' claims, so shared-a is
+    # claimed too, and the unowned helper under a key of its own.
+    assert report.claim_targets == ("base", _lean_key("_private.Demo.Extra.0.A.priv"), "shared-a", "uses")
 
 
 def test_revised_names_resolve_by_component_and_are_never_their_own_helpers() -> None:
@@ -401,7 +413,7 @@ def test_an_alias_shares_its_target_s_statement() -> None:
     assert _ids(report.statement_impacted) == ["states-alias"]
     assert _ids(report.proof_impacted) == ["uses-alias"]
     assert [(helper.name, helper.impact) for helper in report.helpers] == [("A.alias", "statement")]
-    assert report.claim_targets == ("plain", "states-alias", "uses-alias")
+    assert report.claim_targets == ("plain", _lean_key("A.alias"), "states-alias", "uses-alias")
 
 
 def test_a_deprecated_constant_s_own_companions_are_not_its_users() -> None:
@@ -484,7 +496,54 @@ def test_helpers_the_revised_article_owns_keep_a_revision_contained() -> None:
     assert format_impact(owned)[2] == "Contained: nothing outside s uses A.S, so it can be revised in place."
     assert not shared.contained
     assert [(helper.name, helper.owner) for helper in shared.helpers] == [("A.T.aux", "other"), ("A.loose", None)]
-    assert shared.claim_targets == ("t", "other")
+    assert shared.claim_targets == ("t", _lean_key("A.loose"), "other")
+
+
+def test_revisions_touching_one_unowned_helper_contend_for_its_claim() -> None:
+    records = _records(
+        _rec("A.left", "def"),
+        _rec("A.right", "def"),
+        _rec("A.bridge", type_uses=("A.left", "A.right")),
+        _rec("A.T", "inductive"),
+        _rec("A.T.aux", type_uses=("A.left",), parent="A.T"),
+    )
+    articles = [
+        _article("left", "A.left", article_id="af_left"),
+        _article("right", "A.right", article_id="af_right"),
+        _article("t", "A.T", article_id="af_t"),
+    ]
+
+    left = _impact(records, articles, "left")
+    right = _impact(records, articles, "right")
+
+    # No article names A.bridge, so both revisions claim one key derived from
+    # its name, shaped like an author claim key; an owned helper is claimed
+    # under its owner's claim target.
+    key = "lean/a-bridge-" + hashlib.sha256(b"A.bridge").hexdigest()[:16]
+    assert claims._validate_key(key) == key
+    assert [(helper.name, helper.owner, helper.claim_target) for helper in left.helpers] == [
+        ("A.T.aux", "t", "af_t"),
+        ("A.bridge", None, key),
+    ]
+    assert [(helper.name, helper.claim_target) for helper in right.helpers] == [("A.bridge", key)]
+    assert left.claim_targets == ("af_left", "af_t", key)
+    assert right.claim_targets == ("af_right", key)
+    assert not right.contained
+    assert json.loads(right.to_json())["helpers"][0]["claim_target"] == key
+
+
+def test_an_unowned_helper_claim_key_is_ref_safe_for_any_name() -> None:
+    names = ("_private.Demo.Extra.0.A.priv", "A.«weird name»", "«∀»", "A." + "long" * 20)
+    records = _records(_rec("A.base", "def"), *(_rec(name, type_uses=("A.base",)) for name in names))
+    articles = [_article("base", "A.base")]
+
+    report = _impact(records, articles, "base")
+
+    keys = {helper.name: helper.claim_target for helper in report.helpers}
+    assert keys == {name: _lean_key(name) for name in names}
+    assert keys["«∀»"].startswith("lean/declaration-")
+    assert all(claims._validate_key(key) == key for key in keys.values())
+    assert len(keys["A." + "long" * 20]) == len("lean/") + 48 + 1 + 16
 
 
 # --------------------------------------------------------------------------- #
@@ -836,6 +895,7 @@ def test_cli_writes_the_impact_report_as_canonical_json(tmp_path: Path, monkeypa
                 "path": "Demo.lean",
                 "line": 5,
                 "owner": None,
+                "claim_target": "lean/demo-base-eq-7f17aa41d1461243",
             }
         ],
         "undeclared_dependencies": ["chapter/loose"],
@@ -844,7 +904,7 @@ def test_cli_writes_the_impact_report_as_canonical_json(tmp_path: Path, monkeypa
             {"name": "Demo.old", "replacement": "Demo.base_eq", "users": ["Demo.loose"], "articles": []},
         ],
         "deprecated_unused": ["Demo.gone"],
-        "claim_targets": [_BASE_ID, _USES_ID, "chapter/loose"],
+        "claim_targets": [_BASE_ID, _USES_ID, "chapter/loose", "lean/demo-base-eq-7f17aa41d1461243"],
     }
     (call,) = calls
     assert call["label"] == "impact probe"
@@ -871,12 +931,12 @@ def test_cli_text_report_lists_each_section(tmp_path: Path, monkeypatch, capsys)
         "Proof impacted:",
         "  chapter/loose: Demo.loose",
         "Helpers no article names:",
-        "  Demo.base_eq (theorem, statement) Demo.lean:5; no owner",
+        "  Demo.base_eq (theorem, statement) Demo.lean:5; no owner; claim lean/demo-base-eq-7f17aa41d1461243",
         "Impacted without a Markdown dependency path to the revised article: chapter/loose",
         "Deprecated:",
         "  Demo.gone: no users, safe to delete",
         "  Demo.old -> Demo.base_eq: used by Demo.loose",
-        f"Claim targets: {_BASE_ID}, {_USES_ID}, chapter/loose",
+        f"Claim targets: {_BASE_ID}, {_USES_ID}, chapter/loose, lean/demo-base-eq-7f17aa41d1461243",
     ]
     assert calls[0]["timeout"] == skeleton.DEFAULT_PROBE_TIMEOUT
 
@@ -921,7 +981,8 @@ def test_cli_text_escapes_terminal_control_characters(tmp_path: Path, monkeypatc
     output = capsys.readouterr()
     assert code == 0, output.err
     assert "\x1b" not in output.out
-    assert "  Demo.bad\\x1b[2Jname (theorem, statement) Demo.lean; no owner" in output.out.splitlines()
+    line = "  Demo.bad\\x1b[2Jname (theorem, statement) Demo.lean; no owner; claim lean/demo-bad-2jname-6d30903d669991fb"
+    assert line in output.out.splitlines()
 
 
 @pytest.mark.parametrize(
@@ -1265,7 +1326,9 @@ def test_the_probe_reads_a_built_project(tmp_path: Path, monkeypatch, capsys) ->
         {"name": "Imp.oldUnused", "replacement": "Imp.base_eq", "users": [], "articles": []},
     ]
     assert report["deprecated_unused"] == ["Imp.oldSeed", "Imp.oldUnused"]
-    assert report["claim_targets"] == ["chapter/base", "chapter/proved", "chapter/simp", "chapter/uses"]
+    unowned = sorted(_lean_key(h["name"]) for h in report["helpers"])
+    assert [h["claim_target"] for h in report["helpers"]] == [_lean_key(h["name"]) for h in report["helpers"]]
+    assert report["claim_targets"] == ["chapter/base", "chapter/proved", "chapter/simp", "chapter/uses", *unowned]
     assert report["source_revision"] == source_revision
 
     (probed,) = outputs
