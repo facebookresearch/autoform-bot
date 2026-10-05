@@ -15,6 +15,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
     assert skills == {
         "setup",
         "roadmap",
+        "formalize",
         "human-review",
         "agent-review",
         "develop-plugin",
@@ -50,19 +51,26 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
             assert config["mcpServers"][name]["args"][-2:] == ["-m", module]
 
     codex_manifest = json.loads((repo_root / ".codex-plugin/plugin.json").read_text())
-    assert len(codex_manifest["interface"]["defaultPrompt"]) == 5
+    interface = codex_manifest["interface"]
+    assert len(interface["shortDescription"]) <= 30
+    assert interface["category"] == "Developer Tools"
+    default_prompts = interface["defaultPrompt"]
+    assert len(default_prompts) == 3
+    assert all(len(prompt) <= 128 and "\n" not in prompt for prompt in default_prompts)
     assert any(
-        "one invocation" in prompt and "persistent Goal" in prompt
-        for prompt in codex_manifest["interface"]["defaultPrompt"]
+        "source-grounded Autoform roadmap" in prompt and "persistent Goal" in prompt
+        for prompt in default_prompts
     )
+    assert any("Formalize the ready Markdown roadmap frontier" in prompt for prompt in default_prompts)
     assert not any(
         "claim-backed workers" in prompt
-        for prompt in codex_manifest["interface"]["defaultPrompt"]
+        for prompt in default_prompts
     )
     muse = json.loads((repo_root / ".muse-plugin/plugin.json").read_text())
     assert [command["id"] for command in muse["capabilities"]["commands"]] == [
         "setup",
         "roadmap",
+        "formalize",
         "human-review",
         "agent-review",
         "develop-plugin",

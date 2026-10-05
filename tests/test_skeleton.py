@@ -17,7 +17,15 @@ import pytest
 import psutil
 
 from autoform_cli.__main__ import main
-from autoform_cli.lean import PACKET_SCHEMA, PASSAGE_SCHEMA, index_project
+from autoform_cli.graph import load_graph
+from autoform_cli.lean import (
+    PACKET_SCHEMA,
+    PASSAGE_SCHEMA,
+    Declaration,
+    LeanSourceError,
+    SourceIndex,
+    index_project,
+)
 from autoform_cli.skeleton import (
     DeclarationSkeleton,
     NodeSkeleton,
@@ -43,9 +51,11 @@ from autoform_cli.skeleton import (
     _hash_module_files,
     _local_safety_issue,
     _process_is_alive,
+    _remember_tagged_processes,
     _project_control_snapshot,
     _without_comments,
     _probe_record_issue,
+    extract_graph_skeletons,
     extract_skeletons,
     format_report,
     lean_libraries,
@@ -247,6 +257,26 @@ def _fake_report(tmp_path: Path, output: str | None = None) -> SkeletonReport:
     project = _project(tmp_path)
     blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
     output = _fake_probe_output() if output is None else output
+    if os.name == "nt":
+        declaration = Declaration(
+            "Skel.observation_determined",
+            Path("Skel/Main.lean"),
+            15,
+            "theorem",
+        )
+        index = SourceIndex(
+            root=project,
+            declarations={declaration.name: declaration},
+            source_digest="windows-publication-fixture",
+            line_counts={Path("Skel/Main.lean"): 21},
+        )
+        return extract_graph_skeletons(
+            load_graph(blueprint),
+            lean_root=project,
+            libraries=lean_libraries(project),
+            index=index,
+            runner=lambda _probe, _root: output,
+        )
     return extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
 
 
@@ -312,7 +342,7 @@ def test_probe_refuses_stale_artifacts_before_executing_lean(tmp_path: Path, mon
 
     monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
 
-    with pytest.raises(SkeletonError, match="build artifacts are stale"):
+    with pytest.raises(SkeletonError, match=r"run `lake build Skel.Main`"):
         run_probe(probe, tmp_path)
 
     assert calls == [["/bin/lake", "--rehash", "--no-build", "build", "Skel.Main"]]
@@ -432,6 +462,120 @@ def test_bounded_command_finds_a_descendant_that_escapes_its_process_group(
         _bounded(tmp_path, parent_program)
 
     _assert_dies(int(child_pid.read_text(encoding="utf-8")), "detached descendant", "cleanup")
+
+
+def test_tagged_process_scan_retries_a_transient_system_error(monkeypatch) -> None:
+    class Candidate:
+        pid = 123456
+
+        def environ(self):
+            return {"_AUTOFORM_PROCESS_TOKEN": "owned"}
+
+        def create_time(self):
+            return 7.0
+
+    calls = 0
+
+    def process_iter():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise SystemError("transient Darwin process state")
+        return [Candidate()]
+
+    monkeypatch.setattr(psutil, "process_iter", process_iter)
+    descendants = {}
+
+    _remember_tagged_processes("owned", descendants, root_pid=654321)
+
+    assert calls == 2
+    assert list(descendants) == [(123456, 7.0)]
+
+
+def test_tagged_process_scan_fails_closed_after_repeated_system_errors(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        psutil,
+        "process_iter",
+        lambda: (_ for _ in ()).throw(SystemError("persistent failure")),
+    )
+
+    with pytest.raises(SkeletonError, match="cannot safely inspect"):
+        _remember_tagged_processes("owned", {}, root_pid=654321)
+
+    # Cleanup mode must still reach process-group termination rather than
+    # allowing a flaky process-table read to mask the original failure.
+    _remember_tagged_processes("owned", {}, root_pid=654321, strict=False)
+
+
+@pytest.mark.parametrize("error", [OSError("scan failed"), psutil.Error("scan failed")])
+def test_tagged_process_scan_fails_closed_when_enumeration_remains_unreadable(
+    monkeypatch,
+    error: BaseException,
+) -> None:
+    monkeypatch.setattr(
+        psutil,
+        "process_iter",
+        lambda: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(SkeletonError, match="repeated process-table errors"):
+        _remember_tagged_processes("owned", {}, root_pid=654321)
+
+    _remember_tagged_processes("owned", {}, root_pid=654321, strict=False)
+
+
+def test_tagged_process_scan_does_not_treat_mixed_failures_as_success(
+    monkeypatch,
+) -> None:
+    errors = iter((SystemError("transient state"), OSError("table unreadable")))
+    monkeypatch.setattr(
+        psutil,
+        "process_iter",
+        lambda: (_ for _ in ()).throw(next(errors)),
+    )
+
+    with pytest.raises(SkeletonError, match="repeated process-table errors"):
+        _remember_tagged_processes("owned", {}, root_pid=654321)
+
+
+def test_tagged_process_scan_retries_a_candidate_system_error(monkeypatch) -> None:
+    calls = 0
+
+    class Candidate:
+        pid = 123456
+
+        def environ(self):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise SystemError("transient process state")
+            return {"_AUTOFORM_PROCESS_TOKEN": "owned"}
+
+        def create_time(self):
+            return 7.0
+
+    monkeypatch.setattr(psutil, "process_iter", lambda: [Candidate()])
+    descendants = {}
+
+    _remember_tagged_processes("owned", descendants, root_pid=654321)
+
+    assert calls == 2
+    assert list(descendants) == [(123456, 7.0)]
+
+
+def test_process_liveness_fails_closed_on_inspection_uncertainty() -> None:
+    class Uncertain:
+        def is_running(self):
+            raise SystemError("transient process state")
+
+    class Gone:
+        def is_running(self):
+            raise psutil.NoSuchProcess(123456)
+
+    assert _process_is_alive(Uncertain()) is True
+    assert _process_is_alive(Gone()) is False
 
 
 def test_bounded_command_interruption_kills_the_process(tmp_path: Path, monkeypatch) -> None:
@@ -1164,7 +1308,8 @@ def test_extraction_reports_names_the_sources_and_the_environment_lack(tmp_path:
 
     assert not report.clean
     assert tuple(issue.message for issue in report.unresolved) == (
-        "basics/ghost: Skel.ghost: not in the built environment; run `lake build`",
+        "basics/ghost: Skel.ghost: not in the built environment after importing "
+        "Skel.Main; check the `lean:` target and declaring source",
         "basics/phantom: Skel.doesNotExist: declaration not found in the Lean sources",
     )
     assert [node.node_id for node in report.nodes] == ["basics/determined", "basics/ghost", "basics/phantom"]
@@ -1251,6 +1396,48 @@ def test_custom_runner_rejects_sources_changed_during_probe(tmp_path: Path) -> N
 
     with pytest.raises(SkeletonError, match="Lean sources changed"):
         extract_skeletons(blueprint, lean_root=project, runner=changing_runner)
+
+
+@pytest.mark.parametrize(
+    ("reason", "message"),
+    [
+        (None, "Lean sources could not be indexed"),
+        (
+            "permission denied: Project/Secret.lean",
+            "Lean sources could not be indexed: permission denied: Project/Secret.lean",
+        ),
+    ],
+)
+@pytest.mark.parametrize("failure_call", (1, 2))
+def test_extraction_translates_source_index_io_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_call: int, reason: str | None, message: str
+) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    real_index_project = index_project
+    calls = 0
+
+    def fail_index(root: Path):
+        nonlocal calls
+        calls += 1
+        if calls == failure_call:
+            if reason is not None:
+                raise LeanSourceError(reason)
+            raise OSError(f"private host detail: {root}")
+        return real_index_project(root)
+
+    monkeypatch.setattr("autoform_cli.skeleton.index_project", fail_index)
+
+    with pytest.raises(SkeletonError) as error:
+        extract_skeletons(
+            blueprint,
+            lean_root=project,
+            runner=lambda probe, root: _fake_probe_output(),
+        )
+
+    assert error.value.issues == (message,)
+    assert str(tmp_path) not in str(error.value)
+    assert calls == failure_call
 
 
 def test_extraction_rejects_configuration_changed_while_reading_libraries(tmp_path: Path, monkeypatch) -> None:

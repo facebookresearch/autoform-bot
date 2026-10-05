@@ -776,7 +776,7 @@ def test_disposable_call_uses_one_frame_and_removes_process_handles(monkeypatch)
         "sorries": [{"goal": "False"}],
     }
     assert len(starts) == 1
-    assert starts[0]["warmup_imports"] == ()
+    assert starts[0]["warm"] is False
     assert 0 < starts[0]["startup_timeout"] <= 3
     assert len(calls) == 1
     assert calls[0][0] == "import Mathlib\n#check Nat"

@@ -647,7 +647,6 @@ class LeanReplConfig:
     chunk_size: int = 4096
 
     instance_mem_limit_gb: int = 16
-    mem_interval_check: float = 1.0
     max_retries: int = 1
 
     allowed_imports: frozenset[str] = ALLOWED_IMPORTS
@@ -902,7 +901,7 @@ class LeanRepl:
         self,
         startup_timeout: float | None = None,
         *,
-        warmup_imports: frozenset[str] | tuple[str, ...] | None = None,
+        warm: bool = True,
     ) -> None:
         """Start and warm the Lean REPL within one startup deadline."""
         if os.name != "posix":
@@ -937,18 +936,13 @@ class LeanRepl:
             self._stderr_bytes = 0
             self._stderr_tail.clear()
 
-            startup_imports = (
-                self.config.warmup_imports
-                if warmup_imports is None
-                else warmup_imports
-            )
-            if startup_imports:
+            if warm and self.config.warmup_imports:
                 header = "\n".join(
-                    f"import {root}" for root in startup_imports
+                    f"import {root}" for root in self.config.warmup_imports
                 )
                 logger.info(
                     "Loading imports at startup: %s",
-                    startup_imports,
+                    self.config.warmup_imports,
                 )
                 resp = self._run(code=header, env_id=None, timeout=remaining())
                 environment, messages = _validate_command_response(
@@ -1170,10 +1164,7 @@ class LeanRepl:
                     command = f"{prefix}\n{code}" if prefix else code
                     # Do not send startup import or smoke-test frames. The
                     # submitted command is the generation's only request.
-                    self.start(
-                        startup_timeout=remaining(),
-                        warmup_imports=(),
-                    )
+                    self.start(startup_timeout=remaining(), warm=False)
                     response = self._run(
                         code=command,
                         env_id=None,
@@ -1237,8 +1228,6 @@ class LeanRepl:
 
             if request_error is not None:
                 raise request_error.with_traceback(request_error.__traceback__)
-            if result is None:
-                raise RuntimeError("disposable Lean REPL call produced no result")
             return result
 
     def run(self, code: str, env_id: int | None = None, timeout: float | None = None) -> dict[str, Any]:

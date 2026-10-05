@@ -1,7 +1,7 @@
 {
   "name": "autoform",
   "version": "0.5.0+codex.20260812000640",
-  "description": "Set up Lean repositories, build source-grounded Markdown roadmaps, and support human or agent review.",
+  "description": "Set up Lean repositories, build and formalize source-grounded Markdown roadmaps, and support review.",
   "author": {
     "name": "Vivien Cabannes"
   },
@@ -10,20 +10,18 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "AutoForm Bot",
-    "shortDescription": "Lean setup, roadmaps, review, LSP, and REPL",
-    "longDescription": "AutoForm separates repository setup from source-grounded roadmap construction, keeps the plan in an Obsidian-compatible Markdown vault, publishes it with GitHub Pages, checks proofs through two public Lean MCP servers, and provides distinct visual human-review and rubric-driven agent-review workflows.",
+    "shortDescription": "Lean formalization workflows",
+    "longDescription": "AutoForm separates repository setup, source-grounded roadmap construction, Markdown-native Lean formalization, and review; the Obsidian-compatible vault remains the shared source of truth and publishes through GitHub Pages.",
     "developerName": "Vivien Cabannes",
-    "category": "Coding",
+    "category": "Developer Tools",
     "capabilities": [
       "Read",
       "Write"
     ],
     "defaultPrompt": [
       "Set up this Lean repository with an Autoform vault, verification CI, and GitHub Pages without planning the mathematics.",
-      "Complete and validate a source-grounded Autoform roadmap in one invocation, using a compatible native persistent Goal when possible.",
-      "Prepare the visual blueprint surfaces so I can review this formalization.",
-      "Judge this roadmap or Lean formalization with evidence-based review rubrics.",
-      "Develop Autoform itself through its executable formalization example."
+      "Build and validate a source-grounded Autoform roadmap, using a persistent Goal when available.",
+      "Formalize the ready Markdown roadmap frontier in Lean and record only verified progress."
     ],
     "brandColor": "#2563EB",
     "composerIcon": "./assets/autoform-small.svg",
