@@ -84,7 +84,8 @@ An article asserts only facts a human or agent verified:
 | Key | Meaning |
 | --- | --- |
 | `statement: formalized` | The Lean statement exists and compiles. |
-| `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. CI's `autoform check` at an older `AUTOFORM_REF` rejects the marker, so move the pin first; until then, retract by removing `statement` and `proof` and keeping `lean:`. |
+| `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. CI's `autoform check` at an older `AUTOFORM_REF` rejects the marker, so move the pin first; until then, retract by removing `statement`, `statement_hash`, and `proof` and keeping `lean:`. |
+| `statement_hash: sha256:...` | The statement Agent Review passed: `sha256:` and 64 lowercase hex digits, as `autoform skeleton` prints it. Requires `statement: formalized`; invalid with `statement: retracted` or `mathlib: true`. CI fails when the statement drifts from it, as `autoform skeleton --check-statements` reports. |
 | `proof: formalized` | The Lean proof compiles. Under the open policy it may rest on open statements, and the article is then conditional; only the derived `fully_proved` means complete and `sorry`-free. |
 | `mathlib: true` | The result is upstreamed into Mathlib. |
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
@@ -340,6 +341,7 @@ Extract what a reader must trust for each formalized statement:
 autoform skeleton blueprint --lean-root .
 autoform skeleton blueprint --lean-root . --node chapter/main-result
 autoform skeleton blueprint --lean-root . --output skeleton.json --packets review-packets --passages review-passages
+autoform skeleton blueprint --lean-root . --check-statements
 ```
 
 A theorem means what its statement means. The skeleton of a `lean:`
@@ -383,7 +385,7 @@ environment rather than by the source text: its kernel face is an opaque
 constant, so the body a reader would see is not what Lean checks. The command
 exits nonzero when a `lean:` name is absent from the sources or from the built
 environment, or reaches a refused declaration; that name is unresolved for its article only, other articles still extract, and it writes nothing into the vault;
-`--output` records the `autoform-skeleton/v4` report, which contains no
+`--output` records the `autoform-skeleton/v5` report, which contains no
 timestamp or absolute path, for a later render or review to consume. The
 report identifies the exact blueprint, its complete target set, and whether
 the extraction covered all targets or an explicit `--node` selection. It
@@ -427,6 +429,42 @@ the article skeleton. If any of those names is unresolved, the report records
 the article's hash and review hash as null rather than hashing the rest. It
 compares reports across builds; it is not a stable statement identifier,
 reviewer authentication, or an approval key.
+
+Each article also gets a **statement hash**, printed as `statement_hash` in
+`--json` and as a `== ID · statement_hash sha256:...` line in the text report.
+It is the SHA-256 of canonical JSON over the schema `autoform-statement/v1`,
+the article's statement text (the published statement: the body between the
+title and the first heading, dependency sections dropped, with line endings
+and trailing whitespace normalized), and the sorted, de-duplicated name, kind,
+and elaborated meaning of every `lean:` declaration and every project
+declaration its statement rests on. A theorem's meaning is its type, so a proof
+leaves the hash alone; axioms, external assumptions, boundary modules, the
+Lean version, and the cited passage are left out. A toolchain bump rotates it
+only when it changes the elaborated terms. It is null when any of the article's
+names is unresolved. The report records the statement text it hashes.
+
+Formalize records the hash as `statement_hash` beside `statement: formalized`
+once the statement passes Agent Review. `--check-statements` then compares
+every recorded hash with the current one and exits 1 with one line per drifted
+article:
+
+```text
+error: ID: statement_hash OLD is recorded but the statement now hashes to NEW; re-review the statement and record the new hash
+```
+
+An article that records a hash but has no `lean:`, or one of whose names is
+unresolved, also fails. Articles without the key are not checked; when none
+records one, the command prints `no article records statement_hash; nothing
+to check` and exits 0 without running Lean, and otherwise a clean run prints
+`N recorded statement hash(es) match`. It honours `--timeout` and does not
+combine with `--node`, `--json`, `--output`, `--packets`, or `--passages`. The
+generated `autoform-verify.yml` runs it after the kernel-trust audit, so a type
+edit that still compiles, or an edit to the article's statement text, fails CI
+instead of keeping the article proved. Like the drift hash, it is a drift
+check, not reviewer authentication or an approval key. A project whose
+`AUTOFORM_REF` predates the key stops at `autoform check` with `unsupported
+frontmatter key 'statement_hash'`; move the pin and replace the workflow with
+the version `autoform init` writes before recording hashes.
 
 Reports and packet manifests also carry an evidence hash over the exact packet
 shown to a reviewer. It identifies those bytes but does not authenticate who
@@ -916,10 +954,10 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
      names X beside X', so the audit keeps accepting that `sorry` as an open
      statement, and R records `proof` only after step 4 deletes X.
      Statement-impacted articles replace `statement: formalized` with
-     `statement: retracted`, lose `proof`, and keep `lean:`, so they return to
-     the frontier as revisions; under the open policy a statement-impacted
-     theorem stays an open statement meanwhile (see [open
-     statements](#open-statements)). When X's proof is sorry-free,
+     `statement: retracted`, lose `statement_hash` and `proof`, and keep
+     `lean:`, so they return to the frontier as revisions; under the open
+     policy a statement-impacted theorem stays an open statement meanwhile
+     (see [open statements](#open-statements)). When X's proof is sorry-free,
      proof-impacted articles keep everything, since their proofs still use the
      valid old X; migrating them to X' is later work. While it is still
      `sorry`, proof-impacted theorems lose `proof: formalized` but keep
@@ -941,14 +979,15 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
      `contained` says, and its `claim_targets` are incomplete: add every stated
      article whose Lean imports the changed module and treat it as
      statement-impacted. A statement-impacted article keeps `statement` only
-     after an Agent Review of its source faithfulness under X's new meaning;
-     otherwise it records `statement: retracted`, loses `proof`, and keeps
+     after an Agent Review of its source faithfulness under X's new meaning,
+     and then records its new `statement_hash`; otherwise it records
+     `statement: retracted`, loses `statement_hash` and `proof`, and keeps
      `lean:`. A repaired dependent proof keeps `proof: formalized` only after
      an Agent Review of the repair; otherwise it loses `proof`. A theorem's
      proof that cannot be repaired becomes exactly `sorry` under the open
      policy; otherwise delete the declaration and remove its article's
-     `lean:`, `statement`, and `proof`, which works only when nothing else
-     uses it. When neither applies, the
+     `lean:`, `statement`, `statement_hash`, and `proof`, which works only
+     when nothing else uses it. When neither applies, the
      revision is blocked: release the claims and report it. Record what
      happened under `## Execution notes` of each touched article.
 3. Claim the route's claim set with one `autoform claim acquire`. When it is
@@ -976,12 +1015,13 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
    design, while CI, which runs neither, passes.
 6. When Roadmap revises an article, its statement text or only its Lean, it
    records the decision and retracts the article: it replaces `statement:
-   formalized` with `statement: retracted`, removes `proof: formalized`, and
-   keeps `lean:`, which `work impact` needs, so the article returns to the
-   frontier as a revision; an article without `lean:` just loses `statement`
-   and `proof`. It retracts only that article and the dependents whose
-   Markdown text the revision rewrites; the Lean-side impact decides every
-   other dependent. Roadmap edits only Markdown: it releases its claims and
+   formalized` with `statement: retracted`, removes `statement_hash` and
+   `proof: formalized`, and keeps `lean:`, which `work impact` needs, so the
+   article returns to the frontier as a revision; an article without `lean:`
+   just loses `statement`, `statement_hash`, and `proof`. It retracts only
+   that article and the dependents whose Markdown text the revision rewrites;
+   the Lean-side impact decides every other dependent. Roadmap edits only
+   Markdown: it releases its claims and
    leaves the Lean revision to Formalize.
 
 ## Local runtime doctor

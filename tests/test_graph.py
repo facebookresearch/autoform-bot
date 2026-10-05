@@ -329,6 +329,70 @@ def test_rejects_a_retracted_statement_that_cannot_keep_its_declaration(
     assert raised.value.issues == (message,)
 
 
+_STATEMENT_HASH = "sha256:" + "0123456789abcdef" * 4
+
+
+def test_records_a_statement_hash(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "result.md",
+        "# Result\n",
+        declaration="theorem",
+        statement="formalized",
+        statement_hash=_STATEMENT_HASH,
+        lean="Ns.result",
+    )
+    _node(blueprint, "other.md", "# Other\n", declaration="theorem", statement="formalized", lean="Ns.other")
+
+    nodes = load_graph(blueprint).nodes
+
+    assert nodes["result"].statement_hash == _STATEMENT_HASH
+    assert nodes["other"].statement_hash is None
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        (
+            {"statement": "formalized", "statement_hash": _STATEMENT_HASH.upper()},
+            "result:4: malformed statement_hash",
+        ),
+        (
+            {"statement": "formalized", "statement_hash": _STATEMENT_HASH[:-1]},
+            "result:4: malformed statement_hash",
+        ),
+        (
+            {"statement": "formalized", "statement_hash": _STATEMENT_HASH.removeprefix("sha256:")},
+            "result:4: malformed statement_hash",
+        ),
+        (
+            {"statement_hash": _STATEMENT_HASH},
+            "result: statement_hash needs statement: formalized; without it, omit statement_hash",
+        ),
+        (
+            {"statement": "retracted", "statement_hash": _STATEMENT_HASH},
+            "result: statement_hash needs statement: formalized; without it, omit statement_hash",
+        ),
+        (
+            {"statement": "formalized", "statement_hash": _STATEMENT_HASH, "mathlib": "true"},
+            "result: a mathlib: true article cannot record statement_hash",
+        ),
+    ],
+)
+def test_rejects_a_statement_hash_without_a_statement_to_bind(
+    tmp_path: Path, metadata: dict[str, str], message: str
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", "# Result\n", lean="Ns.result", **metadata)
+
+    with pytest.raises(GraphValidationError) as raised:
+        load_graph(blueprint)
+
+    assert len(raised.value.issues) == 1
+    assert raised.value.issues[0].startswith(message)
+
+
 def test_records_origin_and_source_links_without_treating_them_as_edges(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     source = blueprint / "sources" / "paper.md"

@@ -22,12 +22,14 @@ _LINK = re.compile(r"(?<!!)\[[^\]]+\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+[^)]*)?\)")
 _HTML_COMMENT = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
 _INLINE_CODE = re.compile(r"(`+).*?\1")
 ARTICLE_ID_PATTERN = re.compile(r"af_[0-9a-f]{24}\Z")
+STATEMENT_HASH_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _FRONTMATTER_KEYS = frozenset(
     {
         "article_id",
         "declaration",
         "lean",
         "statement",
+        "statement_hash",
         "proof",
         "mathlib",
         "mathlib_declaration",
@@ -83,6 +85,9 @@ class Node:
     #: ``lean:`` still names the old declaration, which stays in the build
     #: until Formalize restates the article.
     statement_retracted: bool = False
+    #: ``statement_hash``: the statement hash ``autoform skeleton`` printed
+    #: when the statement passed review; ``--check-statements`` compares it.
+    statement_hash: str | None = None
     proof_formalized: bool = False
     mathlib: bool = False
     mathlib_declaration: str | None = None
@@ -233,6 +238,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             lean=metadata.get("lean"),
             statement_formalized=metadata.get("statement") == _FORMALIZED,
             statement_retracted=metadata.get("statement") == _RETRACTED,
+            statement_hash=metadata.get("statement_hash"),
             proof_formalized=metadata.get("proof") == _FORMALIZED,
             mathlib=metadata.get("mathlib") in _TRUE,
             mathlib_declaration=metadata.get("mathlib_declaration"),
@@ -488,6 +494,11 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
             issues.append(f"{node_id}: proof: formalized needs statement: formalized, not retracted")
         if metadata.get("mathlib") in _TRUE:
             issues.append(f"{node_id}: a mathlib: true article cannot record statement: retracted")
+    if "statement_hash" in metadata:
+        if metadata.get("statement") != _FORMALIZED:
+            issues.append(f"{node_id}: statement_hash needs statement: formalized; without it, omit statement_hash")
+        if metadata.get("mathlib") in _TRUE:
+            issues.append(f"{node_id}: a mathlib: true article cannot record statement_hash")
     return metadata, end + 1, issues
 
 
@@ -498,6 +509,10 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
     if key == "article_id":
         if not ARTICLE_ID_PATTERN.fullmatch(value):
             return value, f"{location}: malformed article_id {value!r}"
+        return value, None
+    if key == "statement_hash":
+        if not STATEMENT_HASH_PATTERN.fullmatch(value):
+            return value, f"{location}: malformed statement_hash {value!r}; expected sha256: and 64 lowercase hex digits"
         return value, None
     if key == "statement":
         if folded not in {_FORMALIZED, _RETRACTED}:

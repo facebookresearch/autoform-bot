@@ -17,6 +17,7 @@ import pytest
 import psutil
 
 from autoform_cli.__main__ import main
+from autoform_cli.graph import load_graph
 from autoform_cli.lean import PACKET_SCHEMA, PASSAGE_SCHEMA, index_project
 from autoform_cli.skeleton import (
     DeclarationSkeleton,
@@ -46,6 +47,8 @@ from autoform_cli.skeleton import (
     _project_control_snapshot,
     _without_comments,
     _probe_record_issue,
+    article_statement,
+    check_statement_hashes,
     extract_skeletons,
     format_report,
     lean_libraries,
@@ -1488,7 +1491,7 @@ def test_report_round_trips_through_json_deterministically(tmp_path: Path) -> No
     path.write_text(first, encoding="utf-8")
     assert load_skeleton_report(path) == report
 
-    for schema in ("autoform-skeleton/v1", "autoform-skeleton/v2", "autoform-skeleton/v3"):
+    for schema in ("autoform-skeleton/v1", "autoform-skeleton/v2", "autoform-skeleton/v3", "autoform-skeleton/v4"):
         legacy = report.as_dict()
         legacy["schema"] = schema
         _assert_load_rejects(path, legacy)
@@ -1627,6 +1630,82 @@ def test_text_report_quotes_the_sources_a_reader_must_trust(tmp_path: Path) -> N
     assert "   -- Skel.NonAmbiguous {Y : Type} (S : Y → Prop) : Prop\n" in text
     # The quoted source travels inside the report, so no Lean tree is needed to print it.
     assert "   def Eligible (S : Y → Prop) (y : Y) : Prop := S y\n" in format_report(report)
+    assert f"== basics/determined · statement_hash {report.nodes[0].statement_hash}\n" in text
+
+
+def test_statement_hash_binds_the_statement_text_and_meaning_only(tmp_path: Path) -> None:
+    node = _fake_report(tmp_path).nodes[0]
+    (declaration,) = node.declarations
+    base = node.statement_hash
+    assert base is not None and re.fullmatch(r"sha256:[0-9a-f]{64}", base)
+    assert node.statement_text == "A statement."
+
+    def with_root(**changes: object) -> NodeSkeleton:
+        return replace(node, declarations=(replace(declaration, **changes),))
+
+    # What a proof, the toolchain, or a citation can change leaves it alone,
+    # although the drift hash moves for some of them.
+    assert with_root(lean_version="4.99.0").hash != node.hash
+    for unchanged in (
+        with_root(lean_version="4.99.0"),
+        with_root(axioms=(), axiom_semantics=()),
+        with_root(assumed=(), assumed_semantics=(), boundary_modules=()),
+        with_root(end_line=99, statement="theorem respelled : True", statement_comments=()),
+        replace(node, passage="Theorem 1.", passage_locator="sources/book.txt#L1-L1"),
+    ):
+        assert unchanged.statement_hash == base
+
+    # The article's statement text, a root's meaning, or a trusted item's meaning rotates it.
+    other_type = _semantic({"type": {"sort": {"succ": {"zero": None}}}})
+    first, *rest = declaration.trusted
+    for changed in (
+        replace(node, statement_text="A stronger statement."),
+        with_root(semantic=other_type),
+        with_root(trusted=(replace(first, semantic=other_type), *rest)),
+        with_root(trusted=(replace(first, kind="opaque"), *rest)),
+    ):
+        assert changed.statement_hash not in {None, base}
+
+    # Shared trusted items count once, whatever order the declarations come in.
+    second = replace(declaration, name="Skel.other")
+    assert replace(node, declarations=(declaration, second)).statement_hash == (
+        replace(node, declarations=(second, declaration)).statement_hash
+    )
+    assert replace(node, complete=False).statement_hash is None
+
+
+def test_article_statement_is_the_published_statement_with_normalized_line_ends(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    article = blueprint / "roadmap" / "basics" / "determined.md"
+    article.write_bytes(
+        b"---\r\nlean: Skel.observation_determined\r\n---\r\n\r\n# determined\r\n\r\n"
+        b"Every  \r\nobservation is determined.\t\r\n\r\n## Depends on\r\n\r\nNone.\r\n\r\n"
+        b"## Sources\r\n\r\n- Chapter 1\r\n"
+    )
+    statement = article_statement(load_graph(blueprint).nodes["basics/determined"])
+    assert statement == "Every\nobservation is determined."
+
+    article.write_text(
+        "---\nlean: Skel.observation_determined\n---\n\n# determined\n\n"
+        "Every\nobservation is determined.\n\n## Sources\n\n- Chapter 2, a different citation\n",
+        encoding="utf-8",
+    )
+    assert article_statement(load_graph(blueprint).nodes["basics/determined"]) == statement
+
+
+def test_report_records_the_statement_text_its_hash_binds(tmp_path: Path) -> None:
+    report = _fake_report(tmp_path)
+    path = tmp_path / "skeleton.json"
+    node = report.as_dict()["nodes"][0]
+    assert (node["statement_text"], node["statement_hash"]) == ("A statement.", report.nodes[0].statement_hash)
+
+    payload = report.as_dict()
+    payload["nodes"][0]["statement_text"] = "A different statement."
+    _assert_load_rejects(path, payload, "not a canonical")
+
+    payload = report.as_dict()
+    payload["nodes"][0]["statement_text"] = None
+    _assert_load_rejects(path, payload, "invalid statement text")
 
 
 def _cli(tmp_path: Path, monkeypatch, *arguments: object) -> int:
@@ -1678,6 +1757,111 @@ def test_cli_sets_the_probe_timeout(tmp_path: Path, capsys, monkeypatch) -> None
         with pytest.raises(SystemExit):
             main([*command, "--timeout", bad])
     assert "expected a positive number of seconds" in capsys.readouterr().err
+
+
+def _record_statement_hash(blueprint: Path, stem: str, statement_hash: str) -> Path:
+    """Record ``statement: formalized`` and ``statement_hash`` on one ``_blueprint`` article."""
+
+    article = blueprint / "roadmap" / "basics" / f"{stem}.md"
+    text = article.read_text(encoding="utf-8")
+    article.write_text(
+        text.replace("---\n\n#", f"statement: formalized\nstatement_hash: {statement_hash}\n---\n\n#", 1),
+        encoding="utf-8",
+    )
+    return article
+
+
+def _current_statement_hash(blueprint: Path, project: Path, node_id: str, capsys) -> str | None:
+    main(["skeleton", str(blueprint), "--lean-root", str(project), "--node", node_id, "--json"])
+    (node,) = json.loads(capsys.readouterr().out)["nodes"]
+    return node["statement_hash"]
+
+
+def test_cli_check_statements_skips_lean_when_no_article_records_a_hash(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+
+    def no_probe(probe: str, root: Path) -> str:
+        raise AssertionError("the probe must not run")
+
+    monkeypatch.setattr("autoform_cli.skeleton.run_probe", no_probe)
+    command = ["skeleton", str(blueprint), "--lean-root", str(project), "--check-statements"]
+
+    assert main(command) == 0
+    assert capsys.readouterr().out == "no article records statement_hash; nothing to check\n"
+    assert main([*command, "--json"]) == 2
+    assert "--check-statements does not combine with" in capsys.readouterr().err
+
+
+def test_cli_check_statements_fails_on_a_changed_statement(tmp_path: Path, capsys, monkeypatch) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
+    command = ["skeleton", str(blueprint), "--lean-root", str(project), "--check-statements"]
+    recorded = _current_statement_hash(blueprint, project, "basics/determined", capsys)
+    assert recorded is not None
+    article = _record_statement_hash(blueprint, "determined", recorded)
+
+    assert main(command) == 0
+    assert capsys.readouterr().out == "1 recorded statement hash(es) match\n"
+    assert main(["skeleton", str(blueprint), "--lean-root", str(project)]) == 0
+    assert f"== basics/determined · statement_hash {recorded}\n" in capsys.readouterr().out
+
+    article.write_text(
+        article.read_text(encoding="utf-8").replace("A statement.", "A stronger statement."), encoding="utf-8"
+    )
+    current = _current_statement_hash(blueprint, project, "basics/determined", capsys)
+    assert current not in {None, recorded}
+
+    assert main(command) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.splitlines() == [
+        f"error: basics/determined: statement_hash {recorded} is recorded but the statement now hashes to "
+        f"{current}; re-review the statement and record the new hash"
+    ]
+
+
+def test_cli_check_statements_fails_when_a_recorded_hash_cannot_be_computed(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(
+        tmp_path,
+        lean={"determined": "Skel.observation_determined", "phantom": "Skel.doesNotExist", "plain": "Skel.plain"},
+    )
+    monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda probe, root: _fake_probe_output())
+    _record_statement_hash(blueprint, "phantom", "sha256:" + "0" * 64)
+    unnamed = _record_statement_hash(blueprint, "plain", "sha256:" + "1" * 64)
+    unnamed.write_text(unnamed.read_text(encoding="utf-8").replace("lean: Skel.plain\n", ""), encoding="utf-8")
+
+    assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--check-statements"]) == 1
+
+    assert capsys.readouterr().err.splitlines() == [
+        "error: basics/phantom: statement_hash cannot be checked: "
+        "Skel.doesNotExist: declaration not found in the Lean sources",
+        "error: basics/plain: statement_hash is recorded but the article names no lean: declaration",
+    ]
+
+
+def test_cli_check_statements_sets_the_probe_timeout(tmp_path: Path, capsys, monkeypatch) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    _record_statement_hash(blueprint, "determined", "sha256:" + "0" * 64)
+    timeouts: list[float] = []
+
+    def fake_run_probe(probe: str, root: Path, *, timeout: float) -> str:
+        timeouts.append(timeout)
+        return _fake_probe_output()
+
+    monkeypatch.setattr("autoform_cli.__main__.run_probe", fake_run_probe)
+    command = ["skeleton", str(blueprint), "--lean-root", str(project), "--check-statements"]
+
+    assert main([*command, "--timeout", "1800"]) == 1
+    assert timeouts == [1800.0]
+    assert "re-review the statement and record the new hash" in capsys.readouterr().err
 
 
 def test_cli_reports_extraction_failures_on_stderr(tmp_path: Path, capsys) -> None:
@@ -2052,6 +2236,47 @@ def test_the_probe_reads_a_built_project(tmp_path: Path) -> None:
     _replace_source(project / "Skel" / "Main.lean", "∃ y, o.admits y ∧ ∀ z, o.admits z → z = y := by", "True := by")
     with pytest.raises(SkeletonError, match="build artifacts are stale"):
         extract_skeletons(blueprint, lean_root=project)
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_statement_hash_survives_a_proof_and_catches_a_type_edit(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _build(project, "Skel.Main")
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+
+    def extract() -> NodeSkeleton:
+        report = extract_skeletons(blueprint, lean_root=project)
+        assert report.clean
+        return report.nodes[0]
+
+    before = extract()
+    recorded = before.statement_hash
+    assert recorded is not None and extract().statement_hash == recorded
+    _record_statement_hash(blueprint, "determined", recorded)
+    assert check_statement_hashes(blueprint, lean_root=project) == (1, ())
+
+    # Proving the theorem drops `sorryAx`: the drift hash moves, the statement hash does not.
+    main_lean = project / "Skel" / "Main.lean"
+    _replace_source(main_lean, "  sorry\n", "  obtain ⟨y, hy⟩ := o.nonempty\n  exact ⟨y, hy, fun z hz => h z y hz hy⟩\n")
+    _build(project, "Skel.Main")
+    proved = extract()
+    assert proved.declarations[0].axioms == () and proved.hash != before.hash
+    assert proved.statement_hash == recorded
+    assert check_statement_hashes(blueprint, lean_root=project) == (1, ())
+
+    # A type edit that still compiles is caught.
+    _replace_source(main_lean, "∀ z, o.admits z → z = y := by", "∀ z, o.admits z → y = z := by")
+    _replace_source(main_lean, "h z y hz hy⟩", "h y z hy hz⟩")
+    _build(project, "Skel.Main")
+    edited = extract().statement_hash
+    assert edited not in {None, recorded}
+    assert check_statement_hashes(blueprint, lean_root=project) == (
+        1,
+        (
+            f"basics/determined: statement_hash {recorded} is recorded but the statement now hashes to "
+            f"{edited}; re-review the statement and record the new hash",
+        ),
+    )
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")

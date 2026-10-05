@@ -46,8 +46,9 @@ from .lean import (
     index_project,
 )
 
-SKELETON_SCHEMA = "autoform-skeleton/v4"
+SKELETON_SCHEMA = "autoform-skeleton/v5"
 SEMANTIC_SCHEMA = "autoform-lean-expr/v4"
+STATEMENT_HASH_SCHEMA = "autoform-statement/v1"
 
 #: Every line the probe wants read back starts with this marker, so Lean's own
 #: informational output can never be mistaken for a result.
@@ -304,6 +305,8 @@ class NodeSkeleton:
     #: article then has no hash, since one over the rest would miss changes
     #: to the missing declaration.
     complete: bool = True
+    #: The article's own statement text, as :func:`article_statement` cuts it.
+    statement_text: str = ""
 
     def blind_text(self) -> str:
         """The article's declarations as one blind packet, for a faithfulness judge.
@@ -354,6 +357,33 @@ class NodeSkeleton:
         }
         return _sha256_id(json.dumps(material, sort_keys=True, ensure_ascii=False).encode())
 
+    @property
+    def statement_hash(self) -> str | None:
+        """Fingerprint what a reviewed statement certifies, for ``statement_hash:``.
+
+        It binds the article's statement text and the elaborated meaning of
+        its declarations and every project declaration they trust, and nothing
+        else: proofs, axioms, library assumptions, boundary modules, the Lean
+        version, the cited passage, and source spelling stay out, so removing a
+        ``sorry``, bumping the toolchain, or editing a citation leaves it alone.
+        """
+
+        if not self.complete:
+            return None
+        declarations = sorted(
+            {
+                (item.name, item.kind, item.semantic)
+                for declaration in self.declarations
+                for item in (declaration, *declaration.trusted)
+            }
+        )
+        material = {
+            "declarations": [list(item) for item in declarations],
+            "schema": STATEMENT_HASH_SCHEMA,
+            "statement": self.statement_text,
+        }
+        return _sha256_id(json.dumps(material, sort_keys=True, ensure_ascii=False).encode())
+
     def as_dict(self) -> dict[str, object]:
         return {
             "article_path": self.article_path,
@@ -364,6 +394,8 @@ class NodeSkeleton:
             "passage": self.passage,
             "passage_locator": self.passage_locator,
             "review_hash": self.review_hash,
+            "statement_hash": self.statement_hash,
+            "statement_text": self.statement_text,
         }
 
 
@@ -610,6 +642,9 @@ def _node_from_dict(
     locator = _report_value(item.get("passage_locator"), f"passage locator for {node_id}", optional=True)
     if (passage is None) != (locator is None):
         raise SkeletonError([f"mismatched passage fields for {node_id} in skeleton report"])
+    statement_text = item.get("statement_text")
+    if type(statement_text) is not str:
+        raise SkeletonError([f"invalid statement text for {node_id} in skeleton report"])
     return NodeSkeleton(
         node_id=node_id,
         article_path=article_path,
@@ -617,6 +652,7 @@ def _node_from_dict(
         passage=passage,
         passage_locator=locator,
         complete={declaration.name for declaration in declarations} == set(targets.get(node_id, ())),
+        statement_text=statement_text,
     )
 
 
@@ -2109,6 +2145,7 @@ def extract_graph_skeletons(
         selected = [(node, names) for node, names in selected if node.id in wanted]
         selection = "filtered"
     passages: dict[str, tuple[str | None, str | None]] = {}
+    statements = {node.id: article_statement(node) for node, _ in selected}
     # An article whose cited passage cannot be found cannot be judged for
     # faithfulness, so its declarations are unresolved rather than shown alone.
     broken_passages: dict[str, str] = {}
@@ -2203,6 +2240,7 @@ def extract_graph_skeletons(
                 passage=passage,
                 passage_locator=locator,
                 complete={item.name for item in declarations} == set(names),
+                statement_text=statements[node.id],
             )
         )
     return SkeletonReport(
@@ -2230,6 +2268,73 @@ def _statement(value: object) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return _TRAILING_VALUE.sub("", value).rstrip()
+
+
+def article_statement(node: Node) -> str:
+    """Return the article's own statement text, the part ``statement_hash`` binds.
+
+    It is what the published site sets inside the statement box: the prose
+    after the H1 and before the first section heading, without the dependency
+    sections. Only line endings and trailing whitespace are normalized.
+    """
+
+    from .render import _split_body
+
+    try:
+        content = node.path.read_bytes()
+    except OSError as exc:
+        raise SkeletonError([f"{node.id}: cannot read the article: {exc}"]) from exc
+    if node.source_sha256 is not None and hashlib.sha256(content).hexdigest() != node.source_sha256:
+        raise SkeletonError(
+            [f"{node.id}: the article changed while skeletons were being extracted; retry after the project is idle"]
+        )
+    statement, _ = _split_body(content.decode("utf-8"))
+    return "\n".join(line.rstrip() for line in statement.splitlines())
+
+
+def check_statement_hashes(
+    blueprint_dir: str | Path,
+    *,
+    lean_root: str | Path,
+    runner: ProbeRunner | None = None,
+) -> tuple[int, tuple[str, ...]]:
+    """Compare every recorded ``statement_hash`` with the current one.
+
+    Returns how many articles record one and one failure line per article
+    whose hash no longer holds or cannot be computed. When no article records
+    one, Lean never runs.
+    """
+
+    try:
+        graph = load_graph(blueprint_dir)
+    except GraphValidationError as exc:
+        raise SkeletonError(exc.issues) from exc
+    recorded = {node.id: node for node in graph.nodes.values() if node.statement_hash is not None}
+    failures: dict[str, str] = {}
+    for node_id, node in recorded.items():
+        if not node.lean:
+            failures[node_id] = f"{node_id}: statement_hash is recorded but the article names no lean: declaration"
+    probed = tuple(sorted(node_id for node_id in recorded if node_id not in failures))
+    if probed:
+        report = extract_skeletons(graph.blueprint_dir, lean_root=lean_root, runner=runner, node_ids=probed)
+        if report.blueprint_hash != _blueprint_hash(graph):
+            raise SkeletonError(
+                ["the blueprint changed while statement hashes were being checked; retry after the project is idle"]
+            )
+        reasons = {issue.node_id: f"{issue.declaration}: {issue.reason}" for issue in report.unresolved}
+        for node_id in probed:
+            expected = recorded[node_id].statement_hash
+            skeleton = report.node(node_id)
+            current = None if skeleton is None else skeleton.statement_hash
+            if current is None:
+                why = reasons.get(node_id, "a declaration is unresolved")
+                failures[node_id] = f"{node_id}: statement_hash cannot be checked: {why}"
+            elif current != expected:
+                failures[node_id] = (
+                    f"{node_id}: statement_hash {expected} is recorded but the statement now hashes to {current}; "
+                    "re-review the statement and record the new hash"
+                )
+    return len(recorded), tuple(failures[node_id] for node_id in sorted(failures))
 
 
 def source_passage(node: Node, blueprint: Path, *, issues: list[str] | None = None) -> tuple[str | None, str | None]:
@@ -2478,6 +2583,9 @@ def format_report(report: SkeletonReport, *, lean_root: Path | None = None) -> s
             out.append("")
         if not node.declarations:
             out += [f"== {node.node_id} · no skeleton", ""]
+        else:
+            statement = node.statement_hash or "none: a declaration is unresolved"
+            out += [f"== {node.node_id} · statement_hash {statement}", ""]
     for issue in report.unresolved:
         out.append(f"error: {issue.message}")
     return "\n".join(out).rstrip("\n") + "\n"
@@ -2951,6 +3059,7 @@ __all__ = [
     "PROBE_MARKER",
     "SEMANTIC_SCHEMA",
     "SKELETON_SCHEMA",
+    "STATEMENT_HASH_SCHEMA",
     "DeclarationSkeleton",
     "LeanLibrary",
     "NodeSkeleton",
@@ -2959,6 +3068,8 @@ __all__ = [
     "SkeletonError",
     "SkeletonReport",
     "TrustedDeclaration",
+    "article_statement",
+    "check_statement_hashes",
     "extract_graph_skeletons",
     "extract_skeletons",
     "format_report",
