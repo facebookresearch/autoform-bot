@@ -123,7 +123,8 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     project_page = (out / "dependencies.md").read_text(encoding="utf-8")
     assert "graph_view: project" in project_page
     assert 'data-graph-src="dependencies.json"' in project_page
-    assert 'data-search-src="dependencies/index.json"' in project_page
+    assert 'data-catalog-src="dependencies/index.json"' in project_page
+    assert "data-search-src" not in project_page  # Material reserves and strips this prefix.
     assert "Explore all nodes" not in project_page
     project_payload = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))
     assert project_payload["title"] == "Dependency explorer"
