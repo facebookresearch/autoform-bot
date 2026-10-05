@@ -17,7 +17,7 @@ import json
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 _NAMESPACE = re.compile(r"^\s*namespace\s+(.+)$")
@@ -28,6 +28,7 @@ _DECLARATION = re.compile(
     r"(?:(?:private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
     r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom|irreducible_def)\s+(.+)$"
 )
+_ATTRIBUTES = re.compile(r"@\[[^\]]*\]")
 _IGNORED_DIRECTORIES = frozenset({".lake", ".git", "lake-packages", "build"})
 #: Known schemas of the skeleton command's packet and passage manifests.
 PACKET_SCHEMA = "autoform-skeleton-packets/v2"
@@ -50,15 +51,26 @@ class Declaration:
     path: Path
     line: int
     keyword: str
+    #: A private declaration is indexed by the name its source writes, without
+    #: the module-specific prefix Lean gives it.
+    private: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class SourceIndex:
-    """Every declaration the scanner found, keyed by fully qualified name."""
+    """Every declaration the scanner found, keyed by fully qualified name.
+
+    ``declarations`` keeps the first lexical definition of each name.
+    ``duplicates`` lists every definition of a name that resolves to more than
+    one declaration: two public ones, or, with no public one, two private ones.
+    A public name and private ones elsewhere are distinct in Lean, so they are
+    not duplicates.
+    """
 
     root: Path
     declarations: dict[str, Declaration]
     source_digest: str
+    duplicates: dict[str, tuple[Declaration, ...]] = field(default_factory=dict)
 
     def find(self, name: str) -> Declaration | None:
         return self.declarations.get(name)
@@ -67,10 +79,9 @@ class SourceIndex:
 def index_project(root: str | Path) -> SourceIndex:
     """Scan ``*.lean`` beneath *root* and index declarations by full name."""
     root_path = Path(root).expanduser().resolve()
-    declarations: dict[str, Declaration] = {}
     digest = hashlib.sha256()
     if not root_path.is_dir():
-        return SourceIndex(root=root_path, declarations=declarations, source_digest=digest.hexdigest())
+        return SourceIndex(root=root_path, declarations={}, source_digest=digest.hexdigest())
 
     paths: list[Path] = []
     for directory, names, files in os.walk(root_path):
@@ -87,6 +98,7 @@ def index_project(root: str | Path) -> SourceIndex:
         )
         paths.extend(current / name for name in files if name.endswith(".lean"))
 
+    found: dict[str, list[Declaration]] = {}
     for path in sorted(paths):
         try:
             text = path.read_text(encoding="utf-8")
@@ -98,10 +110,21 @@ def index_project(root: str | Path) -> SourceIndex:
         digest.update(text.encode("utf-8"))
         digest.update(b"\0")
         for declaration in _scan(text, relative):
-            # First definition wins, so an earlier file is not masked by a later
-            # one when a name is genuinely duplicated across namespaces.
-            declarations.setdefault(declaration.name, declaration)
-    return SourceIndex(root=root_path, declarations=declarations, source_digest=digest.hexdigest())
+            found.setdefault(declaration.name, []).append(declaration)
+    # First definition wins, so an earlier file is not masked by a later one
+    # when a name is genuinely duplicated across namespaces.
+    declarations = {name: same[0] for name, same in found.items()}
+    duplicates = {name: tuple(same) for name, same in found.items() if _ambiguous(same)}
+    return SourceIndex(
+        root=root_path, declarations=declarations, source_digest=digest.hexdigest(), duplicates=duplicates
+    )
+
+
+def _ambiguous(same: list[Declaration]) -> bool:
+    """Whether a name resolves to several declarations, as ``impact`` resolves it."""
+
+    public = sum(1 for declaration in same if not declaration.private)
+    return public > 1 or (public == 0 and len(same) > 1)
 
 
 def _is_managed_output(path: Path) -> bool:
@@ -155,7 +178,8 @@ def _scan(text: str, relative: Path) -> list[Declaration]:
             if name is None:
                 continue
             qualified = ".".join([*namespaces, name])
-            found.append(Declaration(qualified, relative, number, keyword))
+            modifiers = _ATTRIBUTES.sub(" ", line[: declaration_match.start(1)]).split()
+            found.append(Declaration(qualified, relative, number, keyword, private="private" in modifiers))
     return found
 
 

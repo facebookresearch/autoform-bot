@@ -238,3 +238,33 @@ def test_no_link_without_repository_coordinates(tmp_path: Path) -> None:
     assert linker.url("Outer.alpha") is None
     # The location is still known, so the page can still say where the code is.
     assert linker.location("Outer.alpha") is not None
+
+
+def test_a_name_defined_in_two_files_keeps_the_first_and_records_both(tmp_path: Path) -> None:
+    _index(tmp_path, "namespace Demo\ntheorem main : True := trivial\nend Demo\n", "Demo/Main.lean")
+    index = _index(tmp_path, "\ntheorem Demo.main : True := trivial\n", "Drafts/Main.lean")
+
+    assert index.find("Demo.main").path == Path("Demo/Main.lean")
+    assert [(item.path, item.line) for item in index.duplicates["Demo.main"]] == [
+        (Path("Demo/Main.lean"), 2),
+        (Path("Drafts/Main.lean"), 2),
+    ]
+
+
+def test_the_same_short_name_in_two_namespaces_is_not_a_duplicate(tmp_path: Path) -> None:
+    index = _index(tmp_path, "namespace A\ndef x : Nat := 0\nend A\nnamespace B\ndef x : Nat := 1\nend B\n")
+
+    assert set(index.declarations) == {"A.x", "B.x"}
+    assert index.duplicates == {}
+
+
+def test_private_names_collide_only_when_no_public_one_wins(tmp_path: Path) -> None:
+    """Lean resolves a name to its public declaration; private ones elsewhere are distinct."""
+
+    _index(tmp_path, "@[simp] private theorem helper : True := trivial\n", "A.lean")
+    index = _index(tmp_path, "private theorem helper : True := trivial\n", "B.lean")
+    assert index.find("helper").private
+    assert [item.path for item in index.duplicates["helper"]] == [Path("A.lean"), Path("B.lean")]
+
+    index = _index(tmp_path, "theorem helper : True := trivial\n", "B.lean")
+    assert index.duplicates == {}
