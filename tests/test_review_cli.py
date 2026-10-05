@@ -788,6 +788,24 @@ def test_one_bad_record_stops_the_batch_before_any_card_is_written(
     assert "Review.result: a read-back requires nonempty testimony" in err
 
 
+@pytest.mark.parametrize("article", ["result.md", "other.md"])
+def test_every_article_in_a_batch_is_checked_against_its_prepared_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], article: str
+) -> None:
+    """A statement edited since `review prepare` stops the batch, whichever article it is."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    path = blueprint / "roadmap" / "basics" / article
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("\n\n## Depends on", "\n\nA new claim.\n\n## Depends on"), encoding="utf-8")
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    assert load_readbacks(blueprint) == {}
+    assert "prepared review evidence differs from the current statement" in capsys.readouterr().err
+
+
 def test_an_article_changed_during_extraction_files_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -940,6 +958,32 @@ def test_a_stale_expected_hash_is_refused_before_lean_runs(
     assert f"read-back changed before replacement: expected {stale!r}" in capsys.readouterr().err
 
 
+def test_a_card_filed_while_lean_runs_stops_the_batch_before_any_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The built cards are checked for conflicts again, all of them before the first is written."""
+
+    extraction = _Extraction()
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
+    later = json.loads(manifest.read_text(encoding="utf-8"))["records"][1]
+
+    def another_writer_while_lean_runs(*args: object, **kwargs: object) -> SkeletonReport:
+        monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", extraction)
+        _file_alone(blueprint, bundle, manifest, tmp_path, later, "A different reading.\n")
+        return extraction(*args, **kwargs)
+
+    monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", another_writer_while_lean_runs)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, manifest, tmp_path) == 2
+
+    # The other writer's card is the only one: the batch filed none of its own.
+    assert set(load_readbacks(blueprint)) == {(later["article_id"], later["declaration"])}
+    err = capsys.readouterr().err
+    assert f"{later['declaration']}: read-back already exists with different content" in err
+    assert "were filed before the failure" not in err
+
+
 def test_a_batch_interrupted_while_publishing_says_what_it_filed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1074,6 +1118,8 @@ def test_record_takes_a_manifest_or_one_record_but_not_both(
     common = ["review", "record", str(tmp_path), "--lean-root", str(tmp_path), "--bundle", str(tmp_path / "b.json"), "--model", "m"]
 
     assert main([*common, "--manifest", str(tmp_path / "m.json"), "--article-id", _RESULT_ID]) == 2
+    assert "--manifest replaces" in capsys.readouterr().err
+    assert main([*common, "--manifest", str(tmp_path / "m.json"), "--expected-card-hash", "sha256:" + "0" * 64]) == 2
     assert "--manifest replaces" in capsys.readouterr().err
     assert main([*common, "--article-id", _RESULT_ID]) == 2
     assert "needs --manifest, or all of" in capsys.readouterr().err
