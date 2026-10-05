@@ -812,7 +812,7 @@ def _prepare_destination(destination: Path, *, clean: bool) -> None:
     if not manifest.is_symlink() and manifest.is_file():
         try:
             publication = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
+        except (OSError, RecursionError, ValueError):
             pass
     if (
         manifest.is_symlink()

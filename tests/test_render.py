@@ -20,6 +20,7 @@ from autoform_cli.render import (
     render_site,
 )
 from autoform_cli.status import STATES, derive
+from tests.test_skeleton import _undecodable_json
 
 
 def _project(tmp_path: Path) -> Path:
@@ -1035,6 +1036,20 @@ def test_render_refuses_to_overwrite_an_unowned_directory(tmp_path: Path) -> Non
         render_site(project / "blueprint", output, lean_root=project)
 
     assert sentinel.read_text(encoding="utf-8") == "user data\n"
+
+
+@pytest.mark.parametrize("damage", ["nested", "a-number-too-long"])
+def test_render_refuses_a_directory_whose_manifest_cannot_be_decoded(tmp_path: Path, damage: str) -> None:
+    text = _undecodable_json(damage)
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / PUBLICATION_MANIFEST).write_text(text, encoding="utf-8")
+
+    with pytest.raises(PublicationError, match="non-Autoform output directory"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert (output / PUBLICATION_MANIFEST).read_text(encoding="utf-8") == text
 
 
 def test_render_refuses_an_output_symlink(tmp_path: Path) -> None:
