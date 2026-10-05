@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import sys
 import threading
 from collections.abc import Callable
@@ -1534,6 +1535,23 @@ def _link_to_a_device(article: Path) -> None:
     article.symlink_to("/dev/null")
 
 
+def _replace_with_a_socket(article: Path) -> None:
+    article.unlink()
+    # Bound by a relative name: a socket's path may be only about 100 bytes long.
+    cwd = os.getcwd()
+    os.chdir(article.parent)
+    try:
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(article.name)
+    finally:
+        os.chdir(cwd)
+
+
+def _link_to_itself(article: Path) -> None:
+    article.unlink()
+    article.symlink_to(article.name)
+
+
 def _make_unreadable(article: Path) -> None:
     article.chmod(0)
 
@@ -1553,6 +1571,12 @@ _GONE = "so its card was not filed; restore the article, or drop its records, an
             marks=pytest.mark.skipif(not os.path.exists("/dev/null"), reason="needs /dev/null"),
         ),
         pytest.param(
+            _replace_with_a_socket,
+            f"is no longer a regular file, {_GONE}",
+            marks=pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="needs Unix sockets"),
+        ),
+        (_link_to_itself, f"is no longer a regular file, {_GONE}"),
+        pytest.param(
             _make_unreadable,
             "cannot be read (Permission denied), so its card was not filed; rerun the record once it can be read",
             marks=pytest.mark.skipif(
@@ -1566,6 +1590,8 @@ _GONE = "so its card was not filed; restore the article, or drop its records, an
         "chapter-replaced-by-a-file",
         "replaced-by-a-directory",
         "linked-to-a-device",
+        "replaced-by-a-socket",
+        "a-link-to-itself",
         "made-unreadable",
     ],
 )

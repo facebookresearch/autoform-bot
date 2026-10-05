@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -1517,6 +1518,10 @@ def _refuse_changed_article(card: PreparedReadback, path: str, digest: str) -> N
     # Opened without waiting for a writer, so a FIFO put at the path, or a link
     # to one, is refused unread instead of holding the batch.
     flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+    not_regular = (
+        "is no longer a regular file, so its card was not filed; restore the article, or drop its records, "
+        "and rerun the record"
+    )
     try:
         descriptor = os.open(path, flags)
         try:
@@ -1527,10 +1532,7 @@ def _refuse_changed_article(card: PreparedReadback, path: str, digest: str) -> N
         finally:
             os.close(descriptor)
         if not regular:
-            what = (
-                "is no longer a regular file, so its card was not filed; restore the article, or drop its records, "
-                "and rerun the record"
-            )
+            what = not_regular
         elif content.hexdigest() == digest:
             return
         else:
@@ -1546,6 +1548,11 @@ def _refuse_changed_article(card: PreparedReadback, path: str, digest: str) -> N
         what = (
             f"cannot be read ({exc.strerror or exc}), so its card was not filed; rerun the record once it can be read"
         )
+        # A socket cannot be opened, and a link that loops, or a chain of links
+        # too long to follow, cannot be followed: none of them reads as a
+        # regular file, however often the record is rerun.
+        if exc.errno == errno.ELOOP or (os.path.exists(path) and not os.path.isfile(path)):
+            what = not_regular
     raise ReviewError(
         [ReviewFinding(card.article_id, "review-snapshot-changed", f"{card.declaration}: article {path} {what}")]
     )
