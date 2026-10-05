@@ -552,15 +552,20 @@ def test_document_close_budget_exhaustion_poisons_the_session(tmp_path, monkeypa
     source = tmp_path / "Test.lean"
     source.write_text("#check Nat\n")
     session = lsp.LeanLspSession(lsp.LspConfig(timeout=60))
-    clock = iter([0.0, 0.0, 0.0, 0.0, 60.0])
+    clock = {"now": 0.0}
     notifications = []
-    monkeypatch.setattr(lsp.time, "monotonic", lambda: next(clock, 60.0))
+    monkeypatch.setattr(lsp.time, "monotonic", lambda: clock["now"])
     monkeypatch.setattr(
         session,
         "_send_notification",
         lambda method, params, **kwargs: notifications.append(method),
     )
-    monkeypatch.setattr(session, "_collect_diagnostics", lambda uri, timeout: [])
+
+    def finish_at_deadline(uri, timeout):
+        clock["now"] = 60.0
+        return []
+
+    monkeypatch.setattr(session, "_collect_diagnostics", finish_at_deadline)
 
     with pytest.raises(TimeoutError, match="before closing the document"):
         session.get_diagnostics(str(source))
