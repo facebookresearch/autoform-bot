@@ -95,18 +95,21 @@ instead of fixing them.
 
 If `<PROJECT>/blueprint/.autoform-review` exists, project CI also runs the
 statement-review gate: `autoform review check` fails on a formalized statement
-until Human Review has filed its read-backs and a person has approved it in
-`review_approved`. Never write either yourself. Add `--review` to the audit,
-report its findings on the claimed article, and hand each newly formalized
-statement to Human Review; until that review lands, the gate stays red wherever
-the result is integrated.
+until it has current read-backs and `review_approved` holds its current review
+hash. Human Review files the read-backs and copies that hash only when a person
+approves; never write either yourself. Hand each newly formalized statement to
+Human Review; until that review lands, the gate stays red wherever the result
+is integrated.
 
 Commit the verified result in its worktree, renew the claim, and rebase onto or
 merge the current shared branch. On the result, run the default `lake build`,
 confirm that dependency readiness is unchanged, and confirm that the claimed
 article differs from its starting `article_revision` only by this worker's
 edits; if integration changed the candidate, repeat the review, check, and
-audit. Keep the article claim until every checkout on the claim board can see
+audit. With the review marker, then run the audit with `--review`, which needs
+that build because it extracts every Lean-mapped article, and report its
+findings on the claimed article.
+Keep the article claim until every checkout on the claim board can see
 the verified commit: on the shared branch and, for an `origin` board, pushed,
 since other clones read their frontier from the remote. Without authority to
 update or push that branch, or when integration fails, keep the claim and report
