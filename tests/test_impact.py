@@ -1168,6 +1168,8 @@ theorem seedEq : seed = 2 := rfl
 
 imp_alias seedAlias := seedEq
 
+theorem seedAgain : seed = 1 + 1 := seedEq
+
 theorem usesAlias : seed = 2 ∧ True := ⟨seedAlias, trivial⟩
 
 @[simp, deprecated seedEq (since := "2026-10-05")]
@@ -1303,6 +1305,7 @@ def test_the_probe_reads_a_built_project(tmp_path: Path, monkeypatch, capsys) ->
     seed = compute_impact(records, more, more[0], ["Imp.seed"], source_revision="rev")
     assert _ids(seed.statement_impacted) == ["chapter/priv", "chapter/seed-eq", "chapter/uses-alias"]
     assert [(helper.name, helper.owner) for helper in seed.helpers] == [
+        ("Imp.seedAgain", None),
         ("Imp.seedAlias", None),
         (f"{priv}.aux", "chapter/priv"),
     ]
@@ -1310,10 +1313,16 @@ def test_the_probe_reads_a_built_project(tmp_path: Path, monkeypatch, capsys) ->
     # The alias's type copies seedEq's without mentioning it.
     assert records["Imp.seedAlias"].alias_of == "Imp.seedEq"
     assert "Imp.seedEq" not in records["Imp.seedAlias"].type_uses
+    # A theorem whose type only unfolds to its target's states its own type.
+    assert records["Imp.seedAgain"].alias_of is None
+    assert records["Imp.seedAgain"].value_uses == ("Imp.seedEq",)
     seed_eq = compute_impact(records, more, more[2], ["Imp.seedEq"], source_revision="rev")
     assert seed_eq.statement_impacted == ()
     assert _ids(seed_eq.proof_impacted) == ["chapter/uses-alias"]
-    assert [(helper.name, helper.impact) for helper in seed_eq.helpers] == [("Imp.seedAlias", "statement")]
+    assert [(helper.name, helper.impact) for helper in seed_eq.helpers] == [
+        ("Imp.seedAgain", "proof"),
+        ("Imp.seedAlias", "statement"),
+    ]
     # A structure's generated companions belong to its own article.
     box = compute_impact(records, more, more[4], ["Imp.Box"], source_revision="rev")
     assert box.contained

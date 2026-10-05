@@ -56,8 +56,8 @@ class ConstantRecord:
     Lean generates (``_proof_1``, ``match_1``, ``_simp_1``) are.
     ``user_name`` is the user-facing name of a private constant, which is how
     articles and ``--declaration`` name it, and ``None`` for any other.
-    ``alias_of`` is the local constant a theorem's value is exactly, as for
-    Batteries' ``alias``, whose type is copied from that constant's.
+    ``alias_of`` is the local constant a theorem's value is exactly when its
+    type is exactly that constant's too, as Batteries' ``alias`` writes.
     """
 
     name: str
@@ -447,9 +447,9 @@ def compute_impact(
     directly or through internal-detail constants, such as the ``_simp_1``
     companion ``simp`` uses or the ``_proof_1`` a definition's nested proof
     becomes. Definitions belong in P too: their nested proofs can stop
-    elaborating although their meaning is unchanged. A theorem whose value is
-    exactly another constant, as Batteries' ``alias`` makes, has that
-    constant's statement, so it joins M with it.
+    elaborating although their meaning is unchanged. A theorem whose value and
+    type are exactly another constant and its type, as Batteries' ``alias``
+    writes, has that constant's statement, so it joins M with it.
     """
 
     resolve = _resolver(records)

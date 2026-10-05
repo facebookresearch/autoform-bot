@@ -59,9 +59,11 @@ statements they use change; an inductive's constructors stand in for a value.
 wrote is not an internal detail, while the companions Lean generates for it
 (`_proof_1`, `match_1`, `_simp_1`) still are. `user_name` is that name for a
 private constant, which is how articles and `--declaration` name it.
-`alias_of` is the local constant a theorem's value is exactly, as for
-Batteries' `alias`: such a theorem copies its target's type, so its statement
-changes with the target's although its type never mentions it. -/
+`alias_of` is the local constant a theorem's value is exactly when the
+theorem's type is also exactly that constant's, as Batteries' `alias` writes:
+its statement then changes with the target's although its type never mentions
+it. A theorem whose type differs from its target's, even up to definitional
+unfolding, keeps its own statement. -/
 def record (env : Environment) (isLocal : Name → Bool) (c : Name) (info : ConstantInfo)
     (module : Name) : Json :=
   let value := info.value? (allowOpaque := true)
@@ -73,8 +75,11 @@ def record (env : Environment) (isLocal : Name → Bool) (c : Name) (info : Cons
     | .thmInfo _ | .defnInfo _ | .opaqueInfo _ => value.isNone
     | _                                        => false
   let aliasOf := match info, value.map (·.consumeMData) with
-    | .thmInfo _, some (.const target _) => if isLocal target then some target else none
-    | _, _                               => none
+    | .thmInfo _, some (.const target levels) =>
+      let sameType := (env.find? target).any
+        (fun (targetInfo : ConstantInfo) => info.type == targetInfo.instantiateTypeLevelParams levels)
+      if isLocal target && sameType then some target else none
+    | _, _ => none
   let usesDeprecated := (typeConstants ++ valueConstants).foldl
     (fun acc d => if Linter.isDeprecated env d && !acc.contains d then acc.push d else acc) #[]
   Json.mkObj [
