@@ -1049,6 +1049,21 @@ class LeanRepl:
                         self.process = error.process
                         self._process_group_id = error.process.pid
                         self._retire_pending = True
+                        original_error = error.original_error
+                        cleanup_error = error.cleanup_error
+                        if original_error is not None and not isinstance(
+                            original_error, Exception
+                        ):
+                            add_note = getattr(original_error, "add_note", None)
+                            if add_note is not None:
+                                add_note(str(error))
+                            raise original_error.with_traceback(
+                                original_error.__traceback__
+                            )
+                        if not isinstance(cleanup_error, Exception):
+                            raise cleanup_error.with_traceback(
+                                cleanup_error.__traceback__
+                            )
                         raise
                     except ValueError as error:
                         result = {"repl_error": f"Rejected Lean header: {error}"}
@@ -1061,7 +1076,13 @@ class LeanRepl:
                     and self.config.validate_imports
                     and self._allowed_import_roots is not None
                 ):
-                    disallowed = submitted_roots - self._allowed_import_roots
+                    warmup_roots = {
+                        module.split(".")[0]
+                        for module in self.config.warmup_imports
+                    }
+                    disallowed = (
+                        submitted_roots | warmup_roots
+                    ) - self._allowed_import_roots
                     if disallowed:
                         result = {
                             "repl_error": (

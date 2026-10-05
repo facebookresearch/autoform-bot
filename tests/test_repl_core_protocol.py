@@ -994,6 +994,25 @@ def test_disposable_call_checks_submitted_header_before_warmup_prefix(monkeypatc
     assert checked == ["/- note -/ import Unsafe\n#check Nat"]
 
 
+def test_disposable_call_rejects_disallowed_warmup_import(monkeypatch):
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(
+            allowed_imports=frozenset({"Mathlib"}),
+            warmup_imports=frozenset({"Unsafe.Prelude"}),
+            header_deps_command=_fake_header_deps(_deps_json()),
+        )
+    )
+    monkeypatch.setattr(
+        repl,
+        "start",
+        lambda *args, **kwargs: pytest.fail("disallowed warmup must not start Lean"),
+    )
+
+    response = repl.run_disposable("#check Nat")
+
+    assert "Disallowed imports: Unsafe" in response["repl_error"]
+
+
 def test_header_check_kills_a_command_that_outlives_the_deadline():
     started = time.monotonic()
 
@@ -1125,8 +1144,6 @@ def test_disposable_call_preserves_header_request_cancellation(monkeypatch):
         ]
     assert cleanup_calls == 2
     assert repl.is_clean()
-
-
 def test_response_timeout_after_full_write_is_not_retried(monkeypatch):
     repl = repl_core.LeanRepl(
         repl_core.LeanReplConfig(
