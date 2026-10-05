@@ -252,6 +252,10 @@ def _file(tmp_path: Path, testimony: str) -> Path:
         ("The claim\ufff9 holds.", "U+FFF9 INTERLINEAR ANNOTATION ANCHOR"),
         ("For all $x" + "\u2003" * 2000 + "y$, P.", "U+2003 EM SPACE"),
         ("P" + "\u00a0" * 400 + "and Q.", "U+00A0 NO-BREAK SPACE"),
+        # The renderer drops these at the start of a paragraph, so they are
+        # found only in the source.
+        ("\u00a0The claim holds.", "U+00A0 NO-BREAK SPACE"),
+        ("\u3000The claim holds.", "U+3000 IDEOGRAPHIC SPACE"),
         ("The bound is \u05d0 > x.", "U+05D0 HEBREW LETTER ALEF"),
         ("The bound is \u0627 > x.", "U+0627 ARABIC LETTER ALEF"),
         ("The sum \u0661 + \u0662 is three.", "U+0661 ARABIC-INDIC DIGIT ONE"),
@@ -1199,6 +1203,13 @@ def test_brackets_over_the_limit_are_refused_with_a_rewrite_that_is_accepted() -
         ("a" * 32768, "a" * 32769, "testimony is 32769 bytes, over the 32768-byte limit"),
         ("a\n" * 499 + "a", "a\n" * 500 + "a", "testimony has 501 lines, over the 500-line limit"),
         ("$a$ " * 512, "$a$ " * 512 + "\\$", "testimony has 1025 math delimiters, over the limit of 1024"),
+        # \( and \) count as math delimiters too, even in a code block, where
+        # nothing else refuses them.
+        (
+            "```\n" + "\\(x\\) " * 512 + "\n```",
+            "```\n" + "\\(x\\) " * 512 + "\\(\n```",
+            "testimony has 1025 math delimiters, over the limit of 1024",
+        ),
         ("`a` " * 256, "`a` " * 256 + "\\`", "testimony has 513 backticks, over the limit of 512"),
         ("`" * 16 + "a" + "`" * 16, "`" * 17 + "a" + "`" * 17, "testimony has a run of 17 backticks, over the limit of 16"),
         (
@@ -1208,6 +1219,8 @@ def test_brackets_over_the_limit_are_refused_with_a_rewrite_that_is_accepted() -
         ),
         ("> " * 32 + "a", "> " * 32 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
         (">\t" * 16 + "a", ">\t" * 16 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
+        ("- " * 32 + "a", "- " * 32 + " a", "testimony nests blocks 65 columns deep, over the limit of 64"),
+        ("1. " * 21 + " a", "1. " * 21 + "  a", "testimony nests blocks 65 columns deep, over the limit of 64"),
         (" _a" * 256, " _a" * 257, "testimony has 257 underscores that start a word, over the limit of 256"),
         ("*a* " * 512, "*a* " * 512 + "\\*", "testimony has 1025 asterisks, over the limit of 1024"),
         ("a" + "\\." * 2048, "a" + "\\." * 2049, "testimony has 2049 backslashes, over the limit of 2048"),
