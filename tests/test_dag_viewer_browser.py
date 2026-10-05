@@ -179,7 +179,7 @@ def test_plain_wheel_scrolls_the_page_instead_of_being_trapped(webkit_browser: o
     page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
     page.mouse.wheel(0, 420)
 
-    page.wait_for_function("before => window.scrollY > before", before)
+    page.wait_for_function("before => window.scrollY > before", arg=before)
     assert page.evaluate("window.scrollY") > before
     page.close()
 
