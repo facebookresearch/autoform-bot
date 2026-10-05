@@ -100,21 +100,31 @@ class Node:
         """Whether this article names a concrete Lean declaration."""
         return self.declaration is not None
 
-    def __getstate__(self) -> list[object]:
-        """Keep the public slotted record append-compatible for old pickles."""
 
-        return [getattr(self, item.name) for item in fields(self)]
 
-    def __setstate__(self, state: list[object]) -> None:
-        node_fields = fields(self)
-        if len(state) > len(node_fields):
-            raise ValueError("Node pickle has unsupported fields")
-        for item, value in zip(node_fields, state, strict=False):
-            object.__setattr__(self, item.name, value)
-        for item in node_fields[len(state) :]:
-            if item.default is MISSING:
-                raise ValueError(f"Node pickle is missing required field {item.name!r}")
-            object.__setattr__(self, item.name, item.default)
+def _node_getstate(node: Node) -> list[object]:
+    """Keep the public slotted record append-compatible for old pickles."""
+
+    return [getattr(node, item.name) for item in fields(node)]
+
+
+def _node_setstate(node: Node, state: list[object]) -> None:
+    node_fields = fields(node)
+    if len(state) > len(node_fields):
+        raise ValueError("Node pickle has unsupported fields")
+    for item, value in zip(node_fields, state, strict=False):
+        object.__setattr__(node, item.name, value)
+    for item in node_fields[len(state) :]:
+        if item.default is MISSING:
+            raise ValueError(f"Node pickle is missing required field {item.name!r}")
+        object.__setattr__(node, item.name, item.default)
+
+
+# Python 3.10's frozen+slots dataclass transformation overwrites methods defined
+# in the class body. Assign after decoration so every supported Python uses the
+# same append-compatible state contract.
+Node.__getstate__ = _node_getstate  # type: ignore[method-assign]
+Node.__setstate__ = _node_setstate  # type: ignore[method-assign]
 
 
 @dataclass(frozen=True, slots=True)
