@@ -315,6 +315,30 @@ def _assert_load_rejects(path: Path, payload: dict[str, object], match: str | No
         load_skeleton_report(path)
 
 
+def _undecodable_json(damage: str) -> str:
+    """JSON that json.loads refuses with a RecursionError or a plain ValueError,
+    not a JSONDecodeError.
+
+    A hundred thousand nested arrays are deeper than the decoder goes on Python
+    3.10 to 3.13; from 3.14 it goes as deep as the stack allows, about 37,000
+    levels in 8 MiB, and a stack that holds all of them skips. An integer of
+    more digits than sys.get_int_max_str_digits() is refused unless there is no
+    limit (before 3.10.7, or with it set to 0), which skips too.
+    """
+
+    if damage == "nested":
+        text = '{"schema": ' + "[" * 100_000 + "]" * 100_000 + "}"
+        # Decoded here, nearer the stack's base than the loader decodes it.
+        try:
+            json.loads(text)
+        except RecursionError:
+            return text
+        pytest.skip("this stack holds a hundred thousand nested arrays")
+    if not getattr(sys, "get_int_max_str_digits", lambda: 0)():
+        pytest.skip("this interpreter converts an integer of any length")
+    return '{"schema": 1' + "0" * sys.get_int_max_str_digits() + "}"
+
+
 # --------------------------------------------------------------------------- #
 # The probe program
 # --------------------------------------------------------------------------- #
@@ -2547,6 +2571,22 @@ def test_report_loader_rejects_a_v4_report_with_a_clear_message(tmp_path: Path) 
     assert "is an autoform-skeleton/v4 report; this version reads only autoform-skeleton/v5 reports" in str(
         refused.value
     )
+
+
+@pytest.mark.parametrize("damage", ["nested", "a-number-too-long"])
+def test_a_report_or_packet_manifest_that_cannot_be_decoded_is_refused(tmp_path: Path, damage: str) -> None:
+    text = _undecodable_json(damage)
+    path = tmp_path / "skeleton.json"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(SkeletonError, match=f"^cannot read skeleton report {re.escape(str(path))}: "):
+        load_skeleton_report(path)
+
+    packets = tmp_path / "packets"
+    packets.mkdir()
+    (packets / PACKET_MANIFEST).write_text(text, encoding="utf-8")
+    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform packet output"):
+        write_packets(_fake_report(tmp_path), packets)
+    assert (packets / PACKET_MANIFEST).read_text(encoding="utf-8") == text
 
 
 def test_report_loader_rejects_scope_tampering(tmp_path: Path) -> None:

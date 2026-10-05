@@ -570,9 +570,12 @@ def _share(table: dict[str, object], name: str, value: object, *, table_name: st
 def load_skeleton_report(path: str | Path) -> SkeletonReport:
     """Read a report written by :meth:`SkeletonReport.to_json` back into memory."""
 
+    # ValueError covers malformed JSON, bytes that are not UTF-8, and a number
+    # too long to convert; RecursionError, arrays or objects nested deeper than
+    # the decoder recurses.
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, RecursionError, ValueError) as exc:
         raise SkeletonError([f"cannot read skeleton report {path}: {exc}"]) from exc
     schema = data.get("schema") if isinstance(data, dict) else None
     if isinstance(schema, str) and schema.startswith("autoform-skeleton/") and schema != SKELETON_SCHEMA:
@@ -2921,7 +2924,7 @@ def _validate_managed_output(
             if manifest.is_file() and not manifest.is_symlink()
             else None
         )
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except (OSError, RecursionError, ValueError):
         payload = None
     if not (
         isinstance(payload, dict)
