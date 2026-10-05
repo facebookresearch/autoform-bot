@@ -749,8 +749,8 @@ results that stay incomplete until every open statement they rest on is proved.
 A theorem that loses `statement` while its `lean:` still names a declaration,
 as a retraction or a revision leaves it, stays an open statement: that Lean,
 `sorry` or not, still compiles into whatever uses it. The audit keeps accepting
-its `sorry`, and what rests on it stays conditional, until its statement is
-recorded again or its `lean:` is removed. A definition is never open: its body
+its `sorry`, and what rests on it stays conditional, until its proof is
+recorded or its `lean:` is removed. A definition is never open: its body
 is its proof, CI rejects a `sorry` in it, and its statement phase waits until
 its proof prerequisites are stated. Turn the policy back off only once no open
 statement remains, since the strict audit rejects every `sorry` and strict
@@ -785,9 +785,9 @@ that depends on `sorry`, an article declaration that reaches an open statement
 its Markdown dependencies do not reach (so a fully proved article, which
 assumes nothing, may reach none), a `lean:` name missing from the build,
 and an open statement that its article records as proved. Each article
-declaration gets at most one log line, with `NAME` the declaration and `ID` the
-article's node ID, and one with an error gets none of the last three, which
-read as passing:
+declaration gets at most one of these status lines, with `NAME` the
+declaration and `ID` the article's node ID, and one with an error gets none
+of the last three, which read as passing:
 
 ```text
 open statement (proof is sorry): NAME [ID]
