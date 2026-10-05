@@ -483,6 +483,7 @@ def _article(
     *,
     is_open: bool = False,
     allowed: list[str] | None = None,
+    state: str | None = None,
 ) -> dict[str, object]:
     return {
         "allowed_open_declarations": allowed or [],
@@ -491,7 +492,7 @@ def _article(
         "declarations": declarations,
         "id": article_id,
         "open": is_open,
-        "state": "stated" if is_open else "proved",
+        "state": state or ("stated" if is_open else "proved"),
     }
 
 
@@ -665,6 +666,8 @@ theorem reduction : 1 + 1 = 2 ∧ True := ⟨open_stmt, trivial⟩
 
 theorem clean : True := Dep.dep_clean
 
+theorem done_stmt : True := trivial
+
 end Fixture
 """
 
@@ -804,7 +807,8 @@ def test_open_probe_accepts_declared_open_statements_and_reductions(
             _OPEN_ARTICLE,
             _article("reduction", ["Fixture.reduction"], allowed=["Fixture.open_stmt"]),
             _article('clean "odd" \\ id', ["Fixture.clean"]),
-            _article("dependency", ["Dep.dep_clean"]),
+            _article("mathlib", ["Dep.dep_clean"], state="mathlib"),
+            _article("done", ["Fixture.done_stmt"], is_open=True, allowed=["Fixture.done_stmt"]),
         ),
     )
 
@@ -813,9 +817,13 @@ def test_open_probe_accepts_declared_open_statements_and_reductions(
     assert "open statement (proof is sorry): Fixture.open_stmt [open]" in output
     assert "conditional: Fixture.reduction [reduction] rests on open statement(s) Fixture.open_stmt" in output
     assert 'sorry-free: Fixture.clean [clean "odd" \\ id]' in output
-    assert "sorry-free: Dep.dep_clean [dependency]" in output
+    assert "sorry-free: Dep.dep_clean [mathlib]" in output
+    assert (
+        "open statement (proof is sorry-free; restate it if retracted, then record proof: formalized): "
+        "Fixture.done_stmt [done]"
+    ) in output
     assert "kernel trust clean except declared open statements (" in output
-    assert "; 1 open statement(s), 1 conditional declaration(s))" in output
+    assert "; 2 open statement(s), 1 conditional declaration(s))" in output
     assert "kernel trust clean (" not in output
 
 
@@ -830,6 +838,11 @@ def test_open_probe_accepts_declared_open_statements_and_reductions(
         (
             [_article("open", ["Fixture.open_stmt"])],
             "Fixture.open_stmt contains sorry but is not an open statement",
+        ),
+        (
+            [_OPEN_ARTICLE, _article("mathlib", ["Fixture.reduction"], state="mathlib")],
+            "Fixture.reduction [mathlib] rests on open statement(s) Fixture.open_stmt, "
+            "which its article's Markdown dependencies do not reach",
         ),
     ],
 )
