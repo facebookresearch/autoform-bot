@@ -135,7 +135,26 @@ def test_summary_counts_in_legend_order(tmp_path: Path) -> None:
     ]
 
 
-@pytest.mark.parametrize("declaration", ["def", "structure", "instance", "class", "abbrev"])
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "def",
+        "structure",
+        "instance",
+        "class",
+        "abbrev",
+        "opaque",
+        "irreducible_def",
+        "noncomputable def",
+        "private noncomputable def",
+        "Noncomputable Instance",
+        "protected def",
+        "partial def",
+        "unsafe def",
+        "local instance",
+        "scoped instance",
+    ],
+)
 def test_every_definition_keyword_skips_the_proof_obligation(
     tmp_path: Path, declaration: str
 ) -> None:
@@ -143,3 +162,13 @@ def test_every_definition_keyword_skips_the_proof_obligation(
     _node(blueprint, "d.md", declaration=declaration, statement="formalized")
 
     assert derive(load_graph(blueprint))["d"].proved
+
+
+@pytest.mark.parametrize("declaration", ["axiom", "noncomputable", "private theorem", "def foo"])
+def test_assumptions_and_propositions_keep_the_proof_obligation(
+    tmp_path: Path, declaration: str
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "d.md", declaration=declaration, statement="formalized")
+
+    assert not derive(load_graph(blueprint))["d"].proved

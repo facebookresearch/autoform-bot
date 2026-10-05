@@ -472,6 +472,113 @@ def test_snapshot_retries_a_root_replaced_while_it_is_bound(
     assert snapshot.index.find("canonical") is not None
 
 
+@pytest.mark.parametrize("git_entry", ["file", "directory"])
+@pytest.mark.parametrize("relative", [".claude/worktrees/worker", "vendor/worker"])
+def test_nested_checkouts_are_not_indexed_as_project_source(
+    tmp_path: Path,
+    git_entry: str,
+    relative: str,
+) -> None:
+    # A Git worktree or submodule has a .git file; a nested clone has a directory.
+    (tmp_path / ".git").mkdir()
+    worktree = tmp_path / relative
+    (worktree / "Project").mkdir(parents=True)
+    marker = worktree / ".git"
+    if git_entry == "file":
+        marker.write_text("gitdir: elsewhere\n", encoding="utf-8")
+    else:
+        marker.mkdir()
+    (worktree / "Project/Basic.lean").write_text(
+        "def toplevel : Nat := 3\ndef workerOnly : Nat := 0\n", encoding="utf-8"
+    )
+    for number in range(32):
+        (worktree / f"Project/Nested{number}.lean").write_text(
+            f"def nestedWorker{number} : Nat := {number}\n",
+            encoding="utf-8",
+        )
+
+    _index(tmp_path)
+    snapshot = snapshot_project_sources(
+        tmp_path,
+        limits=TreeCaptureLimits(max_entries=12),
+    )
+
+    assert snapshot.index.find("toplevel").path == Path("Project/Basic.lean")
+    assert snapshot.index.find("workerOnly") is None
+    assert snapshot.index.find("nestedWorker0") is None
+
+    # Churn below the nested checkout is outside this project's evidence
+    # generation, just as it was outside the old pathname scan.
+    (worktree / "Project/Nested0.lean").write_text(
+        "def nestedWorker0 : Nat := 999\n",
+        encoding="utf-8",
+    )
+    if git_entry == "file":
+        marker.write_text("gitdir: moved-elsewhere\n", encoding="utf-8")
+    else:
+        (marker / "config").write_text("[core]\n", encoding="utf-8")
+    after = snapshot_project_sources(
+        tmp_path,
+        limits=TreeCaptureLimits(max_entries=12),
+    )
+    assert after.revision == snapshot.revision
+    assert after.generation_revision == snapshot.generation_revision
+
+
+@pytest.mark.parametrize("replacement_kind", ["file", "directory"])
+def test_nested_checkout_marker_replacement_retries_one_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement_kind: str,
+) -> None:
+    _index(tmp_path)
+    worker = tmp_path / "vendor/worker"
+    (worker / "Project").mkdir(parents=True)
+    marker = worker / ".git"
+    if replacement_kind == "file":
+        marker.mkdir()
+    else:
+        marker.write_text("gitdir: before\n", encoding="utf-8")
+    (worker / "Project/Worker.lean").write_text(
+        "def nestedWorker : Nat := 0\n",
+        encoding="utf-8",
+    )
+
+    changed = False
+    attempts = 0
+    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
+    original_bind = lean_module.bind_project_sources
+
+    def replace_marker(event: str, relative: str) -> None:
+        nonlocal changed
+        original_checkpoint(event, relative)
+        if event != "before-final-verification" or changed:
+            return
+        changed = True
+        if replacement_kind == "file":
+            marker.rmdir()
+            marker.write_text("gitdir: after\n", encoding="utf-8")
+        else:
+            marker.unlink()
+            marker.mkdir()
+
+    def counted_bind(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        return original_bind(*args, **kwargs)
+
+    monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", replace_marker)
+    monkeypatch.setattr(lean_module, "bind_project_sources", counted_bind)
+    monkeypatch.setattr(lean_module, "_SNAPSHOT_RETRY_DELAY_SECONDS", 0)
+
+    snapshot = snapshot_project_sources(tmp_path)
+
+    assert changed
+    assert attempts == 2
+    assert snapshot.index.find("toplevel") is not None
+    assert snapshot.index.find("nestedWorker") is None
+
+
 @pytest.mark.parametrize(
     "transient_errno",
     [
@@ -2195,6 +2302,12 @@ def test_oversized_managed_manifest_leaves_its_directory_indexed_at_its_read_bou
 
     assert observed_lengths == [65]
     assert index.find("oversizedPacket") is not None
+
+
+def test_irreducible_definitions_are_indexed(tmp_path: Path) -> None:
+    index = _index(tmp_path, "namespace A\nirreducible_def b : Nat := 1\nend A\n")
+
+    assert index.find("A.b").keyword == "irreducible_def"
 
 
 def test_anonymous_instances_are_not_mistaken_for_names(tmp_path: Path) -> None:

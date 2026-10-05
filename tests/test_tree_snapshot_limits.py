@@ -13,6 +13,7 @@ from autoform_cli import _directory_binding as directory_binding_module
 from autoform_cli import _tree_snapshot as tree_snapshot_module
 from autoform_cli._tree_snapshot import (
     BoundDirectoryTree,
+    OpaqueDirectoryMarker,
     TreeCaptureLimitError,
     TreeCaptureLimits,
     TreeSelection,
@@ -50,6 +51,56 @@ def _all_entries(limits: TreeCaptureLimits) -> TreeSelection:
         descend=lambda _path: True,
         limits=limits,
     )
+
+
+@pytest.mark.parametrize("portable", [False, True])
+@pytest.mark.parametrize("marker_kind", ["file", "directory"])
+def test_presence_marker_makes_a_nested_directory_opaque(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    portable: bool,
+    marker_kind: str,
+) -> None:
+    root = tmp_path / "tree"
+    worker = root / "worker"
+    payload = worker / "payload"
+    payload.mkdir(parents=True)
+    (root / "kept").write_bytes(b"kept\n")
+    (payload / "hidden").write_text("before\n", encoding="utf-8")
+    marker = worker / ".git"
+    if marker_kind == "file":
+        marker.write_text("gitdir: before\n", encoding="utf-8")
+    else:
+        marker.mkdir()
+
+    selection = TreeSelection(
+        include=lambda _path, _mode: True,
+        descend=lambda _path: True,
+        record_omitted=False,
+        opaque_markers=(
+            OpaqueDirectoryMarker(
+                ".git",
+                0,
+                lambda _data: False,
+                presence_only=True,
+            ),
+        ),
+    )
+    before = _capture(root, selection, portable=portable, monkeypatch=monkeypatch)
+
+    assert before.opaque_directories == ("worker",)
+    assert before.files == (("kept", b"kept\n"),)
+    assert all(not relative.startswith("worker/") for relative, _identity in before.identities)
+
+    (payload / "hidden").write_text("after\n", encoding="utf-8")
+    if marker_kind == "file":
+        marker.write_text("gitdir: after\n", encoding="utf-8")
+    else:
+        (marker / "config").write_text("[core]\n", encoding="utf-8")
+    after = _capture(root, selection, portable=portable, monkeypatch=monkeypatch)
+
+    assert after.revision == before.revision
+    assert after.generation_revision == before.generation_revision
 
 
 @pytest.mark.parametrize(

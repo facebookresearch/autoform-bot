@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  AUTOFORM_SOURCE: "https://github.com/VivienCabannes/autoform-bot.git"
+  AUTOFORM_SOURCE: "https://github.com/facebookresearch/autoform-bot.git"
   AUTOFORM_REF: "e1317a35eee4e737154532d178deff9ece23d050"
 
 concurrency:

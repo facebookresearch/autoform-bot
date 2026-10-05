@@ -32,6 +32,7 @@ Frontmatter records checked facts:
 
 ```markdown
 ---
+article_id: af_5b0e4d3c2a1f09e8d7c6b5a4
 declaration: theorem
 origin: cited
 statement: formalized
@@ -66,7 +67,8 @@ intended Lean artifact, for example `def`, `theorem`, `lemma`, `structure`, or
 `instance`. Container and exposition articles omit it. Autoform records this
 hint but does not constrain the set of Lean declaration commands. Declarations
 that introduce data rather than a proposition carry no separate proof
-obligation.
+obligation; leading modifiers such as `noncomputable` do not change that, and an
+`axiom` does not get this shortcut.
 
 `origin` records provenance for formalizable work: `cited` for a direct source
 target, `bridged` for a result introduced between source targets, and
@@ -87,6 +89,7 @@ An article asserts only facts a human or agent verified:
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
 | `lean: Ns.decl` | Primary declaration, followed by any supporting declarations that discharge the article. |
 | `discussion: 42` | Issue number or URL where the article is being discussed. |
+| `article_id: af_...` | Durable identity, `af_` plus 24 lowercase hex digits; `autoform work` requires it on unfinished formalizable leaves. |
 
 Everything a reader thinks of as progress is *derived* from the DAG on every
 run, so it cannot go stale:
@@ -179,10 +182,11 @@ statement may name a Lean declaration that does not exist yet.
 available port unless `--port` is supplied, and adds a read-only live overlay
 from current author claims. Static content remains the
 same artifact deployed to GitHub Pages; only the loopback server exposes
-`/__autoform/live.json`. The overlay is ephemeral, uses the runtime's temporary
-path-derived node IDs, and is never written into the vault, publication
-manifest, or public site. Re-run render and the MkDocs build to refresh durable
-content; claim badges update while the local server is running.
+`/__autoform/live.json`. The overlay is ephemeral, matches claims taken on
+either an article's path-derived node ID or its `article_id`, reports in that
+JSON the `claim_target` each lease used, and is never written into the vault,
+publication manifest, or public site. Re-run render and the MkDocs build to
+refresh durable content; claim badges update while the local server is running.
 
 Validate structure, and optionally check that every `lean:` name really exists
 in the project's Lean sources:
@@ -498,6 +502,37 @@ This is failure atomicity, not simultaneous visibility across paths: each
 rename is atomic, but a reader opening several outputs during publication can
 briefly observe different generations.
 
+Inspect the current Markdown-derived formalization frontier without creating a
+queue or scheduler state:
+
+```bash
+autoform work list . --lean-root .
+autoform work list . --lean-root . --json
+autoform work context chapter/result . --lean-root . --json
+```
+
+`work list` returns only formalizable leaves whose next statement or proof phase
+is unblocked. Project CI rejects `sorry`, so a theorem's statement lands with
+its proof, and an article's statement phase also waits until its `## Proof
+depends on` prerequisites are proved. The derived `can_state` state and the
+site's Next up card do not apply this gate; dispatch from `work list`. `work
+context` accepts the path-derived node ID (see Articles and containment) or an
+assigned `article_id` and reports the exact article, dependencies, source
+targets, Lean targets, blockers, article and graph source revisions, and claim
+target. The article revision hashes that article's bytes alone. A Lean target's
+`source_file` is relative to `--lean-root`, and null without one or when the
+local scan does not find the declaration. The scan skips build output and nested
+checkouts, meaning any subdirectory with a `.git` entry, such as a worker's
+worktree or a submodule. Blockers are unmet dependency IDs or one of
+`roadmap:not-a-formalizable-leaf`, `roadmap:proof-without-statement`,
+`roadmap:missing-article-id`, `roadmap:missing-article-revision`, and
+`roadmap:not-ready`. The claim target prefers durable `article_id` metadata.
+`work list` fails explicitly if an unfinished formalizable leaf lacks one; plan
+the missing IDs with `autoform migrate article-ids` and add them to the
+frontmatter. `work context` may still select that article by its path ID to
+report the migration blocker. Both commands are read-only projections of
+Markdown.
+
 Plan durable article identity metadata without changing the blueprint:
 
 ```bash
@@ -508,17 +543,27 @@ autoform migrate article-ids blueprint --check
 `article_id` accepts opaque values in the form `af_` plus 24 lowercase hex
 digits. The planner validates uniqueness, proposes deterministic IDs for
 missing articles, includes exact source hashes, and is strictly read-only.
-Applying plans, moving runtime consumers and claims to durable IDs, and
-preserving publication routes are intentionally deferred to follow-up changes.
+Runtime v2 and `autoform work` expose assigned IDs immediately; applying plans
+and preserving publication routes across path moves remain follow-up changes.
 
 Coordinate temporary cross-machine ownership without modifying the book:
 
 ```bash
 export AUTOFORM_WORKER_ID="agent-name"
-autoform claim acquire "chapter/main-result"
-autoform claim renew "chapter/main-result"
-autoform claim release "chapter/main-result"
+autoform claim acquire af_5b0e4d3c2a1f09e8d7c6b5a4
+autoform claim renew af_5b0e4d3c2a1f09e8d7c6b5a4
+autoform claim release af_5b0e4d3c2a1f09e8d7c6b5a4
 ```
+
+Claim an article by the `claim_target` that `work context` reports. The board
+hashes whatever string it is given, so a claim on an article's path ID and one
+on its `article_id` do not exclude each other. Each concurrent agent needs its
+own worker ID, because a second acquire by the same owner succeeds. Where shell
+state does not persist between commands, as in agent tool calls, pass it with
+`--worker-id` on every command instead of exporting `AUTOFORM_WORKER_ID` once.
+Leases expire after 1500 seconds unless `--ttl` sets another length. Renew well
+within that, and confirm a claim is still held with `renew`, not `acquire`,
+which also succeeds once a lease has expired or been released.
 
 Claims are fail-closed compare-and-swap leases under
 `refs/autoform-claims/` on the Git `origin`; pass `--repo` for another claim
@@ -620,9 +665,9 @@ r = 0.25; its largest node is 1344 lines of Lean behind 66 words of prose and a
 single declaration name. Pre-formalization size estimates were considered and
 rejected on that evidence.
 
-The audit API also accepts an already compiled graph. Future orchestration may
-turn its findings into private work items, but the audit itself never enqueues
-work, stamps articles, or creates another graph artifact.
+The audit API also accepts an already compiled graph. Formalize may use its
+findings while working the Markdown frontier, but the audit itself never
+enqueues work, stamps articles, or creates another graph artifact.
 
 ## Claim contract
 
@@ -670,7 +715,7 @@ doctor, separate from any future Deicyde fleet or machine-capability preflight.
 ## Runtime contract
 
 `autoform_cli.runtime` projects the canonical Markdown graph into the versioned,
-deeply immutable in-memory schema `autoform-runtime/v1`. Its declared authority
+deeply immutable in-memory schema `autoform-runtime/v2`. Its declared authority
 is `markdown-articles`: the adapter copies hierarchy, typed statement and proof
 dependencies, authored assertions, derived progress, provenance, and optional
 local Lean source locations, but it provides no persistence or write API.
@@ -686,12 +731,11 @@ and bytes, excluding timestamps, absolute paths, Git state, and operational
 state. Optional Lean locations come from a local lexical scan and do not by
 themselves establish compilation or proof correctness.
 
-Schema v1 retains the graph's path-derived article ID. That is suitable for
-an ephemeral runtime projection and temporary claims, but it is not yet an
-approved durable identity. Queues, reviews, recovery records, PR markers,
-dashboard routes, providers, and logs must not persist against this ID until a
-path-move identity and migration policy is defined. Those records remain private
-and excluded from runtime snapshots and publication.
+Schema v2 exposes optional durable `article_id` metadata beside the graph's
+path-derived `id`. Temporary claims and local dashboard hooks may fall back to
+the path ID, but durable execution records and routes must require `article_id`
+until the path-move migration is complete. Operational state remains private and
+excluded from runtime snapshots and publication.
 
 ## Publication contract
 

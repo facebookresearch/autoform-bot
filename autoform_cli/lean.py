@@ -43,7 +43,7 @@ _END = re.compile(r"^\s*end\b\s*(\S*)")
 _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
     r"(?:(?:private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
-    r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom)\s+(.+)$"
+    r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom|irreducible_def)\s+(.+)$"
 )
 
 # Lean erases the source-level distinction between theorem, lemma, corollary,
@@ -430,6 +430,15 @@ def _lean_tree_selection(
         record_omitted=False,
         limits=limits,
         opaque_markers=(
+            # A nested Git checkout is another source tree.  Treat the
+            # presence of either a worktree/submodule .git file or a clone's
+            # .git directory as a bounded sentinel before visiting children.
+            OpaqueDirectoryMarker(
+                ".git",
+                0,
+                lambda _data: False,
+                presence_only=True,
+            ),
             OpaqueDirectoryMarker(
                 _MANAGED_OUTPUT_MANIFEST,
                 _MANAGED_OUTPUT_MANIFEST_BYTE_LIMIT,

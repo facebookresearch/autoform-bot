@@ -44,7 +44,8 @@ choosing one would discard accepted work.
 ## Ground and decompose
 
 Inspect the repository and existing vault before writing. Preserve accepted
-material and unrelated changes; send missing infrastructure to Setup.
+material and unrelated changes; send missing infrastructure to Setup. Formalize
+owns Lean execution after this skill produces a validated ready frontier.
 
 Work from exact source passages. Record stable source locations, assumptions,
 and uncovered prerequisites under `blueprint/sources/`; label project-authored
@@ -64,11 +65,24 @@ Write milestone pages under `blueprint/roadmap/` by mathematical significance,
 then one fine article per coherent unit with one unique main result. Ground each
 statement and proof sketch in the source. Put genuine statement prerequisites
 under `## Depends on` and proof-only prerequisites under `## Proof depends on`.
+Assign durable `article_id` metadata to new articles; use
+`autoform migrate article-ids blueprint --json` to obtain deterministic IDs
+after creating the pages.
 Assert formalization or `mathlib: true` only after exact verification. The
 generated local artifact gate rejects `mathlib: true` until a separate Mathlib
-verification gate is installed. For a large source, divide independent sections
-among available agents while retaining one owner for global coverage and
-dependency consistency.
+verification gate is installed. Before revising a formalizable leaf, acquire
+the `claim_target` that `autoform work
+context` reports for it, passing your own `--worker-id`; renew it while editing
+and release it once the committed revision is on the branch Formalize works
+from. A refused acquire means another agent owns the article: leave it and
+report it. Claims write refs to the board's remote, which is outward-facing, so
+make sure the request covers them. When a revision changes a statement, remove
+the `statement`, `proof`, and `lean` metadata the new text no longer matches.
+For a Lean revision requested in Human Review, record the decision in the
+article and remove the assertions it invalidates there and on every dependent
+whose Lean uses the changed declaration, so Formalize takes the work up from its
+frontier. For a large source, divide independent sections among available agents
+while retaining one owner for global coverage and dependency consistency.
 
 Reconcile every affected source and milestone page, the coverage contract,
 `blueprint/README.md`, and the repository `README.md`.

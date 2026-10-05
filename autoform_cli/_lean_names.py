@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 
 
-_LEAN_NAME_PART = r"«([^»]+)»|([^.\s«»]+)"
-_LEAN_NAME = re.compile(rf"(?:{_LEAN_NAME_PART})(?:\.(?:{_LEAN_NAME_PART}))*")
+_LEAN_ID_BEGIN_ESCAPE = "«"
+_LEAN_ID_END_ESCAPE = "»"
 
 
 class LeanNameError(ValueError):
@@ -37,12 +36,69 @@ def parse_lean_name(name: str) -> tuple[LeanNamePart, ...]:
     strings.
     """
 
-    if not _LEAN_NAME.fullmatch(name):
-        raise LeanNameError(f"invalid Lean name: {name!r}")
-    return tuple(
-        LeanNamePart(quoted or plain, bool(quoted))
-        for quoted, plain in re.findall(_LEAN_NAME_PART, name)
+    parts: list[LeanNamePart] = []
+    index = 0
+    while index < len(name):
+        character = name[index]
+        if character == _LEAN_ID_BEGIN_ESCAPE:
+            end = name.find(_LEAN_ID_END_ESCAPE, index + 1)
+            if end < 0:
+                break
+            parts.append(LeanNamePart(name[index + 1 : end], True))
+            index = end + 1
+        elif _lean_is_id_first(character):
+            start = index
+            index += 1
+            while index < len(name) and _lean_is_id_rest(name[index]):
+                index += 1
+            parts.append(LeanNamePart(name[start:index], False))
+        elif "0" <= character <= "9":
+            start = index
+            while index < len(name) and "0" <= name[index] <= "9":
+                index += 1
+            parts.append(LeanNamePart(name[start:index], False))
+        else:
+            break
+        if index == len(name):
+            return tuple(parts)
+        if name[index] != ".":
+            break
+        index += 1
+    raise LeanNameError(f"invalid Lean name: {name!r}")
+
+
+def _lean_is_id_first(character: str) -> bool:
+    return character == "_" or "a" <= character <= "z" or "A" <= character <= "Z" or _lean_is_letter_like(character)
+
+
+def _lean_is_id_rest(character: str) -> bool:
+    return (
+        "a" <= character <= "z"
+        or "A" <= character <= "Z"
+        or "0" <= character <= "9"
+        or character in "_'!?"
+        or _lean_is_letter_like(character)
+        or _lean_is_subscript_alnum(character)
     )
+
+
+def _lean_is_letter_like(character: str) -> bool:
+    code = ord(character)
+    return (
+        (0x3B1 <= code <= 0x3C9 and code != 0x3BB)
+        or (0x391 <= code <= 0x3A9 and code not in {0x3A0, 0x3A3})
+        or 0x3CA <= code <= 0x3FB
+        or 0x1F00 <= code <= 0x1FFE
+        or 0x2100 <= code <= 0x214F
+        or 0x1D49C <= code <= 0x1D59F
+        or (0xC0 <= code <= 0xFF and code not in {0xD7, 0xF7})
+        or 0x100 <= code <= 0x17F
+    )
+
+
+def _lean_is_subscript_alnum(character: str) -> bool:
+    code = ord(character)
+    return 0x2080 <= code <= 0x2089 or 0x2090 <= code <= 0x209C or 0x1D62 <= code <= 0x1D6A or code == 0x2C7C
 
 
 def render_lean_name_term(name: str) -> str:
