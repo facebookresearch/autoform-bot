@@ -67,37 +67,12 @@ def _blueprint(root: Path) -> Path:
 
 
 def _skeleton() -> SkeletonReport:
-    declaration = DeclarationSkeleton(
-        name="Review.result",
-        kind="theorem",
-        module="Review",
-        path="Review.lean",
-        start_line=1,
-        end_line=1,
-        signature="Review.result : True",
-        raw_signature="Review.result : True",
-        semantic='{"generated":[],"root":{"safety":"safe","type":{"sort":{"zero":null}}}}',
-        lean_version="4.32.2",
-        depends=(),
-        trusted=(),
-        assumed=(),
-        assumed_semantics=(),
-        boundary_modules=(),
-        axioms=(),
-        axiom_semantics=(),
-    )
     return SkeletonReport(
         blueprint_hash=_BLUEPRINT_HASH,
-        targets=(("basics/result", (declaration.name,)),),
+        targets=(("basics/result", ("Review.result",)),),
         selection="all",
         selected_nodes=("basics/result",),
-        nodes=(
-            NodeSkeleton(
-                node_id="basics/result",
-                article_path="roadmap/basics/result.md",
-                declarations=(declaration,),
-            ),
-        ),
+        nodes=(_node("basics/result", "Review.result"),),
         unresolved=(),
     )
 
