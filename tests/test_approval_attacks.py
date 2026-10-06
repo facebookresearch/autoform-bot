@@ -307,12 +307,7 @@ def test_a_pull_request_listed_without_a_number_leaves_the_base_unknown(tmp_path
     github = FakeGitHub(root)
     _approved(root, github)
     parent = _git(root, "rev-parse", "main^")
-    answer = github.get
-
-    def unnumbered(path: str, query: dict | None = None) -> object | None:
-        return [{"number": "7"}] if path == f"/commits/{parent}/pulls" else answer(path, query)
-
-    github.get = unnumbered  # type: ignore[method-assign]
+    github.answers[f"/commits/{parent}/pulls"] = [{"number": "7"}]
 
     _refused(root, github, f"GitHub listed a pull request without a number for commit {parent[:12]}")
 
@@ -1717,12 +1712,7 @@ def test_a_listing_github_finds_nothing_for_fails_closed(tmp_path: Path, listing
     root = _project(tmp_path)
     github = FakeGitHub(root)
     _approved(root, github)
-    listed = github.get
-
-    def missing(path: str, query: dict | None = None) -> object | None:
-        return None if path == listing else listed(path, query)
-
-    github.get = missing  # type: ignore[method-assign]
+    github.answers[listing] = None
 
     _refused(root, github, f"GitHub API GET {listing} found nothing (HTTP 404), so the list cannot be read")
 

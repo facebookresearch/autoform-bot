@@ -143,6 +143,8 @@ class FakeGitHub:
         self.runs: list[dict] = []
         self.calls: list[tuple[str, dict]] = []
         self.file_edits: dict[int, object] = {}
+        # path -> what GET answers instead, raised if an exception; such a request is not logged in calls.
+        self.answers: dict[str, object] = {}
         # What GET /rate_limit says: the hour's limit and how many requests are left, or None for no answer.
         self.hourly: tuple[int, int] | None = (1000, 1000)
         self.rules: list[dict] = [
@@ -341,6 +343,11 @@ class FakeGitHub:
         return self.hourly
 
     def get(self, path: str, query: dict | None = None) -> object | None:
+        if path in self.answers:
+            answer = self.answers[path]
+            if isinstance(answer, BaseException):
+                raise answer
+            return answer
         query = dict(query or {})
         self.calls.append((path, query))
         if path == "":
@@ -793,14 +800,8 @@ def test_a_failed_request_in_the_gate_refuses_only_the_approval_that_needs_it(tm
     _commit(root, "Approve two articles")
     head = github.open_pull(7, "bob")
     github.review(7, "alice", "APPROVED", head)
-    answer = github.get
-
-    def flaky(path: str, query: dict | None = None) -> object | None:
-        if path == "/contents/blueprint/roadmap/basics/other.md":
-            raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
-        return answer(path, query)
-
-    github.get = flaky  # type: ignore[method-assign]
+    other = "/contents/blueprint/roadmap/basics/other.md"
+    github.answers[other] = GitHubUnavailable(f"GitHub API GET {other} failed with HTTP 502: Bad Gateway")
     statuses = _verify(root, github, trusted_ref="main", pull_request=7)
 
     assert statuses["basics/result"].authenticated
@@ -823,20 +824,12 @@ def test_only_an_approval_a_later_run_may_authenticate_is_unchecked(tmp_path: Pa
     other_head = github.open_pull(8, "bob")
     github.review(8, "alice", "APPROVED", other_head)
     _land(root, github, 8)
-    answer = github.get
-
-    def flaky(path: str, query: dict | None = None) -> object | None:
-        if path != "/pulls/8/files":
-            return answer(path, query)
-        if failure == "HTTP 502":
-            raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
-        if failure == "HTTP 422":
-            raise ApprovalError(f"GitHub API GET {path} failed with HTTP 422: Unprocessable Entity")
-        if failure == "oversized":
-            raise ApprovalError(f"GitHub API GET {path} returned more than 8388608 bytes")
-        return None
-
-    github.get = flaky  # type: ignore[method-assign]
+    github.answers["/pulls/8/files"] = {
+        "HTTP 502": GitHubUnavailable("GitHub API GET /pulls/8/files failed with HTTP 502: Bad Gateway"),
+        "HTTP 404": None,
+        "HTTP 422": ApprovalError("GitHub API GET /pulls/8/files failed with HTTP 422: Unprocessable Entity"),
+        "oversized": ApprovalError("GitHub API GET /pulls/8/files returned more than 8388608 bytes"),
+    }[failure]
     verifier = _verified(root, github)
 
     assert list(verifier.reasons) == ["basics/other"]
@@ -844,7 +837,7 @@ def test_only_an_approval_a_later_run_may_authenticate_is_unchecked(tmp_path: Pa
     if failure == "HTTP 502":
         assert "HTTP 502" in verifier.reasons["basics/other"]
 
-    github.get = answer  # type: ignore[method-assign]
+    del github.answers["/pulls/8/files"]
     # The setup with alice's permission, then the nine requests for #8, which "basics/other" sorts first to use.
     budget = len(_SETUP_CALLS) + 1 + 9
     github.hourly = (1000, budget + 50)
@@ -867,16 +860,11 @@ def test_a_head_lookup_that_fails_outside_a_publishing_run_leaves_every_approval
     github = FakeGitHub(root)
     head = _pull_approving(root, github)
     github.review(7, "alice", "APPROVED", head)
-    answer = github.get
-
-    def flaky(path: str, query: dict | None = None) -> object | None:
-        if path != "/git/ref/heads/main":
-            return answer(path, query)
-        if failure == "HTTP 502":
-            raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
-        return None
-
-    github.get = flaky  # type: ignore[method-assign]
+    github.answers["/git/ref/heads/main"] = (
+        GitHubUnavailable("GitHub API GET /git/ref/heads/main failed with HTTP 502: Bad Gateway")
+        if failure == "HTTP 502"
+        else None
+    )
     verifier = _verified(root, github, publishing=False)
 
     assert list(verifier.reasons) == ["basics/result"]
@@ -1346,25 +1334,17 @@ def test_the_gate_requires_authentication_only_for_added_or_changed_approvals(
     assert not any(path.startswith(("/commits/", "/actions/")) for path, _ in github.calls)
 
     # A review list GitHub did not answer needs a retry, not another review.
-    answer = github.get
-
-    def failing(path: str, query: dict | None = None) -> object:
-        if path == "/pulls/7/reviews":
-            raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
-        return answer(path, query)
-
-    github.get = failing  # type: ignore[method-assign]
+    github.answers["/pulls/7/reviews"] = GitHubUnavailable(
+        "GitHub API GET /pulls/7/reviews failed with HTTP 502: Bad Gateway"
+    )
     assert _gate(root, base) == 1
     captured = capsys.readouterr()
     assert f"error: 1 approval added or changed since {base} is self-approved; each line above says why\n" in captured.err
 
     # Nor does a review list too large to read, which every run is refused the same way.
-    def oversized(path: str, query: dict | None = None) -> object:
-        if path == "/pulls/7/reviews":
-            raise ApprovalError(f"GitHub API GET {path} returned more than 8388608 bytes")
-        return answer(path, query)
-
-    github.get = oversized  # type: ignore[method-assign]
+    github.answers["/pulls/7/reviews"] = ApprovalError(
+        "GitHub API GET /pulls/7/reviews returned more than 8388608 bytes"
+    )
     assert _gate(root, base) == 1
     captured = capsys.readouterr()
     assert "returned more than 8388608 bytes" in captured.out
@@ -1618,14 +1598,7 @@ def test_a_reason_never_starts_a_workflow_command_in_the_build_log(
     assert output.count("#3 changes notes\\n::error::forged\\r\\u2028, not only articles") == 4
     assert all(not line.lstrip().startswith("::") for line in output.splitlines())
 
-    answer = github.get
-
-    def forging(path: str, query: dict | None = None) -> object:
-        if path == "":
-            raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: {forged}")
-        return answer(path, query)
-
-    github.get = forging  # type: ignore[method-assign]
+    github.answers[""] = GitHubUnavailable(f"GitHub API GET of the repository failed with HTTP 502: {forged}")
     assert _render(tmp_path, blueprint)[0] == 1
     output = capsys.readouterr().out
     assert "failed with HTTP 502: notes\\n::error::forged\\r\\u2028\n" in output
@@ -1764,14 +1737,8 @@ def test_a_build_whose_head_cannot_be_read_fails_before_writing_the_site(
     if failing is None:
         github.heads["main"] = None
     else:
-        answer = github.get
-
-        def flaky(path: str, query: dict | None = None) -> object:
-            if path == failing:
-                raise GitHubUnavailable(f"GitHub API GET {path or 'of the repository'} failed with HTTP 502: Bad Gateway")
-            return answer(path, query)
-
-        github.get = flaky  # type: ignore[method-assign]
+        message = f"GitHub API GET {failing or 'of the repository'} failed with HTTP 502: Bad Gateway"
+        github.answers[failing] = GitHubUnavailable(message)
 
     code, pages = _render(tmp_path, blueprint)
 
