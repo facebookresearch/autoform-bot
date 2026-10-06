@@ -1297,6 +1297,21 @@ def test_a_batch_interrupted_while_publishing_says_what_it_filed(
     assert len(load_readbacks(blueprint)) == 2
 
 
+def _after_each_card(monkeypatch: pytest.MonkeyPatch, effect: Callable[[], None]) -> Callable[[object], Path]:
+    """Make the batch run ``effect`` after it publishes each card, and return the
+    real publisher, so that a test can restore it."""
+
+    publish = main.__globals__["publish_readback"]
+
+    def publish_then_run_effect(card: object) -> Path:
+        path = publish(card)
+        effect()
+        return path
+
+    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish_then_run_effect)
+    return publish
+
+
 def test_a_batch_whose_named_card_is_removed_midway_finishes_naming_none(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1310,15 +1325,12 @@ def test_a_batch_whose_named_card_is_removed_midway_finishes_naming_none(
     _file_alone(blueprint, bundle, manifest, tmp_path, later, "An earlier reading.\n")
     records[1]["expected_card_hash"] = load_readbacks(blueprint)[key].file_hash
     manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
-    publish = main.__globals__["publish_readback"]
 
-    def publish_then_remove_the_named_card(card: object) -> Path:
-        path = publish(card)
+    def remove_the_named_card() -> None:
         if key in load_readbacks(blueprint):
             load_readbacks(blueprint)[key].path.unlink()
-        return path
 
-    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish_then_remove_the_named_card)
+    publish = _after_each_card(monkeypatch, remove_the_named_card)
     capsys.readouterr()
 
     assert _record(blueprint, bundle, manifest, tmp_path) == 2
@@ -1410,17 +1422,14 @@ def test_an_article_edited_while_the_batch_publishes_stops_before_its_card(
 
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
     other = (blueprint / "roadmap" / "basics" / "other.md").resolve()
-    publish = main.__globals__["publish_readback"]
 
-    def publish_then_edit_the_other_article(card: object) -> Path:
-        path = publish(card)
+    def edit_the_other_article() -> None:
         if deleted:
             other.unlink(missing_ok=True)
         else:
             other.write_text(other.read_text(encoding="utf-8") + "\nAn edit.\n", encoding="utf-8")
-        return path
 
-    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish_then_edit_the_other_article)
+    publish = _after_each_card(monkeypatch, edit_the_other_article)
     capsys.readouterr()
 
     assert _record(blueprint, bundle, manifest, tmp_path) == 2
@@ -1547,14 +1556,7 @@ def test_an_article_that_cannot_be_read_again_names_the_record_and_why(
 
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
     other = (blueprint / "roadmap" / "basics" / "other.md").resolve()
-    publish = main.__globals__["publish_readback"]
-
-    def publish_then_damage_the_other_article(card: object) -> Path:
-        path = publish(card)
-        damage(other)
-        return path
-
-    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish_then_damage_the_other_article)
+    _after_each_card(monkeypatch, lambda: damage(other))
     capsys.readouterr()
 
     assert _record(blueprint, bundle, manifest, tmp_path) == 2
@@ -1589,14 +1591,7 @@ def test_a_fifo_put_at_an_article_stops_the_batch_without_blocking_it(
 
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
     other = (blueprint / "roadmap" / "basics" / "other.md").resolve()
-    publish = main.__globals__["publish_readback"]
-
-    def publish_then_damage_the_other_article(card: object) -> Path:
-        path = publish(card)
-        damage(other)
-        return path
-
-    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish_then_damage_the_other_article)
+    _after_each_card(monkeypatch, lambda: damage(other))
     capsys.readouterr()
     exits: list[int] = []
 
@@ -1649,15 +1644,12 @@ def test_an_article_that_is_a_link_is_read_again_through_the_link(
     other.symlink_to("other-1.txt")
     prepare = ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle)]
     assert main(prepare) == 0
-    publish = main.__globals__["publish_readback"]
 
-    def publish_then_point_the_other_article_elsewhere(card: object) -> Path:
-        path = publish(card)
+    def point_the_other_article_elsewhere() -> None:
         other.unlink()
         other.symlink_to("other-2.txt")
-        return path
 
-    monkeypatch.setattr("autoform_cli.__main__.publish_readback", publish_then_point_the_other_article_elsewhere)
+    publish = _after_each_card(monkeypatch, point_the_other_article_elsewhere)
     capsys.readouterr()
 
     assert _record(blueprint, bundle, manifest, tmp_path) == 2
