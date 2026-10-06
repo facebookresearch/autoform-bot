@@ -75,20 +75,16 @@ class LeanReplPool:
             except queue.Empty:
                 break
 
-    def is_usable(self) -> bool:
-        """Return whether this pool may admit another public call."""
-        return not self._shutdown
-
     def _settle(self, worker: LeanRepl) -> BaseException | None:
-        """Stop admission and retry cleanup until the worker owns no process.
+        """Retry cleanup until the worker owns no process.
 
-        Returns the first cancellation-like cleanup error, for the caller to
-        raise once ownership is settled.
+        Until then the slot stays out of the idle queue, so no other call can
+        receive it. Returns the first cancellation-like cleanup error, for the
+        caller to raise once ownership is settled.
         """
         cancelled: BaseException | None = None
         delay = _CLEANUP_RETRY_INITIAL_SECONDS
         while not worker.is_clean():
-            self._shutdown = True
             try:
                 worker.close()
             except BaseException as error:
@@ -133,7 +129,7 @@ class LeanReplPool:
             return result
         finally:
             with self._condition:
-                if repl is not None and not self._shutdown:
+                if repl is not None and not self._shutdown and repl.is_clean():
                     self._idle.put(repl)
                 self._active_calls -= 1
                 self._condition.notify_all()
