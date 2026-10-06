@@ -30,11 +30,11 @@ from autoform_cli.readback import (
     load_readbacks,
     publishable_article,
     render_testimony,
-    write_readback,
 )
 from autoform_cli.markdown import site_converter
 from autoform_cli.render import _mermaid_script, _readback_block, _skeleton_block
 from autoform_cli.skeleton import DeclarationSkeleton
+from tests.test_readback import write_readback
 
 
 def _declaration() -> DeclarationSkeleton:

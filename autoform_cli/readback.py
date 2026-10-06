@@ -694,40 +694,6 @@ class PreparedReadback:
             )
 
 
-def write_readback(
-    blueprint: str | Path,
-    *,
-    article_id: str,
-    declaration: DeclarationSkeleton,
-    model: str,
-    text: str,
-    packet_text: str,
-    expected_card_hash: str | None = None,
-) -> Path:
-    """File a complete card without following links or clobbering another writer.
-
-    ``packet_text`` is required because the card attests to what the independent
-    reader actually received, not to a packet reconstructed later. A differing
-    packet is rejected even if a caller supplies matching metadata.
-
-    Existing different content is replaced only when ``expected_card_hash``
-    names it. This compare-and-swap rule prevents asynchronous reviewers from
-    silently overwriting one another. Filing identical content is idempotent.
-    """
-
-    return publish_readback(
-        prepare_readback(
-            blueprint,
-            article_id=article_id,
-            declaration=declaration,
-            model=model,
-            text=text,
-            packet_text=packet_text,
-            expected_card_hash=expected_card_hash,
-        )
-    )
-
-
 def prepare_readback(
     blueprint: str | Path,
     *,
@@ -738,9 +704,14 @@ def prepare_readback(
     packet_text: str,
     expected_card_hash: str | None = None,
 ) -> PreparedReadback:
-    """Run every check :func:`write_readback` runs, and build the card, without
-    touching the filesystem. A caller filing several cards prepares them all
-    first, so that one bad card stops the batch before any is written."""
+    """Run every check a card must pass, and build it, without touching the
+    filesystem. A caller filing several cards prepares them all first, so
+    that one bad card stops the batch before any is written.
+
+    ``packet_text`` is required because the card attests to what the independent
+    reader actually received, not to a packet reconstructed later. A differing
+    packet is rejected even if a caller supplies matching metadata.
+    """
 
     # Refuse a bad name, then bad fields, before comparing the packet.
     readback_path(Path(blueprint), article_id, declaration.name)
@@ -848,7 +819,11 @@ def readback_conflicts(cards: Iterable[PreparedReadback]) -> list[str]:
 
 
 def publish_readback(prepared: PreparedReadback) -> Path:
-    """Publish a prepared card under the same compare-and-swap rule.
+    """Publish a prepared card without following links or clobbering another writer.
+
+    Existing different content is replaced only when ``expected_card_hash``
+    names it. This compare-and-swap rule prevents asynchronous reviewers from
+    silently overwriting one another. Filing identical content is idempotent.
 
     The card's directory is reached from the blueprint without following
     links and locked, so publications into it happen one at a time. Since it
@@ -4087,5 +4062,4 @@ __all__ = [
     "readback_for",
     "readback_keys",
     "readback_path",
-    "write_readback",
 ]

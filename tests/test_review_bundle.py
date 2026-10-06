@@ -10,7 +10,7 @@ import pytest
 import autoform_cli.render as render_module
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.graph import Graph, load_graph
-from autoform_cli.readback import Readback, load_readbacks, write_readback
+from autoform_cli.readback import Readback, load_readbacks
 from autoform_cli.render import (
     PUBLICATION_MANIFEST,
     PublicationError,
@@ -37,6 +37,7 @@ from autoform_cli.skeleton import (
     blueprint_hash,
     write_packets,
 )
+from tests.test_readback import write_readback
 
 
 _SEMANTIC = '{"generated":[],"root":{"safety":"safe","type":{"sort":{"zero":null}}}}'

@@ -24,7 +24,6 @@ from autoform_cli.readback import (
     readback_conflicts,
     readback_findings,
     readback_path,
-    write_readback,
 )
 from autoform_cli.skeleton import (
     PACKET_MANIFEST,
@@ -97,6 +96,12 @@ def _declaration(
         axioms=("propext",),
         axiom_semantics=(("propext", _PROP),),
     )
+
+
+def write_readback(blueprint: str | Path, **fields) -> Path:
+    """File a card as ``record`` does: run every check, then publish it."""
+
+    return publish_readback(prepare_readback(blueprint, **fields))
 
 
 def _report(declaration: DeclarationSkeleton | None = None) -> SkeletonReport:
