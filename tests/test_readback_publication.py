@@ -23,14 +23,13 @@ from autoform_cli.readback import (
     PreparedReadback,
     load_readbacks,
     planned_readback,
-    prepare_readback,
     publish_readback,
     readback_conflicts,
     readback_findings,
     readback_path,
 )
 from autoform_cli.skeleton import evidence_hash_of
-from tests.test_readback import _ARTICLE_ID, _blueprint, _declaration, _file_card, _report, _staged_names
+from tests.test_readback import _ARTICLE_ID, _blueprint, _declaration, _file_card, _prepared, _report, _staged_names
 
 _DECLARATION = "Skel.sup_unique"
 _CARD_LIMIT = 4 * 1024 * 1024
@@ -42,19 +41,6 @@ def _filed(tmp_path: Path) -> tuple[Path, Path, str]:
     blueprint = _blueprint(tmp_path)
     path = _file_card(blueprint, "First.")
     return blueprint, path, load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)].file_hash
-
-
-def _prepared(blueprint: Path, text: str, expected: str | None = None) -> PreparedReadback:
-    declaration = _declaration()
-    return prepare_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="m",
-        text=text,
-        packet_text=declaration.blind_text(),
-        expected_card_hash=expected,
-    )
 
 
 def _byte_hash(data: bytes) -> str:

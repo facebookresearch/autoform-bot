@@ -640,15 +640,7 @@ def test_the_card_path_never_goes_empty_while_a_card_is_replaced(tmp_path: Path,
     blueprint = _blueprint(tmp_path)
     path = _file_card(blueprint, "First.")
     expected = load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].file_hash
-    declaration = _declaration()
-    create_only = prepare_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="m",
-        text="Create-only.",
-        packet_text=declaration.blind_text(),
-    )
+    create_only = _prepared(blueprint, "Create-only.")
     seen: dict[str, object] = {}
     replace_file = os.replace
 
@@ -706,14 +698,14 @@ def _crash_publication(tmp_path: Path, repo_root: Path, card: object, *, rename:
     assert crashed.returncode == 17
 
 
-def _replacement(blueprint: Path, expected: str):
+def _prepared(blueprint: Path, text: str, expected: str | None = None):
     declaration = _declaration()
     return prepare_readback(
         blueprint,
         article_id=_ARTICLE_ID,
         declaration=declaration,
         model="m",
-        text="Replacement.",
+        text=text,
         packet_text=declaration.blind_text(),
         expected_card_hash=expected,
     )
@@ -723,7 +715,7 @@ def test_a_crash_mid_publication_leaves_nothing_that_blocks_a_retry(tmp_path: Pa
     blueprint = _blueprint(tmp_path)
     path = _file_card(blueprint, "First.")
     original = path.read_bytes()
-    card = _replacement(blueprint, load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].file_hash)
+    card = _prepared(blueprint, "Replacement.", load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].file_hash)
 
     _crash_publication(tmp_path, repo_root, card, rename="before")
 
@@ -738,7 +730,7 @@ def test_a_crash_mid_publication_leaves_nothing_that_blocks_a_retry(tmp_path: Pa
 def test_a_crash_after_the_rename_leaves_the_new_card_in_place(tmp_path: Path, repo_root: Path) -> None:
     blueprint = _blueprint(tmp_path)
     path = _file_card(blueprint, "First.")
-    card = _replacement(blueprint, load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].file_hash)
+    card = _prepared(blueprint, "Replacement.", load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].file_hash)
 
     _crash_publication(tmp_path, repo_root, card, rename="after")
 
