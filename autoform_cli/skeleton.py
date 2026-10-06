@@ -3097,12 +3097,12 @@ def _remove_output(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def atomic_rename(source: str | Path, destination: str | Path) -> None:
+def _rename_no_replace(source: Path, destination: Path) -> None:
     """Rename ``source`` to ``destination`` in one step that never removes a name.
 
     The rename fails with :class:`FileExistsError` when ``destination``
-    exists. Raises :class:`NotImplementedError` where the platform has no
-    such call; a filesystem that lacks it fails with :class:`OSError` and
+    exists. Raises :class:`SkeletonError` where the platform has no such
+    call; a filesystem that lacks it fails with :class:`OSError` and
     changes nothing.
     """
 
@@ -3117,26 +3117,17 @@ def atomic_rename(source: str | Path, destination: str | Path) -> None:
     elif sys.platform == "darwin":
         system, name, current_directory, no_replace = "macOS", "renameatx_np", -2, 0x4
     else:
-        raise NotImplementedError(f"atomic no-replace rename is unsupported on {sys.platform}")
+        raise SkeletonError([f"atomic no-replace rename is unsupported on {sys.platform}"])
     try:
         rename = getattr(ctypes.CDLL(None, use_errno=True), name)
     except AttributeError as exc:
-        raise NotImplementedError(f"atomic no-replace rename is unavailable on this {system} system") from exc
+        raise SkeletonError([f"atomic no-replace rename is unavailable on this {system} system"]) from exc
     rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
     rename.restype = ctypes.c_int
     result = rename(current_directory, os.fsencode(source), current_directory, os.fsencode(destination), no_replace)
     if result != 0:
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error), destination)
-
-
-def _rename_no_replace(source: Path, destination: Path) -> None:
-    """Atomically rename ``source`` only when ``destination`` is absent."""
-
-    try:
-        atomic_rename(source, destination)
-    except NotImplementedError as exc:
-        raise SkeletonError([str(exc)]) from exc
 
 
 def _install_output(stage: Path, destination: Path) -> None:
@@ -3462,7 +3453,6 @@ __all__ = [
     "SkeletonError",
     "SkeletonReport",
     "TrustedDeclaration",
-    "atomic_rename",
     "blueprint_hash",
     "declaration_filename",
     "evidence_hash_of",
