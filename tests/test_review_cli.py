@@ -466,17 +466,7 @@ def test_review_prepare_reports_output_filesystem_errors(
     output = tmp_path / "review.json"
     output.mkdir()
 
-    assert main(
-        [
-            "review",
-            "prepare",
-            str(blueprint),
-            "--lean-root",
-            str(tmp_path),
-            "--output",
-            str(output),
-        ]
-    ) == 2
+    assert main(["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(output)]) == 2
     assert "error:" in capsys.readouterr().err
 
 
@@ -600,19 +590,8 @@ def _prepared_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extraction:
 
 def _record(blueprint: Path, bundle: Path, manifest: Path, root: Path) -> int:
     return main(
-        [
-            "review",
-            "record",
-            str(blueprint),
-            "--lean-root",
-            str(root),
-            "--bundle",
-            str(bundle),
-            "--manifest",
-            str(manifest),
-            "--model",
-            "test-model",
-        ]
+        ["review", "record", str(blueprint), "--lean-root", str(root), "--bundle", str(bundle),
+         "--manifest", str(manifest), "--model", "test-model"]
     )
 
 
