@@ -2424,36 +2424,6 @@ def _two_module_report(tmp_path: Path) -> str:
     return report.to_json()
 
 
-def test_report_keys_trusted_declarations_by_root_module(tmp_path: Path) -> None:
-    first = _two_module_report(tmp_path)
-    data = json.loads(first)
-    path = tmp_path / "skeleton.json"
-
-    # The same trusted declaration is stated once per root module, as each module prints it.
-    assert list(data["trusted"]) == ["Skel.Main", "Skel.Uses"]
-    assert data["trusted"]["Skel.Main"] == data["trusted"]["Skel.Uses"]
-    path.write_text(first, encoding="utf-8")
-    loaded = load_skeleton_report(path)
-    assert loaded.to_json() == first
-
-    # A declaration may name only trusted entries printed for its own root module.
-    payload = json.loads(first)
-    del payload["trusted"]["Skel.Uses"]
-    _assert_load_rejects(path, payload, "mismatched trusted declarations for Skel.heavy_of_notation")
-
-    payload = json.loads(first)
-    payload["trusted"]["Skel.Other"] = payload["trusted"]["Skel.Main"]
-    _assert_load_rejects(path, payload, "not a canonical")
-
-    payload = json.loads(first)
-    payload["trusted"]["Skel.Other"] = {}
-    _assert_load_rejects(path, payload, "malformed shared trusted table for root module Skel.Other")
-
-    payload = json.loads(first)
-    payload["trusted"] = payload["trusted"]["Skel.Main"]
-    _assert_load_rejects(path, payload)
-
-
 def _divergent_module_probe(probe: str, lean_root: Path) -> str:
     """Answer like ``_fake_module_probe``, but ``Skel.Uses`` sees other constants under the same names."""
 
@@ -2470,33 +2440,41 @@ def _divergent_module_probe(probe: str, lean_root: Path) -> str:
     return "\n".join(dict.fromkeys(lines))
 
 
-def test_report_keys_semantic_material_by_root_module(tmp_path: Path) -> None:
+def test_report_keys_shared_material_by_root_module(tmp_path: Path) -> None:
     project = _project(tmp_path)
     report = extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project, runner=_divergent_module_probe)
     assert report.clean
     first = report.to_json()
     data = json.loads(first)
     path = tmp_path / "skeleton.json"
-
-    # Two root modules whose imports declare different constants under one name each keep their own.
-    assert list(data["semantics"]) == ["Skel.Main", "Skel.Uses"]
-    for name in ("Mathlib.Fake", "sorryAx"):
-        assert data["semantics"]["Skel.Main"][name] != data["semantics"]["Skel.Uses"][name]
     path.write_text(first, encoding="utf-8")
     assert load_skeleton_report(path) == report
 
-    # A declaration may name only the material read in its own root module.
-    payload = json.loads(first)
-    payload["semantics"]["Skel.Uses"] = payload["semantics"]["Skel.Main"]
-    _assert_load_rejects(path, payload, "not a canonical")
+    # Each root module states the trusted declarations it printed, and keeps its
+    # own semantics when its imports declare other constants under one name.
+    assert list(data["trusted"]) == list(data["semantics"]) == ["Skel.Main", "Skel.Uses"]
+    assert data["trusted"]["Skel.Main"] == data["trusted"]["Skel.Uses"]
+    for name in ("Mathlib.Fake", "sorryAx"):
+        assert data["semantics"]["Skel.Main"][name] != data["semantics"]["Skel.Uses"][name]
+
+    # A declaration may name only the material printed for its own root module.
+    for table, mismatch, copy in (
+        ("trusted", "trusted declarations", "Skel.Other"),
+        ("semantics", "assumption semantics", "Skel.Uses"),
+    ):
+        payload = json.loads(first)
+        del payload[table]["Skel.Uses"]
+        _assert_load_rejects(path, payload, f"mismatched {mismatch} for Skel.heavy_of_notation")
+        payload = json.loads(first)
+        payload[table][copy] = payload[table]["Skel.Main"]
+        _assert_load_rejects(path, payload, "not a canonical")
+        payload = json.loads(first)
+        payload[table]["Skel.Other"] = {}
+        _assert_load_rejects(path, payload, f"malformed shared {table} table for root module Skel.Other")
 
     payload = json.loads(first)
-    del payload["semantics"]["Skel.Uses"]
-    _assert_load_rejects(path, payload, "mismatched assumption semantics for Skel.heavy_of_notation")
-
-    payload = json.loads(first)
-    payload["semantics"]["Skel.Other"] = {}
-    _assert_load_rejects(path, payload, "malformed shared semantics table for root module Skel.Other")
+    payload["trusted"] = payload["trusted"]["Skel.Main"]
+    _assert_load_rejects(path, payload)
 
 
 def test_cli_reports_conflicting_shared_material_as_an_error(
