@@ -440,15 +440,14 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
         if not _is_within(canonical, roadmap_root):
             issues.append(f"{node_id}: node file escapes the roadmap directory")
             continue
-        if path.name == "README.md" and canonical.name != "README.md":
+        if path.name == "README.md" and canonical != path:
             # Containment is looked up by the path each README.md resolves to,
-            # so one linked to another name would contain nothing, and the
-            # pages beside it would attach to the root.
+            # so a linked one would contain nothing, and the pages beside it
+            # would attach to the root. The walk follows no directory link, so
+            # only a link resolves elsewhere.
             relative = path.relative_to(roadmap_root).as_posix()
-            issues.append(
-                f"{relative}: links to {canonical.relative_to(roadmap_root).as_posix()}, which is not named "
-                "README.md; replace the link with the page itself"
-            )
+            target = canonical.relative_to(roadmap_root).as_posix()
+            issues.append(f"{relative}: links to {target}; replace the link with the page itself")
             continue
         sources.append(
             _NodeSource(node_id, canonical, content, text, hashlib.sha256(content).hexdigest())

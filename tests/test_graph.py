@@ -274,9 +274,29 @@ def test_rejects_a_readme_linked_to_a_file_with_another_name(tmp_path: Path, rel
 
     target = Path(relative).with_name("intro.txt").as_posix()
     assert result.returncode == 1
-    assert (
-        f"error: {relative}: links to {target}, which is not named README.md; replace the link with the page itself"
-    ) in result.stdout
+    assert f"error: {relative}: links to {target}; replace the link with the page itself" in result.stdout
+
+
+@pytest.mark.parametrize("target", ["b", "B"], ids=["same-case", "case-alias"])
+def test_rejects_a_readme_linked_to_another_chapters_readme(tmp_path: Path, target: str) -> None:
+    """Only a link to another name was refused.
+
+    Under a case alias, on a case-insensitive filesystem, the link also passed
+    the duplicate check, and the chapter's pages attached to the root.
+    """
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    _roadmap_page(blueprint, "b/README.md", "# B\n")
+    _roadmap_page(blueprint, "a/leaf.md", "# Leaf\n")
+    link = blueprint / "roadmap" / "a" / "README.md"
+    link.symlink_to(f"../{target}/README.md")
+    if not link.exists():
+        pytest.skip("the filesystem is case-sensitive")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues == (f"a/README.md: links to {target}/README.md; replace the link with the page itself",)
 
 
 @pytest.mark.parametrize(
