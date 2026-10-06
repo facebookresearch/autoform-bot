@@ -958,12 +958,11 @@ does not affect a verdict already reached. `audit --review`, `audit --review-bun
 `render --review`, and `render --review-bundle` make the same check, then judge or show the cards it
 validated rather than reading them again. They load the articles again to audit
 or render them, and an edit to any article or cited source since the check
-fails them with `review-snapshot-changed` too: every skeleton report records a
-hash of the blueprint it was extracted from, covering each article's bytes and
-the bytes of each source file a passage is cut from, and review evidence is
-never built from a report and a blueprint that hash differently. What they then
-audit or render is the bytes that second load read, as for a plain `audit` or
-`render`, whatever the files hold afterward. The rendered review disclosure uses the same packet bytes that were
+fails them with `review-snapshot-changed` too, since review evidence is never
+built from a report and a blueprint that hash differently (see `autoform skeleton`
+above). What they then audit or render is the bytes that second load read, as
+for a plain `audit` or `render`, whatever the files hold afterward. The
+rendered review disclosure uses the same packet bytes that were
 hashed, never a reconstructed or comment-bearing approximation. Read-back
 cards are absorbed into their article and are not published as standalone
 pages. Without `--bundle`, `review check` derives the bundle from its own
@@ -971,11 +970,9 @@ extraction, and `render --review` and `audit --review` do the same: each extract
 instead of once to prepare and again to check. `review check` and `render` may instead read a
 report `autoform skeleton --output` wrote, with `--skeleton-report FILE` in
 place of `--lean-root` for `review check` and beside it for `render`; the
-report must cover every article and carry the hash of the blueprint being
-checked, so a report from another checkout or another state of the articles
-is refused. Each review command that
-extracts Lean, plus review-enabled `audit` and `render`, accepts the same
-`--timeout SECONDS` probe override as `skeleton`.
+report must cover every article and match the blueprint's hash. Each review
+command that extracts Lean, plus review-enabled `audit` and `render`, accepts
+the same `--timeout SECONDS` probe override as `skeleton`.
 
 Newly scaffolded projects commit the versioned `.autoform-review` policy marker,
 so generated CI enforces this gate from the first formalized statement. Older
@@ -1021,18 +1018,8 @@ unless code owner review guards all of them at R, the trusted ref
   head cannot be read, since labelling every approval self-approved would let
   either downgrade the site. `review check` and `review authenticate`, which
   publish nothing, label every approval self-approved instead, naming R and
-  the head, or the failed lookup. Whatever the review settings, the generated
-  Pages workflow's `deploy` job makes the same check before it deploys, so a
-  build the branch has moved past never replaces the site. That workflow
-  builds every push to the default branch, whatever its name: a trigger cannot
-  name the default branch, so a push to any branch starts a run, and for any
-  other branch every job is skipped before a runner starts. Only a build of
-  the default branch outside a pull request authenticates approvals and
-  deploys. Neither a pull request's runs nor a newer run of the branch, such
-  as a re-run of an old one, can cancel a pending one (`queue: max`), so the
-  build of the newer head publishes the site. A head that starts no run of its
-  own, such as one pushed with `[skip ci]` or by a workflow's `GITHUB_TOKEN`,
-  is built by the workflow's hourly scheduled run. The gate below trusts its
+  the head, or the failed lookup. The generated Pages workflow's `deploy` job
+  repeats the check before it deploys (below). The gate below trusts its
   base commit instead.
 - **Ruleset.** The active rulesets on the default branch, as
   `GET /repos/{owner}/{repo}/rules/branches/{branch}` reports them, have pull
@@ -1252,8 +1239,8 @@ failure delays the next try by an hour, then two, four, and so on up to a day;
 when the repository's other runs keep more than 100 of each hour's API
 requests spent, in which case the schedule never builds; and when GitHub delays
 scheduled runs, or disables them in a public repository after 60 days without
-activity. To show it at once, run the Pages workflow by hand
-(`workflow_dispatch`).
+activity (re-enable the workflow from the Actions tab). To show it at once,
+run the Pages workflow by hand (`workflow_dispatch`).
 
 Residual limits. Code owner review is checked at R as it is now, not as it
 was when each pull request merged. A team GitHub enforces is trusted as a
@@ -1263,9 +1250,6 @@ a pull request that re-records a hash without review. A `pull_request` run
 tests the head merged into the base as it was then, not the merge that
 landed. A review's `author_association` can understate a writer's access,
 for example for a private organization member, which reads self-approved.
-Pages decides when it builds: a review dismissed after the merge, or a verify
-run that finishes after it, shows at the next Pages build, which the schedule
-starts a day after the last unless one of the delays above holds it back.
 Older commits are read with the current frontmatter parser, so a schema change
 refuses rather than guesses. Signed SSH or GPG approvals (issue #49) are
 planned as a second verifier behind the same interface.
@@ -1296,33 +1280,35 @@ branch's workflow and CODEOWNERS.
 The generated Pages workflow splits that computation from the Lean build,
 because building runs the project's own code (`lakefile.lean` and every
 dependency's build code), which must not run beside the token that reads
-reviews or the artifact that becomes the site. Its `lean` job checks out the
-project, builds it, and uploads only the skeleton report
+reviews or the artifact that becomes the site. The workflow builds every push
+to the default branch, whatever its name: a trigger cannot name the default
+branch, so a push to any branch starts a run, and for any other branch every
+job is skipped before a runner starts. Only a build of the default branch
+outside a pull request authenticates approvals and deploys. Its `lean` job
+checks out the project, builds it, and uploads only the skeleton report
 `autoform skeleton --output` writes. Its `build` job starts fresh with full
 history, installs Autoform from the pinned ref, downloads the report, and
 runs `review check` and `render --review` with `--skeleton-report`; it never
-runs Lake. A skeleton report records the hash of the blueprint it was
-extracted from, and both commands refuse one that does not match their own
-checkout or that covers selected articles only, so the `lean` job decides
-which statements are current, never who approved them. Authentication reads
-only the `build` job's checkout and the GitHub API. MkDocs still runs
-`mkdocs.yml` and `theme/` in that job, which is why the precondition requires
-them to have a code owner, and both jobs install uv with its cache disabled,
-so nothing the `lean` job writes is restored into the `build` job. Its
-`deploy` job, which needs only `contents: read` besides the Pages
-permissions, first fails unless the `build` job ran in its own attempt
-(`github.run_attempt`), then asks GitHub for the head of the default branch
-and fails unless it is the commit the run built, with or without statement
-review; a failed lookup fails the job too. The Pages artifact is named for
-the attempt that uploaded it (`github-pages-N`), and the job deploys only the
-one named for its own attempt. So a re-run of the `deploy` job alone, or
-"Re-run failed jobs" after a green `build` job, both of which keep the
-earlier attempt's render, never replaces the site, even while the commit is
-still the head: that render can show an approval withdrawn since. A full
-re-run, or a re-run of the `build` job (GitHub re-runs a job's dependents
-with it), renders afresh and deploys only if its commit is still the head,
-so no re-run of an older commit replaces the site. After deploying, the job
-fails the run when `publication.json` lists any `unchecked_approvals`.
+runs Lake. The report is refused unless it matches the `build` job's checkout
+and covers every article, so the `lean` job decides which statements are
+current, never who approved them. Authentication reads only the `build` job's
+checkout and the GitHub API. MkDocs still runs `mkdocs.yml` and `theme/` in
+that job, which is why the precondition requires them to have a code owner,
+and both jobs install uv with its cache disabled, so nothing the `lean` job
+writes is restored into the `build` job. Its `deploy` job, which needs only
+`contents: read` besides the Pages permissions, first fails unless the `build`
+job ran in its own attempt (`github.run_attempt`), then asks GitHub for the
+head of the default branch and fails unless it is the commit the run built,
+with or without statement review; a failed lookup fails the job too. The Pages
+artifact is named for the attempt that uploaded it (`github-pages-N`), and the
+job deploys only the one named for its own attempt. So a re-run of the
+`deploy` job alone, or "Re-run failed jobs" after a green `build` job, both of
+which keep the earlier attempt's render, never replaces the site, even while
+the commit is still the head: that render can show an approval withdrawn
+since. A full re-run, or a re-run of the `build` job (GitHub re-runs a job's
+dependents with it), renders afresh and deploys only if its commit is still
+the head, so no re-run of an older commit replaces the site. After deploying,
+the job fails the run when `publication.json` lists any `unchecked_approvals`.
 
 Some events start no Pages run: a dismissed review, a change of access, team,
 or rulesets, a verify run that finishes after the merge, a push with `[skip
@@ -1345,9 +1331,7 @@ every failed run of the head counts. It first asks `GET
 /rate_limit`, which costs nothing, and builds only when at most 100 of the
 hour's requests are spent, so that the verification has all it may make, the
 ceiling above, even after decide's own requests (at most nine) and 41 more by
-other runs during the build; in a repository whose other runs keep more than 100 of
-every hour's requests spent, the schedule never builds, and only
-pushes and manual runs rebuild the site. A scheduled run that builds nothing
+other runs during the build. A scheduled run that builds nothing
 makes at most nine requests besides that one (the head, its newest
 deployments, the status of each up to the newest that succeeded, at most six,
 and the workflow's runs on the head), usually four: at most 216 a day, under
@@ -1361,21 +1345,20 @@ cannot read, it builds nothing and ends its run green with a warning, since a
 red run would count as a failed run of the head; the next hour asks again. A
 warning on every scheduled run means the schedule is not building at all. A
 head whose build fails every time, such as one whose Lean does not compile, is
-retried once a day after its first few failures. In a public repository GitHub
-disables a schedule after 60 days without activity; re-enable the workflow
-from the Actions tab. In a private repository GitHub bills Actions by the
-minute, rounding each job up to a whole minute, so the schedule costs minutes
-even when it builds nothing: each scheduled run's `decide` job is at least a
-minute, about 24 a day and 720 a month, and every push and pull request run
-pays a minute for its own `decide` as well. The daily rebuild adds its Lean,
-build, and deploy jobs, longer when review checks run `lake build`. Every
-pending run of a ref is kept (`queue: max`), so several quick pushes to one
-pull request build one after another, not only the newest. That is a large
-share of the minutes a plan includes, 2,000 a month on GitHub Free. A private
-repository whose plan has no GitHub Pages fails `configure-pages` on every
-build; delete the `schedule` trigger from
-`.github/workflows/blueprint-pages.yml` there. Public repositories pay no
-minutes on GitHub-hosted runners.
+retried once a day after its first few failures. In a private repository
+GitHub bills Actions by the minute, rounding each job up to a whole minute, so
+the schedule costs minutes even when it builds nothing: each scheduled run's
+`decide` job is at least a minute, about 24 a day and 720 a month, and every
+push and pull request run pays a minute for its own `decide` as well. The
+daily rebuild adds its Lean, build, and deploy jobs, longer when review checks
+run `lake build`. Every pending run of a ref is kept (`queue: max`), so a
+newer run, such as a re-run of an old one, cannot cancel the pending build of
+the head, and several quick pushes to one pull request build one after
+another, not only the newest. That is a large share of the minutes a plan
+includes, 2,000 a month on GitHub Free. A private repository whose plan has no
+GitHub Pages fails `configure-pages` on every build; delete the `schedule`
+trigger from `.github/workflows/blueprint-pages.yml` there. Public
+repositories pay no minutes on GitHub-hosted runners.
 
 When `--output`, `--packets`, and `--passages` are combined, all three outputs
 are staged before publication and a failed commit restores the previous set.
