@@ -14,7 +14,7 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
-from . import status
+from . import debrief, status
 from .article_identity import plan_article_ids
 from .audit import audit_blueprint
 from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_key
@@ -219,6 +219,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     claim_cleanup = claim_subparsers.add_parser("cleanup")
     _add_claim_board_arguments(claim_cleanup)
 
+    debrief_parser = subparsers.add_parser(
+        "debrief", help="opt-in feedback form an agent fills in after a formalization attempt"
+    )
+    debrief_subparsers = debrief_parser.add_subparsers(dest="debrief_command", required=True)
+    for operation, help_text in (
+        ("form", "print the form for a finished attempt (or report that debriefs are disabled)"),
+        ("record", "validate an answer and store it as a new debrief record"),
+    ):
+        command = debrief_subparsers.add_parser(operation, help=help_text)
+        command.add_argument("selector", help="path-derived node id or durable article_id")
+        command.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+        command.add_argument("--lean-root", type=Path, help="resolve local Lean declaration targets")
+        command.add_argument("--phase", required=True, choices=("statement", "proof"), help="phase attempted")
+        command.add_argument("--note", default="", help="why the attempt did not succeed, if it did not")
+        if operation == "record":
+            command.add_argument("--answer", type=Path, help="answer file (default: standard input)")
+            command.add_argument(
+                "--worker-id",
+                default=os.environ.get("AUTOFORM_WORKER_ID") or "",
+                help="this agent's worker ID (or set AUTOFORM_WORKER_ID)",
+            )
+            command.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    debrief_render = debrief_subparsers.add_parser("render", help="rebuild Markdown views of the records")
+    debrief_render.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+    debrief_render.add_argument("--out", type=Path, help="output directory (default: <store>/views)")
+
     migrate = subparsers.add_parser("migrate", help="inspect authored migration contracts")
     migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
     article_ids = migrate_subparsers.add_parser(
@@ -308,6 +334,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _work(args)
     if args.command == "claim":
         return _claim(args)
+    if args.command == "debrief":
+        return _debrief(args)
     if args.command == "migrate":
         return _migrate(args)
     if args.command == "skeleton":
@@ -723,6 +751,51 @@ def _work_impact(args: argparse.Namespace) -> int:
         return 0
     for line in format_impact(report):
         print(_human_text(line))
+    return 0
+
+
+def _debrief(args: argparse.Namespace) -> int:
+    try:
+        if args.debrief_command == "render":
+            root = debrief.debrief_root(args.target)
+            written = debrief.render(root, args.out)
+            print(f"rendered {len(written)} debrief report(s) from {_human_text(root)}")
+            return 0
+        if args.debrief_command == "form":
+            if not debrief.enabled():
+                print(f"Debriefs are disabled ({debrief.DEBRIEF_ENV} is not set); skip this step.")
+                return 0
+            print(debrief.form(args.target, args.selector, phase=args.phase, note=args.note, lean_root=args.lean_root))
+            return 0
+        if args.answer is not None:
+            with args.answer.open("rb") as handle:
+                raw = handle.read(debrief.MAX_ANSWER_BYTES + 1)
+        else:
+            raw = sys.stdin.buffer.read(debrief.MAX_ANSWER_BYTES + 1)
+        entry, path = debrief.record(
+            args.target,
+            args.selector,
+            raw.decode("utf-8", "replace"),
+            phase=args.phase,
+            note=args.note,
+            worker_id=args.worker_id,
+            lean_root=args.lean_root,
+        )
+    except (GraphValidationError, RuntimeProjectionError) as error:
+        for issue in error.issues:
+            print(f"error: {_human_text(issue)}", file=sys.stderr)
+        return 2
+    except (debrief.DebriefError, OSError) as error:
+        print(f"error: {_human_text(error)}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(
+            {"attempt_id": entry.attempt_id, "outcome": entry.outcome, "path": str(path)},
+            sort_keys=True,
+            separators=(",", ":"),
+        ))
+    else:
+        print(_human_text(f"recorded debrief {entry.attempt_id} ({entry.outcome_label}) at {path}"))
     return 0
 
 
