@@ -133,6 +133,325 @@ def test_runtime_reuses_one_project_pool_and_status_stays_lazy(tmp_path):
     assert pools[0]._shutdown is True
 
 
+def test_cache_observation_ignores_staleness_invalidity_and_validation(tmp_path, monkeypatch):
+    from servers import lean_runtime as lean_runtime_module
+
+    project = make_lake_project(tmp_path, "observed-stale")
+    alias = tmp_path / "observed-stale-alias"
+    try:
+        alias.symlink_to(project, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"directory symlinks are unavailable: {error}")
+    created = []
+    closed = []
+    validation_calls = 0
+
+    def factory(root):
+        resource = object()
+        created.append(resource)
+        return resource
+
+    def is_valid(resource):
+        nonlocal validation_calls
+        validation_calls += 1
+        return False
+
+    cache = ProjectResourceCache(
+        factory,
+        closed.append,
+        max_entries=1,
+        idle_seconds=1800,
+        is_valid=is_valid,
+        start_sweeper=False,
+    )
+    with cache.lease(str(project)) as resource:
+        pass
+    cache.invalidate(str(project), resource)
+    (project / "lakefile.toml").write_text('[package]\nname = "changed"\n')
+    monkeypatch.setattr(
+        lean_runtime_module,
+        "lean_project_fingerprint",
+        lambda root: pytest.fail("observation fingerprinted the project"),
+    )
+
+    with cache.observe(str(alias)) as (observed, state):
+        assert observed is resource
+        assert state == "warm"
+        resident = cache.stats()["resident"]
+        assert resident[0]["active"] == 1
+        assert resident[0]["valid"] is False
+
+    assert created == [resource]
+    assert closed == []
+    assert validation_calls == 0
+    cache.close()
+    assert closed == [resource]
+
+
+def test_cache_observation_does_not_refresh_ttl_and_pins_idle_eviction(tmp_path):
+    project = make_lake_project(tmp_path, "observed-ttl")
+    clock = {"now": 0.0}
+    closed = []
+    cache = ProjectResourceCache(
+        lambda root: root,
+        closed.append,
+        max_entries=1,
+        idle_seconds=5,
+        start_sweeper=False,
+        clock=lambda: clock["now"],
+    )
+    with cache.lease(str(project)):
+        pass
+    clock["now"] = 10.0
+
+    with cache.observe(str(project)) as (resource, state):
+        assert resource == project.resolve()
+        assert state == "warm"
+        resident = cache.stats()["resident"][0]
+        assert resident["active"] == 1
+        assert resident["idle_seconds"] == 10.0
+        assert cache.evict_idle() == 0
+
+    resident = cache.stats()["resident"][0]
+    assert resident["active"] == 0
+    assert resident["idle_seconds"] == 10.0
+    assert cache.evict_idle() == 1
+    assert closed == [project.resolve()]
+    cache.close()
+
+
+def test_cache_close_waits_for_an_active_observation(tmp_path):
+    project = make_lake_project(tmp_path, "observed-close")
+    closed = []
+    close_started = threading.Event()
+    close_finished = threading.Event()
+    cache = ProjectResourceCache(
+        lambda root: root,
+        closed.append,
+        max_entries=1,
+        idle_seconds=1800,
+        start_sweeper=False,
+    )
+    with cache.lease(str(project)):
+        pass
+
+    def close_cache():
+        close_started.set()
+        cache.close()
+        close_finished.set()
+
+    with cache.observe(str(project)) as (resource, state):
+        assert resource == project.resolve()
+        assert state == "warm"
+        thread = threading.Thread(target=close_cache)
+        thread.start()
+        assert close_started.wait(timeout=1)
+        assert not close_finished.wait(timeout=0.1)
+        assert closed == []
+
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert close_finished.is_set()
+    assert closed == [project.resolve()]
+
+
+def test_invalid_pool_replacement_waits_for_active_observation(tmp_path):
+    project = make_lake_project(tmp_path, "observed-replacement")
+    resources = []
+    events = []
+    replacement_started = threading.Event()
+    lease_attempted = threading.Event()
+    errors = []
+
+    def factory(root):
+        resource = object()
+        resources.append(resource)
+        events.append(f"create:{len(resources)}")
+        if len(resources) == 2:
+            replacement_started.set()
+        return resource
+
+    def close_resource(resource):
+        events.append(f"close:{resources.index(resource) + 1}")
+
+    cache = ProjectResourceCache(
+        factory,
+        close_resource,
+        max_entries=1,
+        idle_seconds=1800,
+        start_sweeper=False,
+    )
+    with cache.lease(str(project)) as first:
+        pass
+    cache.invalidate(str(project), first)
+
+    def replace():
+        lease_attempted.set()
+        try:
+            with cache.lease(str(project)) as resource:
+                assert resource is resources[1]
+        except BaseException as error:
+            errors.append(error)
+
+    with cache.observe(str(project)) as (observed, state):
+        assert observed is first
+        assert state == "warm"
+        thread = threading.Thread(target=replace)
+        thread.start()
+        assert lease_attempted.wait(timeout=1)
+        assert not replacement_started.wait(timeout=0.1)
+        assert events == ["create:1"]
+
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert errors == []
+    assert events[:3] == ["create:1", "close:1", "create:2"]
+    cache.close()
+
+
+def test_cache_observation_rejects_a_closed_cache(tmp_path):
+    project = make_lake_project(tmp_path, "observed-closed")
+    cache = ProjectResourceCache(
+        lambda root: root,
+        lambda resource: None,
+        max_entries=1,
+        idle_seconds=1800,
+        start_sweeper=False,
+    )
+    cache.close()
+
+    with pytest.raises(RuntimeError, match="cache is closed"):
+        with cache.observe(str(project)):
+            pytest.fail("a closed cache must not expose an observation")
+
+
+def test_cache_observation_reports_warming_without_waiting_or_creating(tmp_path):
+    project = make_lake_project(tmp_path, "observed-warming")
+    factory_started = threading.Event()
+    release_factory = threading.Event()
+    errors = []
+
+    def factory(root):
+        factory_started.set()
+        assert release_factory.wait(timeout=2)
+        return root
+
+    cache = ProjectResourceCache(
+        factory,
+        lambda resource: None,
+        max_entries=1,
+        idle_seconds=1800,
+        start_sweeper=False,
+    )
+
+    def create():
+        try:
+            with cache.lease(str(project)):
+                pass
+        except BaseException as error:
+            errors.append(error)
+
+    creator = threading.Thread(target=create)
+    creator.start()
+    try:
+        assert factory_started.wait(timeout=1)
+        with cache.observe(str(project)) as (resource, state):
+            assert resource is None
+            assert state == "warming"
+    finally:
+        release_factory.set()
+        creator.join(timeout=2)
+
+    assert not creator.is_alive()
+    assert errors == []
+    cache.close()
+
+
+def test_repl_status_reports_a_stale_shutdown_pool_without_replacing_it(tmp_path):
+    project = make_lake_project(tmp_path, "observed-status")
+    pools = []
+
+    class StatusPool(FakePool):
+        def __init__(self, root):
+            super().__init__(root)
+            self.shutdown_calls = 0
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+            super().shutdown()
+
+    def create_pool(root):
+        pool = StatusPool(root)
+        pools.append(pool)
+        return pool
+
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=create_pool,
+        lsp_factory=FakeLsp,
+        start_sweepers=False,
+    )
+    try:
+        services.dispatch(
+            "repl.run",
+            {"project_dir": str(project), "code": "#check Nat", "timeout": None},
+        )
+        pool = pools[0]
+        pool._shutdown = True
+        (project / "lakefile.toml").write_text('[package]\nname = "changed"\n')
+
+        status = services.dispatch("repl.status", {"project_dir": str(project)})
+
+        assert status["state"] == "warm"
+        assert status["shutdown"] is True
+        assert status["memory_usage_gb"] == 0.25
+        assert pools == [pool]
+        assert pool.shutdown_calls == 0
+    finally:
+        services.close()
+
+    assert pools[0].shutdown_calls == 1
+
+
+def test_repl_status_field_cancellation_releases_pin_without_refreshing_ttl(tmp_path):
+    project = make_lake_project(tmp_path, "observed-field-cancellation")
+    clock = {"now": 0.0}
+    services = None
+
+    class Cancellation(BaseException):
+        pass
+
+    class CancellingPool(FakePool):
+        def get_memory_usage(self):
+            resident = services.repl_projects.stats()["resident"][0]
+            assert resident["active"] == 1
+            assert resident["idle_seconds"] == 10.0
+            raise Cancellation("cancel pool field read")
+
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=CancellingPool,
+        lsp_factory=FakeLsp,
+        start_sweepers=False,
+    )
+    services.repl_projects._clock = lambda: clock["now"]
+    try:
+        services.dispatch(
+            "repl.run",
+            {"project_dir": str(project), "code": "#check Nat", "timeout": None},
+        )
+        clock["now"] = 10.0
+
+        with pytest.raises(Cancellation, match="cancel pool field read"):
+            services.dispatch("repl.status", {"project_dir": str(project)})
+
+        resident = services.repl_projects.stats()["resident"][0]
+        assert resident["active"] == 0
+        assert resident["idle_seconds"] == 10.0
+    finally:
+        services.close()
+
+
 def test_shared_runtime_disables_ambiguous_repl_retries(tmp_path, monkeypatch):
     from servers import lean_runtime
 
@@ -255,7 +574,8 @@ def test_project_startup_that_misses_its_budget_is_discarded(tmp_path):
             pytest.fail("late project startup must never execute a tool request")
 
     assert closed == [project.resolve()]
-    assert cache.state(str(project)) == "cold"
+    with cache.observe(str(project)) as (resource, state):
+        assert resource is None and state == "cold"
     cache.close()
 
 

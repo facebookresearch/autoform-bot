@@ -76,6 +76,14 @@ def test_formalize_replaces_custom_orchestration_with_the_markdown_frontier(
     assert "no custom scheduler or provider adapter" in normalized
     assert "ready, running, retrying, failed, or blocked scheduler states" in normalized
     assert "never a transcript or retry counter" in normalized
+    assert (
+        "require the same `phase`, `blockers`, `dependencies`, `article_revision`, "
+        "`open_statements`, `assumes`, and `revision` as the first read"
+    ) in normalized
+    assert (
+        "the same `phase`, `article_revision`, `open_statements`, `assumes`, and "
+        "`revision` it was dispatched with"
+    ) in normalized
     assert "$formalize" in metadata
     assert "Formalize the ready Markdown roadmap frontier" in codex
     assert '"id": "formalize"' in muse
@@ -90,6 +98,11 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     assert "private declaration safety as fail-closed evidence" in normalized
     assert "official user name" in normalized
     assert "by source coordinates" in normalized
+    assert "regenerate `production_module_roots`" in normalized
+    assert "from Lake package configs" in normalized
+    assert "private creation bundle, catalog identity" in normalized
+    assert "complete `lake update` manifest" in normalized
+    assert "direct-Mathlib-only manifest is invalid" in normalized
     assert "repeated pathname reads are not a generation boundary" in normalized
     assert "marker schema in its owning feature" in normalized
     assert "match the blob at the stable detected commit" in normalized
@@ -113,6 +126,23 @@ def test_development_guidance_uses_progressive_command_reference(repo_root: Path
     assert "| `target-unreadable` |" in inspection_reference
 
 
+def test_development_guidance_routes_repository_contracts(repo_root: Path) -> None:
+    skill_path = repo_root / "skills/develop-plugin/SKILL.md"
+    contracts_path = skill_path.parent / "references/repository-contracts.md"
+    skill = skill_path.read_text(encoding="utf-8")
+
+    assert "[repository contracts](references/repository-contracts.md)" in skill
+    assert contracts_path.is_file()
+
+
+def test_root_agent_guidance_routes_to_owning_documents(repo_root: Path) -> None:
+    guidance = (repo_root / "AGENTS.md").read_text(encoding="utf-8")
+
+    for relative in ("CONTRIBUTING.md", "skills/develop-plugin/SKILL.md"):
+        assert f"]({relative})" in guidance
+        assert (repo_root / relative).is_file()
+
+
 def test_agent_review_treats_skeleton_hashes_as_advisory(repo_root: Path) -> None:
     review = (repo_root / "skills" / "agent-review" / "SKILL.md").read_text(
         encoding="utf-8"
@@ -132,6 +162,52 @@ def test_quick_start_keeps_the_cli_agent_facing(repo_root: Path) -> None:
     assert "users do not need to learn or run its commands" in normalized
     assert "/autoform:setup" in quick_start
     assert "uv run autoform" not in quick_start
+
+
+def test_setup_guidance_uses_the_offline_atomic_project_creator(repo_root: Path) -> None:
+    setup_root = repo_root / "skills" / "setup"
+    setup = (setup_root / "SKILL.md").read_text(encoding="utf-8")
+    normalized = " ".join(setup.split())
+
+    assert (
+        'uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project inspect '
+        '"$PROJECT" --json'
+    ) in setup
+    assert (
+        'uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project new '
+        '"$TARGET" --package "$PACKAGE"'
+    ) in setup
+    assert "never overwrites an existing target" in normalized
+    assert "without running Lake, Lean, or network operations" in normalized
+    assert "complete Autoform vault, site, ignore rules, and pinnable CI" in normalized
+    assert "no later `init` is needed" in normalized
+    assert "Every component of the target parent must be a real directory, not a symlink" in normalized
+    assert "on macOS use `/private/tmp`, not the `/tmp` alias" in normalized
+    assert "pins generated workflows exactly as `init` does" in normalized
+    assert "cached remote-tracking ref contains that commit" in normalized
+    assert "prefers Autoform's canonical repository" in normalized
+    assert "only when tracked files are clean" in normalized
+    assert "bounded, regular, link-free required template snapshot" in normalized
+    assert "executable-bit classification" in normalized
+    assert "Git replacement objects" in normalized
+    assert "installed copy must also match its marketplace checkout" in normalized
+    assert "fails closed" in normalized and "including Windows" in normalized
+    assert "Do not invent version pairs" not in normalized
+    assert "--lean-toolchain" in normalized
+    assert "lake update" in normalized
+    assert "v4.27.0" in normalized
+    assert (
+        "appending only missing Autoform rules through a retained bounded regular root"
+        in normalized
+    )
+    assert "scripts/workspace_inspector.py" not in setup
+    assert "scripts/make_project.sh" not in setup
+    for document in sorted(setup_root.rglob("*.md")):
+        text = document.read_text(encoding="utf-8")
+        for reference in re.findall(r"(?<![A-Za-z0-9_])scripts/[A-Za-z0-9_./-]+", text):
+            assert (repo_root / reference).is_file(), (
+                f"{document.relative_to(repo_root)} references missing helper {reference}"
+            )
 
 
 def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
@@ -730,10 +806,13 @@ def test_skills_delegate_the_command_line_to_the_reference(repo_root: Path) -> N
     citing = 0
     for skill in sorted((repo_root / "skills").glob("*/SKILL.md")):
         text = skill.read_text(encoding="utf-8")
-        assert "uv run --project" not in text, (
-            f"{skill.relative_to(repo_root)} restates a CLI invocation; "
-            "link to autoform_cli/README.md#commands instead"
-        )
+        if skill.parent.name == "setup":
+            assert text.count("uv run --project") == 3
+        else:
+            assert "uv run --project" not in text, (
+                f"{skill.relative_to(repo_root)} restates a CLI invocation; "
+                "link to autoform_cli/README.md#commands instead"
+            )
         if "autoform_cli/README.md" in text:
             citing += 1
     assert citing >= 3

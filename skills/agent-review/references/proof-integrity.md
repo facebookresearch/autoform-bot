@@ -14,6 +14,21 @@ is insufficient when its dependencies are hollow.
    infrastructure does not justify axiomatizing content that the source proves.
 5. In a repository with an explicit audited axiom ledger, apply that repository's ledger and
    discharge policy in addition to this rubric.
+6. If `roadmap/README.md` sets `open_statements: allowed`, list the open statements the reviewed
+   article may assume (`autoform work assumptions`) and trace each `sorryAx` to its source, for
+   example with the CI audit the [open statements reference](../../../autoform_cli/README.md#open-statements)
+   reproduces, which logs each declaration as open, conditional, or sorry-free.
+
+## Open statements
+
+Under the open-statement policy, a `sorry` inside a declared open upstream statement, one the
+reviewed article reaches through its Markdown dependencies and that `work assumptions` attributes
+to it, is a recorded dependency of the reviewed declaration, not a gap in it. Score the reviewed
+proof on its own work, name every assumed open statement in the review, and mark the verdict as due
+for re-review when one is discharged, since the skeleton's axioms and hashes then move. A `sorry`
+anywhere else, including a helper, a `where` clause, or the reviewed declaration's own statement, or
+an open statement that is not a declared dependency, keeps the ceilings below. A conditional proof
+is never axiom-clean, complete, or sorry-free, whatever its score.
 
 ## Structural red flags
 
@@ -42,4 +57,4 @@ the instantiated theorem really implies the reviewed statement.
 Hard ceilings: any axiom or sorry covering source-proved content scores at most 1; orphan classes,
 vacuous definitions, or trivial instances score at most 2. Give a separate justified/unjustified
 verdict for every nonstandard axiom, sorry, or structural issue found. Pass at 3; reject at 2 or
-below, and never describe a result with a score-3 gap as axiom-clean.
+below, and never describe a result with a score-3 gap, or a conditional proof, as axiom-clean.
