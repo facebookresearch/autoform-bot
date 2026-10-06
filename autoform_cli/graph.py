@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -403,16 +404,28 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
     entries = sorted(
         Path(directory, name) for directory, _, files in os.walk(roadmap_root, onerror=unlistable) for name in files
     )
+    pages: list[Path] = []
     for path in entries:
-        if path.is_file() and path.name.casefold() == "readme.md" and path.name != "README.md":
+        if path.suffix != ".md" and path.name.casefold() != "readme.md":
+            continue
+        try:
+            if stat.S_ISREG(path.stat().st_mode):
+                pages.append(path)
+        except FileNotFoundError:
+            continue  # a dangling link, like an editor's lock file, or a page removed since the walk
+        except OSError as exc:
+            issues.append(f"{path.relative_to(roadmap_root).as_posix()}: cannot read roadmap page: {exc}")
+
+    for path in pages:
+        if path.name.casefold() == "readme.md" and path.name != "README.md":
             relative = path.relative_to(roadmap_root).as_posix()
             issues.append(
                 f"{relative}: noncanonical README filename; container pages must be named exactly README.md "
                 "for portable behavior on case-sensitive filesystems"
             )
 
-    for path in entries:
-        if not path.is_file() or path.suffix != ".md":
+    for path in pages:
+        if path.suffix != ".md":
             continue
         try:
             content = path.read_bytes()
@@ -440,7 +453,9 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
             _NodeSource(node_id, canonical, content, text, hashlib.sha256(content).hexdigest())
         )
 
-    issues.extend(_chapter_issues(roadmap_root))
+    if not issues:
+        # A chapter page that could not be read is named above; calling it missing would mislead.
+        issues.extend(_chapter_issues(roadmap_root))
     return sources, issues
 
 

@@ -8,6 +8,7 @@ contacts a network service or writes generated state back into the blueprint.
 from __future__ import annotations
 
 import json
+import os
 import re
 import statistics
 from bisect import bisect_right
@@ -607,8 +608,9 @@ def _validation_article_path(blueprint: Path, issue: str) -> str:
         candidate = roadmap / "README.md"
     else:
         readme = roadmap / node_id / "README.md"
-        candidate = readme if readme.exists() else roadmap / f"{node_id}.md"
-    if candidate.exists() or roadmap.exists():
+        # os.path.exists is False for a path it cannot stat; Path.exists raises before 3.14.
+        candidate = readme if os.path.exists(readme) else roadmap / f"{node_id}.md"
+    if os.path.exists(candidate) or roadmap.exists():
         return _relative_path(candidate, blueprint)
     return "."
 

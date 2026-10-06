@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -536,6 +537,28 @@ def test_audit_returns_graph_validation_errors_with_article_paths(tmp_path: Path
     assert result.findings[0].code == "invalid-graph"
     assert result.findings[0].reason == "bad: missing H1 title"
     assert json.loads(result.to_json()) == result.as_dict()
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
+def test_audit_reports_a_chapter_it_can_list_but_not_enter(tmp_path: Path) -> None:
+    """Looking for each unreadable page's article path inside the chapter raised a traceback."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "chapter/result.md", declaration="theorem")
+    chapter = blueprint / "roadmap" / "chapter"
+    chapter.chmod(0o644)
+    try:
+        result = audit_blueprint(blueprint)
+    finally:
+        chapter.chmod(0o755)
+
+    assert [(finding.code, finding.reason) for finding in result.findings] == [
+        (
+            "invalid-graph",
+            f"chapter/{name}: cannot read roadmap page: [Errno 13] Permission denied: './roadmap/chapter/{name}'",
+        )
+        for name in ("README.md", "result.md")
+    ]
 
 
 def test_audit_reports_a_container_holding_too_many_articles(tmp_path: Path) -> None:
