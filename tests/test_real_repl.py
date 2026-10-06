@@ -44,6 +44,15 @@ def test_disposable_call_matches_the_pinned_repl_protocol():
             "/- a --/\nimport REPL.Frontend\n-- -/\n#check Nat",
             "cannot validate safely",
         ),
+        (
+            (),
+            "prelude -- ordinary comment\n"
+            "import Init /- a --/\n"
+            "import Lean\n"
+            "-- -/\n"
+            "#check Lean.Name",
+            "cannot validate safely",
+        ),
         ((), "import REPL.Frontend\n#check Nat", None),
         ((), '#eval "--/"', None),
         ((), "--/ harmless line comment\n#check Nat", None),

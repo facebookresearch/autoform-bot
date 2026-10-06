@@ -506,79 +506,64 @@ def _decode_header_analysis(stdout: bytes) -> _LeanHeaderAnalysis:
         raise ValueError("unrecognized output from lean --deps-json") from None
 
 
-def _reject_legacy_deps_json_comment_bypass(code: str) -> None:
-    """Refuse close spellings misparsed by Lean 4.30--4.32 deps-json.
+def _normalize_legacy_deps_json_comment_closes(code: str) -> str:
+    """Normalize only block-comment closes misparsed by Lean 4.30--4.32.
 
     Those releases skip one character too many when an even run of dashes
-    precedes ``/`` inside a block comment, so an import the real parser sees
-    can disappear from the fast parser's result.  The byte pattern is rare;
-    failing closed also avoids pretending that quoted/comment context can be
-    reconstructed safely in Python.
+    precedes ``/`` inside a block comment.  Removing one dash gives their fast
+    parser the same close point as the real parser.  Callers compare Lean's
+    dependency facts for both byte strings and fail closed if they differ,
+    avoiding any Python reimplementation of Lean's header grammar.
     """
 
     block_depth = 0
-    header_prefixes = ("import ", "public import ", "private import ", "meta import ")
-
-    for line in code.splitlines():
-        stripped = line.lstrip()
+    index = 0
+    remove: set[int] = set()
+    while index < len(code):
         if block_depth == 0:
-            if not stripped or stripped.startswith("--"):
+            if code.startswith("--", index):
+                newline = code.find("\n", index + 2)
+                index = len(code) if newline < 0 else newline + 1
                 continue
-            if not (
-                stripped.startswith("/-")
-                or stripped == "prelude"
-                or stripped == "module"
-                or stripped.startswith("module ")
-                or stripped.startswith(header_prefixes)
-            ):
-                # The fast parser stops at the first body command. A block
-                # comment after that point cannot hide a header import.
-                break
-
-        index = 0
-        while index < len(line):
-            if block_depth == 0:
-                if line.startswith("--", index):
-                    break
-                if line.startswith("/-", index):
-                    block_depth = 1
-                    index += 2
-                    continue
-                if line[index] == '"':
-                    index += 1
-                    while index < len(line):
-                        if line[index] == "\\":
-                            index += 2
-                        elif line[index] == '"':
-                            index += 1
-                            break
-                        else:
-                            index += 1
-                    continue
-                index += 1
-                continue
-
-            if line.startswith("/-", index):
-                block_depth += 1
+            if code.startswith("/-", index):
+                block_depth = 1
                 index += 2
                 continue
-            if line[index] == "-":
-                end = index
-                while end < len(line) and line[end] == "-":
-                    end += 1
-                if end < len(line) and line[end] == "/":
-                    dash_count = end - index
-                    if dash_count % 2 == 0:
-                        raise ValueError(
-                            "Lean header contains a block-comment close spelling that "
-                            "lean --deps-json cannot validate safely"
-                        )
-                    block_depth -= 1
-                    index = end + 1
-                    continue
-                index = end
+            if code[index] == '"':
+                index += 1
+                while index < len(code):
+                    if code[index] == "\\":
+                        index += 2
+                    elif code[index] == '"':
+                        index += 1
+                        break
+                    else:
+                        index += 1
                 continue
             index += 1
+            continue
+
+        if code.startswith("/-", index):
+            block_depth += 1
+            index += 2
+            continue
+        if code[index] == "-":
+            end = index
+            while end < len(code) and code[end] == "-":
+                end += 1
+            if end < len(code) and code[end] == "/":
+                if (end - index) % 2 == 0:
+                    remove.add(index)
+                block_depth -= 1
+                index = end + 1
+                continue
+            index = end
+            continue
+        index += 1
+
+    if not remove:
+        return code
+    return "".join(character for position, character in enumerate(code) if position not in remove)
 
 
 def _split_imports_and_body(code: str) -> tuple[list[str], str, int]:
@@ -1086,8 +1071,15 @@ class LeanRepl:
                     and self._allowed_import_roots is not None
                 ):
                     try:
-                        _reject_legacy_deps_json_comment_bypass(code)
                         header = self._check_header(code, deadline)
+                        normalized = _normalize_legacy_deps_json_comment_closes(code)
+                        if normalized != code:
+                            normalized_header = self._check_header(normalized, deadline)
+                            if normalized_header != header:
+                                raise ValueError(
+                                    "Lean header contains a block-comment close "
+                                    "spelling that lean --deps-json cannot validate safely"
+                                )
                     except ValueError as error:
                         result = {"repl_error": f"Rejected Lean header: {error}"}
                     else:
