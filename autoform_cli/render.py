@@ -25,7 +25,14 @@ from . import graph_pages, graph_views, mermaid, status
 from .approvals import ApprovalStatus, ApprovalVerifier, approval_statuses, current_approvals
 from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage
 from .graph import Graph, Node, load_graph
-from .lean import SourceLinker, build_linker, declaration_names, detect_ref, detect_repository_url
+from .lean import (
+    SourceLinker,
+    build_linker,
+    declaration_names,
+    detect_ref,
+    detect_repository_url,
+    index_failure_message,
+)
 from .markdown import content_lines as _content_lines
 from .markdown import NOTES_BOX, PAGE_SUFFIXES, STATEMENT_BOX, boxed, statement_and_notes
 from .markdown import outside_fences as _outside_fences
@@ -621,7 +628,10 @@ def render_site(
     # <repo>/docs/blueprint would otherwise be described as <repo>/blueprint,
     # and every generated permalink would 404.
     repo_root = Path(lean_root).expanduser().resolve() if lean_root is not None else blueprint.parent
-    linker = build_linker(repo_root, repository_url=repository_url, ref=ref)
+    try:
+        linker = build_linker(repo_root, repository_url=repository_url, ref=ref)
+    except OSError as error:
+        raise PublicationError([index_failure_message(error)]) from error
     sources_base = _sources_base(blueprint, repo_root, linker.repository_url, linker.ref)
     site = _publication(graph, blueprint, snapshot, destination=destination, sources_base=sources_base)
     if site.issues:

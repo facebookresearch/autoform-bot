@@ -45,6 +45,7 @@ from .lean import (
     PASSAGE_SCHEMA,
     SourceIndex,
     declaration_names,
+    index_failure_message,
     index_project,
 )
 
@@ -960,12 +961,12 @@ def _remember_descendants(
 
     try:
         children = psutil.Process(process.pid).children(recursive=True)
-    except (psutil.Error, OSError):
+    except (psutil.Error, OSError, SystemError):
         return
     for child in children:
         try:
             descendants[(child.pid, child.create_time())] = child
-        except (psutil.Error, OSError):
+        except (psutil.Error, OSError, SystemError):
             continue
 
 
@@ -974,25 +975,48 @@ def _remember_tagged_processes(
     descendants: dict[tuple[int, float], psutil.Process],
     *,
     root_pid: int,
+    strict: bool = True,
 ) -> None:
     """Find descendants that escaped the original parent and process group."""
 
-    for candidate in psutil.process_iter():
-        if candidate.pid in {os.getpid(), root_pid}:
-            continue
-        # Reading another user's process can fail with SystemError on macOS.
+    last_scan_error: BaseException | None = None
+    for _attempt in range(2):
+        retry = False
         try:
-            if candidate.environ().get(_PROCESS_TOKEN_ENV) == token:
-                descendants[(candidate.pid, candidate.create_time())] = candidate
-        except (psutil.Error, OSError, SystemError):
+            candidates = tuple(psutil.process_iter())
+        except (psutil.Error, OSError, SystemError) as error:
+            last_scan_error = error
             continue
+        for candidate in candidates:
+            if candidate.pid in {os.getpid(), root_pid}:
+                continue
+            try:
+                if candidate.environ().get(_PROCESS_TOKEN_ENV) == token:
+                    descendants[(candidate.pid, candidate.create_time())] = candidate
+            except (psutil.Error, OSError):
+                continue
+            except SystemError as error:
+                last_scan_error = error
+                retry = True
+        if not retry:
+            return
+    if strict and last_scan_error is not None:
+        raise SkeletonError(
+            ["cannot safely inspect descendant processes after repeated process-table errors"]
+        ) from last_scan_error
 
 
 def _process_is_alive(process: psutil.Process) -> bool:
     try:
         return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
-    except (psutil.Error, OSError):
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
         return False
+    except (psutil.Error, OSError, SystemError):
+        # Uncertainty is live for the success gate and cleanup target list.  A
+        # disappeared/reused PID is handled by psutil's identity checks when
+        # termination is attempted; treating inspection failure as dead could
+        # let an escaped descendant survive a successful command.
+        return True
 
 
 def _process_group_is_alive(pid: int) -> bool:
@@ -1031,18 +1055,23 @@ def _terminate_process_tree(
     started, available = time.perf_counter(), _remaining(deadline)
     for share, group_signal, method in ((0.4, "SIGTERM", "terminate"), (0.8, "SIGKILL", "kill")):
         _remember_descendants(process, descendants)
-        _remember_tagged_processes(token, descendants, root_pid=process.pid)
+        _remember_tagged_processes(
+            token,
+            descendants,
+            root_pid=process.pid,
+            strict=False,
+        )
         live = [child for child in descendants.values() if child.pid != process.pid and _process_is_alive(child)]
         if os.name == "posix":
             with contextlib.suppress(OSError):
                 os.killpg(process.pid, getattr(signal, group_signal))
         for target in ([process] if process.poll() is None else []) + live:
-            with contextlib.suppress(OSError, psutil.Error):
+            with contextlib.suppress(OSError, psutil.Error, SystemError):
                 getattr(target, method)()
         phase_deadline = started + available * share
         with contextlib.suppress(OSError, subprocess.TimeoutExpired):
             process.wait(timeout=_remaining(phase_deadline))
-        with contextlib.suppress(OSError, psutil.Error):
+        with contextlib.suppress(OSError, psutil.Error, SystemError):
             psutil.wait_procs(live, timeout=_remaining(phase_deadline))
 
 
@@ -1284,6 +1313,7 @@ class LeanLibrary:
     name: str
     src_dir: Path
     roots: tuple[str, ...]
+    globs: tuple[str, ...] = ()
 
 
 def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
@@ -1322,7 +1352,14 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
         roots = entry.get("roots")
         if not isinstance(roots, list) or not all(isinstance(item, str) for item in roots):
             roots = [name]
-        libraries.append(LeanLibrary(name=name, src_dir=src_dir.resolve(), roots=tuple(roots)))
+        # Lake accepts one glob or an array, and translate-config writes them
+        # only when they differ from the default of one glob per root.
+        globs = entry.get("globs")
+        if isinstance(globs, str):
+            globs = [globs]
+        if not isinstance(globs, list) or not all(isinstance(item, str) for item in globs):
+            globs = []
+        libraries.append(LeanLibrary(name=name, src_dir=src_dir.resolve(), roots=tuple(roots), globs=tuple(globs)))
     if not libraries:
         package = config.get("name")
         if isinstance(package, str) and package:
@@ -1500,8 +1537,14 @@ def _probe_modules(probe: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(modules))
 
 
+def _probe_purpose(label: str) -> str:
+    """What `lake build` must come before, as the freshness messages say it."""
+
+    return "extracting skeletons" if label == "skeleton probe" else f"running the {label}"
+
+
 def _check_artifacts_fresh(
-    lake: str, lean_root: Path, modules: tuple[str, ...], *, timeout: float
+    lake: str, lean_root: Path, modules: tuple[str, ...], *, timeout: float, label: str = "skeleton probe"
 ) -> None:
     """Ask Lake to prove that imported artifacts match their exact inputs.
 
@@ -1522,7 +1565,7 @@ def _check_artifacts_fresh(
         raise SkeletonError(
             [
                 "Lean build artifacts are stale; run "
-                f"`{build_command}` before extracting skeletons\n{detail}"
+                f"`{build_command}` before {_probe_purpose(label)}\n{detail}"
             ]
         )
     if result.returncode != 0:
@@ -1535,7 +1578,7 @@ def _check_artifacts_fresh(
         )
 
 
-def _lake_executable(lean_root: Path) -> str:
+def _lake_executable(lean_root: Path, label: str = "skeleton probe") -> str:
     """Find Lake, and refuse a project Lake has never resolved."""
 
     lake = shutil.which("lake")
@@ -1543,7 +1586,7 @@ def _lake_executable(lean_root: Path) -> str:
         raise SkeletonError(["lake is not on PATH; a built Lean project is required to extract skeletons"])
     if not (lean_root / "lake-manifest.json").is_file():
         raise SkeletonError(
-            ["lake-manifest.json is missing; run `lake build` before extracting skeletons"]
+            [f"lake-manifest.json is missing; run `lake build` before {_probe_purpose(label)}"]
         )
     return lake
 
@@ -1597,7 +1640,7 @@ def _build_probe_helper(lean_root: Path, directory: Path, *, timeout: float) -> 
     return directory
 
 
-def _raise_if_core_module_shadowed(detail: str) -> None:
+def _raise_if_core_module_shadowed(detail: str, label: str = "skeleton probe") -> None:
     """Name the dependency library at fault when Lean could not load a toolchain module."""
 
     shadowed = _SHADOWED_CORE_MODULE.search(detail)
@@ -1605,7 +1648,7 @@ def _raise_if_core_module_shadowed(detail: str) -> None:
         root = shadowed.group(1).split(".", 1)[0]
         raise _ProbeEnvironmentError(
             [
-                f"the skeleton probe cannot load toolchain module {shadowed.group(1)}: a dependency "
+                f"the {label} cannot load toolchain module {shadowed.group(1)}: a dependency "
                 f"library probably provides modules under `{root}`, which hides the toolchain's own `{root}`; "
                 f"rename that library's modules\n{detail}"
             ]
@@ -1620,6 +1663,7 @@ def run_probe(
     freshness_timeout: float = DEFAULT_FRESHNESS_TIMEOUT,
     check_freshness: bool = True,
     helper: Path | None = None,
+    label: str = "skeleton probe",
 ) -> str:
     """Run ``probe`` with ``lake env lean`` inside the built project.
 
@@ -1627,25 +1671,27 @@ def run_probe(
     ``timeout`` the probe itself; neither spends the other's budget. Extraction
     checks freshness once for all its probes and passes ``check_freshness=False``.
     ``helper`` is the directory ``_build_probe_helper`` compiled the helpers
-    into; without one, the probe builds its own within ``timeout``.
+    into; without one, a probe that imports them builds its own within
+    ``timeout``. ``label`` names the probe in failure messages.
     """
 
-    lake = _lake_executable(lean_root)
+    lake = _lake_executable(lean_root, label)
     modules = _probe_modules(probe)
     if check_freshness:
-        _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout)
+        _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout, label=label)
     deadline = time.monotonic() + timeout
     env = _probe_environment()
     with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
-        if helper is None:
-            helper = _build_probe_helper(
-                lean_root, Path(scratch) / "helper", timeout=max(0.0, deadline - time.monotonic())
-            )
-        if not (helper / f"{_PROBE_HELPER_MODULE}.olean").is_file():
-            raise _ProbeEnvironmentError([f"the skeleton probe helpers are missing from {helper}"])
-        # Lake puts the project's own directories first, so the helper cannot
-        # hide a project module; building it refused one with the same name.
-        env["LEAN_PATH"] = os.pathsep.join(filter(None, (env.get("LEAN_PATH"), str(helper))))
+        if f"import «{_PROBE_HELPER_MODULE}»" in probe.splitlines():
+            if helper is None:
+                helper = _build_probe_helper(
+                    lean_root, Path(scratch) / "helper", timeout=max(0.0, deadline - time.monotonic())
+                )
+            if not (helper / f"{_PROBE_HELPER_MODULE}.olean").is_file():
+                raise _ProbeEnvironmentError([f"the skeleton probe helpers are missing from {helper}"])
+            # Lake puts the project's own directories first, so the helper cannot
+            # hide a project module; building it refused one with the same name.
+            env["LEAN_PATH"] = os.pathsep.join(filter(None, (env.get("LEAN_PATH"), str(helper))))
         source = Path(scratch) / "AutoformSkeletonProbe.lean"
         source.write_text(probe, encoding="utf-8")
         # Records go to their own file: on stdout any other write could split one.
@@ -1668,8 +1714,10 @@ def run_probe(
             ) from exc
         output = _read_probe_records(records) if result.returncode == 0 else ""
     if result.returncode != 0:
-        detail = _stable_detail((result.stderr or result.stdout).strip(), lean_root, Path(scratch), helper)
-        _raise_if_core_module_shadowed(detail)
+        detail = _stable_detail(
+            (result.stderr or result.stdout).strip(), lean_root, *filter(None, (Path(scratch), helper))
+        )
+        _raise_if_core_module_shadowed(detail, label)
         collision = _HELPER_COLLISION.search(detail)
         if collision:
             raise SkeletonError(
@@ -1678,7 +1726,7 @@ def run_probe(
                     f"namespace is reserved by the skeleton probe's helper; rename that declaration\n{detail}"
                 ]
             )
-        raise SkeletonError([f"the skeleton probe failed; is the project built with `lake build`?\n{detail}"])
+        raise SkeletonError([f"the {label} failed; is the project built with `lake build`?\n{detail}"])
     return output or result.stdout
 
 
@@ -2339,7 +2387,10 @@ def extract_skeletons(
         raise SkeletonError(
             ["Lean project configuration changed while skeletons were being extracted; retry after the project is idle"]
         )
-    index = index_project(root)
+    try:
+        index = index_project(root)
+    except OSError as error:
+        raise SkeletonError([index_failure_message(error)]) from error
     prepare: Callable[[tuple[str, ...]], None] | None = None
     # The guard encloses the scratch directory, so the commands inside reuse it
     # and a termination signal is re-delivered only after the directory is gone.
@@ -2365,7 +2416,11 @@ def extract_skeletons(
             node_ids=node_ids,
             prepare=prepare,
         )
-    if index_project(root).source_digest != index.source_digest:
+    try:
+        current_index = index_project(root)
+    except OSError as error:
+        raise SkeletonError([index_failure_message(error)]) from error
+    if current_index.source_digest != index.source_digest:
         raise SkeletonError(["Lean sources changed during skeleton extraction; retry after the build is idle"])
     if _project_control_snapshot(root) != control_snapshot:
         raise SkeletonError(

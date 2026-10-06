@@ -17,41 +17,79 @@ MkDocs, CI, and optionally publication. It does not scope sources, choose
 theorems, write roadmap nodes, or prove results; Roadmap owns that work.
 
 Inspect before writing and preserve existing Lean, Markdown, workflow, and
-ignore files. Use `scripts/workspace_inspector.py` when auditing an existing
-Lean workspace. Infer safe local defaults from the request and repository. If a
-material choice is missing, ask once for the run type (new, repair, or inspect),
-UpperCamelCase package name, target directory, and whether publication is
-wanted. Without explicit publication approval, make no remote changes. Setup
-prepares the shell and stops before
+ignore files. Resolve `AUTOFORM_PLUGIN_ROOT` from the loaded plugin and inspect
+an existing project through the supported read-only entrypoint:
+
+```bash
+AUTOFORM_PLUGIN_ROOT="<loaded-plugin-root>"
+PROJECT="<existing-project>"
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project inspect "$PROJECT" --json
+```
+
+Infer safe local defaults from the request and repository. If a material choice
+is missing, ask once for the run type (new, repair, or inspect), UpperCamelCase
+package name, target directory, and whether publication is wanted. Without
+explicit publication approval, make no remote changes. Setup prepares the shell
+and stops before
 mathematical planning.
 
 Read the repo-shaped [Cabannes thesis project](assets/cabannes-thesis-project/README.md)
 as a concrete setup example. Reuse its structure selectively: rename the Lean
-package, check the current matching stable Lean/Mathlib release, update branch
-and immutable workflow pins, and merge rather than overwrite. Its populated
+package, keep the recommended release from `autoform project versions` unless
+the user needs another Lean version, update branch and immutable workflow pins,
+and merge rather than overwrite. Its populated
 thesis notes illustrate later skills; Setup does not reproduce that mathematics.
 
-For a new repository, require a target directory that does not already exist and
-bootstrap the Lean/Mathlib shell with the plugin's internal helper:
+For a new repository, require a target directory that does not already exist,
+then create the complete local project atomically:
 
 ```bash
-bash "<AUTOFORM_PLUGIN_ROOT>/scripts/make_project.sh" \
-  <ProjectName> [target-dir]
+AUTOFORM_PLUGIN_ROOT="<loaded-plugin-root>"
+TARGET="<absent-target>"
+PACKAGE="<UpperCamelCaseName>"
+uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project new "$TARGET" --package "$PACKAGE"
 ```
 
-For a new or incomplete repository:
+Without version flags `project new` uses the recommended release from
+`autoform project versions`: a tested Lean/Mathlib pair whose resolved
+`lake-manifest.json` is bundled. Pass `--release <RELEASE_ID>` for another
+listed pair. If the user needs a different Lean version, pass
+`--lean-toolchain <vX.Y.Z>`; `--mathlib-rev <REV>` overrides the default Mathlib
+tag of the same name, and the toolchain must match the `lean-toolchain` of that
+Mathlib revision. Such a project is created without `lake-manifest.json` and
+with a warning: run `lake update` in it, which needs network access and
+downloads the Mathlib build cache, then commit the manifest it writes. Autoform
+needs Lean v4.27.0 or newer, and `project new` also warns below that.
+Every component of the target parent must be a real directory, not a symlink;
+on macOS use `/private/tmp`, not the `/tmp` alias. The parent must not be group-
+or world-writable unless it is a sticky directory owned by the user or root. If
+`project new` reports `project-parent-unsafe`, choose another parent or, with the
+user's agreement, remove that write access with `chmod g-w,o-w`.
 
-- create or repair a buildable Lean project with matching `lean-toolchain` and
-  Mathlib revisions; and
-- write the blueprint vault, site configuration, and CI with `autoform init`.
+`project new` writes the requested `lean-toolchain` and Mathlib revision (by
+default the recommended, locked catalog pair), the Lean shell, and the complete
+Autoform vault, site, ignore rules, and pinnable CI without running Lake, Lean,
+or network operations; no later `init` is needed. It never overwrites an
+existing target and fails closed on platforms without the required POSIX
+filesystem operations, including Windows.
+It pins generated workflows exactly as `init` does, described below, and omits
+them when there is no commit to pin;
+invoke `init` later through the same plugin-root launcher, passing the target
+and `--autoform-ref <40-char-sha>`. Do not invent workflow sources or revisions,
+and do not copy the populated example as a project generator.
+
+For an incomplete existing repository, preserve its authored configuration and
+run `autoform init` through the same `uv run --project "$AUTOFORM_PLUGIN_ROOT"`
+prefix only for the Autoform vault/site repair overlay.
 
 `autoform init` is the whole vault: `blueprint/` with its landing page,
 `roadmap/README.md`, `coverage/`, and `sources/`, plus `mkdocs.yml`, the theme
 override, the workflows, and ignore rules. Do not hand-build any of it and do
 not copy the bundled example: the layout is fixed, and a chapter written as a
 sibling file instead of `<chapter>/README.md` still validates while publishing
-a book with no chapters. `init` never overwrites an existing file, so it is
-also the repair path; it reports what it left alone. See the
+a book with no chapters. `init` preserves existing files, appending only missing
+Autoform rules through a retained bounded regular root `.gitignore` file, so it
+is also the repair path; it reports what it left alone. See the
 [CLI reference](../../autoform_cli/README.md#commands) for its flags.
 
 The site's MathJax configuration is not part of the vault: `autoform render`
@@ -62,12 +100,20 @@ refuses. See the [CLI reference](../../autoform_cli/README.md#commands) for
 what the script loads and how a project scaffolded with a copy of it is
 handled.
 
-`init` pins the generated workflows to the Autoform commit that ran it, but it
-can only do that when Autoform is running from a Git checkout. Installed as a
-plugin it is a plain directory copy, so there is nothing to read and `init`
-writes no CI rather than guess a ref: guessing produced projects whose first
-push failed with nothing in the workflow to explain why. When it reports that,
-find the commit the plugin was installed from and pass
+`init` pins the generated workflows to the Autoform commit that ran it, using a
+safe remote only when a cached remote-tracking ref contains that commit. It
+prefers Autoform's canonical repository, then `origin`, then `upstream`, then a
+unique remaining source from the Autoform checkout it runs from or the
+marketplace checkout an installed plugin was copied from. It infers that pin
+only when tracked files are clean and the retained bounded, regular, link-free
+required template snapshot and scaffold renderer match the pinned commit in
+path, bytes, and executable-bit classification; an installed copy must also
+match its marketplace checkout. All identity and tree reads ignore local Git
+replacement objects. On any mismatch or when no remote has that local
+containment evidence, `init` writes no CI rather than guess a source or ref:
+guessing produced projects whose first push failed with nothing in the workflow
+to explain why. When it reports that, find the commit the plugin was installed
+from and pass
 `--autoform-ref <40-char-sha>`, or say plainly that CI was not configured.
 Never invent a ref. It must be a full 40-character commit sha: `init` refuses a
 branch, a tag, or an abbreviated sha, because CI would silently reinstall a
@@ -114,6 +160,7 @@ Validate the prepared repository before reporting it ready. Build Lean first,
 then run the publication sequence:
 
 ```bash
+lake update          # only when the project has no lake-manifest.json
 lake exe cache get   # skip only when the project has no Mathlib dependency
 lake build
 ```

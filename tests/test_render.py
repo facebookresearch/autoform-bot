@@ -10,7 +10,7 @@ import pytest
 
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS
 from autoform_cli.graph import load_graph
-from autoform_cli.lean import _normalize_remote
+from autoform_cli.lean import LeanSourceError, _normalize_remote
 from autoform_cli.markdown import site_converter, statement_and_notes
 from autoform_cli.render import (
     PUBLICATION_MANIFEST,
@@ -755,6 +755,35 @@ def test_refuses_overlapping_source_and_output(tmp_path: Path, destination: str)
         render_site(blueprint, output)
 
 
+@pytest.mark.parametrize(
+    ("reason", "message"),
+    [
+        (None, "Lean sources could not be indexed"),
+        (
+            "permission denied: Project/Secret.lean",
+            "Lean sources could not be indexed: permission denied: Project/Secret.lean",
+        ),
+    ],
+)
+def test_render_translates_source_index_io_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str | None, message: str
+) -> None:
+    project = _project(tmp_path)
+
+    def fail_linker(root: Path, **kwargs: object):
+        if reason is not None:
+            raise LeanSourceError(reason)
+        raise OSError(f"private host detail: {root}")
+
+    monkeypatch.setattr("autoform_cli.render.build_linker", fail_linker)
+
+    with pytest.raises(PublicationError) as error:
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert error.value.issues == (message,)
+    assert str(tmp_path) not in str(error.value)
+
+
 def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path) -> None:
     project = _project(tmp_path)
     outputs = [tmp_path / "first", tmp_path / "second"]
@@ -1071,8 +1100,10 @@ def test_render_omits_benign_hidden_files(tmp_path: Path) -> None:
         ("https://github.com/owner/repo.git", "https://github.com/owner/repo"),
         ("https://github.com/owner/repo/", "https://github.com/owner/repo"),
         ("ssh://git@github.com/owner/repo.git", "https://github.com/owner/repo"),
-        ("https://user:token@github.com/owner/repo.git", "https://github.com/owner/repo"),
-        ("https://ci:token@git.example.com:8443/group/repo.git", "https://git.example.com:8443/group/repo"),
+        ("https://user:secret@github.com/owner/repo.git", None),
+        ("https://ci:token@git.example.com:8443/group/repo.git", None),
+        ("https://github.com/owner/repo.git?access_token=secret", None),
+        ("https://github.com/owner/repo.git#secret", None),
         ("/local/path", None),
     ],
 )
