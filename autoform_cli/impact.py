@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -320,6 +320,9 @@ class ImpactArticle:
     article_id: str | None
     declarations: tuple[str, ...]
     dependencies: tuple[str, ...] = ()
+    statement_dependencies: tuple[str, ...] = ()
+    stated: bool = False
+    mathlib: bool = False
 
     @property
     def claim_target(self) -> str:
@@ -408,7 +411,15 @@ class ImpactReport:
     statement_impacted: tuple[ImpactedArticle, ...]
     proof_impacted: tuple[ImpactedArticle, ...]
     helpers: tuple[ImpactHelper, ...]
+    #: Impacted articles with no Markdown dependency path to the revised
+    #: declarations: to the revised article, or to an article naming one of
+    #: them or, when none names it, owning it.
     undeclared_dependencies: tuple[str, ...]
+    #: Stated articles other than Mathlib ones whose Markdown statement rests on
+    #: the revised declarations, through statement edges only, that are not
+    #: statement-impacted: their Lean may inline a revised definition's body
+    #: instead of naming it.
+    unused_statement_dependencies: tuple[str, ...]
     deprecated: tuple[DeprecatedConstant, ...]
     deprecated_unused: tuple[str, ...]
     claim_targets: tuple[str, ...]
@@ -420,9 +431,11 @@ class ImpactReport:
         A helper the revised article owns, such as a structure's generated
         constructor or recursor, is repaired under that article's claim, so it
         does not count; any other helper, owned or not, does, and so does a
-        revised declaration that belongs to another article or to none. The
-        revision is contained exactly when its only claim target is the
-        revised article's.
+        revised declaration that belongs to another article or to none, or a
+        stated article, other than a Mathlib one, whose Markdown statement rests
+        on the revised declarations, even when its Lean shows no use. The
+        revision is contained exactly when its only claim target is the revised
+        article's.
         """
 
         return self.claim_targets == (self.article.claim_target,)
@@ -444,6 +457,7 @@ class ImpactReport:
             "proof_impacted": [item.as_dict() for item in self.proof_impacted],
             "helpers": [helper.as_dict() for helper in self.helpers],
             "undeclared_dependencies": list(self.undeclared_dependencies),
+            "unused_statement_dependencies": list(self.unused_statement_dependencies),
             "deprecated": [item.as_dict() for item in self.deprecated],
             "deprecated_unused": list(self.deprecated_unused),
             "claim_targets": list(self.claim_targets),
@@ -547,8 +561,31 @@ def compute_impact(
             ImpactHelper(name, record.kind, impact, record.module, path, line, owners, targets)
         )
 
+    # A revised declaration belongs to the articles naming it or, when none
+    # does, to its owners, so a Markdown path to any of them reaches the
+    # revision as surely as a path to the revised article does.
+    anchors = {revised.id}
+    for name in revised_names:
+        anchors.update(named.get(name) or _owners(records[name], records, named))
     impacted = (*statement_impacted, *proof_impacted)
-    undeclared = sorted(item.id for item in impacted if not _reaches(item.id, revised.id, by_id))
+    undeclared = sorted(
+        item.id for item in impacted if item.id not in anchors and not _reaches(item.id, anchors, by_id)
+    )
+    # The probe sees only names, so a dependent whose Lean inlines a revised
+    # definition's body instead of naming it would keep its statement under the
+    # old meaning; its Markdown statement dependency is the only trace. A
+    # Mathlib article's statement is a Mathlib declaration, which cannot use the
+    # revised one, and the loader refuses to retract it, so it is left out.
+    statement_ids = {item.id for item in statement_impacted}
+    unused = sorted(
+        article.id
+        for article in articles
+        if article.stated
+        and not article.mathlib
+        and article.id != revised.id
+        and article.id not in statement_ids
+        and _reaches(article.id, anchors, by_id, statement_only=True)
+    )
 
     deprecated_users: dict[str, set[str]] = {}
     for record in records.values():
@@ -568,9 +605,11 @@ def compute_impact(
     # A helper is repaired under every owning article's claim; an unowned
     # helper contributes the key derived from its own name.
     # A revised declaration no article names is claimed the same way.
-    others = {item.claim_target for item in impacted} | {
-        target for helper in helpers for target in helper.claim_targets
-    }
+    others = (
+        {item.claim_target for item in impacted}
+        | {by_id[article_id].claim_target for article_id in unused}
+        | {target for helper in helpers for target in helper.claim_targets}
+    )
     for name in revised_names:
         if name not in named:
             others.update(_claim_targets_for(name, _owners(records[name], records, named), by_id))
@@ -585,6 +624,7 @@ def compute_impact(
         proof_impacted=tuple(proof_impacted),
         helpers=tuple(helpers),
         undeclared_dependencies=tuple(undeclared),
+        unused_statement_dependencies=tuple(unused),
         deprecated=deprecated,
         deprecated_unused=tuple(item.name for item in deprecated if not item.users and not item.articles),
         claim_targets=claim_targets,
@@ -694,15 +734,18 @@ def _descends_from(record: ConstantRecord, ancestor: str, records: Mapping[str, 
     return False
 
 
-def _reaches(start: str, target: str, articles: Mapping[str, ImpactArticle]) -> bool:
-    """Whether ``start`` reaches ``target`` through Markdown dependencies."""
+def _reaches(
+    start: str, targets: Collection[str], articles: Mapping[str, ImpactArticle], *, statement_only: bool = False
+) -> bool:
+    """Whether ``start`` reaches one of ``targets`` through Markdown dependencies, or only statement ones."""
 
     seen = {start}
     work = [start]
     while work:
         article = articles.get(work.pop())
-        for dependency in article.dependencies if article is not None else ():
-            if dependency == target:
+        edges = () if article is None else article.statement_dependencies if statement_only else article.dependencies
+        for dependency in edges:
+            if dependency in targets:
                 return True
             if dependency not in seen:
                 seen.add(dependency)
@@ -779,6 +822,9 @@ def revision_impact(
             node.article_id,
             tuple(dict.fromkeys(target.declaration for target in node.lean_targets)),
             tuple(node.dependencies),
+            tuple(node.statement_dependencies),
+            node.status.stated,
+            node.mathlib,
         )
         for node in runtime.nodes
     }
@@ -888,8 +934,13 @@ def format_impact(report: ImpactReport) -> list[str]:
             )
     if report.undeclared_dependencies:
         lines.append(
-            "Impacted without a Markdown dependency path to the revised article: "
+            "Impacted without a Markdown dependency path to the revised declarations: "
             + ", ".join(report.undeclared_dependencies)
+        )
+    if report.unused_statement_dependencies:
+        lines.append(
+            "Statement dependents in Markdown that are not statement impacted: "
+            + ", ".join(report.unused_statement_dependencies)
         )
     if report.deprecated:
         lines.append("Deprecated:")

@@ -105,6 +105,14 @@ def test_formalize_replaces_custom_orchestration_with_the_markdown_frontier(
     assert "no custom scheduler or provider adapter" in normalized
     assert "ready, running, retrying, failed, or blocked scheduler states" in normalized
     assert "never a transcript or retry counter" in normalized
+    assert (
+        "require the same `phase`, `blockers`, `dependencies`, `article_revision`, "
+        "`open_statements`, `assumes`, and `revision` as the first read"
+    ) in normalized
+    assert (
+        "the same `phase`, `article_revision`, `open_statements`, `assumes`, and "
+        "`revision` it was dispatched with"
+    ) in normalized
     assert "$formalize" in metadata
     assert "Formalize the ready Markdown roadmap frontier" in codex
     assert '"id": "formalize"' in muse

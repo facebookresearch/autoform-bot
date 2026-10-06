@@ -41,9 +41,11 @@ _FRONTMATTER_KEYS = frozenset(
         "not_ready",
         "origin",
         "discussion",
+        "open_statements",
     }
 )
 _FORMALIZED = "formalized"
+_RETRACTED = "retracted"
 _TRUE = frozenset({"true", "yes"})
 _FALSE = frozenset({"false", "no"})
 _CATALOG_DECLARATION_KEYS = frozenset(
@@ -88,6 +90,10 @@ class Node:
     lean: str | None = None
     declaration: str | None = None
     statement_formalized: bool = False
+    #: ``statement: retracted``: a revision retracted the statement while
+    #: ``lean:`` still names the old declaration, which stays in the build
+    #: until Formalize restates the article.
+    statement_retracted: bool = False
     proof_formalized: bool = False
     mathlib: bool = False
     mathlib_declaration: str | None = None
@@ -142,6 +148,10 @@ class Graph:
 
     blueprint_dir: Path
     nodes: dict[str, Node]
+    #: ``open_statements: allowed`` in ``roadmap/README.md``: a theorem's
+    #: statement may land with a ``sorry`` proof. Absent or ``forbidden`` keeps
+    #: the strict policy, where CI rejects every ``sorry``.
+    open_statements: bool = False
 
     @property
     def edge_count(self) -> int:
@@ -187,6 +197,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     issues.extend(discovery_issues)
     article_ids: dict[str, str] = {}
     source_hashes = {source.id: source.source_sha256 for source in sources}
+    policy_page = (blueprint / "roadmap" / "README.md").resolve()
+    open_statements = False
 
     for source in sources:
         canonical = source.path.resolve()
@@ -214,6 +226,14 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     )
                 else:
                     article_ids[article_id] = node.id
+            policy = node.metadata.get("open_statements")
+            if policy is not None:
+                if canonical != policy_page:
+                    issues.append(
+                        f"{node.id}: open_statements is a project policy; set it only in roadmap/README.md"
+                    )
+                else:
+                    open_statements = policy == "allowed"
             parsed.append(node)
 
     if issues:
@@ -268,6 +288,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             catalog=metadata.get("catalog"),
             lean=metadata.get("lean"),
             statement_formalized=metadata.get("statement") == _FORMALIZED,
+            statement_retracted=metadata.get("statement") == _RETRACTED,
             proof_formalized=metadata.get("proof") == _FORMALIZED,
             mathlib=metadata.get("mathlib") in _TRUE,
             mathlib_declaration=metadata.get("mathlib_declaration"),
@@ -291,7 +312,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         issues.extend(_find_rollup_cycles(nodes))
     if issues:
         raise GraphValidationError(issues)
-    return Graph(blueprint_dir=blueprint, nodes=nodes)
+    return Graph(blueprint_dir=blueprint, nodes=nodes, open_statements=open_statements)
 
 
 def _apply_atlas_manifest(
@@ -646,6 +667,16 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
                 f"frontmatter key {key!r}"
             )
 
+    if metadata.get("statement") == _RETRACTED:
+        if "lean" not in metadata:
+            issues.append(
+                f"{node_id}: statement: retracted needs the lean: declaration it retracts;"
+                " without lean:, omit statement"
+            )
+        if metadata.get("proof") == _FORMALIZED:
+            issues.append(f"{node_id}: proof: formalized needs statement: formalized, not retracted")
+        if metadata.get("mathlib") in _TRUE:
+            issues.append(f"{node_id}: a mathlib: true article cannot record statement: retracted")
     return metadata, end + 1, issues
 
 
@@ -661,7 +692,13 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
         if folded != "module":
             return value, f"{location}: 'catalog' accepts only 'module'"
         return folded, None
-    if key in {"statement", "proof"}:
+    if key == "statement":
+        if folded not in {_FORMALIZED, _RETRACTED}:
+            return value, (
+                f"{location}: 'statement' accepts only {_FORMALIZED!r} or {_RETRACTED!r}; omit the key otherwise"
+            )
+        return folded, None
+    if key == "proof":
         if folded != _FORMALIZED:
             return value, f"{location}: {key!r} accepts only {_FORMALIZED!r}; omit the key otherwise"
         return folded, None
@@ -672,6 +709,10 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
     if key == "origin":
         if folded not in {"cited", "bridged", "background"}:
             return value, f"{location}: 'origin' accepts cited, bridged, or background"
+        return folded, None
+    if key == "open_statements":
+        if folded not in {"allowed", "forbidden"}:
+            return value, f"{location}: 'open_statements' accepts allowed or forbidden"
         return folded, None
     return value, None
 

@@ -1356,6 +1356,20 @@ def test_override_parent_generation_is_part_of_the_snapshot(
     assert "project-changed-during-inspection" in _codes(result)
 
 
+def test_native_parent_change_token_invalidates_one_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _project(tmp_path)
+    (root / ".lake").mkdir()
+    tokens = iter(((101,), (102,)))
+    monkeypatch.setattr(project_snapshot, "_directory_change_token", lambda _path: next(tokens))
+
+    snapshot = project_snapshot._capture_decision_snapshot(root)
+
+    assert snapshot.lake_directory == ("changed", None)
+    assert not snapshot.stable
+
+
 def test_new_nearer_project_root_forces_a_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     outer = _project(tmp_path)
     inner = outer / "nested"

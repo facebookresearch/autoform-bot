@@ -136,6 +136,42 @@ def test_green_stops_at_an_unproved_prerequisite(tmp_path: Path) -> None:
     assert statuses["top"].key == "proved"
 
 
+def test_a_conditional_proof_has_its_own_colour_and_legend_entry(tmp_path: Path) -> None:
+    """A proof resting on a sorry must not share the fully proved green."""
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "README.md", "Roadmap", open_statements="allowed")
+    _write_node(blueprint / "roadmap" / "open.md", "Open", declaration="theorem", statement="formalized")
+    _write_node(
+        blueprint / "roadmap" / "top.md",
+        "Top",
+        [("Open", "open.md")],
+        declaration="theorem",
+        statement="formalized",
+        proof="formalized",
+    )
+
+    document = export_graph(blueprint).read_text(encoding="utf-8")
+
+    assert '("Top"):::conditional' in document
+    assert f"classDef conditional fill:{_state('conditional').fill}" in document
+    assert '<span class="bp-swatch bp-swatch-conditional">' in document
+    assert "Proof compiles, but rests on an open statement without a recorded Lean proof." in document
+
+
+def test_the_legend_explains_readiness_without_naming_a_policy(tmp_path: Path) -> None:
+    """Readiness depends on the project's policy, so the legend words it without naming one."""
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "stated.md", "Stated", declaration="theorem", statement="formalized")
+    _write_node(blueprint / "roadmap" / "unstated.md", "Unstated", declaration="theorem")
+    statuses = derive(load_graph(blueprint))
+
+    legend = mermaid.render_legend(statuses)
+
+    assert [statuses[key].key for key in ("stated", "unstated")] == ["can_prove", "can_state"]
+    assert "Statement is in Lean and nothing it needs is blocked, so the proof can start." in legend
+    assert "Nothing it needs is blocked, so the statement can be written in Lean." in legend
+
+
 def test_cli_writes_only_the_graph_by_default(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

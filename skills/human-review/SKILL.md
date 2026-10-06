@@ -50,17 +50,22 @@ individual node and Lean-source links. Record each human decision as `approve`,
 `revise`, or `block`, with the exact page or node and rationale. Separate validator output
 from the person's judgment. Do not silently apply requested revisions: hand
 mathematical-plan changes and Lean implementation changes to Roadmap, which
-reopens the affected articles for Formalize, and autonomous rubric scoring to
-Agent Review.
+records the decision and retracts the affected article so Formalize takes it up
+under the [revision contract](../../autoform_cli/README.md#revision-contract),
+and autonomous rubric scoring to Agent Review.
 
 Treat the landing page's `Scoped roadmap` percentage as completion among
 formalizable leaf targets only. Module catalogs are non-dispatchable source
 inventories reported by a separate neutral metric. Completion includes every
-dependency recursively and requires proofs for theorems and bodies for definitions.
-A target marked
-`mathlib: true` follows the authored status contract; the marker is an author
-assertion, not audit verification that the declaration is in Mathlib. Treat the
-percentage never as whole-source completion. Read the adjacent declared source
-coverage and its linked coverage contract before making scope claims. A
-statement-only theorem remains incomplete whether it is blocked or ready to
-prove.
+dependency recursively and requires proofs for theorems and bodies for definitions. A
+target marked `mathlib: true` follows the authored status contract; the marker
+is an author assertion, not audit verification that the declaration is in
+Mathlib. Treat the percentage never as whole-source completion. Read the
+adjacent declared source coverage and its linked coverage contract before
+making scope claims. A statement-only theorem remains incomplete whether it is
+blocked or ready to prove. In a project that allows open statements, a
+conditionally proved target, whose proof rests on an open statement without a
+recorded Lean proof, is not complete either: it is never fully proved, so it
+counts toward the percentage's total but not its completed share, as does
+every target that depends on it. Present it as conditional, naming the open
+statements in its `Assumes` row, never as proved or sorry-free.
