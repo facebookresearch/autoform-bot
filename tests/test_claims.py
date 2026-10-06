@@ -255,6 +255,7 @@ def test_malformed_lease_is_unverifiable_and_not_takeover_eligible(tmp_path: Pat
         lambda: board.renew("malformed"),
         lambda: board.release("malformed"),
         lambda: board.acquire("malformed", ttl=600),
+        lambda: board.acquire("malformed", ttl=600, steal=True),
     ):
         with pytest.raises(claims.MalformedLeaseError):
             operation()

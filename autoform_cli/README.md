@@ -134,14 +134,85 @@ autoform init . --title "Finite Flat Group Schemes" \
 
 Pass `--autoform-ref <sha>` to pin the generated workflows at an immutable
 commit, `--force` to overwrite, and `--json` for machine-readable output.
+An existing root `.gitignore` must be a bounded single-link regular file;
+missing Autoform rules are appended through one retained descriptor. If an
+append cannot be fully reverified, the error says it may be partial and the
+file must be inspected before retrying.
 
-Inspect a Lean project and list Autoform's bundled known-good release pairs:
+Create or inspect a Lean project and list Autoform's bundled known-good release pairs:
 
 ```bash
+autoform project versions
+autoform project new ./FiniteFlat --package FiniteFlat
+autoform project new ./FiniteFlat430 --package FiniteFlat --lean-toolchain v4.30.0
 autoform project inspect .
 autoform project inspect path/inside/project --json
 autoform project versions --json
 ```
+
+`project new` requires an absent target and uses the catalog's recommended
+release unless `--release` names another listed one. It builds a
+complete Lean shell with the release's Lake-generated resolved dependency
+manifest, blueprint, and site in a private sibling directory, validates the
+staged project, then publishes the directory with an atomic no-replace rename.
+It never overwrites an existing path. Failed and concurrent creations leave no
+partial target, and exactly one concurrent creator can win. A failure or
+interrupt after staging can leave a hidden `.autoform-new-*` directory in the
+parent, and the error says so; inspect it before removing it. The published
+tree has fixed modes, 0755 for directories and 0644 for files (0755 for
+executables), whatever the umask.
+A private creation bundle adds generated production-module roots, so package
+names cannot shadow Mathlib libraries such as `Archive` or `Counterexamples`.
+Its release identity is cross-checked with the public catalog and its complete
+Lake manifest before any filesystem state is created.
+Generated workflows are pinned as `init` pins them: `--autoform-ref` must be a
+full commit SHA, an explicit `--autoform-source` carries its own ref or none,
+and without flags the workflows pin the HEAD commit of the Autoform checkout
+running the command, or of the marketplace checkout an installed plugin was
+copied from, read with local Git. Source selection prefers Autoform's canonical
+repository, then `origin`, then `upstream`, then a unique remaining safe remote,
+but only when one of its cached tracking refs contains HEAD. An inferred pin is
+used only when tracked files are clean and the bounded, link-free template
+snapshot and scaffold renderer match that commit in paths, bytes, and
+executable-bit classification; an installed copy must match the checkout too.
+Local Git replacement objects are ignored. Apart from those reads, the command
+runs no subprocesses, Lake, Lean, or network operations. Without a ref the local
+project is complete but the workflows are omitted.
+It fails closed where POSIX descriptor traversal, advisory locking, directory
+sync, or atomic no-replace rename is unavailable, including on Windows.
+The parent and each of its ancestors must be readable real directories, because
+each caller-supplied path component is opened without following links
+(`project-parent-inaccessible` or `project-path-is-symlink` otherwise). On
+macOS, use the canonical `/private/tmp` path rather than the `/tmp` symlink. The
+parent must not be group- or world-writable unless it is a sticky directory
+owned by you or root; otherwise creation fails with
+`project-parent-unsafe`, which `chmod g-w,o-w` on the parent fixes. Creations in
+one parent are serialized with an advisory lock, and a lock held elsewhere for
+30 seconds fails with `project-parent-busy`.
+Immediately before publication and after syncing it, Autoform reopens the
+requested parent without following links and rechecks its device, inode, and
+owner. A pre-publication mismatch preserves the stage; a later mismatch reports
+where publication was observed and tells the caller not to retry blindly.
+
+`--lean-toolchain` takes a Lean release tag (`v4.30.0`, `v4.30.0-rc1`, or
+`leanprover/lean4:v4.30.0`) and `--mathlib-rev` a Mathlib tag, branch, or
+commit, defaulting to the same tag; `--mathlib-rev` requires `--lean-toolchain`,
+and neither combines with `--release`. A pair equal to a catalog entry gets that
+entry's bundled manifest. Any other pair is written without
+`lake-manifest.json` and reported with a `project-release-unlisted` warning:
+run `lake update` in the project, which needs network access, resolves and
+locks Mathlib, and downloads the Mathlib build cache, then commit the manifest.
+Use the toolchain that Mathlib revision declares in its own `lean-toolchain`;
+otherwise Lake may rewrite the project's toolchain, warn, or fail to build.
+Until the manifest exists, `project inspect` reports `indeterminate` with
+`missing-lake-manifest`; afterwards, `unlisted`, or `supported` when Lake locks a
+catalog commit. Autoform needs Lean v4.27.0 or
+newer (the skeleton probe uses that release's `String` API and the generated
+audit reads ILean `decls`); older toolchains get a `project-lean-below-minimum`
+warning. With `--json`, such a pair reports `"release": null` and its warnings
+go to the `warnings` array; otherwise warnings go to stderr. Either way the
+exit status stays 0. Successful JSON uses schema
+`autoform-project-creation/v1`.
 
 `project inspect` is local and read-only. It inspects the nearest enclosing Lean
 project without running Lake, Lean, Git, or the network. For automation, use
@@ -161,7 +232,8 @@ See the [project-inspection reference](project/README.md) for resolver rules,
 scope limits, JSON fields, nullability, and diagnostic codes.
 
 `project versions` lists the bundled catalog of known-good Lean and Mathlib
-pairs. It is an allowlist, not a resolver.
+pairs. These are the pairs `project new` can lock offline; it does not resolve
+others, which it writes unlocked for `lake update`.
 
 Publishing a project runs four steps in order: validate, write the Mermaid
 graph into the vault, render the site source, then strict-build the site.
@@ -522,6 +594,35 @@ the missing IDs with `autoform migrate article-ids` and add them to the
 frontmatter. `work context` may still select that article by its path ID to
 report the migration blocker. Both commands are read-only projections of
 Markdown.
+
+Inspect the Lean consequences of revising an article before editing it:
+
+```bash
+autoform work impact chapter/result . --lean-root .
+autoform work impact chapter/result . --lean-root . --declaration MyProject.helper --json
+```
+
+`work impact` runs a bounded Lean probe against a fresh build and reports
+statement-impacted and proof-impacted articles, unnamed helpers, missing
+Markdown dependency paths, deprecated declarations and their users, whether
+the change is contained, and the complete `claim_targets` set. Helpers shared
+by several articles contribute every owner's claim; an unowned helper gets a
+stable `lean/<slug>-<digest>` target. A revised declaration that no article
+names is claimed the same way, under every nearest owner's target or its own
+stable key. A revision is contained exactly when the selected article's target
+is its only claim target. Project locality is an exact inventory of regular
+repository source modules, never a namespace-prefix guess.
+
+The command snapshots and rereads the roadmap around the probe. It retains one
+bound Lean source generation, derives module inventory and locations from that
+generation's captured bytes, then recaptures through the same binding and
+refuses any content or source-identity change. JSON uses `autoform-impact/v1`
+and binds its answer to the Markdown `source_revision`, the repository
+`lean_source_revision`, and a `build_revision` hash of the normalized Lean
+records. The probe imports project modules, so run it only in a trusted checkout
+or sandbox. It compares elaborated types and values; changes to notation,
+attributes, instance priority, or unreported generated declarations still
+require human review.
 
 Plan durable article identity metadata without changing the blueprint:
 
