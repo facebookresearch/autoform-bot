@@ -1461,30 +1461,22 @@ def test_a_pull_request_that_changed_its_base_branch_proves_nothing_by_its_run(t
         (None, "#7 comes from a deleted repository, not a branch of owner/project"),
     ],
 )
-def test_a_pull_request_from_a_fork_is_refused(tmp_path: Path, source: dict | None, reason: str) -> None:
+def test_a_pull_request_from_a_fork_is_refused_before_anything_about_it_is_read(
+    tmp_path: Path, source: dict | None, reason: str
+) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
     _approved(root, github)
     github.pulls[7]["head"]["repo"] = source
 
     _refused(root, github, reason)
-    _refused(root, github, "record approvals from a branch of this repository")
-
-
-@pytest.mark.parametrize("source", [{"id": 2, "full_name": "mallory/project"}, None])
-def test_a_fork_is_refused_before_anything_about_it_is_read(tmp_path: Path, source: dict | None) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
-    _approved(root, github)
-    github.pulls[7]["head"]["repo"] = source
-
-    _refused(root, github, "not a branch of owner/project")
     requested = [path for path, _ in github.calls]
     assert not any(path.startswith(("/contents/", "/pulls/7/")) for path in requested), requested
     # Only the commit that recorded the hash is looked up, not the walk to the fork's base.
     assert [path for path in requested if path.startswith("/commits/")] == [
         f"/commits/{_git(root, 'rev-parse', 'HEAD')}/pulls"
     ], requested
+    _refused(root, github, "record approvals from a branch of this repository")
 
 
 @pytest.mark.parametrize(
