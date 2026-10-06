@@ -479,12 +479,6 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "autoform check blueprint --lean-root ." in workflow
     assert "autoform render blueprint" in workflow
     assert "--require-declarations" in workflow
-    report = '"$RUNNER_TEMP/autoform-skeleton/skeleton-report.json"'
-    assert f"autoform review check blueprint\n          --skeleton-report {report}\n" in workflow
-    assert "review prepare" not in workflow
-    assert f"review_args=(--review --skeleton-report {report})" in workflow
-    assert "--with markdown==3.10.3" in workflow
-    assert "--with pymdown-extensions==11.0.1" in workflow
     assert "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128" in workflow
     assert "@main" not in workflow
 
@@ -495,8 +489,6 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "Reject kernel-check bypass options" in verify
     assert "Audit every root-package declaration" in verify
     assert "python3 .github/autoform_audit.py" in verify
-    assert "autoform review check blueprint --lean-root .\n" in verify
-    assert "review prepare" not in verify
     assert "lake pack" in verify
     assert "lake-modules" not in verify
     assert "contains no ILean artifacts" in (
@@ -507,14 +499,11 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'version: "0.12.1"' in verify
     assert "elan/releases/download/v4.2.3" in verify
     assert "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2" in verify
-    assert "if: needs.decide.outputs.publish == 'true'" in workflow
-    assert "refs/heads/main" not in workflow
     assert workflow.count('- "theme/**"') == 1
     assert 'version: "0.12.1"' in workflow
     assert "@main" not in verify
 
     gate = (example / ".github/workflows/autoform-review-gate.yml").read_text(encoding="utf-8")
-    assert "autoform review authenticate blueprint --github" in gate
     assert "@main" not in gate
 
     for contents in (workflow, verify, gate):

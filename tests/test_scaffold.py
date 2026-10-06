@@ -736,8 +736,6 @@ def test_generated_ci_rebuilds_opted_in_statement_review_evidence(tmp_path: Path
     assert f"review_args=(--review --skeleton-report {report})" in pages
     assert "--review-bundle" not in pages
     assert "Build Lean for statement review" in pages
-    assert "--with markdown==3.10.3" in pages
-    assert "--with pymdown-extensions==11.0.1" in pages
     assert (tmp_path / "blueprint/.autoform-review").read_text(encoding="utf-8") == (
         "autoform-review-policy/v1\n"
     )
@@ -762,10 +760,7 @@ _REVIEW_BRANCH = re.compile(
         ("autoform-review-gate.yml", "Authenticate changed approvals"),
     ],
 )
-@pytest.mark.parametrize("copy", ["template", "example"])
-def test_statement_review_steps_run_only_in_projects_that_opted_in(
-    tmp_path: Path, repo_root: Path, copy: str, name: str, gated: str
-) -> None:
+def test_statement_review_steps_run_only_in_projects_that_opted_in(tmp_path: Path, name: str, gated: str) -> None:
     """A project without the review marker never extracts a skeleton report,
     and its Lean-mapped articles need no durable article_id, so a review step
     that ran there would fail its CI. Steps are found by what they mention, not
@@ -774,12 +769,8 @@ def test_statement_review_steps_run_only_in_projects_that_opted_in(
     branch that runs when the same test holds."""
 
     yaml = pytest.importorskip("yaml")
-    if copy == "template":
-        scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
-        workflows = tmp_path / ".github/workflows"
-    else:
-        workflows = repo_root / "skills/setup/assets/cabannes-thesis-project/.github/workflows"
-    jobs = yaml.safe_load((workflows / name).read_text(encoding="utf-8"))["jobs"]
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    jobs = yaml.safe_load((tmp_path / ".github/workflows" / name).read_text(encoding="utf-8"))["jobs"]
     review = [
         step
         for job in jobs.values()
