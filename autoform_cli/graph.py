@@ -487,7 +487,9 @@ def _chapter_issues(roadmap_root: Path) -> list[str]:
     """
 
     try:
-        chapters = sorted(path for path in roadmap_root.iterdir() if path.is_dir())
+        # Like the walk, follow no chapter link: its pages are not loaded, and one
+        # that cannot be entered would raise.
+        chapters = sorted(path for path in roadmap_root.iterdir() if path.is_dir() and not path.is_symlink())
     except OSError:
         return []
     issues = []

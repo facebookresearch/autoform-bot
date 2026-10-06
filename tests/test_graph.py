@@ -354,6 +354,27 @@ def test_a_roadmap_directory_that_cannot_be_listed_is_refused(tmp_path: Path, re
     assert f"cannot list roadmap directory {directory}: Permission denied" in caught.value.issues
 
 
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
+def test_a_chapter_link_that_cannot_be_entered_does_not_crash_the_load(tmp_path: Path) -> None:
+    """The walk does not follow the link, but the chapter check did, and raised PermissionError.
+
+    The linked pages are not loaded, as before; check refuses the link when it publishes.
+    """
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    target = tmp_path / "chapter"
+    target.mkdir()
+    (target / "README.md").write_text("# Chapter\n", encoding="utf-8")
+    (blueprint / "roadmap" / "chapter").symlink_to(target)
+    target.chmod(0o644)
+    try:
+        graph = load_graph(blueprint)
+    finally:
+        target.chmod(0o755)
+
+    assert list(graph.nodes) == ["roadmap"]
+
+
 def test_a_readme_that_links_to_itself_is_refused_rather_than_called_missing(tmp_path: Path) -> None:
     """It was skipped, and the chapter was then told to add the README.md it has."""
     blueprint = tmp_path / "blueprint"
