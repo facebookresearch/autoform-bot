@@ -541,7 +541,7 @@ def test_audit_returns_graph_validation_errors_with_article_paths(tmp_path: Path
 
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
 def test_audit_reports_a_chapter_it_can_list_but_not_enter(tmp_path: Path) -> None:
-    """Looking for each unreadable page's article path inside the chapter raised a traceback."""
+    """Checking each page raised a traceback, in load_graph and again in audit's search for its article path."""
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     _article(blueprint, "chapter/result.md", declaration="theorem")

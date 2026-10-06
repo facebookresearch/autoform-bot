@@ -334,26 +334,6 @@ def test_a_roadmap_directory_that_cannot_be_listed_is_refused(tmp_path: Path, re
     assert f"cannot list roadmap directory {directory}: Permission denied" in caught.value.issues
 
 
-@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
-def test_a_chapter_that_can_be_listed_but_not_entered_names_each_page(tmp_path: Path) -> None:
-    """Listing it works, so the walk reports nothing, and checking each page raised a traceback."""
-    blueprint = tmp_path / "blueprint"
-    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
-    _node(blueprint, "chapter/result.md", "# Result\n")
-    chapter = (blueprint / "roadmap" / "chapter").resolve()
-    chapter.chmod(0o644)
-    try:
-        with pytest.raises(GraphValidationError) as caught:
-            load_graph(blueprint)
-    finally:
-        chapter.chmod(0o755)
-
-    assert caught.value.issues == tuple(
-        f"chapter/{name}: cannot read roadmap page: [Errno {errno.EACCES}] Permission denied: '{chapter / name}'"
-        for name in ("README.md", "result.md")
-    )
-
-
 def test_a_readme_that_links_to_itself_is_refused_rather_than_called_missing(tmp_path: Path) -> None:
     """It was skipped, and the chapter was then told to add the README.md it has."""
     blueprint = tmp_path / "blueprint"
