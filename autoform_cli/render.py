@@ -690,6 +690,7 @@ def _render_in_bound_output_parent(
             workspace.name,
             workspace_identity,
         )
+        _probe_publication_filesystem(workspace_descriptor, output_parent)
         _require_output_parent(output_parent, "before destination inspection")
         expected_destination = _inspect_destination_at(
             output_parent.descriptor,
@@ -1634,6 +1635,213 @@ def _open_workspace_directory(
         raise
 
 
+def _probe_publication_filesystem(
+    workspace_descriptor: int,
+    output_parent: RetainedDirectory,
+) -> None:
+    """Exercise the commit primitives on this filesystem before live inspection.
+
+    libc exposing ``renameat2`` or ``renameatx_np`` does not prove that the
+    mounted filesystem implements their no-replace and exchange flags.  The
+    probe stays inside Autoform's private workspace and is removed before any
+    source or destination is inspected.
+    """
+
+    assert fcntl is not None
+    try:
+        fcntl.flock(
+            output_parent.descriptor,
+            fcntl.LOCK_SH | fcntl.LOCK_NB,
+        )
+    except BlockingIOError as error:
+        raise PublicationError(
+            ["another publication is committing in the output directory; retry"]
+        ) from error
+    except OSError as error:
+        raise PublicationError(
+            ["transactional publication locking is unavailable on this filesystem"]
+        ) from error
+
+    probe_name = ".capabilities"
+    probe_descriptor: int | None = None
+    peer_descriptor: int | None = None
+    probe_identity: tuple[int, int] | None = None
+    probe_created = False
+    operation_error: BaseException | None = None
+    cleanup_error: BaseException | None = None
+
+    def named_directory_identity(parent: int, name: str) -> tuple[int, int]:
+        metadata = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise OSError(errno.ESTALE, "publication capability entry changed type")
+        return metadata.st_dev, metadata.st_ino
+
+    def probe_rename(
+        source_parent: int,
+        source: str,
+        target_parent: int,
+        target: str,
+        *,
+        exchange: bool,
+    ) -> int:
+        function, flag = _rename_implementation(exchange=exchange)
+        result = function(
+            source_parent,
+            os.fsencode(source),
+            target_parent,
+            os.fsencode(target),
+            flag,
+        )
+        return 0 if result == 0 else ctypes.get_errno()
+
+    try:
+        os.mkdir(probe_name, mode=0o700, dir_fd=workspace_descriptor)
+        probe_created = True
+        probe_identity = named_directory_identity(workspace_descriptor, probe_name)
+        probe_descriptor = os.open(
+            probe_name,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=workspace_descriptor,
+        )
+        if _descriptor_identity(probe_descriptor) != probe_identity:
+            raise OSError(errno.ESTALE, "publication capability directory changed")
+
+        os.mkdir("peer", mode=0o700, dir_fd=probe_descriptor)
+        peer_identity = named_directory_identity(probe_descriptor, "peer")
+        peer_descriptor = os.open(
+            "peer",
+            os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=probe_descriptor,
+        )
+        if _descriptor_identity(peer_descriptor) != peer_identity:
+            raise OSError(errno.ESTALE, "publication capability peer changed")
+
+        os.mkdir("exchange-source", mode=0o700, dir_fd=probe_descriptor)
+        os.mkdir("exchange-target", mode=0o700, dir_fd=peer_descriptor)
+        source_identity = named_directory_identity(probe_descriptor, "exchange-source")
+        target_identity = named_directory_identity(peer_descriptor, "exchange-target")
+        exchange_error = probe_rename(
+            probe_descriptor,
+            "exchange-source",
+            peer_descriptor,
+            "exchange-target",
+            exchange=True,
+        )
+        if exchange_error:
+            raise OSError(
+                exchange_error,
+                os.strerror(exchange_error),
+                "exchange-target",
+            )
+        if (
+            named_directory_identity(probe_descriptor, "exchange-source")
+            != target_identity
+            or named_directory_identity(peer_descriptor, "exchange-target")
+            != source_identity
+        ):
+            raise OSError(errno.ESTALE, "atomic directory exchange was not exact")
+
+        os.mkdir("noreplace-source", mode=0o700, dir_fd=probe_descriptor)
+        os.mkdir("noreplace-collision", mode=0o700, dir_fd=peer_descriptor)
+        noreplace_identity = named_directory_identity(probe_descriptor, "noreplace-source")
+        collision_identity = named_directory_identity(peer_descriptor, "noreplace-collision")
+        collision_error = probe_rename(
+            probe_descriptor,
+            "noreplace-source",
+            peer_descriptor,
+            "noreplace-collision",
+            exchange=False,
+        )
+        if collision_error not in {errno.EEXIST, errno.ENOTEMPTY}:
+            if collision_error:
+                raise OSError(
+                    collision_error,
+                    os.strerror(collision_error),
+                    "noreplace-collision",
+                )
+            raise OSError(errno.ENOTSUP, "no-replace rename overwrote an existing entry")
+        if (
+            named_directory_identity(probe_descriptor, "noreplace-source")
+            != noreplace_identity
+            or named_directory_identity(peer_descriptor, "noreplace-collision")
+            != collision_identity
+        ):
+            raise OSError(errno.ESTALE, "no-replace collision changed an entry")
+        install_error = probe_rename(
+            probe_descriptor,
+            "noreplace-source",
+            peer_descriptor,
+            "noreplace-installed",
+            exchange=False,
+        )
+        if install_error:
+            raise OSError(
+                install_error,
+                os.strerror(install_error),
+                "noreplace-installed",
+            )
+        if (
+            named_directory_identity(peer_descriptor, "noreplace-installed")
+            != noreplace_identity
+        ):
+            raise OSError(errno.ESTALE, "no-replace install changed generation")
+        os.fsync(peer_descriptor)
+        os.fsync(probe_descriptor)
+        os.fsync(workspace_descriptor)
+    except BaseException as error:
+        operation_error = error
+    finally:
+        if peer_descriptor is not None:
+            try:
+                os.close(peer_descriptor)
+            except OSError as error:
+                cleanup_error = error
+        if probe_descriptor is not None:
+            try:
+                inventory = _cleanup_inventory_descriptor(probe_descriptor)
+                _remove_inventory_contents(probe_descriptor, inventory)
+            except BaseException as error:
+                cleanup_error = cleanup_error or error
+            try:
+                os.close(probe_descriptor)
+            except OSError as error:
+                cleanup_error = cleanup_error or error
+        elif probe_created:
+            cleanup_error = cleanup_error or OSError(
+                errno.ESTALE,
+                "publication capability directory could not be retained",
+            )
+        if probe_identity is not None and cleanup_error is None:
+            try:
+                if (
+                    named_directory_identity(workspace_descriptor, probe_name)
+                    != probe_identity
+                ):
+                    raise OSError(
+                        errno.ESTALE,
+                        "publication capability directory changed during cleanup",
+                    )
+                os.rmdir(probe_name, dir_fd=workspace_descriptor)
+                os.fsync(workspace_descriptor)
+            except BaseException as error:
+                cleanup_error = error
+        try:
+            fcntl.flock(output_parent.descriptor, fcntl.LOCK_UN)
+        except BaseException as error:
+            cleanup_error = cleanup_error or error
+
+    if cleanup_error is not None:
+        raise _PublicationRecoveryError(
+            ["publication capability probe could not be cleaned; workspace retained"]
+        ) from (operation_error or cleanup_error)
+    if operation_error is not None:
+        if isinstance(operation_error, (KeyboardInterrupt, SystemExit)):
+            raise operation_error
+        raise PublicationError(
+            ["transactional publication is unavailable on this filesystem"]
+        ) from operation_error
+
+
 def _create_stage_directory(workspace_descriptor: int) -> tuple[int, tuple[int, int]]:
     created_identity: tuple[int, int] | None = None
     descriptor: int | None = None
@@ -2302,6 +2510,10 @@ def _publication_plan_checkpoint(_event: str, _relative: str) -> None:
     """A test hook for adversarial pathname replacement."""
 
 
+def _publication_commit_checkpoint(_event: str) -> None:
+    """A test hook for process termination immediately after the atomic commit."""
+
+
 def _materialize_publication_plan(
     stage_descriptor: int,
     plan: _PublicationFilePlan,
@@ -2789,6 +3001,7 @@ def _publish_staged_site(
                 parent_descriptor,
                 destination.name,
             )
+            _publication_commit_checkpoint("after-install")
         else:
             _rename_exchange(
                 stage_parent_descriptor,
@@ -2796,6 +3009,7 @@ def _publish_staged_site(
                 parent_descriptor,
                 destination.name,
             )
+            _publication_commit_checkpoint("after-exchange")
             displaced = _inspect_destination_at(
                 stage_parent_descriptor,
                 stage.name,

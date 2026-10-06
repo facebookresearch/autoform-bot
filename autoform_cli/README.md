@@ -765,8 +765,14 @@ example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 
 Publication is staged, synced, validated, and atomically exchanged with the
 previous generated site. This fail-closed transaction requires macOS
-`renameatx_np` or Linux `renameat2`; other platforms can still use the remaining
-CLI commands but cannot run `autoform render`. A legacy
+`renameatx_np` or Linux `renameat2`, plus descriptor-relative traversal,
+advisory locking, and directory sync. Autoform exercises no-replace and
+cross-directory exchange inside its private workspace before it inspects the
+live output, so a network or local filesystem that does not implement those
+flags fails without changing the published site. Other platforms, including
+Windows, can still use the remaining supported CLI commands but cannot run
+`autoform render`; Autoform never falls back to a two-rename replacement with a
+missing-site crash window. A legacy
 `autoform-publication/v1` output is never deleted automatically. Remove it
 explicitly or choose an empty output directory once, then subsequent v2 renders
 can replace only the exact checksummed generation they inspected.
@@ -1162,4 +1168,6 @@ unique generation. It reports an exact recovery path only while the bound output
 parent is still addressable. Losing that parent path after commit is an uncertain
 publication error; the parent is checked again after workspace cleanup before
 success is returned. Other post-verification cleanup refusals leave the
-published site in place and return the retained workspace as a warning.
+published site in place and return the retained workspace as a warning. A process
+exit immediately after exchange likewise leaves the complete previous generation
+under that workspace while the complete replacement occupies the output path.

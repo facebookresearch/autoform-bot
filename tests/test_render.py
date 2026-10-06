@@ -8,6 +8,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
@@ -1495,6 +1496,66 @@ def test_interrupt_after_exchange_retains_previous_site_for_recovery(
     assert (workspaces[0] / "site/publication.json").read_bytes() == before_manifest
 
 
+@pytest.mark.skipif(os.name == "nt", reason="transactional render is capability-gated")
+def test_process_exit_after_exchange_retains_both_complete_generations(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    render_site(
+        project / "blueprint",
+        output,
+        lean_root=project,
+        repository_url="",
+        ref="",
+    )
+    before_manifest = (output / PUBLICATION_MANIFEST).read_bytes()
+    article = project / "blueprint/roadmap/top.md"
+    article.write_text(
+        article.read_text(encoding="utf-8") + "\nA new publication generation.\n",
+        encoding="utf-8",
+    )
+
+    script = """
+import os
+import sys
+import autoform_cli.render as render_module
+
+def crash_after_commit(_event: str) -> None:
+    os._exit(86)
+
+render_module._publication_commit_checkpoint = crash_after_commit
+render_module.render_site(
+    sys.argv[1],
+    sys.argv[2],
+    lean_root=sys.argv[3],
+    repository_url="",
+    ref="",
+)
+"""
+    crashed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(project / "blueprint"),
+            str(output),
+            str(project),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert crashed.returncode == 86, crashed.stderr
+    after_manifest = (output / PUBLICATION_MANIFEST).read_bytes()
+    assert after_manifest != before_manifest
+    assert json.loads(after_manifest)["complete"] is True
+    workspaces = list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+    assert len(workspaces) == 1
+    assert (workspaces[0] / "site" / PUBLICATION_MANIFEST).read_bytes() == before_manifest
+
+
 def test_interrupt_after_first_install_retains_uncertain_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1971,6 +2032,45 @@ def test_unsupported_platform_fails_before_creating_a_stage(
     with pytest.raises(PublicationError, match="unavailable on this platform"):
         render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
+    assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
+def test_unsupported_filesystem_fails_before_inspecting_or_changing_live_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    output.mkdir()
+    sentinel = output / "PRECIOUS"
+    sentinel.write_text("keep\n", encoding="utf-8")
+    inspected = False
+    original_implementation = render_module._rename_implementation
+
+    def unsupported_exchange(*, exchange: bool):
+        function, flag = original_implementation(exchange=exchange)
+        if not exchange:
+            return function, flag
+
+        def fail(*_args) -> int:
+            render_module.ctypes.set_errno(errno.EOPNOTSUPP)
+            return -1
+
+        return fail, flag
+
+    def inspect(*args, **kwargs):
+        nonlocal inspected
+        inspected = True
+        return render_module._DestinationState("absent")
+
+    monkeypatch.setattr(render_module, "_rename_implementation", unsupported_exchange)
+    monkeypatch.setattr(render_module, "_inspect_destination_at", inspect)
+
+    with pytest.raises(PublicationError, match="unavailable on this filesystem"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert not inspected
+    assert sentinel.read_text(encoding="utf-8") == "keep\n"
     assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
 
 

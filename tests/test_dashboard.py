@@ -232,6 +232,7 @@ def test_live_overlay_builds_graph_from_the_verified_snapshot(
             "node_id": "roadmap",
             "title": "Roadmap",
             "owner": "worker-a",
+            "claim_target": "roadmap",
         }
     ]
     assert "error" not in state
