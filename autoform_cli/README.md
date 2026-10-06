@@ -2072,7 +2072,9 @@ targets. It exits zero only when every required check passes. Omitting
 `--lean-root` records an explicit advisory pass; supplying it performs only a
 lexical local-source check, not a Lean build, kernel check, or proof-honesty
 review. The bundled example intentionally exits nonzero while its declared
-coverage still holds `MAPPED` rows.
+coverage still holds `MAPPED` rows. The roadmap audit leaves `review_approved`
+to `autoform audit blueprint --lean-root . --review`, since judging it needs
+review evidence.
 
 This command is strictly read-only and local. It does not invoke Git, GitHub,
 subprocesses, network services, claims, queues, reviews, recovery state,
