@@ -856,11 +856,10 @@ def _deps_json(
     return json.dumps({"imports": [entry]})
 
 
-def _header_modules(command: list[str], *, deadline: float | None = None, **config) -> list[str]:
+def _header_modules(command: list[str], *, timeout: float = 10, **config) -> list[str]:
     repl = repl_core.LeanRepl(repl_core.LeanReplConfig(header_deps_command=command, **config))
     try:
-        deadline = time.monotonic() + 10 if deadline is None else deadline
-        return list(repl._check_header("import Mathlib", deadline).modules)
+        return list(repl._check_header("import Mathlib", time.monotonic() + timeout).modules)
     finally:
         repl.close()
 
@@ -1055,20 +1054,14 @@ def test_header_check_kills_a_command_that_outlives_the_deadline():
     started = time.monotonic()
 
     with pytest.raises(TimeoutError):
-        _header_modules(
-            [sys.executable, "-c", "import time; time.sleep(30)"],
-            deadline=started + 0.2,
-        )
+        _header_modules([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.2)
 
     assert time.monotonic() - started < 5
 
 
 def test_header_check_rejects_output_over_the_combined_limit():
     with pytest.raises(ValueError, match="output exceeded 1024 bytes"):
-        _header_modules(
-            _fake_header_deps("x" * 1025),
-            max_buffer_bytes=1024,
-        )
+        _header_modules(_fake_header_deps("x" * 1025), max_buffer_bytes=1024)
 
 
 def test_header_check_reaps_descendants_after_success(tmp_path):
@@ -1089,101 +1082,65 @@ def test_header_check_reaps_descendants_after_success(tmp_path):
     assert not repl_core._process_group_has_live_members(process_ids["group"])
 
 
-def test_disposable_call_retries_header_cleanup_before_reuse(monkeypatch):
+def _repl_failing_first_header_cleanup(monkeypatch, error: BaseException):
     repl = repl_core.LeanRepl(
         repl_core.LeanReplConfig(
-            warmup_imports=frozenset(),
-            header_deps_command=_fake_header_deps(_deps_json("Mathlib")),
+            warmup_imports=frozenset(), header_deps_command=_fake_header_deps(_deps_json("Mathlib"))
         )
     )
     real_kill = repl_core._kill_subprocesses
-    cleanup_calls = 0
+    cleanup_calls = []
 
     def fail_once(process, process_group_id, deadline=None):
-        nonlocal cleanup_calls
-        cleanup_calls += 1
-        if cleanup_calls == 1:
-            raise RuntimeError("injected cleanup failure")
+        cleanup_calls.append(process_group_id)
+        if len(cleanup_calls) == 1:
+            raise error
         return real_kill(process, process_group_id, deadline)
 
     monkeypatch.setattr(repl_core, "_kill_subprocesses", fail_once)
-    monkeypatch.setattr(
-        repl,
-        "start",
-        lambda *args, **kwargs: pytest.fail("unclean header must not start Lean"),
-    )
+    return repl, cleanup_calls
+
+
+def test_disposable_call_retries_header_cleanup_before_reuse(monkeypatch):
+    repl, cleanup_calls = _repl_failing_first_header_cleanup(monkeypatch, RuntimeError("injected cleanup failure"))
+    monkeypatch.setattr(repl, "start", lambda *args, **kwargs: pytest.fail("unclean header must not start Lean"))
 
     response = repl.run_disposable("import Mathlib\n#check Nat")
 
     assert "injected cleanup failure" in response["repl_error"]
-    assert cleanup_calls == 2
+    assert len(cleanup_calls) == 2
     assert repl.is_clean()
 
 
 def test_disposable_call_preserves_header_cleanup_cancellation(monkeypatch):
-    repl = repl_core.LeanRepl(
-        repl_core.LeanReplConfig(
-            warmup_imports=frozenset(),
-            header_deps_command=_fake_header_deps(_deps_json("Mathlib")),
-        )
+    repl, cleanup_calls = _repl_failing_first_header_cleanup(
+        monkeypatch, asyncio.CancelledError("cancel header cleanup")
     )
-    real_kill = repl_core._kill_subprocesses
-    cleanup_calls = 0
-
-    def cancel_once(process, process_group_id, deadline=None):
-        nonlocal cleanup_calls
-        cleanup_calls += 1
-        if cleanup_calls == 1:
-            raise asyncio.CancelledError("cancel header cleanup")
-        return real_kill(process, process_group_id, deadline)
-
-    monkeypatch.setattr(repl_core, "_kill_subprocesses", cancel_once)
 
     with pytest.raises(asyncio.CancelledError, match="cancel header cleanup"):
         repl.run_disposable("import Mathlib\n#check Nat")
 
-    assert cleanup_calls == 2
+    assert len(cleanup_calls) == 2
     assert repl.is_clean()
 
 
 def test_disposable_call_preserves_header_request_cancellation(monkeypatch):
-    repl = repl_core.LeanRepl(
-        repl_core.LeanReplConfig(
-            warmup_imports=frozenset(),
-            header_deps_command=[sys.executable, "-c", "import time; time.sleep(30)"],
-        )
-    )
-    real_kill = repl_core._kill_subprocesses
-    cleanup_calls = 0
+    repl, cleanup_calls = _repl_failing_first_header_cleanup(monkeypatch, RuntimeError("header cleanup failed"))
 
-    monkeypatch.setattr(
-        repl_core,
-        "_communicate_bounded",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            KeyboardInterrupt("cancel header request")
-        ),
-    )
+    def cancel(*args, **kwargs):
+        raise KeyboardInterrupt("cancel header request")
 
-    def fail_once(process, process_group_id, deadline=None):
-        nonlocal cleanup_calls
-        cleanup_calls += 1
-        if cleanup_calls == 1:
-            raise RuntimeError("header cleanup failed")
-        return real_kill(process, process_group_id, deadline)
-
-    monkeypatch.setattr(repl_core, "_kill_subprocesses", fail_once)
+    monkeypatch.setattr(repl_core, "_communicate_bounded", cancel)
 
     with pytest.raises(KeyboardInterrupt, match="cancel header request") as raised:
         repl.run_disposable("import Mathlib\n#check Nat")
 
     if hasattr(raised.value, "add_note"):
-        assert raised.value.__notes__ == [
-            "Lean REPL process cleanup also failed: header cleanup failed"
-        ]
+        assert raised.value.__notes__ == ["Lean REPL process cleanup also failed: header cleanup failed"]
     # The slot keeps the parser until a later close() verifies that it exited.
     assert not repl.is_clean()
     repl.close()
-    assert cleanup_calls == 2
+    assert len(cleanup_calls) == 2
     assert repl.is_clean()
 
 

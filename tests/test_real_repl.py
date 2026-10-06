@@ -20,18 +20,9 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_disposable_call_matches_the_pinned_repl_protocol():
-    repl = LeanRepl(
-        LeanReplConfig(
-            cwd=str(REPL_FIXTURE),
-            warmup_imports=frozenset(),
-            validate_imports=False,
-        )
-    )
+    repl = LeanRepl(LeanReplConfig(cwd=str(REPL_FIXTURE), warmup_imports=frozenset(), validate_imports=False))
 
-    response = repl.run_disposable(
-        "theorem autoform_repl_probe : True := by sorry",
-        timeout=180,
-    )
+    response = repl.run_disposable("theorem autoform_repl_probe : True := by sorry", timeout=180)
 
     assert response.get("sorries")
     assert "env" not in response
@@ -49,11 +40,7 @@ def test_disposable_call_matches_the_pinned_repl_protocol():
         ((), "import «REPL\n", "Rejected Lean header"),
         ((), "import REPL.Frontend\n#check Nat", None),
         (("Mathlib",), "module\npublic import REPL.Frontend\n", None),
-        (
-            ("Mathlib",),
-            "prelude\nimport REPL.Frontend\n#check Nat",
-            None,
-        ),
+        (("Mathlib",), "prelude\nimport REPL.Frontend\n#check Nat", None),
     ],
 )
 def test_disposable_imports_are_checked_by_lean(warmup, code, expected_error):
@@ -69,10 +56,7 @@ def test_disposable_imports_are_checked_by_lean(warmup, code, expected_error):
 
     if expected_error is None:
         assert "repl_error" not in response
-        assert not any(
-            message["severity"] == "error"
-            for message in response.get("messages", [])
-        )
+        assert not any(message["severity"] == "error" for message in response.get("messages", []))
     else:
         assert expected_error in response["repl_error"]
     assert repl.is_clean()
@@ -81,26 +65,11 @@ def test_disposable_imports_are_checked_by_lean(warmup, code, expected_error):
 def test_runtime_calls_do_not_share_lean_state(runtime_dir, monkeypatch):
     monkeypatch.setenv("AUTOFORM_REPL_TOTAL_WORKERS", "1")
     monkeypatch.setenv("AUTOFORM_REPL_WORKERS_PER_PROJECT", "1")
-    client = LeanRuntimeClient(
-        socket_path=runtime_dir / "real-repl.sock",
-        response_timeout=300,
-        startup_timeout=30,
-    )
-    declaration = (
-        "theorem autoform_isolation_probe (P : Prop) (h : P) : P := h"
-    )
+    client = LeanRuntimeClient(socket_path=runtime_dir / "real-repl.sock", response_timeout=300, startup_timeout=30)
+    declaration = "theorem autoform_isolation_probe (P : Prop) (h : P) : P := h"
+    params = {"project_dir": str(REPL_FIXTURE), "code": declaration, "timeout": 180}
     try:
-        responses = [
-            client.request(
-                "repl.run",
-                {
-                    "project_dir": str(REPL_FIXTURE),
-                    "code": declaration,
-                    "timeout": 180,
-                },
-            )
-            for _ in range(2)
-        ]
+        responses = [client.request("repl.run", params) for _ in range(2)]
     finally:
         with suppress(LeanRuntimeUnavailable):
             client.stop()
