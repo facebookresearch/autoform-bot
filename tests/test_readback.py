@@ -261,14 +261,7 @@ def test_readbacks_are_filed_per_declaration_and_report_their_status(tmp_path: P
 def test_missing_stale_and_revised_readbacks_are_reported(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     old = _declaration("def IsSup (E : Set S) (b : S) : Prop := True", semantic=_OTHER_BODY)
-    write_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=old,
-        model="m",
-        text="Anything.",
-        packet_text=old.blind_text(),
-    )
+    _file_card(blueprint, "Anything.", declaration=old)
 
     (stale,) = readback_findings(
         _report(),
@@ -281,15 +274,7 @@ def test_missing_stale_and_revised_readbacks_are_reported(tmp_path: Path) -> Non
     respaced = _declaration("def IsSup (E : Set S) (b : S) : Prop :=\n  ∀ x ∈ E, x ≤ b")
     old_path = readback_path(blueprint, _ARTICLE_ID, old.name)
     expected = load_readbacks(blueprint)[(_ARTICLE_ID, old.name)].file_hash
-    write_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=respaced,
-        model="m",
-        text="Anything.",
-        packet_text=respaced.blind_text(),
-        expected_card_hash=expected,
-    )
+    _file_card(blueprint, "Anything.", declaration=respaced, expected_card_hash=expected)
     assert old_path.is_file()
     (revised,) = readback_findings(
         _report(),
@@ -324,15 +309,7 @@ def test_a_card_that_shows_lean_it_does_not_record_is_reported(tmp_path: Path) -
     """The card is read in the vault, so the Lean it shows is the evidence."""
 
     blueprint = _blueprint(tmp_path)
-    declaration = _declaration()
-    path = write_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="m",
-        text="Fine.",
-        packet_text=declaration.blind_text(),
-    )
+    path = _file_card(blueprint, "Fine.")
     card = load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")]
     assert card.packet_hash is not None and card.shown_hash == card.packet_hash
     assert (
@@ -362,15 +339,7 @@ def test_testimony_for_a_declaration_the_blueprint_dropped_is_reported(tmp_path:
     """A renamed statement must not leave testimony behind unmentioned."""
 
     blueprint = _blueprint(tmp_path)
-    declaration = _declaration()
-    write_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="m",
-        text="Fine.",
-        packet_text=declaration.blind_text(),
-    )
+    _file_card(blueprint, "Fine.")
     renamed = replace(_declaration(), name="Skel.sup_unique'")
 
     findings = readback_findings(
@@ -386,15 +355,7 @@ def test_testimony_for_a_declaration_the_blueprint_dropped_is_reported(tmp_path:
 
 def test_malformed_hashes_and_symlinked_cards_are_not_testimony(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
-    declaration = _declaration()
-    path = write_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="m",
-        text="Fine.",
-        packet_text=declaration.blind_text(),
-    )
+    path = _file_card(blueprint, "Fine.")
     path.write_text(path.read_text(encoding="utf-8").replace(_declaration().hash, "approved"), encoding="utf-8")
 
     readback = load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")]
@@ -441,14 +402,7 @@ def test_incomplete_or_misidentified_cards_are_explicitly_invalid(
 ) -> None:
     blueprint = _blueprint(tmp_path)
     declaration = _declaration()
-    path = write_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="m",
-        text="Fine.",
-        packet_text=declaration.blind_text(),
-    )
+    path = _file_card(blueprint, "Fine.")
     card = path.read_text(encoding="utf-8")
     if damage == "missing-schema":
         damaged = card.replace("schema: autoform-readback/v1\n", "")
@@ -541,14 +495,7 @@ def test_a_card_whose_suffix_differs_only_in_case_is_reported_for_the_declaratio
 def test_card_body_rejects_interstitial_content(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     declaration = _declaration()
-    path = write_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="m",
-        text="Fine.",
-        packet_text=declaration.blind_text(),
-    )
+    path = _file_card(blueprint, "Fine.")
     card = path.read_text(encoding="utf-8")
     path.write_text(
         card.replace("\n## Read-back\n", "\n## Unverified claim\n\nInjected.\n\n## Read-back\n"),
@@ -566,14 +513,7 @@ def test_card_parser_ignores_readback_heading_inside_packet(tmp_path: Path) -> N
         _declaration(),
         signature='Skel.sup_unique : String := "## Read-back"',
     )
-    write_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="m",
-        text="The declaration returns the heading text.",
-        packet_text=declaration.blind_text(),
-    )
+    _file_card(blueprint, "The declaration returns the heading text.", declaration=declaration)
 
     readback = load_readbacks(blueprint)[(_ARTICLE_ID, declaration.name)]
     assert readback.valid
@@ -583,14 +523,7 @@ def test_card_parser_ignores_readback_heading_inside_packet(tmp_path: Path) -> N
 def test_card_loader_rejects_crlf_rewrite_and_hashes_actual_bytes(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     declaration = _declaration()
-    path = write_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="m",
-        text="Fine.",
-        packet_text=declaration.blind_text(),
-    )
+    path = _file_card(blueprint, "Fine.")
     rewritten = path.read_bytes().replace(b"\n", b"\r\n")
     path.write_bytes(rewritten)
 
@@ -614,14 +547,7 @@ def test_writer_requires_the_actual_packet_and_nonempty_testimony(tmp_path: Path
             packet_text=declaration.blind_text().replace("≤", "<"),
         )
     with pytest.raises(ValueError, match="nonempty testimony"):
-        write_readback(
-            blueprint,
-            article_id=_ARTICLE_ID,
-            declaration=declaration,
-            model="m",
-            text=" \n",
-            packet_text=declaration.blind_text(),
-        )
+        _file_card(blueprint, " \n")
     with pytest.raises(ValueError, match="nonempty model"):
         write_readback(
             blueprint,
@@ -644,14 +570,7 @@ def test_writer_refuses_symlinked_parent_and_ignores_predictable_stage_link(tmp_
     (readbacks / _ARTICLE_ID).symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(ValueError, match="symlink"):
-        write_readback(
-            blueprint,
-            article_id=_ARTICLE_ID,
-            declaration=declaration,
-            model="m",
-            text="Fine.",
-            packet_text=declaration.blind_text(),
-        )
+        _file_card(blueprint, "Fine.")
     assert list(outside.iterdir()) == []
 
     (readbacks / _ARTICLE_ID).unlink()
@@ -663,14 +582,7 @@ def test_writer_refuses_symlinked_parent_and_ignores_predictable_stage_link(tmp_
     predictable = path.with_name(path.name + ".tmp")
     predictable.symlink_to(valuable)
 
-    write_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="m",
-        text="Fine.",
-        packet_text=declaration.blind_text(),
-    )
+    _file_card(blueprint, "Fine.")
     assert valuable.read_text(encoding="utf-8") == "keep\n"
     assert predictable.is_symlink()
 
@@ -681,14 +593,7 @@ def test_concurrent_writers_do_not_silently_overwrite_each_other(tmp_path: Path)
 
     def file(testimony: str) -> str:
         try:
-            write_readback(
-                blueprint,
-                article_id=_ARTICLE_ID,
-                declaration=declaration,
-                model="m",
-                text=testimony,
-                packet_text=declaration.blind_text(),
-            )
+            _file_card(blueprint, testimony, declaration=declaration)
         except ValueError:
             return "refused"
         return "filed"
@@ -705,27 +610,12 @@ def test_concurrent_writers_do_not_silently_overwrite_each_other(tmp_path: Path)
 def test_compare_and_swap_preserves_a_concurrent_edit(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     declaration = _declaration()
-    path = write_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="m",
-        text="First.",
-        packet_text=declaration.blind_text(),
-    )
+    path = _file_card(blueprint, "First.")
     expected = load_readbacks(blueprint)[(_ARTICLE_ID, declaration.name)].file_hash
     path.write_text(path.read_text(encoding="utf-8") + "Concurrent edit.\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="changed before replacement"):
-        write_readback(
-            blueprint,
-            article_id=_ARTICLE_ID,
-            declaration=declaration,
-            model="m",
-            text="Replacement.",
-            packet_text=declaration.blind_text(),
-            expected_card_hash=expected,
-        )
+        _file_card(blueprint, "Replacement.", expected_card_hash=expected)
     assert path.read_text(encoding="utf-8").endswith("Concurrent edit.\n")
 
 
@@ -1073,14 +963,7 @@ def test_case_distinct_declarations_have_distinct_card_paths(tmp_path: Path) -> 
     lower = replace(base, name="foo.x")
 
     paths = [
-        write_readback(
-            blueprint,
-            article_id=_ARTICLE_ID,
-            declaration=declaration,
-            model="m",
-            text=f"Testimony for {declaration.name}.",
-            packet_text=declaration.blind_text(),
-        )
+        _file_card(blueprint, f"Testimony for {declaration.name}.", declaration=declaration)
         for declaration in (upper, lower)
     ]
 
@@ -1095,14 +978,7 @@ def test_case_distinct_declarations_have_distinct_card_paths(tmp_path: Path) -> 
 def test_card_identity_survives_a_roadmap_move(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     declaration = _declaration()
-    card = write_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="m",
-        text="Stable testimony.",
-        packet_text=declaration.blind_text(),
-    )
+    card = _file_card(blueprint, "Stable testimony.")
     article = blueprint / "roadmap" / "basics" / "sup-unique.md"
     moved = blueprint / "roadmap" / "renamed" / "result.md"
     moved.parent.mkdir()
