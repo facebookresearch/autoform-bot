@@ -399,7 +399,7 @@ def validate_review_article(
                 f"article_id {article_id} is no longer mapped to Lean",
             ),
         )
-    shape = _article_shape_finding(graph, node)
+    shape = _article_shape_finding(node, {item.parent for item in graph.nodes.values() if item.parent is not None})
     if shape is not None:
         return (shape,)
     if current_skeleton.schema != SKELETON_SCHEMA or current_skeleton.semantic_schema != SEMANTIC_SCHEMA:
@@ -754,8 +754,8 @@ def _snapshot_findings(graph: Graph, skeleton: SkeletonReport) -> list[ReviewFin
     ]
 
 
-def _article_shape_finding(graph: Graph, node: Node) -> ReviewFinding | None:
-    if node.formalizable and not graph.children(node.id):
+def _article_shape_finding(node: Node, parents: set[str]) -> ReviewFinding | None:
+    if node.formalizable and node.id not in parents:
         return None
     return ReviewFinding(
         node.id,
@@ -766,6 +766,8 @@ def _article_shape_finding(graph: Graph, node: Node) -> ReviewFinding | None:
 
 def _report_findings(graph: Graph, skeleton: SkeletonReport) -> list[ReviewFinding]:
     findings: list[ReviewFinding] = []
+    # Indexed once, so no article's shape check rescans the graph for its children.
+    parents = {item.parent for item in graph.nodes.values() if item.parent is not None}
     for node in sorted(graph.nodes.values(), key=lambda item: item.id):
         if node.lean is None:
             continue
@@ -777,7 +779,7 @@ def _report_findings(graph: Graph, skeleton: SkeletonReport) -> list[ReviewFindi
                     "Lean-mapped article has no durable article_id; run `autoform migrate` before preparing review evidence",
                 )
             )
-        shape = _article_shape_finding(graph, node)
+        shape = _article_shape_finding(node, parents)
         if shape is not None:
             findings.append(shape)
     if skeleton.schema != SKELETON_SCHEMA or skeleton.semantic_schema != SEMANTIC_SCHEMA:
