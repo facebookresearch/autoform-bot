@@ -161,7 +161,7 @@ def publication_bound_live_state(
                 or manifest.get("source_revision") != publication_source_revision(blueprint)
             ):
                 raise ValueError("built dashboard is stale; rerun render and the MkDocs build")
-        except (OSError, ValueError) as error:
+        except (OSError, RecursionError, ValueError) as error:
             return {
                 "schema": LIVE_SCHEMA,
                 "claims": [],
