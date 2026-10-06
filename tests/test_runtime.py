@@ -173,9 +173,12 @@ def test_runtime_node_loads_the_previous_v3_pickle_shape(tmp_path: Path) -> None
 
 @pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
 def test_runtime_node_pickle_round_trip(tmp_path: Path, protocol: int) -> None:
-    node = load_runtime_graph(_project(tmp_path)).nodes[0]
+    node = replace(load_runtime_graph(_project(tmp_path)).nodes[0], catalog="module")
 
-    assert pickle.loads(pickle.dumps(node, protocol=protocol)) == node
+    restored = pickle.loads(pickle.dumps(node, protocol=protocol))
+
+    assert restored == node
+    assert restored.catalog == "module"
 
 
 def test_exposes_provenance_mathlib_and_optional_lean_locations(tmp_path: Path) -> None:

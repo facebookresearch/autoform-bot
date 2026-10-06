@@ -775,7 +775,7 @@ autoform migrate article-ids blueprint --check
 `article_id` accepts opaque values in the form `af_` plus 24 lowercase hex
 digits. The planner validates uniqueness, proposes deterministic IDs for
 missing articles, includes exact source hashes, and is strictly read-only.
-Runtime v3 and `autoform work` expose assigned IDs immediately; applying plans
+The runtime and `autoform work` expose assigned IDs immediately; applying plans
 and preserving publication routes across path moves remain follow-up changes.
 
 Coordinate temporary cross-machine ownership without modifying the book:
