@@ -690,49 +690,30 @@ held no card. Writes name
 a card by the hash of its bytes, so a card that is not UTF-8 is replaced like
 any other; one over the limit must be removed by hand.
 
-A write walks to the card's directory without following links and takes that
-directory's lock, so Autoform's writes to one directory happen one at a time.
-If the directory was moved or replaced before the lock was taken, a fresh walk
-no longer reaches it, so the write lets it go and walks again, three times at
-most before it refuses; nothing is staged until the directory it holds is the
-one the card's path reaches. Holding the lock, the write reads the current card
-through that directory. An optional expected-card hash makes updates
-compare-and-swap: different content replaces a card only when it names that
-card's hash, and a card that names a hash conflicts with a missing card. The
-conflict check a batch runs first applies the same rule. Filing content
+A write takes the card directory's lock, reached without following links, so
+Autoform's writes to one directory happen one at a time; a write that cannot
+get the lock within ten seconds gives up. An optional expected-card hash makes
+updates compare-and-swap: different content replaces a card only when it names
+that card's hash, and a card that names a hash conflicts with a missing card.
+The conflict check a batch runs first applies the same rule. Filing content
 identical to the current card writes nothing, so it succeeds even in a
-read-only directory. Otherwise the write stages the card in a new temporary
-file, flushes it to disk, renames it over the card's name in one step, and
-flushes the directory. On macOS, where a plain `fsync` can leave data in the
-drive's cache, each flush is `F_FULLFSYNC`, falling back to `fsync` on a file
-system that does not support it; any other error from it fails the flush. Each
-directory a first card's write makes on the way is flushed into its parent as
-it is made. At every moment the card's name holds
-either the old complete card (nothing, for a first card) or the new one. A
-failure or interrupt before the rename removes the temporary file and leaves
-the card as it was. If removing it also fails, the file is left, and the error
-names it, or after an interrupt a warning does. A second interrupt that lands
-while it is removed can leave it too, as can a crash, SIGTERM, or SIGKILL. It
-is a `.autoform-readback-*.tmp` file beside the card, which the loader never
-reads as a card and the blueprint `.gitignore`
-that `autoform init` writes ignores. If only a flush of a directory fails, the
-card is still published and the write warns. The contract covers Autoform's
-writers only: while a write runs, any other change in `readbacks/<article>/` is
-out of contract. An editor's save that lands during a write can be replaced without a
-conflict, so edit cards while no write is running.
-
-The lock belongs to the open file description, which a process forked during
-a write shares, so a write unlocks before it closes; a write that cannot get
-the lock within ten seconds gives up. If a process dies holding the lock, the
-lock is released once no process shares that description: at once, unless such
-a child is still running. An interrupt that lands just as a write opens a file
-or directory can leak that descriptor, never a locked one, until the process
-exits; a temporary file created that way is still removed. Publishing needs
+read-only directory. Otherwise the write stages the card in a
+`.autoform-readback-*.tmp` file beside it, flushes it to disk, and renames it
+over the card in one step, so the card's name holds either the old complete
+card (nothing, for a first card) or the new one; then it flushes the directory.
+A failure or interrupt before the rename removes the staging file; if that
+fails, the error names it, or after an interrupt a warning does. A second
+interrupt during removal, a crash, SIGTERM, or SIGKILL can leave it unnamed.
+The loader never reads it as a card, and the blueprint `.gitignore` that
+`autoform init` writes ignores it. If only the directory flush fails, the card
+is still published and the write warns. The contract covers Autoform's writers
+only: an editor's save that lands during a write can be replaced without a
+conflict, so edit cards while no write is running. Publishing needs
 descriptor-relative `open`, `mkdir`, `rename`, and `unlink`, `O_DIRECTORY`,
-`O_NOFOLLOW`, `fchmod`, and `flock`, which Linux and macOS provide. Elsewhere,
+`O_NOFOLLOW`, `fchmod`, and `flock`, which Linux and macOS provide; elsewhere,
 including Windows, a write and the batch conflict check are refused before
-anything is created or read; cards can still be loaded. `model:` remains
-a label supplied by the coordinator, not authenticated provenance.
+anything is created or read, and cards can still be loaded. `model:` remains a
+label supplied by the coordinator, not authenticated provenance.
 
 `--packets DIR` writes one comment-stripped packet per skeleton, with a
 manifest mapping packets to articles and hashes. The destination must be empty
