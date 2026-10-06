@@ -14,7 +14,6 @@ import hashlib
 import json
 import os
 import re
-import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Mapping
@@ -24,6 +23,7 @@ from .graph import ARTICLE_ID_PATTERN, Graph, Node, source_passage
 from .lean import REVIEW_PACKET_SCHEMA, declaration_names
 from .markdown import FENCE, FENCE_CLOSE, HEADING, frontmatter_end, strip_line_comments
 from .readback import Readback, load_readbacks, readback_for, readback_keys
+from .scaffold import _atomic_write
 from .skeleton import (
     PACKET_MANIFEST,
     SEMANTIC_SCHEMA,
@@ -643,21 +643,7 @@ def write_review_bundle(bundle: ReviewBundle, path: str | Path) -> Path:
     destination = requested.parent.resolve() / requested.name
     if destination.is_symlink():
         raise ReviewError([ReviewFinding("", "review-bundle-unsafe", f"refusing to replace symlink: {destination}")])
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=destination.parent,
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(bundle.to_json() + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary.chmod(0o644)
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
+    _atomic_write(destination, (bundle.to_json() + "\n").encode("utf-8"), mode=0o644)
     return destination
 
 
