@@ -20,7 +20,7 @@ from autoform_cli.render import (
     render_site,
 )
 from autoform_cli.status import STATES, derive
-from tests.test_skeleton import _undecodable_json
+from tests.test_review_cli import _undecodable_json
 
 
 def _project(tmp_path: Path) -> Path:

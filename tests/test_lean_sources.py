@@ -32,7 +32,7 @@ from autoform_cli.lean import (
     snapshot_project_sources,
     strip_lean_comments,
 )
-from tests.test_skeleton import _undecodable_json
+from tests.test_review_cli import _undecodable_json
 
 _SOURCE = """import Mathlib
 

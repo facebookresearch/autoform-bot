@@ -1868,6 +1868,20 @@ def _too_deep_to_decode(text: str) -> bool:
     return False
 
 
+def _undecodable_json(damage: str) -> str:
+    """JSON that json.loads refuses with a RecursionError or a plain ValueError;
+    skips where it decodes, as this file's tests of the same damage do."""
+
+    if damage == "nested":
+        text = '{"schema": ' + "[" * 100_000 + "]" * 100_000 + "}"
+        if not _too_deep_to_decode(text):
+            pytest.skip("this stack holds a hundred thousand nested arrays")
+        return text
+    if not getattr(sys, "get_int_max_str_digits", lambda: 0)():
+        pytest.skip("this interpreter converts an integer of any length")
+    return '{"schema": 1' + "0" * sys.get_int_max_str_digits() + "}"
+
+
 @pytest.mark.parametrize("damaged", ["manifest", "bundle"])
 def test_a_manifest_or_bundle_nested_too_deep_to_decode_is_refused_before_any_lean_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], damaged: str

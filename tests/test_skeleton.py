@@ -80,7 +80,7 @@ from autoform_cli.skeleton import (
     write_packets,
     write_skeleton_report,
 )
-from tests.test_review_cli import _too_deep_to_decode
+from tests.test_review_cli import _undecodable_json
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "skeleton-project"
 
@@ -314,20 +314,6 @@ def _assert_load_rejects(path: Path, payload: dict[str, object], match: str | No
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(SkeletonError, match=match):
         load_skeleton_report(path)
-
-
-def _undecodable_json(damage: str) -> str:
-    """JSON that json.loads refuses with a RecursionError or a plain ValueError;
-    skips where it decodes, as test_review_cli's tests of the same damage do."""
-
-    if damage == "nested":
-        text = '{"schema": ' + "[" * 100_000 + "]" * 100_000 + "}"
-        if not _too_deep_to_decode(text):
-            pytest.skip("this stack holds a hundred thousand nested arrays")
-        return text
-    if not getattr(sys, "get_int_max_str_digits", lambda: 0)():
-        pytest.skip("this interpreter converts an integer of any length")
-    return '{"schema": 1' + "0" * sys.get_int_max_str_digits() + "}"
 
 
 # --------------------------------------------------------------------------- #
