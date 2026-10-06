@@ -26,7 +26,6 @@ _HTML_COMMENT = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
 _INLINE_CODE = re.compile(r"(`+).*?\1")
 _MARKDOWN_LINK_TEXT = re.compile(r"!?\[([^\]]+)\]\([^)]*\)")
 _HTML_TAG = re.compile(r"<[^>]+>")
-_LEAN_DECLARATION_NAME = re.compile(r"(?:«[^»]*(?:»|$)|[^\s,«])+")
 ARTICLE_ID_PATTERN = re.compile(r"af_[0-9a-f]{24}\Z")
 _FRONTMATTER_KEYS = frozenset(
     {
@@ -268,7 +267,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             if (
                 metadata.get("statement") == _FORMALIZED
                 or metadata.get("proof") == _FORMALIZED
-            ) and not _LEAN_DECLARATION_NAME.findall(metadata.get("lean", "")):
+            ) and not declaration_names(metadata.get("lean", "")):
                 issues.append(
                     f"{parsed_node.id}: formalized module catalog must list exact "
                     "compiled names in 'lean'"

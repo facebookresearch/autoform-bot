@@ -191,6 +191,44 @@ def test_audit_accepts_an_explicit_non_dispatchable_module_catalog(tmp_path: Pat
     assert audit_blueprint(blueprint, lean_root=lean_root).clean
 
 
+def test_audit_requires_module_catalog_lean_targets_to_resolve(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Existing module | INVENTORIED | "
+        "[Catalog](../roadmap/existing-module.md) |",
+    )
+    ledger = blueprint / "sources" / "existing-module.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Existing module declarations\n", encoding="utf-8")
+    _article(
+        blueprint,
+        "existing-module.md",
+        catalog="module",
+        lean="Missing.noSuchDeclaration",
+        statement="formalized",
+        proof="formalized",
+        sources=("../sources/existing-module.md",),
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Other.lean").write_text(
+        "theorem Existing.other : True := by trivial\n",
+        encoding="utf-8",
+    )
+
+    findings = _finding_map(blueprint, lean_root=lean_root)
+
+    assert findings["roadmap/existing-module.md"] == [
+        (
+            "lean-target-not-found",
+            "Lean declaration target was not found: Missing.noSuchDeclaration",
+        )
+    ]
+
+
 def test_audit_surfaces_invalid_module_catalog_evidence(
     tmp_path: Path,
 ) -> None:

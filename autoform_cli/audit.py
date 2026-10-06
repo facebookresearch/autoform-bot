@@ -481,8 +481,6 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
-        if node.catalog is not None:
-            continue
         names = declaration_names(node.lean or "")
         resolved = []
         for name in names:
@@ -497,6 +495,12 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
                 )
             else:
                 resolved.append(declaration)
+
+        # Catalog declarations must resolve like every other asserted Lean
+        # target. Only declaration-specific policy is inapplicable to a
+        # non-dispatchable inventory container.
+        if node.catalog is not None:
+            continue
 
         for declaration in resolved:
             if _declared_deprecated(declaration, sources):

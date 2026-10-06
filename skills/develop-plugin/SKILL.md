@@ -6,11 +6,10 @@ description: Maintain AutoformBot.
 # Develop
 
 Treat Autoform as an example-based plugin for an independent formalization.
+State a consumer scenario and invariant. Treat user nudges as product evidence;
+preserve insight, not the transcript, in a focused test so future agents need less steering.
 
-State a consumer scenario. Treat user nudges as product evidence; preserve
-insight, not the transcript, so future agents need less steering.
-
-Keep Cabannes-specific facts in examples and plugin and formalization roots
+Keep Cabannes-specific facts in examples; keep plugin and formalization roots
 distinct. Agents can infer routine details; keep shared agent entrypoints concise
 with on-demand references.
 
@@ -18,9 +17,10 @@ Per release, regenerate `production_module_roots` from Lake package configs.
 Update the private creation bundle, catalog identity, and complete `lake update`
 manifest; run `lake build`. A direct-Mathlib-only manifest is invalid.
 
-Retain descriptors: repeated pathname reads are not a generation boundary. Read
-bounded outputs before descendants, keep each marker schema in its owning
-feature, and make links match the blob at the stable detected commit.
+Source indexes, revisions, and links are one evidence boundary. Retain
+descriptors: repeated pathname reads are not a generation boundary. Read bounded
+outputs before descendants, keep each marker schema in its owning feature, and
+make links match the blob at the stable detected commit.
 
 For claims, publication, mirrors, pins, and releases, read
 [repository contracts](references/repository-contracts.md).

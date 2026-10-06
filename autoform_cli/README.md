@@ -463,9 +463,10 @@ For an existing blueprint, migrate a catalog-only `DECOMPOSED` row to
 `INVENTORIED`. If the same source also has declaration articles, keep that
 inventory row and add distinct, axis-qualified `DECOMPOSED` rows for the
 mathematical scopes; do not overwrite the inventory claim. This is a
-backward-compatible extension of `autoform-coverage/v1` and
-`autoform-publication/v1`: existing Markdown and frontmatter still parse, and no
-manifest schema version changes. Until migrated, a catalog-only `DECOMPOSED` row
+backward-compatible extension of `autoform-coverage/v1`: existing Markdown and
+frontmatter still parse. The shared-explorer publication manifest uses
+`autoform-publication/v2`, as described below. Until migrated, a catalog-only
+`DECOMPOSED` row
 remains syntactically accepted but audit reports `coverage-role-mismatch`; a
 catalog not reached by any `INVENTORIED` evidence also reports
 `unclassified-inventory`. Target-completion percentages may change because
