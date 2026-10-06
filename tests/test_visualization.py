@@ -22,6 +22,9 @@ def _write_node(
     **metadata: str,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if "formalized" in (metadata.get("statement"), metadata.get("proof")):
+        # The graph rejects formalized work without a lean: name.
+        metadata.setdefault("lean", f"Project.{path.stem}")
     properties = [*(f"{key}: {value}" for key, value in metadata.items())]
     lines = ["---", *properties, "---", "", f"# {title}"]
     if dependencies:
