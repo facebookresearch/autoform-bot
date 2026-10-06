@@ -333,7 +333,8 @@ def test_a_card_that_shows_lean_it_does_not_record_is_reported(tmp_path: Path) -
         text="Fine.",
         packet_text=declaration.blind_text(),
     )
-    assert load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].shows_what_it_attests
+    card = load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")]
+    assert card.packet_hash is not None and card.shown_hash == card.packet_hash
     assert (
         readback_findings(
             _report(),
@@ -346,7 +347,7 @@ def test_a_card_that_shows_lean_it_does_not_record_is_reported(tmp_path: Path) -
     path.write_text(path.read_text(encoding="utf-8").replace("∀ x ∈ E, x ≤ b", "∀ x ∈ E, x < b"), encoding="utf-8")
 
     readback = load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")]
-    assert not readback.shows_what_it_attests
+    assert readback.shown_hash != readback.packet_hash
     # the hashes still match the skeleton; only the displayed packet moved
     assert readback.status(_declaration()) == "invalid"
     (altered,) = readback_findings(

@@ -250,17 +250,6 @@ class Readback:
 
         return not self.validate()
 
-    @property
-    def shows_what_it_attests(self) -> bool:
-        """Whether the displayed packet is the one the card's hash names.
-
-        A card is read in the vault, so the Lean a reviewer sees is the
-        evidence. An edit to that block would otherwise leave the hashes
-        attesting to a packet nobody read.
-        """
-
-        return self.shown_hash is not None and self.packet_hash is not None and self.shown_hash == self.packet_hash
-
     def validate(
         self,
         expected: DeclarationSkeleton | None = None,
