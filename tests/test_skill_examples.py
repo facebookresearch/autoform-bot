@@ -175,6 +175,7 @@ def test_public_repl_calls_are_documented_as_process_disposable(repo_root: Path)
     assert "no process-owned environment or proof-state handle survives" in servers
     assert "toolchain's `lean --deps-json`" in servers
     assert "unrecognized parser response fails closed" in servers
+    assert "quoted or path-like components are refused" in servers
     assert "package-qualified `@repl/repl` target" in servers
     assert "one total post-admission budget" in servers
     assert "default and maximum are 240 seconds" in servers

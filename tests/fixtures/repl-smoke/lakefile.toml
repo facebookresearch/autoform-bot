@@ -8,3 +8,6 @@ rev = "68a3b3a059787a7db44fb1e6281e4a657efee470"
 
 [[lean_lib]]
 name = "Mathlib"
+
+[[lean_lib]]
+name = "Secret"

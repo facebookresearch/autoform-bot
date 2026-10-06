@@ -472,9 +472,16 @@ def _decode_header_analysis(stdout: bytes) -> _LeanHeaderAnalysis:
             module = item.get("module")
             if not isinstance(module, str) or not module:
                 raise ValueError
-            if "/" in module or "\\" in module:
+            components = module.split(".")
+            if (
+                "/" in module
+                or "\\" in module
+                or "«" in module
+                or "»" in module
+                or any(not component for component in components)
+            ):
                 raise ValueError(
-                    "Lean header contains an import module with a path separator"
+                    "Lean header imports must use plain, nonempty module components"
                 )
             if has_result:
                 is_meta = item.get("isMeta")

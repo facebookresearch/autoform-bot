@@ -97,7 +97,7 @@ jobs:
         with:
           auto-config: false
           build: true
-          build-args: "Mathlib @repl/repl"
+          build-args: "Mathlib Secret @repl/repl"
           lake-package-directory: tests/fixtures/repl-smoke
       - run: uv sync --frozen --extra dev --extra repl
       - run: uv run pytest -q tests/test_real_repl.py

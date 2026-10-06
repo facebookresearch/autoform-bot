@@ -1070,9 +1070,7 @@ def _header_modules(command: list[str], *, timeout: float = 10, **config) -> lis
 
 
 def test_header_check_accepts_current_and_legacy_lean_schemas():
-    current = _fake_header_deps(
-        _deps_json("Init", "Mathlib.Tactic", "«Mathlib.X»")
-    )
+    current = _fake_header_deps(_deps_json("Init", "Mathlib.Tactic"))
     legacy = _fake_header_deps(
         json.dumps(
             {
@@ -1089,7 +1087,7 @@ def test_header_check_accepts_current_and_legacy_lean_schemas():
         )
     )
 
-    assert _header_modules(current) == ["Mathlib.Tactic", "«Mathlib.X»"]
+    assert _header_modules(current) == ["Mathlib.Tactic"]
     assert _header_modules(legacy) == ["Mathlib.Tactic"]
 
 
@@ -1133,7 +1131,11 @@ def test_header_parser_launcher_ignores_a_path_shadow(tmp_path):
         (_fake_header_deps(_deps_json(errors=("bad header",))), "bad header"),
         (
             _fake_header_deps(_deps_json("Mathlib.«/abs/path/Secret»")),
-            "module with a path separator",
+            "plain, nonempty module components",
+        ),
+        (
+            _fake_header_deps(_deps_json("Mathlib.«..».Secret")),
+            "plain, nonempty module components",
         ),
         (_fake_header_deps("", returncode=1, stderr="unknown package\n"), "unknown package"),
         (_fake_header_deps("not json"), "unrecognized output"),
@@ -1213,12 +1215,6 @@ def test_disposable_call_checks_submitted_header_before_warmup_prefix(monkeypatc
         (
             "prelude -- ordinary comment\n"
             "import Init /- a --/\n"
-            "import Lean\n"
-            "-- -/\n"
-            "#check Lean.Name"
-        ),
-        (
-            "import Mathlib.«Foo--» /- a --/\n"
             "import Lean\n"
             "-- -/\n"
             "#check Lean.Name"
