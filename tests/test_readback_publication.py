@@ -73,6 +73,16 @@ class _Os:
         return getattr(os, name)
 
 
+def _patch_os(monkeypatch, **calls) -> None:
+    """Give publication an ``os`` with ``calls`` replaced, each also usable with ``dir_fd``."""
+
+    patched = _Os()
+    for name, call in calls.items():
+        setattr(patched, name, call)
+    patched.supports_dir_fd = os.supports_dir_fd | set(calls.values())
+    monkeypatch.setattr(readback, "os", patched)
+
+
 def _fail(monkeypatch, call: str, when=lambda *args, **kwargs: True) -> list[tuple]:
     """Make publication's ``os.<call>`` fail with EIO whenever ``when`` accepts its arguments.
 
@@ -89,10 +99,7 @@ def _fail(monkeypatch, call: str, when=lambda *args, **kwargs: True) -> list[tup
             raise OSError(errno.EIO, "injected input/output error")
         return real(*args, **kwargs)
 
-    patched = _Os()
-    setattr(patched, call, failing)
-    patched.supports_dir_fd = os.supports_dir_fd | {failing}
-    monkeypatch.setattr(readback, "os", patched)
+    _patch_os(monkeypatch, **{call: failing})
     return failed
 
 
@@ -106,12 +113,18 @@ def _read_only(directory: Path) -> None:
     _restrict(directory, 0o555)
 
 
+def _fcntl(monkeypatch, **calls) -> None:
+    """Give publication an ``fcntl`` with only the real locking calls, and ``calls`` replacing or added to them."""
+
+    fcntl = pytest.importorskip("fcntl")
+    locking = {"LOCK_EX": fcntl.LOCK_EX, "LOCK_NB": fcntl.LOCK_NB, "LOCK_UN": fcntl.LOCK_UN, "flock": fcntl.flock}
+    monkeypatch.setattr("autoform_cli.readback.fcntl", types.SimpleNamespace(**{**locking, **calls}))
+
+
 def _without_full_fsync(monkeypatch) -> None:
     """Flush with plain ``os.fsync``, as on Linux, so a test can watch or fail each flush."""
 
-    fcntl = pytest.importorskip("fcntl")
-    locking = types.SimpleNamespace(LOCK_EX=fcntl.LOCK_EX, LOCK_NB=fcntl.LOCK_NB, LOCK_UN=fcntl.LOCK_UN, flock=fcntl.flock)
-    monkeypatch.setattr("autoform_cli.readback.fcntl", locking)
+    _fcntl(monkeypatch)
 
 
 def _with_full_fsync(monkeypatch, full_fsync) -> None:
@@ -124,15 +137,7 @@ def _with_full_fsync(monkeypatch, full_fsync) -> None:
         assert requested == command
         return full_fsync(descriptor)
 
-    locking = types.SimpleNamespace(
-        LOCK_EX=fcntl.LOCK_EX,
-        LOCK_NB=fcntl.LOCK_NB,
-        LOCK_UN=fcntl.LOCK_UN,
-        flock=fcntl.flock,
-        F_FULLFSYNC=command,
-        fcntl=call,
-    )
-    monkeypatch.setattr("autoform_cli.readback.fcntl", locking)
+    _fcntl(monkeypatch, F_FULLFSYNC=command, fcntl=call)
 
 
 def _kind(descriptor: int) -> str:
@@ -265,7 +270,7 @@ def test_the_card_is_renamed_into_place_while_the_lock_is_held(tmp_path: Path, m
 
 
 def test_a_child_process_started_during_publication_does_not_keep_the_lock(tmp_path: Path, monkeypatch) -> None:
-    fcntl = pytest.importorskip("fcntl")
+    pytest.importorskip("fcntl")
     blueprint, path, expected = _filed(tmp_path)
     publish = readback._publish_card
     children: list[subprocess.Popen[bytes]] = []
@@ -287,11 +292,7 @@ def test_a_child_process_started_during_publication_does_not_keep_the_lock(tmp_p
     try:
         assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
         assert len(children) == 1 and children[0].poll() is None
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        finally:
-            os.close(directory)
+        assert _unlocked(path.parent)
     finally:
         for child in children:
             child.communicate(timeout=30)
@@ -365,8 +366,7 @@ def test_a_lock_call_that_fails_is_handled(tmp_path: Path, monkeypatch, failing:
             raise OSError(errno.ENOLCK, "no locks available")
         fcntl.flock(descriptor, requested)
 
-    locking = types.SimpleNamespace(LOCK_EX=fcntl.LOCK_EX, LOCK_NB=fcntl.LOCK_NB, LOCK_UN=fcntl.LOCK_UN, flock=flock)
-    monkeypatch.setattr("autoform_cli.readback.fcntl", locking)
+    _fcntl(monkeypatch, flock=flock)
 
     if failing == "lock":
         # A lock that cannot be taken stops the write before anything is staged.
@@ -417,10 +417,7 @@ def test_a_write_naming_the_wrong_hash_is_refused_before_anything_is_staged(tmp_
             created.append(name)
         return open_(name, flags, *args, **kwargs)
 
-    patched = _Os()
-    patched.open = counted
-    patched.supports_dir_fd = os.supports_dir_fd | {counted}
-    monkeypatch.setattr(readback, "os", patched)
+    _patch_os(monkeypatch, open=counted)
 
     # The compare comes first, so a refused write never creates a staging file.
     with pytest.raises(ValueError, match="changed before replacement"):
@@ -503,9 +500,7 @@ def test_a_card_over_the_size_limit_is_reported_and_never_read_past_it(tmp_path:
         sizes.append(len(block))
         return block
 
-    patched = _Os()
-    patched.read = counted
-    monkeypatch.setattr(readback, "os", patched)
+    _patch_os(monkeypatch, read=counted)
 
     loaded = load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)]
     assert f"card is over the {_CARD_LIMIT}-byte limit for a card file" in loaded.validate()
@@ -608,10 +603,7 @@ def test_a_card_whose_open_fails_is_reported_unless_nothing_or_a_link_is_there(
             raise OSError(error, os.strerror(error))
         return open_(name, flags, *args, **kwargs)
 
-    patched = _Os()
-    patched.open = failing
-    patched.supports_dir_fd = os.supports_dir_fd | {failing}
-    monkeypatch.setattr(readback, "os", patched)
+    _patch_os(monkeypatch, open=failing)
 
     loaded = load_readbacks(blueprint)
     findings = readback_findings(_report(), loaded, article_ids={"basics/sup-unique": _ARTICLE_ID})
@@ -751,10 +743,7 @@ def test_a_link_put_where_a_card_directory_is_being_made_is_refused(tmp_path: Pa
             os.symlink(outside, name, dir_fd=dir_fd)
         mkdir(name, mode, dir_fd=dir_fd)
 
-    patched = _Os()
-    patched.mkdir = link_then_mkdir
-    patched.supports_dir_fd = os.supports_dir_fd | {link_then_mkdir}
-    monkeypatch.setattr(readback, "os", patched)
+    _patch_os(monkeypatch, mkdir=link_then_mkdir)
 
     with pytest.raises(
         ValueError, match=f"refusing a symlink or unsafe component in the read-back path: .*/readbacks/{_ARTICLE_ID}: "
@@ -878,10 +867,7 @@ def test_a_staging_file_that_cannot_be_removed_is_left_once_the_rename_fails(tmp
         removals.append(name)
         raise OSError(errno.EIO, "injected input/output error")
 
-    patched = _Os()
-    patched.replace, patched.unlink = fail_replace, fail_unlink
-    patched.supports_dir_fd = os.supports_dir_fd | {fail_unlink}
-    monkeypatch.setattr(readback, "os", patched)
+    _patch_os(monkeypatch, replace=fail_replace, unlink=fail_unlink)
 
     # The error is the rename's, and names the file the one failed removal left.
     with pytest.raises(ValueError) as refused:
@@ -913,10 +899,7 @@ def test_a_staging_file_that_could_not_be_created_is_not_named_as_left_behind(tm
         removals.append(name)
         raise OSError(errno.EROFS, os.strerror(errno.EROFS))
 
-    patched = _Os()
-    patched.open, patched.unlink = read_only_open, read_only_unlink
-    patched.supports_dir_fd = os.supports_dir_fd | {read_only_open, read_only_unlink}
-    monkeypatch.setattr(readback, "os", patched)
+    _patch_os(monkeypatch, open=read_only_open, unlink=read_only_unlink)
 
     with pytest.raises(ValueError) as refused:
         _file_card(blueprint, "Replacement.", expected_card_hash=expected)
@@ -1002,9 +985,7 @@ def test_each_flush_uses_full_fsync_where_the_platform_has_it_and_fsync_where_it
         fsync(descriptor)
 
     _with_full_fsync(monkeypatch, full)
-    patched = _Os()
-    patched.fsync = plain
-    monkeypatch.setattr(readback, "os", patched)
+    _patch_os(monkeypatch, fsync=plain)
 
     # On macOS a plain fsync can leave the data in the drive's cache, so it is only the fallback.
     assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
@@ -1026,9 +1007,7 @@ def test_an_io_error_from_full_fsync_fails_the_flush_rather_than_falling_back_to
         fsyncs.append(_kind(descriptor))
 
     _with_full_fsync(monkeypatch, full)
-    patched = _Os()
-    patched.fsync = plain
-    monkeypatch.setattr(readback, "os", patched)
+    _patch_os(monkeypatch, fsync=plain)
 
     # A plain fsync would succeed into the drive's cache and hide the error.
     with pytest.raises(ValueError) as refused:
@@ -1053,10 +1032,7 @@ def test_a_first_card_flushes_each_directory_it_makes_into_its_parent(tmp_path: 
         mkdir(name, mode, dir_fd=dir_fd)
         steps.append(("mkdir", name))
 
-    patched = _Os()
-    patched.fsync, patched.mkdir = flushed, made
-    patched.supports_dir_fd = os.supports_dir_fd | {made}
-    monkeypatch.setattr(readback, "os", patched)
+    _patch_os(monkeypatch, fsync=flushed, mkdir=made)
 
     path = _file_card(blueprint, "First.")
     parent, readbacks, card, directory = (
@@ -1098,9 +1074,7 @@ def test_short_writes_still_stage_the_whole_card(tmp_path: Path, monkeypatch) ->
         calls += 1
         return write(descriptor, bytes(data[:7]))
 
-    patched = _Os()
-    patched.write = write_a_little
-    monkeypatch.setattr(readback, "os", patched)
+    _patch_os(monkeypatch, write=write_a_little)
 
     assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
     loaded = load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)]
@@ -1214,10 +1188,7 @@ def test_a_staging_file_an_interruption_leaves_behind_is_named_in_a_warning(tmp_
     def fail_unlink(name: str, *, dir_fd: int | None = None) -> None:
         raise OSError(errno.EIO, "injected input/output error")
 
-    patched = _Os()
-    patched.write, patched.unlink = interrupt, fail_unlink
-    patched.supports_dir_fd = os.supports_dir_fd | {fail_unlink}
-    monkeypatch.setattr(readback, "os", patched)
+    _patch_os(monkeypatch, write=interrupt, unlink=fail_unlink)
 
     # The interrupt has no message to name the file in, so a warning does.
     with pytest.warns(RuntimeWarning) as warned, pytest.raises(KeyboardInterrupt):
@@ -1230,7 +1201,7 @@ def test_a_staging_file_an_interruption_leaves_behind_is_named_in_a_warning(tmp_
 
 
 def test_an_interruption_as_any_step_of_a_write_returns_leaves_no_lock_or_staging_file(tmp_path: Path) -> None:
-    fcntl = pytest.importorskip("fcntl")
+    pytest.importorskip("fcntl")
     module = readback.__file__
     step = returns = 0
 
@@ -1264,11 +1235,7 @@ def test_an_interruption_as_any_step_of_a_write_returns_leaves_no_lock_or_stagin
             break
         assert path.read_bytes() in (original, card.content.encode("utf-8")), step
         assert _staged_names(path.parent) == [], step
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        finally:
-            os.close(directory)
+        assert _unlocked(path.parent), step
     assert step > 10
 
 
