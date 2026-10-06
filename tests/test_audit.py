@@ -552,8 +552,9 @@ def test_audit_reports_a_chapter_it_can_list_but_not_enter(tmp_path: Path) -> No
     finally:
         chapter.chmod(0o755)
 
-    assert [(finding.code, finding.reason) for finding in result.findings] == [
+    assert [(finding.article_path, finding.code, finding.reason) for finding in result.findings] == [
         (
+            f"roadmap/chapter/{name}",
             "invalid-graph",
             f"chapter/{name}: cannot read roadmap page: [Errno 13] Permission denied: './roadmap/chapter/{name}'",
         )
