@@ -1252,6 +1252,7 @@ def _ambiguous_companion(record: dict[str, object]) -> None:
     [
         (lambda record: record.update(semantic_schema="unknown"), "unsupported semantic schema"),
         (lambda record: record.update(semantic="not JSON"), "invalid elaborated semantic material"),
+        (lambda record: record.update(semantic='{"root":1' + "0" * 4300 + "}"), "invalid elaborated semantic material"),
         (_unknown_safety, "invalid elaborated semantic material"),
         (_ambiguous_companion, "invalid elaborated semantic material"),
         (lambda record: record["trusted"][0].update(depends=[False]), "invalid depends"),

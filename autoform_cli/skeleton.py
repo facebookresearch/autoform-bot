@@ -2155,7 +2155,7 @@ def _validate_semantic_material(semantic: str, *, context: str, kind: str | None
     shapes = _SEMANTIC_SHAPES if kind is None else (_KIND_SEMANTIC_SHAPE.get(kind, _SEMANTIC_SHAPES[0]),)
     try:
         payload = json.loads(semantic)
-    except (json.JSONDecodeError, RecursionError):
+    except (RecursionError, ValueError):
         payload = None
     generated = payload.get("generated") if isinstance(payload, dict) else None
     entries = generated if isinstance(generated, list) else []
