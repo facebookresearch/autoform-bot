@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from .lean import declaration_names
 from .markdown import content_lines
 from .snapshot import BlueprintSnapshot, SnapshotError, read_regular_file
 
@@ -651,6 +652,14 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
             issues.append(f"{node_id}: proof: formalized needs statement: formalized, not retracted")
         if metadata.get("mathlib") in _TRUE:
             issues.append(f"{node_id}: a mathlib: true article cannot record statement: retracted")
+    # Load errors rather than audit findings: the generated workflows never run
+    # the audit, so either state would otherwise publish as proved with no Lean
+    # statement behind it. `mathlib: true` exempts neither.
+    if metadata.get("proof") == _FORMALIZED and metadata.get("statement") not in {_FORMALIZED, _RETRACTED}:
+        issues.append(f"{node_id}: proof: formalized needs statement: formalized")
+    formalized = [key for key in ("statement", "proof") if metadata.get(key) == _FORMALIZED]
+    if formalized and not declaration_names(metadata.get("lean", "")):
+        issues.append(f"{node_id}: {formalized[0]}: formalized needs the lean: declaration that formalizes it")
     return metadata, end + 1, issues
 
 

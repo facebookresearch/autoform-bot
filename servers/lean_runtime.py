@@ -339,23 +339,44 @@ class ProjectResourceCache(Generic[T]):
         self,
         project_dir: str,
         *,
-        create: bool = True,
         acquisition_timeout: float | None = None,
         creation_budget: float = 0.0,
-    ) -> Iterator[T | None]:
+    ) -> Iterator[T]:
         """Keep a project resource alive for the complete operation."""
         root = resolve_lean_project_dir(project_dir)
         resource = self._acquire(
             root,
-            create=create,
             acquisition_timeout=acquisition_timeout,
             creation_budget=creation_budget,
         )
         try:
             yield resource
         finally:
+            self._release(root, resource)
+
+    @contextmanager
+    def observe(self, project_dir: str) -> Iterator[tuple[T | None, str]]:
+        """Borrow one atomic state snapshot without validating or refreshing it."""
+        root = resolve_lean_project_dir(project_dir)
+        with self._condition:
+            if self._closed:
+                raise RuntimeError("project resource cache is closed")
+            entry = self._entries.get(root)
+            if entry is None:
+                resource = None
+                state = "warming" if root in self._creating else "cold"
+            else:
+                entry.active += 1
+                resource = entry.resource
+                state = "warm"
+        try:
+            yield resource, state
+        finally:
             if resource is not None:
-                self._release(root, resource)
+                with self._condition:
+                    # A pinned entry is never evicted, replaced, or closed.
+                    self._entries[root].active -= 1
+                    self._condition.notify_all()
 
     def stats(self) -> dict[str, Any]:
         with self._condition:
@@ -375,16 +396,6 @@ class ProjectResourceCache(Generic[T]):
                 ],
                 "creating": sorted(str(root) for root in self._creating),
             }
-
-    def state(self, project_dir: str) -> str:
-        """Return ``cold``, ``warming``, or ``warm`` without creating state."""
-        root = resolve_lean_project_dir(project_dir)
-        with self._condition:
-            if root in self._entries:
-                return "warm"
-            if root in self._creating:
-                return "warming"
-            return "cold"
 
     def invalidate(self, project_dir: str, resource: T) -> None:
         """Arrange to replace a failed resource after its active calls finish."""
@@ -430,10 +441,9 @@ class ProjectResourceCache(Generic[T]):
         self,
         root: Path,
         *,
-        create: bool,
         acquisition_timeout: float | None,
         creation_budget: float,
-    ) -> T | None:
+    ) -> T:
         if acquisition_timeout is not None and acquisition_timeout <= 0:
             raise ProjectResourceBusyError(
                 "no response budget remains for a shared Lean project slot"
@@ -469,22 +479,14 @@ class ProjectResourceCache(Generic[T]):
                 )
                 if entry_is_stale:
                     assert entry is not None
+                    self._require_creation_budget(
+                        root,
+                        deadline=deadline,
+                        creation_budget=creation_budget,
+                    )
                     if entry.active:
-                        if not create:
-                            resource = None
-                            break
-                        self._require_creation_budget(
-                            root,
-                            deadline=deadline,
-                            creation_budget=creation_budget,
-                        )
                         wait = True
                     else:
-                        self._require_creation_budget(
-                            root,
-                            deadline=deadline,
-                            creation_budget=creation_budget,
-                        )
                         resources_to_close.append(self._entries.pop(root).resource)
                         self._condition.notify_all()
                         entry = None
@@ -497,10 +499,6 @@ class ProjectResourceCache(Generic[T]):
                     entry.active += 1
                     entry.last_used = self._clock()
                     resource = entry.resource
-                    break
-
-                if not wait and entry is None and not create:
-                    resource = None
                     break
 
                 if not wait and root in self._creating:
@@ -716,8 +714,7 @@ class LeanRuntimeServices:
                 return format_repl_response(pool.run(code, timeout=effective_timeout))
         if method == "repl.status":
             project_dir = self._string_param(params, "project_dir")
-            with self.repl_projects.lease(project_dir, create=False) as pool:
-                state = "warm" if pool is not None else self.repl_projects.state(project_dir)
+            with self.repl_projects.observe(project_dir) as (pool, state):
                 return {
                     "state": state,
                     "capacity": (

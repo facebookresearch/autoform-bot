@@ -375,9 +375,12 @@ def test_overview_carries_the_counts_without_a_separate_progress_page(tmp_path: 
 def test_statement_only_theorems_never_count_as_complete(tmp_path: Path) -> None:
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
+    (project / "Project" / "Blocker.lean").write_text(
+        "namespace Project\n\ntheorem blocker : True := trivial\n\nend Project\n", encoding="utf-8"
+    )
     blocker = roadmap / "blocker.md"
     blocker.write_text(
-        "---\ndeclaration: theorem\nstatement: formalized\n---\n\n# Blocker\n",
+        "---\ndeclaration: theorem\nstatement: formalized\nlean: Project.blocker\n---\n\n# Blocker\n",
         encoding="utf-8",
     )
     top = roadmap / "top.md"
@@ -398,7 +401,7 @@ def test_statement_only_theorems_never_count_as_complete(tmp_path: Path) -> None
     assert "1 of 3 targets complete" in blocked
 
     blocker.write_text(
-        "---\ndeclaration: theorem\nstatement: formalized\nproof: formalized\n---\n\n"
+        "---\ndeclaration: theorem\nstatement: formalized\nproof: formalized\nlean: Project.blocker\n---\n\n"
         "# Blocker\n",
         encoding="utf-8",
     )
@@ -1471,8 +1474,11 @@ def _conditional_project(tmp_path: Path, policy: str) -> Path:
         "## Results\n\n- [Open](open.md)\n- [Top](top.md)\n",
         encoding="utf-8",
     )
+    (project / "Project" / "Open.lean").write_text(
+        "namespace Project\n\ntheorem openStatement : True := sorry\n\nend Project\n", encoding="utf-8"
+    )
     (roadmap / "open.md").write_text(
-        "---\ndeclaration: theorem\nstatement: formalized\n---\n\n"
+        "---\ndeclaration: theorem\nstatement: formalized\nlean: Project.openStatement\n---\n\n"
         "# Open\n\nA statement whose proof is still sorry.\n\n## Depends on\n\n- [Base](base.md)\n",
         encoding="utf-8",
     )

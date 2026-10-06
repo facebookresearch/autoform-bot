@@ -231,15 +231,6 @@ def audit_graph(
                 )
             )
 
-        if node.proof_formalized and not node.statement_formalized:
-            findings.append(
-                AuditFinding(
-                    article_path,
-                    "proof-without-statement",
-                    "proof is marked formalized but the statement is not marked formalized",
-                )
-            )
-
         if node.mathlib and not declaration_names(node.mathlib_declaration or ""):
             findings.append(
                 AuditFinding(
@@ -455,16 +446,6 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
         names = declaration_names(node.lean or "")
-        if (node.statement_formalized or node.proof_formalized) and not names:
-            findings.append(
-                AuditFinding(
-                    article_path,
-                    "missing-lean-target",
-                    "formalized local work has no lean declaration target",
-                )
-            )
-            continue
-
         resolved = []
         for name in names:
             declaration = index.find(name)
