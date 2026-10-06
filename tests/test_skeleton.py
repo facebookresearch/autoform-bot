@@ -2590,6 +2590,19 @@ def test_a_report_or_packet_manifest_that_cannot_be_decoded_is_refused(tmp_path:
     assert (packets / PACKET_MANIFEST).read_text(encoding="utf-8") == text
 
 
+def test_report_loader_refuses_a_lone_surrogate_as_unreadable(tmp_path: Path) -> None:
+    text = _fake_report(tmp_path).to_json()
+    assert '"lean_version":"' in text
+    path = tmp_path / "skeleton.json"
+    path.write_text(text.replace('"lean_version":"', '"lean_version":"\\ud800', 1), encoding="utf-8")
+
+    with pytest.raises(SkeletonError) as refused:
+        load_skeleton_report(path)
+
+    reason = "it escapes a lone surrogate, '\\ud800', which UTF-8 cannot encode"
+    assert refused.value.issues == (f"cannot read skeleton report {path}: {reason}",)
+
+
 def test_report_loader_rejects_scope_tampering(tmp_path: Path) -> None:
     report = _fake_report(tmp_path)
     path = tmp_path / "skeleton.json"

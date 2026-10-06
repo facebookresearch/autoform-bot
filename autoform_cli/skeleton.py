@@ -575,6 +575,12 @@ def load_skeleton_report(path: str | Path) -> SkeletonReport:
     # the decoder recurses.
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
+        # As in a bundle, an escape such as "\ud800" decodes to half of a
+        # surrogate pair, which the report's hashes cannot encode as UTF-8.
+        json.dumps(data, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        reason = f"it escapes a lone surrogate, {exc.object[exc.start]!r}, which UTF-8 cannot encode"
+        raise SkeletonError([f"cannot read skeleton report {path}: {reason}"]) from exc
     except (OSError, RecursionError, ValueError) as exc:
         raise SkeletonError([f"cannot read skeleton report {path}: {exc}"]) from exc
     schema = data.get("schema") if isinstance(data, dict) else None
