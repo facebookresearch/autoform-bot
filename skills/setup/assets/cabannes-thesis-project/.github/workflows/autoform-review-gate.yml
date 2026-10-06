@@ -1,20 +1,8 @@
 # Early feedback on who approved the statement reviews a pull request adds or
 # changes. It needs no Lean, so it reruns cheaply whenever a review arrives.
-#
-# review_approved shows only that the review surface is unchanged, and
-# `review check` prints the hash, so anyone can paste it. This gate asks, for
-# each approval the pull request adds or changes, whether rulesets on the
-# default branch that this job's token cannot bypass require code owner
-# review, dismiss stale approvals, and require approval of the last push,
-# CODEOWNERS, which GitHub reads without error, gives every path a code owner
-# GitHub enforces, the pull request changes only articles and read-back cards,
-# and an individual @user code owner of the article (per CODEOWNERS on the
-# base commit) with write access, who neither opened the pull request nor
-# wrote any of its commits, approved its head commit, whose diff adds that
-# hash. The base commit is the first parent of the merge commit GitHub builds
-# for the pull request, which is what this job checks out. It runs the
-# pull request's own copy of this file, so a pull request can disable it; the
-# authoritative label is the one blueprint-pages.yml computes on main.
+# It runs the pull request's own copy of this file, so a pull request can
+# disable it; the authoritative label is the one blueprint-pages.yml computes
+# on main. The approval rule is in autoform_cli/README.md of autoform-bot.
 
 name: autoform review gate
 
