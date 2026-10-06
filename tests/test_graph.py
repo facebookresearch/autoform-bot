@@ -274,8 +274,7 @@ def test_rejects_a_readme_linked_to_a_file_with_another_name(tmp_path: Path, rel
     target = Path(relative).with_name("intro.txt").as_posix()
     assert result.returncode == 1
     assert (
-        f"error: {relative}: links to {target}, which is not named README.md; "
-        "container pages must be named exactly README.md"
+        f"error: {relative}: links to {target}, which is not named README.md; replace the link with the page itself"
     ) in result.stdout
 
 

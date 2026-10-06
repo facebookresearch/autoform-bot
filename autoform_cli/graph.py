@@ -433,7 +433,7 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
             relative = path.relative_to(roadmap_root).as_posix()
             issues.append(
                 f"{relative}: links to {canonical.relative_to(roadmap_root).as_posix()}, which is not named "
-                "README.md; container pages must be named exactly README.md"
+                "README.md; replace the link with the page itself"
             )
             continue
         sources.append(
