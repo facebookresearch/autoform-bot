@@ -127,29 +127,13 @@ def test_readback_markdown_cannot_inject_raw_html() -> None:
     ],
 )
 def test_writer_rejects_active_testimony(testimony: str, tmp_path: Path) -> None:
-    declaration = _declaration()
-
     with pytest.raises(ValueError, match="unsafe read-back testimony"):
-        write_readback(
-            tmp_path,
-            article_id="af_0123456789abcdef01234567",
-            declaration=declaration,
-            model="reviewer",
-            text=testimony,
-            packet_text=declaration.blind_text(),
-        )
+        _file(tmp_path, testimony)
 
 
 def test_parser_marks_hand_authored_active_testimony_invalid(tmp_path: Path) -> None:
     declaration = _declaration()
-    path = write_readback(
-        tmp_path,
-        article_id="af_0123456789abcdef01234567",
-        declaration=declaration,
-        model="reviewer",
-        text="A plain mathematical statement.",
-        packet_text=declaration.blind_text(),
-    )
+    path = _file(tmp_path, "A plain mathematical statement.")
     path.write_text(
         path.read_text(encoding="utf-8").replace(
             "A plain mathematical statement.",
@@ -213,14 +197,7 @@ def test_attribute_lists_are_shown_as_typed(testimony: str, tmp_path: Path) -> N
 def test_writer_keeps_inert_markdown_and_mathematics(tmp_path: Path) -> None:
     declaration = _declaration()
 
-    path = write_readback(
-        tmp_path,
-        article_id="af_0123456789abcdef01234567",
-        declaration=declaration,
-        model="reviewer",
-        text="**Precisely:** for $x < y$, the claim holds.\n\n- No extra hypothesis.",
-        packet_text=declaration.blind_text(),
-    )
+    path = _file(tmp_path, "**Precisely:** for $x < y$, the claim holds.\n\n- No extra hypothesis.")
 
     assert load_readbacks(tmp_path)[
         ("af_0123456789abcdef01234567", declaration.name)
@@ -228,13 +205,15 @@ def test_writer_keeps_inert_markdown_and_mathematics(tmp_path: Path) -> None:
     assert path.is_file()
 
 
-def _file(tmp_path: Path, testimony: str) -> Path:
-    declaration = _declaration()
+def _file(
+    tmp_path: Path, testimony: str, *, declaration: DeclarationSkeleton | None = None, model: str = "reviewer"
+) -> Path:
+    declaration = _declaration() if declaration is None else declaration
     return write_readback(
         tmp_path,
         article_id="af_0123456789abcdef01234567",
         declaration=declaration,
-        model="reviewer",
+        model=model,
         text=testimony,
         packet_text=declaration.blind_text(),
     )
@@ -2216,14 +2195,7 @@ def test_card_frontmatter_round_trips_quoted_names_and_models(tmp_path: Path) ->
     declaration = replace(_declaration(), name="Review.«name: quoted»")
     model = 'reviewer: "strict" # literal'
 
-    path = write_readback(
-        tmp_path,
-        article_id="af_0123456789abcdef01234567",
-        declaration=declaration,
-        model=model,
-        text="A plain mathematical statement.",
-        packet_text=declaration.blind_text(),
-    )
+    path = _file(tmp_path, "A plain mathematical statement.", declaration=declaration, model=model)
     source = path.read_text(encoding="utf-8")
     card = load_readbacks(tmp_path)[
         ("af_0123456789abcdef01234567", declaration.name)
@@ -2238,14 +2210,7 @@ def test_card_frontmatter_round_trips_quoted_names_and_models(tmp_path: Path) ->
 
 def test_parser_rejects_bare_identity_frontmatter(tmp_path: Path) -> None:
     declaration = _declaration()
-    path = write_readback(
-        tmp_path,
-        article_id="af_0123456789abcdef01234567",
-        declaration=declaration,
-        model="reviewer",
-        text="A plain mathematical statement.",
-        packet_text=declaration.blind_text(),
-    )
+    path = _file(tmp_path, "A plain mathematical statement.")
     source = path.read_text(encoding="utf-8")
     path.write_text(source.replace('model: "reviewer"', "model: reviewer"), encoding="utf-8")
 
@@ -2259,14 +2224,5 @@ def test_parser_rejects_bare_identity_frontmatter(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("model", ["line\nbreak", "tab\tlabel", "control\x00label"])
 def test_writer_rejects_control_characters_in_model_labels(model: str, tmp_path: Path) -> None:
-    declaration = _declaration()
-
     with pytest.raises(ValueError, match="printable, single-line"):
-        write_readback(
-            tmp_path,
-            article_id="af_0123456789abcdef01234567",
-            declaration=declaration,
-            model=model,
-            text="A plain mathematical statement.",
-            packet_text=declaration.blind_text(),
-        )
+        _file(tmp_path, "A plain mathematical statement.", model=model)
