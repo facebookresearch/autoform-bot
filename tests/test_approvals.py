@@ -1117,14 +1117,8 @@ def test_the_client_reads_404_as_no_evidence_and_fails_clearly_otherwise(monkeyp
 
 
 def test_the_client_refuses_an_oversized_response(monkeypatch: pytest.MonkeyPatch) -> None:
-    class Response(io.BytesIO):
-        def __enter__(self) -> Response:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            self.close()
-
-    monkeypatch.setattr(approvals.urllib.request, "urlopen", lambda request, timeout: Response(b"[" + b" " * 64 + b"]"))
+    oversized = b"[" + b" " * 64 + b"]"
+    monkeypatch.setattr(approvals.urllib.request, "urlopen", lambda request, timeout: io.BytesIO(oversized))
     monkeypatch.setattr(approvals, "_MAX_RESPONSE_BYTES", 32)
 
     with pytest.raises(ApprovalError, match="returned more than 32 bytes"):
@@ -1150,18 +1144,11 @@ def test_the_client_reads_how_many_requests_are_left_and_nothing_else(
 ) -> None:
     requests: list[object] = []
 
-    class Response(io.BytesIO):
-        def __enter__(self) -> Response:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            self.close()
-
     def urlopen(request: object, timeout: float) -> object:
         requests.append(request)
         if isinstance(answer, Exception):
             raise answer
-        return Response(answer)
+        return io.BytesIO(answer)
 
     monkeypatch.setattr(approvals.urllib.request, "urlopen", urlopen)
 
@@ -1214,17 +1201,10 @@ def test_the_client_reads_how_many_requests_are_left_and_nothing_else(
 def test_the_client_tells_a_failure_a_later_run_may_not_repeat_from_a_verdict(
     monkeypatch: pytest.MonkeyPatch, failure: bytes | Exception, unavailable: bool
 ) -> None:
-    class Response(io.BytesIO):
-        def __enter__(self) -> Response:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            self.close()
-
     def urlopen(request: object, timeout: float) -> object:
         if isinstance(failure, Exception):
             raise failure
-        return Response(failure)
+        return io.BytesIO(failure)
 
     monkeypatch.setattr(approvals.urllib.request, "urlopen", urlopen)
     monkeypatch.setattr(approvals, "_MAX_RESPONSE_BYTES", 32)
@@ -1249,17 +1229,10 @@ def test_a_failed_request_for_the_repository_says_what_it_asked_for(
 ) -> None:
     """The repository's own path is empty, which left `GitHub API GET  failed` naming nothing."""
 
-    class Response(io.BytesIO):
-        def __enter__(self) -> Response:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            self.close()
-
     def urlopen(request: object, timeout: float) -> object:
         if isinstance(failure, Exception):
             raise failure
-        return Response(failure)
+        return io.BytesIO(failure)
 
     monkeypatch.setattr(approvals.urllib.request, "urlopen", urlopen)
     monkeypatch.setattr(approvals, "_MAX_RESPONSE_BYTES", 32)
