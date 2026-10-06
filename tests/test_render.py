@@ -10,7 +10,7 @@ import pytest
 
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS
 from autoform_cli.graph import load_graph
-from autoform_cli.lean import _normalize_remote
+from autoform_cli.lean import LeanSourceError, _normalize_remote
 from autoform_cli.render import (
     PUBLICATION_MANIFEST,
     PublicationError,
@@ -676,6 +676,35 @@ def test_refuses_overlapping_source_and_output(tmp_path: Path, destination: str)
         render_site(blueprint, output)
 
 
+@pytest.mark.parametrize(
+    ("reason", "message"),
+    [
+        (None, "Lean sources could not be indexed"),
+        (
+            "permission denied: Project/Secret.lean",
+            "Lean sources could not be indexed: permission denied: Project/Secret.lean",
+        ),
+    ],
+)
+def test_render_translates_source_index_io_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str | None, message: str
+) -> None:
+    project = _project(tmp_path)
+
+    def fail_linker(root: Path, **kwargs: object):
+        if reason is not None:
+            raise LeanSourceError(reason)
+        raise OSError(f"private host detail: {root}")
+
+    monkeypatch.setattr("autoform_cli.render.build_linker", fail_linker)
+
+    with pytest.raises(PublicationError) as error:
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert error.value.issues == (message,)
+    assert str(tmp_path) not in str(error.value)
+
+
 def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path) -> None:
     project = _project(tmp_path)
     outputs = [tmp_path / "first", tmp_path / "second"]
@@ -968,8 +997,10 @@ def test_render_omits_benign_hidden_files(tmp_path: Path) -> None:
         ("https://github.com/owner/repo.git", "https://github.com/owner/repo"),
         ("https://github.com/owner/repo/", "https://github.com/owner/repo"),
         ("ssh://git@github.com/owner/repo.git", "https://github.com/owner/repo"),
-        ("https://user:token@github.com/owner/repo.git", "https://github.com/owner/repo"),
-        ("https://ci:token@git.example.com:8443/group/repo.git", "https://git.example.com:8443/group/repo"),
+        ("https://user:secret@github.com/owner/repo.git", None),
+        ("https://ci:token@git.example.com:8443/group/repo.git", None),
+        ("https://github.com/owner/repo.git?access_token=secret", None),
+        ("https://github.com/owner/repo.git#secret", None),
         ("/local/path", None),
     ],
 )
@@ -1277,3 +1308,89 @@ def test_a_node_that_is_the_current_page_links_as_a_bare_fragment(tmp_path: Path
         "chapter": "#",
         "chapter/x": "#x",
     }
+
+
+def _conditional_project(tmp_path: Path, policy: str) -> Path:
+    """`_project` with Top proved from an open statement, under the given policy."""
+    project = _project(tmp_path)
+    roadmap = project / "blueprint" / "roadmap"
+    (roadmap / "README.md").write_text(
+        f"---\nopen_statements: {policy}\n---\n\n# Roadmap\n\n"
+        "## Definitions\n\n- [Base](base.md)\n\n"
+        "## Results\n\n- [Open](open.md)\n- [Top](top.md)\n",
+        encoding="utf-8",
+    )
+    (roadmap / "open.md").write_text(
+        "---\ndeclaration: theorem\nstatement: formalized\n---\n\n"
+        "# Open\n\nA statement whose proof is still sorry.\n\n## Depends on\n\n- [Base](base.md)\n",
+        encoding="utf-8",
+    )
+    top = roadmap / "top.md"
+    top.write_text(
+        top.read_text(encoding="utf-8") + "\n## Proof depends on\n\n- [Open](open.md)\n", encoding="utf-8"
+    )
+    return project
+
+
+def test_a_conditional_proof_names_the_open_statements_it_assumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The Lean row is the fallback for a declaration without a source link, and
+    # on CI the Actions environment would supply the coordinates for one.
+    for variable in ("GITHUB_REPOSITORY", "GITHUB_SERVER_URL", "GITHUB_SHA"):
+        monkeypatch.delenv(variable, raising=False)
+    project = _conditional_project(tmp_path, "allowed")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    top = page[page.index('id="top"'):]
+
+    assert '<div class="bp-thmwrapper theorem-style-plain bp-conditional" id="top"' in page
+    assert '●<span class="bp-mark-label">conditionally proved</span>' in top
+    assert (
+        '<span class="bp-key">Assumes</span><span class="bp-value">'
+        '<a class="bp-ref bp-ref-can_prove" href="#open">Theorem 1 (Open)</a>'
+        " (open statements without a recorded Lean proof)</span>"
+    ) in top
+    # Only the conditional proof carries the row; the open statement assumes nothing.
+    assert page.count('<span class="bp-key">Assumes</span>') == 1
+    # The row follows the implementation row and precedes Discussion.
+    meta = top[top.index('<div class="bp-meta">'):top.index('<details class="bp-dependencies">')]
+    assert re.findall(r'<span class="bp-key">([^<]+)</span>', meta) == ["Lean", "Assumes", "Discussion"]
+
+    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
+    assert ".bp-ref-conditional::before, .bp-swatch-conditional { background: #E9DFFC; border-color: #6B3FCF; }" in css
+    assert "[data-md-color-scheme=slate] .bp-ref-conditional::before" in css
+    assert ".bp-conditional .bp-mark { color: #6B3FCF; }" in css
+
+
+def test_the_strict_policy_shows_the_same_proof_as_proved_with_no_assumptions(tmp_path: Path) -> None:
+    project = _conditional_project(tmp_path, "forbidden")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    assert '<div class="bp-thmwrapper theorem-style-plain bp-proved" id="top"' in page
+    assert '<span class="bp-key">Assumes</span>' not in page
+
+
+@pytest.mark.parametrize(
+    ("dropped", "why"),
+    [
+        ("proof: formalized\n", "Its prerequisites are ready, so the proof can be written now."),
+        (
+            "statement: formalized\nproof: formalized\n",
+            "Its prerequisites are ready, so the statement can be written down.",
+        ),
+    ],
+)
+def test_next_up_explains_readiness_without_naming_a_policy(tmp_path: Path, dropped: str, why: str) -> None:
+    project = _project(tmp_path)
+    top = project / "blueprint" / "roadmap" / "top.md"
+    top.write_text(top.read_text(encoding="utf-8").replace(dropped, ""), encoding="utf-8")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    landing = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+
+    assert '<div class="bp-next-target" data-autoform-node-id="top">' in landing
+    assert f'<div class="bp-next-why">{why}</div>' in landing

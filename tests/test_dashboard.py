@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 import threading
 from functools import partial
@@ -182,6 +183,80 @@ def test_dashboard_handler_serves_static_site_and_no_store_overlay(tmp_path: Pat
             assert json.loads(response.read()) == state
             assert response.headers["Cache-Control"] == "no-store"
             assert response.headers["X-Content-Type-Options"] == "nosniff"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+@pytest.mark.parametrize("path", ["/", LIVE_ENDPOINT])
+def test_dashboard_rejects_dns_rebinding_host_before_serving(
+    tmp_path: Path,
+    path: str,
+    method: str,
+) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.html").write_text("private dashboard", encoding="utf-8")
+    loads = []
+    handler = partial(
+        DashboardHandler,
+        directory=str(site),
+        live_state=lambda: loads.append(True) or {},
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(method, path, headers={"Host": "attacker.example"})
+        response = connection.getresponse()
+        response.read()
+        connection.close()
+
+        assert response.status == 421
+        assert loads == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_dashboard_rejects_cross_origin_request_before_loading_claims(
+    tmp_path: Path,
+    method: str,
+) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    loads = []
+    handler = partial(
+        DashboardHandler,
+        directory=str(site),
+        live_state=lambda: loads.append(True) or {},
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            method,
+            LIVE_ENDPOINT,
+            headers={
+                "Host": f"127.0.0.1:{port}",
+                "Origin": "https://attacker.example",
+            },
+        )
+        response = connection.getresponse()
+        response.read()
+        connection.close()
+
+        assert response.status == 403
+        assert loads == []
     finally:
         server.shutdown()
         server.server_close()

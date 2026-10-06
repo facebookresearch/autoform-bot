@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+import autoform_cli.audit as audit_module
 from autoform_cli.audit import audit_blueprint
+from autoform_cli.lean import LeanSourceError
 
 
 def _ensure_chapter(blueprint: Path, relative: str) -> None:
@@ -276,6 +280,106 @@ def test_audit_validates_lean_targets_only_when_root_is_supplied(tmp_path: Path)
     ]
 
 
+def test_audit_reports_lean_targets_declared_deprecated(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    targets = {
+        "same-line.md": "Project.sameLine",
+        "line-above.md": "Project.lineAbove",
+        "multi-line.md": "Project.multiLine",
+        "fresh.md": "Project.fresh",
+        "decoy.md": "Project.decoy",
+        "after-previous.md": "Project.afterPrevious",
+        "after-alias.md": "Project.afterAlias",
+    }
+    for relative, name in targets.items():
+        _article(blueprint, relative, declaration="theorem", statement="formalized", lean=name)
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    source = [
+        "theorem Project.fresh : True := trivial",
+        "",
+        '@[deprecated Project.fresh (since := "2025-01-01")] theorem Project.sameLine : True := trivial',
+        "",
+        "/-- Kept for one release. -/",
+        "@[simp]",
+        '@[deprecated Project.fresh (since := "2025-01-01")]',
+        "protected theorem Project.lineAbove : True := trivial",
+        "",
+        "@[simp,",
+        '  deprecated "use [Project.fresh] instead" (since := "2025-01-01")]',
+        "-- removed after the next release",
+        "theorem Project.multiLine : True := trivial",
+        "",
+        '-- @[deprecated Project.fresh (since := "2025-01-01")]',
+        "/- @[deprecated Project.fresh] -/",
+        '@[to_additive "deprecated", deprecated_alias]',
+        "theorem Project.decoy : True := by",
+        '  have : "@[deprecated]" = "@[deprecated]" := rfl',
+        "  trivial",
+        "",
+        # An earlier declaration's attributes stay with it, indexed or not.
+        "@[deprecated Project.fresh] theorem Project.previous : True := trivial",
+        "theorem Project.afterPrevious : True := trivial",
+        "",
+        "@[deprecated Project.fresh]",
+        "alias Project.oldAlias := Project.fresh",
+        "theorem Project.afterAlias : True := trivial",
+    ]
+    (lean_root / "Old.lean").write_text("\n".join(source) + "\n", encoding="utf-8")
+
+    without_lean = _finding_map(blueprint)
+    with_lean = _finding_map(blueprint, lean_root=lean_root)
+
+    def deprecated(name: str) -> list[tuple[str, str]]:
+        return [("lean-target-deprecated", f"lean target {name} is deprecated; point lean: at its replacement")]
+
+    assert without_lean == {}
+    assert with_lean == {
+        "roadmap/same-line.md": deprecated("Project.sameLine"),
+        "roadmap/line-above.md": deprecated("Project.lineAbove"),
+        "roadmap/multi-line.md": deprecated("Project.multiLine"),
+    }
+
+
+def test_audit_reads_deprecation_from_the_captured_source_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(
+        blueprint,
+        "result.md",
+        declaration="theorem",
+        statement="formalized",
+        lean="Project.result",
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    source = lean_root / "Project.lean"
+    source.write_text(
+        "@[deprecated Project.fresh] theorem Project.result : True := trivial\n",
+        encoding="utf-8",
+    )
+    real_snapshot_project_sources = audit_module.snapshot_project_sources
+
+    def snapshot_then_rewrite(root: Path):
+        snapshot = real_snapshot_project_sources(root)
+        source.write_text("theorem Project.result : True := trivial\n", encoding="utf-8")
+        return snapshot
+
+    monkeypatch.setattr(audit_module, "snapshot_project_sources", snapshot_then_rewrite)
+
+    findings = _finding_map(blueprint, lean_root=lean_root)
+
+    assert findings["roadmap/result.md"] == [
+        (
+            "lean-target-deprecated",
+            "lean target Project.result is deprecated; point lean: at its replacement",
+        )
+    ]
+
+
 def test_audit_reports_invalid_lean_root_once(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
@@ -471,6 +575,80 @@ def test_audit_reports_nodes_that_are_large_outliers_for_their_project(tmp_path:
             )
         ]
     }
+
+
+def test_audit_measures_source_spans_from_the_captured_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    spans = {f"Project.small{index}": 6 for index in range(5)}
+    spans["Project.big"] = 420
+    for name in spans:
+        _article(
+            blueprint,
+            f"{name.rsplit('.', 1)[-1]}.md",
+            declaration="theorem",
+            statement="formalized",
+            proof="formalized",
+            lean=name,
+        )
+    lean_root = _lean_project(tmp_path, spans)
+    real_snapshot_project_sources = audit_module.snapshot_project_sources
+
+    def snapshot_then_mutate(root: Path):
+        snapshot = real_snapshot_project_sources(root)
+        (root / "big.lean").write_text(
+            "theorem Project.big : True := trivial\n", encoding="utf-8"
+        )
+        return snapshot
+
+    monkeypatch.setattr(audit_module, "snapshot_project_sources", snapshot_then_mutate)
+
+    findings = _finding_map(blueprint, lean_root=lean_root)
+
+    assert findings["roadmap/big.md"] == [
+        (
+            "node-too-large",
+            "node's Lean declarations span 420 lines against this project's "
+            "6-line median; split it into pull-request-sized nodes",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("reason", "message"),
+    [
+        (None, "Lean sources could not be indexed"),
+        (
+            "permission denied: Project/Secret.lean",
+            "Lean sources could not be indexed: permission denied: Project/Secret.lean",
+        ),
+    ],
+)
+def test_audit_reports_source_index_io_failure_without_host_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str | None, message: str
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "result.md", declaration="theorem", lean="Project.result")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+
+    def fail_snapshot(root: Path):
+        if reason is not None:
+            raise LeanSourceError(reason)
+        raise OSError(f"private host detail: {root}")
+
+    monkeypatch.setattr(audit_module, "snapshot_project_sources", fail_snapshot)
+
+    result = audit_blueprint(blueprint, lean_root=lean_root)
+
+    assert [(finding.article_path, finding.code, finding.reason) for finding in result.findings] == [
+        (".", "unreadable-lean-sources", message)
+    ]
+    assert str(tmp_path) not in result.to_json()
 
 
 def test_audit_measures_node_size_against_the_project_rather_than_a_fixed_limit(

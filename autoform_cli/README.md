@@ -84,26 +84,42 @@ An article asserts only facts a human or agent verified:
 | Key | Meaning |
 | --- | --- |
 | `statement: formalized` | The Lean statement exists and compiles. |
-| `proof: formalized` | The Lean proof is complete. |
+| `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. CI's `autoform check` at an older `AUTOFORM_REF` rejects the marker, so move the pin first; until then, retract by removing `statement` and `proof` and keeping `lean:`. |
+| `proof: formalized` | The Lean proof compiles. Under the open policy it may rest on open statements, and the article is then conditional; only the derived `fully_proved` means complete and `sorry`-free. |
 | `mathlib: true` | The result is upstreamed into Mathlib. |
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
 | `lean: Ns.decl` | Declaration name(s) that discharge the article. |
 | `discussion: 42` | Issue number or URL where the article is being discussed. |
 | `article_id: af_...` | Durable identity, `af_` plus 24 lowercase hex digits; `autoform work` requires it on unfinished formalizable leaves. |
+| `open_statements: allowed` | Project policy, valid only in `roadmap/README.md`: a theorem's statement may land with a `sorry` proof (see [Open statements](#open-statements)). Absent or `forbidden` keeps the strict policy. |
 
 Everything a reader thinks of as progress is *derived* from the DAG on every
-run, so it cannot go stale:
+run, so it cannot go stale. Readiness depends on the project's policy: under
+the default strict policy CI rejects every `sorry`, so a theorem's statement
+lands only with its proof; under `open_statements: allowed` it may land with a
+`sorry` proof.
 
 | Derived state | Holds when |
 | --- | --- |
-| `can_state` | Every statement prerequisite is stated. |
-| `can_prove` | Stated, and every proof prerequisite is proved. |
-| `proved` | The proof compiles. |
+| `can_state` | Every statement prerequisite is stated and every proof prerequisite is proved. Under the open policy a theorem waits for no proof prerequisite, and a definition, whose body is its proof, waits for them to be stated. |
+| `can_prove` | Stated, every statement prerequisite is stated, and every proof prerequisite is proved (strict policy) or stated (open policy). |
+| `proved` | The article records `proof: formalized`, is a stated definition, or is in Mathlib. |
+| `conditional` | Proved, but the proof rests on an open statement; open policy only. |
 | `fully_proved` | Proved, and every prerequisite is fully proved, recursively. |
-| `defined` | A definition is written but rests on unfinished work. |
+| `defined` | A definition is written but rests on unfinished work; one whose body rests on an open statement is `conditional` instead. |
 
 `proved` and `fully_proved` differ on purpose: a theorem whose own proof
-compiles but which rests on an unproved lemma is green, not dark green. The
+compiles but which rests on unfinished work is green, not dark green.
+`conditional`, labelled "conditionally proved", is the open policy's case of
+that: the article is proved, but it reaches an open statement, a theorem that
+is stated or retracted but not proved
+(see [Open statements](#open-statements)), through its dependencies. An open
+dependency counts together with whatever its statement prerequisites reach, and
+a proved dependency passes on
+everything it reaches. The site colours it violet, never green, and lists those
+open statements in an `Assumes` row on the article page. It is never
+`fully_proved`, which keeps its meaning in both policies; a conditional result
+is complete only once every open statement it assumes is proved. The
 palette and state names follow
 [leanblueprint](https://pypi.org/project/leanblueprint/), so the published
 graph reads the same way as the Lean community's LaTeX blueprints.
@@ -114,9 +130,10 @@ This section is the single source of truth for the command line. Skills
 describe what to achieve and link here; they do not restate flags, so a change
 to the CLI lands in one place.
 
-The commands below are written as they appear on `PATH`. Inside a consumer
-project the plugin is not installed, so resolve `<AUTOFORM_PLUGIN_ROOT>` from
-the loaded plugin and prefix each one, running from the project root:
+The commands below are written as they appear on `PATH` once this Python
+package is installed. Inside a consumer project the package is not installed,
+so resolve `<AUTOFORM_PLUGIN_ROOT>` from the loaded plugin and prefix each one,
+running from the project root:
 
 ```bash
 uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform check blueprint --lean-root .
@@ -133,14 +150,85 @@ autoform init . --title "Finite Flat Group Schemes" \
 
 Pass `--autoform-ref <sha>` to pin the generated workflows at an immutable
 commit, `--force` to overwrite, and `--json` for machine-readable output.
+An existing root `.gitignore` must be a bounded single-link regular file;
+missing Autoform rules are appended through one retained descriptor. If an
+append cannot be fully reverified, the error says it may be partial and the
+file must be inspected before retrying.
 
-Inspect a Lean project and list Autoform's bundled known-good release pairs:
+Create or inspect a Lean project and list Autoform's bundled known-good release pairs:
 
 ```bash
+autoform project versions
+autoform project new ./FiniteFlat --package FiniteFlat
+autoform project new ./FiniteFlat430 --package FiniteFlat --lean-toolchain v4.30.0
 autoform project inspect .
 autoform project inspect path/inside/project --json
 autoform project versions --json
 ```
+
+`project new` requires an absent target and uses the catalog's recommended
+release unless `--release` names another listed one. It builds a
+complete Lean shell with the release's Lake-generated resolved dependency
+manifest, blueprint, and site in a private sibling directory, validates the
+staged project, then publishes the directory with an atomic no-replace rename.
+It never overwrites an existing path. Failed and concurrent creations leave no
+partial target, and exactly one concurrent creator can win. A failure or
+interrupt after staging can leave a hidden `.autoform-new-*` directory in the
+parent, and the error says so; inspect it before removing it. The published
+tree has fixed modes, 0755 for directories and 0644 for files (0755 for
+executables), whatever the umask.
+A private creation bundle adds generated production-module roots, so package
+names cannot shadow Mathlib libraries such as `Archive` or `Counterexamples`.
+Its release identity is cross-checked with the public catalog and its complete
+Lake manifest before any filesystem state is created.
+Generated workflows are pinned as `init` pins them: `--autoform-ref` must be a
+full commit SHA, an explicit `--autoform-source` carries its own ref or none,
+and without flags the workflows pin the HEAD commit of the Autoform checkout
+running the command, or of the marketplace checkout an installed plugin was
+copied from, read with local Git. Source selection prefers Autoform's canonical
+repository, then `origin`, then `upstream`, then a unique remaining safe remote,
+but only when one of its cached tracking refs contains HEAD. An inferred pin is
+used only when tracked files are clean and the bounded, link-free template
+snapshot and scaffold renderer match that commit in paths, bytes, and
+executable-bit classification; an installed copy must match the checkout too.
+Local Git replacement objects are ignored. Apart from those reads, the command
+runs no subprocesses, Lake, Lean, or network operations. Without a ref the local
+project is complete but the workflows are omitted.
+It fails closed where POSIX descriptor traversal, advisory locking, directory
+sync, or atomic no-replace rename is unavailable, including on Windows.
+The parent and each of its ancestors must be readable real directories, because
+each caller-supplied path component is opened without following links
+(`project-parent-inaccessible` or `project-path-is-symlink` otherwise). On
+macOS, use the canonical `/private/tmp` path rather than the `/tmp` symlink. The
+parent must not be group- or world-writable unless it is a sticky directory
+owned by you or root; otherwise creation fails with
+`project-parent-unsafe`, which `chmod g-w,o-w` on the parent fixes. Creations in
+one parent are serialized with an advisory lock, and a lock held elsewhere for
+30 seconds fails with `project-parent-busy`.
+Immediately before publication and after syncing it, Autoform reopens the
+requested parent without following links and rechecks its device, inode, and
+owner. A pre-publication mismatch preserves the stage; a later mismatch reports
+where publication was observed and tells the caller not to retry blindly.
+
+`--lean-toolchain` takes a Lean release tag (`v4.30.0`, `v4.30.0-rc1`, or
+`leanprover/lean4:v4.30.0`) and `--mathlib-rev` a Mathlib tag, branch, or
+commit, defaulting to the same tag; `--mathlib-rev` requires `--lean-toolchain`,
+and neither combines with `--release`. A pair equal to a catalog entry gets that
+entry's bundled manifest. Any other pair is written without
+`lake-manifest.json` and reported with a `project-release-unlisted` warning:
+run `lake update` in the project, which needs network access, resolves and
+locks Mathlib, and downloads the Mathlib build cache, then commit the manifest.
+Use the toolchain that Mathlib revision declares in its own `lean-toolchain`;
+otherwise Lake may rewrite the project's toolchain, warn, or fail to build.
+Until the manifest exists, `project inspect` reports `indeterminate` with
+`missing-lake-manifest`; afterwards, `unlisted`, or `supported` when Lake locks a
+catalog commit. Autoform needs Lean v4.27.0 or
+newer (the skeleton probe uses that release's `String` API and the generated
+audit reads ILean `decls`); older toolchains get a `project-lean-below-minimum`
+warning. With `--json`, such a pair reports `"release": null` and its warnings
+go to the `warnings` array; otherwise warnings go to stderr. Either way the
+exit status stays 0. Successful JSON uses schema
+`autoform-project-creation/v1`.
 
 `project inspect` is local and read-only. It inspects the nearest enclosing Lean
 project without running Lake, Lean, Git, or the network. For automation, use
@@ -160,7 +248,8 @@ See the [project-inspection reference](project/README.md) for resolver rules,
 scope limits, JSON fields, nullability, and diagnostic codes.
 
 `project versions` lists the bundled catalog of known-good Lean and Mathlib
-pairs. It is an allowlist, not a resolver.
+pairs. These are the pairs `project new` can lock offline; it does not resolve
+others, which it writes unlocked for `lake update`.
 
 Publishing a project runs four steps in order: validate, write the Mermaid
 graph into the vault, render the site source, then strict-build the site.
@@ -501,10 +590,14 @@ autoform work context chapter/result . --lean-root . --json
 ```
 
 `work list` returns only formalizable leaves whose next statement or proof phase
-is unblocked. Project CI rejects `sorry`, so a theorem's statement lands with
-its proof, and an article's statement phase also waits until its `## Proof
-depends on` prerequisites are proved. The derived `can_state` state and the
-site's Next up card do not apply this gate; dispatch from `work list`. `work
+is unblocked, by the same policy-dependent rule as the derived `can_state` and
+`can_prove` states, the runtime projection, and the site's Next up card. Under
+the strict policy project CI rejects `sorry`, so a theorem's statement lands
+with its proof, and an article's statement phase also waits until its `## Proof
+depends on` prerequisites are proved. Under `open_statements: allowed` a
+theorem's statement phase waits only for the statement prerequisites to be
+stated, a definition's also for its proof prerequisites, which its body uses,
+and the proof phase for every prerequisite to be stated. `work
 context` accepts the path-derived node ID (see Articles and containment) or an
 assigned `article_id` and reports the exact article, dependencies, source
 targets, Lean targets, blockers, article and graph source revisions, and claim
@@ -519,8 +612,84 @@ worktree or a submodule. Blockers are unmet dependency IDs or one of
 `work list` fails explicitly if an unfinished formalizable leaf lacks one; plan
 the missing IDs with `autoform migrate article-ids` and add them to the
 frontmatter. `work context` may still select that article by its path ID to
-report the migration blocker. Both commands are read-only projections of
+report the migration blocker. An item whose article records `statement:
+retracted` is a revision: it carries `revision` true in JSON, and the text of
+`work list` adds a `revision:` line and `work context` a `Revision:` line saying
+to start from `autoform work impact` (see the [revision
+contract](#revision-contract)). Both commands are read-only projections of
 Markdown.
+
+Under the open policy the text output of `work list` starts with an `Open
+statements: allowed` line and adds an `assumes:` line under each item that rests
+on open statements; `work context` prints `Open statements:` and `Assumes:`
+lines. In JSON, `work list` and `work context` use `autoform-work/v2`: the
+frontier and every item carry `open_statements`, and every item carries
+`assumes`, the open statements its proof rests on (empty under the strict
+policy), plus `revision` for an explicit retraction. The runtime projection
+carries the same `open_statements` flag, and each node's runtime status adds
+`assumes` and `waiting_on`, the prerequisites that keep an unproved node from
+its next phase.
+
+List the open statements and the articles that rest on them:
+
+```bash
+autoform work assumptions .
+autoform work assumptions blueprint --json
+```
+
+`work assumptions` prints the policy, one `open:` line per open statement with
+its declarations and the open statements it assumes, if any, one
+`conditional:` line per conditional article, and one `unproved:` line per other
+listed article that assumes open statements, such as a retracted definition
+whose body reaches one.
+`--json` writes the `autoform-assumptions/v1` contract that CI audits the build
+against: every article whose `lean:` names a declaration, stated or not, with
+`open`, `assumes`, and `allowed_open_declarations`, the declarations of the
+open statements its Lean may reach, plus its own when it is open. A `mathlib:
+true` article is listed with state `mathlib`, `open` false, and nothing assumed
+or allowed, so CI checks that its names exist and reach no open statement. Under
+the strict policy every such article is listed with `open` false and nothing
+allowed. It reads Markdown only and needs no Lean build.
+
+Ask what revising an article's Lean declarations would affect before editing
+them:
+
+```bash
+autoform work impact chapter/result . --lean-root .
+autoform work impact chapter/result . --lean-root . --declaration MyProject.helper --json
+```
+
+`work impact` runs a bounded Lean probe against a fresh build and reports
+statement-impacted and proof-impacted articles, unnamed helpers, missing
+Markdown dependency paths, deprecated declarations and their users, whether
+the change is contained, and the complete `claim_targets` set. Helpers shared
+by several articles contribute every owner's claim; an unowned helper gets a
+stable `lean/<slug>-<digest>` target. A revised declaration that no article
+names is claimed the same way, under every nearest owner's target or its own
+stable key. `unused_statement_dependencies` lists the stated articles whose
+Markdown statement rests on the revised declarations, directly or through other
+statement dependencies, that are not statement-impacted: the probe follows
+names, so a dependent whose Lean inlines a revised definition's body shows no
+use although its statement changes meaning. They join `claim_targets` too. A
+`mathlib: true` article is left out: its statement is a Mathlib declaration,
+which cannot use the revised one, and it cannot record `statement: retracted`.
+A revision is contained exactly when the selected article's target is its only
+claim target. A Markdown path reaches the revised declarations when it ends at
+the revised article or at an article that names one of them or, when none names
+it, owns it; missing dependency paths are counted the same way. Project
+locality is an exact inventory of regular repository source modules, never a
+namespace-prefix guess.
+
+The command snapshots and rereads the roadmap around the probe. It retains one
+bound Lean source generation, derives module inventory and locations from that
+generation's captured bytes, then recaptures through the same binding and
+refuses any content or source-identity change. JSON uses `autoform-impact/v1`
+and binds its answer to the Markdown `source_revision`, the repository
+`lean_source_revision`, and a `build_revision` hash of the normalized Lean
+records. The probe imports project modules, so run it only in a trusted checkout
+or sandbox. It compares elaborated types and values; changes to notation,
+attributes, instance priority, or unreported generated declarations still
+require human review.
 
 Plan durable article identity metadata without changing the blueprint:
 
@@ -532,7 +701,7 @@ autoform migrate article-ids blueprint --check
 `article_id` accepts opaque values in the form `af_` plus 24 lowercase hex
 digits. The planner validates uniqueness, proposes deterministic IDs for
 missing articles, includes exact source hashes, and is strictly read-only.
-Runtime v2 and `autoform work` expose assigned IDs immediately; applying plans
+Runtime v3 and `autoform work` expose assigned IDs immediately; applying plans
 and preserving publication routes across path moves remain follow-up changes.
 
 Coordinate temporary cross-machine ownership without modifying the book:
@@ -542,6 +711,7 @@ export AUTOFORM_WORKER_ID="agent-name"
 autoform claim acquire af_5b0e4d3c2a1f09e8d7c6b5a4
 autoform claim renew af_5b0e4d3c2a1f09e8d7c6b5a4
 autoform claim release af_5b0e4d3c2a1f09e8d7c6b5a4
+autoform claim acquire af_5b0e4d3c2a1f09e8d7c6b5a4 af_0123456789abcdef01234567
 ```
 
 Claim an article by the `claim_target` that `work context` reports. The board
@@ -552,7 +722,15 @@ state does not persist between commands, as in agent tool calls, pass it with
 `--worker-id` on every command instead of exporting `AUTOFORM_WORKER_ID` once.
 Leases expire after 1500 seconds unless `--ttl` sets another length. Renew well
 within that, and confirm a claim is still held with `renew`, not `acquire`,
-which also succeeds once a lease has expired or been released.
+which also succeeds once a lease has expired or been released. Several targets
+in one command change all-or-nothing; see the [claim contract](#claim-contract).
+
+Pass several targets to `acquire`, `renew`, or `release` when one change needs
+shared ownership. The board reads the set once and sends one atomic push with a
+lease for every ref, so either every target changes or none does. A remote that
+cannot push atomically is refused, and duplicate or malformed targets fail
+before any push. To avoid deadlock, acquire the complete set in one command;
+never hold a partial set while waiting for another target.
 
 Claims are fail-closed compare-and-swap leases under
 `refs/autoform-claims/` on the Git `origin`; pass `--repo` for another claim
@@ -595,6 +773,19 @@ values it does not recognize. With `--lean-root` it also fails on a `lean:` name
 absent from the sources, as `leanblueprint checkdecls` does for LaTeX
 blueprints. It validates structure and leaves mathematical correctness to the
 agent and the Lean kernel.
+
+Source-aware `--lean-root` inspection requires directory-descriptor traversal.
+Platforms without that capability, including Windows, fail closed instead of
+treating repeated pathname reads as one filesystem generation. Declaration
+locations and source revisions come from the same retained capture. Recognized
+skeleton packet/passages directories are identified by their bounded managed
+manifest before descendants are read; publication-output policy remains with
+the publication feature rather than this source layer.
+
+Automatically detected Git permalinks are emitted only for captured files whose
+bytes equal the blob at the stable detected commit. Dirty, untracked, missing,
+or concurrently checked-out files keep local declaration locations but receive
+no URL. An explicitly supplied ref remains a caller attestation.
 
 The Markdown files are the source of truth. Graphs and sites are derived views
 that may be regenerated at any time.
@@ -645,6 +836,110 @@ The audit API also accepts an already compiled graph. Formalize may use its
 findings while working the Markdown frontier, but the audit itself never
 enqueues work, stamps articles, or creates another graph artifact.
 
+## Open statements
+
+By default a project runs the strict policy: CI rejects every `sorry`, so a
+theorem's statement lands only together with its proof, and a statement waits
+until the proof's prerequisites are proved. `open_statements: allowed` in
+`roadmap/README.md` lets a theorem's statement land with a `sorry` proof. Such
+an article, a theorem whose statement is formalized and whose proof is not, is
+an open statement; CI audits it only through the declarations its `lean:`
+names. A proof that uses open statements is conditional:
+it compiles and records `proof: formalized`, but is reported as conditionally
+proved, never as fully proved. Status, `work`, and the site derive that from
+the Markdown dependencies and CI from what the Lean uses, so CI can print
+`sorry-free` for an article the site shows as conditional, when its Markdown
+depends on an open statement its Lean does not use. CI is never the looser of
+the two, since a Lean reach the Markdown does not declare fails. The policy lets
+dependents be stated and proved against a faithful statement before its proof
+exists; the price is conditional
+results that stay incomplete until every open statement they rest on is proved.
+
+A retracted theorem, one recording `statement: retracted` as a revision leaves
+it, stays an open statement: the Lean its `lean:` names,
+`sorry` or not, still compiles into whatever uses it. The audit keeps accepting
+its `sorry`, and what rests on it stays conditional, until Formalize restates
+and proves it, or the marker and `lean:` are removed. A theorem that was never
+stated is not open even when it has `lean:`: a draft name does not become an
+assumption, and CI rejects its `sorry`. A definition is never open: its body
+is its proof, CI rejects a `sorry` in it, and its statement phase waits until
+its proof prerequisites are stated. A retracted definition is not open either,
+but what rests on it still assumes the open statements its body reaches. Turn
+the policy back off only once no open statement remains, since the strict audit
+rejects every `sorry` and strict
+status shows a proof resting on one as proved, not conditional.
+
+Write an open statement's proof as exactly `sorry`. The audit accepts a `sorry`
+only inside the proof of a theorem that an open article's `lean:` names: never
+in its type, a helper, a definition, or a `where` clause, and never inherited
+from a declaration outside the root package. Lean-generated auxiliaries count as
+helpers: a `where` clause becomes `T.aux`, well-founded recursion over two or
+more arguments moves the `decreasing_by` proof into `T._unary`, and structural
+recursion through a `mutual` block compiles the bodies into `T._f`, so all three
+fail. Recursion can move a `sorry` case into such an auxiliary, so write the
+whole proof as `sorry`, never one case of it. `lake build --wfail` and
+`warningAsError` turn Lean's "declaration uses `sorry`" warning into an error,
+so they cannot be combined with open statements; the generated workflow runs
+plain `lake build`.
+
+The generated `autoform-verify.yml` reads the policy with `python3
+.github/autoform_audit.py --policy blueprint`, which prints `allowed` or
+`forbidden` from `roadmap/README.md` (`forbidden` when the file or key is
+absent) and exits 1 with `error: ...` on malformed frontmatter. Under
+`forbidden` the audit is unchanged: any `sorryAx` fails with `NAME depends on
+unexpected axiom sorryAx` and `root-package declarations failed the
+kernel-trust audit`. Under `allowed` the workflow writes the `autoform work
+assumptions blueprint --json` contract and audits every root-package
+declaration against it. The audit accepts a `sorry` in a declared open
+statement's own proof and a proof that reaches only the open statements its
+article's Markdown dependencies reach. It rejects a `sorry` in a statement, a
+`sorry` anywhere else in the root package, a dependency outside the root package
+that depends on `sorry`, an article declaration that reaches an open statement
+its Markdown dependencies do not reach (so a fully proved article, which
+assumes nothing, may reach none), a `lean:` name missing from the build,
+and an open statement that its article records as proved. Each article
+declaration gets at most one of these status lines, with `NAME` the
+declaration and `ID` the article's node ID. A declaration with an error, or one
+that reaches a failed declaration, gets none of them:
+
+```text
+open statement (proof is sorry): NAME [ID]
+open statement (proof depends on sorry elsewhere): NAME [ID]
+open statement (proof is sorry-free; restate it if retracted, then record proof: formalized): NAME [ID]
+conditional: NAME [ID] rests on open statement(s) A, B
+sorry-free: NAME [ID]
+```
+
+A passing audit ends with `kernel trust clean except declared open statements
+(N root-package declaration(s) audited; K open statement(s), C conditional
+declaration(s))`; a failing one logs each error, naming the declaration and
+what to change, and ends with `root-package declarations failed the
+open-statement audit`.
+
+The step runs `autoform work assumptions` from `AUTOFORM_REF`, and the earlier
+`autoform check` step validates the frontmatter with that same pin. Scaffolded
+workflows pin `AUTOFORM_REF` to the Autoform checkout that scaffolded them, so a
+project scaffolded before open statements existed must, before opting in, move
+`AUTOFORM_REF` to a commit that has `work assumptions` and replace
+`.github/workflows/autoform-verify.yml` and `.github/autoform_audit.py` with the
+versions `autoform init` writes at that commit. Both halves fail closed: an
+older pin stops at `autoform check` with `unsupported frontmatter key
+'open_statements'`, and an older workflow runs the strict audit, which rejects
+every `sorry`.
+
+To reproduce the open-statement audit locally after a build, with
+`ROOT_PACKAGE` the Lake package name the workflow reads from `lake
+translate-config toml`:
+
+```bash
+lake build
+lake pack /tmp/autoform-root.tgz
+autoform work assumptions blueprint --json > /tmp/autoform-assumptions.json
+python3 .github/autoform_audit.py --open-statements /tmp/autoform-assumptions.json \
+  ROOT_PACKAGE /tmp/autoform-root.tgz /tmp/autoform-probe.lean
+lake env lean /tmp/autoform-probe.lean
+```
+
 ## Claim contract
 
 Claims use canonical `autoform-claim/v1` JSON in orphan commit messages and
@@ -655,14 +950,116 @@ cleanup. A heartbeat verifies ownership on entry and permanently records any
 later refusal or transport uncertainty as lost ownership.
 
 A claim key is a slug and digest of any string, not a validated node id, so a
-shared resource is locked the same way a node is. Parallel agents get one Git
-worktree each and serialize `lake build` behind a `lake-build` claim, because
+shared resource is locked the same way a node is, as is a Lean helper no
+article owns under the `lean/<slug>-<digest>` key `work impact` reports.
+Parallel agents get one Git worktree each and serialize `lake build` behind a
+`lake-build` claim, because
 builds share the elan toolchain and the Mathlib cache even when the checkouts
 are separate.
 
-Claims are temporary operational state, never article frontmatter. Future
-Deicyde workers may share this protocol, but their current continue-uncoordinated
-failure behavior must be removed before they use the canonical claim API.
+`acquire`, `renew`, and `release` accept several targets. The board reads
+every ref once, applies the single-key ownership checks to each, and sends one
+atomic push with a lease per ref, so either every claim changes or none does;
+a board that cannot push atomically is refused. Success prints the usual line
+per target. A refusal exits 1 with one line such as `error: could not acquire
+af_y, af_z; no claim was acquired: held by another worker: af_y`, naming the
+blocking targets when known, and leaves no claim behind; a duplicate target
+exits 2. Workers that need several
+claims follow a no-hold-and-wait rule: acquire the whole set in one command and,
+when it is refused, release everything already held and retry with the whole
+set, never holding some claims while waiting for others. The CLI does not
+enforce the rule; it is what keeps two multi-article revisions from
+deadlocking.
+
+Claims are temporary operational state, never article frontmatter.
+
+## Revision contract
+
+Revising a declaration X of article R that other articles' Lean uses touches
+work R's claim does not cover. This contract makes that work claimable and
+keeps the default build passing. Roadmap records a requested revision in the
+Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
+
+1. On a fresh build, run `autoform work impact R . --lean-root .`, with
+   `--declaration` when only some of R's declarations, or a helper, change.
+2. Choose the route:
+   - **Contained** (`contained: true`): revise X in place under R's claim.
+     `contained` ignores R's own declarations, so re-check R's other
+     declarations that use X as well.
+   - **Expand, migrate, contract**, the default whenever anything uses X: add
+     X' with the revised statement, leave X unchanged and mark it
+     `@[deprecated X' (since := "YYYY-MM-DD")]`, and point R's `lean:` at X'.
+     Under the open policy, while X's proof is still `sorry`, R's `lean:`
+     names X beside X', so the audit keeps accepting that `sorry` as an open
+     statement, and R records `proof` only after step 4 deletes X.
+     Statement-impacted articles replace `statement: formalized` with
+     `statement: retracted`, lose `proof`, and keep `lean:`, so they return to
+     the frontier as revisions; under the open policy a statement-impacted
+     theorem stays an open statement meanwhile (see [open
+     statements](#open-statements)). When X's proof is sorry-free,
+     proof-impacted articles keep everything, since their proofs still use the
+     valid old X; migrating them to X' is later work. While it is still
+     `sorry`, proof-impacted theorems lose `proof: formalized` but keep
+     `statement` and `lean:`, so they return to the frontier as proof phases
+     and migrate to X'. A stated definition counts as proved whatever its
+     `proof:` says, so a proof-impacted definition is migrated to X' in the
+     same commit or, when that is not possible, retracted like a
+     statement-impacted article. Otherwise they would keep resting on the
+     deprecated, `sorry`'d X, show "conditional, assumes R" although R's text
+     now describes X', and keep X out of `deprecated_unused`, so R could never
+     record its proof. The claim set is every article whose frontmatter or
+     Lean changes: R, the statement-impacted articles, and, in that case, the
+     proof-impacted ones.
+   - **In place**, only when X and X' cannot coexist, for example an instance
+     or a structure change: the claim set is every `claim_targets` entry.
+     Repair every impacted declaration in one commit whose default build
+     passes. A change `work impact` cannot see, to an instance's priority or
+     scope, an attribute, or notation, also takes this route whatever
+     `contained` says, and its `claim_targets` are incomplete: add every stated
+     article whose Lean imports the changed module and treat it as
+     statement-impacted. A statement-impacted article keeps `statement` only
+     after an Agent Review of its source faithfulness under X's new meaning;
+     otherwise it records `statement: retracted`, loses `proof`, and keeps
+     `lean:`. A repaired dependent proof keeps `proof: formalized` only after
+     an Agent Review of the repair; otherwise it loses `proof`. A theorem's
+     proof that cannot be repaired becomes exactly `sorry` under the open
+     policy; otherwise delete the declaration and remove its article's
+     `lean:`, `statement`, and `proof`, which works only when nothing else
+     uses it. When neither applies, the
+     revision is blocked: release the claims and report it. Record what
+     happened under `## Execution notes` of each touched article.
+3. Claim the route's claim set with one `autoform claim acquire`. When it is
+   refused, release everything and report the held claim as the blocker. After
+   acquiring, re-run `work impact`; if the set grew, release and start over
+   with the larger set. After rebasing onto the current shared branch and
+   rebuilding, re-run it once more; if the set grew, acquire the whole larger
+   set in one command under the no-hold-and-wait rule of the [claim
+   contract](#claim-contract) and repair the new targets before landing. Under
+   the open policy, reproduce the CI audit as [open statements](#open-statements)
+   shows before landing. Land one commit, then
+   release every claim.
+4. Contract: delete a deprecated X once it appears in `deprecated_unused` of
+   `work impact R . --lean-root .`, meaning no declaration uses it and no
+   other article's `lean:` names it, and drop it from R's `lean:` in the same
+   commit. `contained` is not enough: it ignores R's own declarations, such as
+   an X' built from X.
+5. `autoform audit --lean-root` reports `lean-target-deprecated` for an article
+   whose `lean:` names a declaration with `deprecated` in its own `@[...]`
+   attribute list; point it at the replacement. The check is lexical, so it
+   misses a later `attribute [deprecated] X`, which the deprecated list of
+   `work impact` does see. Under the open policy the finding is expected for a
+   superseded X that step 2 keeps in R's `lean:` until step 4, so `autoform
+   audit --lean-root` and `autoform doctor --lean-root` fail in that window by
+   design, while CI, which runs neither, passes.
+6. When Roadmap revises an article, its statement text or only its Lean, it
+   records the decision and retracts the article: it replaces `statement:
+   formalized` with `statement: retracted`, removes `proof: formalized`, and
+   keeps `lean:`, which `work impact` needs, so the article returns to the
+   frontier as a revision; an article without `lean:` just loses `statement`
+   and `proof`. It retracts only that article and the dependents whose
+   Markdown text the revision rewrites; the Lean-side impact decides every
+   other dependent. Roadmap edits only Markdown: it releases its claims and
+   leaves the Lean revision to Formalize.
 
 ## Local runtime doctor
 
@@ -686,12 +1083,12 @@ This command is strictly read-only and local. It does not invoke Git, GitHub,
 subprocesses, network services, claims, queues, reviews, recovery state,
 providers, workers, renderers, or dashboards, and it creates no cache, scratch
 repository, service, state directory, or `graph.json`. It is a project/runtime
-doctor, separate from any future Deicyde fleet or machine-capability preflight.
+doctor, separate from any future worker fleet or machine-capability preflight.
 
 ## Runtime contract
 
 `autoform_cli.runtime` projects the canonical Markdown graph into the versioned,
-deeply immutable in-memory schema `autoform-runtime/v2`. Its declared authority
+deeply immutable in-memory schema `autoform-runtime/v3`. Its declared authority
 is `markdown-articles`: the adapter copies hierarchy, typed statement and proof
 dependencies, authored assertions, derived progress, provenance, and optional
 local Lean source locations, but it provides no persistence or write API.
@@ -707,11 +1104,13 @@ and bytes, excluding timestamps, absolute paths, Git state, and operational
 state. Optional Lean locations come from a local lexical scan and do not by
 themselves establish compilation or proof correctness.
 
-Schema v2 exposes optional durable `article_id` metadata beside the graph's
-path-derived `id`. Temporary claims and local dashboard hooks may fall back to
-the path ID, but durable execution records and routes must require `article_id`
-until the path-move migration is complete. Operational state remains private and
-excluded from runtime snapshots and publication.
+Schema v3 retains optional durable `article_id` metadata beside the graph's
+path-derived `id` and adds the project `open_statements` policy,
+`statement_retracted` assertions, and each status's `assumes` and `waiting_on`
+fields. Temporary claims and local dashboard hooks may fall back to the path ID,
+but durable execution records and routes must require `article_id` until the
+path-move migration is complete. Operational state remains private and excluded
+from runtime snapshots and publication.
 
 ## Publication contract
 

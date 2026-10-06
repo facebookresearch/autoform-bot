@@ -483,6 +483,7 @@ def test_missing_manifest_is_indeterminate(tmp_path: Path) -> None:
         '{"packages": []}',
         '{"version": "1.1.0", "packages": {}}',
         '{"version": "2.0.0", "packages": []}',
+        '{"version": "2.0.0-rc1", "packages": []}',
         '{"version": 4, "packages": []}',
         '{"version": "1.1.0", "packages": [], "lakeDir": NaN}',
         '{"version": "1.1.0", "packages": [{"name": "mathlib", "type": "zip"}]}',
@@ -634,6 +635,14 @@ def test_null_or_absent_packages_mean_no_packages(tmp_path: Path, packages: str)
 def test_integer_manifest_versions_are_read(tmp_path: Path) -> None:
     root = _project(tmp_path)
     _write_manifest(root, _mathlib(), version=7)
+
+    assert inspect_project(root).compatibility.status == "supported"
+
+
+@pytest.mark.parametrize("version", ["1.3.0", "1.9.0"])
+def test_newer_1x_manifest_versions_are_read(tmp_path: Path, version: str) -> None:
+    root = _project(tmp_path)
+    _write_manifest(root, _mathlib(), version=version)
 
     assert inspect_project(root).compatibility.status == "supported"
 
@@ -1624,3 +1633,7 @@ def test_human_report_escapes_characters_that_could_forge_lines(tmp_path: Path, 
 
     assert "Lake: Ex\\u202eample\\x9b\\n 0.1.0 (lakefile.toml)" in capsys.readouterr().out
     assert _human_text("\U000e0001") == "\\U000e0001"
+    # Readable names stay readable; only `project new` escapes to ASCII.
+    assert _human_text("Th\N{LATIN SMALL LETTER E WITH ACUTE}or\N{LATIN SMALL LETTER E WITH GRAVE}me") == (
+        "Th\N{LATIN SMALL LETTER E WITH ACUTE}or\N{LATIN SMALL LETTER E WITH GRAVE}me"
+    )

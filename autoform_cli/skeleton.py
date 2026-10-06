@@ -43,6 +43,7 @@ from .lean import (
     PASSAGE_SCHEMA,
     SourceIndex,
     declaration_names,
+    index_failure_message,
     index_project,
 )
 
@@ -881,12 +882,12 @@ def _remember_descendants(
 
     try:
         children = psutil.Process(process.pid).children(recursive=True)
-    except (psutil.Error, OSError):
+    except (psutil.Error, OSError, SystemError):
         return
     for child in children:
         try:
             descendants[(child.pid, child.create_time())] = child
-        except (psutil.Error, OSError):
+        except (psutil.Error, OSError, SystemError):
             continue
 
 
@@ -895,24 +896,48 @@ def _remember_tagged_processes(
     descendants: dict[tuple[int, float], psutil.Process],
     *,
     root_pid: int,
+    strict: bool = True,
 ) -> None:
     """Find descendants that escaped the original parent and process group."""
 
-    for candidate in psutil.process_iter():
-        if candidate.pid in {os.getpid(), root_pid}:
-            continue
+    last_scan_error: BaseException | None = None
+    for _attempt in range(2):
+        retry = False
         try:
-            if candidate.environ().get(_PROCESS_TOKEN_ENV) == token:
-                descendants[(candidate.pid, candidate.create_time())] = candidate
-        except (psutil.Error, OSError):
+            candidates = tuple(psutil.process_iter())
+        except (psutil.Error, OSError, SystemError) as error:
+            last_scan_error = error
             continue
+        for candidate in candidates:
+            if candidate.pid in {os.getpid(), root_pid}:
+                continue
+            try:
+                if candidate.environ().get(_PROCESS_TOKEN_ENV) == token:
+                    descendants[(candidate.pid, candidate.create_time())] = candidate
+            except (psutil.Error, OSError):
+                continue
+            except SystemError as error:
+                last_scan_error = error
+                retry = True
+        if not retry:
+            return
+    if strict and last_scan_error is not None:
+        raise SkeletonError(
+            ["cannot safely inspect descendant processes after repeated process-table errors"]
+        ) from last_scan_error
 
 
 def _process_is_alive(process: psutil.Process) -> bool:
     try:
         return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
-    except (psutil.Error, OSError):
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
         return False
+    except (psutil.Error, OSError, SystemError):
+        # Uncertainty is live for the success gate and cleanup target list.  A
+        # disappeared/reused PID is handled by psutil's identity checks when
+        # termination is attempted; treating inspection failure as dead could
+        # let an escaped descendant survive a successful command.
+        return True
 
 
 def _process_group_is_alive(pid: int) -> bool:
@@ -951,18 +976,23 @@ def _terminate_process_tree(
     started, available = time.perf_counter(), _remaining(deadline)
     for share, group_signal, method in ((0.4, "SIGTERM", "terminate"), (0.8, "SIGKILL", "kill")):
         _remember_descendants(process, descendants)
-        _remember_tagged_processes(token, descendants, root_pid=process.pid)
+        _remember_tagged_processes(
+            token,
+            descendants,
+            root_pid=process.pid,
+            strict=False,
+        )
         live = [child for child in descendants.values() if child.pid != process.pid and _process_is_alive(child)]
         if os.name == "posix":
             with contextlib.suppress(OSError):
                 os.killpg(process.pid, getattr(signal, group_signal))
         for target in ([process] if process.poll() is None else []) + live:
-            with contextlib.suppress(OSError, psutil.Error):
+            with contextlib.suppress(OSError, psutil.Error, SystemError):
                 getattr(target, method)()
         phase_deadline = started + available * share
         with contextlib.suppress(OSError, subprocess.TimeoutExpired):
             process.wait(timeout=_remaining(phase_deadline))
-        with contextlib.suppress(OSError, psutil.Error):
+        with contextlib.suppress(OSError, psutil.Error, SystemError):
             psutil.wait_procs(live, timeout=_remaining(phase_deadline))
 
 
@@ -1183,6 +1213,7 @@ class LeanLibrary:
     name: str
     src_dir: Path
     roots: tuple[str, ...]
+    globs: tuple[str, ...] = ()
 
 
 def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
@@ -1221,7 +1252,14 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
         roots = entry.get("roots")
         if not isinstance(roots, list) or not all(isinstance(item, str) for item in roots):
             roots = [name]
-        libraries.append(LeanLibrary(name=name, src_dir=src_dir.resolve(), roots=tuple(roots)))
+        # Lake accepts one glob or an array, and translate-config writes them
+        # only when they differ from the default of one glob per root.
+        globs = entry.get("globs")
+        if isinstance(globs, str):
+            globs = [globs]
+        if not isinstance(globs, list) or not all(isinstance(item, str) for item in globs):
+            globs = []
+        libraries.append(LeanLibrary(name=name, src_dir=src_dir.resolve(), roots=tuple(roots), globs=tuple(globs)))
     if not libraries:
         package = config.get("name")
         if isinstance(package, str) and package:
@@ -1357,8 +1395,14 @@ def _probe_modules(probe: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(modules))
 
 
+def _probe_purpose(label: str) -> str:
+    """What `lake build` must come before, as the freshness messages say it."""
+
+    return "extracting skeletons" if label == "skeleton probe" else f"running the {label}"
+
+
 def _check_artifacts_fresh(
-    lake: str, lean_root: Path, modules: tuple[str, ...], *, timeout: float
+    lake: str, lean_root: Path, modules: tuple[str, ...], *, timeout: float, label: str = "skeleton probe"
 ) -> None:
     """Ask Lake to prove that imported artifacts match their exact inputs.
 
@@ -1379,7 +1423,7 @@ def _check_artifacts_fresh(
         raise SkeletonError(
             [
                 "Lean build artifacts are stale; run "
-                f"`{build_command}` before extracting skeletons\n{detail}"
+                f"`{build_command}` before {_probe_purpose(label)}\n{detail}"
             ]
         )
     if result.returncode != 0:
@@ -1398,11 +1442,13 @@ def run_probe(
     *,
     timeout: float = DEFAULT_PROBE_TIMEOUT,
     freshness_timeout: float = DEFAULT_FRESHNESS_TIMEOUT,
+    label: str = "skeleton probe",
 ) -> str:
     """Run ``probe`` with ``lake env lean`` inside the built project.
 
     ``freshness_timeout`` bounds the Lake freshness check that runs first and
-    ``timeout`` the probe itself; neither spends the other's budget.
+    ``timeout`` the probe itself; neither spends the other's budget. ``label``
+    names the probe in failure messages.
     """
 
     lake = shutil.which("lake")
@@ -1410,10 +1456,10 @@ def run_probe(
         raise SkeletonError(["lake is not on PATH; a built Lean project is required to extract skeletons"])
     if not (lean_root / "lake-manifest.json").is_file():
         raise SkeletonError(
-            ["lake-manifest.json is missing; run `lake build` before extracting skeletons"]
+            [f"lake-manifest.json is missing; run `lake build` before {_probe_purpose(label)}"]
         )
     modules = _probe_modules(probe)
-    _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout)
+    _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout, label=label)
     deadline = time.monotonic() + timeout
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
@@ -1446,12 +1492,12 @@ def run_probe(
             root = shadowed.group(1).split(".", 1)[0]
             raise SkeletonError(
                 [
-                    f"the skeleton probe cannot load toolchain module {shadowed.group(1)}: a dependency "
+                    f"the {label} cannot load toolchain module {shadowed.group(1)}: a dependency "
                     f"library probably provides modules under `{root}`, which hides the toolchain's own `{root}`; "
                     f"rename that library's modules\n{detail}"
                 ]
             )
-        raise SkeletonError([f"the skeleton probe failed; is the project built with `lake build`?\n{detail}"])
+        raise SkeletonError([f"the {label} failed; is the project built with `lake build`?\n{detail}"])
     return output or result.stdout
 
 
@@ -2009,7 +2055,10 @@ def extract_skeletons(
         raise SkeletonError(
             ["Lean project configuration changed while skeletons were being extracted; retry after the project is idle"]
         )
-    index = index_project(root)
+    try:
+        index = index_project(root)
+    except OSError as error:
+        raise SkeletonError([index_failure_message(error)]) from error
     report = extract_graph_skeletons(
         graph,
         lean_root=root,
@@ -2018,7 +2067,11 @@ def extract_skeletons(
         runner=runner or run_probe,
         node_ids=node_ids,
     )
-    if index_project(root).source_digest != index.source_digest:
+    try:
+        current_index = index_project(root)
+    except OSError as error:
+        raise SkeletonError([index_failure_message(error)]) from error
+    if current_index.source_digest != index.source_digest:
         raise SkeletonError(["Lean sources changed while skeletons were being extracted; retry after the build is idle"])
     if _project_control_snapshot(root) != control_snapshot:
         raise SkeletonError(
