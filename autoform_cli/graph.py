@@ -10,8 +10,9 @@ a second graph file that could drift from the book.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
-from dataclasses import MISSING, dataclass, fields
+from dataclasses import MISSING, dataclass, fields, replace
 from html import unescape
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -55,6 +56,8 @@ _CATALOG_DECLARATION_KEYS = frozenset(
 _STATEMENT_SECTION = "depends on"
 _PROOF_SECTION = "proof depends on"
 _SOURCES_SECTION = "sources"
+ATLAS_SCHEMA = "autoform-atlas/v1"
+_MAX_ATLAS_BYTES = 1_000_000
 
 
 class GraphValidationError(ValueError):
@@ -281,6 +284,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             area=metadata.get("area"),
         )
 
+    _apply_atlas_manifest(blueprint, nodes, issues)
     if not issues:
         issues.extend(_find_cycles(nodes))
     if not issues:
@@ -288,6 +292,62 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     if issues:
         raise GraphValidationError(issues)
     return Graph(blueprint_dir=blueprint, nodes=nodes)
+
+
+def _apply_atlas_manifest(
+    blueprint: Path,
+    nodes: dict[str, Node],
+    issues: list[str],
+) -> None:
+    """Apply an optional authored taxonomy without coupling it to file layout."""
+    path = blueprint / "atlas.json"
+    if not path.exists():
+        return
+    if path.is_symlink() or not path.is_file():
+        issues.append("atlas.json: taxonomy must be a regular file inside the blueprint")
+        return
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        issues.append(f"atlas.json: cannot read taxonomy: {error}")
+        return
+    if len(raw) > _MAX_ATLAS_BYTES:
+        issues.append(f"atlas.json: exceeds {_MAX_ATLAS_BYTES} bytes")
+        return
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        issues.append(f"atlas.json: invalid JSON: {error}")
+        return
+    if not isinstance(payload, dict) or payload.get("schema") != ATLAS_SCHEMA:
+        issues.append(f"atlas.json: schema must be {ATLAS_SCHEMA!r}")
+        return
+    areas = payload.get("areas")
+    if not isinstance(areas, dict):
+        issues.append("atlas.json: 'areas' must be an object")
+        return
+    assigned: dict[str, str] = {}
+    for area, node_ids in areas.items():
+        if not isinstance(area, str) or not area.strip() or not isinstance(node_ids, list):
+            issues.append("atlas.json: each area must be a non-empty string mapped to an array")
+            continue
+        for node_id in node_ids:
+            if not isinstance(node_id, str) or node_id not in nodes:
+                issues.append(f"atlas.json: unknown roadmap node {node_id!r}")
+                continue
+            previous = assigned.get(node_id)
+            if previous is not None:
+                issues.append(f"atlas.json: node {node_id!r} belongs to both {previous!r} and {area!r}")
+                continue
+            authored = nodes[node_id].area
+            if authored is not None and authored != area:
+                issues.append(
+                    f"atlas.json: node {node_id!r} conflicts with its frontmatter area {authored!r}"
+                )
+                continue
+            assigned[node_id] = area
+    for node_id, area in assigned.items():
+        nodes[node_id] = replace(nodes[node_id], area=area)
 
 
 def _catalog_has_local_ledger(node: _ParsedNode, blueprint: Path) -> bool:

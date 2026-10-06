@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -115,6 +116,52 @@ and explains why the characterization matters.
         "and explains why the characterization matters."
     )
     assert node.area == "Geometry & Topology"
+
+
+def test_authored_atlas_manifest_groups_nodes_independently_of_paths(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "algebra.md", "# Algebra\n")
+    _node(blueprint, "topology.md", "# Topology\n")
+    (blueprint / "atlas.json").write_text(
+        json.dumps(
+            {
+                "schema": "autoform-atlas/v1",
+                "areas": {
+                    "Algebra": ["algebra"],
+                    "Geometry & Topology": ["topology"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["algebra"].area == "Algebra"
+    assert graph.nodes["topology"].area == "Geometry & Topology"
+
+
+def test_atlas_manifest_rejects_unknown_and_duplicate_assignments(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "algebra.md", "# Algebra\n")
+    (blueprint / "atlas.json").write_text(
+        json.dumps(
+            {
+                "schema": "autoform-atlas/v1",
+                "areas": {
+                    "One": ["algebra", "missing"],
+                    "Two": ["algebra"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(GraphValidationError) as error:
+        load_graph(blueprint)
+
+    assert "unknown roadmap node 'missing'" in str(error.value)
+    assert "belongs to both 'One' and 'Two'" in str(error.value)
 
 
 def test_loads_a_non_dispatchable_module_catalog_status(tmp_path: Path) -> None:

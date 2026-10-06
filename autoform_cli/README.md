@@ -84,6 +84,16 @@ region in the knowledge atlas. Use mathematical areas such as `Foundations` or
 `MathlibExt` or `catalog-01`. Autoform does not guess areas from paths, imports,
 or titles.
 
+For a taxonomy maintained separately from article files, `blueprint/atlas.json`
+may assign the same areas without moving pages:
+
+```json
+{"schema":"autoform-atlas/v1","areas":{"Geometry & Topology":["topology","geometry"]}}
+```
+
+Every listed value is a roadmap node id, each node may appear once, and a
+manifest assignment must agree with any `area:` already authored on that node.
+
 A repository-wide inventory may use a narrative leaf to summarize an existing
 Lean module containing several declarations. Such a leaf sets
 `catalog: module` and omits `declaration`, so it is never dispatched as one
