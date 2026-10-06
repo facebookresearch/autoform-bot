@@ -363,6 +363,53 @@ def open_project_sources(
     return BoundProjectSources(root_path, tree, excluded)
 
 
+@contextmanager
+def bind_project_source_snapshot(
+    root: str | Path,
+    *,
+    exclude_roots: Iterable[str | Path] = (),
+    limits: TreeCaptureLimits = TreeCaptureLimits(),
+) -> Iterator[tuple[BoundProjectSources, IndexedSourceSnapshot]]:
+    """Retain and yield one initially stable source generation.
+
+    Initial bind or capture races get the same bounded retry and sanitized
+    failure as :func:`snapshot_project_sources`; the successful binding stays
+    open so a caller can verify and recapture it after using the evidence.
+    """
+
+    exclusions = tuple(exclude_roots)
+    changed: TreeChangedError | None = None
+    for attempt in range(_SNAPSHOT_ATTEMPTS):
+        if attempt:
+            time.sleep(_SNAPSHOT_RETRY_DELAY_SECONDS * attempt)
+        bound: BoundProjectSources | None = None
+        try:
+            bound = open_project_sources(root, exclude_roots=exclusions, limits=limits)
+            snapshot = bound.capture()
+        except TreeChangedError as error:
+            changed = error
+            if bound is not None:
+                bound.close()
+            continue
+        except TreeSnapshotError as error:
+            if bound is not None:
+                bound.close()
+            raise LeanSourceError(str(error)) from error
+        except BaseException:
+            if bound is not None:
+                bound.close()
+            raise
+        try:
+            yield bound, snapshot
+        finally:
+            bound.close()
+        return
+    lasting = _lasting_root_failure(root)
+    if lasting is not None:
+        raise LeanSourceError(lasting) from changed
+    raise LeanSourceError("Lean sources kept changing while they were indexed") from changed
+
+
 def _project_exclusions(
     root: Path,
     values: Iterable[str | Path],
@@ -1199,6 +1246,7 @@ __all__ = [
     "PASSAGE_SCHEMA",
     "SourceIndex",
     "SourceLinker",
+    "bind_project_source_snapshot",
     "build_linker",
     "declaration_names",
     "detect_ref",

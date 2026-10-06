@@ -1213,6 +1213,7 @@ class LeanLibrary:
     name: str
     src_dir: Path
     roots: tuple[str, ...]
+    globs: tuple[str, ...] = ()
 
 
 def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
@@ -1251,7 +1252,14 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
         roots = entry.get("roots")
         if not isinstance(roots, list) or not all(isinstance(item, str) for item in roots):
             roots = [name]
-        libraries.append(LeanLibrary(name=name, src_dir=src_dir.resolve(), roots=tuple(roots)))
+        # Lake accepts one glob or an array, and translate-config writes them
+        # only when they differ from the default of one glob per root.
+        globs = entry.get("globs")
+        if isinstance(globs, str):
+            globs = [globs]
+        if not isinstance(globs, list) or not all(isinstance(item, str) for item in globs):
+            globs = []
+        libraries.append(LeanLibrary(name=name, src_dir=src_dir.resolve(), roots=tuple(roots), globs=tuple(globs)))
     if not libraries:
         package = config.get("name")
         if isinstance(package, str) and package:
@@ -1387,8 +1395,14 @@ def _probe_modules(probe: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(modules))
 
 
+def _probe_purpose(label: str) -> str:
+    """What `lake build` must come before, as the freshness messages say it."""
+
+    return "extracting skeletons" if label == "skeleton probe" else f"running the {label}"
+
+
 def _check_artifacts_fresh(
-    lake: str, lean_root: Path, modules: tuple[str, ...], *, timeout: float
+    lake: str, lean_root: Path, modules: tuple[str, ...], *, timeout: float, label: str = "skeleton probe"
 ) -> None:
     """Ask Lake to prove that imported artifacts match their exact inputs.
 
@@ -1409,7 +1423,7 @@ def _check_artifacts_fresh(
         raise SkeletonError(
             [
                 "Lean build artifacts are stale; run "
-                f"`{build_command}` before extracting skeletons\n{detail}"
+                f"`{build_command}` before {_probe_purpose(label)}\n{detail}"
             ]
         )
     if result.returncode != 0:
@@ -1428,11 +1442,13 @@ def run_probe(
     *,
     timeout: float = DEFAULT_PROBE_TIMEOUT,
     freshness_timeout: float = DEFAULT_FRESHNESS_TIMEOUT,
+    label: str = "skeleton probe",
 ) -> str:
     """Run ``probe`` with ``lake env lean`` inside the built project.
 
     ``freshness_timeout`` bounds the Lake freshness check that runs first and
-    ``timeout`` the probe itself; neither spends the other's budget.
+    ``timeout`` the probe itself; neither spends the other's budget. ``label``
+    names the probe in failure messages.
     """
 
     lake = shutil.which("lake")
@@ -1440,10 +1456,10 @@ def run_probe(
         raise SkeletonError(["lake is not on PATH; a built Lean project is required to extract skeletons"])
     if not (lean_root / "lake-manifest.json").is_file():
         raise SkeletonError(
-            ["lake-manifest.json is missing; run `lake build` before extracting skeletons"]
+            [f"lake-manifest.json is missing; run `lake build` before {_probe_purpose(label)}"]
         )
     modules = _probe_modules(probe)
-    _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout)
+    _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout, label=label)
     deadline = time.monotonic() + timeout
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
@@ -1476,12 +1492,12 @@ def run_probe(
             root = shadowed.group(1).split(".", 1)[0]
             raise SkeletonError(
                 [
-                    f"the skeleton probe cannot load toolchain module {shadowed.group(1)}: a dependency "
+                    f"the {label} cannot load toolchain module {shadowed.group(1)}: a dependency "
                     f"library probably provides modules under `{root}`, which hides the toolchain's own `{root}`; "
                     f"rename that library's modules\n{detail}"
                 ]
             )
-        raise SkeletonError([f"the skeleton probe failed; is the project built with `lake build`?\n{detail}"])
+        raise SkeletonError([f"the {label} failed; is the project built with `lake build`?\n{detail}"])
     return output or result.stdout
 
 

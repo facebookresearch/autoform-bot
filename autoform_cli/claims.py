@@ -26,6 +26,11 @@ CLAIM_SCHEMA = "autoform-claim/v1"
 CLAIM_TTL_S = 1500
 CLAIM_HEARTBEAT_S = 300
 CLAIM_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
+_SCP_REPOSITORY_RE = re.compile(r"^(?:[^/@:]+@)?(?:\[[^\]]+\]|[^/:]+):.+$")
+_WINDOWS_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+_WINDOWS_ROOTED_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+_SCRATCH_INIT_ATTEMPTS = 10
+_SCRATCH_INIT_DELAY_S = 0.05
 
 _GIT_ENV = {
     "GIT_AUTHOR_NAME": "autoform",
@@ -145,6 +150,20 @@ def author_claim_key(node_id: str) -> str:
     return f"author/{slug}-{digest}"
 
 
+def _repository_is_remote(value: str, *, windows: bool | None = None) -> bool:
+    """Match Git's URL/SCP forms without misclassifying Windows paths."""
+
+    on_windows = os.name == "nt" if windows is None else windows
+    windows_path = (
+        value.startswith("\\")
+        or _WINDOWS_ROOTED_DRIVE_RE.match(value) is not None
+        or (on_windows and _WINDOWS_DRIVE_PREFIX_RE.match(value) is not None)
+    )
+    return not windows_path and (
+        "://" in value or _SCP_REPOSITORY_RE.fullmatch(value) is not None
+    )
+
+
 class ClaimBoard:
     """Lease operations against a Git repository via a local bare object store."""
 
@@ -152,7 +171,7 @@ class ClaimBoard:
         if not worker_id:
             raise ValueError("worker_id must not be empty")
         raw_repo_url = os.fspath(repo_url)
-        if "://" not in raw_repo_url and not re.match(r"^[^/]+@[^:]+:", raw_repo_url):
+        if not _repository_is_remote(raw_repo_url):
             raw_repo_url = str(Path(raw_repo_url).expanduser().resolve())
         self.repo_url = raw_repo_url
         self.worker_id = worker_id
@@ -183,10 +202,30 @@ class ClaimBoard:
         return proc
 
     def _ensure_scratch(self) -> None:
-        if (self.scratch / "HEAD").is_file():
-            return
-        self.scratch.mkdir(parents=True, exist_ok=True)
-        self._git(["init", "--bare", "--quiet", "."])
+        last_error: BaseException | None = None
+        for attempt in range(_SCRATCH_INIT_ATTEMPTS):
+            try:
+                if self.scratch.is_dir():
+                    ready = self._git(
+                        ["rev-parse", "--is-bare-repository"],
+                        check=False,
+                    )
+                    if ready.returncode == 0 and ready.stdout.strip() == "true":
+                        return
+                self.scratch.mkdir(parents=True, exist_ok=True)
+            except (OSError, ClaimTransportError) as exc:
+                last_error = exc
+                break
+            try:
+                self._git(["init", "--bare", "--quiet", "."])
+                return
+            except ClaimTransportError as exc:
+                last_error = exc
+            if attempt + 1 < _SCRATCH_INIT_ATTEMPTS:
+                time.sleep(_SCRATCH_INIT_DELAY_S)
+        raise ClaimTransportError(
+            "cannot prepare the local claim-board scratch directory"
+        ) from last_error
 
     @staticmethod
     def _ref(key: str) -> str:
@@ -351,7 +390,10 @@ class ClaimBoard:
         return expires_at <= comparison_time
 
     def acquire(self, key: str, ttl: int | float = CLAIM_TTL_S, steal: bool = False, note: str = "") -> bool:
-        """CAS-acquire a free, expired, malformed, owned, or explicitly stolen lease."""
+        """CAS-acquire a free, expired, owned, or explicitly stolen lease.
+
+        A malformed lease raises ``MalformedLeaseError``, even with ``steal``.
+        """
         key = _validate_key(key)
         _validate_ttl(ttl)
         self._ensure_scratch()
