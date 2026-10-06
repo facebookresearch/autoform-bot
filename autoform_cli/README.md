@@ -641,24 +641,12 @@ styles, `\text`, spaces from `\!` to `\qquad` and `~`, and the `cases`,
 `equation` environments, with at most one `align`, `gather`, or `equation` in
 a formula. Any other command or environment, such as
 `\phantom`, `\rlap`, `\kern`, `\color`, `\tag`, or a macro definition, is
-refused by name. Each formula is read the way MathJax lays it out. TeX it
-would not set is refused: unbalanced braces, `\left` without `\right`, a
-missing argument, `x^a^b`, `\not` before anything but a relation, a function
-name such as `\sin` alone as a script (write `x^{\sin}`), `\pmb` inside
-`\pmb`, a character MathJax's fonts lack, a combining mark, array columns
-other than `l`, `c`, and `r` with one `|` or `:` between two of them, and a
-bracket after `aligned`, `gathered`, or `array` other than `[t]`, `[b]`, or
-`[c]`. So are
-arguments that show nothing (`\mathrm{}`, `\hat{\displaystyle}`), space
-between two symbols that adds up to less than one negative thin space,
-negative space at the start or end of a formula, which slides it over what
-sits beside it, row spacing after `\\`, and a `*` right after `\\`, which
-MathJax reads as part of the row break and does not show. A formula may
-hold at most 2,048 characters, 8 em of space, 9 `&` in a row, 16 `\\` in an
-environment and 32 in all, 16 empty
-cells, and no empty row, nested at most 16 deep with scripts 8 deep; a
-testimony may hold at most 64 em of space, the space in the rows of an
-environment counted once per column. Text between two dollar signs is held
+refused by name. Each formula is read the way MathJax lays it out: TeX it
+would not set, arguments that show nothing, space between two symbols below
+one negative thin space, negative space at either end of a formula, and a `*`
+right after `\\` are refused, and a formula may hold at most 8 em of space and
+a testimony 64 em. That list is not exhaustive; `readback.py` keeps every
+layout rule and size limit. Text between two dollar signs is held
 to the same rules, as in `$ P \color{white}{Q} $`, which the site shows as
 typed but a card on GitHub might show as a formula. The dollar signs of a
 paragraph, list item, or table cell, a formula's own two among them, are
@@ -670,11 +658,9 @@ backslash, and with none after an odd number of backslashes. So dollar
 signs meant as typed go in code.
 Testimony must also show at least one letter or digit. Before any card is parsed its
 testimony must fit limits well above what real read-backs use: 32 KiB, 500
-lines, 1,024 math delimiters, 512 backticks in runs of at most 16, 64 opening
-brackets, 64 columns of nesting, 256 underscores that start a word, 1,024
-asterisks, 2,048 backslashes, and 2,048 table cells. The Markdown parser is
-superlinear in each of these, so a byte limit alone would not bound it, and
-every card in a pull request is read before its validity is known. The
+lines, 64 opening brackets, and the others in `readback.py`. The Markdown
+parser is superlinear in each of these, so a byte limit alone would not bound
+it, and every card in a pull request is read before its validity is known. The
 rendering of a testimony must also fit in 256 KiB of HTML before that HTML is
 parsed. Cards are read through no-follow descriptors, so a card or directory
 swapped for a link is skipped. A card file
