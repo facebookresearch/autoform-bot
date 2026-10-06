@@ -29,7 +29,11 @@ def create_repl_server(runtime: LeanRuntimeClient) -> FastMCP:
 
     @server.tool
     def get_repl_status(project_dir: str) -> str:
-        """Return pool capacity, memory use, and shutdown state.
+        """Return pool capacity, memory use, lifecycle state, and shutdown state.
+
+        State is ``cold``, ``warming``, ``warm``, or ``retiring``. Memory use
+        is available only for a warm resident; retiring reports zero and
+        ``shutdown: true`` while verified cleanup remains in progress.
 
         Args:
             project_dir: Absolute path to the Lake project root.

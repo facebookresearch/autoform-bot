@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 
 import pytest
 
@@ -66,6 +67,76 @@ def test_shutdown_closes_every_worker_and_drains_idle_queue(monkeypatch):
     assert pool._idle.empty()
 
 
+def test_shutdown_retains_failed_workers_for_a_retry(monkeypatch):
+    workers = []
+
+    class FakeRepl:
+        def __init__(self, config):
+            self.close_calls = 0
+            workers.append(self)
+
+        def start(self):
+            pass
+
+        def close(self):
+            self.close_calls += 1
+            if self is workers[0] and self.close_calls == 1:
+                raise RuntimeError("injected close failure")
+
+    monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
+    pool = repl_pool.LeanReplPool(
+        repl_pool.LeanReplPoolConfig(num_repls=2, startup_stagger=0)
+    )
+
+    with pytest.raises(RuntimeError, match="workers remain owned"):
+        pool.shutdown()
+
+    assert pool._workers == [workers[0]]
+    assert pool._idle.empty()
+    assert [worker.close_calls for worker in workers] == [1, 1]
+
+    pool.shutdown()
+
+    assert pool._workers == []
+    assert [worker.close_calls for worker in workers] == [2, 1]
+
+
+def test_partial_startup_transfers_failed_cleanup_for_retry(monkeypatch):
+    workers = []
+
+    class FakeRepl:
+        def __init__(self, config):
+            self.number = len(workers) + 1
+            self.close_calls = 0
+            workers.append(self)
+
+        def start(self):
+            if self.number == 2:
+                raise RuntimeError("second worker failed")
+
+        def close(self):
+            self.close_calls += 1
+            if self.number == 1 and self.close_calls == 1:
+                raise RuntimeError("injected cleanup failure")
+
+    monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
+
+    with pytest.raises(repl_pool.LeanReplPoolStartupError) as raised:
+        repl_pool.LeanReplPool(
+            repl_pool.LeanReplPoolConfig(num_repls=2, startup_stagger=0)
+        )
+
+    assert str(raised.value.cause) == "second worker failed"
+    assert raised.value.pool._workers == [workers[0]]
+    assert [worker.close_calls for worker in workers] == [1, 1]
+    with pytest.raises(RuntimeError, match="shut down"):
+        raised.value.pool.run("#check Nat", timeout=0.1)
+
+    raised.value.pool.shutdown()
+
+    assert [worker.close_calls for worker in workers] == [2, 1]
+
+
 def test_request_timeout_includes_waiting_for_an_idle_worker(monkeypatch):
     class FakeRepl:
         def __init__(self, config):
@@ -88,6 +159,50 @@ def test_request_timeout_includes_waiting_for_an_idle_worker(monkeypatch):
     finally:
         pool._idle.put(borrowed)
         pool.shutdown()
+
+
+def test_shutdown_waits_for_checked_out_worker_before_closing_or_draining(monkeypatch):
+    run_started = threading.Event()
+    release_run = threading.Event()
+    close_started = threading.Event()
+
+    class FakeRepl:
+        def __init__(self, config):
+            pass
+
+        def start(self):
+            pass
+
+        def run(self, code, **kwargs):
+            run_started.set()
+            assert release_run.wait(timeout=2)
+            return {"messages": []}
+
+        def close(self):
+            close_started.set()
+
+    monkeypatch.setattr(repl_pool, "LeanRepl", FakeRepl)
+    pool = repl_pool.LeanReplPool(
+        repl_pool.LeanReplPoolConfig(num_repls=1, startup_stagger=0)
+    )
+    run_thread = threading.Thread(target=lambda: pool.run("#check Nat", timeout=1))
+    run_thread.start()
+    assert run_started.wait(timeout=1)
+    shutdown_thread = threading.Thread(target=pool.shutdown)
+    shutdown_thread.start()
+
+    assert not close_started.wait(timeout=0.1)
+    release_run.set()
+    run_thread.join(timeout=2)
+    shutdown_thread.join(timeout=2)
+
+    assert not run_thread.is_alive()
+    assert not shutdown_thread.is_alive()
+    assert close_started.is_set()
+    assert pool._workers == []
+    assert pool._idle.empty()
+    with pytest.raises(RuntimeError, match="shut down"):
+        pool.run("#check Int", timeout=0.1)
 
 
 def test_repl_retry_recovery_uses_the_original_deadline(monkeypatch):
