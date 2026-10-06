@@ -423,6 +423,13 @@ class FakeGitHub:
         return items[(page - 1) * size : page * size]
 
 
+def _repo(tmp_path: Path, codeowners: str | None = _CODEOWNERS) -> tuple[Path, FakeGitHub]:
+    """A test project and the GitHub that answers for it."""
+
+    root = _project(tmp_path, codeowners)
+    return root, FakeGitHub(root)
+
+
 def _branch(root: Path, name: str, start: str = "main") -> None:
     _git(root, "checkout", "--quiet", "-b", name, start)
 
@@ -518,8 +525,7 @@ def test_without_a_verifier_every_current_approval_is_self_approved(tmp_path: Pa
 def test_a_code_owner_approving_the_head_of_the_recording_pull_request_authenticates(
     tmp_path: Path, strategy: str
 ) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     # main moves on first, so a rebase merge cannot fast-forward.
     _append(root, "Unrelated.\n", "blueprint/README.md")
     _commit(root, "Edit the blueprint README")
@@ -545,8 +551,7 @@ def test_a_code_owner_approving_the_head_of_the_recording_pull_request_authentic
 
 
 def test_the_pull_request_author_cannot_authenticate_their_own_approval(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _pull_approving(root, github, author="Alice")
     github.review(7, "alice", "APPROVED", head)
 
@@ -557,8 +562,7 @@ def test_the_pull_request_author_cannot_authenticate_their_own_approval(tmp_path
 
 
 def test_a_reviewer_who_is_not_a_code_owner_cannot_authenticate(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github, reviewer="carol")
 
     status = _verify(root, github)["basics/result"]
@@ -568,8 +572,7 @@ def test_a_reviewer_who_is_not_a_code_owner_cannot_authenticate(tmp_path: Path) 
 
 
 def test_code_owners_must_hold_before_the_merge_and_at_the_trusted_ref(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     # The pull request adds its own reviewer to CODEOWNERS.
     _branch(root, "grab")
     (root / ".github" / "CODEOWNERS").write_text("* @owner\nblueprint/ @alice @carol\n", encoding="utf-8")
@@ -606,8 +609,7 @@ def test_code_owners_must_hold_before_the_merge_and_at_the_trusted_ref(tmp_path:
 
 
 def test_an_approval_of_an_earlier_commit_does_not_count(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _branch(root, "approve")
     _approve(root, "result", _OTHER_HASH)
     reviewed = _commit(root, "Approve an earlier review")
@@ -630,8 +632,7 @@ def test_an_approval_of_an_earlier_commit_does_not_count(tmp_path: Path) -> None
 def test_a_later_verdict_voids_an_approval_but_a_comment_does_not(
     tmp_path: Path, later: str, authenticated: bool
 ) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approved(root, github)
     github.review(7, "alice", later, head)
 
@@ -643,8 +644,7 @@ def test_a_later_verdict_voids_an_approval_but_a_comment_does_not(
 
 
 def test_reviews_are_ordered_by_submission_not_by_listing(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _pull_approving(root, github)
     github.review(7, "alice", "CHANGES_REQUESTED", head)
     github.review(7, "alice", "APPROVED", head)
@@ -654,8 +654,7 @@ def test_reviews_are_ordered_by_submission_not_by_listing(tmp_path: Path) -> Non
 
 
 def test_a_dismissed_approval_does_not_authenticate(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _pull_approving(root, github)
     # GitHub rewrites a dismissed review's own state rather than adding one.
     github.review(7, "alice", "DISMISSED", head)
@@ -664,8 +663,7 @@ def test_a_dismissed_approval_does_not_authenticate(tmp_path: Path) -> None:
 
 
 def test_team_and_email_owners_never_authenticate(tmp_path: Path) -> None:
-    root = _project(tmp_path, "* @owner\nblueprint/ @owner/reviewers alice@example.com\n")
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, "* @owner\nblueprint/ @owner/reviewers alice@example.com\n")
     _approved(root, github)
 
     status = _verify(root, github)["basics/result"]
@@ -678,8 +676,7 @@ def test_team_and_email_owners_never_authenticate(tmp_path: Path) -> None:
 
 
 def test_no_codeowners_file_allows_nobody(tmp_path: Path) -> None:
-    root = _project(tmp_path, codeowners=None)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, codeowners=None)
     _approved(root, github)
 
     status = _verify(root, github)["basics/result"]
@@ -689,8 +686,7 @@ def test_no_codeowners_file_allows_nobody(tmp_path: Path) -> None:
 
 
 def test_code_owner_logins_match_without_case(tmp_path: Path) -> None:
-    root = _project(tmp_path, "* @owner\nblueprint/ @Alice\n")
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, "* @owner\nblueprint/ @Alice\n")
     _approved(root, github, reviewer="aLICE")
 
     status = _verify(root, github)["basics/result"]
@@ -700,8 +696,7 @@ def test_code_owner_logins_match_without_case(tmp_path: Path) -> None:
 
 
 def test_reviews_are_read_across_pages(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _pull_approving(root, github)
     for number in range(100):
         github.review(7, f"reader{number}", "COMMENTED", head)
@@ -717,8 +712,7 @@ def test_a_listing_longer_than_the_page_limit_fails_closed(
 ) -> None:
     """Reading only the first pages would miss alice's later verdict."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approved(root, github)
     for number in range(99):
         github.review(7, f"reader{number}", "COMMENTED", head)
@@ -732,8 +726,7 @@ def test_a_listing_longer_than_the_page_limit_fails_closed(
 
 
 def test_lookups_are_cached_and_the_request_budget_fails_closed(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approving_pull(root, github, "result", "other")
     github.review(7, "alice", "APPROVED", head)
     landed = _land(root, github, 7)
@@ -774,8 +767,7 @@ def test_a_budget_spent_outside_a_candidate_is_refused_at_the_ceiling_and_unchec
     """Whether the budget runs out in the precondition, or in a gate's checks of its pull request, a run with
     the whole ceiling gets no further than any other, and a run with less may."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approving_pull(root, github, "result", "other")
     github.review(7, "alice", "APPROVED", head)
     if gate:
@@ -804,8 +796,7 @@ def test_a_failed_request_in_the_gate_refuses_only_the_approval_that_needs_it(tm
     """Deliberate guard: the gate tries no candidate commits, so a failure reaches
     the per-approval handling that the tests of merged pull requests no longer exercise."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approving_pull(root, github, "result", "other")
     github.review(7, "alice", "APPROVED", head)
     other = "/contents/blueprint/roadmap/basics/other.md"
@@ -822,8 +813,7 @@ def test_only_an_approval_a_later_run_may_authenticate_is_unchecked(tmp_path: Pa
     """A later run may get the answer a failed request did not, or a spent budget did not ask for. A 404, any
     other 4xx but a rate limit, and an oversized answer come back the same on every run: a verdict, not a gap."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     _branch(root, "other")
     _approve(root, "other", _OTHER_HASH)
@@ -863,8 +853,7 @@ def test_only_an_approval_a_later_run_may_authenticate_is_unchecked(tmp_path: Pa
 def test_a_head_lookup_that_fails_outside_a_publishing_run_leaves_every_approval_unchecked(
     tmp_path: Path, failure: str
 ) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.answers["/git/ref/heads/main"] = (
         GitHubUnavailable("GitHub API GET /git/ref/heads/main failed with HTTP 502: Bad Gateway")
@@ -894,8 +883,7 @@ def test_a_head_lookup_that_fails_outside_a_publishing_run_leaves_every_approval
 def test_the_request_budget_is_what_the_hour_has_left_and_leaves_some_of_it(
     tmp_path: Path, hourly: tuple[int, int] | None, budget: int
 ) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     github.rules = []
     github.hourly = hourly
     # Not publishing, so a budget too small for the head check refuses rather than stops the build.
@@ -912,8 +900,7 @@ def test_approvals_past_the_ceiling_of_a_run_with_the_hour_to_itself_are_refused
 ) -> None:
     """No run gets further, so leaving them unchecked would fail every run, and retry each one in vain."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     _branch(root, "other")
     _approve(root, "other", _OTHER_HASH)
@@ -1023,8 +1010,7 @@ def test_unreadable_codeowners_rules_leave_the_owners_undecided(rules: str, mess
 
 
 def test_an_unreadable_codeowners_rule_refuses_the_articles_it_could_own(tmp_path: Path) -> None:
-    root = _project(tmp_path, "* @alice\n!blueprint/ @carol\n")
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, "* @alice\n!blueprint/ @carol\n")
     _approved(root, github)
 
     status = _verify(root, github)["basics/result"]
@@ -1055,8 +1041,7 @@ def test_github_reads_the_first_codeowners_location_that_exists(tmp_path: Path) 
 
 
 def test_a_shallow_checkout_stops_authentication(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     shallow = tmp_path / "shallow"
     _git(tmp_path, "clone", "--quiet", "--depth", "1", "--branch", "main", root.resolve().as_uri(), str(shallow))
@@ -1368,8 +1353,7 @@ def test_the_gate_takes_its_base_from_the_merge_commit_it_checks_out(
 ) -> None:
     """The gate checks out refs/pull/N/merge, built on main as it is now; the event's base.sha can lag behind."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _use_fake_github(monkeypatch, github)
     _branch(root, "notes")
     _append(root, "A note.\n", "blueprint/README.md")
@@ -1412,8 +1396,7 @@ def test_the_gate_refuses_a_pull_request_into_another_branch(
 def test_the_gate_needs_the_base_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _use_fake_github(monkeypatch, github)
 
     assert main(["review", "authenticate", str(root / "blueprint"), "--github", "--pr", "7"]) == 2
@@ -1784,8 +1767,7 @@ def test_render_links_reviews_only_under_an_https_verifier_host() -> None:
 
 
 def test_a_review_link_off_the_github_host_is_dropped(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.reviews[7][0]["html_url"] = "https://evil.example/owner/project/pull/7"
 

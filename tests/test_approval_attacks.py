@@ -33,6 +33,7 @@ from tests.test_approvals import (
     _land,
     _project,
     _pull_approving,
+    _repo,
     _verified,
     _verify,
 )
@@ -72,8 +73,7 @@ def _pasted_on_main(root: Path, github: FakeGitHub, *, extra: str = "") -> None:
 def test_a1_an_owner_approving_an_unrelated_pull_request_launders_nothing(
     tmp_path: Path, strategy: str, reason: str
 ) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _pasted_on_main(root, github)
     _refused(root, github, "@carol approved #5 but is not an individual code owner")
 
@@ -95,8 +95,7 @@ def test_a1_an_owner_approving_an_unrelated_pull_request_launders_nothing(
 
 
 def test_a1_a_decoy_line_in_the_body_does_not_count_as_recording_the_hash(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _pasted_on_main(root, github)
     _branch(root, "typo")
     _approve(root, "result", None)
@@ -113,8 +112,7 @@ def test_a1_a_decoy_line_in_the_body_does_not_count_as_recording_the_hash(tmp_pa
 
 
 def test_a1_one_diff_line_that_parses_as_two_does_not_record_the_hash(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _branch(root, "hide")
     article = root / _ARTICLE
     article.write_text(
@@ -134,8 +132,7 @@ def test_a1_one_diff_line_that_parses_as_two_does_not_record_the_hash(tmp_path: 
 # A1b: deleting a hidden second copy of the hash, a frontmatter comment the parser skips.
 @pytest.mark.parametrize("strategy", ["merge", "rebase"])
 def test_a1b_deleting_a_hidden_copy_of_the_hash_launders_nothing(tmp_path: Path, strategy: str) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _pasted_on_main(root, github, extra=f"# cache {_HASH}\n")
     github.reviews.clear()
 
@@ -152,8 +149,7 @@ def test_a1b_deleting_a_hidden_copy_of_the_hash_launders_nothing(tmp_path: Path,
 
 # A2: an evil merge on a pull request branch replays a revoked approval.
 def test_a2_an_evil_merge_cannot_replay_a_revoked_approval(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _branch(root, "approve")
     _approve(root, "result", _HASH)
     _commit(root, "Approve the result")
@@ -185,8 +181,7 @@ _GRAB = "* @owner\nblueprint/ @alice\nblueprint/roadmap/ @carol\n"
 
 
 def test_a3_a_pull_request_cannot_name_its_own_code_owner(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _branch(root, "grab")
     (root / ".github" / "CODEOWNERS").write_text(_GRAB, encoding="utf-8")
     _approve(root, "result", _HASH)
@@ -210,8 +205,7 @@ def test_a3_a_pull_request_cannot_name_its_own_code_owner_one_commit_earlier(tmp
     base, before both. The merge and squash cases are deliberate guards: the
     landing commit's first parent is that base."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     base = _git(root, "rev-parse", "main")
     _branch(root, "grab")
     (root / ".github" / "CODEOWNERS").write_text(_GRAB, encoding="utf-8")
@@ -233,8 +227,7 @@ def test_a3_a_pull_request_cannot_name_its_own_code_owner_and_take_it_back(tmp_p
     three, shows carol owned nothing. The merge and squash cases are
     deliberate guards: the landing commit's first parent is that base."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     base = _git(root, "rev-parse", "main")
     codeowners = root / ".github" / "CODEOWNERS"
     _branch(root, "grab")
@@ -257,8 +250,7 @@ def test_a3_a_pull_request_cannot_name_its_own_code_owner_and_take_it_back(tmp_p
 def test_a_rebased_pull_request_is_judged_by_the_owners_at_its_base(tmp_path: Path) -> None:
     """Deliberate guard: the walk passes the pull request's own commits and stops at its base."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     base = _git(root, "rev-parse", "main")
     other = "blueprint/roadmap/basics/other.md"
     _branch(root, "approve")
@@ -283,8 +275,7 @@ def test_a_rebased_pull_request_is_judged_by_the_owners_at_its_base(tmp_path: Pa
 
 
 def test_a_pull_request_that_introduced_every_earlier_commit_shows_no_owners_before_it(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.associate(7, *_git(root, "rev-list", "main").split())
 
@@ -294,8 +285,7 @@ def test_a_pull_request_that_introduced_every_earlier_commit_shows_no_owners_bef
 def test_a_base_further_back_than_a_pull_request_has_commits_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     landed = _git(root, "rev-parse", "main")
     github.associate(7, _git(root, "rev-parse", "main^"))
@@ -305,8 +295,7 @@ def test_a_base_further_back_than_a_pull_request_has_commits_fails_closed(
 
 
 def test_a_pull_request_listed_without_a_number_leaves_the_base_unknown(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     parent = _git(root, "rev-parse", "main^")
     github.answers[f"/commits/{parent}/pulls"] = [{"number": "7"}]
@@ -317,8 +306,7 @@ def test_a_pull_request_listed_without_a_number_leaves_the_base_unknown(tmp_path
 # A4: a review by an account GitHub shows without write access.
 @pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", None])
 def test_a4_a_reviewer_without_write_access_does_not_count(tmp_path: Path, association: str | None) -> None:
-    root = _project(tmp_path, "* @owner\nblueprint/ @alice-old\n")
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, "* @owner\nblueprint/ @alice-old\n")
     _pull_approving(root, github, author="mallory")
     github.review(7, "alice-old", "APPROVED", association=association)  # type: ignore[arg-type]
 
@@ -338,8 +326,7 @@ def test_a4_a_reviewer_without_write_access_does_not_count(tmp_path: Path, assoc
     ],
 )
 def test_a5_an_approval_needs_a_green_verify_run_on_the_approved_head(tmp_path: Path, run: dict | None) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _branch(root, "approve")
     _approve(root, "result", _HASH)
     _commit(root, "Record a hash for a surface that does not exist")
@@ -353,8 +340,7 @@ def test_a5_an_approval_needs_a_green_verify_run_on_the_approved_head(tmp_path: 
 
 
 def test_a5_a_green_run_on_an_earlier_commit_does_not_count(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approving_pull(root, github)
     _append(root, "\nA note.\n")
     _commit(root, "Add a note")
@@ -429,8 +415,7 @@ def test_a5_only_a_completed_green_pull_request_run_of_the_verify_workflow_on_th
 
 # A6: an uppercase hash is the same approval, and a legitimate one authenticates.
 def test_a6_an_uppercase_hash_authenticates(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _branch(root, "approve")
     _approve(root, "result", "sha256:" + "A" * 64)
     _commit(root, "Approve with an uppercase hash")
@@ -445,8 +430,7 @@ def test_a6_an_uppercase_hash_authenticates(tmp_path: Path) -> None:
 
 # A7: Enterprise Managed User logins contain an underscore.
 def test_a7_an_enterprise_managed_user_can_own_and_approve(tmp_path: Path) -> None:
-    root = _project(tmp_path, "* @owner\ndocs/ @docs_acme\nblueprint/ @octocat_acme\n")
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, "* @owner\ndocs/ @docs_acme\nblueprint/ @octocat_acme\n")
     _pull_approving(root, github)
     github.review(7, "octocat_acme", "APPROVED")
 
@@ -471,8 +455,7 @@ def test_a8_an_undecodable_first_codeowners_does_not_fall_through(tmp_path: Path
 @pytest.mark.parametrize("separator", ["\u2028", "\x0b", "\x1c", "\x85", "\x0c", "\u00a0"])
 def test_b1_a_hidden_separator_leaves_the_owners_undecided(tmp_path: Path, separator: str) -> None:
     rules = f"* @owner\nblueprint/ @alice\n# reviewers, see docs{separator}blueprint/ @mallory\n"
-    root = _project(tmp_path, rules)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, rules)
     _pull_approving(root, github, author="bob")
     github.review(7, "mallory", "APPROVED")
 
@@ -484,8 +467,7 @@ def test_b1_a_hidden_separator_leaves_the_owners_undecided(tmp_path: Path, separ
 
 # B1b: a no-break space is not a token separator for GitHub.
 def test_b1b_a_no_break_space_does_not_split_owner_tokens(tmp_path: Path) -> None:
-    root = _project(tmp_path, "* @owner\nblueprint/ @alice\nblueprint/\u00a0@mallory\n")
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, "* @owner\nblueprint/ @alice\nblueprint/\u00a0@mallory\n")
     _pull_approving(root, github)
     github.review(7, "mallory", "APPROVED")
 
@@ -495,8 +477,7 @@ def test_b1b_a_no_break_space_does_not_split_owner_tokens(tmp_path: Path) -> Non
 # Finding 9 and its relatives: only a pull request merged into the default
 # branch attributes the commit that recorded the hash.
 def test_a_direct_push_is_attributed_to_no_pull_request(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approve(root, "result", _HASH)
     commit = _commit(root, "Approve on main directly")
 
@@ -504,8 +485,7 @@ def test_a_direct_push_is_attributed_to_no_pull_request(tmp_path: Path) -> None:
 
 
 def test_an_unmerged_pull_request_approved_by_an_owner_does_not_count(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _branch(root, "approve")
     _approve(root, "result", _HASH)
     commit = _commit(root, "Approve the result")
@@ -520,8 +500,7 @@ def test_an_unmerged_pull_request_approved_by_an_owner_does_not_count(tmp_path: 
 
 
 def test_a_pull_request_merged_into_another_branch_does_not_count(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approving_pull(root, github, author="mallory", base_ref="release")
     github.review(7, "alice", "APPROVED")
     _land(root, github, 7)
@@ -530,8 +509,7 @@ def test_a_pull_request_merged_into_another_branch_does_not_count(tmp_path: Path
 
 
 def test_a_commit_in_several_merged_pull_requests_is_ambiguous(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approved(root, github)
     github.open_pull(8, "mallory", head=head, base=_git(root, "rev-parse", "HEAD~1"))
     github.merged(8, _git(root, "rev-parse", "HEAD"))
@@ -551,8 +529,7 @@ def test_a_hash_recorded_in_the_first_commit_was_never_reviewed(tmp_path: Path) 
 
 
 def test_a_moved_article_needs_a_fresh_review(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _pull_approving(root, github)
     github.review(7, "alice", "APPROVED")
     assert _verify(root, github)["basics/result"].authenticated
@@ -581,8 +558,7 @@ def test_a_moved_article_needs_a_fresh_review(tmp_path: Path) -> None:
     ],
 )
 def test_a_diff_github_cut_short_fails_closed(tmp_path: Path, edit: object) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _pull_approving(root, github)
     github.review(7, "alice", "APPROVED")
 
@@ -598,8 +574,7 @@ def test_a_diff_github_cut_short_fails_closed(tmp_path: Path, edit: object) -> N
 
 
 def test_the_recorded_hash_must_be_at_the_head_of_the_pull_request(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _branch(root, "approve")
     _approve(root, "result", _OTHER_HASH)
     _commit(root, "Approve another hash")
@@ -618,8 +593,7 @@ def test_the_recorded_hash_must_be_at_the_head_of_the_pull_request(tmp_path: Pat
 # Preconditions of A1 that already failed to launder; they must keep failing.
 @pytest.mark.parametrize("strategy", ["merge", "squash"])
 def test_a1_without_a_net_article_change_still_launders_nothing(tmp_path: Path, strategy: str) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _pasted_on_main(root, github)
     _branch(root, "typo")
     _approve(root, "result", None)
@@ -672,8 +646,7 @@ def _owners_grant(root: Path, github: FakeGitHub, strategy: str) -> None:
 def test_c2_without_a_ruleset_requiring_code_owners_an_unreviewed_owner_change_authenticates_nothing(
     tmp_path: Path, strategy: str
 ) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     github.rules = []
     _owners_grant(root, github, strategy)
 
@@ -683,8 +656,7 @@ def test_c2_without_a_ruleset_requiring_code_owners_an_unreviewed_owner_change_a
 def test_rules_github_finds_nothing_for_read_as_no_ruleset(tmp_path: Path) -> None:
     """GitHub may answer 404 for the rules of a branch no rule applies to; that refuses, not as a failed request."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.rules = None  # type: ignore[assignment]
 
@@ -693,8 +665,7 @@ def test_rules_github_finds_nothing_for_read_as_no_ruleset(tmp_path: Path) -> No
 
 @pytest.mark.parametrize("strategy", ["merge", "squash"])
 def test_c2_codeowners_that_own_no_codeowners_file_authenticate_nothing(tmp_path: Path, strategy: str) -> None:
-    root = _project(tmp_path, "blueprint/ @alice\n")
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, "blueprint/ @alice\n")
     _owners_grant(root, github, strategy)
 
     _refused(
@@ -718,8 +689,7 @@ def test_c2_codeowners_that_own_no_codeowners_file_authenticate_nothing(tmp_path
     ],
 )
 def test_no_approval_authenticates_unless_a_ruleset_requires_code_owner_review(tmp_path: Path, rules: list) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     github.rules = rules
     _approved(root, github)
 
@@ -732,8 +702,7 @@ def test_no_approval_authenticates_unless_a_ruleset_requires_code_owner_review(t
 def test_a_code_owner_rule_on_a_later_page_of_rules_counts(tmp_path: Path) -> None:
     """Deliberate guard: the rules are read across pages, like every list."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     github.rules = [{"type": "deletion"}] * 100 + github.rules
     _approved(root, github)
 
@@ -773,8 +742,7 @@ def test_no_approval_authenticates_unless_stale_approvals_are_dismissed_and_the_
     """Repro: without these settings, an owner's approval of a typo fix still
     counts after the author pushes a CODEOWNERS line naming themselves."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     github.rules[0]["parameters"].update(parameters)
     _approved(root, github)
 
@@ -786,8 +754,7 @@ def test_no_approval_authenticates_unless_stale_approvals_are_dismissed_and_the_
 def test_the_review_settings_may_come_from_different_rulesets(tmp_path: Path) -> None:
     """Deliberate guard: GitHub enforces the strictest of every ruleset's rules, so they add up."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     github.rules[0]["parameters"].update(require_last_push_approval=False)
     github.rules.append(
         {
@@ -823,8 +790,7 @@ def test_the_review_settings_may_come_from_different_rulesets(tmp_path: Path) ->
 def test_a_ruleset_this_token_can_bypass_does_not_count(tmp_path: Path, ruleset: dict | None, reason: str) -> None:
     """A workflow whose token can bypass the ruleset can push to main unreviewed."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     if ruleset is None:
         del github.rulesets[1]
     else:
@@ -841,8 +807,7 @@ def test_a_ruleset_this_token_can_bypass_does_not_count(tmp_path: Path, ruleset:
 
 
 def test_a_pull_request_rule_that_names_no_ruleset_does_not_count(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     del github.rules[0]["ruleset_id"]
     _approved(root, github)
 
@@ -852,8 +817,7 @@ def test_a_pull_request_rule_that_names_no_ruleset_does_not_count(tmp_path: Path
 def test_a_pull_request_rule_whose_ruleset_id_is_a_boolean_does_not_count(tmp_path: Path) -> None:
     """True == 1, so read as a number it would reuse ruleset 1's answer and count as held."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     held = github.rules[0]
     only_owners = {**held["parameters"], "dismiss_stale_reviews_on_push": False, "require_last_push_approval": False}
     github.rules = [{**held, "parameters": only_owners}, {**held, "ruleset_id": True}]
@@ -865,8 +829,7 @@ def test_a_pull_request_rule_whose_ruleset_id_is_a_boolean_does_not_count(tmp_pa
 def test_a_ruleset_the_token_cannot_bypass_counts_beside_one_it_can(tmp_path: Path) -> None:
     """Deliberate guard: a bypassable ruleset is left out, not held against the others."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     github.rules.insert(0, {**github.rules[0], "ruleset_id": 2})
     github.rulesets[2] = {**github.rulesets[1], "id": 2, "current_user_can_bypass": "always"}
     _approved(root, github)
@@ -878,8 +841,7 @@ def test_a_ruleset_the_token_cannot_bypass_counts_beside_one_it_can(tmp_path: Pa
 
 
 def test_a_build_of_an_older_commit_cannot_bring_back_a_withdrawn_approval(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     landed = _git(root, "rev-parse", "HEAD")
     (root / ".github" / "CODEOWNERS").write_text("* @owner\nblueprint/ @carol\n", encoding="utf-8")
@@ -914,8 +876,7 @@ def test_a_default_branch_head_github_does_not_name_stops_the_build(
 ) -> None:
     """Labelling every approval self-approved instead would let it downgrade the live site."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.heads["main"] = edit(github.get("/git/ref/heads/main"))  # type: ignore[operator]
 
@@ -928,8 +889,7 @@ def test_a_default_branch_head_github_does_not_name_stops_the_build(
 def test_the_gate_reads_codeowners_errors_at_its_base(tmp_path: Path, broken: str) -> None:
     """GitHub reads each commit's own CODEOWNERS, so the gate asks about its base, not main's head."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     base = _git(root, "rev-parse", "main")
     head = _approving_pull(root, github)
     github.review(7, "alice", "APPROVED", head)
@@ -951,8 +911,7 @@ def test_the_gate_reads_codeowners_errors_at_its_base(tmp_path: Path, broken: st
 def test_the_gate_reads_no_default_branch_head(tmp_path: Path) -> None:
     """Deliberate guard: the gate trusts its base commit, which the default branch may have moved past."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     base = _git(root, "rev-parse", "main")
     head = _approving_pull(root, github)
     github.review(7, "alice", "APPROVED", head)
@@ -1003,8 +962,7 @@ def test_every_rule_from_the_last_catch_all_on_needs_a_code_owner_who_can_write(
     an unowned /blueprint/roadmap/*.html rule would let a pull request publish
     HTML on the site without code owner review."""
 
-    root = _project(tmp_path, codeowners)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, codeowners)
     github.permissions.update(permissions)
     _approved(root, github)
 
@@ -1020,8 +978,9 @@ def test_every_rule_from_the_last_catch_all_on_needs_a_code_owner_who_can_write(
 def test_owning_every_tracked_file_by_name_leaves_new_files_unowned(tmp_path: Path) -> None:
     """Repro: without a `*` rule, a pull request adding a workflow needs no code owner review."""
 
-    root = _project(tmp_path, "/.github/CODEOWNERS @owner\n/blueprint/README.md @owner\n/blueprint/roadmap/ @alice\n")
-    github = FakeGitHub(root)
+    root, github = _repo(
+        tmp_path, "/.github/CODEOWNERS @owner\n/blueprint/README.md @owner\n/blueprint/roadmap/ @alice\n"
+    )
     _approved(root, github)
 
     _refused(root, github, ".github/CODEOWNERS at HEAD has no `*` rule")
@@ -1033,8 +992,7 @@ def test_a_catch_all_other_than_a_star_is_refused_for_what_it_is(tmp_path: Path,
     """Deliberate guard: only `*` is read as matching every path. The reason says so,
     rather than claim that a file no rule matches can be added unreviewed."""
 
-    root = _project(tmp_path, f"{catch_all} @owner\nblueprint/ @alice\n")
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, f"{catch_all} @owner\nblueprint/ @alice\n")
     _approved(root, github)
 
     _refused(
@@ -1053,8 +1011,7 @@ def test_a_catch_all_other_than_a_star_is_refused_for_what_it_is(tmp_path: Path,
 def test_rules_before_the_last_catch_all_decide_nothing(tmp_path: Path, codeowners: str) -> None:
     """Deliberate guard: the last `*` rule overrides every rule before it for every path."""
 
-    root = _project(tmp_path, codeowners)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, codeowners)
     github.permissions["reader"] = "read"
     _approved(root, github)
 
@@ -1076,8 +1033,7 @@ def test_any_error_github_reports_in_codeowners_authenticates_nothing(
     """GitHub skips a line it cannot parse and ignores an owner it cannot use,
     such as a team without write access; the local parser cannot see either."""
 
-    root = _project(tmp_path, codeowners)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, codeowners)
     source = codeowners.split("\n")[line - 1]
     github.codeowners_errors = [
         {
@@ -1101,8 +1057,7 @@ def test_any_error_github_reports_in_codeowners_authenticates_nothing(
 
 
 def test_errors_github_reports_are_named_ten_at_a_time(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     github.codeowners_errors = [{"line": line, "kind": "Unknown owner", "path": "CODEOWNERS"} for line in range(1, 13)]
     _approved(root, github)
 
@@ -1118,8 +1073,7 @@ def test_errors_github_reports_are_named_ten_at_a_time(tmp_path: Path) -> None:
     ],
 )
 def test_codeowners_github_cannot_read_authenticate_nothing(tmp_path: Path, answer: object, reason: str) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     github.codeowners_errors = answer  # type: ignore[assignment]
     _approved(root, github)
 
@@ -1129,8 +1083,7 @@ def test_codeowners_github_cannot_read_authenticate_nothing(tmp_path: Path, answ
 def test_a_team_of_another_organization_owns_nothing(tmp_path: Path) -> None:
     """Only the repository owner's teams can have access to its files."""
 
-    root = _project(tmp_path, "* @org/maintainers\nblueprint/ @alice\n")
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, "* @org/maintainers\nblueprint/ @alice\n")
     _approved(root, github)
 
     _refused(root, github, ": line 1: @org/maintainers is not a team of owner")
@@ -1151,8 +1104,7 @@ def test_a_team_of_another_organization_owns_nothing(tmp_path: Path) -> None:
 def test_a_team_or_one_owner_who_can_write_covers_a_file(tmp_path: Path, codeowners: str, permissions: dict) -> None:
     """Deliberate guard for the teams and permissions that do cover a file."""
 
-    root = _project(tmp_path, codeowners)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, codeowners)
     github.permissions.update(permissions)
     _approved(root, github)
 
@@ -1163,8 +1115,7 @@ def test_a_team_or_one_owner_who_can_write_covers_a_file(tmp_path: Path, codeown
 def test_a_team_of_an_owner_whose_login_has_capitals_covers_a_file(tmp_path: Path, codeowners: str) -> None:
     """GitHub compares logins without case, and owners such as GoogleCloudPlatform are mixed case."""
 
-    root = _project(tmp_path, codeowners)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, codeowners)
     github.repository = {**FakeGitHub.repository, "owner": {"login": "Owner"}}
     _approved(root, github)
 
@@ -1172,8 +1123,7 @@ def test_a_team_of_an_owner_whose_login_has_capitals_covers_a_file(tmp_path: Pat
 
 
 def test_a_repository_github_names_no_owner_of_authenticates_nothing(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     github.repository = {key: value for key, value in FakeGitHub.repository.items() if key != "owner"}
     _approved(root, github)
 
@@ -1181,8 +1131,9 @@ def test_a_repository_github_names_no_owner_of_authenticates_nothing(tmp_path: P
 
 
 def test_the_uncovered_rules_are_named_ten_at_a_time(tmp_path: Path) -> None:
-    root = _project(tmp_path, _CODEOWNERS + "".join(f"/Lib{index:02d}.lean @reader{index:02d}\n" for index in range(12)))
-    github = FakeGitHub(root)
+    root, github = _repo(
+        tmp_path, _CODEOWNERS + "".join(f"/Lib{index:02d}.lean @reader{index:02d}\n" for index in range(12))
+    )
     github.permissions.update({f"reader{index:02d}": "read" for index in range(12)})
     _approved(root, github)
 
@@ -1251,8 +1202,7 @@ def test_content_is_found_in_a_blueprint_at_the_repository_root() -> None:
 def test_an_approving_pull_request_that_changes_anything_else_authenticates_nothing(
     tmp_path: Path, path: str, text: str
 ) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _branch(root, "approve")
     _approve(root, "result", _HASH)
     (root / path).parent.mkdir(parents=True, exist_ok=True)
@@ -1271,8 +1221,7 @@ def test_an_approving_pull_request_that_changes_anything_else_authenticates_noth
 
 
 def test_a_rename_into_the_roadmap_counts_by_its_previous_name(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.file_edits[7] = lambda entries: [
         *entries,
@@ -1285,8 +1234,7 @@ def test_a_rename_into_the_roadmap_counts_by_its_previous_name(tmp_path: Path) -
 def test_an_approving_pull_request_may_change_other_articles_and_cards(tmp_path: Path) -> None:
     """Deliberate guard: content is every article and card, not only the approved one."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _branch(root, "approve")
     _approve(root, "result", _HASH)
     _append(root, "Another note.\n", "blueprint/roadmap/basics/other.md")
@@ -1304,8 +1252,7 @@ def test_an_approving_pull_request_may_change_other_articles_and_cards(tmp_path:
 def test_a_file_list_longer_than_github_lists_fails_closed(tmp_path: Path) -> None:
     """Deliberate guard: GitHub lists at most 3000 files, so a full list may be cut short."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.file_edits[7] = lambda entries: entries + [
         {"filename": f"blueprint/roadmap/basics/n{index}.md", "status": "added"}
@@ -1316,8 +1263,7 @@ def test_a_file_list_longer_than_github_lists_fails_closed(tmp_path: Path) -> No
 
 
 def test_the_gate_refuses_a_pull_request_that_changes_anything_else(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _branch(root, "approve")
     _approve(root, "result", _HASH)
     (root / ".github" / "CODEOWNERS").write_text(_GRAB, encoding="utf-8")
@@ -1334,8 +1280,7 @@ def test_the_gate_refuses_a_pull_request_that_changes_anything_else(tmp_path: Pa
 def test_a_file_list_as_long_as_github_lists_fails_closed_however_many_pages_are_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gate: bool
 ) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approving_pull(root, github)
     github.review(7, "alice", "APPROVED", head)
     if not gate:
@@ -1356,8 +1301,7 @@ def test_a_file_list_as_long_as_github_lists_fails_closed_however_many_pages_are
 def test_the_gate_still_needs_the_diff_to_record_the_hash(tmp_path: Path) -> None:
     """Deliberate guard: the gate skips the merge and the run, not the visible diff."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approving_pull(root, github)
     github.review(7, "alice", "APPROVED", head)
     github.file_edits[7] = lambda entries: [{**entry, "patch": None} for entry in entries]
@@ -1371,8 +1315,7 @@ def test_the_gate_still_needs_the_diff_to_record_the_hash(tmp_path: Path) -> Non
 
 
 def test_c3_a_run_for_a_pull_request_into_another_branch_does_not_count(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approving_pull(root, github, author="mallory", ci=None)
     github.run(head)
     repository = {"id": 1, "full_name": "owner/project"}
@@ -1402,8 +1345,7 @@ def test_a_run_that_lists_only_its_own_pull_request_counts(tmp_path: Path, liste
     open a pull request in their fork from the branch, which GitHub lists too, but a run here
     belongs to a pull request into this repository, so that one is not the run's."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.runs[-1]["pull_requests"] = listed
 
@@ -1423,8 +1365,7 @@ def test_a_run_that_lists_only_its_own_pull_request_counts(tmp_path: Path, liste
     ],
 )
 def test_a_run_from_elsewhere_does_not_count(tmp_path: Path, change: dict) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approved(root, github)
     github.runs[-1].update(change)
 
@@ -1432,8 +1373,7 @@ def test_a_run_from_elsewhere_does_not_count(tmp_path: Path, change: dict) -> No
 
 
 def test_a_branch_that_headed_another_pull_request_ties_no_run_to_this_one(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approved(root, github)
     # A decoy pull request from the same branch, whose run is indistinguishable after both close.
     github.open_pull(8, "mallory", head=head, base_ref="evil", ref="approve-7", ci=None)
@@ -1446,8 +1386,7 @@ def test_a_branch_that_headed_another_pull_request_ties_no_run_to_this_one(tmp_p
 
 
 def test_a_pull_request_that_changed_its_base_branch_proves_nothing_by_its_run(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.events[7] = [{"event": "labeled"}, {"event": "base_ref_changed"}]
 
@@ -1464,8 +1403,7 @@ def test_a_pull_request_that_changed_its_base_branch_proves_nothing_by_its_run(t
 def test_a_pull_request_from_a_fork_is_refused_before_anything_about_it_is_read(
     tmp_path: Path, source: dict | None, reason: str
 ) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.pulls[7]["head"]["repo"] = source
 
@@ -1487,8 +1425,7 @@ def test_a_pull_request_from_a_fork_is_refused_before_anything_about_it_is_read(
     ],
 )
 def test_the_gate_refuses_a_pull_request_between_repositories(tmp_path: Path, side: str, reason: str) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approving_pull(root, github)
     github.review(7, "alice", "APPROVED", head)
     github.pulls[7][side]["repo"] = {"id": 2, "full_name": "mallory/project"}
@@ -1499,8 +1436,7 @@ def test_the_gate_refuses_a_pull_request_between_repositories(tmp_path: Path, si
 
 
 def test_a_pull_request_into_another_repository_is_refused(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.pulls[7]["base"]["repo"] = {"id": 2, "full_name": "mallory/project"}
 
@@ -1514,8 +1450,7 @@ def test_a_pull_request_into_another_repository_beside_the_approving_one_is_left
     """In a project that is a fork, GitHub also lists the upstream pull request that took its main,
     which may share a number with one of the project's own."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github, strategy=strategy)
     upstream = {"id": 2, "full_name": "upstream/project"}
     for number in (5, 7):
@@ -1535,8 +1470,7 @@ def test_a_pull_request_into_another_repository_beside_the_approving_one_is_left
 
 @pytest.mark.parametrize("user", [None, {}, {"login": ""}, {"login": None}, {"login": "two words"}])
 def test_a_pull_request_without_an_author_authenticates_nothing(tmp_path: Path, user: object) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approved(root, github)
     pull = github.pulls[7]
     # GitHub still links the commits to bob, so only the missing author is in question.
@@ -1551,8 +1485,7 @@ def test_a_pull_request_without_an_author_authenticates_nothing(tmp_path: Path, 
 def test_a_pull_request_an_app_opened_has_an_author(tmp_path: Path) -> None:
     """Deliberate guard: a bot login is an author, not a missing one."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.pulls[7]["user"] = {"login": "github-actions[bot]"}
 
@@ -1567,8 +1500,7 @@ def test_c5_an_organization_member_without_write_permission_does_not_count(
     tmp_path: Path, permission: str | None
 ) -> None:
     # owner also owns the articles, so the coverage precondition holds without alice.
-    root = _project(tmp_path, "* @owner\nblueprint/roadmap/ @alice @owner\n")
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path, "* @owner\nblueprint/roadmap/ @alice @owner\n")
     head = _pull_approving(root, github)
     github.review(7, "alice", "APPROVED", head, association="MEMBER")
     github.permissions["alice"] = permission
@@ -1587,8 +1519,7 @@ def test_a_writer_with_any_writing_association_authenticates(
 ) -> None:
     """Deliberate guard: what the permission and association checks must still admit."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _pull_approving(root, github)
     github.review(7, "alice", "APPROVED", head, association=association)
     github.permissions["alice"] = permission
@@ -1603,8 +1534,7 @@ def test_a_writer_with_any_writing_association_authenticates(
 def test_a_reviewer_who_wrote_a_commit_of_the_pull_request_does_not_count(
     tmp_path: Path, users: tuple[str, str]
 ) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _branch(root, "approve")
     _approve(root, "result", _HASH)
     first = _commit(root, "Approve the result")
@@ -1620,8 +1550,7 @@ def test_a_reviewer_who_wrote_a_commit_of_the_pull_request_does_not_count(
 
 @pytest.mark.parametrize("users", [(None, "bob"), ("bob", None)])
 def test_a_commit_github_links_to_no_account_refuses_the_approval(tmp_path: Path, users: tuple) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approved(root, github)
     github.commit_users[head] = users
 
@@ -1629,8 +1558,7 @@ def test_a_commit_github_links_to_no_account_refuses_the_approval(tmp_path: Path
 
 
 def test_a_pull_request_with_more_commits_than_github_lists_refuses_the_approval(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.commits = lambda number: [  # type: ignore[method-assign]
         {"sha": f"{index:040x}", "author": {"login": "bob"}, "committer": {"login": "bob"}} for index in range(250)
@@ -1640,8 +1568,7 @@ def test_a_pull_request_with_more_commits_than_github_lists_refuses_the_approval
 
 
 def test_a_missing_later_page_fails_closed(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     head = _approved(root, github)
     for _ in range(99):
         github.review(7, "carol", "COMMENTED", head)
@@ -1670,8 +1597,7 @@ def test_a_listing_github_finds_nothing_for_fails_closed(tmp_path: Path, listing
     list: no commits would clear every reviewer of writing one, and no events would show the
     base branch never changed."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     github.answers[listing] = None
 
@@ -1691,8 +1617,7 @@ def _move_approval_line(root: Path) -> None:
 
 
 def test_a_later_reviewed_pull_request_re_approves_a_hash_first_pushed_unreviewed(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approve(root, "result", _HASH)
     pushed = _commit(root, "Paste the hash directly")
     _refused(root, github, f"commit {pushed[:12]}, which recorded this hash, came from no pull request merged")
@@ -1716,8 +1641,7 @@ def test_a_later_reviewed_pull_request_re_approves_a_hash_first_pushed_unreviewe
 
 
 def test_a_budget_spent_on_an_older_candidate_keeps_the_newer_ones_reason(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _pull_approving(root, github)
     landed = _git(root, "rev-parse", "HEAD")
     _move_approval_line(root)
@@ -1743,8 +1667,7 @@ def test_a_budget_spent_on_an_older_candidate_keeps_the_newer_ones_reason(tmp_pa
 
 
 def test_the_newest_authenticated_re_approval_is_the_one_shown(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     _authenticated(root, github)
 
@@ -1763,8 +1686,7 @@ def test_the_newest_authenticated_re_approval_is_the_one_shown(tmp_path: Path) -
 def test_a_failed_re_approval_leaves_the_reviewed_one_standing(tmp_path: Path) -> None:
     """Deliberate guard: the newest-first walk falls back to the older reviewed commit."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     _move_approval_line(root)
     moved = _commit(root, "Move the approval line on main")
@@ -1779,8 +1701,7 @@ def test_a_later_edit_that_records_no_approval_costs_no_requests(tmp_path: Path)
     """Deliberate guard on the request budget: only a commit whose own diff adds
     the approval line is tried, though GitHub's diff would refuse the others."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _approved(root, github)
     _branch(root, "edit")
     _append(root, "More truth.\n")
@@ -1796,8 +1717,7 @@ def test_the_walk_reads_the_article_path_literally(tmp_path: Path, monkeypatch: 
     """Deliberate guard against a false refusal: read as a glob, ``re[s]ult.md``
     would also match result.md, whose later edit would use up the walk's cap."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     chapter = root / "blueprint" / "roadmap" / "basics"
     text = (chapter / "result.md").read_text(encoding="utf-8")
     (chapter / "re[s]ult.md").write_text(
@@ -1828,8 +1748,7 @@ def test_c4_a_replayed_approval_needs_someone_who_can_bypass_the_ruleset(tmp_pat
     is the old approving commit. With the ruleset that pushing needs a bypass
     actor, whom the verifier trusts; without it nothing authenticates."""
 
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
+    root, github = _repo(tmp_path)
     _branch(root, "approve-7")
     _approve(root, "result", _HASH)
     approved = _commit(root, "Approve the result")
