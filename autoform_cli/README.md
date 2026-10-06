@@ -538,17 +538,17 @@ stable `lean/<slug>-<digest>` target. A revised declaration that no article
 names is claimed the same way, under every nearest owner's target or its own
 stable key. A revision is contained exactly when the selected article's target
 is its only claim target. `unused_statement_dependencies` lists the stated
-articles whose Markdown statement rests on the revised declarations, directly or
-through other statement dependencies, that are not statement-impacted: the
+articles whose Markdown statement rests on the revised declarations, directly
+or through other statement dependencies, that are not statement-impacted: the
 probe follows names, so a dependent whose Lean inlines a revised definition's
 body shows no use although its statement changes meaning. They join
 `claim_targets`, so they too rule out `contained`. A `mathlib: true` article is
-left out: its statement is a Mathlib declaration, which cannot use the revised one, and it cannot
-record `statement: retracted`. A Markdown path reaches the revised declarations
-when it ends at the revised article or at an article that names one of them
-or, when none names it, owns it; missing dependency paths are counted the same
-way. Project locality is an exact inventory of regular repository source
-modules, never a namespace-prefix guess.
+left out: its statement is a Mathlib declaration, which cannot use the revised
+one, and it cannot record `statement: retracted`. A Markdown path reaches the
+revised declarations when it ends at the revised article, at an article that
+names one of them, or, when none names it, at an owner; missing dependency
+paths are counted the same way. Project locality is an exact inventory of
+regular repository source modules, never a namespace-prefix guess.
 
 The command snapshots and rereads the roadmap around the probe. It retains one
 bound Lean source generation, derives module inventory and locations from that
