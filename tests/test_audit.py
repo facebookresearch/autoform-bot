@@ -360,6 +360,35 @@ def test_audit_reads_deprecation_from_the_captured_source_generation(
     ]
 
 
+def test_audit_checks_irreducible_def_kinds(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    for declaration, target in (
+        ("def", "sealed"),
+        ("definition", "sealed"),
+        ("irreducible_def", "sealed"),
+        ("irreducible_def", "plain"),
+    ):
+        _article(
+            blueprint,
+            f"{declaration}-{target}.md",
+            declaration=declaration,
+            statement="formalized",
+            lean=f"Project.{target}",
+        )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Value.lean").write_text(
+        "irreducible_def Project.sealed : Nat := 1\ndef Project.plain : Nat := 1\n", encoding="utf-8"
+    )
+
+    assert _finding_map(blueprint, lean_root=lean_root) == {
+        "roadmap/irreducible_def-plain.md": [
+            ("lean-target-kind-mismatch", "Lean target kind def does not match declaration intent irreducible_def")
+        ]
+    }
+
+
 def test_audit_reports_invalid_lean_root_once(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
