@@ -35,7 +35,7 @@ _VALID_DIAGNOSTIC_SEVERITIES = frozenset({"trace", "info", "warning", "error"})
 _STDERR_TAIL_BYTES = 200
 _PUBLIC_DIAGNOSTIC_FIELDS = frozenset({"severity", "data", "pos", "endPos"})
 _PUBLIC_SORRY_FIELDS = frozenset({"goal", "pos", "endPos"})
-_LEAN_HEADER_LAUNCHER = (
+LEAN_HEADER_LAUNCHER = (
     "import os; "
     "lean = os.path.join(os.environ['LEAN_SYSROOT'], 'bin', 'lean'); "
     "os.execv(lean, [lean, '--deps-json', '/dev/stdin'])"
@@ -78,7 +78,7 @@ def _process_group_exists(process_group_id: int) -> bool:
             return False
         if error.errno == errno.EPERM:
             return True
-        raise RuntimeError("failed to inspect the Lean REPL process group") from error
+        raise RuntimeError("failed to inspect the Lean process group") from error
     return True
 
 
@@ -120,7 +120,7 @@ def _wait_for_process(process: subprocess.Popen, deadline: float) -> bool:
     except subprocess.TimeoutExpired:
         return False
     except OSError as error:
-        raise RuntimeError("failed to reap the Lean REPL process") from error
+        raise RuntimeError("failed to reap the Lean process") from error
     return True
 
 
@@ -130,6 +130,21 @@ def _kill_subprocesses(
     deadline: float | None = None,
 ) -> None:
     """Terminate and verify one dedicated POSIX process group."""
+    if getattr(process, "returncode", None) is not None:
+        if _process_group_has_live_members(process_group_id):
+            raise RuntimeError(
+                "refusing to signal a process group after its leader was reaped"
+            )
+        return
+    _terminate_process_group(process_group_id, deadline)
+    _reap_process(process, deadline)
+
+
+def _terminate_process_group(
+    process_group_id: int,
+    deadline: float | None = None,
+) -> None:
+    """Terminate a dedicated group without reaping its leader."""
     started = time.monotonic()
     term_deadline = started + REPL_ABORT_TERM_SECONDS
     kill_deadline = term_deadline + REPL_ABORT_KILL_SECONDS
@@ -143,7 +158,7 @@ def _kill_subprocesses(
         except ProcessLookupError:
             pass
         except OSError as error:
-            raise RuntimeError("failed to terminate the Lean REPL process group") from error
+            raise RuntimeError("failed to terminate the Lean process group") from error
 
     _wait_for_live_process_group_exit(process_group_id, term_deadline)
     if _process_group_has_live_members(process_group_id):
@@ -152,12 +167,23 @@ def _kill_subprocesses(
         except ProcessLookupError:
             pass
         except OSError as error:
-            raise RuntimeError("failed to kill the Lean REPL process group") from error
+            raise RuntimeError("failed to kill the Lean process group") from error
 
     group_exited = _wait_for_live_process_group_exit(process_group_id, kill_deadline)
     if not group_exited:
-        raise RuntimeError("timed out terminating the Lean REPL process group")
+        raise RuntimeError("timed out terminating the Lean process group")
 
+
+def _reap_process(
+    process: subprocess.Popen,
+    deadline: float | None = None,
+) -> None:
+    """Reap one leader only after its process group is known retired."""
+    if getattr(process, "returncode", None) is not None:
+        return
+    kill_deadline = time.monotonic() + REPL_ABORT_KILL_SECONDS
+    if deadline is not None:
+        kill_deadline = min(kill_deadline, deadline)
     parent_reaped = _wait_for_process(process, kill_deadline)
     if not parent_reaped:
         try:
@@ -165,10 +191,10 @@ def _kill_subprocesses(
         except ProcessLookupError:
             pass
         except OSError as error:
-            raise RuntimeError("failed to kill the Lean REPL process") from error
+            raise RuntimeError("failed to kill the Lean process") from error
         parent_reaped = _wait_for_process(process, kill_deadline)
     if not parent_reaped:
-        raise RuntimeError("timed out reaping the Lean REPL process")
+        raise RuntimeError("timed out reaping the Lean process")
 
 
 def _inherit_clean_env() -> dict[str, str]:
@@ -385,14 +411,9 @@ def _communicate_bounded(
                         close_stdin()
 
     close_stdin()
-    if process.poll() is None:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("timed out checking the Lean header")
-        try:
-            process.wait(timeout=remaining)
-        except subprocess.TimeoutExpired:
-            raise TimeoutError("timed out checking the Lean header") from None
+    # Do not poll or wait here. Process-group cleanup must verify that the
+    # whole group is retired before reaping its leader, or a reused numeric
+    # PGID could be signalled after the parser leaves a descendant behind.
     return bytes(stdout), bytes(stderr)
 
 
@@ -451,6 +472,10 @@ def _decode_header_analysis(stdout: bytes) -> _LeanHeaderAnalysis:
             module = item.get("module")
             if not isinstance(module, str) or not module:
                 raise ValueError
+            if "/" in module or "\\" in module:
+                raise ValueError(
+                    "Lean header contains an import module with a path separator"
+                )
             if has_result:
                 is_meta = item.get("isMeta")
                 if is_meta is not None and type(is_meta) is not bool:
@@ -479,6 +504,29 @@ def _decode_header_analysis(stdout: bytes) -> _LeanHeaderAnalysis:
         if str(error):
             raise
         raise ValueError("unrecognized output from lean --deps-json") from None
+
+
+def _reject_legacy_deps_json_comment_bypass(code: str) -> None:
+    """Refuse close spellings misparsed by Lean 4.30--4.32 deps-json.
+
+    Those releases skip one character too many when an even run of dashes
+    precedes ``/`` inside a block comment, so an import the real parser sees
+    can disappear from the fast parser's result.  The byte pattern is rare;
+    failing closed also avoids pretending that quoted/comment context can be
+    reconstructed safely in Python.
+    """
+
+    dashes = 0
+    for character in code:
+        if character == "-":
+            dashes += 1
+            continue
+        if character == "/" and dashes > 0 and dashes % 2 == 0:
+            raise ValueError(
+                "Lean header contains a block-comment close spelling that "
+                "lean --deps-json cannot validate safely"
+            )
+        dashes = 0
 
 
 def _split_imports_and_body(code: str) -> tuple[list[str], str, int]:
@@ -517,7 +565,7 @@ class LeanReplConfig:
     cwd: str = "."
     env: dict[str, str] = field(default_factory=dict)
 
-    request_timeout: float = 30.0
+    request_timeout: float = 240.0
     startup_timeout: float = DEFAULT_REPL_STARTUP_TIMEOUT
     chunk_size: int = 4096
 
@@ -529,7 +577,7 @@ class LeanReplConfig:
 
     repl_command: list[str] = field(default_factory=lambda: ["lake", "exe", "@repl/repl"])
     header_deps_command: list[str] = field(
-        default_factory=lambda: ["lake", "env", sys.executable, "-c", _LEAN_HEADER_LAUNCHER]
+        default_factory=lambda: ["lake", "env", sys.executable, "-c", LEAN_HEADER_LAUNCHER]
     )
 
     # stdout is capped per response. stderr has no protocol framing, so its
@@ -724,7 +772,7 @@ class ReplStderrBacklog(RuntimeError):
 
 
 class ReplCleanupError(RuntimeError):
-    """A disposable call produced a result but its process was not reaped."""
+    """A disposable result is valid but its wrapper still owns a process."""
 
     def __init__(self, message: str, result: dict[str, Any]) -> None:
         super().__init__(message)
@@ -937,15 +985,16 @@ class LeanRepl:
             env=env,
             start_new_session=True,
         )
-        self._process_group_id = self.process.pid
+        process = self.process
+        self._process_group_id = process.pid
         stdout, stderr = _communicate_bounded(
-            self.process,
+            process,
             code.encode(),
             deadline=deadline,
             max_output_bytes=self.config.max_buffer_bytes,
         )
-        returncode = self.process.returncode
         self.close(deadline=deadline)
+        returncode = process.returncode
         if returncode != 0:
             detail = stderr.decode(errors="replace").strip().splitlines()
             raise ValueError(detail[0] if detail else f"exit status {returncode}")
@@ -960,11 +1009,11 @@ class LeanRepl:
         timeout = self.request_timeout if timeout is None else timeout
         deadline = time.monotonic() + timeout
 
-        def remaining() -> float:
+        def remaining(phase: str) -> float:
             value = deadline - time.monotonic()
             if value <= 0:
                 raise TimeoutError(
-                    f"REPL command timed out after {timeout:g} seconds"
+                    f"Lean REPL {phase} timed out after {timeout:g} seconds"
                 )
             return value
 
@@ -976,6 +1025,8 @@ class LeanRepl:
                 # A previous failed cleanup must settle before another process
                 # generation can be created from this slot.
                 self.close(deadline=deadline)
+                if os.name != "posix":
+                    raise RuntimeError("Lean REPL transport requires a POSIX platform")
                 imports, _, _ = _split_imports_and_body(code)
                 accepts_leading_imports = True
                 if (
@@ -983,6 +1034,7 @@ class LeanRepl:
                     and self._allowed_import_roots is not None
                 ):
                     try:
+                        _reject_legacy_deps_json_comment_bypass(code)
                         header = self._check_header(code, deadline)
                     except ValueError as error:
                         result = {"repl_error": f"Rejected Lean header: {error}"}
@@ -1017,11 +1069,14 @@ class LeanRepl:
                     command = f"{prefix}\n{code}" if prefix else code
                     # Do not send startup import or smoke-test frames. The
                     # submitted command is the generation's only request.
-                    self.start(startup_timeout=remaining(), warm=False)
+                    self.start(
+                        startup_timeout=remaining("disposable child startup"),
+                        warm=False,
+                    )
                     response = self._run(
                         code=command,
                         env_id=None,
-                        timeout=remaining(),
+                        timeout=remaining("combined command execution"),
                     )
                     _validate_command_response(
                         response,
@@ -1075,7 +1130,7 @@ class LeanRepl:
                     elif result is not None:
                         raise ReplCleanupError(
                             "Disposable Lean REPL cleanup failed after a result "
-                            f"was produced; the result was not returned: {cleanup_error}",
+                            f"was produced; pool retirement is required: {cleanup_error}",
                             result,
                         ) from cleanup_error
 

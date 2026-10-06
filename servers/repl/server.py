@@ -20,7 +20,9 @@ def create_repl_server(runtime: LeanRuntimeClient) -> FastMCP:
         Args:
             project_dir: Absolute path to the Lake project root.
             code: Lean code to execute.
-            timeout: Optional timeout in seconds.
+            timeout: Optional total post-admission timeout in seconds. It
+                covers the idle-slot wait, Lean header validation, disposable
+                child startup, generated imports, and submitted code.
         """
         return runtime.request(
             "repl.run",
@@ -29,7 +31,11 @@ def create_repl_server(runtime: LeanRuntimeClient) -> FastMCP:
 
     @server.tool
     def get_repl_status(project_dir: str) -> str:
-        """Return pool capacity, memory use, and shutdown state.
+        """Return pool capacity, memory use, lifecycle state, and shutdown state.
+
+        State is ``cold``, ``warming``, ``warm``, or ``retiring``. Memory use
+        is available only for a warm resident; retiring reports zero and
+        ``shutdown: true`` while verified cleanup remains in progress.
 
         Args:
             project_dir: Absolute path to the Lake project root.

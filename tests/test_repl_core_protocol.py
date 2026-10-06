@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 from contextlib import ExitStack
+from types import SimpleNamespace
 
 import pytest
 
@@ -122,7 +123,14 @@ def test_close_kills_descendant_after_repl_wrapper_already_exited():
     )
     assert wrapper.stdout is not None
     child_pid = int(wrapper.stdout.readline())
-    wrapper.wait(timeout=2)
+    import psutil
+
+    deadline = time.monotonic() + 2
+    while psutil.Process(wrapper.pid).status() != psutil.STATUS_ZOMBIE:
+        if time.monotonic() >= deadline:
+            pytest.fail("REPL wrapper did not become a zombie")
+        time.sleep(0.01)
+    assert wrapper.returncode is None
 
     repl = repl_core.LeanRepl(
         repl_core.LeanReplConfig(
@@ -134,20 +142,14 @@ def test_close_kills_descendant_after_repl_wrapper_already_exited():
     repl._process_group_id = wrapper.pid
     try:
         repl.close()
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            try:
-                os.kill(child_pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.01)
-        else:
-            pytest.fail("REPL descendant survived process-group cleanup")
-    finally:
+        assert wrapper.returncode == 0
         try:
-            os.kill(child_pid, signal.SIGKILL)
-        except ProcessLookupError:
+            assert psutil.Process(child_pid).status() == psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
             pass
+    finally:
+        if wrapper.returncode is None:
+            repl.close()
 
 
 def test_close_retains_process_handle_until_cleanup_succeeds(monkeypatch):
@@ -251,6 +253,25 @@ def test_process_group_cleanup_does_not_signal_an_all_zombie_group(monkeypatch):
     repl_core._kill_subprocesses(object(), 1234)
 
     assert signals == [(1234, signal.SIGTERM)]
+
+
+def test_process_group_cleanup_refuses_a_pre_reaped_leader_with_live_members(
+    monkeypatch,
+):
+    process = SimpleNamespace(returncode=0)
+    monkeypatch.setattr(
+        repl_core,
+        "_process_group_has_live_members",
+        lambda process_group_id: True,
+    )
+    monkeypatch.setattr(
+        repl_core.os,
+        "killpg",
+        lambda *args: pytest.fail("a reused process group was signalled"),
+    )
+
+    with pytest.raises(RuntimeError, match="leader was reaped"):
+        repl_core._kill_subprocesses(process, 1234)
 
 
 def test_split_imports_preserves_body_offset_after_comments_and_blank_lines():
@@ -765,15 +786,42 @@ def test_disposable_call_uses_one_frame_and_removes_process_handles(monkeypatch)
         calls.append((code, env_id, timeout))
         return {
             "env": 4,
-            "messages": [],
-            "sorries": [{"goal": "False", "proofState": 8}],
+            "messages": [
+                {
+                    "severity": "info",
+                    "data": "message",
+                    "pos": {"line": 2, "column": 1},
+                    "endPos": {"line": 2, "column": 3},
+                }
+            ],
+            "sorries": [
+                {
+                    "goal": "False",
+                    "proofState": 8,
+                    "pos": {"line": 3, "column": 1},
+                    "endPos": {"line": 3, "column": 2},
+                }
+            ],
         }
 
     monkeypatch.setattr(repl, "_run", run)
 
     assert repl.run_disposable("#check Nat", timeout=3) == {
-        "messages": [],
-        "sorries": [{"goal": "False"}],
+        "messages": [
+            {
+                "severity": "info",
+                "data": "message",
+                "pos": {"line": 1, "column": 1},
+                "endPos": {"line": 1, "column": 3},
+            }
+        ],
+        "sorries": [
+            {
+                "goal": "False",
+                "pos": {"line": 2, "column": 1},
+                "endPos": {"line": 2, "column": 2},
+            }
+        ],
     }
     assert len(starts) == 1
     assert starts[0]["warm"] is False
@@ -782,6 +830,163 @@ def test_disposable_call_uses_one_frame_and_removes_process_handles(monkeypatch)
     assert calls[0][0] == "import Mathlib\n#check Nat"
     assert calls[0][1] is None
     assert len(closes) == 2
+
+
+def test_disposable_call_uses_one_decreasing_phase_budget(monkeypatch):
+    clock = {"now": 0.0}
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(warmup_imports=frozenset({"Mathlib"}))
+    )
+    budgets = []
+
+    monkeypatch.setattr(repl_core.time, "monotonic", lambda: clock["now"])
+
+    def close(**kwargs):
+        repl.process = None
+        repl._process_group_id = None
+
+    def check_header(code, deadline):
+        assert deadline == 10
+        clock["now"] = 2
+        return repl_core._LeanHeaderAnalysis((), True)
+
+    def start(*, startup_timeout, warm):
+        budgets.append(("startup", startup_timeout, warm))
+        clock["now"] = 5
+
+    def run(code, env_id, timeout):
+        budgets.append(("command", timeout, code))
+        return {"env": 1, "messages": []}
+
+    monkeypatch.setattr(repl, "close", close)
+    monkeypatch.setattr(repl, "_check_header", check_header)
+    monkeypatch.setattr(repl, "start", start)
+    monkeypatch.setattr(repl, "_run", run)
+
+    assert repl.run_disposable("#check Nat", timeout=10) == {"messages": []}
+    assert budgets == [
+        ("startup", 8, False),
+        ("command", 5, "import Mathlib\n#check Nat"),
+    ]
+
+
+@pytest.mark.parametrize("expired_phase", ["startup", "command"])
+def test_disposable_timeout_names_the_expired_phase(monkeypatch, expired_phase):
+    clock = {"now": 0.0}
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(warmup_imports=frozenset())
+    )
+
+    monkeypatch.setattr(repl_core.time, "monotonic", lambda: clock["now"])
+
+    def close(**kwargs):
+        repl.process = None
+        repl._process_group_id = None
+
+    def check_header(code, deadline):
+        if expired_phase == "startup":
+            clock["now"] = 2
+        return repl_core._LeanHeaderAnalysis((), True)
+
+    def start(**kwargs):
+        if expired_phase == "command":
+            clock["now"] = 2
+
+    monkeypatch.setattr(repl, "close", close)
+    monkeypatch.setattr(repl, "_check_header", check_header)
+    monkeypatch.setattr(repl, "start", start)
+    monkeypatch.setattr(
+        repl,
+        "_run",
+        lambda **kwargs: pytest.fail("expired budget dispatched the command"),
+    )
+
+    result = repl.run_disposable("#check Nat", timeout=1)
+
+    assert expired_phase in result["repl_error"]
+
+
+def test_disposable_backlog_adjusts_prefixed_positions(monkeypatch):
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(
+            validate_imports=False,
+            warmup_imports=frozenset({"Mathlib"}),
+        )
+    )
+
+    def close(**kwargs):
+        repl.process = None
+        repl._process_group_id = None
+
+    monkeypatch.setattr(repl, "close", close)
+    monkeypatch.setattr(repl, "start", lambda **kwargs: None)
+    response = {
+        "env": 4,
+        "messages": [
+            {
+                "severity": "error",
+                "data": "bad",
+                "pos": {"line": 2, "column": 1},
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        repl,
+        "_run",
+        lambda **kwargs: (_ for _ in ()).throw(
+            repl_core.ReplStderrBacklog("stderr backlog", response)
+        ),
+    )
+
+    assert repl.run_disposable("#check missing", timeout=3) == {
+        "messages": [
+            {
+                "severity": "error",
+                "data": "bad",
+                "pos": {"line": 1, "column": 1},
+            }
+        ]
+    }
+
+
+def test_disposable_call_does_not_shift_positions_without_a_prefix(monkeypatch):
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(
+            validate_imports=False,
+            warmup_imports=frozenset({"Mathlib"}),
+        )
+    )
+
+    def close(**kwargs):
+        repl.process = None
+        repl._process_group_id = None
+
+    monkeypatch.setattr(repl, "close", close)
+    monkeypatch.setattr(repl, "start", lambda **kwargs: None)
+    monkeypatch.setattr(
+        repl,
+        "_run",
+        lambda **kwargs: {
+            "env": 4,
+            "messages": [
+                {
+                    "severity": "info",
+                    "data": "ok",
+                    "pos": {"line": 1, "column": 1},
+                }
+            ],
+        },
+    )
+
+    assert repl.run_disposable("import Mathlib\n#check Nat", timeout=3) == {
+        "messages": [
+            {
+                "severity": "info",
+                "data": "ok",
+                "pos": {"line": 1, "column": 1},
+            }
+        ]
+    }
 
 
 def test_disposable_call_does_not_return_a_result_before_verified_cleanup(monkeypatch):
@@ -806,7 +1011,7 @@ def test_disposable_call_does_not_return_a_result_before_verified_cleanup(monkey
         lambda **kwargs: {"env": 1, "messages": []},
     )
 
-    with pytest.raises(repl_core.ReplCleanupError, match="was not returned") as error:
+    with pytest.raises(repl_core.ReplCleanupError, match="retirement is required") as error:
         repl.run_disposable("#check Nat", timeout=1)
 
     assert error.value.result == {"messages": []}
@@ -917,7 +1122,7 @@ def test_header_parser_launcher_ignores_a_path_shadow(tmp_path):
         "PATH": f"{shadow_bin}{os.pathsep}{os.environ.get('PATH', '')}",
     }
 
-    modules = _header_modules([sys.executable, "-c", repl_core._LEAN_HEADER_LAUNCHER], env=env)
+    modules = _header_modules([sys.executable, "-c", repl_core.LEAN_HEADER_LAUNCHER], env=env)
 
     assert modules == ["Mathlib"]
 
@@ -926,10 +1131,26 @@ def test_header_parser_launcher_ignores_a_path_shadow(tmp_path):
     ("command", "message"),
     [
         (_fake_header_deps(_deps_json(errors=("bad header",))), "bad header"),
+        (
+            _fake_header_deps(_deps_json("Mathlib.«/abs/path/Secret»")),
+            "module with a path separator",
+        ),
         (_fake_header_deps("", returncode=1, stderr="unknown package\n"), "unknown package"),
         (_fake_header_deps("not json"), "unrecognized output"),
-        (_fake_header_deps('{"imports": [], "imports": []}'), "unrecognized output"),
-        (_fake_header_deps('{"imports": NaN}'), "unrecognized output"),
+        (
+            _fake_header_deps(
+                '{"imports":[{"errors":[],"result":{"isModule":false,'
+                '"imports":[{"module":"Unsafe","isMeta":false}],"imports":[]}}]}'
+            ),
+            "unrecognized output",
+        ),
+        (
+            _fake_header_deps(
+                '{"imports":[{"errors":[],"result":{"isModule":false,'
+                '"imports":[{"module":"Mathlib","isMeta":false,"importAll":NaN}]}}]}'
+            ),
+            "unrecognized output",
+        ),
     ],
 )
 def test_header_check_fails_closed_on_rejected_or_unknown_output(command, message):
@@ -984,6 +1205,43 @@ def test_disposable_call_checks_submitted_header_before_warmup_prefix(monkeypatc
     repl.run_disposable("/- note -/ import Unsafe\n#check Nat")
 
     assert checked == ["/- note -/ import Unsafe\n#check Nat"]
+
+
+def test_disposable_call_refuses_the_legacy_deps_json_comment_bypass(monkeypatch):
+    repl = repl_core.LeanRepl(
+        repl_core.LeanReplConfig(
+            allowed_imports=frozenset({"Mathlib"}),
+            warmup_imports=frozenset(),
+            header_deps_command=_fake_header_deps(_deps_json()),
+        )
+    )
+    monkeypatch.setattr(
+        repl,
+        "start",
+        lambda *args, **kwargs: pytest.fail("ambiguous header must not start Lean"),
+    )
+
+    response = repl.run_disposable(
+        "/- a --/\nimport Unsafe\n-- -/\n#check Nat",
+    )
+
+    assert "lean --deps-json cannot validate safely" in response["repl_error"]
+    assert repl.is_clean()
+
+
+def test_disposable_call_refuses_non_posix_before_spawning_header_parser(monkeypatch):
+    repl = repl_core.LeanRepl(repl_core.LeanReplConfig())
+    monkeypatch.setattr(repl_core.os, "name", "nt")
+    monkeypatch.setattr(
+        repl_core.subprocess,
+        "Popen",
+        lambda *args, **kwargs: pytest.fail("non-POSIX call spawned a parser"),
+    )
+
+    response = repl.run_disposable("#check Nat")
+
+    assert "requires a POSIX platform" in response["repl_error"]
+    assert repl.is_clean()
 
 
 _LEGACY_INIT_ONLY = json.dumps(

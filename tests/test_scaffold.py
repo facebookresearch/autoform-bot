@@ -895,30 +895,33 @@ def _repository(path: Path, remote: str, *, advertise: bool = True) -> str:
     return head
 
 
+def _git_output(path: Path, *args: str) -> str:
+    run = ["git", "-c", "user.email=t@test", "-c", "user.name=Test", *args]
+    return subprocess.run(run, cwd=path, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _autoform_checkout(path: Path, remote: str, *, advertise: bool = True) -> str:
+    """Commit a copy of this scaffold and its templates at *path*; return HEAD."""
+    (path / "autoform_cli").mkdir(parents=True)
+    shutil.copy2(Path(scaffold_module.__file__), path / "autoform_cli" / "scaffold.py")
+    shutil.copytree(scaffold_module._TEMPLATES, path / "autoform_cli" / "templates")
+    return _repository(path, remote, advertise=advertise)
+
+
+def _run_from(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+    monkeypatch.setattr(scaffold_module, "_here", lambda: root)
+    monkeypatch.setattr(scaffold_module, "_TEMPLATES", root / "autoform_cli" / "templates")
+
+
 def _fake_plugin_install(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[Path, Path, str]:
     """Lay out a plugin cache copy and the real checkout it was copied from."""
-    from autoform_cli import scaffold as scaffold_module
-
     checkout = tmp_path / "src" / "autoform-bot"
-    (checkout / "autoform_cli").mkdir(parents=True)
-    shutil.copy2(Path(scaffold_module.__file__), checkout / "autoform_cli" / "scaffold.py")
-    shutil.copytree(scaffold_module._TEMPLATES, checkout / "autoform_cli" / "templates")
-    head = _repository(checkout, "git@github.com:owner/autoform-bot.git")
-
+    head = _autoform_checkout(checkout, "git@github.com:owner/autoform-bot.git")
     copied = tmp_path / ".claude/plugins/cache/autoform/autoform/0.5.0"
-    (copied / "autoform_cli").mkdir(parents=True)
-    shutil.copy2(
-        checkout / "autoform_cli" / "scaffold.py",
-        copied / "autoform_cli" / "scaffold.py",
-    )
-    shutil.copytree(
-        checkout / "autoform_cli" / "templates",
-        copied / "autoform_cli" / "templates",
-    )
-    monkeypatch.setattr(scaffold_module, "_here", lambda: copied)
-    monkeypatch.setattr(scaffold_module, "_TEMPLATES", copied / "autoform_cli" / "templates")
+    shutil.copytree(checkout / "autoform_cli", copied / "autoform_cli")
+    _run_from(monkeypatch, copied)
 
     registry = tmp_path / "known_marketplaces.json"
     registry.write_text(
@@ -947,18 +950,24 @@ def test_an_installed_plugin_pins_from_the_marketplace_checkout(
     )
 
 
+def test_plugin_pin_is_empty_when_git_digests_are_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unavailable(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("unsupported hash type")
+
+    _fake_plugin_install(tmp_path, monkeypatch)
+    digests = SimpleNamespace(new=unavailable, sha1=unavailable, sha256=unavailable)
+    monkeypatch.setattr(scaffold_module, "hashlib", digests)
+
+    assert scaffold_module.plugin_pin() == ("", "")
+
+
 def test_plugin_pin_omits_a_local_commit_no_remote_tracking_ref_contains(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from autoform_cli import scaffold as scaffold_module
-
-    checkout = tmp_path / "checkout"
-    (checkout / "autoform_cli").mkdir(parents=True)
-    shutil.copy2(Path(scaffold_module.__file__), checkout / "autoform_cli" / "scaffold.py")
-    shutil.copytree(scaffold_module._TEMPLATES, checkout / "autoform_cli" / "templates")
-    _repository(checkout, "https://example.test/fork.git", advertise=False)
-    monkeypatch.setattr(scaffold_module, "_here", lambda: checkout)
-    monkeypatch.setattr(scaffold_module, "_TEMPLATES", checkout / "autoform_cli" / "templates")
+    _autoform_checkout(tmp_path / "checkout", "https://example.test/fork.git", advertise=False)
+    _run_from(monkeypatch, tmp_path / "checkout")
 
     assert scaffold_module.plugin_pin() == ("", "")
 
@@ -966,37 +975,21 @@ def test_plugin_pin_omits_a_local_commit_no_remote_tracking_ref_contains(
 def test_plugin_pin_ignores_git_replacement_objects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from autoform_cli import scaffold as scaffold_module
-
     checkout = tmp_path / "checkout"
-    (checkout / "autoform_cli").mkdir(parents=True)
-    shutil.copy2(Path(scaffold_module.__file__), checkout / "autoform_cli" / "scaffold.py")
-    shutil.copytree(scaffold_module._TEMPLATES, checkout / "autoform_cli" / "templates")
-    original = _repository(checkout, "https://example.test/autoform.git")
-    run = ["git", "-c", "user.email=t@test", "-c", "user.name=Test"]
+    original = _autoform_checkout(checkout, "https://example.test/autoform.git")
     renderer = checkout / "autoform_cli" / "scaffold.py"
     renderer.write_bytes(renderer.read_bytes() + b"\n# replacement behavior\n")
-    subprocess.run([*run, "add", "autoform_cli/scaffold.py"], cwd=checkout, check=True)
-    subprocess.run([*run, "commit", "-q", "-m", "replacement"], cwd=checkout, check=True)
-    replacement = subprocess.run(
-        [*run, "rev-parse", "HEAD"],
-        cwd=checkout,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+    _git_output(checkout, "commit", "-q", "-m", "replacement", "autoform_cli/scaffold.py")
+    replacement = _git_output(checkout, "rev-parse", "HEAD")
     replacement_bytes = renderer.read_bytes()
-    subprocess.run([*run, "checkout", "-q", "--detach", original], cwd=checkout, check=True)
+    _git_output(checkout, "checkout", "-q", "--detach", original)
     renderer.write_bytes(replacement_bytes)
-    subprocess.run([*run, "add", "autoform_cli/scaffold.py"], cwd=checkout, check=True)
-    subprocess.run([*run, "replace", original, replacement], cwd=checkout, check=True)
-    assert subprocess.run([*run, "diff", "--quiet", "HEAD", "--"], cwd=checkout).returncode == 0
-    assert (
-        subprocess.run([*run, "diff", "--cached", "--quiet", "HEAD", "--"], cwd=checkout).returncode
-        == 0
-    )
-    monkeypatch.setattr(scaffold_module, "_here", lambda: checkout)
-    monkeypatch.setattr(scaffold_module, "_TEMPLATES", checkout / "autoform_cli" / "templates")
+    _git_output(checkout, "add", "autoform_cli/scaffold.py")
+    _git_output(checkout, "replace", original, replacement)
+    for cached in ((), ("--cached",)):
+        diff = subprocess.run(["git", "diff", *cached, "--quiet", "HEAD", "--"], cwd=checkout)
+        assert diff.returncode == 0
+    _run_from(monkeypatch, checkout)
 
     assert scaffold_module.plugin_pin() == ("", "")
 
@@ -1004,45 +997,15 @@ def test_plugin_pin_ignores_git_replacement_objects(
 def test_plugin_pin_prefers_canonical_upstream_over_a_containing_fork_origin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from autoform_cli import scaffold as scaffold_module
-
     checkout = tmp_path / "checkout"
-    (checkout / "autoform_cli").mkdir(parents=True)
-    shutil.copy2(Path(scaffold_module.__file__), checkout / "autoform_cli" / "scaffold.py")
-    shutil.copytree(scaffold_module._TEMPLATES, checkout / "autoform_cli" / "templates")
-    _repository(checkout, "https://example.test/fork.git")
-    run = ["git", "-c", "user.email=t@test", "-c", "user.name=Test"]
-    subprocess.run(
-        [*run, "commit", "-q", "--allow-empty", "-m", "upstream head"],
-        cwd=checkout,
-        check=True,
-    )
-    head = subprocess.run(
-        [*run, "rev-parse", "HEAD"],
-        cwd=checkout,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    subprocess.run(
-        [*run, "update-ref", "refs/remotes/origin/main", head], cwd=checkout, check=True
-    )
-    subprocess.run(
-        [
-            *run,
-            "remote",
-            "add",
-            "upstream",
-            "https://github.com/facebookresearch/autoform-bot.git",
-        ],
-        cwd=checkout,
-        check=True,
-    )
-    subprocess.run(
-        [*run, "update-ref", "refs/remotes/upstream/main", head], cwd=checkout, check=True
-    )
-    monkeypatch.setattr(scaffold_module, "_here", lambda: checkout)
-    monkeypatch.setattr(scaffold_module, "_TEMPLATES", checkout / "autoform_cli" / "templates")
+    _autoform_checkout(checkout, "https://example.test/fork.git")
+    _git_output(checkout, "commit", "-q", "--allow-empty", "-m", "upstream head")
+    head = _git_output(checkout, "rev-parse", "HEAD")
+    _git_output(checkout, "update-ref", "refs/remotes/origin/main", head)
+    canonical = "https://github.com/facebookresearch/autoform-bot.git"
+    _git_output(checkout, "remote", "add", "upstream", canonical)
+    _git_output(checkout, "update-ref", "refs/remotes/upstream/main", head)
+    _run_from(monkeypatch, checkout)
 
     assert scaffold_module.plugin_pin() == (scaffold_module.DEFAULT_AUTOFORM_SOURCE, head)
 
@@ -1089,15 +1052,9 @@ def test_plugin_pin_fails_closed_when_checkout_or_copy_bytes_do_not_match_head(
 def test_direct_checkout_pin_requires_a_matching_tracked_surface(
     change: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from autoform_cli import scaffold as scaffold_module
-
     checkout = tmp_path / "checkout"
-    (checkout / "autoform_cli").mkdir(parents=True)
-    shutil.copy2(Path(scaffold_module.__file__), checkout / "autoform_cli" / "scaffold.py")
-    shutil.copytree(scaffold_module._TEMPLATES, checkout / "autoform_cli" / "templates")
-    head = _repository(checkout, "https://example.test/autoform.git")
-    monkeypatch.setattr(scaffold_module, "_here", lambda: checkout)
-    monkeypatch.setattr(scaffold_module, "_TEMPLATES", checkout / "autoform_cli" / "templates")
+    head = _autoform_checkout(checkout, "https://example.test/autoform.git")
+    _run_from(monkeypatch, checkout)
     assert scaffold_module.plugin_pin() == ("https://example.test/autoform.git", head)
 
     if change == "tracked":
@@ -1122,16 +1079,10 @@ def test_direct_checkout_pin_requires_a_matching_tracked_surface(
 def test_direct_checkout_pin_ignores_unrelated_untracked_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from autoform_cli import scaffold as scaffold_module
-
     checkout = tmp_path / "checkout"
-    (checkout / "autoform_cli").mkdir(parents=True)
-    shutil.copy2(Path(scaffold_module.__file__), checkout / "autoform_cli" / "scaffold.py")
-    shutil.copytree(scaffold_module._TEMPLATES, checkout / "autoform_cli" / "templates")
-    head = _repository(checkout, "https://example.test/autoform.git")
+    head = _autoform_checkout(checkout, "https://example.test/autoform.git")
     (checkout / "large-unrelated-output").write_bytes(b"x" * (1024 * 1024))
-    monkeypatch.setattr(scaffold_module, "_here", lambda: checkout)
-    monkeypatch.setattr(scaffold_module, "_TEMPLATES", checkout / "autoform_cli" / "templates")
+    _run_from(monkeypatch, checkout)
 
     assert scaffold_module.plugin_pin() == ("https://example.test/autoform.git", head)
 

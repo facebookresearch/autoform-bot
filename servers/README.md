@@ -23,8 +23,12 @@ in-place upgrade gracefully replaces the older build.
 
 REPL children and LSP processes remain lazy. A cold tool call stays pending
 while Lean warms up, so no `/repl-start`, `/lsp-start`, or model-side sleep is
-needed. Idle project state is closed after 30 minutes by default, while the
-small runtime remains available. Its lifecycle is also explicit:
+needed. The REPL `timeout` is one total post-admission budget for an idle-slot
+wait, header validation, child startup, generated imports, and submitted code;
+the default and maximum are 240 seconds. Project-cache admission uses the
+daemon response budget separately. Idle project state is closed after 30
+minutes by default, while the small runtime remains available. Its lifecycle
+is also explicit:
 
 ```bash
 uv run autoform-lean-runtime start
@@ -41,5 +45,9 @@ uid-specific directory in `/tmp`; the rotating runtime log is beside it.
 by `AUTOFORM_REPL_TOTAL_WORKERS`, `AUTOFORM_REPL_WORKERS_PER_PROJECT`,
 `AUTOFORM_MAX_LEAN_PROJECTS`, and `AUTOFORM_LEAN_IDLE_SECONDS`. The first
 process to start the runtime supplies those settings until it is stopped.
-`AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` can raise the client/daemon response budget
-when unusually large worker pools need more than the default 15 minutes to warm.
+`LEAN_REPL_CMD` selects the disposable child command. An absolute `lake`
+executable is reused for header validation; a container or other wrapper must
+also set `LEAN_REPL_HEADER_CMD` to the matching toolchain-owned parser command.
+`AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` bounds project admission, retained cleanup,
+the tool operation, and a safety margin. A `warm` REPL project means its cold
+wrapper pool is cached; it does not mean a REPL subprocess remains resident.

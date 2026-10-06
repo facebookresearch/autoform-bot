@@ -202,50 +202,19 @@ def _normalize_autoform_source(source: str, *, allow_github_scp: bool = False) -
 def _git_checkout_clean(root: Path) -> bool:
     """Whether *root* has no tracked or staged changes from ``HEAD``."""
 
-    commands = (
-        [
-            "git",
-            "--no-optional-locks",
-            "--no-replace-objects",
-            "-c",
-            "core.fsmonitor=false",
-            "-C",
-            str(root),
-            "diff",
-            "--quiet",
-            "--no-ext-diff",
-            "--no-textconv",
-            "HEAD",
-            "--",
-        ],
-        [
-            "git",
-            "--no-optional-locks",
-            "--no-replace-objects",
-            "-c",
-            "core.fsmonitor=false",
-            "-C",
-            str(root),
-            "diff",
-            "--cached",
-            "--quiet",
-            "--no-ext-diff",
-            "--no-textconv",
-            "HEAD",
-            "--",
-        ],
-    )
+    git = ["git", "--no-optional-locks", "--no-replace-objects", "-c", "core.fsmonitor=false"]
+    options = ["--quiet", "--no-ext-diff", "--no-textconv", "HEAD", "--"]
     try:
         return all(
             subprocess.run(
-                command,
+                [*git, "-C", str(root), "diff", *cached, *options],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=10,
                 check=False,
             ).returncode
             == 0
-            for command in commands
+            for cached in ((), ("--cached",))
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -391,11 +360,8 @@ def _git_blob_id(content: bytes, length: int) -> str | None:
         return None
     try:
         digest = hashlib.new(algorithm, usedforsecurity=False)
-    except (TypeError, ValueError):
-        try:
-            digest = hashlib.new(algorithm)
-        except ValueError:
-            return None
+    except ValueError:
+        return None
     digest.update(f"blob {len(content)}\0".encode("ascii"))
     digest.update(content)
     return digest.hexdigest()
@@ -424,27 +390,23 @@ def _matches_committed_scaffold(
 ) -> bool:
     """Whether retained bytes and output-affecting modes equal the Git tree."""
 
-    lengths = {len(object_name) for _mode, object_name in committed.values()}
-    if len(lengths) != 1:
-        return False
-    object_length = lengths.pop()
-    actual: dict[str, tuple[str, str]] = {}
-    for path, content, mode in (
-        ("autoform_cli/scaffold.py", scaffold_source, scaffold_mode),
-        *(
-            (f"autoform_cli/templates/{relative}", content, mode)
-            for relative, content, mode in templates
-        ),
-    ):
-        git_mode = (
+    # _committed_scaffold_entries guarantees one hash length and the renderer entry.
+    object_length = len(committed["autoform_cli/scaffold.py"][1])
+    actual = {
+        path: (
             committed.get(path, ("", ""))[0]
             if _WINDOWS_STAT_VIEWS
-            else {0o644: "100644", 0o755: "100755"}.get(_canonical_template_mode(mode))
+            else ("100755" if mode & 0o111 else "100644"),
+            _git_blob_id(content, object_length),
         )
-        object_name = _git_blob_id(content, object_length)
-        if git_mode is None or object_name is None or path in actual:
-            return False
-        actual[path] = (git_mode, object_name)
+        for path, content, mode in (
+            ("autoform_cli/scaffold.py", scaffold_source, scaffold_mode),
+            *(
+                (f"autoform_cli/templates/{relative}", content, mode)
+                for relative, content, mode in templates
+            ),
+        )
+    }
     return actual == committed
 
 
@@ -607,12 +569,6 @@ def _node_identity(metadata: os.stat_result) -> tuple[int, ...]:
         metadata.st_mtime_ns,
         metadata.st_ctime_ns,
     )
-
-
-def _cross_interface_identity(identity: tuple[int, ...]) -> tuple[int, ...]:
-    """Normalize fields Windows exposes differently through stat and fstat."""
-
-    return identity[:-1] if _WINDOWS_STAT_VIEWS else identity
 
 
 def _is_link(metadata: os.stat_result) -> bool:
@@ -838,20 +794,7 @@ def _scaffold_plan(
     return tuple(files), tuple(skipped)
 
 
-def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
-    return (
-        metadata.st_dev,
-        metadata.st_ino,
-        metadata.st_mode,
-        metadata.st_size,
-        metadata.st_mtime_ns,
-        metadata.st_ctime_ns,
-    )
-
-
-def _cross_interface_identity(
-    identity: tuple[int, int, int, int, int, int],
-) -> tuple[int, ...]:
+def _cross_interface_identity(identity: tuple[int, ...]) -> tuple[int, ...]:
     """Normalize Windows path-stat birth time versus fstat change time."""
 
     return identity[:-1] if _WINDOWS_STAT_VIEWS else identity
@@ -860,13 +803,11 @@ def _cross_interface_identity(
 def _read_gitignore_descriptor(
     descriptor: int,
     path: Path,
-) -> tuple[bytes, tuple[int, int, int, int, int, int]]:
+) -> tuple[bytes, tuple[int, ...]]:
     """Read a stable bounded snapshot from one retained regular file."""
 
     opened = os.fstat(descriptor)
-    attributes = getattr(opened, "st_file_attributes", 0)
-    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-    if not stat.S_ISREG(opened.st_mode) or attributes & reparse:
+    if not stat.S_ISREG(opened.st_mode) or _is_link(opened):
         raise ScaffoldError([f"refusing to merge non-regular .gitignore: {path}"])
     if opened.st_nlink != 1:
         raise ScaffoldError([f"refusing to merge hard-linked .gitignore: {path}"])
@@ -889,14 +830,13 @@ def _read_gitignore_descriptor(
             )
     after = os.fstat(descriptor)
     named = os.stat(path, follow_symlinks=False)
-    opened_identity = _file_identity(opened)
-    after_identity = _file_identity(after)
-    named_identity = _file_identity(named)
-    named_attributes = getattr(named, "st_file_attributes", 0)
+    opened_identity = _node_identity(opened)
+    after_identity = _node_identity(after)
+    named_identity = _node_identity(named)
     if (
         after.st_nlink != 1
         or named.st_nlink != 1
-        or named_attributes & reparse
+        or _is_link(named)
         or after_identity != opened_identity
         or _cross_interface_identity(named_identity)
         != _cross_interface_identity(opened_identity)
@@ -923,24 +863,23 @@ def _gitignore_suffix(existing: bytes, required: bytes) -> bytes | None:
 def _gitignore_identity_matches(
     descriptor: int,
     path: Path,
-    expected: tuple[int, int, int, int, int, int],
+    expected: tuple[int, ...],
 ) -> bool:
     try:
         opened = os.fstat(descriptor)
         named = os.stat(path, follow_symlinks=False)
     except OSError:
         return False
-    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
     return (
         stat.S_ISREG(opened.st_mode)
         and stat.S_ISREG(named.st_mode)
-        and not getattr(opened, "st_file_attributes", 0) & reparse
-        and not getattr(named, "st_file_attributes", 0) & reparse
+        and not _is_link(opened)
+        and not _is_link(named)
         and opened.st_nlink == 1
         and named.st_nlink == 1
-        and _cross_interface_identity(_file_identity(opened))
+        and _cross_interface_identity(_node_identity(opened))
         == _cross_interface_identity(expected)
-        == _cross_interface_identity(_file_identity(named))
+        == _cross_interface_identity(_node_identity(named))
     )
 
 
