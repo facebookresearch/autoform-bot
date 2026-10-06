@@ -1229,6 +1229,18 @@ def test_disposable_call_refuses_the_legacy_deps_json_comment_bypass(monkeypatch
     assert repl.is_clean()
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        '#eval "--/"',
+        "--/ harmless line comment\n#check Nat",
+        "#check Nat\n/- body --/",
+    ],
+)
+def test_legacy_deps_json_guard_ignores_non_header_context(code):
+    repl_core._reject_legacy_deps_json_comment_bypass(code)
+
+
 def test_disposable_call_refuses_non_posix_before_spawning_header_parser(monkeypatch):
     repl = repl_core.LeanRepl(repl_core.LeanReplConfig())
     monkeypatch.setattr(repl_core.os, "name", "nt")

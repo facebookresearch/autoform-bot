@@ -48,6 +48,8 @@ process to start the runtime supplies those settings until it is stopped.
 `LEAN_REPL_CMD` selects the disposable child command. An absolute `lake`
 executable is reused for header validation; a container or other wrapper must
 also set `LEAN_REPL_HEADER_CMD` to the matching toolchain-owned parser command.
-`AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` bounds project admission, retained cleanup,
-the tool operation, and a safety margin. A `warm` REPL project means its cold
+`AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` bounds project admission, the tool
+operation, and a safety margin. Failed cleanup transfers to a retained
+background reaper and may continue past that response budget rather than
+allowing an overlapping replacement. A `warm` REPL project means its cold
 wrapper pool is cached; it does not mean a REPL subprocess remains resident.

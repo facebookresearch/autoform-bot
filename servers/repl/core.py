@@ -516,17 +516,69 @@ def _reject_legacy_deps_json_comment_bypass(code: str) -> None:
     reconstructed safely in Python.
     """
 
-    dashes = 0
-    for character in code:
-        if character == "-":
-            dashes += 1
-            continue
-        if character == "/" and dashes > 0 and dashes % 2 == 0:
-            raise ValueError(
-                "Lean header contains a block-comment close spelling that "
-                "lean --deps-json cannot validate safely"
-            )
-        dashes = 0
+    block_depth = 0
+    header_prefixes = ("import ", "public import ", "private import ", "meta import ")
+
+    for line in code.splitlines():
+        stripped = line.lstrip()
+        if block_depth == 0:
+            if not stripped or stripped.startswith("--"):
+                continue
+            if not (
+                stripped.startswith("/-")
+                or stripped == "prelude"
+                or stripped == "module"
+                or stripped.startswith("module ")
+                or stripped.startswith(header_prefixes)
+            ):
+                # The fast parser stops at the first body command. A block
+                # comment after that point cannot hide a header import.
+                break
+
+        index = 0
+        while index < len(line):
+            if block_depth == 0:
+                if line.startswith("--", index):
+                    break
+                if line.startswith("/-", index):
+                    block_depth = 1
+                    index += 2
+                    continue
+                if line[index] == '"':
+                    index += 1
+                    while index < len(line):
+                        if line[index] == "\\":
+                            index += 2
+                        elif line[index] == '"':
+                            index += 1
+                            break
+                        else:
+                            index += 1
+                    continue
+                index += 1
+                continue
+
+            if line.startswith("/-", index):
+                block_depth += 1
+                index += 2
+                continue
+            if line[index] == "-":
+                end = index
+                while end < len(line) and line[end] == "-":
+                    end += 1
+                if end < len(line) and line[end] == "/":
+                    dash_count = end - index
+                    if dash_count % 2 == 0:
+                        raise ValueError(
+                            "Lean header contains a block-comment close spelling that "
+                            "lean --deps-json cannot validate safely"
+                        )
+                    block_depth -= 1
+                    index = end + 1
+                    continue
+                index = end
+                continue
+            index += 1
 
 
 def _split_imports_and_body(code: str) -> tuple[list[str], str, int]:
