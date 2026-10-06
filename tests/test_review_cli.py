@@ -1536,6 +1536,31 @@ def _link_to_a_fifo(article: Path) -> None:
     article.symlink_to("other.pipe")
 
 
+def _record_without_blocking(
+    blueprint: Path, bundle: Path, manifest: Path, root: Path, fifos: tuple[Path, ...]
+) -> list[int]:
+    """Run the batch in a thread, assert that it did not block, and return its exit statuses.
+
+    A batch stuck opening one of ``fifos`` is let go, so the test fails rather
+    than hangs. Each FIFO is opened without waiting, since a batch held anywhere
+    else leaves it no reader to wait for."""
+
+    exits: list[int] = []
+    batch = threading.Thread(target=lambda: exits.append(_record(blueprint, bundle, manifest, root)), daemon=True)
+    batch.start()
+    batch.join(30)
+    blocked = batch.is_alive()
+    if blocked:
+        for path in fifos:
+            try:
+                os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+            except OSError:
+                pass
+        batch.join(30)
+    assert not blocked
+    return exits
+
+
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
 @pytest.mark.parametrize("damage", [_replace_with_a_fifo, _link_to_a_fifo], ids=["a-fifo", "a-link-to-a-fifo"])
 def test_a_fifo_put_at_an_article_stops_the_batch_without_blocking_it(
@@ -1551,22 +1576,8 @@ def test_a_fifo_put_at_an_article_stops_the_batch_without_blocking_it(
     other = (blueprint / "roadmap" / "basics" / "other.md").resolve()
     _after_each_card(monkeypatch, lambda: damage(other))
     capsys.readouterr()
-    exits: list[int] = []
 
-    batch = threading.Thread(target=lambda: exits.append(_record(blueprint, bundle, manifest, tmp_path)), daemon=True)
-    batch.start()
-    batch.join(30)
-    blocked = batch.is_alive()
-    if blocked:
-        # A batch stuck opening the FIFO is let go, so the test fails rather than
-        # hangs. The FIFO is opened without waiting, since a batch held anywhere
-        # else leaves it no reader to wait for.
-        try:
-            os.close(os.open(other, os.O_WRONLY | os.O_NONBLOCK))
-        except OSError:
-            pass
-        batch.join(30)
-    assert not blocked
+    exits = _record_without_blocking(blueprint, bundle, manifest, tmp_path, (other,))
 
     err = capsys.readouterr().err
     assert exits == [2]
@@ -2052,21 +2063,8 @@ def test_a_fifo_given_as_a_packet_or_testimony_is_refused_without_blocking(
         path.unlink()
         os.mkfifo(path)
     capsys.readouterr()
-    exits: list[int] = []
 
-    batch = threading.Thread(target=lambda: exits.append(_record(blueprint, bundle, manifest, tmp_path)), daemon=True)
-    batch.start()
-    batch.join(30)
-    blocked = batch.is_alive()
-    if blocked:
-        # A batch stuck opening a FIFO is let go, so the test fails rather than hangs.
-        for path in (packet, testimony):
-            try:
-                os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
-            except OSError:
-                pass
-        batch.join(30)
-    assert not blocked
+    exits = _record_without_blocking(blueprint, bundle, manifest, tmp_path, (packet, testimony))
 
     err = capsys.readouterr().err
     assert exits == [2]
