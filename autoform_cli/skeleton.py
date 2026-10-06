@@ -2913,6 +2913,8 @@ def _validate_managed_output(
     kind: str,
     schema: str | None = None,
 ) -> tuple[int, int, str] | None:
+    """Validate an output tree against its exact producer schema."""
+
     identity = _output_identity(path)
     if identity is None:
         return identity
@@ -2946,15 +2948,7 @@ def _validate_managed_output(
     return identity
 
 
-def validate_managed_output(
-    path: Path,
-    *,
-    kind: str,
-    schema: str | None = None,
-) -> tuple[int, int, str] | None:
-    """Validate an output tree against its exact producer schema."""
-
-    return _validate_managed_output(path, kind=kind, schema=schema)
+validate_managed_output = _validate_managed_output
 
 
 def _safe_node_path(node_id: str) -> Path:
@@ -2981,10 +2975,6 @@ def declaration_filename(name: str, *, suffix: str = ".lean") -> str:
     if not encoded or len(os.fsencode(encoded)) > 180:
         encoded = "declaration"
     return f"{encoded}--{digest}{suffix}"
-
-
-def _packet_filename(name: str) -> str:
-    return declaration_filename(name)
 
 
 def _stage_output(destination: Path, stages: list[Path], content: str | None = None) -> Path:
@@ -3386,7 +3376,7 @@ def write_packets(
                     (packet_stage / article_relative).write_text(node.blind_text(), encoding="utf-8")
                     written.append(root / article_relative)
                 for declaration in node.declarations:
-                    relative = node_path / _packet_filename(declaration.name)
+                    relative = node_path / declaration_filename(declaration.name)
                     (packet_stage / relative).write_text(declaration.blind_text(), encoding="utf-8")
                     written.append(root / relative)
                     entry = {
