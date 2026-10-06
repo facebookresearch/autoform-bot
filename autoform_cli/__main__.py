@@ -1529,31 +1529,13 @@ def _named_article_path(graph: Graph, node_id: str) -> str:
 def _refuse_changed_article(card: PreparedReadback, path: str, digest: str) -> None:
     """Refuse to file ``card`` unless its article's file still holds the bytes its evidence was checked against."""
 
-    # Opened without waiting for a writer, so a FIFO put at the path, or a link
-    # to one, is refused unread instead of holding the batch.
-    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
-    not_regular = (
-        "is no longer a regular file, so its card was not filed; restore the article, or drop its records, "
-        "and rerun the record"
-    )
     try:
-        descriptor = os.open(path, flags)
-        try:
-            regular = stat.S_ISREG(os.fstat(descriptor).st_mode)
-            content = hashlib.sha256()
-            while regular and (block := os.read(descriptor, 64 * 1024)):
-                content.update(block)
-        finally:
-            os.close(descriptor)
-        if not regular:
-            what = not_regular
-        elif content.hexdigest() == digest:
+        if hashlib.sha256(_read_regular_file(Path(path))).hexdigest() == digest:
             return
-        else:
-            what = (
-                "changed after its evidence was checked, so its card was not filed; rerun the record, after review "
-                "prepare if the change is to that evidence"
-            )
+        what = (
+            "changed after its evidence was checked, so its card was not filed; rerun the record, after review "
+            "prepare if the change is to that evidence"
+        )
     except (FileNotFoundError, NotADirectoryError):
         # A link left naming a missing file is still there; only its target is gone.
         gone = "now links to a missing file" if os.path.islink(path) else "was deleted after its evidence was checked"
@@ -1562,11 +1544,15 @@ def _refuse_changed_article(card: PreparedReadback, path: str, digest: str) -> N
         what = (
             f"cannot be read ({exc.strerror or exc}), so its card was not filed; rerun the record once it can be read"
         )
-        # A socket cannot be opened, and a link that loops, or a chain of links
-        # too long to follow, cannot be followed: none of them reads as a
-        # regular file, however often the record is rerun.
-        if exc.errno == errno.ELOOP or (os.path.exists(path) and not os.path.isfile(path)):
-            what = not_regular
+        # A FIFO or device put at the path, or linked to, is refused unread, a
+        # directory or socket cannot be opened, and a link that loops, or a chain
+        # of links too long to follow, cannot be followed: none of them reads as
+        # a regular file, however often the record is rerun.
+        if exc.errno in (None, errno.ELOOP) or (os.path.exists(path) and not os.path.isfile(path)):
+            what = (
+                "is no longer a regular file, so its card was not filed; restore the article, or drop its records, "
+                "and rerun the record"
+            )
     raise ReviewError(
         [ReviewFinding(card.article_id, "review-snapshot-changed", f"{card.declaration}: article {path} {what}")]
     )
