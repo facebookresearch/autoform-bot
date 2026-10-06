@@ -159,50 +159,52 @@ def publication_bound_live_state(
 ) -> Callable[[], dict[str, object]]:
     """Refuse live badges when the built publication is stale or incomplete."""
 
+    lock = threading.Lock()
     blueprint = Path(blueprint_dir)
     manifest_path = Path(site_dir) / PUBLICATION_MANIFEST
 
     def guarded() -> dict[str, object]:
-        try:
-            encoded = manifest_path.read_bytes()
-            if len(encoded) > PUBLICATION_MANIFEST_MAX_BYTES:
-                raise ValueError("publication manifest is too large")
-            manifest = json.loads(encoded)
-            snapshot = capture_publication_source(blueprint)
-            if (
-                not isinstance(manifest, dict)
-                or manifest.get("schema") != PUBLICATION_SCHEMA
-                or manifest.get("complete") is not True
-                or manifest.get("source_revision") != snapshot.revision
-            ):
-                raise ValueError("built dashboard is stale; rerun render and the MkDocs build")
-            graph = load_graph_snapshot(
-                snapshot.root,
-                {
-                    relative.as_posix(): data
-                    for relative, data in snapshot.files.items()
-                },
-                directories=(
-                    "" if relative.as_posix() == "." else relative.as_posix()
-                    for relative in snapshot.directories
-                ),
-            )
-            runtime = _PublicationLiveGraph(
-                snapshot.revision,
-                tuple(graph.nodes.values()),
-            )
-            return build_live_state(runtime, claims.list())
-        except (
-            ClaimTransportError,
-            GraphValidationError,
-            OSError,
-            ValueError,
-        ) as error:
-            return {
-                "schema": LIVE_SCHEMA,
-                "claims": [],
-                "error": f"{type(error).__name__}: {error}",
-            }
+        with lock:
+            try:
+                encoded = manifest_path.read_bytes()
+                if len(encoded) > PUBLICATION_MANIFEST_MAX_BYTES:
+                    raise ValueError("publication manifest is too large")
+                manifest = json.loads(encoded)
+                snapshot = capture_publication_source(blueprint)
+                if (
+                    not isinstance(manifest, dict)
+                    or manifest.get("schema") != PUBLICATION_SCHEMA
+                    or manifest.get("complete") is not True
+                    or manifest.get("source_revision") != snapshot.revision
+                ):
+                    raise ValueError("built dashboard is stale; rerun render and the MkDocs build")
+                graph = load_graph_snapshot(
+                    snapshot.root,
+                    {
+                        relative.as_posix(): data
+                        for relative, data in snapshot.files.items()
+                    },
+                    directories=(
+                        "" if relative.as_posix() == "." else relative.as_posix()
+                        for relative in snapshot.directories
+                    ),
+                )
+                runtime = _PublicationLiveGraph(
+                    snapshot.revision,
+                    tuple(graph.nodes.values()),
+                )
+                return build_live_state(runtime, claims.list())
+            except (
+                ClaimTransportError,
+                GraphValidationError,
+                OSError,
+                ValueError,
+            ) as error:
+                return {
+                    "schema": LIVE_SCHEMA,
+                    "claims": [],
+                    "error": f"{type(error).__name__}: {error}",
+                }
 
     return guarded
 

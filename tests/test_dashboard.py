@@ -3,6 +3,8 @@ from __future__ import annotations
 import http.client
 import json
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -277,6 +279,58 @@ def test_live_overlay_refuses_portable_freshness_capture(
 
     assert state["claims"] == []
     assert "could not be captured safely" in str(state["error"])
+
+
+def test_publication_bound_live_state_serializes_snapshot_and_claim_reads(
+    tmp_path: Path,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+    roadmap.mkdir(parents=True)
+    (roadmap / "README.md").write_text("# Roadmap\n", encoding="utf-8")
+    revision = publication_source_revision(blueprint)
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "publication.json").write_text(
+        json.dumps(
+            {
+                "schema": PUBLICATION_SCHEMA,
+                "complete": True,
+                "source_revision": revision,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class SharedClaims:
+        def __init__(self) -> None:
+            self.guard = threading.Lock()
+            self.active = 0
+            self.peak = 0
+
+        def list(self) -> list[dict[str, object]]:
+            with self.guard:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+            try:
+                time.sleep(0.05)
+                return []
+            finally:
+                with self.guard:
+                    self.active -= 1
+
+    claims = SharedClaims()
+    load = publication_bound_live_state(
+        claims,
+        blueprint_dir=blueprint,
+        site_dir=site,
+    )
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        states = list(executor.map(lambda _index: load(), range(8)))
+
+    assert claims.peak == 1
+    assert all(state["source_revision"] == revision for state in states)
+    assert all(state["claims"] == [] for state in states)
 
 
 def test_dashboard_handler_serves_static_site_and_no_store_overlay(tmp_path: Path) -> None:

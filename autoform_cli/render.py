@@ -690,7 +690,7 @@ def _render_in_bound_output_parent(
             workspace.name,
             workspace_identity,
         )
-        _probe_publication_filesystem(workspace_descriptor, output_parent)
+        _probe_publication_filesystem(workspace, workspace_descriptor, output_parent)
         _require_output_parent(output_parent, "before destination inspection")
         expected_destination = _inspect_destination_at(
             output_parent.descriptor,
@@ -1521,14 +1521,17 @@ def _create_workspace(
     parent_descriptor = parent_binding.descriptor
     for _ in range(128):
         name = f"{_PUBLICATION_STAGE_PREFIX}{secrets.token_hex(16)}"
+        workspace = parent / name
         try:
             os.mkdir(name, mode=0o700, dir_fd=parent_descriptor)
         except FileExistsError:
             continue
-        metadata = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
-        identity = metadata.st_dev, metadata.st_ino
+        identity: tuple[int, int] | None = None
+        marker: tuple[tuple[int, ...], str] | None = None
         descriptor: int | None = None
         try:
+            metadata = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+            identity = metadata.st_dev, metadata.st_ino
             descriptor = os.open(
                 name,
                 os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
@@ -1538,18 +1541,44 @@ def _create_workspace(
                 raise OSError(errno.ESTALE, "workspace changed during creation")
             marker = _create_workspace_marker(descriptor)
             os.fsync(parent_descriptor)
-        except BaseException:
-            try:
-                current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
-                if (current.st_dev, current.st_ino) == identity:
-                    os.rmdir(name, dir_fd=parent_descriptor)
-            except OSError:
-                pass
-            raise
+            os.close(descriptor)
+            descriptor = None
+            return workspace, identity, marker
+        except BaseException as error:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+                descriptor = None
+            cleaned = bool(
+                identity is not None
+                and _remove_owned_workspace(
+                    workspace,
+                    identity,
+                    expected_children={},
+                    expected_files=(
+                        {_WORKSPACE_MARKER: marker}
+                        if marker is not None
+                        else {}
+                    ),
+                    parent_binding=parent_binding,
+                )
+            )
+            if cleaned:
+                raise
+            raise _PublicationRecoveryError(
+                [
+                    "publication workspace creation failed; workspace retained "
+                    f"{_workspace_recovery_location(workspace, parent_binding)}"
+                ]
+            ) from error
         finally:
             if descriptor is not None:
-                os.close(descriptor)
-        return parent / name, identity, marker
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
     raise PublicationError(["could not create a private publication workspace"])
 
 
@@ -1596,7 +1625,10 @@ def _create_workspace_marker(
         ):
             raise OSError(errno.ESTALE, "workspace marker changed during creation")
         os.fsync(workspace_descriptor)
-        return final, hashlib.sha256(_WORKSPACE_MARKER_BYTES).hexdigest()
+        marker = final, hashlib.sha256(_WORKSPACE_MARKER_BYTES).hexdigest()
+        os.close(descriptor)
+        descriptor = None
+        return marker
     except BaseException:
         if created_identity is not None:
             try:
@@ -1612,7 +1644,10 @@ def _create_workspace_marker(
         raise
     finally:
         if descriptor is not None:
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
 def _open_workspace_directory(
@@ -1636,6 +1671,7 @@ def _open_workspace_directory(
 
 
 def _probe_publication_filesystem(
+    workspace: Path,
     workspace_descriptor: int,
     output_parent: RetainedDirectory,
 ) -> None:
@@ -1832,7 +1868,10 @@ def _probe_publication_filesystem(
 
     if cleanup_error is not None:
         raise _PublicationRecoveryError(
-            ["publication capability probe could not be cleaned; workspace retained"]
+            [
+                "publication capability probe could not be cleaned; workspace retained "
+                f"{_workspace_recovery_location(workspace, output_parent)}"
+            ]
         ) from (operation_error or cleanup_error)
     if operation_error is not None:
         if isinstance(operation_error, (KeyboardInterrupt, SystemExit)):

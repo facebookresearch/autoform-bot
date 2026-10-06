@@ -1298,6 +1298,72 @@ def test_workspace_open_failure_removes_the_empty_private_workspace(
     assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
 
 
+def test_workspace_parent_sync_failure_removes_its_durable_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    original_marker = render_module._create_workspace_marker
+    original_sync = render_module.os.fsync
+    marker_created = False
+    failed = False
+
+    def create_marker(descriptor: int):
+        nonlocal marker_created
+        marker = original_marker(descriptor)
+        marker_created = True
+        return marker
+
+    def fail_parent_sync(descriptor: int) -> None:
+        nonlocal failed
+        if marker_created and not failed:
+            failed = True
+            raise OSError(errno.EIO, "injected parent durability failure")
+        original_sync(descriptor)
+
+    monkeypatch.setattr(render_module, "_create_workspace_marker", create_marker)
+    monkeypatch.setattr(render_module.os, "fsync", fail_parent_sync)
+
+    with pytest.raises(OSError, match="parent durability failure"):
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert failed
+    assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
+def test_workspace_descriptor_close_failure_removes_its_durable_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    original_marker = render_module._create_workspace_marker
+    original_close = render_module.os.close
+    marker_created = False
+    failed = False
+
+    def create_marker(descriptor: int):
+        nonlocal marker_created
+        marker = original_marker(descriptor)
+        marker_created = True
+        return marker
+
+    def fail_workspace_close(descriptor: int) -> None:
+        nonlocal failed
+        if marker_created and not failed and stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            failed = True
+            raise OSError(errno.EIO, "injected workspace close failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(render_module, "_create_workspace_marker", create_marker)
+    monkeypatch.setattr(render_module.os, "close", fail_workspace_close)
+
+    with pytest.raises(OSError, match="workspace close failure"):
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert failed
+    assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
 def test_partial_stage_write_failure_removes_the_inventoried_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2072,6 +2138,26 @@ def test_unsupported_filesystem_fails_before_inspecting_or_changing_live_output(
     assert not inspected
     assert sentinel.read_text(encoding="utf-8") == "keep\n"
     assert not list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+
+
+def test_capability_probe_cleanup_failure_reports_exact_recovery_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+
+    def fail_cleanup(*_args, **_kwargs) -> None:
+        raise OSError(errno.EIO, "injected capability cleanup failure")
+
+    monkeypatch.setattr(render_module, "_remove_inventory_contents", fail_cleanup)
+
+    with pytest.raises(PublicationError, match="capability probe could not be cleaned") as error:
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    workspaces = list(tmp_path.glob(f"{render_module._PUBLICATION_STAGE_PREFIX}*"))
+    assert len(workspaces) == 1
+    assert f"at {workspaces[0]}" in str(error.value)
+    assert not (tmp_path / "out").exists()
 
 
 def test_concurrent_renders_publish_one_generation_without_leaking_stages(

@@ -212,7 +212,7 @@ def _load_graph_sources(
     issues.extend(discovery_issues)
     article_ids: dict[str, str] = {}
     source_hashes = {source.id: source.source_sha256 for source in sources}
-    policy_page = (blueprint / "roadmap" / "README.md").resolve()
+    policy_page = canonicalize(blueprint / "roadmap" / "README.md")
     open_statements = False
 
     for source in sources:
