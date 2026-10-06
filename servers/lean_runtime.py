@@ -41,10 +41,8 @@ from servers.lean_client import (
 )
 from servers.lsp.server import (
     LspConfig,
-    LspBusyError,
     LeanLspStartupError,
     LeanLspSession,
-    LspProtocolError,
     format_lsp_diagnostics,
 )
 from servers.repl.core import DEFAULT_REPL_STARTUP_TIMEOUT, format_repl_response
@@ -951,11 +949,10 @@ class LeanRuntimeServices:
                 assert session is not None
                 try:
                     diagnostics = session.get_diagnostics(str(path))
-                except LspBusyError:
-                    raise
-                except (LspProtocolError, TimeoutError, OSError):
-                    session.retire()
-                    self.lsp_projects.invalidate_resolved(root, session)
+                except Exception:
+                    if not session.is_alive():
+                        session.retire()
+                        self.lsp_projects.invalidate_resolved(root, session)
                     raise
                 if not session.is_alive():
                     self.lsp_projects.invalidate_resolved(root, session)
@@ -976,11 +973,10 @@ class LeanRuntimeServices:
                 assert session is not None
                 try:
                     result = session.hover(str(path), line, character)
-                except LspBusyError:
-                    raise
-                except (LspProtocolError, TimeoutError, OSError):
-                    session.retire()
-                    self.lsp_projects.invalidate_resolved(root, session)
+                except Exception:
+                    if not session.is_alive():
+                        session.retire()
+                        self.lsp_projects.invalidate_resolved(root, session)
                     raise
                 if not session.is_alive():
                     self.lsp_projects.invalidate_resolved(root, session)

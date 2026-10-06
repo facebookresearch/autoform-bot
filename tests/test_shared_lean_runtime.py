@@ -1709,6 +1709,7 @@ def test_failed_lsp_request_returns_while_verified_cleanup_runs(tmp_path):
             self.retiring = False
 
         def get_diagnostics(self, file_path):
+            self.retiring = True
             raise LspProtocolError("broken shared stream")
 
         def retire(self):
@@ -1744,6 +1745,48 @@ def test_failed_lsp_request_returns_while_verified_cleanup_runs(tmp_path):
                 pytest.fail("replacement overlapped LSP cleanup")
     finally:
         release_close.set()
+        services.close()
+
+
+def test_hover_input_os_error_does_not_retire_healthy_session(tmp_path):
+    project = make_lake_project(tmp_path, "lsp-input-error")
+    (project / "Main.lean").write_text("#check Nat\n")
+    sessions = []
+
+    class Session(FakeLsp):
+        def __init__(self, root):
+            super().__init__(root)
+            self.retire_calls = 0
+            sessions.append(self)
+
+        def hover(self, file_path, line, character):
+            raise PermissionError("input cannot be read")
+
+        def retire(self):
+            self.retire_calls += 1
+
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=FakePool,
+        lsp_factory=Session,
+        start_sweepers=False,
+    )
+    try:
+        with pytest.raises(PermissionError, match="input cannot be read"):
+            services.dispatch(
+                "lsp.hover",
+                {
+                    "project_dir": str(project),
+                    "file_path": "Main.lean",
+                    "line": 0,
+                    "character": 0,
+                },
+            )
+
+        assert sessions[0].retire_calls == 0
+        resident = services.lsp_projects.stats()["resident"]
+        assert len(resident) == 1 and resident[0]["valid"] is True
+    finally:
         services.close()
 
 
