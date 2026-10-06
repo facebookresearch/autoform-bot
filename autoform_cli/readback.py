@@ -742,28 +742,20 @@ def prepare_readback(
     touching the filesystem. A caller filing several cards prepares them all
     first, so that one bad card stops the batch before any is written."""
 
-    blueprint_path = Path(blueprint).expanduser().resolve()
-    path = readback_path(blueprint_path, article_id, declaration.name)
+    # Refuse a bad name, then bad fields, before comparing the packet.
+    readback_path(Path(blueprint), article_id, declaration.name)
     _validate_readback_fields(model, text, expected_card_hash)
-    expected_packet = declaration.blind_text()
-    if packet_text != expected_packet or evidence_hash_of(packet_text) != declaration.evidence_hash:
+    if packet_text != declaration.blind_text() or evidence_hash_of(packet_text) != declaration.evidence_hash:
         raise ValueError(f"read-back packet does not match the current packet for {declaration.name}")
-
-    content = _card_content(
+    return planned_readback(
+        blueprint,
         article_id=article_id,
         declaration=declaration.name,
         skeleton_hash=declaration.hash,
         packet_hash=declaration.evidence_hash,
         model=model,
+        text=text,
         packet_text=packet_text,
-        testimony=text,
-    )
-    return PreparedReadback(
-        blueprint=blueprint_path,
-        article_id=article_id,
-        declaration=declaration.name,
-        path=path,
-        content=content,
         expected_card_hash=expected_card_hash,
     )
 
@@ -800,8 +792,9 @@ def planned_readback(
 ) -> PreparedReadback:
     """The card a record would file, built from prepared evidence before Lean runs.
 
-    It is not checked against the current Lean tree and must never be
-    published; :func:`prepare_readback` builds the card that is. When the
+    It is not checked against the current Lean tree, so it must never be
+    published as built here; :func:`prepare_readback` checks the packet
+    against a declaration first and returns the card that is. When the
     prepared evidence is current, the two are identical, so a batch can find
     the cards it would conflict with before paying for an extraction.
     """
