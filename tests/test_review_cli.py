@@ -1037,7 +1037,9 @@ def test_a_re_review_whose_article_id_is_gone_is_named_before_its_card_conflict(
 ) -> None:
     """A card's path is keyed by its article_id, so the card a re-review would
     replace stays under the old one: the record is named as gone rather than
-    asked for that card's hash, and files under the new article_id without it."""
+    asked for that card's hash, and files under the new article_id without it.
+    review check then names the old card's file to delete, and stops naming it
+    once it is gone."""
 
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
     assert _record(blueprint, bundle, manifest, tmp_path) == 0
@@ -1079,6 +1081,18 @@ def test_a_re_review_whose_article_id_is_gone_is_named_before_its_card_conflict(
     assert set(cards) == set(filed) | {(entry["article_id"], "Review.other")}
     assert cards[(_OTHER_ID, "Review.other")] == filed[(_OTHER_ID, "Review.other")]
     assert cards[(_RESULT_ID, "Review.result")].file_hash != filed[(_RESULT_ID, "Review.result")].file_hash
+
+    old = filed[(_OTHER_ID, "Review.other")].path
+    capsys.readouterr()
+    assert _check(blueprint, tmp_path) == 1
+    orphaned = [line for line in capsys.readouterr().out.splitlines() if "readback-orphaned" in line]
+    assert orphaned == [
+        f"error: {_OTHER_ID}: readback-orphaned: read-back filed for Review.other under article_id {_OTHER_ID} is "
+        f"not named by the prepared review bundle; delete {old}, or restore the article_id and declaration it names"
+    ]
+    old.unlink()
+    _check(blueprint, tmp_path)
+    assert "readback-orphaned" not in capsys.readouterr().out
 
 
 def test_any_blueprint_edit_during_a_record_extraction_files_nothing(

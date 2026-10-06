@@ -956,7 +956,8 @@ dropped, or take its `article_id` from the packet manifest a new
 names a card filed under the old `article_id`. If that manifest names a
 different packet for it, the record needs that packet and a new testimony
 written from it: packets are named by their content, so the old testimony read
-other text.
+other text. Either way, any card filed under the old `article_id` stays there,
+and `review check` names its file, which must be deleted.
 
 `review check`, `audit`, and `render` re-extract the
 current Lean evidence and reject unresolved, partial, foreign, or stale

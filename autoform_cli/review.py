@@ -560,7 +560,8 @@ def review_findings(
             ReviewFinding(
                 node.id if node is not None else article_id,
                 "readback-orphaned",
-                f"read-back filed for {name} under article_id {article_id} is not named by the prepared review bundle",
+                f"read-back filed for {name} under article_id {article_id} is not named by the prepared review bundle; "
+                f"delete {cards[(article_id, name)].path}, or restore the article_id and declaration it names",
             )
         )
 
