@@ -42,6 +42,7 @@ from servers.lean_client import (
 from servers.lsp.server import (
     LspConfig,
     LspBusyError,
+    LeanLspStartupError,
     LeanLspSession,
     LspProtocolError,
     format_lsp_diagnostics,
@@ -848,7 +849,9 @@ class LeanRuntimeServices:
             except LeanReplPoolStartupError as error:
                 return _FailedResourceCreation(error.pool, error.cause)
 
-        def default_lsp_factory(project_dir: Path) -> LeanLspSession:
+        def default_lsp_factory(
+            project_dir: Path,
+        ) -> LeanLspSession | _FailedResourceCreation:
             session = LeanLspSession(
                 LspConfig(
                     cwd=str(project_dir),
@@ -856,7 +859,10 @@ class LeanRuntimeServices:
                     timeout=self.config.lsp_timeout,
                 )
             )
-            session.start()
+            try:
+                session.start()
+            except LeanLspStartupError as error:
+                return _FailedResourceCreation(error.session, error.cause)
             return session
 
         self.repl_projects = ProjectResourceCache(
@@ -943,11 +949,8 @@ class LeanRuntimeServices:
                 except LspBusyError:
                     raise
                 except (LspProtocolError, TimeoutError, OSError):
+                    session.retire()
                     self.lsp_projects.invalidate_resolved(root, session)
-                    try:
-                        session.abort()
-                    except BaseException:
-                        logger.exception("failed to abort invalid Lean LSP session")
                     raise
             return format_lsp_diagnostics(diagnostics)
         if method == "lsp.hover":
@@ -969,11 +972,8 @@ class LeanRuntimeServices:
                 except LspBusyError:
                     raise
                 except (LspProtocolError, TimeoutError, OSError):
+                    session.retire()
                     self.lsp_projects.invalidate_resolved(root, session)
-                    try:
-                        session.abort()
-                    except BaseException:
-                        logger.exception("failed to abort invalid Lean LSP session")
                     raise
             return result or "No hover information at this position."
         raise ValueError(f"unknown Lean runtime method: {method}")

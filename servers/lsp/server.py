@@ -189,6 +189,10 @@ class LeanLspSession:
         with self._lifecycle_lock:
             self._abort_process()
 
+    def retire(self) -> None:
+        """Prevent new work while the owner transfers cleanup to a reaper."""
+        self._retire_pending = True
+
     def is_alive(self) -> bool:
         """Return whether the cached language-server child can accept work."""
         process = self.process

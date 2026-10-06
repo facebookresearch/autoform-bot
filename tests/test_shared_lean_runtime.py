@@ -84,6 +84,9 @@ class FakeLsp:
     def abort(self):
         self.closed = True
 
+    def retire(self):
+        self.closed = True
+
     def is_alive(self):
         return not self.closed
 
@@ -1086,6 +1089,78 @@ def test_partial_repl_startup_transfers_cleanup_without_masking_the_error(
     assert workers[0].close_calls == 2
 
 
+def test_partial_lsp_startup_transfers_cleanup_without_masking_the_error(
+    tmp_path, monkeypatch
+):
+    from servers.lsp import server as lsp_module
+
+    project = make_lake_project(tmp_path, "partial-lsp-startup")
+    (project / "Main.lean").write_text("#check Nat\n")
+    startup_error = ValueError("injected LSP startup failure")
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+    terminate_calls = 0
+
+    class Stream:
+        def close(self):
+            pass
+
+    class Process:
+        pid = 43210
+        returncode = None
+        stdin = Stream()
+        stdout = Stream()
+
+    process = Process()
+
+    def terminate(process_group_id):
+        nonlocal terminate_calls
+        terminate_calls += 1
+        if terminate_calls == 1:
+            raise RuntimeError("injected first cleanup failure")
+        cleanup_started.set()
+        if not release_cleanup.wait(timeout=5):
+            raise RuntimeError("test did not release cleanup")
+
+    def reap(owned):
+        owned.returncode = 0
+
+    monkeypatch.setattr(lsp_module.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(lsp_module, "_terminate_process_group", terminate)
+    monkeypatch.setattr(lsp_module, "_reap_process", reap)
+    monkeypatch.setattr(
+        lsp_module.LeanLspSession,
+        "_send_request",
+        lambda self, method, params, **kwargs: (_ for _ in ()).throw(startup_error),
+    )
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=FakePool,
+        start_sweepers=False,
+    )
+    try:
+        started = time.monotonic()
+        with pytest.raises(ValueError, match="injected LSP startup failure") as raised:
+            services.dispatch(
+                "lsp.diagnostics",
+                {"project_dir": str(project), "file_path": "Main.lean"},
+            )
+        assert raised.value is startup_error
+        assert time.monotonic() - started < 0.5
+        assert cleanup_started.wait(timeout=1)
+        assert services.lsp_projects.stats()["retiring"] == [str(project.resolve())]
+
+        with pytest.raises(ProjectResourceBusyError):
+            with services.lsp_projects.lease(str(project), acquisition_timeout=0.05):
+                pytest.fail("partial LSP cleanup released project capacity early")
+    finally:
+        release_cleanup.set()
+        services.close()
+
+    assert terminate_calls == 2
+    assert process.returncode == 0
+
+
 def test_cache_close_waits_for_retirement_before_returning(tmp_path):
     project = make_lake_project(tmp_path, "retiring-shutdown")
     close_started = threading.Event()
@@ -1617,6 +1692,58 @@ def test_failed_lsp_session_is_replaced_on_the_next_call(tmp_path):
         assert len(sessions) == 2
         assert sessions[0].closed is True
     finally:
+        services.close()
+
+
+def test_failed_lsp_request_returns_while_verified_cleanup_runs(tmp_path):
+    from servers.lsp.server import LspProtocolError
+
+    project = make_lake_project(tmp_path, "lsp-background-retirement")
+    (project / "Main.lean").write_text("#check Nat\n")
+    close_started = threading.Event()
+    release_close = threading.Event()
+
+    class Session(FakeLsp):
+        def __init__(self, root):
+            super().__init__(root)
+            self.retiring = False
+
+        def get_diagnostics(self, file_path):
+            raise LspProtocolError("broken shared stream")
+
+        def retire(self):
+            self.retiring = True
+
+        def is_alive(self):
+            return not self.retiring and not self.closed
+
+        def close(self):
+            close_started.set()
+            assert release_close.wait(timeout=2)
+            self.closed = True
+
+    services = LeanRuntimeServices(
+        runtime_config(max_projects=1),
+        repl_factory=FakePool,
+        lsp_factory=Session,
+        start_sweepers=False,
+    )
+    try:
+        started = time.monotonic()
+        with pytest.raises(LspProtocolError, match="broken shared stream"):
+            services.dispatch(
+                "lsp.diagnostics",
+                {"project_dir": str(project), "file_path": "Main.lean"},
+            )
+        assert time.monotonic() - started < 0.5
+        assert close_started.wait(timeout=1)
+        assert services.lsp_projects.stats()["retiring"] == [str(project.resolve())]
+
+        with pytest.raises(ProjectResourceBusyError):
+            with services.lsp_projects.lease(str(project), acquisition_timeout=0.05):
+                pytest.fail("replacement overlapped LSP cleanup")
+    finally:
+        release_close.set()
         services.close()
 
 
