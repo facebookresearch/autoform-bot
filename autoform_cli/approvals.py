@@ -48,18 +48,9 @@ _MAX_PULL_FILES = 3000
 # GitHub does not load a CODEOWNERS file of 3 MB or more.
 _MAX_CODEOWNERS_BYTES = 3_000_000
 _UNCOVERED_SHOWN = 10
-# GitHub allows a workflow's GITHUB_TOKEN 1000 API requests an hour in one
-# repository (15000 on GitHub Enterprise Cloud), shared by every run there.
-# GET /rate_limit says which, and how many are left, without counting. A run
-# may make what is left but _LEFT_AFTER, for the rest of its own run and a
-# gate run beside it, and never more than the hour's limit less
-# _RESERVED_REQUESTS, so a build never takes the whole hour from the gate and
-# later pushes. The approvals a budget smaller than that ceiling leaves are
-# unchecked, since a run with more of the hour left may get further; the ones
-# the ceiling itself leaves are refused, since no run gets further. A run has
-# the whole ceiling while at most _RESERVED_REQUESTS - _LEFT_AFTER of the
-# hour's requests are spent when it begins, room for the other runs of a busy
-# hour, so which of the two a run reaches never turns on a few requests.
+# A workflow's GITHUB_TOKEN may make 1000 requests an hour, assumed when GET /rate_limit does not say. A run
+# makes what is left less _LEFT_AFTER, at most the limit less _RESERVED_REQUESTS; approvals a smaller budget
+# leaves are unchecked, and those that ceiling leaves are refused, as autoform_cli/README.md explains.
 _GITHUB_TOKEN_HOURLY_LIMIT = 1000
 _RESERVED_REQUESTS = 200
 _LEFT_AFTER = 50
@@ -580,65 +571,15 @@ class _Unapproved(_Refused):
 class GitHubReviewVerifier:
     """Authenticate approvals from the pull request that recorded them.
 
-    Nothing is authenticated unless code owner review guards everything an
-    approval rests on. Once per run, at ``trusted_ref`` R:
-
-    0. Outside the gate, R is the head of the default branch on GitHub.
-       When ``publishing``, as in the Pages build, SupersededBuildError stops
-       the run otherwise, so a build the branch has moved past is not
-       published, and HeadCheckError stops it when that head cannot be read.
-       Without it, as in ``review check``, every approval is self-approved,
-       saying why. The active rulesets on the default branch, leaving out any this verifier's token can bypass, have pull
-       request rules that require code owner review, dismiss stale approvals
-       on push, and require approval of the most recent push. GitHub reports
-       no error in CODEOWNERS at R, and it gives every path that could exist
-       an owner GitHub enforces: its last ``*`` rule and every rule after it
-       name a team of the repository's owner or an individual ``@user`` with
-       write access. Otherwise every approval is self-approved, naming the
-       rules without one.
-
-    On the default branch, approval (A, H) at R, where p is A's path, is
-    authenticated when the steps below hold:
-
-    1. M is a commit in the unbroken run of R's first-parent history of p
-       that records H: the oldest commit of the run, whose first parent does
-       not record H, or a newer one whose own diff adds a
-       ``review_approved: H`` line. Candidates are tried newest first.
-       Moving the article starts a new run.
-    2. Exactly one pull request P merged into the default branch is
-       associated with M; a direct push has none.
-    3. P changes only articles and read-back cards, by file name and by
-       previous name.
-    4. P's diff adds a frontmatter line to p recording ``review_approved: H``
-       where a reviewer sees it, and p records H at P's head commit.
-    5. A reviewer whose latest verdict on P is an approval of P's head commit
-       is not P's author, authored or committed none of P's commits, has
-       write, maintain, or admin permission, and is an individual ``@user``
-       code owner of p in CODEOWNERS both at P's base B and at R. B is the
-       first of M's first-parent ancestors that GitHub does not associate
-       with P: M's first parent unless P was rebased onto the branch, when
-       P's own earlier commits come between.
-    6. P comes from a branch of this repository that headed no other pull
-       request, P never changed its base branch, and ``verify_workflow``
-       succeeded in a pull_request run on P's head commit from that branch.
-       P cannot change that workflow (step 3). Its build runs ``review
-       check``, which fails unless H is current, so H described what the
-       reviewer saw.
-
-    With ``pull_request`` N, the pre-merge gate, P is pull request N, code
-    owners come from R alone (the gate's base commit), and steps 1, 2, and 6
-    are skipped: nothing is merged or finished yet. A P from a fork is
-    refused in both modes before anything about it is read.
-
-    Anything else that cannot be checked, including a failed request, a
-    spent request budget, or undecidable ownership, leaves that one approval
-    self-approved and says why in ``reasons``; a request GitHub did not
-    answer (``GitHubUnavailable``), a list that changed between its pages, or
-    a spent budget, which a later run may get past, also puts it in
-    ``unchecked``.
-    A budget is the requests left this hour less ``_LEFT_AFTER``, at most the
-    hour's limit less ``_RESERVED_REQUESTS``; spending that ceiling is a
-    verdict, not a failure, since no run gets further.
+    autoform_cli/README.md's account of the GitHub verifier lists every check and why it is needed. Once per
+    run at ``trusted_ref`` R, nothing is authenticated unless code owner review guards all an approval rests on.
+    Outside the gate R must be the default branch's head on GitHub; when ``publishing``, SupersededBuildError
+    stops a run the branch has moved past, and HeadCheckError one that cannot read that head. An approval counts
+    when the merged pull request that recorded its hash was approved at its head by an individual code owner
+    who wrote none of it, and ``verify_workflow`` succeeded on that head. With ``pull_request`` N, the pre-merge
+    gate, the pull request is N, code owners come from R alone, and nothing about merges or runs is checked.
+    Each approval left self-approved says why in ``reasons``; one a later run may get past is also in
+    ``unchecked``, and one only a new approval can fix is in ``unapproved``.
     """
 
     method = GITHUB_REVIEW_METHOD
