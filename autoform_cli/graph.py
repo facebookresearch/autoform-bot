@@ -393,6 +393,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
     }
     section: str | None = None
     execution_notes_seen = False
+    execution_notes_not_final_reported = False
     statement_open = False
     statement_text_seen = False
     fence: tuple[str, int] | None = None
@@ -416,10 +417,15 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
             level = len(heading.group(1))
             heading_text = heading.group(2).strip()
             heading_key = heading_text.casefold()
-            if execution_notes_seen:
+            if (
+                execution_notes_seen
+                and level <= 2
+                and not execution_notes_not_final_reported
+            ):
                 issues.append(
                     f"{node_id}: Execution notes must be the article's final section"
                 )
+                execution_notes_not_final_reported = True
             if level == 1:
                 title_count += 1
                 if title is None:

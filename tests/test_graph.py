@@ -155,14 +155,15 @@ def test_execution_notes_must_be_the_final_article_section(tmp_path: Path) -> No
         blueprint,
         "result.md",
         "# Result\n\nA statement.\n\n## Execution notes\n\nTry induction.\n\n"
-        "## Depends on\n\nNone.\n",
+        "## Depends on\n\nNone.\n\n## Sources\n\nNone.\n",
     )
 
-    with pytest.raises(
-        GraphValidationError,
-        match="Execution notes must be the article's final section",
-    ):
+    with pytest.raises(GraphValidationError) as caught:
         load_graph(blueprint)
+
+    assert caught.value.issues.count(
+        "result: Execution notes must be the article's final section"
+    ) == 1
 
 
 def test_execution_notes_must_follow_the_mathematical_statement(tmp_path: Path) -> None:
@@ -180,19 +181,39 @@ def test_execution_notes_must_follow_the_mathematical_statement(tmp_path: Path) 
         load_graph(blueprint)
 
 
-def test_final_execution_notes_do_not_change_dependencies(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("section", "statement_dependencies", "proof_dependencies", "sources"),
+    [
+        ("Depends on", ("base",), (), ()),
+        ("Proof depends on", (), ("base",), ()),
+        ("Sources", (), (), ("base.md",)),
+    ],
+)
+def test_structured_final_execution_notes_do_not_change_article_relations(
+    tmp_path: Path,
+    section: str,
+    statement_dependencies: tuple[str, ...],
+    proof_dependencies: tuple[str, ...],
+    sources: tuple[str, ...],
+) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "base.md", "# Base\n\nA base statement.\n")
+    _node(blueprint, "other.md", "# Other\n\nAnother statement.\n")
     _node(
         blueprint,
         "result.md",
-        "# Result\n\nA result statement.\n\n## Depends on\n\n[Base](base.md)\n\n"
-        "## Execution notes\n\nTry induction.\n",
+        f"# Result\n\nA result statement.\n\n## {section}\n\n[Base](base.md)\n\n"
+        "## Execution notes\n\n### Remaining goal\n\nTry induction.\n\n"
+        "### Next route\n\nTried [Other](other.md).\n",
     )
 
     graph = load_graph(blueprint)
+    node = graph.nodes["result"]
 
-    assert graph.nodes["result"].dependencies == ("base",)
+    assert node.statement_dependencies == statement_dependencies
+    assert node.proof_dependencies == proof_dependencies
+    assert node.dependencies == tuple(dict.fromkeys((*statement_dependencies, *proof_dependencies)))
+    assert node.sources == sources
 
 
 def test_rejects_self_edge(tmp_path: Path) -> None:
