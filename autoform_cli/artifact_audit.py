@@ -30,7 +30,6 @@ from pathlib import Path, PurePosixPath
 import tomli
 
 from ._directory_binding import RetainedDirectory, lexical_absolute_path, open_directory
-from ._lean_names import LeanNameError, parse_lean_name, render_lean_name_term
 from ._tree_snapshot import (
     BoundDirectoryTree,
     TreeCaptureLimits,
@@ -38,8 +37,9 @@ from ._tree_snapshot import (
     TreeSnapshot,
     TreeSnapshotError,
 )
+from .declaration_kinds import declaration_kind
 from .graph import GraphValidationError, load_graph
-from .lean import declaration_kind, declaration_names
+from .lean import declaration_names
 
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
@@ -397,108 +397,42 @@ def render_probe(
     if expected_oleans is not None and set(artifact_paths) != set(modules):
         raise AuditInputError("kernel probe OLean evidence does not match the root module set")
     imports = "\n".join(f"import {module}" for module in modules)
-    root_names = ", ".join(_lean_name(module) for module in modules)
+    root_names = ", ".join(json.dumps(module, ensure_ascii=False) for module in modules)
     root_artifacts = ", ".join(
-        f"({_lean_name(module)}, {json.dumps(path, ensure_ascii=False)})"
+        f"({json.dumps(module, ensure_ascii=False)}, {json.dumps(path, ensure_ascii=False)})"
         for module, path in sorted(artifact_paths.items())
     )
     local_targets = ", ".join(
-        f"({json.dumps(target.article_path, ensure_ascii=False)}, {_lean_name(target.name)}, "
+        f"({json.dumps(target.article_path, ensure_ascii=False)}, "
+        f"{json.dumps(target.name, ensure_ascii=False)}, "
         f"{json.dumps(target.expected_kind or '')})"
         for target in targets
     )
-    probe = f"""{imports}
-import Lean.Util.CollectAxioms
-import Lean.Elab.Command
-import Lean.Meta.Instances
-import Lean.OriginalConstKind
-import Lean.Structure
-import Lean.Class
-
-open Lean Elab Command
-
-private def declaringModule? (env : Environment) (declName : Name) : Option Name := do
-  let moduleIdx ← env.getModuleIdxFor? declName
-  env.header.moduleNames[moduleIdx.toNat]?
-
-private def matchesDeclarationKind
-    (env : Environment) (declName : Name) (expected : String) : Bool :=
-  match expected with
-  | "theorem" => getOriginalConstKind? env declName == some .thm
-  | "axiom" => getOriginalConstKind? env declName == some .axiom
-  | "opaque" => getOriginalConstKind? env declName == some .opaque
-  | "abbrev" =>
-      match env.find? declName with
-      | some (.defnInfo info) => info.hints == .abbrev
-      | _ => false
-  | "def" =>
-      match env.find? declName with
-      | some (.defnInfo info) => info.hints != .abbrev && !Meta.isInstanceCore env declName
-      | _ => false
-  | "instance" => Meta.isInstanceCore env declName
-  | "class" => isClass env declName
-  | "structure" => isStructure env declName && !isClass env declName
-  | "inductive" =>
-      getOriginalConstKind? env declName == some .induct && !isStructure env declName
-  | _ => false
-
-run_cmd do
-  let rootModules : List Name := [{root_names}]
-  let expectedArtifacts : List (Name × String) := [{root_artifacts}]
-  let localTargets : List (String × Name × String) := [{local_targets}]
-  let allowed : List Name := [``propext, ``Classical.choice, ``Quot.sound]
-  let env ← getEnv
-  let mut badArtifacts := false
-  for (moduleName, expectedPath) in expectedArtifacts do
-    let actual ← IO.FS.realPath (← findOLean moduleName)
-    let expected ← IO.FS.realPath (System.FilePath.mk expectedPath)
-    unless actual == expected do
-      badArtifacts := true
-      logError m!"root module {{moduleName}} resolved to {{actual}}, expected {{expected}}"
-  let mut badTargets := false
-  for (article, declName, expectedKind) in localTargets do
-    if env.find? declName |>.isNone then
-      badTargets := true
-      logError m!"{{article}}: local declaration does not exist: {{declName}}"
-    else
-      match declaringModule? env declName with
-      | none =>
-          badTargets := true
-          logError m!"{{article}}: local declaration has no declaring module: {{declName}}"
-      | some moduleName =>
-          unless rootModules.contains moduleName do
-            badTargets := true
-            logError m!"{{article}}: local declaration {{declName}} belongs to non-root module {{moduleName}}"
-      unless expectedKind.isEmpty do
-        unless matchesDeclarationKind env declName expectedKind do
-          badTargets := true
-          logError m!"{{article}}: declaration {{declName}} does not have expected kind {{expectedKind}}"
-  let mut checked : Nat := 0
-  let mut badSafety : Array Name := #[]
-  let mut badAxioms : Array (Name × Name) := #[]
-  for (declName, info) in env.constants do
-    if let some moduleIdx := env.getModuleIdxFor? declName then
-      if let some moduleName := env.header.moduleNames[moduleIdx.toNat]? then
-        if rootModules.contains moduleName then
-          checked := checked + 1
-          if info.isUnsafe || info.isPartial then
-            badSafety := badSafety.push declName
-          for usedAxiom in (← Lean.collectAxioms declName) do
-            unless allowed.contains usedAxiom do
-              badAxioms := badAxioms.push (declName, usedAxiom)
-  for declName in badSafety do
-    logError m!"unsafe or partial declaration: {{declName}}"
-  for (declName, usedAxiom) in badAxioms do
-    logError m!"{{declName}} depends on unexpected axiom {{usedAxiom}}"
-  if checked == 0 then
-    throwError "kernel-trust audit found no root-package declarations"
-  unless !badArtifacts && !badTargets && badSafety.isEmpty && badAxioms.isEmpty do
-    throwError "blueprint or root-package declarations failed the artifact audit"
-  logInfo m!"artifact audit clean ({{checked}} root-package declaration(s) audited)"
-"""
+    probe = _artifact_probe_template()
+    substitutions = {
+        "__AUTOFORM_IMPORTS__": imports,
+        "__AUTOFORM_ROOT_MODULES__": root_names,
+        "__AUTOFORM_EXPECTED_ARTIFACTS__": root_artifacts,
+        "__AUTOFORM_LOCAL_TARGETS__": local_targets,
+    }
+    for marker, value in substitutions.items():
+        if probe.count(marker) != 1:
+            raise AuditInputError(f"artifact probe template has invalid marker count for {marker}")
+        probe = probe.replace(marker, value)
     if len(probe.encode("utf-8")) > _MAX_SOURCE_BYTES:
         raise AuditInputError("generated artifact audit probe is unexpectedly large")
     return probe
+
+
+def _artifact_probe_template() -> str:
+    """Return the Lean-native artifact verifier shipped with Autoform."""
+
+    try:
+        return (Path(__file__).parent / "probes" / "artifact_audit_probe.lean").read_text(
+            encoding="utf-8"
+        )
+    except (OSError, UnicodeError) as exc:
+        raise AuditInputError("cannot read the installed artifact audit probe") from exc
 
 
 def run_artifact_audit(
@@ -1220,14 +1154,17 @@ def _module_parts(module: str, display: str) -> tuple[str, ...]:
 
 
 def _validate_lean_name(name: str, article_path: str) -> None:
-    try:
-        if len(name) > _MAX_NAME_LENGTH or not _is_nfc_text(name):
-            raise LeanNameError(f"invalid Lean name: {name!r}")
-        parse_lean_name(name)
-    except LeanNameError as exc:
+    # Syntax is authoritative only after Lean decodes the raw string in the
+    # probe.  Python enforces transport/resource bounds, not Lean's grammar.
+    if (
+        not name
+        or len(name) > _MAX_NAME_LENGTH
+        or not _is_nfc_text(name)
+        or any(ord(character) < 32 for character in name)
+    ):
         raise AuditInputError(
             f"{article_path}: invalid Lean declaration name in blueprint: {name!r}"
-        ) from exc
+        )
 
 
 def _validate_root_trace(trace: object, module: str, package: str, display: str) -> None:
@@ -1892,13 +1829,6 @@ def _write_private_file(path: Path, data: bytes) -> None:
                 os.close(descriptor)
             except OSError:
                 pass
-
-
-def _lean_name(name: str) -> str:
-    try:
-        return render_lean_name_term(name)
-    except LeanNameError as exc:
-        raise AuditInputError(f"invalid Lean name: {name!r}") from exc
 
 
 def _is_reparse_point(metadata: os.stat_result) -> bool:

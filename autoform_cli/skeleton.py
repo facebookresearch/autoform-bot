@@ -36,7 +36,6 @@ from urllib.parse import quote, urlsplit
 import psutil
 import tomli
 
-from ._lean_names import LeanNameError, parse_lean_name, render_lean_name_term
 from .graph import Graph, GraphValidationError, Node, load_graph
 from .lean import (
     MANAGED_OUTPUT_SCHEMAS,
@@ -1314,10 +1313,30 @@ def render_probe(
 def _lean_name(name: str) -> str:
     """Spell a Lean name as a term without trusting Lean to parse it."""
 
-    try:
-        return render_lean_name_term(name)
-    except LeanNameError:
-        raise SkeletonError([f"invalid Lean declaration name: {name!r}"]) from None
+    result = "Name.anonymous"
+    for part, quoted in _lean_name_parts(name):
+        if not quoted and part.isascii() and part.isdigit():
+            result = f"Name.num ({result}) {int(part)}"
+        else:
+            result = f"Name.str ({result}) {json.dumps(part, ensure_ascii=False)}"
+    return result
+
+
+_LEAN_NAME_PART = r"«([^»]+)»|([^.\s«»]+)"
+_LEAN_NAME = re.compile(rf"(?:{_LEAN_NAME_PART})(?:\.(?:{_LEAN_NAME_PART}))*")
+
+
+def _lean_name_parts(name: str) -> tuple[tuple[str, bool], ...]:
+    """Parse the dot-separated surface spelling of a Lean ``Name``.
+
+    Guillemets quote one name component, so ``A.«b.c d»`` has two components,
+    not three. Constructing the name structurally keeps all such spellings out
+    of generated Lean syntax.
+    """
+
+    if not _LEAN_NAME.fullmatch(name):
+        raise SkeletonError([f"invalid Lean declaration name: {name!r}"])
+    return tuple((quoted, True) if quoted else (plain, False) for quoted, plain in re.findall(_LEAN_NAME_PART, name))
 
 
 def _probe_modules(probe: str) -> tuple[str, ...]:
@@ -1778,14 +1797,9 @@ def _source_required(name: str, kind: str, source: object, has_range: bool) -> b
 def _internal_detail(name: str) -> bool:
     """Mirror Lean's `Name.isInternalDetail` on a probe-emitted name."""
 
-    try:
-        parts = parse_lean_name(name)
-    except LeanNameError:
-        raise SkeletonError([f"invalid Lean declaration name: {name!r}"]) from None
-    return any(
-        part.text.startswith("_") or (part.text.isdigit() and not part.quoted) for part in parts
-    ) or bool(
-        re.fullmatch(r"(?:eq|match|proof|omega)_[0-9_]*", parts[-1].text)
+    parts = _lean_name_parts(name)
+    return any(part.startswith("_") or (part.isdigit() and not quoted) for part, quoted in parts) or bool(
+        re.fullmatch(r"(?:eq|match|proof|omega)_[0-9_]*", parts[-1][0])
     )
 
 

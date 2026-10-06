@@ -7,6 +7,7 @@ import pytest
 
 import autoform_cli.audit as audit_module
 from autoform_cli.audit import audit_blueprint
+from autoform_cli.declaration_kinds import declaration_kind, declaration_keywords
 from autoform_cli.lean import LeanSourceError
 
 
@@ -267,6 +268,14 @@ def test_audit_validates_lean_targets_only_when_root_is_supplied(tmp_path: Path)
         ("lean-target-kind-mismatch", "Lean target kind def does not match declaration intent theorem")
     ]
     assert "roadmap/one-wrong-kind.md" not in with_lean
+
+
+def test_declaration_intent_aliases_are_blueprint_policy_not_lean_parsing() -> None:
+    assert declaration_kind("lemma") == "theorem"
+    assert declaration_kind("Corollary") == "theorem"
+    assert declaration_kind("definition") == "def"
+    assert declaration_kind("unknown") is None
+    assert declaration_keywords("proposition") == frozenset({"lemma", "theorem"})
 
 
 def test_audit_reports_invalid_lean_root_once(tmp_path: Path) -> None:

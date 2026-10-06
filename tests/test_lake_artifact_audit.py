@@ -258,7 +258,7 @@ def test_probe_binds_every_import_to_its_queried_root_olean(helper: ModuleType) 
     "name",
     ["Fixture.lookup?", "Fixture.run!", "Fixture.12", "Fixture.«quoted.part with space»"],
 )
-def test_blueprint_targets_accept_structurally_rendered_lean_names(
+def test_blueprint_targets_are_transported_as_strings_for_lean_to_decode(
     helper: ModuleType, tmp_path: Path, name: str
 ) -> None:
     blueprint = _blueprint(tmp_path)
@@ -268,9 +268,9 @@ def test_blueprint_targets_accept_structurally_rendered_lean_names(
     probe = helper.render_probe(("Fixture",), targets)
 
     assert [target.name for target in targets] == [name]
-    assert "Name.str" in probe
-    if name == "Fixture.12":
-        assert "Name.num" in probe
+    assert "Syntax.decodeNameLit" in probe
+    assert json.dumps(name, ensure_ascii=False) in probe
+    assert "Name.str (" not in probe
 
 
 def test_mathlib_claim_fails_closed_until_its_gate_is_installed(
@@ -1134,6 +1134,9 @@ structure Fixture.StructureClaim where value : Nat
 class Fixture.ClassClaim where value : Nat
 inductive Fixture.InductiveClaim where | value
 opaque Fixture.opaqueClaim : Nat := 1
+theorem Fixture.lookup!? : True := by trivial
+theorem Fixture.«» : True := by trivial
+theorem Fixture.«quoted.part with space» : True := by trivial
 """,
     )
     blueprint = _blueprint(project)
@@ -1146,6 +1149,9 @@ opaque Fixture.opaqueClaim : Nat := 1
         ("class", "class", "Fixture.ClassClaim"),
         ("inductive", "inductive", "Fixture.InductiveClaim"),
         ("opaque", "opaque", "Fixture.opaqueClaim"),
+        ("suffix-name", "theorem", "Fixture.lookup!?"),
+        ("empty-quoted-name", "theorem", "Fixture.«»"),
+        ("spaced-quoted-name", "theorem", "Fixture.«quoted.part with space»"),
     )
     for article, kind, declaration in claims:
         _article(blueprint, article, f"declaration: {kind}", f"lean: {declaration}")
@@ -1182,6 +1188,18 @@ opaque Fixture.opaqueClaim : Nat := 1
         "root-package archive",
         "Lean artifact probe",
     }.issubset(labels)
+
+    invalid_probe = project / "invalid-name.lean"
+    invalid_probe.write_text(
+        helper.render_probe(
+            ("Fixture",),
+            (helper.BlueprintTarget("roadmap/invalid.md", "Fixture.λ", "theorem"),),
+        ),
+        encoding="utf-8",
+    )
+    rejected = _run(project, "lake", "env", "lean", "--trust=0", str(invalid_probe))
+    assert rejected.returncode != 0
+    assert "invalid Lean name: Fixture.λ" in rejected.stdout + rejected.stderr
 
 
 @pytest.mark.skipif(shutil.which("lake") is None, reason="Lake is not installed")

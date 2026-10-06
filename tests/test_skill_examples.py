@@ -93,6 +93,8 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     assert "repeated pathname reads are not a generation boundary" in normalized
     assert "marker schema in its owning feature" in normalized
     assert "match the blob at the stable detected commit" in normalized
+    assert "toolchain-matched Lean parse names and decide semantic facts" in normalized
+    assert "Python handles bounded transport and presentation" in normalized
 
 
 def test_development_guidance_uses_progressive_command_reference(repo_root: Path) -> None:

@@ -15,10 +15,10 @@ from pathlib import Path
 
 from . import status
 from .coverage import CoverageSummary, load_coverage
+from .declaration_kinds import declaration_keywords
 from .graph import Graph, GraphValidationError, Node, load_graph
 from .lean import (
     SourceIndex,
-    declaration_keywords,
     declaration_names,
     index_failure_message,
     index_project,

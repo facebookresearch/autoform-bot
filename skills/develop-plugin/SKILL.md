@@ -6,8 +6,7 @@ description: >-
 
 # Develop Autoform
 
-Treat Autoform as an example-based plugin for an independent formalization. Use
-the Cabannes thesis only as its executable example.
+Treat Autoform as an example-based plugin for an independent formalization.
 
 Inspect the worktree; state a consumer scenario, installed behavior,
 and invariant. Treat user nudges as product evidence. Preserve the insight,
@@ -27,6 +26,8 @@ stable detected commit.
 
 Treat rewritten private declaration safety as fail-closed evidence: correlate
 the official user name to its lexical declaration by source coordinates.
+Let toolchain-matched Lean parse names and decide semantic facts; Python handles
+bounded transport and presentation.
 
 Run focused checks, then normally run:
 
@@ -39,4 +40,3 @@ make check-example
 Run `lake build` when example Lean results change. Validate edited skills and
 the manifest with skill-creator and plugin-creator. Use cachebuster and
 reinstall only to test installed discovery in a new thread.
-Report outcome and checks.
