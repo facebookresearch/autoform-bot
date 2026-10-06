@@ -278,6 +278,106 @@ def test_declaration_intent_aliases_are_blueprint_policy_not_lean_parsing() -> N
     assert declaration_keywords("proposition") == frozenset({"lemma", "theorem"})
 
 
+def test_audit_reports_lean_targets_declared_deprecated(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    targets = {
+        "same-line.md": "Project.sameLine",
+        "line-above.md": "Project.lineAbove",
+        "multi-line.md": "Project.multiLine",
+        "fresh.md": "Project.fresh",
+        "decoy.md": "Project.decoy",
+        "after-previous.md": "Project.afterPrevious",
+        "after-alias.md": "Project.afterAlias",
+    }
+    for relative, name in targets.items():
+        _article(blueprint, relative, declaration="theorem", statement="formalized", lean=name)
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    source = [
+        "theorem Project.fresh : True := trivial",
+        "",
+        '@[deprecated Project.fresh (since := "2025-01-01")] theorem Project.sameLine : True := trivial',
+        "",
+        "/-- Kept for one release. -/",
+        "@[simp]",
+        '@[deprecated Project.fresh (since := "2025-01-01")]',
+        "protected theorem Project.lineAbove : True := trivial",
+        "",
+        "@[simp,",
+        '  deprecated "use [Project.fresh] instead" (since := "2025-01-01")]',
+        "-- removed after the next release",
+        "theorem Project.multiLine : True := trivial",
+        "",
+        '-- @[deprecated Project.fresh (since := "2025-01-01")]',
+        "/- @[deprecated Project.fresh] -/",
+        '@[to_additive "deprecated", deprecated_alias]',
+        "theorem Project.decoy : True := by",
+        '  have : "@[deprecated]" = "@[deprecated]" := rfl',
+        "  trivial",
+        "",
+        # An earlier declaration's attributes stay with it, indexed or not.
+        "@[deprecated Project.fresh] theorem Project.previous : True := trivial",
+        "theorem Project.afterPrevious : True := trivial",
+        "",
+        "@[deprecated Project.fresh]",
+        "alias Project.oldAlias := Project.fresh",
+        "theorem Project.afterAlias : True := trivial",
+    ]
+    (lean_root / "Old.lean").write_text("\n".join(source) + "\n", encoding="utf-8")
+
+    without_lean = _finding_map(blueprint)
+    with_lean = _finding_map(blueprint, lean_root=lean_root)
+
+    def deprecated(name: str) -> list[tuple[str, str]]:
+        return [("lean-target-deprecated", f"lean target {name} is deprecated; point lean: at its replacement")]
+
+    assert without_lean == {}
+    assert with_lean == {
+        "roadmap/same-line.md": deprecated("Project.sameLine"),
+        "roadmap/line-above.md": deprecated("Project.lineAbove"),
+        "roadmap/multi-line.md": deprecated("Project.multiLine"),
+    }
+
+
+def test_audit_reads_deprecation_from_the_captured_source_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(
+        blueprint,
+        "result.md",
+        declaration="theorem",
+        statement="formalized",
+        lean="Project.result",
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    source = lean_root / "Project.lean"
+    source.write_text(
+        "@[deprecated Project.fresh] theorem Project.result : True := trivial\n",
+        encoding="utf-8",
+    )
+    real_snapshot_project_sources = audit_module.snapshot_project_sources
+
+    def snapshot_then_rewrite(root: Path):
+        snapshot = real_snapshot_project_sources(root)
+        source.write_text("theorem Project.result : True := trivial\n", encoding="utf-8")
+        return snapshot
+
+    monkeypatch.setattr(audit_module, "snapshot_project_sources", snapshot_then_rewrite)
+
+    findings = _finding_map(blueprint, lean_root=lean_root)
+
+    assert findings["roadmap/result.md"] == [
+        (
+            "lean-target-deprecated",
+            "lean target Project.result is deprecated; point lean: at its replacement",
+        )
+    ]
+
+
 def test_audit_reports_invalid_lean_root_once(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
@@ -493,16 +593,16 @@ def test_audit_measures_source_spans_from_the_captured_index(
             lean=name,
         )
     lean_root = _lean_project(tmp_path, spans)
-    real_index_project = audit_module.index_project
+    real_snapshot_project_sources = audit_module.snapshot_project_sources
 
-    def index_then_mutate(root: Path):
-        index = real_index_project(root)
+    def snapshot_then_mutate(root: Path):
+        snapshot = real_snapshot_project_sources(root)
         (root / "big.lean").write_text(
             "theorem Project.big : True := trivial\n", encoding="utf-8"
         )
-        return index
+        return snapshot
 
-    monkeypatch.setattr(audit_module, "index_project", index_then_mutate)
+    monkeypatch.setattr(audit_module, "snapshot_project_sources", snapshot_then_mutate)
 
     findings = _finding_map(blueprint, lean_root=lean_root)
 
@@ -534,12 +634,12 @@ def test_audit_reports_source_index_io_failure_without_host_details(
     lean_root = tmp_path / "lean"
     lean_root.mkdir()
 
-    def fail_index(root: Path):
+    def fail_snapshot(root: Path):
         if reason is not None:
             raise LeanSourceError(reason)
         raise OSError(f"private host detail: {root}")
 
-    monkeypatch.setattr(audit_module, "index_project", fail_index)
+    monkeypatch.setattr(audit_module, "snapshot_project_sources", fail_snapshot)
 
     result = audit_blueprint(blueprint, lean_root=lean_root)
 

@@ -44,6 +44,119 @@ def _board(tmp_path: Path, repo: Path, owner: str) -> claims.ClaimBoard:
     return claims.ClaimBoard(repo, owner, tmp_path / f"scratch-{owner}")
 
 
+def test_claim_board_recognizes_scp_remote_without_explicit_user(tmp_path: Path) -> None:
+    board = claims.ClaimBoard(
+        "github-work:org/repo.git",
+        "worker",
+        tmp_path / "scratch",
+    )
+
+    assert board.repo_url == "github-work:org/repo.git"
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        "git@example.com:org/repo.git",
+        "github-work:org/repo.git",
+        "[2001:db8::1]:org/repo.git",
+        "g:repo.git",
+    ],
+)
+def test_repository_remote_grammar_matches_scp_forms(remote: str) -> None:
+    assert claims._repository_is_remote(remote, windows=False)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"C:\projects\claims.git",
+        "C:/projects/claims.git",
+        r"\\?\C:\projects\claims.git",
+        r"\\.\C:\projects\claims.git",
+        r"\\server\share\claims.git",
+    ],
+)
+def test_repository_remote_grammar_rejects_rooted_windows_paths(path: str) -> None:
+    assert not claims._repository_is_remote(path, windows=False)
+
+
+def test_drive_relative_path_is_local_only_on_windows() -> None:
+    assert claims._repository_is_remote("C:claims.git", windows=False)
+    assert not claims._repository_is_remote("C:claims.git", windows=True)
+
+
+def test_claim_board_does_not_treat_windows_drive_as_scp_remote(tmp_path: Path) -> None:
+    raw = r"C:\projects\claims.git"
+    board = claims.ClaimBoard(
+        raw,
+        "worker",
+        tmp_path / "scratch",
+    )
+
+    assert board.repo_url == str(Path(raw).expanduser().resolve())
+    assert Path(board.repo_url).is_absolute()
+
+
+def test_non_directory_scratch_is_a_clean_transport_error(
+    tmp_path: Path,
+    board_repo: Path,
+) -> None:
+    scratch = tmp_path / "scratch"
+    scratch.write_text("not a directory", encoding="utf-8")
+    board = claims.ClaimBoard(board_repo, "worker", scratch)
+
+    with pytest.raises(claims.ClaimTransportError, match="prepare.*scratch"):
+        board.read("author/node")
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="needs a non-root POSIX user and mode-bit permissions",
+)
+def test_inaccessible_scratch_parent_is_a_clean_transport_error(
+    tmp_path: Path,
+    board_repo: Path,
+) -> None:
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    board = claims.ClaimBoard(board_repo, "worker", locked / "scratch")
+    locked.chmod(0)
+    try:
+        with pytest.raises(claims.ClaimTransportError, match="prepare.*scratch"):
+            board.read("author/node")
+    finally:
+        locked.chmod(0o755)
+
+
+def test_concurrent_first_use_initializes_one_shared_scratch(
+    tmp_path: Path,
+    board_repo: Path,
+) -> None:
+    scratch = tmp_path / "scratch"
+    workers = 12
+    start = threading.Barrier(workers)
+    failures: list[BaseException] = []
+
+    def read_missing_claim() -> None:
+        try:
+            start.wait(timeout=5)
+            board = claims.ClaimBoard(board_repo, "worker", scratch)
+            assert board.read("author/missing") is None
+        except BaseException as error:
+            failures.append(error)
+
+    threads = [threading.Thread(target=read_missing_claim) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert failures == []
+    assert _git("rev-parse", "--is-bare-repository", cwd=scratch) == "true"
+
+
 def _plant_message(repo: Path, key: str, message: str) -> str:
     tree = _git("mktree", cwd=repo, input_text="")
     commit = _git("commit-tree", tree, "-m", message, cwd=repo)

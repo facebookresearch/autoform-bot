@@ -51,6 +51,7 @@ from autoform_cli.skeleton import (
     _hash_module_files,
     _local_safety_issue,
     _process_is_alive,
+    _remember_tagged_processes,
     _project_control_snapshot,
     _without_comments,
     _probe_record_issue,
@@ -461,6 +462,120 @@ def test_bounded_command_finds_a_descendant_that_escapes_its_process_group(
         _bounded(tmp_path, parent_program)
 
     _assert_dies(int(child_pid.read_text(encoding="utf-8")), "detached descendant", "cleanup")
+
+
+def test_tagged_process_scan_retries_a_transient_system_error(monkeypatch) -> None:
+    class Candidate:
+        pid = 123456
+
+        def environ(self):
+            return {"_AUTOFORM_PROCESS_TOKEN": "owned"}
+
+        def create_time(self):
+            return 7.0
+
+    calls = 0
+
+    def process_iter():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise SystemError("transient Darwin process state")
+        return [Candidate()]
+
+    monkeypatch.setattr(psutil, "process_iter", process_iter)
+    descendants = {}
+
+    _remember_tagged_processes("owned", descendants, root_pid=654321)
+
+    assert calls == 2
+    assert list(descendants) == [(123456, 7.0)]
+
+
+def test_tagged_process_scan_fails_closed_after_repeated_system_errors(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        psutil,
+        "process_iter",
+        lambda: (_ for _ in ()).throw(SystemError("persistent failure")),
+    )
+
+    with pytest.raises(SkeletonError, match="cannot safely inspect"):
+        _remember_tagged_processes("owned", {}, root_pid=654321)
+
+    # Cleanup mode must still reach process-group termination rather than
+    # allowing a flaky process-table read to mask the original failure.
+    _remember_tagged_processes("owned", {}, root_pid=654321, strict=False)
+
+
+@pytest.mark.parametrize("error", [OSError("scan failed"), psutil.Error("scan failed")])
+def test_tagged_process_scan_fails_closed_when_enumeration_remains_unreadable(
+    monkeypatch,
+    error: BaseException,
+) -> None:
+    monkeypatch.setattr(
+        psutil,
+        "process_iter",
+        lambda: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(SkeletonError, match="repeated process-table errors"):
+        _remember_tagged_processes("owned", {}, root_pid=654321)
+
+    _remember_tagged_processes("owned", {}, root_pid=654321, strict=False)
+
+
+def test_tagged_process_scan_does_not_treat_mixed_failures_as_success(
+    monkeypatch,
+) -> None:
+    errors = iter((SystemError("transient state"), OSError("table unreadable")))
+    monkeypatch.setattr(
+        psutil,
+        "process_iter",
+        lambda: (_ for _ in ()).throw(next(errors)),
+    )
+
+    with pytest.raises(SkeletonError, match="repeated process-table errors"):
+        _remember_tagged_processes("owned", {}, root_pid=654321)
+
+
+def test_tagged_process_scan_retries_a_candidate_system_error(monkeypatch) -> None:
+    calls = 0
+
+    class Candidate:
+        pid = 123456
+
+        def environ(self):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise SystemError("transient process state")
+            return {"_AUTOFORM_PROCESS_TOKEN": "owned"}
+
+        def create_time(self):
+            return 7.0
+
+    monkeypatch.setattr(psutil, "process_iter", lambda: [Candidate()])
+    descendants = {}
+
+    _remember_tagged_processes("owned", descendants, root_pid=654321)
+
+    assert calls == 2
+    assert list(descendants) == [(123456, 7.0)]
+
+
+def test_process_liveness_fails_closed_on_inspection_uncertainty() -> None:
+    class Uncertain:
+        def is_running(self):
+            raise SystemError("transient process state")
+
+    class Gone:
+        def is_running(self):
+            raise psutil.NoSuchProcess(123456)
+
+    assert _process_is_alive(Uncertain()) is True
+    assert _process_is_alive(Gone()) is False
 
 
 def test_bounded_command_interruption_kills_the_process(tmp_path: Path, monkeypatch) -> None:
