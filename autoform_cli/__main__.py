@@ -13,7 +13,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -1246,7 +1246,7 @@ def _review_record(args: argparse.Namespace) -> int:
         # And so is every card that would replace different content without
         # naming it, or whose existing card cannot be safely read: all of them
         # at once, rather than one per extraction.
-        _refuse_conflicts(_planned_records(args.blueprint_dir, inputs, model=args.model))
+        _refuse_conflicts(_build_cards(inputs, lambda item: _planned_card(args.blueprint_dir, item, model=args.model)))
         # Each card's article is read again before the card is written, by its
         # name rather than the file it resolves to, so that a link pointed at
         # another file is seen.
@@ -1282,7 +1282,7 @@ def _review_record(args: argparse.Namespace) -> int:
         ]
         if findings:
             raise ReviewError(findings)
-        cards = _prepare_records(graph, skeleton, inputs, model=args.model)
+        cards = _build_cards(inputs, lambda item: _prepared_card(graph, skeleton, item, model=args.model))
         _refuse_conflicts(cards)
         # Every card has passed every check. Publish them in order; each keeps
         # its own compare-and-swap, and filing identical content is a no-op, so
@@ -1430,42 +1430,39 @@ def _unreadable_input(request: RecordRequest, role: str, path: Path, exc: Except
     )
 
 
-def _planned_records(
-    blueprint: str | Path,
-    inputs: list[_RecordInput],
-    *,
-    model: str,
+def _build_cards(
+    inputs: list[_RecordInput], build: Callable[[_RecordInput], PreparedReadback]
 ) -> list[PreparedReadback]:
-    """The cards the batch would file if the prepared evidence is current."""
+    """Build every input's card with *build*, or refuse the batch naming every card that failed."""
 
     findings: list[ReviewFinding] = []
     cards: list[PreparedReadback] = []
     for item in inputs:
         try:
-            cards.append(
-                planned_readback(
-                    blueprint,
-                    article_id=item.request.article_id,
-                    declaration=item.request.declaration,
-                    skeleton_hash=item.prepared.skeleton_hash,
-                    packet_hash=item.prepared.packet_hash,
-                    model=model,
-                    text=item.testimony,
-                    packet_text=item.packet,
-                    expected_card_hash=item.request.expected_card_hash,
-                )
-            )
+            cards.append(build(item))
         except ValueError as exc:
             findings.append(
-                ReviewFinding(
-                    item.request.article_id,
-                    "review-record-invalid",
-                    f"{item.request.declaration}: {exc}",
-                )
+                ReviewFinding(item.request.article_id, "review-record-invalid", f"{item.request.declaration}: {exc}")
             )
     if findings:
         raise ReviewError(findings)
     return cards
+
+
+def _planned_card(blueprint: str | Path, item: _RecordInput, *, model: str) -> PreparedReadback:
+    """The card the batch would file for *item* if the prepared evidence is current."""
+
+    return planned_readback(
+        blueprint,
+        article_id=item.request.article_id,
+        declaration=item.request.declaration,
+        skeleton_hash=item.prepared.skeleton_hash,
+        packet_hash=item.prepared.packet_hash,
+        model=model,
+        text=item.testimony,
+        packet_text=item.packet,
+        expected_card_hash=item.request.expected_card_hash,
+    )
 
 
 def _refuse_conflicts(cards: list[PreparedReadback]) -> None:
@@ -1558,40 +1555,23 @@ def _refuse_changed_article(card: PreparedReadback, path: str, digest: str) -> N
     )
 
 
-def _prepare_records(
-    graph: Graph,
-    skeleton: SkeletonReport,
-    inputs: list[_RecordInput],
-    *,
-    model: str,
-) -> list[PreparedReadback]:
-    """Build every card against the one extraction, or refuse the batch."""
+def _prepared_card(graph: Graph, skeleton: SkeletonReport, item: _RecordInput, *, model: str) -> PreparedReadback:
+    """Build *item*'s card against the one extraction."""
 
-    findings: list[ReviewFinding] = []
-    cards: list[PreparedReadback] = []
-    for item in inputs:
-        request = item.request
-        node = next(node for node in graph.nodes.values() if node.article_id == request.article_id)
-        # validate_review_article matched this article's extracted declarations
-        # to the bundle's, where _record_inputs found this one.
-        current = next(item for item in skeleton.declarations(node.id) if item.name == request.declaration)
-        try:
-            cards.append(
-                prepare_readback(
-                    graph.blueprint_dir,
-                    article_id=request.article_id,
-                    declaration=current,
-                    model=model,
-                    text=item.testimony,
-                    packet_text=item.packet,
-                    expected_card_hash=request.expected_card_hash,
-                )
-            )
-        except ValueError as exc:
-            findings.append(ReviewFinding(request.article_id, "review-record-invalid", f"{request.declaration}: {exc}"))
-    if findings:
-        raise ReviewError(findings)
-    return cards
+    request = item.request
+    node = next(node for node in graph.nodes.values() if node.article_id == request.article_id)
+    # validate_review_article matched this article's extracted declarations
+    # to the bundle's, where _record_inputs found this one.
+    current = next(item for item in skeleton.declarations(node.id) if item.name == request.declaration)
+    return prepare_readback(
+        graph.blueprint_dir,
+        article_id=request.article_id,
+        declaration=current,
+        model=model,
+        text=item.testimony,
+        packet_text=item.packet,
+        expected_card_hash=request.expected_card_hash,
+    )
 
 
 def _report_recorded(written: list[tuple[Path, str]], total: int) -> None:
