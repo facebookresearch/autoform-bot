@@ -479,6 +479,32 @@ def _pull_approving(
     return head
 
 
+def _approved(root: Path, github: FakeGitHub, *, strategy: str = "squash", reviewer: str = "alice") -> str:
+    """The legitimate case: bob's #7 records the hash and alice approves its head; return that head."""
+
+    head = _pull_approving(root, github, strategy=strategy)
+    github.review(7, reviewer, "APPROVED", head)
+    return head
+
+
+def _approving_pull(
+    root: Path,
+    github: FakeGitHub,
+    *names: str,
+    author: str = "bob",
+    base_ref: str = "main",
+    ci: str | None = "success",
+) -> str:
+    """Open #7 from branch ``approve``, which records _HASH for ``names`` (by default the result); leave the
+    branch checked out and return its head."""
+
+    _branch(root, "approve")
+    for name in names or ("result",):
+        _approve(root, name, _HASH)
+    _commit(root, "Approve " + " and ".join(names or ("result",)))
+    return github.open_pull(7, author, base_ref=base_ref, ci=ci)
+
+
 def test_without_a_verifier_every_current_approval_is_self_approved(tmp_path: Path) -> None:
     graph = load_graph(_project(tmp_path) / "blueprint")
 
@@ -533,8 +559,7 @@ def test_the_pull_request_author_cannot_authenticate_their_own_approval(tmp_path
 def test_a_reviewer_who_is_not_a_code_owner_cannot_authenticate(tmp_path: Path) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "carol", "APPROVED", head)
+    _approved(root, github, reviewer="carol")
 
     status = _verify(root, github)["basics/result"]
 
@@ -607,8 +632,7 @@ def test_a_later_verdict_voids_an_approval_but_a_comment_does_not(
 ) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "alice", "APPROVED", head)
+    head = _approved(root, github)
     github.review(7, "alice", later, head)
 
     status = _verify(root, github)["basics/result"]
@@ -642,8 +666,7 @@ def test_a_dismissed_approval_does_not_authenticate(tmp_path: Path) -> None:
 def test_team_and_email_owners_never_authenticate(tmp_path: Path) -> None:
     root = _project(tmp_path, "* @owner\nblueprint/ @owner/reviewers alice@example.com\n")
     github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "alice", "APPROVED", head)
+    _approved(root, github)
 
     status = _verify(root, github)["basics/result"]
 
@@ -657,8 +680,7 @@ def test_team_and_email_owners_never_authenticate(tmp_path: Path) -> None:
 def test_no_codeowners_file_allows_nobody(tmp_path: Path) -> None:
     root = _project(tmp_path, codeowners=None)
     github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "alice", "APPROVED", head)
+    _approved(root, github)
 
     status = _verify(root, github)["basics/result"]
 
@@ -669,8 +691,7 @@ def test_no_codeowners_file_allows_nobody(tmp_path: Path) -> None:
 def test_code_owner_logins_match_without_case(tmp_path: Path) -> None:
     root = _project(tmp_path, "* @owner\nblueprint/ @Alice\n")
     github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "aLICE", "APPROVED", head)
+    _approved(root, github, reviewer="aLICE")
 
     status = _verify(root, github)["basics/result"]
 
@@ -698,8 +719,7 @@ def test_a_listing_longer_than_the_page_limit_fails_closed(
 
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "alice", "APPROVED", head)
+    head = _approved(root, github)
     for number in range(99):
         github.review(7, f"reader{number}", "COMMENTED", head)
     github.review(7, "alice", "CHANGES_REQUESTED", head)
@@ -714,11 +734,7 @@ def test_a_listing_longer_than_the_page_limit_fails_closed(
 def test_lookups_are_cached_and_the_request_budget_fails_closed(tmp_path: Path) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    _approve(root, "other", _HASH)
-    _commit(root, "Approve two articles")
-    head = github.open_pull(7, "bob")
+    head = _approving_pull(root, github, "result", "other")
     github.review(7, "alice", "APPROVED", head)
     landed = _land(root, github, 7)
 
@@ -760,11 +776,7 @@ def test_a_budget_spent_outside_a_candidate_is_refused_at_the_ceiling_and_unchec
 
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    _approve(root, "other", _HASH)
-    _commit(root, "Approve two articles")
-    head = github.open_pull(7, "bob")
+    head = _approving_pull(root, github, "result", "other")
     github.review(7, "alice", "APPROVED", head)
     if gate:
         assert all(status.authenticated for status in _verify(root, github, pull_request=7).values())
@@ -794,11 +806,7 @@ def test_a_failed_request_in_the_gate_refuses_only_the_approval_that_needs_it(tm
 
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    _approve(root, "other", _HASH)
-    _commit(root, "Approve two articles")
-    head = github.open_pull(7, "bob")
+    head = _approving_pull(root, github, "result", "other")
     github.review(7, "alice", "APPROVED", head)
     other = "/contents/blueprint/roadmap/basics/other.md"
     github.answers[other] = GitHubUnavailable(f"GitHub API GET {other} failed with HTTP 502: Bad Gateway")
@@ -816,8 +824,7 @@ def test_only_an_approval_a_later_run_may_authenticate_is_unchecked(tmp_path: Pa
 
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "alice", "APPROVED", head)
+    _approved(root, github)
     _branch(root, "other")
     _approve(root, "other", _OTHER_HASH)
     _commit(root, "Approve the other article")
@@ -858,8 +865,7 @@ def test_a_head_lookup_that_fails_outside_a_publishing_run_leaves_every_approval
 ) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "alice", "APPROVED", head)
+    _approved(root, github)
     github.answers["/git/ref/heads/main"] = (
         GitHubUnavailable("GitHub API GET /git/ref/heads/main failed with HTTP 502: Bad Gateway")
         if failure == "HTTP 502"
@@ -908,8 +914,7 @@ def test_approvals_past_the_ceiling_of_a_run_with_the_hour_to_itself_are_refused
 
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "alice", "APPROVED", head)
+    _approved(root, github)
     _branch(root, "other")
     _approve(root, "other", _OTHER_HASH)
     _commit(root, "Approve the other article")
@@ -1020,8 +1025,7 @@ def test_unreadable_codeowners_rules_leave_the_owners_undecided(rules: str, mess
 def test_an_unreadable_codeowners_rule_refuses_the_articles_it_could_own(tmp_path: Path) -> None:
     root = _project(tmp_path, "* @alice\n!blueprint/ @carol\n")
     github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "alice", "APPROVED", head)
+    _approved(root, github)
 
     status = _verify(root, github)["basics/result"]
 
@@ -1053,8 +1057,7 @@ def test_github_reads_the_first_codeowners_location_that_exists(tmp_path: Path) 
 def test_a_shallow_checkout_stops_authentication(tmp_path: Path) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "alice", "APPROVED", head)
+    _approved(root, github)
     shallow = tmp_path / "shallow"
     _git(tmp_path, "clone", "--quiet", "--depth", "1", "--branch", "main", root.resolve().as_uri(), str(shallow))
 
@@ -1358,10 +1361,7 @@ def test_the_gate_counts_only_reviews_of_its_own_pull_request(
     base = _git(root, "rev-parse", "HEAD")
     github = FakeGitHub(root)
     _use_fake_github(monkeypatch, github)
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    _commit(root, "Approve the result")
-    head = github.open_pull(7, "bob")
+    head = _approving_pull(root, github)
     # Another pull request with the same head, approved and closed unmerged.
     github.open_pull(8, "bob", head=head)
     github.review(8, "alice", "APPROVED", head)
@@ -1381,10 +1381,7 @@ def test_the_gate_reads_code_owners_at_the_trusted_ref(
     _use_fake_github(monkeypatch, github)
     (root / ".github" / "CODEOWNERS").write_text("* @owner\nblueprint/ @alice @carol\n", encoding="utf-8")
     _commit(root, "Make carol a code owner")
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    _commit(root, "Approve the result")
-    head = github.open_pull(7, "bob")
+    head = _approving_pull(root, github)
     github.review(7, "carol", "APPROVED", head)
 
     assert _gate(root, base) == 1
@@ -1432,10 +1429,7 @@ def test_the_gate_refuses_a_pull_request_into_another_branch(
     base = _git(root, "rev-parse", "HEAD")
     github = FakeGitHub(root)
     _use_fake_github(monkeypatch, github)
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    _commit(root, "Approve the result")
-    head = github.open_pull(7, "bob", base_ref="release")
+    head = _approving_pull(root, github, base_ref="release")
     github.review(7, "alice", "APPROVED", head)
 
     assert _gate(root, base) == 1
@@ -1819,8 +1813,7 @@ def test_render_links_reviews_only_under_an_https_verifier_host() -> None:
 def test_a_review_link_off_the_github_host_is_dropped(tmp_path: Path) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "alice", "APPROVED", head)
+    _approved(root, github)
     github.reviews[7][0]["html_url"] = "https://evil.example/owner/project/pull/7"
 
     status = _verify(root, github)["basics/result"]

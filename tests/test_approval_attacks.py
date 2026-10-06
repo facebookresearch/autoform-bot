@@ -25,6 +25,8 @@ from tests.test_approvals import (
     FakeGitHub,
     _append,
     _approve,
+    _approved,
+    _approving_pull,
     _branch,
     _commit,
     _git,
@@ -353,10 +355,7 @@ def test_a5_an_approval_needs_a_green_verify_run_on_the_approved_head(tmp_path: 
 def test_a5_a_green_run_on_an_earlier_commit_does_not_count(tmp_path: Path) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    _commit(root, "Approve the result")
-    github.open_pull(7, "bob")
+    _approving_pull(root, github)
     _append(root, "\nA note.\n")
     _commit(root, "Add a note")
     head = github.push(7, ci="failure")
@@ -523,10 +522,7 @@ def test_an_unmerged_pull_request_approved_by_an_owner_does_not_count(tmp_path: 
 def test_a_pull_request_merged_into_another_branch_does_not_count(tmp_path: Path) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    _commit(root, "Approve the result")
-    github.open_pull(7, "mallory", base_ref="release")
+    _approving_pull(root, github, author="mallory", base_ref="release")
     github.review(7, "alice", "APPROVED")
     _land(root, github, 7)
 
@@ -536,8 +532,7 @@ def test_a_pull_request_merged_into_another_branch_does_not_count(tmp_path: Path
 def test_a_commit_in_several_merged_pull_requests_is_ambiguous(tmp_path: Path) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "alice", "APPROVED")
+    head = _approved(root, github)
     github.open_pull(8, "mallory", head=head, base=_git(root, "rev-parse", "HEAD~1"))
     github.merged(8, _git(root, "rev-parse", "HEAD"))
 
@@ -642,14 +637,6 @@ def test_a1_without_a_net_article_change_still_launders_nothing(tmp_path: Path, 
 
 # Round 3. Code owner review must guard everything an approval rests on, and
 # an approving pull request may change nothing else.
-
-
-def _approved(root: Path, github: FakeGitHub, *, strategy: str = "squash", reviewer: str = "alice") -> str:
-    """The legitimate case: bob's #7 records the hash and alice approves its head; return that head."""
-
-    head = _pull_approving(root, github, strategy=strategy)
-    github.review(7, reviewer, "APPROVED", head)
-    return head
 
 
 def _authenticated(root: Path, github: FakeGitHub, reviewer: str = "alice") -> None:
@@ -944,10 +931,7 @@ def test_the_gate_reads_codeowners_errors_at_its_base(tmp_path: Path, broken: st
     root = _project(tmp_path)
     github = FakeGitHub(root)
     base = _git(root, "rev-parse", "main")
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    head = _commit(root, "Approve the result")
-    github.open_pull(7, "bob")
+    head = _approving_pull(root, github)
     github.review(7, "alice", "APPROVED", head)
     _git(root, "checkout", "--quiet", "main")
     _append(root, "Moved on.\n", "blueprint/README.md")
@@ -970,10 +954,7 @@ def test_the_gate_reads_no_default_branch_head(tmp_path: Path) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
     base = _git(root, "rev-parse", "main")
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    head = _commit(root, "Approve the result")
-    github.open_pull(7, "bob")
+    head = _approving_pull(root, github)
     github.review(7, "alice", "APPROVED", head)
     _git(root, "checkout", "--quiet", "main")
     _append(root, "Moved on.\n", "blueprint/README.md")
@@ -1355,10 +1336,7 @@ def test_a_file_list_as_long_as_github_lists_fails_closed_however_many_pages_are
 ) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    head = _commit(root, "Approve the result")
-    github.open_pull(7, "bob")
+    head = _approving_pull(root, github)
     github.review(7, "alice", "APPROVED", head)
     if not gate:
         _land(root, github, 7)
@@ -1380,10 +1358,7 @@ def test_the_gate_still_needs_the_diff_to_record_the_hash(tmp_path: Path) -> Non
 
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    head = _commit(root, "Approve the result")
-    github.open_pull(7, "bob")
+    head = _approving_pull(root, github)
     github.review(7, "alice", "APPROVED", head)
     github.file_edits[7] = lambda entries: [{**entry, "patch": None} for entry in entries]
 
@@ -1398,10 +1373,7 @@ def test_the_gate_still_needs_the_diff_to_record_the_hash(tmp_path: Path) -> Non
 def test_c3_a_run_for_a_pull_request_into_another_branch_does_not_count(tmp_path: Path) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    _commit(root, "Approve the result")
-    head = github.open_pull(7, "mallory", ci=None)
+    head = _approving_pull(root, github, author="mallory", ci=None)
     github.run(head)
     repository = {"id": 1, "full_name": "owner/project"}
     github.runs[-1]["pull_requests"] = [
@@ -1525,10 +1497,7 @@ def test_a_fork_is_refused_before_anything_about_it_is_read(tmp_path: Path, sour
 def test_the_gate_refuses_a_pull_request_between_repositories(tmp_path: Path, side: str, reason: str) -> None:
     root = _project(tmp_path)
     github = FakeGitHub(root)
-    _branch(root, "approve")
-    _approve(root, "result", _HASH)
-    head = _commit(root, "Approve the result")
-    github.open_pull(7, "bob")
+    head = _approving_pull(root, github)
     github.review(7, "alice", "APPROVED", head)
     github.pulls[7][side]["repo"] = {"id": 2, "full_name": "mallory/project"}
 
