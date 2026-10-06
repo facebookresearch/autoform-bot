@@ -1718,16 +1718,17 @@ def _too_deep_to_decode(text: str) -> bool:
 
 def _undecodable_json(damage: str) -> str:
     """JSON that json.loads refuses with a RecursionError or a plain ValueError;
-    skips where it decodes, as this file's tests of the same damage do."""
+    skips the calling test where this interpreter would decode it."""
 
     if damage == "nested":
         text = '{"schema": ' + "[" * 100_000 + "]" * 100_000 + "}"
         if not _too_deep_to_decode(text):
             pytest.skip("this stack holds a hundred thousand nested arrays")
         return text
-    if not getattr(sys, "get_int_max_str_digits", lambda: 0)():
+    digits = getattr(sys, "get_int_max_str_digits", lambda: 0)()
+    if not digits:
         pytest.skip("this interpreter converts an integer of any length")
-    return '{"schema": 1' + "0" * sys.get_int_max_str_digits() + "}"
+    return '{"schema": 1' + "0" * digits + "}"
 
 
 @pytest.mark.parametrize("damaged", ["manifest", "bundle"])
@@ -1739,10 +1740,8 @@ def test_a_manifest_or_bundle_nested_too_deep_to_decode_is_refused_before_any_le
     From 3.14 it goes as deep as the stack allows, about 37,000 levels in 8 MiB,
     and a stack that holds all of them skips the test."""
 
-    nested = '{"schema": ' + "[" * 100_000 + "]" * 100_000 + "}"
     # Decoded here, nearer the stack's base than the command decodes it.
-    if not _too_deep_to_decode(nested):
-        pytest.skip("this stack holds a hundred thousand nested arrays")
+    nested = _undecodable_json("nested")
     extraction = _Extraction()
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, extraction)
     path = {"manifest": manifest, "bundle": bundle}[damaged]
@@ -1763,7 +1762,7 @@ def test_a_manifest_or_bundle_nested_too_deep_to_decode_is_refused_before_any_le
 
 def _damage_bundle(bundle: Path, damage: str) -> None:
     if damage == "a-number-too-long":
-        bundle.write_text('{"schema": 1' + "0" * sys.get_int_max_str_digits() + "}", encoding="utf-8")
+        bundle.write_text(_undecodable_json("a-number-too-long"), encoding="utf-8")
     else:
         text = bundle.read_text(encoding="utf-8")
         assert '"title":"' in text
@@ -1788,8 +1787,6 @@ def test_a_bundle_with_a_number_too_long_or_a_lone_surrogate_is_refused_as_unrea
     UTF-8. An interpreter with no such limit (before 3.10.7, or with it set to 0)
     converts an integer of any length, and skips the long-number cases."""
 
-    if damage == "a-number-too-long" and not getattr(sys, "get_int_max_str_digits", lambda: 0)():
-        pytest.skip("this interpreter converts an integer of any length")
     blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
     _damage_bundle(bundle, damage)
     capsys.readouterr()
