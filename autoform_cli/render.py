@@ -842,9 +842,9 @@ def _next_target(
             f'<a href="{html.escape(statement, quote=True)}">{title}</a>' if statement else title
         )
         why = (
-            "Every prerequisite is proved, so the proof can be written now."
+            "Its prerequisites are ready, so the proof can be written now."
             if node_status.key == "can_prove"
-            else "Every prerequisite is stated, so this can be written down."
+            else "Its prerequisites are ready, so the statement can be written down."
         )
         actions = [f'<a href="{html.escape(graph_href, quote=True)}">Dependencies</a>']
         if chapter_page is not None:
@@ -1667,6 +1667,13 @@ def _render_environment(
     context_link = _graph_context_link(node, page=page, destination=destination)
     source_link = _vault_source_link(node, repo_root=repo_root, linker=linker)
     meta_rows = implementation_rows
+    if node_status.key == "conditional":
+        # A conditional proof must never read as finished, so the open
+        # statements it rests on are named on the statement itself.
+        assumed = _node_references(
+            node_status.assumes, graph=graph, statuses=statuses, numbers=numbers, links=links
+        )
+        meta_rows.append(("Assumes", f"{assumed} (open statements without a recorded Lean proof)"))
     if node.discussion:
         meta_rows.append(("Discussion", _discussion_link(node.discussion, linker)))
     meta = _render_rows(meta_rows, css_class="bp-meta")
@@ -1814,15 +1821,7 @@ def _dependency_disclosure(
     rows: list[tuple[str, str]] = []
 
     def references(node_ids: list[str] | tuple[str, ...]) -> str:
-        rendered = []
-        for other_id in node_ids:
-            other = graph.nodes[other_id]
-            label = html.escape(f"{numbers[other_id]} ({other.title})")
-            rendered.append(
-                f'<a class="bp-ref bp-ref-{statuses[other_id].key}" '
-                f'href="{html.escape(links[other_id], quote=True)}">{label}</a>'
-            )
-        return " · ".join(rendered)
+        return _node_references(node_ids, graph=graph, statuses=statuses, numbers=numbers, links=links)
 
     if node.statement_dependencies:
         rows.append(("Statement uses", references(node.statement_dependencies)))
@@ -1836,6 +1835,26 @@ def _dependency_disclosure(
 
     body = _render_rows(rows, css_class="bp-dependency-body")
     return f'<details class="bp-dependencies"><summary>Dependencies</summary>{body}</details>'
+
+
+def _node_references(
+    node_ids: list[str] | tuple[str, ...],
+    *,
+    graph: Graph,
+    statuses: dict[str, status.NodeStatus],
+    numbers: dict[str, str],
+    links: dict[str, str],
+) -> str:
+    """Link each node by number and title, coloured by its derived state."""
+    rendered = []
+    for other_id in node_ids:
+        other = graph.nodes[other_id]
+        label = html.escape(f"{numbers[other_id]} ({other.title})")
+        rendered.append(
+            f'<a class="bp-ref bp-ref-{statuses[other_id].key}" '
+            f'href="{html.escape(links[other_id], quote=True)}">{label}</a>'
+        )
+    return " · ".join(rendered)
 
 
 def _render_rows(rows: list[tuple[str, str]], *, css_class: str) -> str:
