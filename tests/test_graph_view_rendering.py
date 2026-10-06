@@ -256,7 +256,8 @@ def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_pa
     assert "MAX_DOM_NODES = 180" in script
     assert "MAX_MAP_NODES = 120" in script
     assert "MIN_READABLE_SCALE = .8" in script
-    assert "fitted < MIN_READABLE_SCALE" in script
+    assert "MIN_ATLAS_SCALE = .55" in script
+    assert "fitted < readableFloor" in script
     assert 'params.get("view") === "list" || !state.mapAllowed' in script
     assert '" of " + data.nodes.length + " shown"' in script
     assert '"+" + hidden + " hidden"' in script
@@ -326,13 +327,13 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
 def test_explorer_pages_large_searches_and_relations_and_fits_deep_graphs() -> None:
     script = dag_viewer.viewer_script()
 
-    assert "MIN_SCALE = .002, MIN_READABLE_SCALE = .8" in script
+    assert "MIN_SCALE = .002, MIN_READABLE_SCALE = .8, MIN_ATLAS_SCALE = .55" in script
     assert '"Show all "' not in script
     assert "Math.min(matches.length, state.searchLimit + SEARCH_PAGE)" in script
     assert "Math.min(visible + RELATION_PAGE, ids.length)" in script
     assert "ids.slice(visible, next)" in script
     assert "clamp(old * factor, MIN_SCALE, 4)" in script
-    assert "Math.max(fitted, MIN_READABLE_SCALE), MIN_SCALE, 1.35" in script
+    assert "Math.max(fitted, readableFloor), MIN_SCALE, 1.35" in script
 
 
 def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path) -> None:
