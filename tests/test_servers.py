@@ -247,3 +247,32 @@ class TestLspServer:
 
         projects.close()
         assert all(session.closed for session in created)
+
+    def test_project_router_never_returns_a_partial_lsp_session(self, tmp_path):
+        from servers.lsp.server import LeanLspProjects, LeanLspStartupError
+
+        class PartialSession:
+            def __init__(self):
+                self.close_calls = 0
+
+            def close(self):
+                self.close_calls += 1
+
+        project = make_lake_project(tmp_path, "failed-lsp-startup")
+        partial = PartialSession()
+        calls = 0
+
+        def factory(root):
+            nonlocal calls
+            calls += 1
+            raise LeanLspStartupError(partial, RuntimeError("startup failed"))
+
+        projects = LeanLspProjects(factory)
+        with pytest.raises(LeanLspStartupError, match="startup failed"):
+            projects.get(str(project))
+        with pytest.raises(RuntimeError, match="cleanup is pending"):
+            projects.get(str(project))
+        assert calls == 1
+
+        projects.close()
+        assert partial.close_calls == 1
