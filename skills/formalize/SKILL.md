@@ -121,9 +121,10 @@ Depends on`, `## Proof depends on`, and `## Sources`. Replace that section's
 contents on a later failed route rather than appending another one; record the
 remaining goal, checked lemmas, and next route, never a transcript or retry
 counter. A missing
-prerequisite, an incorrect decomposition, a change another article needs, or a
-proof recorded without its statement returns to Roadmap instead of silently
-changing the DAG.
+prerequisite, an incorrect decomposition, or a change another article needs
+returns to Roadmap instead of silently changing the DAG. Never write `proof:
+formalized` without `statement: formalized`; graph loading rejects that
+inconsistent assertion rather than routing it to Roadmap.
 
 Run `autoform check <PROJECT>/blueprint --lean-root <PROJECT>` and `autoform
 audit <PROJECT>/blueprint --lean-root <PROJECT>`. Resolve every finding this

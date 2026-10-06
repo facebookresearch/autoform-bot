@@ -80,6 +80,8 @@ def test_formalize_replaces_custom_orchestration_with_the_markdown_frontier(
     assert "outside `## Depends on`, `## Proof depends on`, and `## Sources`" in normalized
     assert "article's final section" in normalized
     assert "rather than appending another one" in normalized
+    assert "Never write `proof: formalized` without `statement: formalized`" in normalized
+    assert "graph loading rejects that inconsistent assertion" in normalized
     assert (
         "require the same `phase`, `blockers`, `dependencies`, `article_revision`, "
         "`open_statements`, `assumes`, and `revision` as the first read"
