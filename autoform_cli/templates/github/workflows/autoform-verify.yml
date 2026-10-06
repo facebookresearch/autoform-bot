@@ -91,13 +91,25 @@ jobs:
           set -euo pipefail
           archive="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-root-build.XXXXXX.tgz")"
           probe="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-axiom-probe.XXXXXX.lean")"
-          trap 'rm -f "$archive" "$probe"' EXIT
+          contract="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-assumptions.XXXXXX.json")"
+          trap 'rm -f "$archive" "$probe" "$contract"' EXIT
           # Lake resolves both manifest languages and package/custom buildDir.
           # `lake pack` archives only the root package's actual build directory,
           # leaving dependency package artifacts outside the audit boundary.
           lake pack "$archive"
-          python3 .github/autoform_audit.py \
-            "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
+          # roadmap/README.md may opt in to open statements (theorems whose proof
+          # is still sorry). Only then does the audit accept sorry, and only in
+          # the statements the Markdown declares open.
+          policy="$(python3 .github/autoform_audit.py --policy blueprint)"
+          if [ "$policy" = "allowed" ]; then
+            uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+              autoform work assumptions blueprint --json > "$contract"
+            python3 .github/autoform_audit.py --open-statements "$contract" \
+              "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
+          else
+            python3 .github/autoform_audit.py \
+              "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
+          fi
           lake env lean "$probe"
 
       # The explicit policy marker keeps deleting every card from disabling the

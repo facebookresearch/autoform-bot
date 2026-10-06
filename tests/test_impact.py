@@ -56,9 +56,15 @@ def _records(*records: ConstantRecord) -> dict[str, ConstantRecord]:
 
 
 def _article(
-    node_id: str, *declarations: str, article_id: str | None = None, dependencies: tuple[str, ...] = ()
+    node_id: str,
+    *declarations: str,
+    article_id: str | None = None,
+    dependencies: tuple[str, ...] = (),
+    statement_dependencies: tuple[str, ...] = (),
+    stated: bool = False,
+    mathlib: bool = False,
 ) -> ImpactArticle:
-    return ImpactArticle(node_id, article_id, declarations, dependencies)
+    return ImpactArticle(node_id, article_id, declarations, dependencies, statement_dependencies, stated, mathlib)
 
 
 def _impact(records, articles, revised: str, declarations=None, **kwargs):
@@ -291,6 +297,66 @@ def test_undeclared_dependencies_and_claim_targets() -> None:
     assert _ids(report.proof_impacted) == ["chapter/loose"]
     assert report.undeclared_dependencies == ("chapter/detached", "chapter/loose")
     assert report.claim_targets == ("af_base", "af_detached", "af_direct", "af_loose", "chapter/transitive")
+
+
+def test_stated_markdown_statement_dependents_the_lean_does_not_show_are_reported() -> None:
+    records = _records(
+        _rec("A.base", "def"),
+        _rec("A.direct", type_uses=("A.base",)),
+        _rec("A.inlined"),
+        _rec("A.proofOnly", value_uses=("A.base",)),
+        _rec("A.unstated"),
+        _rec("A.viaProof"),
+    )
+
+    def stated(node_id: str, *declarations: str, on: str = "base", **fields: object) -> ImpactArticle:
+        return _article(node_id, *declarations, dependencies=(on,), statement_dependencies=(on,), stated=True, **fields)
+
+    articles = [
+        _article("base", "A.base", article_id="af_base", stated=True),
+        stated("direct", "A.direct"),
+        # Unstated and named by no article: it only carries the statement edge.
+        _article("middle", dependencies=("base",), statement_dependencies=("base",)),
+        stated("inlined", "A.inlined", on="middle", article_id="af_inlined"),
+        stated("proof-only", "A.proofOnly"),
+        _article("unstated", "A.unstated", dependencies=("base",), statement_dependencies=("base",)),
+        _article("via-proof", "A.viaProof", dependencies=("base",), stated=True),
+        # Stated by Mathlib, whose declaration cannot use A.base.
+        stated("in-mathlib", mathlib=True),
+    ]
+
+    report = _impact(records, articles, "base")
+
+    assert _ids(report.statement_impacted) == ["direct"]
+    assert _ids(report.proof_impacted) == ["proof-only"]
+    assert report.unused_statement_dependencies == ("inlined", "proof-only")
+    assert report.as_dict()["unused_statement_dependencies"] == ["inlined", "proof-only"]
+    assert report.claim_targets == ("af_base", "af_inlined", "direct", "proof-only")
+    assert "Statement dependents in Markdown that are not statement impacted: inlined, proof-only" in (
+        format_impact(report)
+    )
+
+
+def test_an_unused_statement_dependency_alone_keeps_a_revision_from_being_contained() -> None:
+    records = _records(_rec("A.leaf", "def"), _rec("A.inlined"))
+    articles = [
+        _article("leaf", "A.leaf", stated=True),
+        _article("inlined", "A.inlined", dependencies=("leaf",), statement_dependencies=("leaf",), stated=True),
+    ]
+
+    report = _impact(records, articles, "leaf")
+
+    assert not report.contained
+    assert report.claim_targets == ("leaf", "inlined")
+    lines = format_impact(report)
+    assert lines.pop(2) == "Lean source revision: unbound"
+    assert re.fullmatch(r"Lean build revision: [0-9a-f]{64}", lines.pop(2))
+    assert lines == [
+        "Revising A.leaf of leaf",
+        "Graph source revision: rev",
+        "Statement dependents in Markdown that are not statement impacted: inlined",
+        "Claim targets: leaf, inlined",
+    ]
 
 
 def test_deprecated_constants_report_users_through_internal_details() -> None:
@@ -622,6 +688,49 @@ def test_declaration_override_claims_every_owner_of_the_revised_declaration() ->
     assert own.contained
 
 
+def test_markdown_paths_count_from_every_article_a_revised_declaration_belongs_to() -> None:
+    records = _records(
+        _rec("A.R", "def"),
+        _rec("A.X", "def"),
+        _rec("A.O", "def"),
+        _rec("A.O.aux", "def", parent="A.O"),
+        _rec("A.loose", "def"),
+        _rec("A.useX", type_uses=("A.X",)),
+        _rec("A.inlinesX"),
+        _rec("A.inlinesAux"),
+    )
+
+    def stated(node_id: str, *declarations: str, on: str) -> ImpactArticle:
+        return _article(node_id, *declarations, dependencies=(on,), statement_dependencies=(on,), stated=True)
+
+    articles = [
+        _article("r", "A.R"),
+        _article("t", "A.X", stated=True),
+        _article("o-a", "A.O"),
+        _article("o-b", "A.O"),
+        _article("uses-x", "A.useX", dependencies=("t",)),
+        stated("inlines-x", "A.inlinesX", on="t"),
+        stated("inlines-aux", "A.inlinesAux", on="o-b"),
+    ]
+
+    named = _impact(records, articles, "r", ["A.X"])
+    owned = _impact(records, articles, "r", ["A.O.aux"])
+    unowned = _impact(records, articles, "r", ["A.loose"])
+
+    # A.X belongs to t, so t needs no path to r, a path to t declares uses-x,
+    # and inlines-x rests on A.X through t although its Lean shows no use.
+    assert _ids(named.statement_impacted) == ["t", "uses-x"]
+    assert named.undeclared_dependencies == ()
+    assert named.unused_statement_dependencies == ("inlines-x",)
+    assert named.claim_targets == ("r", "inlines-x", "t", "uses-x")
+    # The unnamed A.O.aux belongs to both of A.O's articles.
+    assert owned.unused_statement_dependencies == ("inlines-aux",)
+    assert owned.claim_targets == ("r", "inlines-aux", "o-a", "o-b")
+    # A.loose belongs to no article, so only paths to r count.
+    assert unowned.unused_statement_dependencies == ()
+    assert unowned.claim_targets == ("r", _lean_key("A.loose"))
+
+
 def test_an_unowned_helper_claim_key_is_ref_safe_for_any_name() -> None:
     names = ("_private.Demo.Extra.0.A.priv", "A.«weird name»", "«∀»", "A." + "long" * 20)
     records = _records(_rec("A.base", "def"), *(_rec(name, type_uses=("A.base",)) for name in names))
@@ -928,7 +1037,7 @@ def _write_article(
 
 
 def _blueprint_project(tmp_path: Path, prefix: str) -> Path:
-    """A roadmap whose articles name ``{prefix}.base``, ``.uses``, ``.loose`` and nothing."""
+    """A roadmap whose articles name ``{prefix}.base``, ``.uses``, ``.loose``, ``.inlines`` and nothing."""
 
     project = tmp_path / "project"
     _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
@@ -947,6 +1056,12 @@ def _blueprint_project(tmp_path: Path, prefix: str) -> Path:
         project,
         "loose.md",
         metadata=["declaration: theorem", "statement: formalized", f"lean: {prefix}.loose"],
+    )
+    _write_article(
+        project,
+        "inlines.md",
+        metadata=["declaration: theorem", "statement: formalized", f"lean: {prefix}.inlines"],
+        depends=("base.md",),
     )
     _write_article(project, "empty.md", metadata=["declaration: theorem"])
     return project
@@ -968,6 +1083,7 @@ _STUB_RECORDS = [
     _payload("Demo.uses", type_uses=["Demo.base"]),
     _payload("Demo.base_eq", type_uses=["Demo.base"]),
     _payload("Demo.loose", value_uses=["Demo.base", "Demo.old"], uses_deprecated=["Demo.old"]),
+    _payload("Demo.inlines"),
     _payload("Demo.old", deprecated=True, replacement="Demo.base_eq"),
     _payload("Demo.gone", deprecated=True),
 ]
@@ -984,6 +1100,26 @@ def _stub_probe(monkeypatch: pytest.MonkeyPatch, records=_STUB_RECORDS, *, error
 
     monkeypatch.setattr("autoform_cli.skeleton.run_probe", run_probe)
     return calls
+
+
+def test_cli_leaves_a_mathlib_statement_dependent_unclaimed(tmp_path: Path, monkeypatch, capsys) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    _write_article(
+        project,
+        "known.md",
+        metadata=["declaration: theorem", "mathlib: true", "mathlib_declaration: Nat.add_zero"],
+        depends=("base.md",),
+    )
+    lean_root = _stub_lean_root(tmp_path)
+    _stub_probe(monkeypatch)
+
+    code = cli.main(["work", "impact", _BASE_ID, str(project), "--lean-root", str(lean_root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    assert report["unused_statement_dependencies"] == ["chapter/inlines"]
+    assert "chapter/known" not in report["claim_targets"]
 
 
 def test_cli_writes_the_impact_report_as_canonical_json(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -1028,12 +1164,19 @@ def test_cli_writes_the_impact_report_as_canonical_json(tmp_path: Path, monkeypa
             }
         ],
         "undeclared_dependencies": ["chapter/loose"],
+        "unused_statement_dependencies": ["chapter/inlines"],
         "deprecated": [
             {"name": "Demo.gone", "replacement": None, "users": [], "articles": []},
             {"name": "Demo.old", "replacement": "Demo.base_eq", "users": ["Demo.loose"], "articles": []},
         ],
         "deprecated_unused": ["Demo.gone"],
-        "claim_targets": [_BASE_ID, _USES_ID, "chapter/loose", "lean/demo-base-eq-7f17aa41d1461243"],
+        "claim_targets": [
+            _BASE_ID,
+            _USES_ID,
+            "chapter/inlines",
+            "chapter/loose",
+            "lean/demo-base-eq-7f17aa41d1461243",
+        ],
     }
     (call,) = calls
     assert call["label"] == "impact probe"
@@ -1064,11 +1207,12 @@ def test_cli_text_report_lists_each_section(tmp_path: Path, monkeypatch, capsys)
         "  chapter/loose: Demo.loose",
         "Helpers no article names:",
         "  Demo.base_eq (theorem, statement) Demo.lean:5; no owner; claims lean/demo-base-eq-7f17aa41d1461243",
-        "Impacted without a Markdown dependency path to the revised article: chapter/loose",
+        "Impacted without a Markdown dependency path to the revised declarations: chapter/loose",
+        "Statement dependents in Markdown that are not statement impacted: chapter/inlines",
         "Deprecated:",
         "  Demo.gone: no users, safe to delete",
         "  Demo.old -> Demo.base_eq: used by Demo.loose",
-        f"Claim targets: {_BASE_ID}, {_USES_ID}, chapter/loose, lean/demo-base-eq-7f17aa41d1461243",
+        f"Claim targets: {_BASE_ID}, {_USES_ID}, chapter/inlines, chapter/loose, lean/demo-base-eq-7f17aa41d1461243",
     ]
     assert calls[0]["timeout"] == skeleton.DEFAULT_PROBE_TIMEOUT
 
@@ -1597,6 +1741,8 @@ def test_the_probe_reads_a_built_project(tmp_path: Path, monkeypatch, capsys) ->
         ("Imp.usesOld", "theorem", "statement", "Imp/Extra.lean", 10, []),
     ]
     assert report["undeclared_dependencies"] == ["chapter/simp"]
+    # proved.md states on uses.md in Markdown, but its Lean statement does not mention base.
+    assert report["unused_statement_dependencies"] == ["chapter/proved"]
     # The equation lemma `@[simp]` gives oldSeed goes when oldSeed does.
     assert report["deprecated"] == [
         {"name": "Imp.oldEq", "replacement": "Imp.base_eq", "users": ["Imp.usesOld"], "articles": []},

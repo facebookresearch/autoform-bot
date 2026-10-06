@@ -30,9 +30,10 @@ worktree, so nothing reaches that branch before its default build passes.
 Before dispatching, commit the roadmap state the frontier was read from and base
 each worktree on that commit, not on the remote's default branch (Claude Code's
 agent isolation does so only with `worktree.baseRef: head`). Give each subagent
-the `claim_target`, `phase`, and `article_revision` it is dispatched for. A new
-worktree has no `.lake`: in a Mathlib project, run `lake exe cache get` there
-under the `lake-build` claim before its first build or Lean tool call.
+the `claim_target`, `phase`, `article_revision`, `open_statements`, `assumes`,
+and `revision` it is dispatched for. A new worktree has no `.lake`: in a Mathlib
+project, run `lake exe cache get` there under the `lake-build` claim before its
+first build or Lean tool call.
 
 Give every concurrent agent and subagent its own worker ID, such as its host and
 worktree name, and pass it as `--worker-id` on every claim command. Never reuse
@@ -53,25 +54,56 @@ it during a long build, and release it as soon as the build ends.
 
 After acquiring the claim, bring the worktree up to date with the shared branch
 and reload `work context`. Before editing, require the same `phase`, `blockers`,
-`dependencies`, and `article_revision` as the first read and, for a subagent,
-the `phase` and `article_revision` it was dispatched with. Unrelated parallel
-articles may legitimately change the graph-wide source revision.
+`dependencies`, `article_revision`, `open_statements`, `assumes`, and `revision`
+as the first read and, for a subagent, the same `phase`, `article_revision`,
+`open_statements`, `assumes`, and `revision` it was dispatched with. Unrelated
+parallel articles may legitimately change the graph-wide source revision.
 
 Read the complete article, cited sources, dependency articles, and existing Lean
 target. Preserve the exact mathematical statement. Work only on the selected
 phase: do not modify another article or its Lean declarations, or weaken a
-public statement. Search the pinned Mathlib checkout before adding helpers, and
-use the shared Lean LSP and REPL with `<PROJECT>` as the project path. Finish
-with the focused Lake target. Declare the result in a module the library root
-imports, or that the lakefile's globs cover, because the default build is the
-only one CI compiles and audits. Check the recorded declaration with `#print
-axioms`; do not accept `sorry`, new axioms, unsafe shortcuts, a weaker theorem,
-unused hypotheses, or an unrelated declaration.
+public statement. The one exception is revising a declaration other articles'
+Lean uses: start from `autoform work impact` and make only the edits the
+[revision contract](../../autoform_cli/README.md#revision-contract) requires,
+under the claims it requires. A work item flagged `revision`, whose article
+records `statement: retracted`, is such a revision; restating it replaces
+`statement: retracted` with `statement: formalized`. Never add a new use of a
+deprecated declaration. Search the pinned Mathlib checkout before adding
+helpers, and use the shared Lean LSP and REPL with `<PROJECT>` as the project
+path. Finish with the focused Lake target. Declare the result in a module the
+library root imports, or that the lakefile's globs cover, because the default
+build is the only one CI compiles and audits. Check the recorded declaration
+with `#print axioms`; do not accept `sorry`, new axioms, unsafe shortcuts, a
+weaker theorem, unused hypotheses, or an unrelated declaration, except as the
+open-statement policy below allows.
 
-The statement phase writes the declaration. Project CI rejects `sorry`, so for a
-theorem it also writes the complete proof; that is why `work list` offers the
-phase only once the proof prerequisites are proved. The proof phase completes
-the proof of an already recorded statement without changing that statement.
+`roadmap/README.md` sets the project's policy. Under the default strict policy,
+project CI rejects `sorry`: the statement phase writes the declaration and, for
+a theorem, the complete proof, which is why `work list` offers the phase only
+once the proof prerequisites are proved. Under `open_statements: allowed`, the
+statement phase of a theorem writes the faithful statement with a proof body of
+exactly `sorry` and records `statement: formalized`, or writes the full proof
+and, on acceptance, records both assertions. That `sorry` is the declaration's
+whole body: never part of its type, a helper, a definition, or a `where` clause,
+and never one case of a recursive proof, which Lean can compile into
+auxiliaries such as `_f` that CI rejects. A definition is never left open: its
+body is its proof, so `work list` offers its statement phase only once its
+proof prerequisites are stated. In both policies the proof phase completes the
+proof of an already recorded statement without changing that statement.
+
+Under the open policy a proof may use the open statements its Markdown
+dependencies reach: each open dependency with whatever its statement
+prerequisites reach, and everything a proved dependency reaches, but not an
+open dependency's proof prerequisites. `autoform work assumptions --json` lists
+the exact `allowed_open_declarations`. The article then shows as conditionally
+proved, and `#print axioms` lists the `sorryAx` it inherits without saying from
+where. Before landing, record `proof: formalized` in the worktree (until then
+the audit treats the article as open), reproduce the CI audit as the [open
+statements reference](../../autoform_cli/README.md#open-statements) shows, and
+require a `conditional` or `sorry-free` line for each recorded declaration and
+a passing summary. An open statement the Markdown does not declare as a
+dependency fails CI: send the missing dependency to Roadmap or stop using it.
+Never describe a conditional proof as complete, fully proved, or sorry-free.
 
 After the focused build passes, require an independent Agent Review of every
 changed statement or proof for source faithfulness, dependency correctness, and
@@ -90,8 +122,10 @@ changing the DAG.
 
 Run `autoform check <PROJECT>/blueprint --lean-root <PROJECT>` and `autoform
 audit <PROJECT>/blueprint --lean-root <PROJECT>`. Resolve every finding this
-work introduced on the claimed article; report unrelated pre-existing findings
-instead of fixing them.
+work introduced on the claimed article, except `lean-target-deprecated` for a
+superseded declaration that an expand, migrate, contract revision keeps in the
+revised article's `lean:` until it is deleted; report unrelated pre-existing
+findings instead of fixing them.
 
 If `<PROJECT>/blueprint/.autoform-review` exists, project CI also runs the
 statement-review gate: `autoform review check` fails on a formalized statement
@@ -108,7 +142,10 @@ article differs from its starting `article_revision` only by this worker's
 edits; if integration changed the candidate, repeat the review, check, and
 audit. With the review marker, then run the audit with `--review`, which needs
 that build because it extracts every Lean-mapped article, and report its
-findings on the claimed article.
+findings on the claimed article. For a revision, also re-run `autoform work
+impact` on the rebuilt result; if the route's claim set grew, acquire the whole
+larger set in one command under the no-hold-and-wait rule and repair the new
+targets before landing.
 Keep the article claim until every checkout on the claim board can see
 the verified commit: on the shared branch and, for an `origin` board, pushed,
 since other clones read their frontier from the remote. Without authority to

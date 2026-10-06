@@ -297,9 +297,10 @@ _MEANINGS = {
     "fully_proved": "Proved, and every prerequisite is fully proved too.",
     "proved": "Proof compiles, but something it rests on is not finished.",
     "defined": "Definition is written in Lean.",
-    "can_prove": "Statement is in Lean and every prerequisite is proved — ready to work.",
+    "conditional": "Proof compiles, but rests on an open statement without a recorded Lean proof.",
+    "can_prove": "Statement is in Lean and nothing it needs is blocked, so the proof can start.",
     "stated": "Statement is in Lean; the proof is not.",
-    "can_state": "Prerequisites are stated, so this can be written down.",
+    "can_state": "Nothing it needs is blocked, so the statement can be written in Lean.",
     "not_ready": "Needs more blueprint work before it can be attempted.",
     "planned": "Described in the blueprint only.",
 }

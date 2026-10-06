@@ -37,8 +37,9 @@ individual node and Lean-source links. Record each human decision as `approve`, 
 `block`, with the exact page or node and rationale. Separate validator output
 from the person's judgment. Do not silently apply requested revisions: hand
 mathematical-plan changes and Lean implementation changes to Roadmap, which
-reopens the affected articles for Formalize, and autonomous rubric scoring to
-Agent Review.
+records the decision and retracts the affected article so Formalize takes it up
+under the [revision contract](../../autoform_cli/README.md#revision-contract),
+and autonomous rubric scoring to Agent Review.
 
 Treat the landing page's `Scoped roadmap` percentage as completion among
 formalizable leaf targets that are fully proved, including every dependency
@@ -48,7 +49,12 @@ is an author assertion, not audit verification that the declaration is in
 Mathlib. Treat the percentage never as whole-source completion. Read the
 adjacent declared source coverage and its linked coverage contract before
 making scope claims. A statement-only theorem remains incomplete whether it is
-blocked or ready to prove.
+blocked or ready to prove. In a project that allows open statements, a
+conditionally proved target, whose proof rests on an open statement without a
+recorded Lean proof, is not complete either: it is never fully proved, so it
+counts toward the percentage's total but not its completed share, as does
+every target that depends on it. Present it as conditional, naming the open
+statements in its `Assumes` row, never as proved or sorry-free.
 
 ## Review formalized statements through prepared evidence and read-backs
 

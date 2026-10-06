@@ -74,16 +74,34 @@ context` reports for it, passing your own `--worker-id`; renew it while editing
 and release it once the committed revision is on the branch Formalize works
 from. A refused acquire means another agent owns the article: leave it and
 report it. Claims write refs to the board's remote, which is outward-facing, so
-make sure the request covers them. When a revision changes a statement, remove
-the `statement`, `proof`, and `lean` metadata the new text no longer matches.
-When you remove `lean`, also remove `review_approved` and delete the article's
-read-back cards under `blueprint/readbacks/<article_id>/` for declarations it
-no longer maps, which `review check` otherwise reports as orphaned.
-For a Lean revision requested in Human Review, record the decision in the
-article and remove the assertions it invalidates there and on every dependent
-whose Lean uses the changed declaration, so Formalize takes the work up from its
-frontier. For a large source, divide independent sections among available agents
-while retaining one owner for global coverage and dependency consistency.
+make sure the request covers them. When a revision changes a statement whose
+article has `lean:`, retract it: replace `statement: formalized` with
+`statement: retracted`, remove `proof: formalized`, and keep `lean:`, which
+Formalize needs to run `autoform work impact`; an article without `lean:` just
+loses `statement` and `proof`. When the project's CI pins an `AUTOFORM_REF`
+older than the marker, its `autoform check` rejects `statement: retracted`:
+remove `statement` and `proof` and keep `lean:` until the pin moves, and report
+the old pin. Under the open policy a retracted theorem stays
+an open statement, so whatever rests on it stays conditionally proved. Retract
+only that article and the dependents whose Markdown text the revision rewrites,
+claiming them all in one acquire; the Lean-side impact decides every other
+dependent. For a Lean revision requested in Human Review, record the decision in
+the article and retract it the same way, so it returns to the frontier as a
+statement phase flagged as a revision, and leave the Lean change to Formalize,
+which follows the [revision
+contract](../../autoform_cli/README.md#revision-contract); this skill edits
+only Markdown. For a large source, divide independent sections among available
+agents while retaining one owner for global coverage and dependency
+consistency.
+
+`open_statements` in `roadmap/README.md` is a project policy; absent means
+strict. `allowed` lets a theorem's statement land with a `sorry` proof, so
+dependents can be stated and proved before it is; the cost is conditionally
+proved results that stay incomplete until those proofs land. Change it only on
+the user's request and only once CI meets the
+[open statements](../../autoform_cli/README.md#open-statements) requirements.
+Turn it back off only once no open statement remains: the strict audit rejects
+every `sorry`, and strict status shows a proof resting on one as proved.
 
 Reconcile every affected source and milestone page, the coverage contract,
 `blueprint/README.md`, and the repository `README.md`.
