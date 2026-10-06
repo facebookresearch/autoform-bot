@@ -941,21 +941,10 @@ class LeanRuntimeServices:
             project_dir = self._string_param(params, "project_dir")
             file_path = self._string_param(params, "file_path")
             root, path = resolve_lean_file(project_dir, file_path)
-            with self.lsp_projects.lease_resolved(
+            diagnostics = self._lsp_operation(
                 root,
-                acquisition_timeout=self._acquisition_timeout(self.config.lsp_timeout),
-                creation_budget=self.lsp_creation_budget,
-            ) as session:
-                assert session is not None
-                try:
-                    diagnostics = session.get_diagnostics(str(path))
-                except Exception:
-                    if not session.is_alive():
-                        session.retire()
-                        self.lsp_projects.invalidate_resolved(root, session)
-                    raise
-                if not session.is_alive():
-                    self.lsp_projects.invalidate_resolved(root, session)
+                lambda session: session.get_diagnostics(str(path)),
+            )
             return format_lsp_diagnostics(diagnostics)
         if method == "lsp.hover":
             project_dir = self._string_param(params, "project_dir")
@@ -965,23 +954,35 @@ class LeanRuntimeServices:
             if line < 0 or character < 0:
                 raise ValueError("line and character must be nonnegative")
             root, path = resolve_lean_file(project_dir, file_path)
-            with self.lsp_projects.lease_resolved(
+            result = self._lsp_operation(
                 root,
-                acquisition_timeout=self._acquisition_timeout(self.config.lsp_timeout),
-                creation_budget=self.lsp_creation_budget,
-            ) as session:
-                assert session is not None
-                try:
-                    result = session.hover(str(path), line, character)
-                except Exception:
-                    if not session.is_alive():
-                        session.retire()
-                        self.lsp_projects.invalidate_resolved(root, session)
-                    raise
-                if not session.is_alive():
-                    self.lsp_projects.invalidate_resolved(root, session)
+                lambda session: session.hover(str(path), line, character),
+            )
             return result or "No hover information at this position."
         raise ValueError(f"unknown Lean runtime method: {method}")
+
+    def _lsp_operation(
+        self,
+        root: Path,
+        operation: Callable[[LeanLspSession], T],
+    ) -> T:
+        """Route one LSP call while preserving retained cleanup ownership."""
+        with self.lsp_projects.lease_resolved(
+            root,
+            acquisition_timeout=self._acquisition_timeout(self.config.lsp_timeout),
+            creation_budget=self.lsp_creation_budget,
+        ) as session:
+            assert session is not None
+            try:
+                result = operation(session)
+            except Exception:
+                if not session.is_alive():
+                    session.retire()
+                    self.lsp_projects.invalidate_resolved(root, session)
+                raise
+            if not session.is_alive():
+                self.lsp_projects.invalidate_resolved(root, session)
+            return result
 
     def status(self, *, include_projects: bool) -> dict[str, Any]:
         result: dict[str, Any] = {
