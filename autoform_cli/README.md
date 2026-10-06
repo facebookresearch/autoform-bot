@@ -1544,18 +1544,12 @@ example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 `render` also writes `javascripts/mathjax.js`, the site's MathJax
 configuration, on every build; list it in `mkdocs.yml` and nothing else for
 MathJax. It loads MathJax 3.2.2, the release the read-back checks were written
-for, and refuses to typeset with any other. Another script in `mkdocs.yml`
-cannot replace that configuration: an assignment to `window.MathJax`, such as
-the snippet Material's documentation gives, is ignored with an error in the
-browser console, and a script that changes it instead, such as one that sets
-`window.MathJax.startup.pageReady` or `window.MathJax.options` (or, in a
-project that lists the bundle too, `window.MathJax.config`), stops MathJax
-with an error there, and the formulas stay as typed. MathJax itself starts on
-a configuration made from the site's settings as it starts, which no other
-script has seen, so a change the check cannot see, such as a proxy put in
-place of part of the configuration, is not read either. The articles on a page
-share one TeX input, with the packages base, ams, noundefined, boldsymbol,
-cancel, and
+for, and refuses to typeset with any other. No other script in `mkdocs.yml`
+can replace or change that configuration: an assignment to `window.MathJax`,
+such as the snippet Material's documentation gives, is ignored with an error
+in the browser console, and a change to it stops MathJax and leaves the
+formulas as typed. The articles on a page share one TeX input, with the
+packages base, ams, noundefined, boldsymbol, cancel, and
 mathtools, and the project's macros from `blueprint/tex-macros.json`, written
 as MathJax's `tex.macros` is: a name maps to a body, `[body, arguments]`, or
 `[body, arguments, default]`. A body or default may not end in a single
@@ -1575,18 +1569,11 @@ TeX and all. A setting changed in
 any formula's MathJax menu, such as the renderer or the explorer a screen
 reader uses, applies to every formula on the page and on the pages shown after
 it, while each card keeps its own TeX input. Every formula paints
-only within its own band, the height of its line, and across only within
-the paragraph, heading, list, or table cell that holds it, with either
-renderer the menu offers and with any theme. So no article formula can cover
-a card, a status mark, a label, another line, or the navigation beside the
-text. Inside that block a formula paints as TeX sets it, so the text `\rlap`,
-`\llap`, and the mathtools laps put beside a formula is kept, while an inline
-formula wider than its paragraph is cut at the paragraph's edge; write a
-formula that wide as a display, which scrolls on its own when it is too wide
-for the page. Either renderer draws a formula at the size TeX set; neither
-shrinks a wide one to fit. A card too wide for the page scrolls inside its
-card, and a shade at its edge shows there is more that way. A card's approval
-label wraps on a narrow screen instead of running off it.
+only within its own line and the block that holds it, with either renderer and
+any theme, so no article formula can cover a card, a mark, or the text beside
+it. An inline formula wider than its paragraph is cut at the paragraph's edge,
+so write one that wide as a display, which scrolls, as does a card too wide
+for the page.
 
 A project scaffolded before `render` wrote that file keeps a
 `blueprint/javascripts/mathjax.js` and lists the MathJax bundle in `mkdocs.yml`
