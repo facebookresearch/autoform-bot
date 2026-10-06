@@ -80,6 +80,7 @@ from autoform_cli.skeleton import (
     write_packets,
     write_skeleton_report,
 )
+from tests.test_review_cli import _too_deep_to_decode
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "skeleton-project"
 
@@ -316,24 +317,14 @@ def _assert_load_rejects(path: Path, payload: dict[str, object], match: str | No
 
 
 def _undecodable_json(damage: str) -> str:
-    """JSON that json.loads refuses with a RecursionError or a plain ValueError,
-    not a JSONDecodeError.
-
-    A hundred thousand nested arrays are deeper than the decoder goes on Python
-    3.10 to 3.13; from 3.14 it goes as deep as the stack allows, about 37,000
-    levels in 8 MiB, and a stack that holds all of them skips. An integer of
-    more digits than sys.get_int_max_str_digits() is refused unless there is no
-    limit (before 3.10.7, or with it set to 0), which skips too.
-    """
+    """JSON that json.loads refuses with a RecursionError or a plain ValueError;
+    skips where it decodes, as test_review_cli's tests of the same damage do."""
 
     if damage == "nested":
         text = '{"schema": ' + "[" * 100_000 + "]" * 100_000 + "}"
-        # Decoded here, nearer the stack's base than the loader decodes it.
-        try:
-            json.loads(text)
-        except RecursionError:
-            return text
-        pytest.skip("this stack holds a hundred thousand nested arrays")
+        if not _too_deep_to_decode(text):
+            pytest.skip("this stack holds a hundred thousand nested arrays")
+        return text
     if not getattr(sys, "get_int_max_str_digits", lambda: 0)():
         pytest.skip("this interpreter converts an integer of any length")
     return '{"schema": 1' + "0" * sys.get_int_max_str_digits() + "}"

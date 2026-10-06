@@ -20,6 +20,7 @@ from autoform_cli.render import PublicationError, render_site
 from autoform_cli.scaffold import scaffold_project
 from tests.mathjax_package import NODE, mathjax_package
 from tests.test_render import _project
+from tests.test_review_cli import _too_deep_to_decode
 
 _ROOT = Path(__file__).resolve().parents[1]
 _EXAMPLE = _ROOT / "skills/setup/assets/cabannes-thesis-project"
@@ -238,14 +239,6 @@ _LONE = (
 # Deeper than the JSON decoder goes on Python 3.10 to 3.13. From 3.14 it goes as
 # deep as the stack allows, about 37,000 levels in 8 MiB.
 _NESTED = '{"RR": ' + "[" * 100_000 + "]" * 100_000 + "}"
-
-
-def _too_deep_to_decode(text: str) -> bool:
-    try:
-        json.loads(text)
-    except RecursionError:
-        return True
-    return False
 
 
 @pytest.mark.parametrize(
