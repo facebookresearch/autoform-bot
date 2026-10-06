@@ -660,6 +660,55 @@ def test_failed_lsp_session_is_replaced_on_the_next_call(tmp_path):
         services.close()
 
 
+def test_unreadable_hover_file_leaves_a_warm_lsp_session_alone(tmp_path):
+    from servers.lsp import server as lsp
+
+    project = make_lake_project(tmp_path, "lsp-input")
+    (project / "Main.lean").write_text("#check Nat\n")
+    (project / "Latin1.lean").write_bytes("-- café\n".encode("latin-1"))
+    sessions = []
+
+    class Process:
+        stdin = None
+        stdout = None
+
+        def poll(self):
+            return None
+
+    class Session(lsp.LeanLspSession):
+        def __init__(self, root):
+            super().__init__(lsp.LspConfig(cwd=str(root)))
+            self.process = Process()
+            sessions.append(self)
+
+        def _send_notification(self, method, params, **kwargs):
+            pass
+
+        def _send_request(self, method, params, timeout=30):
+            return {"contents": "Nat : Type"}
+
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=FakePool,
+        lsp_factory=Session,
+        start_sweepers=False,
+    )
+
+    def hover(file_path):
+        params = {"project_dir": str(project), "file_path": file_path, "line": 0, "character": 0}
+        return services.dispatch("lsp.hover", params)
+
+    try:
+        assert hover("Main.lean") == "Nat : Type"
+        with pytest.raises(UnicodeDecodeError):
+            hover("Latin1.lean")
+        assert sessions[0].is_alive()
+        assert hover("Main.lean") == "Nat : Type"
+        assert len(sessions) == 1
+    finally:
+        services.close()
+
+
 def test_failed_lsp_cleanup_is_invalidated_and_settled_before_replacement(tmp_path, monkeypatch):
     from servers.lsp import server as lsp
 

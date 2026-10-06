@@ -227,6 +227,9 @@ class LeanLspSession:
 
     def hover(self, file_path: str, line: int, character: int) -> str | None:
         """Get hover information at a position."""
+        # Read before admission so a bad input file cannot poison the session.
+        path = Path(file_path).resolve()
+        content = path.read_text()
         deadline = time.monotonic() + self.config.timeout
         if not self._operation_lock.acquire(timeout=self.config.timeout):
             raise LspBusyError(
@@ -241,7 +244,7 @@ class LeanLspSession:
                     f"timed out after {self.config.timeout:g}s waiting for the Lean LSP session"
                 )
             try:
-                return self._hover(file_path, line, character, timeout=remaining)
+                return self._hover(path, content, line, character, timeout=remaining)
             except BaseException:
                 # Poison before releasing admission so a queued call cannot
                 # read the failed operation's leftovers from the stream.
@@ -252,14 +255,13 @@ class LeanLspSession:
 
     def _hover(
         self,
-        file_path: str,
+        path: Path,
+        content: str,
         line: int,
         character: int,
         *,
         timeout: float = 30,
     ) -> str | None:
-        path = Path(file_path).resolve()
-        content = path.read_text()
         uri = path.as_uri()
         deadline = time.monotonic() + timeout
         self._send_notification(

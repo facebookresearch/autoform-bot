@@ -743,7 +743,8 @@ class LeanRuntimeServices:
                 assert session is not None
                 try:
                     diagnostics = session.get_diagnostics(str(path))
-                except LspBusyError:
+                except (LspBusyError, ValueError):
+                    # A queue timeout or undecodable input file leaves the session healthy.
                     raise
                 except Exception:
                     self.lsp_projects.invalidate(str(root), session)
@@ -766,7 +767,8 @@ class LeanRuntimeServices:
                 assert session is not None
                 try:
                     result = session.hover(str(path), line, character)
-                except LspBusyError:
+                except (LspBusyError, ValueError):
+                    # A queue timeout or undecodable input file leaves the session healthy.
                     raise
                 except Exception:
                     self.lsp_projects.invalidate(str(root), session)
