@@ -77,6 +77,10 @@ jobs:
         run: timeout --signal=TERM --kill-after=30s 10m uv run pytest -q tests/test_impact.py
         env:
           AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
+      - name: Run the open-statement audit and contract against real Lean
+        run: timeout --signal=TERM --kill-after=30s 10m uv run pytest -q tests/test_lake_artifact_audit.py tests/test_contract.py
+        env:
+          AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
 
   real-repl:
     name: real REPL (fixture toolchain)
