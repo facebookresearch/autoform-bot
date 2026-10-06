@@ -306,19 +306,9 @@ def _file(path: Path) -> None:
 @pytest.mark.parametrize(
     ("relative", "make", "reason"),
     [
-        ("javascripts/mathjax.js", _directory_with_a_file,
-         "javascripts/mathjax.js: is a directory, where autoform render writes a file; remove it"),
-        ("javascripts/mathjax.js", _symlink,
-         "javascripts/mathjax.js: is a symlink, where autoform render writes a file; remove it"),
-        ("javascripts/mathjax.js", _fifo,
-         "javascripts/mathjax.js: is a special file, where autoform render writes a file; remove it"),
         ("javascripts", _file,
          "javascripts: is a file, where autoform render needs a folder for javascripts/blueprint-live.js; "
          "remove it"),
-        ("stylesheets/blueprint.css", _directory_with_a_file,
-         "stylesheets/blueprint.css: is a directory, where autoform render writes a file; remove it"),
-        ("assets/autoform.svg", _fifo,
-         "assets/autoform.svg: is a special file, where autoform render writes a file; remove it"),
         ("tex-macros.json", _directory_with_a_file,
          "tex-macros.json: is a directory, where autoform reads the project's macros from a file; remove it"),
         ("tex-macros.json", _symlink,
@@ -328,10 +318,9 @@ def _file(path: Path) -> None:
 def test_something_other_than_a_file_where_the_site_has_one_is_refused(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], relative: str, make, reason: str
 ) -> None:
-    """Render writes the site's stylesheet, scripts, and logo over the vault's
-    copies, and reads the project's macros from the vault, so a directory,
-    symlink, or special file there is named by check rather than crashing,
-    hanging, or being skipped by render."""
+    """Render writes its scripts under javascripts/ and reads the project's
+    macros from the vault, so a file, directory, or symlink in the way is named
+    by check rather than crashing, hanging, or being skipped by render."""
 
     blueprint = _vault(tmp_path)
     make(blueprint / relative)
