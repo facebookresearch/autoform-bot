@@ -34,33 +34,14 @@ from autoform_cli.readback import (
 from autoform_cli.markdown import site_converter
 from autoform_cli.render import _mermaid_script, _readback_block, _skeleton_block
 from autoform_cli.skeleton import DeclarationSkeleton
+from tests.skeleton_fixtures import declaration as fixture_declaration
 from tests.test_readback import write_readback
 
 
 def _declaration() -> DeclarationSkeleton:
     statement = "/-- reviewer hint that is absent from the packet -/\ntheorem result : True"
     comment_end = len(statement[: statement.index("-/") + 2].encode("utf-8"))
-    return DeclarationSkeleton(
-        name="Review.result",
-        kind="theorem",
-        module="Review",
-        path="Review.lean",
-        start_line=1,
-        end_line=2,
-        signature="Review.result : True",
-        raw_signature="Review.result : True",
-        semantic='{"generated":[],"root":{"safety":"safe","type":{"sort":{"zero":null}}}}',
-        lean_version="4.32.2",
-        depends=(),
-        trusted=(),
-        assumed=(),
-        assumed_semantics=(),
-        boundary_modules=(),
-        axioms=(),
-        axiom_semantics=(),
-        statement=statement,
-        statement_comments=((0, comment_end),),
-    )
+    return fixture_declaration(end_line=2, statement=statement, statement_comments=((0, comment_end),))
 
 
 def test_review_displays_the_exact_hashed_blind_packet() -> None:

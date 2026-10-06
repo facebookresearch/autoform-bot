@@ -37,34 +37,24 @@ from autoform_cli.skeleton import (
     blueprint_hash,
     write_packets,
 )
+from tests.skeleton_fixtures import BLUEPRINT_HASH as _BLUEPRINT_HASH
+from tests.skeleton_fixtures import declaration as fixture_declaration
 from tests.test_readback import write_readback
 
 
-_SEMANTIC = '{"generated":[],"root":{"safety":"safe","type":{"sort":{"zero":null}}}}'
 _ARTICLE_ID = "af_0123456789abcdef01234567"
-_BLUEPRINT_HASH = "sha256:" + "0" * 64
 
 
 def _declaration(name: str = "Skel.sup_unique", signature: str | None = None) -> DeclarationSkeleton:
     rendered_signature = signature or f"{name} (a b : Nat) (h : a = b) : b = a"
-    return DeclarationSkeleton(
-        name=name,
-        kind="theorem",
+    return fixture_declaration(
+        name,
         module="Skel.Main",
         path="Skel/Main.lean",
         start_line=3,
         end_line=4,
         signature=rendered_signature,
         raw_signature=rendered_signature,
-        semantic=_SEMANTIC,
-        lean_version="4.32.2",
-        depends=(),
-        trusted=(),
-        assumed=(),
-        assumed_semantics=(),
-        boundary_modules=(),
-        axioms=(),
-        axiom_semantics=(),
     )
 
 

@@ -34,12 +34,13 @@ from autoform_cli.skeleton import (
     load_skeleton_report,
     write_packets,
 )
+from tests.skeleton_fixtures import BLUEPRINT_HASH as _BLUEPRINT_HASH
+from tests.skeleton_fixtures import SEMANTIC as _PROP
+from tests.skeleton_fixtures import declaration as fixture_declaration
 
-_PROP = '{"generated":[],"root":{"safety":"safe","type":{"sort":{"zero":null}}}}'
 _BODY = '{"generated":[],"root":{"safety":"safe","type":{"sort":{"zero":null}},"value":{"bvar":0}}}'
 _OTHER_BODY = '{"generated":[],"root":{"safety":"safe","type":{"sort":{"zero":null}},"value":{"bvar":1}}}'
 _ARTICLE_ID = "af_0123456789abcdef01234567"
-_BLUEPRINT_HASH = "sha256:" + "0" * 64
 
 
 # --------------------------------------------------------------------------- #
@@ -77,22 +78,16 @@ def _declaration(
 ) -> DeclarationSkeleton:
     """A theorem resting on one definition; ``semantic`` is the definition's elaborated body."""
 
-    return DeclarationSkeleton(
-        name="Skel.sup_unique",
-        kind="theorem",
+    return fixture_declaration(
+        "Skel.sup_unique",
         module="Skel.Main",
         path="Skel/Main.lean",
         start_line=10,
         end_line=14,
         signature="Skel.sup_unique {E : Set ℝ} {a b : ℝ} (ha : Skel.IsSup E a) (hb : Skel.IsSup E b) : a = b",
         raw_signature="Skel.sup_unique {E : Set ℝ} {a b : ℝ} (ha : Skel.IsSup E a) (hb : Skel.IsSup E b) : a = b",
-        semantic=_PROP,
-        lean_version="4.32.2",
         depends=("Skel.IsSup",),
         trusted=(_trusted(source, semantic),),
-        assumed=(),
-        assumed_semantics=(),
-        boundary_modules=(),
         axioms=("propext",),
         axiom_semantics=(("propext", _PROP),),
     )

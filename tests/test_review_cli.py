@@ -19,15 +19,14 @@ from autoform_cli.readback import TESTIMONY_MAX_BYTES, load_readbacks, readback_
 from autoform_cli.render import PublicationError, render_site
 from autoform_cli.review import REVIEW_PACKET_SCHEMA, load_review_bundle, validate_review_bundle
 from autoform_cli.skeleton import (
-    DeclarationSkeleton,
     NodeSkeleton,
     SkeletonError,
     SkeletonReport,
     blueprint_hash,
     extract_skeletons,
 )
-
-_BLUEPRINT_HASH = "sha256:" + "0" * 64
+from tests.skeleton_fixtures import BLUEPRINT_HASH as _BLUEPRINT_HASH
+from tests.skeleton_fixtures import declaration as fixture_declaration
 
 
 def _blueprint(root: Path) -> Path:
@@ -503,27 +502,7 @@ def _node(node_id: str, name: str) -> NodeSkeleton:
     return NodeSkeleton(
         node_id=node_id,
         article_path=f"roadmap/{node_id}.md",
-        declarations=(
-            DeclarationSkeleton(
-                name=name,
-                kind="theorem",
-                module="Review",
-                path="Review.lean",
-                start_line=1,
-                end_line=1,
-                signature=f"{name} : True",
-                raw_signature=f"{name} : True",
-                semantic='{"generated":[],"root":{"safety":"safe","type":{"sort":{"zero":null}}}}',
-                lean_version="4.32.2",
-                depends=(),
-                trusted=(),
-                assumed=(),
-                assumed_semantics=(),
-                boundary_modules=(),
-                axioms=(),
-                axiom_semantics=(),
-            ),
-        ),
+        declarations=(fixture_declaration(name),),
     )
 
 
