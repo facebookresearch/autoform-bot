@@ -152,7 +152,9 @@ def test_a_conditional_proof_has_its_own_colour_and_legend_entry(tmp_path: Path)
 
     document = export_graph(blueprint).read_text(encoding="utf-8")
 
-    assert '("Top"):::conditional' in document
+    # The bounded vault map collapses fine nodes into their top-level scope,
+    # but it must keep the conditional state visible in that scope's counts.
+    assert "1 conditional" in document
     assert f"classDef conditional fill:{_state('conditional').fill}" in document
     assert '<span class="bp-swatch bp-swatch-conditional">' in document
     assert "Proof compiles, but rests on an open statement without a recorded Lean proof." in document
