@@ -1,35 +1,34 @@
 ---
 name: develop-plugin
-description: >-
-  Maintain AutoformBot for consumer-project defects.
+description: Maintain AutoformBot plugin infrastructure.
 ---
 
 # Develop Autoform
 
-Treat Autoform as an example-based plugin for an independent formalization.
+Treat Autoform as an example-based plugin for an independent formalization
+repository.
 
-Inspect the worktree; state a consumer scenario, installed behavior,
-and invariant. Treat user nudges as product evidence. Preserve the insight,
-not the transcript, as an owning-skill rule, focused test, and assertion;
-future agents need less steering.
+Inspect the worktree: state a consumer scenario, behavior, and invariant. Treat
+user nudges as product evidence; preserve insight, not the transcript, in a
+focused assertion so future agents need less steering.
 
-Implement reusable behavior. Keep Cabannes-specific facts in examples. Keep
-plugin and formalization roots distinct. Agents can infer routine details.
-Keep shared agent entrypoints concise and link command/schema details as
-on-demand references.
+For each Lean/Mathlib release, regenerate `production_module_roots` from Lake
+package configs. Update the private creation bundle, catalog identity, and
+complete `lake update` manifest together; run `lake build`.
+A direct-Mathlib-only manifest is invalid.
 
-Source indexes, revisions, and links form one evidence boundary. Require
-retained descriptors; repeated pathname reads are not a generation boundary.
-Read bounded generated-output markers before descendants, keeping each marker
-schema in its owning feature. Auto-detected links must match the blob at the
-stable detected commit.
+Keep behavior reusable and Cabannes-specific facts in examples. Keep plugin
+and formalization roots distinct. Agents can infer routine details. Keep shared
+agent entrypoints concise; link details as on-demand references.
 
-Treat rewritten private declaration safety as fail-closed evidence: correlate
-the official user name to its lexical declaration by source coordinates.
+Source indexes, revisions, and links are one evidence boundary: retain
+descriptors because repeated pathname reads are not a generation boundary.
+Read bounded outputs before descendants, with each marker schema in its owning
+feature. Auto-detected links must match the blob at the stable detected commit.
 Let toolchain-matched Lean parse names and decide semantic facts; Python handles
 bounded transport and presentation.
 
-Run focused checks, then normally run:
+Normally run:
 
 ```bash
 make lint
@@ -37,6 +36,7 @@ make test
 make check-example
 ```
 
-Run `lake build` when example Lean results change. Validate edited skills and
-the manifest with skill-creator and plugin-creator. Use cachebuster and
-reinstall only to test installed discovery in a new thread.
+Validate skills and manifests with skill-creator and plugin-creator. Use
+cachebuster/reinstall only for discovery in a new thread.
+Treat rewritten private declaration safety as fail-closed evidence: correlate
+the official user name to its lexical declaration by source coordinates.

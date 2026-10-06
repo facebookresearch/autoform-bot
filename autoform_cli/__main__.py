@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -22,7 +23,13 @@ from .dashboard import publication_bound_live_state, serve_dashboard
 from .graph import GraphValidationError, load_graph
 from .impact import ImpactError, format_impact, revision_impact
 from .lean import build_linker, declaration_names, index_failure_message
-from .project import ProjectCatalogError, inspect_project, load_release_catalog
+from .project import (
+    ProjectCatalogError,
+    ProjectCreateError,
+    create_project,
+    inspect_project,
+    load_release_catalog,
+)
 from .render import PublicationError, render_site
 from .runtime import RuntimeProjectionError, load_runtime_graph, resolve_runtime_paths
 from .scaffold import ScaffoldError, scaffold_project
@@ -49,7 +56,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     init.add_argument(
         "--autoform-source",
         default="",
-        help="Autoform Git source the generated workflows install from (default: this checkout's origin)",
+        help=(
+            "Autoform Git source the generated workflows install from "
+            "(default: a safe remote locally known to contain this checkout's HEAD)"
+        ),
     )
     init.add_argument(
         "--autoform-ref",
@@ -98,8 +108,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="local port (default: choose an available port)",
     )
 
-    project = subparsers.add_parser("project", help="inspect local project configuration and releases")
+    project = subparsers.add_parser(
+        "project", help="create or inspect local projects and supported releases"
+    )
     project_subparsers = project.add_subparsers(dest="project_command", required=True)
+    project_new = project_subparsers.add_parser(
+        "new", help="atomically create a complete Lean and Autoform project"
+    )
+    project_new.add_argument(
+        "target", nargs="?", help="new project directory (required); it must not exist"
+    )
+    project_new.add_argument("--package", help="UpperCamelCase Lean package name (required)")
+    project_new.add_argument(
+        "--release", help="release id from 'project versions' (default: the recommended release)"
+    )
+    project_new.add_argument(
+        "--lean-toolchain",
+        help=(
+            "Lean release tag such as v4.30.0; a pair the catalog does not list is written "
+            "without lake-manifest.json, so run 'lake update' in the project"
+        ),
+    )
+    project_new.add_argument(
+        "--mathlib-rev",
+        help=(
+            "Mathlib tag, branch, or commit to require with --lean-toolchain "
+            "(default: the same tag as the toolchain)"
+        ),
+    )
+    project_new.add_argument(
+        "--autoform-source",
+        default="",
+        help=(
+            "Autoform Git source the generated workflows install from (default: a safe remote "
+            "locally known to contain the HEAD of this checkout, or of the marketplace checkout "
+            "an installed copy came from)"
+        ),
+    )
+    project_new.add_argument(
+        "--autoform-ref",
+        default="",
+        help=(
+            "full 40-character Autoform commit the workflows pin (default: the HEAD commit of "
+            "that checkout; none when --autoform-source is given)"
+        ),
+    )
+    project_new.add_argument("--json", action="store_true", help="write stable machine-readable output")
     project_inspect = project_subparsers.add_parser(
         "inspect", help="inspect a project without running Lake, Git, or network operations"
     )
@@ -435,7 +489,75 @@ def _dashboard(args: argparse.Namespace) -> int:
 
 def _project(args: argparse.Namespace) -> int:
     try:
+        if args.project_command == "new":
+            if args.target is None:
+                raise ProjectCreateError("project-target-invalid", "A new project directory is required.")
+            if args.package is None:
+                raise ProjectCreateError(
+                    "project-name-invalid", "--package is required (an UpperCamelCase Lean package name)."
+                )
+            target = os.path.expanduser(args.target)
+            existed = os.path.lexists(target)
+            try:
+                result = create_project(
+                    args.target,
+                    package=args.package,
+                    release_id=args.release,
+                    lean_toolchain=args.lean_toolchain,
+                    mathlib_rev=args.mathlib_rev,
+                    autoform_source=args.autoform_source,
+                    autoform_ref=args.autoform_ref,
+                )
+            except KeyboardInterrupt:
+                # An interrupt during create_project's final cleanup can follow a
+                # successful publication, so look before saying nothing was published.
+                if not existed and os.path.lexists(target):
+                    message = (
+                        "Project creation was interrupted after the target was created, so it may be "
+                        "this run's complete project. Check it with autoform project inspect before "
+                        "using or removing it."
+                    )
+                else:
+                    message = (
+                        "Project creation was interrupted and no project was published. A hidden "
+                        ".autoform-new-* stage may remain in the target parent; inspect it before removal."
+                    )
+                error = ProjectCreateError("project-create-interrupted", message)
+                if args.json:
+                    print(error.to_json())
+                else:
+                    print(f"error[{error.code}]: {error.message}", file=sys.stderr)
+                return 130
+            if args.json:
+                print(result.to_json())
+            else:
+                label = result.release or f"unlisted: {result.lean_toolchain}, Mathlib {result.mathlib_rev}"
+                print(_ascii_text(f"Created {result.package} at {result.target} ({label})"))
+                # Flush first so the warnings never appear ahead of the line they qualify.
+                sys.stdout.flush()
+                for code, message in result.warnings:
+                    print(_ascii_text(f"warning[{code}]: {message}"), file=sys.stderr)
+                if not result.workflows_pinned:
+                    init_command = (
+                        'uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform init '
+                        f"{_shell_quote_one_line(target)}"
+                    )
+                    if args.autoform_source:
+                        # Without the source, init would pin this checkout's origin instead.
+                        init_command += f" --autoform-source {shlex.quote(args.autoform_source)}"
+                    print(
+                        "warning: workflows were omitted because no immutable Autoform pin was "
+                        f"available; add them with: {init_command} --autoform-ref <40-char-sha>",
+                        file=sys.stderr,
+                    )
+            return 0
         catalog = load_release_catalog()
+    except ProjectCreateError as error:
+        if args.json:
+            print(error.to_json())
+        else:
+            print(f"error[{error.code}]: {error.message}", file=sys.stderr)
+        return 1
     except ProjectCatalogError as error:
         if args.json:
             print(json.dumps({"error": {"code": "project-catalog-invalid", "message": str(error)}, "ok": False}))
@@ -599,6 +721,39 @@ def _human_text(value: object) -> str:
         character if character.isprintable() else character.encode("unicode_escape").decode("ascii")
         for character in str(value)
     )
+
+
+def _ascii_text(value: object) -> str:
+    """Escape untrusted text into one unambiguous printable ASCII line.
+
+    `project new` reports after publishing, when a non-UTF-8 stream must not
+    turn success into a traceback.
+    """
+
+    return ascii(str(value))[1:-1]
+
+
+def _shell_quote_one_line(value: str) -> str:
+    """Quote one filesystem argument without letting it forge another line.
+
+    Ordinary printable paths use the standard shell spelling. POSIX project
+    creation can also accept control bytes in filenames; Bash and Zsh ANSI-C
+    quoting keeps those paths executable while spelling every byte on one line.
+    """
+
+    if all(character.isprintable() and character not in "\r\n" for character in value):
+        return shlex.quote(value)
+    pieces: list[str] = []
+    for byte in os.fsencode(value):
+        if byte == 0x27:
+            pieces.append("\\'")
+        elif byte == 0x5C:
+            pieces.append("\\\\")
+        elif 0x20 <= byte <= 0x7E:
+            pieces.append(chr(byte))
+        else:
+            pieces.append(f"\\x{byte:02x}")
+    return "$'" + "".join(pieces) + "'"
 
 
 def _claim(args: argparse.Namespace) -> int:
