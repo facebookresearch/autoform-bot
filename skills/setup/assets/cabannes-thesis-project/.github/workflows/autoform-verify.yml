@@ -138,10 +138,7 @@ jobs:
 
       # Without --bundle the check derives the bundle from its own extraction,
       # so no committed stale report can certify a changed blueprint or Lean
-      # tree, and the tree is extracted once rather than once to prepare and
-      # again to check. Blueprint Pages labels an approval "approved by" only
-      # when this workflow passed on the head of the pull request that recorded
-      # it, and it passes only when this step accepts every approval there.
+      # tree.
       - name: Verify statement reviews
         if: env.AUTOFORM_REVIEW_ENABLED == 'true'
         run: >-
