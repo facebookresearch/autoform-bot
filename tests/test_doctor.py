@@ -167,7 +167,33 @@ def test_optional_lean_targets_report_success_missing_and_kind_mismatch(tmp_path
     assert _checks(mismatch)["lean targets"] == (False, "1 finding(s): lean-target-kind-mismatch")
 
 
-def test_unreadable_lean_sources_are_a_lean_target_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_deprecated_lean_target_fails_the_lean_targets_check(tmp_path: Path) -> None:
+    project = _clean_project(
+        tmp_path,
+        metadata=(
+            "declaration: theorem",
+            "statement: formalized",
+            "proof: formalized",
+            "lean: Project.result",
+        ),
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Project.lean").write_text(
+        "theorem Project.fresh : True := trivial\n\n"
+        "@[deprecated Project.fresh] theorem Project.result : True := trivial\n",
+        encoding="utf-8",
+    )
+
+    result = diagnose_project(project, lean_root=lean_root)
+
+    assert _checks(result)["lean targets"] == (False, "1 finding(s): lean-target-deprecated")
+    assert _checks(result)["audit"][0]
+
+
+def test_unreadable_lean_sources_are_a_lean_target_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     project = _clean_project(
         tmp_path,
         metadata=(
@@ -184,7 +210,7 @@ def test_unreadable_lean_sources_are_a_lean_target_failure(tmp_path: Path, monke
     def changed_after_projection(_root):
         raise LeanSourceError("Lean sources kept changing while they were indexed")
 
-    monkeypatch.setattr("autoform_cli.audit.index_project", changed_after_projection)
+    monkeypatch.setattr("autoform_cli.audit.snapshot_project_sources", changed_after_projection)
 
     result = diagnose_project(project, lean_root=lean_root)
 

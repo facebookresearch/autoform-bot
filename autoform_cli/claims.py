@@ -390,7 +390,10 @@ class ClaimBoard:
         return expires_at <= comparison_time
 
     def acquire(self, key: str, ttl: int | float = CLAIM_TTL_S, steal: bool = False, note: str = "") -> bool:
-        """CAS-acquire a free, expired, malformed, owned, or explicitly stolen lease."""
+        """CAS-acquire a free, expired, owned, or explicitly stolen lease.
+
+        A malformed lease raises ``MalformedLeaseError``, even with ``steal``.
+        """
         key = _validate_key(key)
         _validate_ttl(ttl)
         self._ensure_scratch()
