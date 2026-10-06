@@ -23,13 +23,7 @@ from .dashboard import publication_bound_live_state, serve_dashboard
 from .graph import GraphValidationError, load_graph
 from .impact import ImpactError, format_impact, revision_impact
 from .lean import build_linker, declaration_names, index_failure_message
-from .project import (
-    ProjectCatalogError,
-    ProjectCreateError,
-    create_project,
-    inspect_project,
-    load_release_catalog,
-)
+from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
 from .render import PublicationError, render_site
 from .runtime import RuntimeProjectionError, load_runtime_graph, resolve_runtime_paths
 from .scaffold import ScaffoldError, scaffold_project
@@ -108,20 +102,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="local port (default: choose an available port)",
     )
 
-    project = subparsers.add_parser(
-        "project", help="create or inspect local projects and supported releases"
-    )
+    project = subparsers.add_parser("project", help="create or inspect local projects and supported releases")
     project_subparsers = project.add_subparsers(dest="project_command", required=True)
-    project_new = project_subparsers.add_parser(
-        "new", help="atomically create a complete Lean and Autoform project"
-    )
-    project_new.add_argument(
-        "target", nargs="?", help="new project directory (required); it must not exist"
-    )
+    project_new = project_subparsers.add_parser("new", help="atomically create a complete Lean and Autoform project")
+    project_new.add_argument("target", nargs="?", help="new project directory (required); it must not exist")
     project_new.add_argument("--package", help="UpperCamelCase Lean package name (required)")
-    project_new.add_argument(
-        "--release", help="release id from 'project versions' (default: the recommended release)"
-    )
+    project_new.add_argument("--release", help="release id from 'project versions' (default: the recommended release)")
     project_new.add_argument(
         "--lean-toolchain",
         help=(
@@ -529,12 +515,7 @@ def _project(args: argparse.Namespace) -> int:
                         "Project creation was interrupted and no project was published. A hidden "
                         ".autoform-new-* stage may remain in the target parent; inspect it before removal."
                     )
-                error = ProjectCreateError("project-create-interrupted", message)
-                if args.json:
-                    print(error.to_json())
-                else:
-                    print(f"error[{error.code}]: {error.message}", file=sys.stderr)
-                return 130
+                raise ProjectCreateError("project-create-interrupted", message) from None
             if args.json:
                 print(result.to_json())
             else:
@@ -564,7 +545,7 @@ def _project(args: argparse.Namespace) -> int:
             print(error.to_json())
         else:
             print(f"error[{error.code}]: {error.message}", file=sys.stderr)
-        return 1
+        return 130 if error.code == "project-create-interrupted" else 1
     except ProjectCatalogError as error:
         if args.json:
             print(json.dumps({"error": {"code": "project-catalog-invalid", "message": str(error)}, "ok": False}))
