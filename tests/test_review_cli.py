@@ -2560,7 +2560,8 @@ def test_audit_review_derives_the_evidence_review_check_derives(
 ) -> None:
     """Where review check passes without a prepared bundle, audit --review
     passes too, deriving the evidence from one extraction of its own. Given no
-    evidence, audit still fails every approved article, and says how to supply it."""
+    evidence, audit still fails, with one finding for the blueprint rather than
+    one per approved article, and says how to supply it."""
 
     extraction = _Extraction()
     blueprint = _approved_batch(tmp_path, monkeypatch, extraction)
@@ -2573,7 +2574,7 @@ def test_audit_review_derives_the_evidence_review_check_derives(
         "or --review-bundle with a prepared bundle, each with --lean-root"
     )
     assert [line for line in capsys.readouterr().out.splitlines() if line.startswith("error:")] == [
-        f"error: roadmap/basics/{name}.md: review-bundle-missing: {missing}" for name in ("other", "result")
+        f"error: .: review-bundle-missing: {missing}"
     ]
 
     extraction.scopes.clear()

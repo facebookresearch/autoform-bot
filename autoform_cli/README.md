@@ -410,8 +410,7 @@ each one as a `declared-coverage-gap`. That is intended: a roadmap is published
 while it is still being decomposed, and the published `coverage.complete: false`
 is how a reader sees that. Run `autoform audit` in CI when you want mapped rows
 to block a merge. Once articles record `review_approved`, run it after the Lean
-build with `--lean-root . --review`, or it reports each approved article as
-`review-bundle-missing`.
+build with `--lean-root . --review`, or it reports `review-bundle-missing`.
 
 Extract what a reader must trust for each formalized statement:
 
@@ -1787,8 +1786,8 @@ and declaration kinds are checked against the Lean source index. With
 `--review`, which derives review evidence in the same run, or
 `--review-bundle FILE`, which reads a prepared bundle, either one with
 `--lean-root`, it also reports the findings `review check` reports. Without
-either, every article that records `review_approved` is reported as
-`review-bundle-missing`.
+either, a blueprint where any article records `review_approved` gets one
+`review-bundle-missing` finding, at `.`.
 
 ### Structure
 

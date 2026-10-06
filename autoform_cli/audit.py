@@ -287,15 +287,15 @@ def _review_findings(
 
     approved = [node for node in graph.nodes.values() if node.review_approved is not None]
     if bundle is None:
+        # The run lacks the evidence, not any one article, so this is reported once.
         return [
             AuditFinding(
-                _relative_path(node.path, graph.blueprint_dir),
+                ".",
                 "review-bundle-missing",
                 "review_approved is present but no review evidence was supplied; pass --review to derive it "
                 "in this run, or --review-bundle with a prepared bundle, each with --lean-root",
             )
-            for node in approved
-        ]
+        ] if approved else []
     if current_skeleton is None:
         target_ids = {
             *(node.id for node in approved),
