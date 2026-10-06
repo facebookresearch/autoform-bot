@@ -207,6 +207,35 @@ def test_failed_operation_poisons_a_queued_waiter_before_releasing_admission(mon
 
 
 @pytest.mark.parametrize("operation", ["diagnostics", "hover"])
+def test_post_admission_budget_exhaustion_keeps_the_session_healthy(
+    tmp_path, monkeypatch, operation
+):
+    source = tmp_path / "Test.lean"
+    source.write_text("#check Nat\n")
+    session = lsp.LeanLspSession(lsp.LspConfig(timeout=0))
+    session.process = _FakeProcess()
+    monkeypatch.setattr(lsp.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(
+        session,
+        "_get_diagnostics",
+        lambda *args, **kwargs: pytest.fail("expired admission ran diagnostics"),
+    )
+    monkeypatch.setattr(
+        session,
+        "_hover",
+        lambda *args, **kwargs: pytest.fail("expired admission ran hover"),
+    )
+
+    with pytest.raises(lsp.LspBusyError, match="waiting for the Lean LSP session"):
+        if operation == "diagnostics":
+            session.get_diagnostics(str(source))
+        else:
+            session.hover(str(source), 0, 0)
+
+    assert session.is_alive()
+
+
+@pytest.mark.parametrize("operation", ["diagnostics", "hover"])
 def test_did_close_failure_keeps_the_result_but_poisons_the_session(tmp_path, monkeypatch, operation):
     source = tmp_path / "Test.lean"
     source.write_text("#check Nat\n")
@@ -511,6 +540,22 @@ def test_lsp_queue_wait_is_bounded_by_session_timeout(tmp_path: Path):
             session.hover(str(source), 0, 0)
     finally:
         session._operation_lock.release()
+
+
+def test_lsp_json_integer_limit_is_reported_as_a_protocol_error():
+    body = b'{"jsonrpc":"2.0","id":' + (b"9" * 5000) + b"}"
+    frame = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body
+    read_fd, write_fd = os.pipe()
+    reader = os.fdopen(read_fd, "rb", buffering=0)
+    session = lsp.LeanLspSession(lsp.LspConfig())
+    session.process = SimpleNamespace(stdout=reader)
+    try:
+        os.write(write_fd, frame)
+        with pytest.raises(lsp.LspProtocolError, match="invalid JSON body"):
+            session._read_message(timeout=1)
+    finally:
+        os.close(write_fd)
+        reader.close()
 
 
 @pytest.mark.parametrize(

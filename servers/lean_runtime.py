@@ -41,7 +41,6 @@ from servers.lean_client import (
 )
 from servers.lsp.server import (
     LspConfig,
-    LspBusyError,
     LeanLspSession,
     format_lsp_diagnostics,
 )
@@ -735,21 +734,10 @@ class LeanRuntimeServices:
             project_dir = self._string_param(params, "project_dir")
             file_path = self._string_param(params, "file_path")
             root, path = resolve_lean_file(project_dir, file_path)
-            with self.lsp_projects.lease(
-                str(root),
-                acquisition_timeout=self._acquisition_timeout(self.config.lsp_timeout),
-                creation_budget=self.lsp_creation_budget,
-            ) as session:
-                assert session is not None
-                try:
-                    diagnostics = session.get_diagnostics(str(path))
-                except (LspBusyError, ValueError):
-                    # A queue timeout or undecodable input file leaves the session healthy.
-                    raise
-                except Exception:
-                    self.lsp_projects.invalidate(str(root), session)
-                    session.abort()
-                    raise
+            diagnostics = self._lsp_operation(
+                root,
+                lambda session: session.get_diagnostics(str(path)),
+            )
             return format_lsp_diagnostics(diagnostics)
         if method == "lsp.hover":
             project_dir = self._string_param(params, "project_dir")
@@ -759,23 +747,35 @@ class LeanRuntimeServices:
             if line < 0 or character < 0:
                 raise ValueError("line and character must be nonnegative")
             root, path = resolve_lean_file(project_dir, file_path)
-            with self.lsp_projects.lease(
-                str(root),
-                acquisition_timeout=self._acquisition_timeout(self.config.lsp_timeout),
-                creation_budget=self.lsp_creation_budget,
-            ) as session:
-                assert session is not None
-                try:
-                    result = session.hover(str(path), line, character)
-                except (LspBusyError, ValueError):
-                    # A queue timeout or undecodable input file leaves the session healthy.
-                    raise
-                except Exception:
-                    self.lsp_projects.invalidate(str(root), session)
-                    session.abort()
-                    raise
+            result = self._lsp_operation(
+                root,
+                lambda session: session.hover(str(path), line, character),
+            )
             return result or "No hover information at this position."
         raise ValueError(f"unknown Lean runtime method: {method}")
+
+    def _lsp_operation(
+        self,
+        root: Path,
+        operation: Callable[[LeanLspSession], T],
+    ) -> T:
+        """Route one LSP call without retiring a healthy shared session."""
+        with self.lsp_projects.lease(
+            str(root),
+            acquisition_timeout=self._acquisition_timeout(self.config.lsp_timeout),
+            creation_budget=self.lsp_creation_budget,
+        ) as session:
+            assert session is not None
+            try:
+                return operation(session)
+            except Exception:
+                # Real operations poison the session before releasing admission
+                # whenever the shared stream may be desynchronized. Input reads
+                # and queue timeouts happen before that point and leave it alive.
+                if not session.is_alive():
+                    self.lsp_projects.invalidate(str(root), session)
+                    session.abort()
+                raise
 
     def status(self, *, include_projects: bool) -> dict[str, Any]:
         result: dict[str, Any] = {

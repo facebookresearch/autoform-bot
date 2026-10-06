@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -702,6 +703,67 @@ def test_busy_lsp_session_is_left_alone_and_reused(tmp_path):
         services.close()
 
 
+def test_hover_busy_after_admission_leaves_the_session_alive(tmp_path):
+    from servers.lsp import server as lsp
+
+    project = make_lake_project(tmp_path, "lsp-hover-busy")
+    (project / "Main.lean").write_text("#check Nat\n")
+    sessions = []
+
+    class Process:
+        stdin = None
+        stdout = None
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return self.returncode
+
+    class Session(lsp.LeanLspSession):
+        def __init__(self, root):
+            super().__init__(lsp.LspConfig(cwd=str(root), timeout=0))
+            self.process = Process()
+            self.aborted = False
+            sessions.append(self)
+
+        def abort(self):
+            self.aborted = True
+            super().abort()
+
+        def _send_notification(self, method, params, **kwargs):
+            pass
+
+        def _send_request(self, method, params, timeout=30):
+            return {"contents": "Nat : Type"}
+
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=FakePool,
+        lsp_factory=Session,
+        start_sweepers=False,
+    )
+    params = {
+        "project_dir": str(project),
+        "file_path": "Main.lean",
+        "line": 0,
+        "character": 0,
+    }
+    try:
+        with pytest.raises(lsp.LspBusyError):
+            services.dispatch("lsp.hover", params)
+        assert services.lsp_projects.stats()["resident"][0]["valid"] is True
+        assert sessions[0].aborted is False
+
+        sessions[0].config.timeout = 1
+        assert services.dispatch("lsp.hover", params) == "Nat : Type"
+        assert len(sessions) == 1
+    finally:
+        services.close()
+
+
 def test_unreadable_hover_file_leaves_a_warm_lsp_session_alone(tmp_path):
     from servers.lsp import server as lsp
 
@@ -751,6 +813,109 @@ def test_unreadable_hover_file_leaves_a_warm_lsp_session_alone(tmp_path):
         services.close()
 
 
+def test_permission_error_hover_does_not_abort_a_concurrent_lsp_request(
+    tmp_path,
+    monkeypatch,
+):
+    from servers.lsp import server as lsp
+
+    project = make_lake_project(tmp_path, "lsp-concurrent-input")
+    readable = project / "Main.lean"
+    unreadable = project / "Unreadable.lean"
+    readable.write_text("#check Nat\n")
+    unreadable.write_text("#check Int\n")
+    diagnostics_started = threading.Event()
+    release_diagnostics = threading.Event()
+    sessions = []
+    results = []
+    errors = []
+
+    class Process:
+        stdin = None
+        stdout = None
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return self.returncode
+
+    class Session(lsp.LeanLspSession):
+        def __init__(self, root):
+            super().__init__(lsp.LspConfig(cwd=str(root)))
+            self.process = Process()
+            self.aborted = False
+            sessions.append(self)
+
+        def abort(self):
+            self.aborted = True
+            super().abort()
+
+        def _get_diagnostics(self, file_path, *, timeout=None):
+            diagnostics_started.set()
+            assert release_diagnostics.wait(timeout=2)
+            return []
+
+        def _send_notification(self, method, params, **kwargs):
+            pass
+
+        def _send_request(self, method, params, timeout=30):
+            return {"contents": "Nat : Type"}
+
+    original_read_text = Path.read_text
+
+    def read_text(path, *args, **kwargs):
+        if path.resolve() == unreadable.resolve():
+            raise PermissionError("permission denied")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=FakePool,
+        lsp_factory=Session,
+        start_sweepers=False,
+    )
+    diagnostic_params = {"project_dir": str(project), "file_path": "Main.lean"}
+    hover_params = {
+        "project_dir": str(project),
+        "file_path": "Unreadable.lean",
+        "line": 0,
+        "character": 0,
+    }
+
+    def diagnose():
+        try:
+            results.append(services.dispatch("lsp.diagnostics", diagnostic_params))
+        except BaseException as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=diagnose)
+    try:
+        thread.start()
+        assert diagnostics_started.wait(timeout=1)
+        with pytest.raises(PermissionError, match="permission denied"):
+            services.dispatch("lsp.hover", hover_params)
+
+        assert thread.is_alive()
+        assert sessions[0].is_alive()
+        assert sessions[0].aborted is False
+        assert services.lsp_projects.stats()["resident"][0]["valid"] is True
+
+        release_diagnostics.set()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        assert errors == []
+        assert results == ["No diagnostics — file compiles cleanly."]
+        assert len(sessions) == 1
+    finally:
+        release_diagnostics.set()
+        thread.join(timeout=2)
+        services.close()
+
+
 def test_failed_lsp_cleanup_is_invalidated_and_settled_before_replacement(tmp_path, monkeypatch):
     from servers.lsp import server as lsp
 
@@ -786,6 +951,9 @@ def test_failed_lsp_cleanup_is_invalidated_and_settled_before_replacement(tmp_pa
 
         def get_diagnostics(self, file_path):
             if self.number == 1:
+                # Real LeanLspSession operations poison before propagating a
+                # stream failure; keep this fake faithful to that contract.
+                self._poisoned = True
                 raise lsp.LspProtocolError("broken shared stream")
             return []
 
