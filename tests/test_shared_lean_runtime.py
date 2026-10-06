@@ -660,6 +660,48 @@ def test_failed_lsp_session_is_replaced_on_the_next_call(tmp_path):
         services.close()
 
 
+def test_busy_lsp_session_is_left_alone_and_reused(tmp_path):
+    from servers.lsp.server import LspBusyError
+
+    project = make_lake_project(tmp_path, "lsp-busy")
+    (project / "Main.lean").write_text("#check Nat\n")
+    sessions = []
+
+    class Session(FakeLsp):
+        def __init__(self, root):
+            super().__init__(root)
+            self.busy = True
+            self.aborted = False
+            sessions.append(self)
+
+        def abort(self):
+            self.aborted = True
+            super().abort()
+
+        def get_diagnostics(self, file_path):
+            if self.busy:
+                self.busy = False
+                raise LspBusyError("timed out waiting for the Lean LSP session")
+            return []
+
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=FakePool,
+        lsp_factory=Session,
+        start_sweepers=False,
+    )
+    try:
+        params = {"project_dir": str(project), "file_path": "Main.lean"}
+        with pytest.raises(LspBusyError):
+            services.dispatch("lsp.diagnostics", params)
+        assert services.lsp_projects.stats()["resident"][0]["valid"] is True
+        assert sessions[0].aborted is False
+        assert services.dispatch("lsp.diagnostics", params).startswith("No diagnostics")
+        assert len(sessions) == 1
+    finally:
+        services.close()
+
+
 def test_unreadable_hover_file_leaves_a_warm_lsp_session_alone(tmp_path):
     from servers.lsp import server as lsp
 
