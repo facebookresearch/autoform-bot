@@ -1241,7 +1241,8 @@ def _review_record(args: argparse.Namespace) -> int:
         # So is every record whose article_id the blueprint no longer has,
         # ahead of the card check: the hash that check asks for cannot help it.
         graph = load_graph(args.blueprint_dir)
-        before = _record_snapshot(graph, requests)
+        by_flags = args.manifest is None
+        before = _record_snapshot(graph, requests, by_flags=by_flags)
         # And so is every card that would replace different content without
         # naming it, or whose existing card cannot be safely read: all of them
         # at once, rather than one per extraction.
@@ -1264,7 +1265,7 @@ def _review_record(args: argparse.Namespace) -> int:
         # Lean ran; otherwise the evidence below would pair a graph and a Lean
         # state that never coexisted.
         graph = load_graph(args.blueprint_dir)
-        if _record_snapshot(graph, requests) != before:
+        if _record_snapshot(graph, requests, by_flags=by_flags) != before:
             raise ReviewError(
                 [
                     ReviewFinding(
@@ -1476,7 +1477,9 @@ def _refuse_conflicts(cards: list[PreparedReadback]) -> None:
         raise ReviewError([ReviewFinding("record", "review-card-conflict", conflict) for conflict in conflicts])
 
 
-def _record_snapshot(graph: Graph, requests: tuple[RecordRequest, ...]) -> tuple[tuple[str, str, str, str], ...]:
+def _record_snapshot(
+    graph: Graph, requests: tuple[RecordRequest, ...], *, by_flags: bool
+) -> tuple[tuple[str, str, str, str], ...]:
     """What each selected article is right now: its node, file, and source hash."""
 
     state: dict[str, tuple[str, str, str, str]] = {}
@@ -1487,7 +1490,7 @@ def _record_snapshot(graph: Graph, requests: tuple[RecordRequest, ...]) -> tuple
         matches = [node for node in graph.nodes.values() if node.article_id == request.article_id]
         if len(matches) != 1:
             # Every such record is named, so one run lists all there are to drop or update.
-            gone.append(_record_selection_finding(request))
+            gone.append(_record_selection_finding(request, by_flags=by_flags))
             continue
         node = matches[0]
         state[request.article_id] = (request.article_id, node.id, str(node.path), node.source_sha256 or "")
@@ -1854,20 +1857,26 @@ def _review_selection_finding(article_id: str, declaration: str) -> ReviewFindin
     )
 
 
-def _record_selection_finding(request: RecordRequest) -> ReviewFinding:
+def _record_selection_finding(request: RecordRequest, *, by_flags: bool) -> ReviewFinding:
     """The bundle has this declaration, but the current blueprint no longer has its article_id."""
 
     # A card's path is keyed by its article_id: the card a re-review names
     # stays under the old one, so a record taking the new one must not name it.
     # A packet is named by its content, so a different one is text the
-    # testimony was not written from.
-    drop_hash = " and drop its expected_card_hash" if request.expected_card_hash is not None else ""
+    # testimony was not written from. Only --packets writes a packet manifest.
+    if by_flags:
+        start, id_field, hash_field = "to record it, ", "--article-id", "--expected-card-hash"
+        needs = "pass that --packet and a --testimony"
+    else:
+        start, id_field, hash_field = "drop the record, or ", "its article_id", "its expected_card_hash"
+        needs = "the record needs that packet and a testimony"
+    drop_hash = f" and drop {hash_field}" if request.expected_card_hash is not None else ""
     return ReviewFinding(
         request.article_id,
         "review-selection-missing",
-        f"{request.declaration}: article_id {request.article_id} is no longer in the blueprint; drop the record, "
-        f"or rerun review prepare and take its article_id from the new packet manifest{drop_hash}; if that manifest "
-        "names a different packet for it, the record needs that packet and a testimony written from it",
+        f"{request.declaration}: article_id {request.article_id} is no longer in the blueprint; {start}rerun review "
+        f"prepare with --packets and take {id_field} from the new packet manifest{drop_hash}; if that manifest "
+        f"names a different packet for it, {needs} written from it",
     )
 
 

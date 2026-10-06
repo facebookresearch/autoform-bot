@@ -879,8 +879,8 @@ def test_an_article_gone_since_prepare_is_named_rather_than_the_bundle(
     assert load_readbacks(blueprint) == {}
     assert (
         f"error: Review.other: article_id {_OTHER_ID} is no longer in the blueprint; drop the record, or rerun "
-        "review prepare and take its article_id from the new packet manifest; if that manifest names a different "
-        "packet for it, the record needs that packet and a testimony written from it\n"
+        "review prepare with --packets and take its article_id from the new packet manifest; if that manifest names "
+        "a different packet for it, the record needs that packet and a testimony written from it\n"
     ) in err
     assert "prepared review bundle" not in err
     assert len(calls) == (2 if during_the_record else 1)
@@ -920,7 +920,8 @@ def test_a_record_whose_article_id_is_gone_files_once_it_does_what_the_refusal_s
     capsys.readouterr()
     assert _record(blueprint, bundle, manifest, tmp_path) == 2
     assert (
-        "drop the record, or rerun review prepare and take its article_id from the new packet manifest; if that"
+        "drop the record, or rerun review prepare with --packets and take its article_id from the new packet "
+        "manifest; if that"
     ) in capsys.readouterr().err
     records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
     packets = manifest.parent / "review-packets"
@@ -943,6 +944,44 @@ def test_a_record_whose_article_id_is_gone_files_once_it_does_what_the_refusal_s
     assert {declaration for _, declaration in load_readbacks(blueprint)} == {
         record["declaration"] for record in records
     }
+
+
+@pytest.mark.parametrize("named", [False, True], ids=["naming-no-card", "naming-its-card"])
+def test_a_single_record_whose_article_id_is_gone_is_told_which_flags_to_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], named: bool
+) -> None:
+    """A record given by flags has no manifest entry to drop or edit, so its
+    refusal names the flags, and files once they take the new article_id from
+    the packet manifest that review prepare writes with --packets."""
+
+    blueprint, bundle, manifest = _prepared_batch(tmp_path, monkeypatch, _Extraction())
+    assert _record(blueprint, bundle, manifest, tmp_path) == 0
+    records = json.loads(manifest.read_text(encoding="utf-8"))["records"]
+    (record,) = [record for record in records if record["declaration"] == "Review.other"]
+    old_card = load_readbacks(blueprint)[(_OTHER_ID, "Review.other")].file_hash
+    _renumber_other(blueprint)
+    flags = [
+        "review", "record", str(blueprint), "--lean-root", str(tmp_path), "--bundle", str(bundle), "--model", "m",
+        "--declaration", "Review.other", "--packet", str(manifest.parent / record["packet"]),
+        "--testimony", str(manifest.parent / record["testimony"]),
+    ]
+    capsys.readouterr()
+
+    assert main([*flags, "--article-id", _OTHER_ID, *(["--expected-card-hash", old_card] if named else [])]) == 2
+    drop_hash = " and drop --expected-card-hash" if named else ""
+    assert capsys.readouterr().err == (
+        f"error: Review.other: article_id {_OTHER_ID} is no longer in the blueprint; to record it, rerun review "
+        f"prepare with --packets and take --article-id from the new packet manifest{drop_hash}; if that manifest "
+        "names a different packet for it, pass that --packet and a --testimony written from it\n"
+    )
+
+    packets = manifest.parent / "review-packets"
+    prepare = ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle)]
+    assert main([*prepare, "--packets", str(packets)]) == 0
+    entries = json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"]
+    (entry,) = [entry for entry in entries if entry["declaration"] == "Review.other"]
+    assert main([*flags, "--article-id", entry["article_id"]]) == 0
+    assert (entry["article_id"], "Review.other") in load_readbacks(blueprint)
 
 
 def test_a_gone_record_whose_packet_changed_files_only_once_it_names_the_new_packet(
@@ -1019,8 +1058,8 @@ def test_a_re_review_whose_article_id_is_gone_is_named_before_its_card_conflict(
     manifest.write_text(json.dumps({"schema": "autoform-review-records/v1", "records": records}), encoding="utf-8")
     assert _record(blueprint, bundle, manifest, tmp_path) == 2
     assert (
-        "rerun review prepare and take its article_id from the new packet manifest and drop its expected_card_hash; "
-        "if that manifest names a different packet"
+        "rerun review prepare with --packets and take its article_id from the new packet manifest and drop its "
+        "expected_card_hash; if that manifest names a different packet"
     ) in capsys.readouterr().err
 
     packets = manifest.parent / "review-packets"
