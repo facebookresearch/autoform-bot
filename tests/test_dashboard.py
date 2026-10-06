@@ -170,7 +170,7 @@ def test_live_overlay_refuses_a_stale_built_publication(tmp_path: Path) -> None:
 def test_live_overlay_reports_a_publication_manifest_nested_too_deep_to_decode(tmp_path: Path) -> None:
     site = tmp_path / "site"
     site.mkdir()
-    # As deep as fits under the 64 KiB cap, which is deeper than the decoder
+    # Nearly as deep as fits under the 64 KiB cap, which is deeper than the decoder
     # goes up to 3.13; a 3.14 stack that holds it skips.
     nested = '{"schema": ' + "[" * 32_000 + "]" * 32_000 + "}"
     if not _too_deep_to_decode(nested):
