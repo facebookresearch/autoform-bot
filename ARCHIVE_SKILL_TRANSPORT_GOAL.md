@@ -18,8 +18,8 @@ Before the first push, verify the current checkout, canonical repository,
 authenticated GitHub identity, available push remote, branch protection/base,
 and dirty worktree. Preserve unrelated changes. If the authenticated account
 cannot push to the canonical repository, use its existing fork or create the
-normal GitHub fork required to open the requested PRs; do not rewrite an
-unrelated remote.
+normal GitHub fork required to open the requested PRs. Never develop on or push
+to another contributor's fork, and do not rewrite an unrelated remote.
 
 ## Execution rule
 
@@ -51,7 +51,8 @@ rebased or retargeted without duplicating commits.
 ## Source and licensing rule
 
 The archive is design evidence, not automatically licensed source code. Its
-verified identity is recorded in the plan. Until authorization and license
+externally attested identity and the repository's evidence limits are recorded
+in the plan. Until authorization and license
 compatibility are documented, independently implement portable behavior from
 the stated requirements. Never copy internal endpoints, credentials, employee
 identifiers, machine paths, model entitlements, private benchmark details, or
@@ -60,11 +61,13 @@ service-specific operational commands.
 ## Branch boundaries
 
 - P-series PRs target `main`.
-- E-series PRs target `execution` after synchronizing their accepted core
-  prerequisites.
+- E-series PRs extend the existing Markdown-native `formalize` owner on `main`;
+  they do not revive the deprecated `execution` branch. E01 is already
+  satisfied by current Formalize, and each remaining specialist also requires
+  the manifest's explicit scope-approval gate.
 - C-series PRs require an explicitly approved companion plugin/repository; do
   not create that external repository merely because the plan names it.
-- D01 is documentation-only and waits for stable interfaces.
+- D01 and D02 are documentation-only and wait for their recorded interfaces.
 - `COMPOSE`, `EXCLUDE-*`, and project-specific inventory decisions do not
   receive implementation PRs.
 
@@ -74,7 +77,8 @@ P-series branches have been opened; follow the dependency and approval rules.
 
 ## Quality and stopping rules
 
-- Preserve `main` as non-autonomous.
+- Preserve `main` as request-driven; do not add a background scheduler or make
+  optional specialists part of the default Formalize flow.
 - Keep Markdown as the authored project state; do not introduce a competing
   mutable database.
 - A model's success report is never test evidence.
