@@ -507,59 +507,28 @@ def _decode_header_analysis(stdout: bytes) -> _LeanHeaderAnalysis:
 
 
 def _normalize_legacy_deps_json_comment_closes(code: str) -> str:
-    """Normalize only block-comment closes misparsed by Lean 4.30--4.32.
+    """Normalize suspect closes for a differential Lean 4.30--4.32 parse.
 
     Those releases skip one character too many when an even run of dashes
-    precedes ``/`` inside a block comment.  Removing one dash gives their fast
-    parser the same close point as the real parser.  Callers compare Lean's
-    dependency facts for both byte strings and fail closed if they differ,
-    avoiding any Python reimplementation of Lean's header grammar.
+    precedes ``/`` inside a block comment. Removing one dash globally is
+    intentionally context-free: callers compare Lean's authoritative header
+    facts for both byte strings and reject only when they differ. Strings,
+    line comments, body text, and quoted identifiers therefore need no Python
+    lexer or duplicated Lean grammar.
     """
 
-    block_depth = 0
     index = 0
     remove: set[int] = set()
     while index < len(code):
-        if block_depth == 0:
-            if code.startswith("--", index):
-                newline = code.find("\n", index + 2)
-                index = len(code) if newline < 0 else newline + 1
-                continue
-            if code.startswith("/-", index):
-                block_depth = 1
-                index += 2
-                continue
-            if code[index] == '"':
-                index += 1
-                while index < len(code):
-                    if code[index] == "\\":
-                        index += 2
-                    elif code[index] == '"':
-                        index += 1
-                        break
-                    else:
-                        index += 1
-                continue
+        if code[index] != "-":
             index += 1
             continue
-
-        if code.startswith("/-", index):
-            block_depth += 1
-            index += 2
-            continue
-        if code[index] == "-":
-            end = index
-            while end < len(code) and code[end] == "-":
-                end += 1
-            if end < len(code) and code[end] == "/":
-                if (end - index) % 2 == 0:
-                    remove.add(index)
-                block_depth -= 1
-                index = end + 1
-                continue
-            index = end
-            continue
-        index += 1
+        end = index
+        while end < len(code) and code[end] == "-":
+            end += 1
+        if end < len(code) and code[end] == "/" and (end - index) % 2 == 0:
+            remove.add(index)
+        index = end + 1 if end < len(code) and code[end] == "/" else end
 
     if not remove:
         return code

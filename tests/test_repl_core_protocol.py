@@ -1207,7 +1207,27 @@ def test_disposable_call_checks_submitted_header_before_warmup_prefix(monkeypatc
     assert checked == ["/- note -/ import Unsafe\n#check Nat"]
 
 
-def test_disposable_call_refuses_the_legacy_deps_json_comment_bypass(monkeypatch):
+@pytest.mark.parametrize(
+    "code",
+    [
+        (
+            "prelude -- ordinary comment\n"
+            "import Init /- a --/\n"
+            "import Lean\n"
+            "-- -/\n"
+            "#check Lean.Name"
+        ),
+        (
+            "import Mathlib.«Foo--» /- a --/\n"
+            "import Lean\n"
+            "-- -/\n"
+            "#check Lean.Name"
+        ),
+    ],
+)
+def test_disposable_call_refuses_the_legacy_deps_json_comment_bypass(
+    monkeypatch, code
+):
     repl = repl_core.LeanRepl(
         repl_core.LeanReplConfig(
             allowed_imports=frozenset({"Init"}),
@@ -1226,13 +1246,7 @@ def test_disposable_call_refuses_the_legacy_deps_json_comment_bypass(monkeypatch
         lambda *args, **kwargs: pytest.fail("ambiguous header must not start Lean"),
     )
 
-    response = repl.run_disposable(
-        "prelude -- ordinary comment\n"
-        "import Init /- a --/\n"
-        "import Lean\n"
-        "-- -/\n"
-        "#check Lean.Name",
-    )
+    response = repl.run_disposable(code)
 
     assert "lean --deps-json cannot validate safely" in response["repl_error"]
     assert repl.is_clean()
@@ -1246,12 +1260,9 @@ def test_disposable_call_refuses_the_legacy_deps_json_comment_bypass(monkeypatch
         "#check Nat\n/- body --/",
     ],
 )
-def test_legacy_deps_json_guard_ignores_non_header_context(code):
+def test_legacy_deps_json_normalizer_does_not_decide_lexical_context(code):
     normalized = repl_core._normalize_legacy_deps_json_comment_closes(code)
-    if code.startswith("#check Nat"):
-        assert normalized != code
-    else:
-        assert normalized == code
+    assert normalized != code
 
 
 def test_disposable_call_refuses_non_posix_before_spawning_header_parser(monkeypatch):

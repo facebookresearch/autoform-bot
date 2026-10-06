@@ -53,6 +53,14 @@ def test_disposable_call_matches_the_pinned_repl_protocol():
             "#check Lean.Name",
             "cannot validate safely",
         ),
+        (
+            (),
+            "import Mathlib.«Foo--» /- a --/\n"
+            "import Lean\n"
+            "-- -/\n"
+            "#check Lean.Name",
+            "cannot validate safely",
+        ),
         ((), "import REPL.Frontend\n#check Nat", None),
         ((), '#eval "--/"', None),
         ((), "--/ harmless line comment\n#check Nat", None),
