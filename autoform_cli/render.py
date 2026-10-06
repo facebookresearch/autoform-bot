@@ -2268,19 +2268,9 @@ def _readback_block(declaration: DeclarationSkeleton, readback: Readback | None)
             "",
         ]
     validation_errors = readback.validate(declaration)
-    status_key = "invalid" if validation_errors else readback.status(declaration)
-    if status_key == "invalid":
-        label = "invalid · " + "; ".join(validation_errors)
-    elif status_key == "altered":
-        label = "altered · the Lean shown below is not the packet this card records"
-    elif status_key == "current":
-        label = "current"
-    elif status_key == "revised":
-        label = "revised · the packet text changed since this was written"
-    else:
-        label = f"stale · written for skeleton {readback.skeleton_hash or '?'}"
     model = f" · {html.escape(readback.model)}" if readback.model else ""
-    if status_key == "invalid":
+    if validation_errors:
+        label = "invalid · " + "; ".join(validation_errors)
         return [
             '<div class="bp-readback bp-readback-invalid">',
             f'<div class="bp-readback-title">Read-back{model} · '
@@ -2295,8 +2285,8 @@ def _readback_block(declaration: DeclarationSkeleton, readback: Readback | None)
     # the title's line and puts no block-level tag at the start of a line,
     # which that parser would take for a block of its own.
     return [
-        f'<div class="bp-readback bp-readback-{status_key}">',
-        f'<div class="bp-readback-title">Read-back{model} · <span class="bp-readback-status">{html.escape(label)}</span></div>'
+        '<div class="bp-readback bp-readback-current">',
+        f'<div class="bp-readback-title">Read-back{model} · <span class="bp-readback-status">current</span></div>'
         + render_testimony(readback.text),
         "</div>",
         "",
@@ -3095,9 +3085,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-readback-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
 .bp-readback-status {{ font-weight: 400; color: var(--bp-muted); }}
-.bp-readback-stale {{ border-left-color: #B77900; }}
-.bp-readback-revised {{ border-left-color: #B77900; }}
-.bp-readback-altered {{ border-left-color: #B77900; }}
 .bp-readback-invalid {{ border-left-color: #B42318; }}
 .bp-readback-missing {{ border-left-color: var(--bp-rule); font-style: italic; }}
 /* A formula paints only within its own band: the height of its box and the

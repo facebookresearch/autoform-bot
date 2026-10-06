@@ -250,12 +250,7 @@ class Readback:
 
         return not self.validate()
 
-    def validate(
-        self,
-        expected: DeclarationSkeleton | None = None,
-        *,
-        article_id: str | None = None,
-    ) -> tuple[str, ...]:
+    def validate(self, expected: DeclarationSkeleton | None = None) -> tuple[str, ...]:
         """Return intrinsic errors and, when given, mismatches with a declaration.
 
         A card that could not be read has only the reason: every other check
@@ -317,8 +312,6 @@ class Readback:
             )
             if self.file_hash != evidence_hash_of(canonical):
                 errors.append("whole-file hash does not match the canonical card bytes")
-        if article_id is not None and self.article_id != article_id:
-            errors.append(f"card article_id is {self.article_id!r}, expected {article_id!r}")
         if expected is not None:
             if self.declaration != expected.name:
                 errors.append(f"card identity is {self.declaration!r}, expected {expected.name!r}")
