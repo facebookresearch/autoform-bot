@@ -224,14 +224,7 @@ def test_readbacks_are_filed_per_declaration_and_report_their_status(tmp_path: P
     blueprint = _blueprint(tmp_path)
     declaration = _declaration()
 
-    path = write_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="test-model",
-        text="Let $E$ …",
-        packet_text=declaration.blind_text(),
-    )
+    path = _file_card(blueprint, "Let $E$ …", model="test-model")
 
     assert path == readback_path(blueprint, _ARTICLE_ID, "Skel.sup_unique")
     # The file is a self-contained review card: title, the skeleton shown to
@@ -538,25 +531,11 @@ def test_writer_requires_the_actual_packet_and_nonempty_testimony(tmp_path: Path
     declaration = _declaration()
 
     with pytest.raises(ValueError, match="packet does not match"):
-        write_readback(
-            blueprint,
-            article_id=_ARTICLE_ID,
-            declaration=declaration,
-            model="m",
-            text="Fine.",
-            packet_text=declaration.blind_text().replace("≤", "<"),
-        )
+        _file_card(blueprint, "Fine.", packet_text=declaration.blind_text().replace("≤", "<"))
     with pytest.raises(ValueError, match="nonempty testimony"):
         _file_card(blueprint, " \n")
     with pytest.raises(ValueError, match="nonempty model"):
-        write_readback(
-            blueprint,
-            article_id=_ARTICLE_ID,
-            declaration=declaration,
-            model=" ",
-            text="Fine.",
-            packet_text=declaration.blind_text(),
-        )
+        _file_card(blueprint, "Fine.", model=" ")
     assert not readback_path(blueprint, _ARTICLE_ID, declaration.name).exists()
 
 
@@ -619,17 +598,14 @@ def test_compare_and_swap_preserves_a_concurrent_edit(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8").endswith("Concurrent edit.\n")
 
 
-def _file_card(blueprint: Path, text: str, **options) -> Path:
-    declaration = options.pop("declaration", _declaration())
-    return write_readback(
-        blueprint,
-        article_id=options.pop("article_id", _ARTICLE_ID),
-        declaration=declaration,
-        model="m",
-        text=text,
-        packet_text=declaration.blind_text(),
-        **options,
-    )
+def _file_card(blueprint: Path, text: str, *, write=write_readback, **options):
+    """File a card, or with ``write=prepare_readback`` only prepare it, defaulting the fields left out."""
+
+    declaration = options.setdefault("declaration", _declaration())
+    options.setdefault("article_id", _ARTICLE_ID)
+    options.setdefault("model", "m")
+    options.setdefault("packet_text", declaration.blind_text())
+    return write(blueprint, text=text, **options)
 
 
 def _staged_names(directory: Path) -> list[str]:
@@ -699,16 +675,7 @@ def _crash_publication(tmp_path: Path, repo_root: Path, card: object, *, rename:
 
 
 def _prepared(blueprint: Path, text: str, expected: str | None = None):
-    declaration = _declaration()
-    return prepare_readback(
-        blueprint,
-        article_id=_ARTICLE_ID,
-        declaration=declaration,
-        model="m",
-        text=text,
-        packet_text=declaration.blind_text(),
-        expected_card_hash=expected,
-    )
+    return _file_card(blueprint, text, write=prepare_readback, expected_card_hash=expected)
 
 
 def test_a_crash_mid_publication_leaves_nothing_that_blocks_a_retry(tmp_path: Path, repo_root: Path) -> None:
@@ -885,15 +852,7 @@ def test_loading_never_follows_a_card_or_directory_swapped_for_a_symlink(tmp_pat
 def _place_card(blueprint: Path, text: str, **options) -> Path:
     """Write a card as a checkout would, without publishing it."""
 
-    declaration = options.pop("declaration", _declaration())
-    card = prepare_readback(
-        blueprint,
-        article_id=options.pop("article_id", _ARTICLE_ID),
-        declaration=declaration,
-        model="m",
-        text=text,
-        packet_text=declaration.blind_text(),
-    )
+    card = _file_card(blueprint, text, write=prepare_readback, **options)
     card.path.parent.mkdir(parents=True, exist_ok=True)
     card.path.write_bytes(card.content.encode("utf-8"))
     return card.path
