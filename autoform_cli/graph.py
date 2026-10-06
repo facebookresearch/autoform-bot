@@ -408,25 +408,24 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
     for path in entries:
         if path.suffix != ".md" and path.name.casefold() != "readme.md":
             continue
+        relative = path.relative_to(roadmap_root).as_posix()
         try:
-            if stat.S_ISREG(path.stat().st_mode):
-                pages.append(path)
+            if not stat.S_ISREG(path.stat().st_mode):
+                continue
         except FileNotFoundError:
             continue  # a dangling link, like an editor's lock file, or a page removed since the walk
         except OSError as exc:
-            issues.append(f"{path.relative_to(roadmap_root).as_posix()}: cannot read roadmap page: {exc}")
-
-    for path in pages:
+            issues.append(f"{relative}: cannot read roadmap page: {exc}")
+            continue
         if path.name.casefold() == "readme.md" and path.name != "README.md":
-            relative = path.relative_to(roadmap_root).as_posix()
             issues.append(
                 f"{relative}: noncanonical README filename; container pages must be named exactly README.md "
                 "for portable behavior on case-sensitive filesystems"
             )
+        if path.suffix == ".md":
+            pages.append(path)
 
     for path in pages:
-        if path.suffix != ".md":
-            continue
         try:
             content = path.read_bytes()
             text = content.decode("utf-8")
