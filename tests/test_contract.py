@@ -68,7 +68,8 @@ def _generate(rng: random.Random) -> list[_Spec]:
         lean = None
         if rng.random() < 0.6:
             lean = f"Gen.{name}" if rng.random() < 0.8 else f"Gen.{name}, Gen.{name}_aux"
-        statements = [None, "formalized"] + (["retracted"] if lean and not mathlib else [])
+        # The loader requires lean: for a formalized statement or proof.
+        statements = [None] + (["formalized"] if lean else []) + (["retracted"] if lean and not mathlib else [])
         statement = rng.choices(statements, weights=[35, 45, 20][: len(statements)])[0]
         statement_dependencies: list[str] = []
         proof_dependencies: list[str] = []
@@ -83,7 +84,7 @@ def _generate(rng: random.Random) -> list[_Spec]:
                 name=name,
                 declaration=declaration,
                 statement=statement,
-                proof=statement != "retracted" and rng.random() < 0.35,
+                proof=statement == "formalized" and rng.random() < 0.35,
                 mathlib=mathlib,
                 not_ready=rng.random() < 0.1,
                 lean=lean,
@@ -127,12 +128,12 @@ def _open_statements(specs: list[_Spec], open_policy: bool) -> dict[str, frozens
     """The open statements each article's proof rests on, from the frontmatter alone.
 
     An open statement is a theorem that is not proved but is stated or records
-    ``statement: retracted``; its own proof is the ``sorry``. A stated one need
-    not name ``lean:``, but only those that do appear in the contract, so only
-    they can be open there. A dependency that is open contributes itself and
-    what its statement prerequisites reach, a proved dependency or a definition
-    naming ``lean:`` passes on everything it reaches, and anything else (an
-    unstated theorem, a Mathlib article) reaches nothing.
+    ``statement: retracted``; its own proof is the ``sorry``. Either way it
+    names ``lean:``, which the loader requires. A dependency that is open
+    contributes itself and what its statement prerequisites reach, a proved
+    dependency or a definition naming ``lean:`` passes on everything it
+    reaches, and anything else (an unstated theorem, a Mathlib article)
+    reaches nothing.
     """
     reaches: dict[str, frozenset[str]] = {}
     assumes: dict[str, frozenset[str]] = {}
@@ -153,13 +154,18 @@ def _open_statements(specs: list[_Spec], open_policy: bool) -> dict[str, frozens
     return assumes
 
 
-_RETRACTION_FAULTS = {
+_LOAD_FAULTS = {
     "no lean": (
         {"lean": None},
         "{name}: statement: retracted needs the lean: declaration it retracts; without lean:, omit statement",
     ),
     "proof": ({"proof": True}, "{name}: proof: formalized needs statement: formalized, not retracted"),
     "mathlib": ({"mathlib": True}, "{name}: a mathlib: true article cannot record statement: retracted"),
+    "formalized without lean": (
+        {"statement": "formalized", "lean": None},
+        "{name}: statement: formalized needs the lean: declaration that formalizes it",
+    ),
+    "proof without statement": ({"statement": None, "proof": True}, "{name}: proof: formalized needs statement: formalized"),
 }
 
 
@@ -282,7 +288,6 @@ def _check_roadmap(
         assert article.declarations == tuple(declaration_names(spec.lean or ""))
         assert (article.state, article.assumes) == (status.key, status.assumes)
         assert set(article.allowed_open_declarations) <= open_declarations, name
-        # A stated theorem without lean: is still assumed, but names nothing to allow.
         allowed = {
             declaration
             for assumed in status.assumes
@@ -320,9 +325,10 @@ def test_random_roadmaps_keep_the_wiki_and_lean_contract(repo_root: Path, tmp_pa
             except AssertionError as error:
                 raise AssertionError(f"seed {seed}, policy {policy}: {error}") from error
 
-        # 11. Each invalid retraction is refused at load, with its own message.
-        fault = rng.choice(sorted(_RETRACTION_FAULTS))
-        changes, message = _RETRACTION_FAULTS[fault]
+        # 11. Each invalid retraction, and each formalized assertion the Lean
+        # cannot back, is refused at load, with its own message.
+        fault = rng.choice(sorted(_LOAD_FAULTS))
+        changes, message = _LOAD_FAULTS[fault]
         victim = rng.randrange(len(specs))
         fields = {"statement": "retracted", "lean": f"Gen.{specs[victim].name}", "proof": False, "mathlib": False}
         broken = replace(specs[victim], **{**fields, **changes})
@@ -339,7 +345,7 @@ def test_random_roadmaps_keep_the_wiki_and_lean_contract(repo_root: Path, tmp_pa
     expected |= {f"allowed:{state.key}" for state in STATES}
     expected |= {"work:statement", "work:proof", "work:missing-article-id"}
     expected |= {"contract:open", "contract:retracted-open", "contract:mathlib"}
-    expected |= {f"invalid:{fault}" for fault in _RETRACTION_FAULTS}
+    expected |= {f"invalid:{fault}" for fault in _LOAD_FAULTS}
     assert expected <= seen, sorted(expected - seen)
 
 

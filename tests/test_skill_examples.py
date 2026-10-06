@@ -160,6 +160,23 @@ def test_development_guidance_uses_progressive_command_reference(repo_root: Path
     assert "| `target-unreadable` |" in inspection_reference
 
 
+def test_development_guidance_routes_repository_contracts(repo_root: Path) -> None:
+    skill_path = repo_root / "skills/develop-plugin/SKILL.md"
+    contracts_path = skill_path.parent / "references/repository-contracts.md"
+    skill = skill_path.read_text(encoding="utf-8")
+
+    assert "[repository contracts](references/repository-contracts.md)" in skill
+    assert contracts_path.is_file()
+
+
+def test_root_agent_guidance_routes_to_owning_documents(repo_root: Path) -> None:
+    guidance = (repo_root / "AGENTS.md").read_text(encoding="utf-8")
+
+    for relative in ("CONTRIBUTING.md", "skills/develop-plugin/SKILL.md"):
+        assert f"]({relative})" in guidance
+        assert (repo_root / relative).is_file()
+
+
 def test_agent_review_treats_skeleton_hashes_as_advisory(repo_root: Path) -> None:
     review = (repo_root / "skills" / "agent-review" / "SKILL.md").read_text(
         encoding="utf-8"
@@ -219,12 +236,6 @@ def test_setup_guidance_uses_the_offline_atomic_project_creator(repo_root: Path)
     )
     assert "scripts/workspace_inspector.py" not in setup
     assert "scripts/make_project.sh" not in setup
-    for document in sorted(setup_root.rglob("*.md")):
-        text = document.read_text(encoding="utf-8")
-        for reference in re.findall(r"(?<![A-Za-z0-9_])scripts/[A-Za-z0-9_./-]+", text):
-            assert (repo_root / reference).is_file(), (
-                f"{document.relative_to(repo_root)} references missing helper {reference}"
-            )
     for document in sorted(setup_root.rglob("*.md")):
         text = document.read_text(encoding="utf-8")
         for reference in re.findall(r"(?<![A-Za-z0-9_])scripts/[A-Za-z0-9_./-]+", text):
