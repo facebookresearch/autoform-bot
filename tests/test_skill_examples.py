@@ -122,7 +122,11 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     development = (repo_root / "skills" / "develop-plugin" / "SKILL.md").read_text(
         encoding="utf-8"
     )
+    contracts = (
+        repo_root / "skills" / "develop-plugin" / "references" / "repository-contracts.md"
+    ).read_text(encoding="utf-8")
     normalized = " ".join(development.split())
+    contract_text = " ".join(contracts.split())
 
     assert "private declaration safety as fail-closed evidence" in normalized
     assert "official user name" in normalized
@@ -135,11 +139,11 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     assert "repeated pathname reads are not a generation boundary" in normalized
     assert "marker schema in its owning feature" in normalized
     assert "match the blob at the stable detected commit" in normalized
-    assert "Full-viewport knowledge maps" in normalized
-    assert "authored mathematical areas and prose drive regions and reading panels" in normalized
-    assert "containment and dependency stay distinct" in normalized
-    assert "provenance folders are facets, never geometry" in normalized
-    assert "Never fit the whole repository" in normalized
+    assert "Full-viewport knowledge maps" in contract_text
+    assert "authored mathematical areas and prose to drive regions and reading panels" in contract_text
+    assert "containment and dependency distinct" in contract_text
+    assert "provenance folders as facets, never geometry" in contract_text
+    assert "Never fit the whole repository" in contract_text
 
 
 def test_development_guidance_uses_progressive_command_reference(repo_root: Path) -> None:

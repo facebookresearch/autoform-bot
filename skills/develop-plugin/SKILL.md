@@ -1,37 +1,42 @@
 ---
 name: develop-plugin
-description: Maintain AutoformBot.
+description: Maintain AutoformBot's code, skills, tests, examples, and installation.
 ---
 
-# Develop
+# Develop Autoform
 
-Treat Autoform as an example-based plugin for an independent formalization.
-State a consumer scenario and invariant. Treat user nudges as product evidence;
-preserve insight, not the transcript, in a focused test so future agents need less steering.
+Treat Autoform as an example-based plugin for an independent formalization
+repository. State a consumer scenario and invariant. Treat user nudges as
+product evidence; preserve insight, not the transcript, in a focused test so
+future agents need less steering.
 
-Keep Cabannes-specific facts in examples; keep plugin and formalization roots
+Keep Cabannes-specific facts in examples. Keep plugin and formalization roots
 distinct. Agents can infer routine details; keep shared agent entrypoints concise
-with on-demand references.
+and link details as on-demand references.
 
-Per release, regenerate `production_module_roots` from Lake package configs.
-Update the private creation bundle, catalog identity, and complete `lake update`
-manifest; run `lake build`. A direct-Mathlib-only manifest is invalid.
+For each Lean/Mathlib release, regenerate `production_module_roots` from Lake
+package configs. Update the private creation bundle, catalog identity, and
+complete `lake update` manifest together; run `lake build`.
+A direct-Mathlib-only manifest is invalid.
 
-Source indexes, revisions, and links are one evidence boundary. Retain
-descriptors: repeated pathname reads are not a generation boundary. Read bounded
-outputs before descendants, keep each marker schema in its owning feature, and
-make links match the blob at the stable detected commit.
+Source indexes, revisions, and links form one evidence boundary: retain
+descriptors because repeated pathname reads are not a generation boundary.
+Read bounded outputs before descendants, keep each marker schema in its owning
+feature, and require links to match the blob at the stable detected commit.
 
-For claims, publication, mirrors, pins, and releases, read
-[repository contracts](references/repository-contracts.md).
+For claim coordination, local publication views, generated mirrors, and pin or
+release policy, read [repository contracts](references/repository-contracts.md).
 
-Full-viewport knowledge maps: authored mathematical areas and prose drive regions
-and reading panels; containment and dependency stay distinct; provenance folders
-are facets, never geometry. Never fit the whole repository.
+Normally run:
 
-Run `make lint`, `make test`, and `make check-example`.
+```bash
+make lint
+make test
+make check-example
+```
 
-Validate with skill-creator and plugin-creator; reinstall only in a new thread.
+Validate skills and manifests with skill-creator and plugin-creator. Test
+cachebuster/reinstall discovery only in a new thread.
 
 Treat rewritten private declaration safety as fail-closed evidence: correlate
 the official user name to its lexical declaration by source coordinates.
