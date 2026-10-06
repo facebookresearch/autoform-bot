@@ -2119,29 +2119,6 @@ def _answer_records(modules: tuple[str, ...], command: list[str], env: dict[str,
     return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
 
-def test_a_probe_failure_reason_hides_the_helper_directory(tmp_path: Path, monkeypatch) -> None:
-    # The helper is compiled into the extraction's scratch directory, which
-    # is on the probe's search path; a reason that lists it must not change
-    # from one run to the next.
-    project = _project(tmp_path)
-
-    def answer(modules, command, env):
-        entries = "\n".join(env["LEAN_PATH"].split(os.pathsep))
-        return subprocess.CompletedProcess(
-            command, 1, stdout="", stderr=f"error: unknown module prefix 'Bogus'\nsearch path entries:\n{entries}"
-        )
-
-    _fake_lake(monkeypatch, project, answer)
-
-    report = extract_skeletons(
-        _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"}), lean_root=project
-    )
-
-    (issue,) = report.unresolved
-    assert "<scratch>" in issue.reason
-    assert "autoform-skeleton-" not in issue.reason
-
-
 def test_a_custom_runner_cannot_be_given_a_timeout_it_would_ignore(tmp_path: Path) -> None:
     project = _project(tmp_path)
     blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
@@ -2269,10 +2246,12 @@ def test_a_failed_probes_reason_reads_the_same_on_every_run(tmp_path: Path, monk
     def answer(modules, command, env):
         if "Skel.Uses" not in modules:
             return _answer_records(modules, command, env)
-        # Lean names the probe's temporary file and the project's own paths.
+        # Lean names the probe's temporary file, the project's own paths, and
+        # the helper, compiled into the extraction's scratch directory.
         stderr = (
             f"{command[-1]}:3:0: error: unknown module prefix\n"
-            f"{project / 'Skel' / 'Uses.lean'}:1:0: note: imported here\n" + "trace line\n" * 500
+            f"{project / 'Skel' / 'Uses.lean'}:1:0: note: imported here\n"
+            f"{env['LEAN_PATH'].split(os.pathsep)[-1]}\n" + "trace line\n" * 500
         )
         return subprocess.CompletedProcess(command, 1, stdout="", stderr=stderr)
 
@@ -2287,6 +2266,7 @@ def test_a_failed_probes_reason_reads_the_same_on_every_run(tmp_path: Path, monk
     (issue,) = report.unresolved
     assert "<scratch>/AutoformSkeletonProbe.lean:3:0: error" in issue.reason
     assert "\nSkel/Uses.lean:1:0: note" in issue.reason and str(tmp_path) not in issue.reason
+    assert "\n<scratch>\n" in issue.reason and "autoform-skeleton-" not in issue.reason
     assert len(issue.reason) <= 2000 and issue.reason.endswith(" more characters]")
 
 
