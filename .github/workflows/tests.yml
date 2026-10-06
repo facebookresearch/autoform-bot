@@ -63,6 +63,10 @@ jobs:
           tests/test_project_inspect.py::test_stale_inherited_mathlib_is_ignored_by_real_lake
         env:
           AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
+      - name: Run the impact probe against real Lean
+        run: timeout --signal=TERM --kill-after=30s 10m uv run pytest -q tests/test_impact.py
+        env:
+          AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
 
   windows-hardening:
     name: Windows inspection, subprocess, and publication hardening

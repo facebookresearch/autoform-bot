@@ -114,9 +114,10 @@ This section is the single source of truth for the command line. Skills
 describe what to achieve and link here; they do not restate flags, so a change
 to the CLI lands in one place.
 
-The commands below are written as they appear on `PATH`. Inside a consumer
-project the plugin is not installed, so resolve `<AUTOFORM_PLUGIN_ROOT>` from
-the loaded plugin and prefix each one, running from the project root:
+The commands below are written as they appear on `PATH` once this Python
+package is installed. Inside a consumer project the package is not installed,
+so resolve `<AUTOFORM_PLUGIN_ROOT>` from the loaded plugin and prefix each one,
+running from the project root:
 
 ```bash
 uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform check blueprint --lean-root .
@@ -522,6 +523,35 @@ frontmatter. `work context` may still select that article by its path ID to
 report the migration blocker. Both commands are read-only projections of
 Markdown.
 
+Inspect the Lean consequences of revising an article before editing it:
+
+```bash
+autoform work impact chapter/result . --lean-root .
+autoform work impact chapter/result . --lean-root . --declaration MyProject.helper --json
+```
+
+`work impact` runs a bounded Lean probe against a fresh build and reports
+statement-impacted and proof-impacted articles, unnamed helpers, missing
+Markdown dependency paths, deprecated declarations and their users, whether
+the change is contained, and the complete `claim_targets` set. Helpers shared
+by several articles contribute every owner's claim; an unowned helper gets a
+stable `lean/<slug>-<digest>` target. A revised declaration that no article
+names is claimed the same way, under every nearest owner's target or its own
+stable key. A revision is contained exactly when the selected article's target
+is its only claim target. Project locality is an exact inventory of regular
+repository source modules, never a namespace-prefix guess.
+
+The command snapshots and rereads the roadmap around the probe. It retains one
+bound Lean source generation, derives module inventory and locations from that
+generation's captured bytes, then recaptures through the same binding and
+refuses any content or source-identity change. JSON uses `autoform-impact/v1`
+and binds its answer to the Markdown `source_revision`, the repository
+`lean_source_revision`, and a `build_revision` hash of the normalized Lean
+records. The probe imports project modules, so run it only in a trusted checkout
+or sandbox. It compares elaborated types and values; changes to notation,
+attributes, instance priority, or unreported generated declarations still
+require human review.
+
 Plan durable article identity metadata without changing the blueprint:
 
 ```bash
@@ -680,9 +710,7 @@ worktree each and serialize `lake build` behind a `lake-build` claim, because
 builds share the elan toolchain and the Mathlib cache even when the checkouts
 are separate.
 
-Claims are temporary operational state, never article frontmatter. Future
-Deicyde workers may share this protocol, but their current continue-uncoordinated
-failure behavior must be removed before they use the canonical claim API.
+Claims are temporary operational state, never article frontmatter.
 
 ## Local runtime doctor
 
@@ -706,7 +734,7 @@ This command is strictly read-only and local. It does not invoke Git, GitHub,
 subprocesses, network services, claims, queues, reviews, recovery state,
 providers, workers, renderers, or dashboards, and it creates no cache, scratch
 repository, service, state directory, or `graph.json`. It is a project/runtime
-doctor, separate from any future Deicyde fleet or machine-capability preflight.
+doctor, separate from any future worker fleet or machine-capability preflight.
 
 ## Runtime contract
 
