@@ -2,14 +2,15 @@
   "schema": "autoform-skill-transport/v2",
   "baseline": {
     "canonical_repository": "facebookresearch/autoform-bot",
-    "main_commit": "dd908202793bc811c832fdcf73905e0c15cb7b33",
+    "main_commit": "7fa6d1d6dcda161d5575a588bb723271ac58467c",
     "landed_capabilities": {
       "skeleton": "#12",
       "readback_faithfulness": "#53",
       "markdown_formalize": "#92",
       "revision_impact": "#136",
       "open_statements": "#138",
-      "project_creation": "#96"
+      "project_creation": "#96",
+      "formalized_work_load_invariants": "#158"
     }
   },
   "archive": {
@@ -81,28 +82,28 @@
     {"name": "setup", "origin": "native", "archive_sources": []}
   ],
   "delivery_units": [
-    {"id": "P00", "owner": "policy.transport", "target_branch": "main", "stack_parent": null, "depends_on": [], "approval_gates": [], "source_skills": [], "state": "this-policy"},
-    {"id": "P01", "owner": "core.formalization-quality", "target_branch": "main", "stack_parent": null, "depends_on": ["P00"], "approval_gates": [], "source_skills": ["lean-formalization-quality"], "state": "planned"},
-    {"id": "P02", "owner": "core.formalization-quality", "target_branch": "main", "stack_parent": "P01", "depends_on": ["P01"], "approval_gates": [], "source_skills": [], "state": "planned"},
-    {"id": "P03", "owner": "core.formalization-quality", "target_branch": "main", "stack_parent": "P02", "depends_on": ["P02"], "approval_gates": [], "source_skills": [], "state": "planned"},
-    {"id": "P04", "owner": "core.mathlib-search", "target_branch": "main", "stack_parent": null, "depends_on": ["P00"], "approval_gates": [], "source_skills": ["mathlib-search", "loogle"], "state": "planned"},
-    {"id": "P05", "owner": "core.setup", "target_branch": "main", "stack_parent": null, "depends_on": ["P00"], "approval_gates": [], "source_skills": ["build-gate", "lean-devserver-setup"], "state": "planned"},
-    {"id": "P06", "owner": "core.statement-equivalence", "target_branch": "main", "stack_parent": null, "depends_on": ["P01", "P04"], "approval_gates": [], "source_skills": ["lean-stmt-equiv"], "state": "planned"},
-    {"id": "P07", "owner": "core.agent-review", "target_branch": "main", "stack_parent": null, "depends_on": ["P01"], "approval_gates": [], "source_skills": ["audit-lean-to-text", "verify-lean-translation"], "state": "planned"},
-    {"id": "E01", "owner": "core.formalize", "target_branch": "main", "stack_parent": null, "depends_on": [], "approval_gates": [], "source_skills": ["lean-proof"], "state": "satisfied-by-main-formalize"},
-    {"id": "E02", "owner": "core.formalize", "target_branch": "main", "stack_parent": null, "depends_on": ["P03", "P04"], "approval_gates": ["specialist-scope-approved"], "source_skills": ["simplify-proofs"], "state": "planned"},
-    {"id": "E03", "owner": "core.formalize", "target_branch": "main", "stack_parent": "E02", "depends_on": ["E02", "P04"], "approval_gates": ["specialist-scope-approved"], "source_skills": ["mathlibify-proofs"], "state": "planned"},
-    {"id": "E04", "owner": "core.formalize", "target_branch": "main", "stack_parent": "E02", "depends_on": ["E02"], "approval_gates": ["specialist-scope-approved"], "source_skills": ["lean-proof-golf"], "state": "planned"},
-    {"id": "E05", "owner": "core.formalize", "target_branch": "main", "stack_parent": null, "depends_on": ["P05"], "approval_gates": ["specialist-scope-approved"], "source_skills": ["lean-comparator"], "state": "planned"},
-    {"id": "E06", "owner": "core.formalize", "target_branch": "main", "stack_parent": "E03", "depends_on": ["E03"], "approval_gates": ["specialist-scope-approved"], "source_skills": ["mathlib-extension"], "state": "planned"},
-    {"id": "C00", "owner": "corpus.framework", "target_branch": "autoform-corpus/main", "stack_parent": null, "depends_on": ["P03", "P05", "P06"], "approval_gates": ["companion-repository-approved"], "source_skills": [], "state": "planned"},
-    {"id": "C01", "owner": "corpus.fetch-source", "target_branch": "autoform-corpus/main", "stack_parent": "C00", "depends_on": ["C00"], "approval_gates": ["companion-repository-approved"], "source_skills": ["fetch-paper", "visual-pdf-math-extraction"], "state": "planned"},
-    {"id": "C02", "owner": "corpus.extract", "target_branch": "autoform-corpus/main", "stack_parent": "C01", "depends_on": ["C01"], "approval_gates": ["companion-repository-approved"], "source_skills": ["extract-lean-conjectures", "extract-textbook-exercises"], "state": "planned"},
-    {"id": "C03", "owner": "corpus.formalize", "target_branch": "autoform-corpus/main", "stack_parent": "C02", "depends_on": ["C02"], "approval_gates": ["companion-repository-approved"], "source_skills": ["formalize-lean-theorems"], "state": "planned"},
-    {"id": "C04", "owner": "corpus.formalize", "target_branch": "autoform-corpus/main", "stack_parent": "C03", "depends_on": ["C03"], "approval_gates": ["companion-repository-approved"], "source_skills": ["formalize-lean-textbook-exercises"], "state": "planned"},
-    {"id": "C05", "owner": "corpus.formalize", "target_branch": "autoform-corpus/main", "stack_parent": "C04", "depends_on": ["C04"], "approval_gates": ["companion-repository-approved"], "source_skills": ["formalize-arxiv-paper"], "state": "planned"},
-    {"id": "D01", "owner": "docs.composition", "target_branch": "main", "stack_parent": null, "depends_on": ["P03", "P05", "P06"], "approval_gates": [], "source_skills": [], "state": "planned"},
-    {"id": "D02", "owner": "docs.composition", "target_branch": "main", "stack_parent": null, "depends_on": ["C00"], "approval_gates": ["companion-repository-approved"], "source_skills": [], "state": "planned"}
+    {"id": "P00", "owner": "policy.transport", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": null, "depends_on": [], "approval_gates": [], "source_skills": [], "state": "this-policy"},
+    {"id": "P01", "owner": "core.formalization-quality", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": null, "depends_on": ["P00"], "approval_gates": [], "source_skills": ["lean-formalization-quality"], "state": "planned"},
+    {"id": "P02", "owner": "core.formalization-quality", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": "P01", "depends_on": ["P01"], "approval_gates": [], "source_skills": [], "state": "planned"},
+    {"id": "P03", "owner": "core.formalization-quality", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": "P02", "depends_on": ["P02"], "approval_gates": [], "source_skills": [], "state": "planned"},
+    {"id": "P04", "owner": "core.mathlib-search", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": null, "depends_on": ["P00"], "approval_gates": [], "source_skills": ["mathlib-search", "loogle"], "state": "planned"},
+    {"id": "P05", "owner": "core.setup", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": null, "depends_on": ["P00"], "approval_gates": [], "source_skills": ["build-gate", "lean-devserver-setup"], "state": "planned"},
+    {"id": "P06", "owner": "core.statement-equivalence", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": null, "depends_on": ["P01", "P04"], "approval_gates": [], "source_skills": ["lean-stmt-equiv"], "state": "planned"},
+    {"id": "P07", "owner": "core.agent-review", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": null, "depends_on": ["P01"], "approval_gates": [], "source_skills": ["audit-lean-to-text", "verify-lean-translation"], "state": "planned"},
+    {"id": "E01", "owner": "core.formalize", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": null, "depends_on": [], "approval_gates": [], "source_skills": ["lean-proof"], "state": "satisfied-by-main-formalize"},
+    {"id": "E02", "owner": "core.formalize", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": null, "depends_on": ["P03", "P04"], "approval_gates": ["specialist-scope-approved"], "source_skills": ["simplify-proofs"], "state": "planned"},
+    {"id": "E03", "owner": "core.formalize", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": "E02", "depends_on": ["E02", "P04"], "approval_gates": ["specialist-scope-approved"], "source_skills": ["mathlibify-proofs"], "state": "planned"},
+    {"id": "E04", "owner": "core.formalize", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": "E02", "depends_on": ["E02"], "approval_gates": ["specialist-scope-approved"], "source_skills": ["lean-proof-golf"], "state": "planned"},
+    {"id": "E05", "owner": "core.formalize", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": null, "depends_on": ["P05"], "approval_gates": ["specialist-scope-approved"], "source_skills": ["lean-comparator"], "state": "planned"},
+    {"id": "E06", "owner": "core.formalize", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": "E03", "depends_on": ["E03"], "approval_gates": ["specialist-scope-approved"], "source_skills": ["mathlib-extension"], "state": "planned"},
+    {"id": "C00", "owner": "corpus.framework", "target_repository": null, "target_branch": "main", "stack_parent": null, "depends_on": ["P03", "P05", "P06"], "approval_gates": ["companion-repository-approved"], "source_skills": [], "state": "planned"},
+    {"id": "C01", "owner": "corpus.fetch-source", "target_repository": null, "target_branch": "main", "stack_parent": "C00", "depends_on": ["C00"], "approval_gates": ["companion-repository-approved"], "source_skills": ["fetch-paper", "visual-pdf-math-extraction"], "state": "planned"},
+    {"id": "C02", "owner": "corpus.extract", "target_repository": null, "target_branch": "main", "stack_parent": "C01", "depends_on": ["C01"], "approval_gates": ["companion-repository-approved"], "source_skills": ["extract-lean-conjectures", "extract-textbook-exercises"], "state": "planned"},
+    {"id": "C03", "owner": "corpus.formalize", "target_repository": null, "target_branch": "main", "stack_parent": "C02", "depends_on": ["C02"], "approval_gates": ["companion-repository-approved"], "source_skills": ["formalize-lean-theorems"], "state": "planned"},
+    {"id": "C04", "owner": "corpus.formalize", "target_repository": null, "target_branch": "main", "stack_parent": "C03", "depends_on": ["C03"], "approval_gates": ["companion-repository-approved"], "source_skills": ["formalize-lean-textbook-exercises"], "state": "planned"},
+    {"id": "C05", "owner": "corpus.formalize", "target_repository": null, "target_branch": "main", "stack_parent": "C04", "depends_on": ["C04"], "approval_gates": ["companion-repository-approved"], "source_skills": ["formalize-arxiv-paper"], "state": "planned"},
+    {"id": "D01", "owner": "docs.composition", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": null, "depends_on": ["P03", "P05", "P06"], "approval_gates": [], "source_skills": [], "state": "planned"},
+    {"id": "D02", "owner": "docs.composition", "target_repository": "facebookresearch/autoform-bot", "target_branch": "main", "stack_parent": null, "depends_on": ["C00"], "approval_gates": ["companion-repository-approved"], "source_skills": [], "state": "planned"}
   ],
   "skills": [
     {"name": "analyze-lean-eval", "disposition": "EXCLUDE-INTERNAL", "target_layer": "internal", "owner": "internal.agent-config", "reuse": "none"},

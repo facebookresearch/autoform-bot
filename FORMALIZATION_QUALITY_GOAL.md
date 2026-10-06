@@ -142,20 +142,37 @@ Allowed statuses are `passed`, `blocked`, and `not-applicable`.
 `not-applicable` requires a visible reason. A missing row is not equivalent to
 `not-applicable`.
 
+Every quality subject must declare `origin` explicitly. Missing origin produces
+`missing-quality-origin`, even when links, prose, or other evidence are present.
+The mapping is total: `origin: cited` requires `source-fidelity: passed` with
+the current hash-bound `agrees` bundle; `origin: bridged` and
+`origin: background` require justified `source-fidelity: not-applicable`.
+
 Applicability is default-deny:
 
 | Gate | When `not-applicable` is allowed |
 | --- | --- |
-| source-fidelity | Only with explicit `origin: background` or `origin: bridged` and a visible rationale explaining why there is no direct source translation. `origin: cited` and omitted origin require `passed`. |
+| source-fidelity | Only with explicit `origin: background` or `origin: bridged` and a visible rationale explaining why there is no direct source translation. `origin: cited` requires `passed`; omitted origin is invalid. |
 | clause-coverage | Never. A trivial clause map is still recorded as `passed`. |
 | definition-fidelity | Never. Evidence may state that no custom representation is used, but the status remains `passed`. |
 | boundary-probes | Never. Evidence may justify that no nontrivial boundary exists, but the status remains `passed`. |
 | lean-validity | Never. |
-| proof-integrity | Only when no completed proof is claimed. This includes a theorem explicitly open under `open_statements: allowed`, with a visible rationale; the existing integrity audit still governs allowed assumptions. `proof: formalized` and a proof-bearing `mathlib: true` target require `passed`; a definition-like Mathlib target has no separate proof obligation. Bare `lean:` or `mathlib_declaration:` evidence without either completion assertion does not claim a completed proof. If `mathlib: true` is asserted and the declaration kind is missing or unresolved, default to proof-bearing. |
+| proof-integrity | Only when no completed proof is claimed. This includes a theorem explicitly open under `open_statements: allowed`, with a visible rationale; the existing integrity audit still governs allowed assumptions. `proof: formalized` and a proof-bearing `mathlib: true` target require `passed`. Bare `lean:` or `mathlib_declaration:` evidence without either completion assertion does not claim a completed proof. |
 | provenance | Never. |
 
 Any case not explicitly allowed by this matrix is
 `invalid-not-applicable`. Missing `origin` never grants an exemption.
+
+Proof applicability and declaration intent use freshly resolved
+`DeclarationSkeleton.kind` values, never the authored `declaration` label. For
+`mathlib: true`, aggregate every compiled root: any theorem or axiom makes the
+subject proof-bearing; only an all-definition-like set may use justified
+proof-integrity N/A when no other proof completion is claimed. A mixed set is
+proof-bearing. An unresolved, unsupported, or incomplete kind blocks and can
+never grant N/A. Compare every compiled root against one centralized
+declaration-intent compatibility map; a mismatch produces
+`quality-target-kind-mismatch`, so relabeling a theorem as a definition cannot
+weaken the proof gate.
 
 `source-fidelity: passed` is not satisfied by bare prose such as “compared with
 the source.” For an `origin: cited` article, its Evidence cell must link to a
@@ -272,10 +289,12 @@ documented change:
 - `invalid-not-applicable`
 - `invalid-quality-subject`
 - `retracted-quality-subject`
+- `missing-quality-origin`
 - `missing-quality-target`
 - `missing-quality-passage`
 - `unresolved-quality-link`
 - `unresolved-quality-declaration`
+- `quality-target-kind-mismatch`
 - `unverified-lean-validity`
 
 ### 4. Integrate without breaking empty projects
@@ -373,6 +392,7 @@ Test these complete article cases:
 | Bridged statement, source fidelity N/A with bridge rationale | pass |
 | Bridged statement, source fidelity N/A without rationale | fail |
 | Omitted origin, source fidelity N/A | fail |
+| Omitted origin, source fidelity passed with otherwise current evidence | fail (`missing-quality-origin`) |
 | Background lemma, justified source fidelity N/A | pass |
 | Background lemma, source fidelity N/A without rationale | fail |
 | Source fidelity passed with a current hash-bound `agrees` verdict | pass |
@@ -395,6 +415,11 @@ Test these complete article cases:
 | Open theorem when project policy forbids open statements | fail in integrity audit |
 | Mathlib theorem claim, proof integrity N/A | fail |
 | Mathlib definition claim, proof integrity N/A | pass |
+| Mathlib theorem mislabeled as a definition | fail (`quality-target-kind-mismatch`) |
+| Mathlib definition mislabeled as a theorem | fail (`quality-target-kind-mismatch`) |
+| Mixed Mathlib definition and theorem roots, proof integrity N/A | fail |
+| All-definition Mathlib roots, proof integrity N/A | pass |
+| Unresolved or unsupported compiled declaration kind | fail |
 | Any mandatory gate blocked | fail |
 | Resolved local evidence link | pass |
 | Escaping or missing evidence link | fail |

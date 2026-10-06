@@ -9,6 +9,7 @@ import pytest
 
 
 _SHA256 = "9d38fe39237afdf673073fd6ebeb15f01514f033689edd56ba3b3251d611d7d3"
+_CANONICAL_REPOSITORY = "facebookresearch/autoform-bot"
 _DISPOSITIONS = {
     "COMPOSE",
     "CORE-ADAPT",
@@ -85,16 +86,17 @@ def _delivery_rows(repo_root: Path) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for line in plan.splitlines():
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) != 8 or not _DELIVERY_ROW.fullmatch(cells[0]):
+        if len(cells) != 9 or not _DELIVERY_ROW.fullmatch(cells[0]):
             continue
         rows.append(
             {
                 "id": cells[0],
                 "owner": _unquote(cells[1]),
-                "target_branch": _unquote(cells[2]),
-                "stack_parent": None if cells[3] == "—" else _unquote(cells[3]),
-                "depends_on": _cell_list(cells[5]),
-                "approval_gates": _cell_list(cells[6]),
+                "target_repository": None if cells[2] == "—" else _unquote(cells[2]),
+                "target_branch": _unquote(cells[3]),
+                "stack_parent": None if cells[4] == "—" else _unquote(cells[4]),
+                "depends_on": _cell_list(cells[6]),
+                "approval_gates": _cell_list(cells[7]),
             }
         )
     return rows
@@ -277,6 +279,7 @@ def test_delivery_graph_is_closed_acyclic_and_topologically_ordered(
         assert set(unit) == {
             "id",
             "owner",
+            "target_repository",
             "target_branch",
             "stack_parent",
             "depends_on",
@@ -299,10 +302,16 @@ def test_delivery_graph_is_closed_acyclic_and_topologically_ordered(
         for dependency in unit["depends_on"]:
             assert dependency in positions
             assert positions[dependency] < positions[unit["id"]]
-        assert unit["target_branch"] in {"main", "autoform-corpus/main"}
+        assert unit["target_branch"] == "main"
+        if unit["id"].startswith("C"):
+            assert unit["target_repository"] is None
+            assert "companion-repository-approved" in unit["approval_gates"]
+        else:
+            assert unit["target_repository"] == _CANONICAL_REPOSITORY
         if unit["stack_parent"] is not None:
             assert unit["stack_parent"] in unit["depends_on"]
             parent = units[positions[unit["stack_parent"]]]
+            assert unit["target_repository"] == parent["target_repository"]
             assert unit["target_branch"] == parent["target_branch"]
 
     by_id = {unit["id"]: unit for unit in units}
@@ -371,6 +380,7 @@ def test_delivery_plan_and_manifest_have_identical_machine_fields(
         {
             "id": unit["id"],
             "owner": unit["owner"],
+            "target_repository": unit["target_repository"],
             "target_branch": unit["target_branch"],
             "stack_parent": unit["stack_parent"],
             "depends_on": unit["depends_on"],
@@ -390,8 +400,9 @@ def test_manifest_records_the_reviewed_repository_baseline(repo_root: Path) -> N
         "main_commit",
         "landed_capabilities",
     }
-    assert baseline["canonical_repository"] == "facebookresearch/autoform-bot"
+    assert baseline["canonical_repository"] == _CANONICAL_REPOSITORY
     assert re.fullmatch(r"[0-9a-f]{40}", baseline["main_commit"])
+    assert baseline["main_commit"] == "7fa6d1d6dcda161d5575a588bb723271ac58467c"
     assert baseline["landed_capabilities"] == {
         "skeleton": "#12",
         "readback_faithfulness": "#53",
@@ -399,6 +410,7 @@ def test_manifest_records_the_reviewed_repository_baseline(repo_root: Path) -> N
         "revision_impact": "#136",
         "open_statements": "#138",
         "project_creation": "#96",
+        "formalized_work_load_invariants": "#158",
     }
 
     source_names = {skill["name"] for skill in manifest["skills"]}
@@ -460,7 +472,8 @@ def test_quality_goal_documents_evidence_selection_and_default_deny(
     ):
         assert gate in matrix
     assert "`origin: background` or `origin: bridged`" in matrix["source-fidelity"]
-    assert "`origin: cited` and omitted origin require `passed`" in matrix["source-fidelity"]
+    assert "`origin: cited` requires `passed`" in matrix["source-fidelity"]
+    assert "omitted origin is invalid" in matrix["source-fidelity"]
     for gate in (
         "clause-coverage",
         "definition-fidelity",
@@ -473,9 +486,16 @@ def test_quality_goal_documents_evidence_selection_and_default_deny(
         "Only when no completed proof is claimed."
     )
     assert "proof-bearing `mathlib: true`" in matrix["proof-integrity"]
-    assert "default to proof-bearing" in matrix["proof-integrity"]
     assert "Missing `origin` never grants an exemption" in applicability
     assert "Any case not explicitly allowed" in applicability
+    assert "Every quality subject must declare `origin` explicitly" in normalized
+    assert "`missing-quality-origin`" in normalized
+    assert "`DeclarationSkeleton.kind` values" in normalized
+    assert "never the authored `declaration` label" in normalized
+    assert "any theorem or axiom makes the subject proof-bearing" in normalized
+    assert "only an all-definition-like set" in normalized
+    assert "A mixed set is proof-bearing" in normalized
+    assert "quality-target-kind-mismatch" in normalized
 
 
 def test_quality_goal_documents_current_compiled_and_review_evidence(
@@ -493,6 +513,8 @@ def test_quality_goal_documents_current_compiled_and_review_evidence(
         "a lexical source hit never",
         "unverified-lean-validity",
         "unresolved-quality-declaration",
+        "missing-quality-origin",
+        "quality-target-kind-mismatch",
         "missing-quality-passage",
         "definitely_not_a_tactic",
         "stale `.olean`",
@@ -528,6 +550,16 @@ def test_quality_goal_documents_all_hosts_and_merged_owners(
         "authorized frozen source passages",
     ):
         assert owner_boundary in quality
+
+    for policy_case in (
+        "Omitted origin, source fidelity passed with otherwise current evidence",
+        "Mathlib theorem mislabeled as a definition",
+        "Mathlib definition mislabeled as a theorem",
+        "Mixed Mathlib definition and theorem roots, proof integrity N/A",
+        "All-definition Mathlib roots, proof integrity N/A",
+        "Unresolved or unsupported compiled declaration kind",
+    ):
+        assert policy_case in quality
 
 
 def test_release_gates_use_only_resolved_commands(repo_root: Path) -> None:

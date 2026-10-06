@@ -144,41 +144,47 @@ No archive skill receives a PR merely because it appeared in the inventory.
 
 ### Planned PR series
 
-The owner, target branch, stack parent, dependencies, and approval gates below
-are duplicated in the manifest intentionally and tested for exact parity. A
-target branch is always a real repository branch; a stack parent is always a
-delivery-unit ID. `—` means no stack parent or an empty list.
+The owner, target repository, target branch, stack parent, dependencies, and
+approval gates below are duplicated in the manifest intentionally and tested
+for exact parity. P-, E-, and D-series units bind the canonical
+`facebookresearch/autoform-bot` repository. C-series repositories remain `—`
+until `companion-repository-approved` binds an actual owner/repository; their
+requested branch is `main`, which execution must verify after that binding and
+before creating a branch. A stack parent is always a delivery-unit ID. `—`
+means no repository, stack parent, or list item.
 
-| Unit | Owner | Target branch | Stack parent | Review unit | Depends on | Approval gates | Required evidence before opening |
-|---|---|---|---|---|---|---|---|
-| P00 | `policy.transport` | `main` | — | Add the transport policy, machine-readable 51-decision manifest, and authorization record. | — | — | Manifest and plan are internally consistent, attestation limits are explicit, and strict policy tests pass. |
-| P01 | `core.formalization-quality` | `main` | — | Add the portable `formalization-quality` skill and link the existing Agent Review rubrics without redefining them. | `P00` | — | All three host surfaces, internal-token scan, and rubric fixtures pass. |
-| P02 | `core.formalization-quality` | `main` | `P01` | Add the quality parser/CLI and extend the existing skeleton pipeline to recorded external Mathlib roots. | `P01` | — | Parser, policy, path containment, local/external compiled evidence, stale/wrong/shadowed-module negatives, immutability, exit-code, and JSON tests pass. |
-| P03 | `core.formalization-quality` | `main` | `P02` | Gate policy-aware verification and Pages from both project generators, document the workflow, and add authorized Cabannes passages plus independent verdicts. | `P02` | — | `init` and `project new` fixtures pass; open-statement policy is preserved; every cited completed example node has current evidence; quality failures cannot deploy. |
-| P04 | `core.mathlib-search` | `main` | — | Add one portable `mathlib-search` skill and fold in optional Loogle behavior. | `P00` | — | Local and optional Loogle search, fallback, and no-invented-name tests pass. |
-| P05 | `core.setup` | `main` | — | Merge only missing build-evidence and LSP/REPL smoke deltas into current Setup; do not recreate project creation or cache bootstrap. | `P00` | — | Existing catalog/project-new tests stay green; explicit build-record, strict and allowed-open, and server-smoke fixtures cover only the accepted delta. |
-| P06 | `core.statement-equivalence` | `main` | — | Add deterministic statement-equivalence verification and its host-driven skill. | `P01`, `P04` | — | Positive bridges and all fail-closed cases pass without network access. |
-| P07 | `core.agent-review` | `main` | — | Merge the nonduplicative archive audit rules into the existing Agent Review owner. | `P01` | — | Source-obligation, boundary, unsupported-claim, and no-duplicate-rubric fixtures pass. |
-| E01 | `core.formalize` | `main` | — | Record that `lean-proof` discipline is already owned by merged Markdown `formalize`; no PR is required. | — | — | Current Formalize contract and focused verification cover the reusable behavior. |
-| E02 | `core.formalize` | `main` | — | Add a shared declaration-interface freeze, output-file overlap preflight, and explicitly requested `simplify-proofs`. | `P03`, `P04` | `specialist-scope-approved` | API mutation and new/unlisted placeholders fail; allowed inherited open assumptions survive; overlapping or ambiguous file targets serialize; the fixture builds. |
-| E03 | `core.formalize` | `main` | `E02` | Add explicitly requested `mathlibify-proofs` through Formalize. | `E02`, `P04` | `specialist-scope-approved` | Interface, import, build, axiom, style, and negative fixtures pass. |
-| E04 | `core.formalize` | `main` | `E02` | Add explicitly requested `lean-proof-golf`; never invoke it by default. | `E02` | `specialist-scope-approved` | Non-default invocation, metric, interface, build, and regression tests pass. |
-| E05 | `core.formalize` | `main` | — | Add `lean-comparator` for repositories with a frozen task interface. | `P05` | `specialist-scope-approved` | Valid, altered-signature, forbidden-axiom, missing-binary, timeout, and infrastructure cases pass. |
-| E06 | `core.formalize` | `main` | `E03` | Add `mathlib-extension` for nodes identified as reusable library gaps. | `E03` | `specialist-scope-approved` | Import, example, duplicate-search, and hidden-declaration fixtures pass. |
-| C00 | `corpus.framework` | `autoform-corpus/main` | — | Scaffold the approved companion and define its source-record/import schema. | `P03`, `P05`, `P06` | `companion-repository-approved` | Plugin validation, schema round trip, stable-ID import, and token scan pass. |
-| C01 | `corpus.fetch-source` | `autoform-corpus/main` | `C00` | Add source fetching and visual PDF correction as one acquisition layer. | `C00` | `companion-repository-approved` | Frozen source fixtures, hashes, page binding, corrections, redirects, and unavailable cases pass. |
-| C02 | `corpus.extract` | `autoform-corpus/main` | `C01` | Add conjecture and textbook extraction with one atomic source-record contract. | `C01` | `companion-repository-approved` | Inventory, numbering, OCR, splitting, and terminal-disposition tests pass. |
-| C03 | `corpus.formalize` | `autoform-corpus/main` | `C02` | Add generic theorem-bank formalization/import into Autoform articles. | `C02` | `companion-repository-approved` | Stable IDs, closure, idempotence, builds, quality evidence, and blocking tests pass. |
-| C04 | `corpus.formalize` | `autoform-corpus/main` | `C03` | Add textbook-exercise formalization on the shared pipeline. | `C03` | `companion-repository-approved` | Exact/schema accounting, corrections, coverage, standalone builds, and rejection tests pass. |
-| C05 | `corpus.formalize` | `autoform-corpus/main` | `C04` | Add the paper pipeline over the tested source, extraction, formalization, and review stages. | `C04` | `companion-repository-approved` | A frozen paper is byte-stable across two runs and seeded faults fail at their designated stages. |
-| D01 | `docs.composition` | `main` | — | Document optional external writing, reference, and computation tools. | `P03`, `P05`, `P06` | — | Link checks pass and removing every optional tool leaves core tests green. |
-| D02 | `docs.composition` | `main` | — | Document optional composition with the approved corpus companion. | `C00` | `companion-repository-approved` | Documentation names only the accepted source-record interface and link checks pass. |
+| Unit | Owner | Target repository | Target branch | Stack parent | Review unit | Depends on | Approval gates | Required evidence before opening |
+|---|---|---|---|---|---|---|---|---|
+| P00 | `policy.transport` | `facebookresearch/autoform-bot` | `main` | — | Add the transport policy, machine-readable 51-decision manifest, and authorization record. | — | — | Manifest and plan are internally consistent, attestation limits are explicit, and strict policy tests pass. |
+| P01 | `core.formalization-quality` | `facebookresearch/autoform-bot` | `main` | — | Add the portable `formalization-quality` skill and link the existing Agent Review rubrics without redefining them. | `P00` | — | All three host surfaces, internal-token scan, and rubric fixtures pass. |
+| P02 | `core.formalization-quality` | `facebookresearch/autoform-bot` | `main` | `P01` | Add the quality parser/CLI and extend the existing skeleton pipeline to recorded external Mathlib roots. | `P01` | — | Parser, policy, path containment, local/external compiled evidence, stale/wrong/shadowed-module negatives, immutability, exit-code, and JSON tests pass. |
+| P03 | `core.formalization-quality` | `facebookresearch/autoform-bot` | `main` | `P02` | Gate policy-aware verification and Pages from both project generators, document the workflow, and add authorized Cabannes passages plus independent verdicts. | `P02` | — | `init` and `project new` fixtures pass; open-statement policy is preserved; every cited completed example node has current evidence; quality failures cannot deploy. |
+| P04 | `core.mathlib-search` | `facebookresearch/autoform-bot` | `main` | — | Add one portable `mathlib-search` skill and fold in optional Loogle behavior. | `P00` | — | Local and optional Loogle search, fallback, and no-invented-name tests pass. |
+| P05 | `core.setup` | `facebookresearch/autoform-bot` | `main` | — | Merge only missing build-evidence and LSP/REPL smoke deltas into current Setup; do not recreate project creation or cache bootstrap. | `P00` | — | Existing catalog/project-new tests stay green; explicit build-record, strict and allowed-open, and server-smoke fixtures cover only the accepted delta. |
+| P06 | `core.statement-equivalence` | `facebookresearch/autoform-bot` | `main` | — | Add deterministic statement-equivalence verification and its host-driven skill. | `P01`, `P04` | — | Positive bridges and all fail-closed cases pass without network access. |
+| P07 | `core.agent-review` | `facebookresearch/autoform-bot` | `main` | — | Merge the nonduplicative archive audit rules into the existing Agent Review owner. | `P01` | — | Source-obligation, boundary, unsupported-claim, and no-duplicate-rubric fixtures pass. |
+| E01 | `core.formalize` | `facebookresearch/autoform-bot` | `main` | — | Record that `lean-proof` discipline is already owned by merged Markdown `formalize`; no PR is required. | — | — | Current Formalize contract and focused verification cover the reusable behavior. |
+| E02 | `core.formalize` | `facebookresearch/autoform-bot` | `main` | — | Add a shared declaration-interface freeze, output-file overlap preflight, and explicitly requested `simplify-proofs`. | `P03`, `P04` | `specialist-scope-approved` | API mutation and new/unlisted placeholders fail; allowed inherited open assumptions survive; overlapping or ambiguous file targets serialize; the fixture builds. |
+| E03 | `core.formalize` | `facebookresearch/autoform-bot` | `main` | `E02` | Add explicitly requested `mathlibify-proofs` through Formalize. | `E02`, `P04` | `specialist-scope-approved` | Interface, import, build, axiom, style, and negative fixtures pass. |
+| E04 | `core.formalize` | `facebookresearch/autoform-bot` | `main` | `E02` | Add explicitly requested `lean-proof-golf`; never invoke it by default. | `E02` | `specialist-scope-approved` | Non-default invocation, metric, interface, build, and regression tests pass. |
+| E05 | `core.formalize` | `facebookresearch/autoform-bot` | `main` | — | Add `lean-comparator` for repositories with a frozen task interface. | `P05` | `specialist-scope-approved` | Valid, altered-signature, forbidden-axiom, missing-binary, timeout, and infrastructure cases pass. |
+| E06 | `core.formalize` | `facebookresearch/autoform-bot` | `main` | `E03` | Add `mathlib-extension` for nodes identified as reusable library gaps. | `E03` | `specialist-scope-approved` | Import, example, duplicate-search, and hidden-declaration fixtures pass. |
+| C00 | `corpus.framework` | — | `main` | — | Scaffold the approved companion and define its source-record/import schema. | `P03`, `P05`, `P06` | `companion-repository-approved` | Plugin validation, schema round trip, stable-ID import, and token scan pass. |
+| C01 | `corpus.fetch-source` | — | `main` | `C00` | Add source fetching and visual PDF correction as one acquisition layer. | `C00` | `companion-repository-approved` | Frozen source fixtures, hashes, page binding, corrections, redirects, and unavailable cases pass. |
+| C02 | `corpus.extract` | — | `main` | `C01` | Add conjecture and textbook extraction with one atomic source-record contract. | `C01` | `companion-repository-approved` | Inventory, numbering, OCR, splitting, and terminal-disposition tests pass. |
+| C03 | `corpus.formalize` | — | `main` | `C02` | Add generic theorem-bank formalization/import into Autoform articles. | `C02` | `companion-repository-approved` | Stable IDs, closure, idempotence, builds, quality evidence, and blocking tests pass. |
+| C04 | `corpus.formalize` | — | `main` | `C03` | Add textbook-exercise formalization on the shared pipeline. | `C03` | `companion-repository-approved` | Exact/schema accounting, corrections, coverage, standalone builds, and rejection tests pass. |
+| C05 | `corpus.formalize` | — | `main` | `C04` | Add the paper pipeline over the tested source, extraction, formalization, and review stages. | `C04` | `companion-repository-approved` | A frozen paper is byte-stable across two runs and seeded faults fail at their designated stages. |
+| D01 | `docs.composition` | `facebookresearch/autoform-bot` | `main` | — | Document optional external writing, reference, and computation tools. | `P03`, `P05`, `P06` | — | Link checks pass and removing every optional tool leaves core tests green. |
+| D02 | `docs.composition` | `facebookresearch/autoform-bot` | `main` | — | Document optional composition with the approved corpus companion. | `C00` | `companion-repository-approved` | Documentation names only the accepted source-record interface and link checks pass. |
 
 P-, E-, and D-series work lands on public `main`; the E prefix is retained only
 to preserve the audit identifiers from the original review. E-series behavior
 extends `formalize` and does not revive the deprecated `execution` branch,
-`autoform-worker`, or `orchestrate`. C-series work belongs to a separately
-approved companion repository. A unit is omitted when its prerequisite design
+`autoform-worker`, or `orchestrate`. `autoform-corpus` remains the C-series
+logical target layer, not a claim that a repository or branch already exists.
+C-series work belongs to the companion repository only after approval binds
+and verifies it. A unit is omitted when its prerequisite design
 or approval gate is rejected; never create placeholder PRs for later waves.
 
 ### PR granularity rules
@@ -367,8 +373,8 @@ may remain external artifacts referenced by hashes.
    completeness.
 4. Test that every decision and delivery unit has a registered owner, every
    dependency names an earlier unit, the graph is acyclic, and the plan and
-   manifest carry identical owner/target-branch/stack/dependency/approval
-   fields.
+   manifest carry identical owner/repository/branch/stack/dependency/approval
+   fields. Only approval-gated C-series units may leave the repository unbound.
 5. Add a negative test rejecting a repository skill directory not present in
    the manifest's current-skill inventory.
 
@@ -389,8 +395,13 @@ Required tests:
   when `declaration` or statement/proof flags are absent;
 - a completion claim on a container fails, while declaration-only planning
   continues to pass;
+- every quality subject has explicit origin; omitted origin fails even with
+  otherwise-current evidence;
 - the seven-gate default-deny N/A matrix is exercised gate by gate, including
-  omitted origin and Mathlib theorem/definition cases;
+  cited/bridged/background origin and compiled Mathlib kind cases;
+- compiled declaration kinds, not authored labels, govern Mathlib proof
+  applicability; mixed theorem/definition roots, spoofed intent, and unresolved
+  kinds fail closed;
 - every missing, blocked, malformed, hidden, or internally inconsistent gate
   fails with a stable finding code;
 - source-fidelity pass for cited work requires a current hash-bound read-back
