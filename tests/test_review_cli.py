@@ -83,6 +83,37 @@ def _as_extracted(report: SkeletonReport, blueprint_dir: object) -> SkeletonRepo
     return replace(report, blueprint_hash=blueprint_hash(load_graph(blueprint_dir)))
 
 
+_TESTIMONY = "For the unique proposition, the proposition is true.\n"
+
+
+def _prepare_and_record(
+    tmp_path: Path,
+    blueprint: Path,
+    *,
+    packet: Path | None = None,
+    testimony: str = _TESTIMONY,
+    extra: tuple[str, ...] = (),
+) -> tuple[int, Path, Path]:
+    """Prepare a bundle and blind packets, then record ``testimony`` for the packet, through the CLI.
+
+    Return the record's exit status, the bundle, and the packet recorded, which
+    is the prepared one unless ``packet`` names another. ``extra`` is passed to
+    both commands."""
+
+    bundle, packets = tmp_path / "review.json", tmp_path / "packets"
+    prepare = ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle)]
+    assert main([*prepare, "--packets", str(packets), *extra]) == 0
+    if packet is None:
+        packet = packets / json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"][0]["packet"]
+    (tmp_path / "testimony.md").write_text(testimony, encoding="utf-8")
+    record = ["review", "record", str(blueprint), "--lean-root", str(tmp_path), "--bundle", str(bundle)]
+    code = main(
+        [*record, "--article-id", "af_0123456789abcdef01234567", "--declaration", "Review.result",
+         "--packet", str(packet), "--testimony", str(tmp_path / "testimony.md"), "--model", "test-model", *extra]
+    )
+    return code, bundle, packet
+
+
 def test_review_cli_prepares_records_and_checks_exact_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -99,59 +130,17 @@ def test_review_cli_prepares_records_and_checks_exact_evidence(
         return _as_extracted(skeleton, args[0])
 
     monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", extract)
-    bundle_path = tmp_path / "review.json"
-    packets = tmp_path / "packets"
 
-    assert main(
-        [
-            "review",
-            "prepare",
-            str(blueprint),
-            "--lean-root",
-            str(tmp_path),
-            "--output",
-            str(bundle_path),
-            "--packets",
-            str(packets),
-            "--timeout",
-            "1800",
-        ]
-    ) == 0
+    code, bundle_path, packet = _prepare_and_record(tmp_path, blueprint, extra=("--timeout", "1800"))
+    assert code == 0
     capsys.readouterr()
     bundle = load_review_bundle(bundle_path)
-    manifest = json.loads((packets / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((tmp_path / "packets" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["schema"] == REVIEW_PACKET_SCHEMA
-    packet = packets / manifest["packets"][0]["packet"]
+    assert packet == tmp_path / "packets" / manifest["packets"][0]["packet"]
     assert packet.parent.name == "blind"
     assert packet.name == skeleton.nodes[0].declarations[0].evidence_hash.removeprefix("sha256:") + ".lean"
     assert "Review.result" not in packet.as_posix() and "basics" not in packet.as_posix()
-    testimony = tmp_path / "testimony.md"
-    testimony.write_text("For the unique proposition, the proposition is true.\n", encoding="utf-8")
-
-    assert main(
-        [
-            "review",
-            "record",
-            str(blueprint),
-            "--lean-root",
-            str(tmp_path),
-            "--bundle",
-            str(bundle_path),
-            "--article-id",
-            "af_0123456789abcdef01234567",
-            "--declaration",
-            "Review.result",
-            "--packet",
-            str(packet),
-            "--testimony",
-            str(testimony),
-            "--model",
-            "test-model",
-            "--timeout",
-            "1800",
-        ]
-    ) == 0
-    capsys.readouterr()
     assert extraction_scopes == [None, ("basics/result",)]
     cards = load_readbacks(blueprint)
     assert cards[("af_0123456789abcdef01234567", "Review.result")].shown_text == packet.read_text(
@@ -216,20 +205,8 @@ def test_check_and_render_derive_the_bundle_from_their_own_extraction(
         return _as_extracted(skeleton, args[0])
 
     monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", extract)
-    bundle_path = tmp_path / "review.json"
-    packets = tmp_path / "packets"
-    assert main(
-        ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle_path),
-         "--packets", str(packets)]
-    ) == 0
-    packet = packets / json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"][0]["packet"]
-    testimony = tmp_path / "testimony.md"
-    testimony.write_text("For the unique proposition, the proposition is true.\n", encoding="utf-8")
-    assert main(
-        ["review", "record", str(blueprint), "--lean-root", str(tmp_path), "--bundle", str(bundle_path),
-         "--article-id", "af_0123456789abcdef01234567", "--declaration", "Review.result",
-         "--packet", str(packet), "--testimony", str(testimony), "--model", "test-model"]
-    ) == 0
+    code, bundle_path, _ = _prepare_and_record(tmp_path, blueprint)
+    assert code == 0
     capsys.readouterr()
     extraction_scopes.clear()
 
@@ -291,47 +268,10 @@ def test_check_and_render_refuse_the_blank_passage_prepare_refuses(
         )
 
     cite("Source theorem.")
-    bundle_path = tmp_path / "review.json"
-    packets = tmp_path / "packets"
-    prepare = [
-        "review",
-        "prepare",
-        str(blueprint),
-        "--lean-root",
-        str(tmp_path),
-        "--output",
-        str(bundle_path),
-        "--packets",
-        str(packets),
-    ]
-    assert main(prepare) == 0
-    packet = packets / json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"][0]["packet"]
-    testimony = tmp_path / "testimony.md"
-    testimony.write_text("For the unique proposition, the proposition is true.\n", encoding="utf-8")
-    assert (
-        main(
-            [
-                "review",
-                "record",
-                str(blueprint),
-                "--lean-root",
-                str(tmp_path),
-                "--bundle",
-                str(bundle_path),
-                "--article-id",
-                "af_0123456789abcdef01234567",
-                "--declaration",
-                "Review.result",
-                "--packet",
-                str(packet),
-                "--testimony",
-                str(testimony),
-                "--model",
-                "test-model",
-            ]
-        )
-        == 0
-    )
+    code, bundle_path, _ = _prepare_and_record(tmp_path, blueprint)
+    assert code == 0
+    prepare = ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle_path),
+               "--packets", str(tmp_path / "packets")]
 
     # The card binds the packet, not the passage, so it stays current.
     cite(blank)
@@ -384,19 +324,8 @@ def _published_card(
     monkeypatch.setattr(
         "autoform_cli.__main__.extract_skeletons", lambda *args, **kwargs: _as_extracted(skeleton, args[0])
     )
-    bundle_path = tmp_path / "review.json"
-    packets = tmp_path / "packets"
-    assert main(
-        ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle_path),
-         "--packets", str(packets)]
-    ) == 0
-    packet = packets / json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"][0]["packet"]
-    (tmp_path / "testimony.md").write_text(testimony, encoding="utf-8")
-    assert main(
-        ["review", "record", str(blueprint), "--lean-root", str(tmp_path), "--bundle", str(bundle_path),
-         "--article-id", "af_0123456789abcdef01234567", "--declaration", "Review.result",
-         "--packet", str(packet), "--testimony", str(tmp_path / "testimony.md"), "--model", "test-model"]
-    ) == 0, capsys.readouterr().err
+    code, _, _ = _prepare_and_record(tmp_path, blueprint, testimony=testimony)
+    assert code == 0, capsys.readouterr().err
     site = tmp_path / "site"
     assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 0
     capsys.readouterr()
@@ -524,48 +453,11 @@ def test_review_record_rejects_packet_bytes_that_differ_from_bundle(
     monkeypatch.setattr(
         "autoform_cli.__main__.extract_skeletons", lambda *args, **kwargs: _as_extracted(skeleton, args[0])
     )
-    bundle_path = tmp_path / "review.json"
-    packets = tmp_path / "packets"
-    assert main(
-        [
-            "review",
-            "prepare",
-            str(blueprint),
-            "--lean-root",
-            str(tmp_path),
-            "--output",
-            str(bundle_path),
-            "--packets",
-            str(packets),
-        ]
-    ) == 0
-    capsys.readouterr()
     packet = tmp_path / "changed.lean"
     packet.write_bytes(skeleton.nodes[0].declarations[0].blind_text().encode("utf-8") + b"\n")
-    testimony = tmp_path / "testimony.md"
-    testimony.write_text("A testimony.\n", encoding="utf-8")
 
-    assert main(
-        [
-            "review",
-            "record",
-            str(blueprint),
-            "--lean-root",
-            str(tmp_path),
-            "--bundle",
-            str(bundle_path),
-            "--article-id",
-            "af_0123456789abcdef01234567",
-            "--declaration",
-            "Review.result",
-            "--packet",
-            str(packet),
-            "--testimony",
-            str(testimony),
-            "--model",
-            "test-model",
-        ]
-    ) == 2
+    code, _, _ = _prepare_and_record(tmp_path, blueprint, packet=packet, testimony="A testimony.\n")
+    assert code == 2
     assert "packet bytes do not match" in capsys.readouterr().err
 
 
