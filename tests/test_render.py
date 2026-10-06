@@ -607,6 +607,45 @@ def test_module_catalog_is_separate_from_formalization_progress(
     assert "1 module inventory" in chapter
 
 
+def test_catalog_slot_with_bracketed_inline_code_is_absorbed(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    sources = project / "blueprint/sources"
+    sources.mkdir()
+    (sources / "catalog.md").write_text("# Project.Basic declarations\n", encoding="utf-8")
+    (project / "blueprint/roadmap/catalog.md").write_text(
+        "---\ncatalog: module\nlean: Project.Base\nstatement: formalized\n"
+        "proof: formalized\n---\n\n# Existing module on `[0,1]^n`\n\n"
+        "A checked inventory with bracketed mathematics in its title.\n\n"
+        "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
+        encoding="utf-8",
+    )
+    roadmap = project / "blueprint/roadmap/README.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8")
+        + "\n## Existing modules\n\n"
+        "- [Existing module on `[0,1]^n`](catalog.md)\n",
+        encoding="utf-8",
+    )
+    coverage = project / "blueprint/coverage/README.md"
+    coverage.write_text(
+        coverage.read_text(encoding="utf-8")
+        + "| Existing module | INVENTORIED | [Catalog](../roadmap/catalog.md) |\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out")
+
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert not (tmp_path / "out/roadmap/catalog.md").exists()
+    assert "](catalog.md)" not in chapter
+    assert 'id="catalog"' in chapter
+    assert "A checked inventory with bracketed mathematics in its title." in chapter
+    assert chapter.index("## Existing modules") < chapter.index('id="catalog"')
+    assert "## Additional formalization targets" not in chapter
+
+
 def test_partial_module_catalog_is_not_reported_as_dispatchable_work(tmp_path: Path) -> None:
     project = _project(tmp_path)
     sources = project / "blueprint/sources"
@@ -1666,6 +1705,12 @@ def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypa
     assert rewrite("Plain prose.\n") == "Plain prose.\n"
     assert calls == []
     assert rewrite("See [X](x.md).\n") == "See [X](a.md#x).\n"
+    assert calls == [chapter]
+    calls.clear()
+    assert (
+        rewrite("See [X on `[0,1]^n`](x.md).\n")
+        == "See [X on `[0,1]^n`](a.md#x).\n"
+    )
     assert calls == [chapter]
     calls.clear()
     # Two nodes on the same chapter page cost one link to it, not one each.

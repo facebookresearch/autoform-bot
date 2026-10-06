@@ -43,7 +43,13 @@ from .status import is_definition
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
-_MARKDOWN_LINK = re.compile(r"(?<!!)\[(?P<label>[^\]]*)\]\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)")
+# A link label may itself contain a closing bracket, most commonly inside
+# inline mathematical code such as ``[0,1]^n``.  Only ``](`` closes the label.
+_LINK_LABEL_PART = r"(?:[^\]]|\](?!\())"
+_MARKDOWN_LINK = re.compile(
+    rf"(?<!!)\[(?P<label>{_LINK_LABEL_PART}*)\]"
+    r"\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)"
+)
 #: A reference-style link definition, `[label]: target "title"`. Markdown
 #: resolves `[Paper][paper]` through one of these, so a rewrite that only sees
 #: inline links leaves the destination behind and publishes a dead link.
@@ -52,7 +58,8 @@ _LINK_DEFINITION = re.compile(
     r'(?P<target><[^>\r\n]+>|[^\s]+)(?P<rest>[ \t]+.*)?$'
 )
 _ARTICLE_SLOT = re.compile(
-    r"^(?P<indent>[ \t]*)[-*+]\s+\[[^\]]+\]\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)\s*$"
+    rf"^(?P<indent>[ \t]*)[-*+]\s+\[{_LINK_LABEL_PART}+\]"
+    r"\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)\s*$"
 )
 _DEPENDENCY_SECTIONS = frozenset({"depends on", "proof depends on"})
 _SKIPPED_DIRECTORIES = frozenset({".obsidian", ".trash", ".git"})
