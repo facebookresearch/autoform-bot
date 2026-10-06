@@ -92,6 +92,16 @@ def _render(blueprint: Path) -> Path:
     return out
 
 
+def _refused(blueprint: Path, capsys: pytest.CaptureFixture[str], reason: str, match: str | None = None) -> None:
+    """Check fails naming reason, and render refuses the blueprint, with match
+    in its message when one is given."""
+
+    assert main(["check", str(blueprint)]) == 1
+    assert reason in capsys.readouterr().out
+    with pytest.raises(PublicationError, match=re.escape(match) if match else None):
+        _render(blueprint)
+
+
 def _settings(script: str) -> dict:
     """The settings object the generated script is configured by."""
 
@@ -156,10 +166,7 @@ def test_an_edited_configuration_is_refused(tmp_path: Path, capsys: pytest.Captu
     blueprint = _vault(tmp_path, kept=kept)
     reason = "move any tex.macros to tex-macros.json and delete it"
 
-    assert main(["check", str(blueprint)]) == 1
-    assert reason in capsys.readouterr().out
-    with pytest.raises(PublicationError, match=reason):
-        _render(blueprint)
+    _refused(blueprint, capsys, reason, reason)
 
 
 def test_project_macros_reach_article_formulas_only(tmp_path: Path) -> None:
@@ -273,10 +280,7 @@ def test_project_macros_that_cannot_be_used_are_refused(
         pytest.skip("this stack holds a hundred thousand nested arrays")
     blueprint = _vault(tmp_path, macros=macros)
 
-    assert main(["check", str(blueprint)]) == 1
-    assert reason in capsys.readouterr().out
-    with pytest.raises(PublicationError, match=re.escape(reason)):
-        _render(blueprint)
+    _refused(blueprint, capsys, reason, reason)
 
 
 def _directory_with_a_file(path: Path) -> None:
@@ -325,10 +329,7 @@ def test_something_other_than_a_file_where_the_site_has_one_is_refused(
     blueprint = _vault(tmp_path)
     make(blueprint / relative)
 
-    assert main(["check", str(blueprint)]) == 1
-    assert reason in capsys.readouterr().out
-    with pytest.raises(PublicationError):
-        _render(blueprint)
+    _refused(blueprint, capsys, reason)
 
 
 #: Every file render writes for the test vault that is not one of the
@@ -379,11 +380,8 @@ def test_something_other_than_a_file_where_render_writes_one_is_refused(
     make(blueprint / relative)
     reason = f"{relative}: is {kind}, where autoform render writes a file; remove it"
 
-    assert main(["check", str(blueprint)]) == 1
-    assert reason in capsys.readouterr().out
     # Capture refuses a symlink or special file it would publish first.
-    with pytest.raises(PublicationError):
-        _render(blueprint)
+    _refused(blueprint, capsys, reason)
 
 
 @pytest.mark.parametrize(
@@ -427,10 +425,7 @@ def test_a_file_where_render_needs_a_folder_is_refused(
     _file(blueprint / folder)
     reason = f"{folder}: is a file, where autoform render needs a folder for {folder}/"
 
-    assert main(["check", str(blueprint)]) == 1
-    assert reason in capsys.readouterr().out
-    with pytest.raises(PublicationError, match=re.escape(reason)):
-        _render(blueprint)
+    _refused(blueprint, capsys, reason, reason)
 
 
 @pytest.mark.parametrize(
@@ -567,10 +562,7 @@ def test_a_refusal_names_the_article_and_the_line(
     blueprint = _vault(tmp_path)
     _with_article(blueprint, article)
 
-    assert main(["check", str(blueprint)]) == 1
-    assert reason in capsys.readouterr().out
-    with pytest.raises(PublicationError, match=re.escape(reason.removeprefix("error: "))):
-        _render(blueprint)
+    _refused(blueprint, capsys, reason, reason.removeprefix("error: "))
 
 
 def test_a_refusal_in_a_chapter_names_the_chapter_and_the_line(
@@ -776,10 +768,7 @@ def test_check_and_render_refuse_a_long_character_reference(
     blueprint = _vault(tmp_path)
     _with_article(blueprint, "The main result &#" + "9" * 39000 + ";.")
 
-    assert main(["check", str(blueprint)]) == 1
-    assert "(39003 characters)" in capsys.readouterr().out
-    with pytest.raises(PublicationError, match=r"\(39003 characters\)"):
-        _render(blueprint)
+    _refused(blueprint, capsys, "(39003 characters)", "(39003 characters)")
 
 
 _FORGED = '<span class="bp-mark">FORGED MARK</span><script>document.title="INJECTED"</script>'
@@ -976,10 +965,8 @@ def test_a_chapter_is_read_in_the_stretches_its_page_has(tmp_path: Path, capsys:
     blueprint = _vault(tmp_path)
     _with_narrative(blueprint, f"## Definitions\n\n`a\n- [Base](base.md)\nb` and `c {_FORGED} d`")
 
-    assert main(["check", str(blueprint)]) == 1
-    assert "roadmap: line 12: raw HTML is not allowed: <span>, </span>, <script>" in capsys.readouterr().out
-    with pytest.raises(PublicationError, match="raw HTML is not allowed"):
-        _render(blueprint)
+    reason = "roadmap: line 12: raw HTML is not allowed: <span>, </span>, <script>"
+    _refused(blueprint, capsys, reason, "raw HTML is not allowed")
 
 
 def test_a_chapter_cannot_leave_a_fence_open_over_its_statements(
@@ -1048,10 +1035,7 @@ def test_a_file_a_browser_could_run_is_not_published(
     (blueprint / relative).parent.mkdir(parents=True, exist_ok=True)
     (blueprint / relative).write_bytes(content)
 
-    assert main(["check", str(blueprint)]) == 1
-    assert f"{relative}: the site publishes no " in capsys.readouterr().out
-    with pytest.raises(PublicationError, match=re.escape(relative)):
-        _render(blueprint)
+    _refused(blueprint, capsys, f"{relative}: the site publishes no ", relative)
 
 
 def test_an_image_or_a_document_is_published_as_it_is(tmp_path: Path) -> None:
@@ -1441,10 +1425,7 @@ def test_check_and_render_refuse_a_mermaid_diagram(tmp_path: Path, capsys: pytes
     _with_article(blueprint, "The main result.\n\n```mermaid\ngraph LR\n  A --> B\n```")
     message = f"top: line 13: {_DIAGRAM_RULE}"
 
-    assert main(["check", str(blueprint)]) == 1
-    assert f"error: {message}\n" in capsys.readouterr().out
-    with pytest.raises(PublicationError, match=re.escape(message)):
-        _render(blueprint)
+    _refused(blueprint, capsys, f"error: {message}\n", message)
 
 
 @pytest.mark.parametrize(
@@ -1475,10 +1456,7 @@ def test_a_heading_id_the_page_gives_its_own_element_is_refused(
         "this page; choose another"
     )
 
-    assert main(["check", str(blueprint)]) == 1
-    assert f"error: {message}\n" in capsys.readouterr().out
-    with pytest.raises(PublicationError, match=re.escape(message)):
-        _render(blueprint)
+    _refused(blueprint, capsys, f"error: {message}\n", message)
 
 
 def test_a_heading_id_is_published(tmp_path: Path) -> None:
@@ -2061,8 +2039,7 @@ def test_the_commands_an_option_colors_are_all_refused(tmp_path: Path) -> None:
 
 
 def test_the_rendered_configuration_refuses_another_release(tmp_path: Path) -> None:
-    mathjax_package()
-    script = (_render(_vault(tmp_path / "vault")) / "javascripts/mathjax.js").read_text(encoding="utf-8")
+    script = _node_script(tmp_path)
 
     report = _node_report(tmp_path, script.replace('"version": "3.2.2"', '"version": "3.2.1"'), "old")
 
@@ -2288,8 +2265,7 @@ def test_no_formula_gives_its_output_a_class_style_id_or_link(tmp_path: Path) ->
     MathJax gives a document made outside its startup the filter's defaults,
     which pass classes that start with mjx-, colors and margins, and links."""
 
-    mathjax_package()
-    script = (_render(_vault(tmp_path / "vault")) / "javascripts/mathjax.js").read_text(encoding="utf-8")
+    script = _node_script(tmp_path)
     token = (
         "\\mmlToken{mi}[style='margin-top:-60em;color:red',class='mjx-x',href='https://evil.example/',"
         "id='mjx-x']{x}"
@@ -2366,8 +2342,7 @@ def test_a_menu_setting_changes_every_formula_on_the_page(tmp_path: Path, change
     the explorer a screen reader uses too, which remakes the document of the
     menu that loads it, and each card keeps its own TeX input."""
 
-    mathjax_package()
-    script = (_render(_vault(tmp_path / "vault")) / "javascripts/mathjax.js").read_text(encoding="utf-8")
+    script = _node_script(tmp_path)
 
     report = _node_report(tmp_path, script, "new", changed=changed)
 
@@ -2391,8 +2366,7 @@ def test_the_document_mathjax_starts_with_holds_no_formula(tmp_path: Path) -> No
     nothing, so every formula is read by a pass, with a new input, and its
     menu shares the reader's settings."""
 
-    mathjax_package()
-    script = (_render(_vault(tmp_path / "vault")) / "javascripts/mathjax.js").read_text(encoding="utf-8")
+    script = _node_script(tmp_path)
 
     report = _node_report(tmp_path, script, "new", startup="renders")
 
@@ -2408,8 +2382,7 @@ def test_no_document_is_made_while_a_menu_is_loading(tmp_path: Path) -> None:
     it has loaded, so the documents of a pass wait for the load the first
     menu starts for a saved setting."""
 
-    mathjax_package()
-    script = (_render(_vault(tmp_path / "vault")) / "javascripts/mathjax.js").read_text(encoding="utf-8")
+    script = _node_script(tmp_path)
 
     report = _node_report(tmp_path, script, "new", startup="loads")
 
