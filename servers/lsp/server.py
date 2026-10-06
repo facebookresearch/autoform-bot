@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from logging import getLogger
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from fastmcp.server import FastMCP
 
@@ -30,6 +30,7 @@ from servers.repl.core import (
 
 logger = getLogger(__name__)
 _POPEN_TYPE = subprocess.Popen
+T = TypeVar("T")
 
 DEFAULT_LSP_TIMEOUT = 60
 MAX_LSP_HEADER_BYTES = 16 * 1024
@@ -214,8 +215,8 @@ class LeanLspSession:
             return True
         return status not in {psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD}
 
-    def get_diagnostics(self, file_path: str) -> list[dict]:
-        """Open a file and collect diagnostics from the language server."""
+    def _admitted(self, operation: Callable[[float], T]) -> T:
+        """Run one serialized operation and fence a failed protocol stream."""
         deadline = time.monotonic() + self.config.timeout
         if not self._operation_lock.acquire(timeout=self.config.timeout):
             raise LspBusyError(
@@ -230,12 +231,18 @@ class LeanLspSession:
                     f"timed out after {self.config.timeout:g}s waiting for the Lean LSP session"
                 )
             try:
-                return self._get_diagnostics(file_path, timeout=remaining)
+                return operation(remaining)
             except BaseException:
                 self._retire_pending = True
                 raise
         finally:
             self._operation_lock.release()
+
+    def get_diagnostics(self, file_path: str) -> list[dict]:
+        """Open a file and collect diagnostics from the language server."""
+        return self._admitted(
+            lambda remaining: self._get_diagnostics(file_path, timeout=remaining)
+        )
 
     def _get_diagnostics(self, file_path: str, *, timeout: float | None = None) -> list[dict]:
         path = Path(file_path).resolve()
@@ -289,32 +296,15 @@ class LeanLspSession:
         # shared protocol stream, so they must not retire a healthy session.
         path = Path(file_path).resolve()
         content = path.read_text()
-        deadline = time.monotonic() + self.config.timeout
-        if not self._operation_lock.acquire(timeout=self.config.timeout):
-            raise LspBusyError(
-                f"timed out after {self.config.timeout:g}s waiting for the Lean LSP session"
+        return self._admitted(
+            lambda remaining: self._hover(
+                path,
+                content,
+                line,
+                character,
+                timeout=remaining,
             )
-        try:
-            if self._retire_pending:
-                raise LspProtocolError("Lean LSP session is retiring after a failed operation")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise LspBusyError(
-                    f"timed out after {self.config.timeout:g}s waiting for the Lean LSP session"
-                )
-            try:
-                return self._hover(
-                    path,
-                    content,
-                    line,
-                    character,
-                    timeout=remaining,
-                )
-            except BaseException:
-                self._retire_pending = True
-                raise
-        finally:
-            self._operation_lock.release()
+        )
 
     def _hover(
         self,
@@ -554,7 +544,7 @@ class LeanLspSession:
 
         try:
             message = json.loads(bytes(body).decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        except ValueError as error:
             raise LspProtocolError("LSP emitted an invalid JSON body") from error
         if not isinstance(message, dict):
             raise LspProtocolError("LSP JSON-RPC message is not an object")
