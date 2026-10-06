@@ -390,6 +390,50 @@ def test_rejects_a_retracted_statement_that_cannot_keep_its_declaration(
     assert raised.value.issues == (message,)
 
 
+@pytest.mark.parametrize(
+    ("metadata", "issues"),
+    [
+        (
+            {"proof": "formalized", "lean": "Ns.result"},
+            ("result: proof: formalized needs statement: formalized",),
+        ),
+        (
+            {"proof": "formalized", "lean": "Ns.result", "mathlib": "true"},
+            ("result: proof: formalized needs statement: formalized",),
+        ),
+        (
+            {"statement": "formalized"},
+            ("result: statement: formalized needs the lean: declaration that formalizes it",),
+        ),
+        (
+            {"statement": "formalized", "proof": "formalized", "mathlib": "true"},
+            ("result: statement: formalized needs the lean: declaration that formalizes it",),
+        ),
+        (
+            {"statement": "formalized", "lean": ","},
+            ("result: statement: formalized needs the lean: declaration that formalizes it",),
+        ),
+        (
+            {"proof": "formalized"},
+            (
+                "result: proof: formalized needs statement: formalized",
+                "result: proof: formalized needs the lean: declaration that formalizes it",
+            ),
+        ),
+    ],
+)
+def test_rejects_formalized_work_the_lean_does_not_show(
+    tmp_path: Path, metadata: dict[str, str], issues: tuple[str, ...]
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", "# Result\n", declaration="theorem", **metadata)
+
+    with pytest.raises(GraphValidationError) as raised:
+        load_graph(blueprint)
+
+    assert raised.value.issues == issues
+
+
 def test_records_origin_and_source_links_without_treating_them_as_edges(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     source = blueprint / "sources" / "paper.md"

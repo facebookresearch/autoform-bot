@@ -135,7 +135,7 @@ def test_completed_article_cannot_keep_stale_execution_notes(tmp_path: Path) -> 
     assert any(code == "stale-execution-notes" for code, _ in findings["roadmap/result.md"])
 
 
-def test_audit_reports_formalizable_structure_and_inconsistent_checked_facts(tmp_path: Path) -> None:
+def test_audit_reports_formalizable_structure(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     _article(
@@ -144,7 +144,6 @@ def test_audit_reports_formalizable_structure_and_inconsistent_checked_facts(tmp
         prose="",
         depends=False,
         declaration="theorem",
-        proof="formalized",
     )
     _article(blueprint, "chapter/child.md", declaration="lemma")
 
@@ -155,7 +154,6 @@ def test_audit_reports_formalizable_structure_and_inconsistent_checked_facts(tmp
         "formalizable-container",
         "missing-depends-section",
         "missing-statement-text",
-        "proof-without-statement",
     }
     assert all(reason for _code, reason in findings)
 
@@ -250,12 +248,6 @@ def test_audit_validates_lean_targets_only_when_root_is_supplied(tmp_path: Path)
     )
     _article(
         blueprint,
-        "untargeted.md",
-        declaration="lemma",
-        statement="formalized",
-    )
-    _article(
-        blueprint,
         "wrong-kind.md",
         declaration="theorem",
         statement="formalized",
@@ -271,9 +263,6 @@ def test_audit_validates_lean_targets_only_when_root_is_supplied(tmp_path: Path)
     assert "roadmap/missing.md" not in without_lean
     assert with_lean["roadmap/missing.md"] == [
         ("lean-target-not-found", "Lean declaration target was not found: Project.missing")
-    ]
-    assert with_lean["roadmap/untargeted.md"] == [
-        ("missing-lean-target", "formalized local work has no lean declaration target")
     ]
     assert with_lean["roadmap/wrong-kind.md"] == [
         ("lean-target-kind-mismatch", "Lean target kind def does not match declaration intent theorem")

@@ -682,9 +682,6 @@ def _work_assumptions(args: argparse.Namespace) -> int:
     # As in `_work`, only loading the roadmap is reported as a path error.
     try:
         contract = assumption_contract(args.target)
-        # The text report also names conditional articles without `lean:`,
-        # which the contract leaves out because CI has nothing to check there.
-        runtime = None if args.json else load_runtime_graph(args.target)
     except (GraphValidationError, RuntimeProjectionError) as error:
         for issue in error.issues:
             print(f"error: {_human_text(issue)}", file=sys.stderr)
@@ -697,17 +694,17 @@ def _work_assumptions(args: argparse.Namespace) -> int:
         print(contract.to_json())
         return 0
     print(_human_text(f"Open statements: {'allowed' if contract.open_statements else 'forbidden'}"))
-    listed = {article.id: article for article in contract.articles}
-    for node in sorted(runtime.nodes, key=lambda candidate: candidate.id):
-        article = listed.get(node.id)
-        assumes = f"assumes {', '.join(node.status.assumes)}"
-        if article is not None and article.open:
+    # A conditional article is proved, so the loader made its `lean:` name a
+    # declaration, and the contract lists it.
+    for article in contract.articles:
+        assumes = f"assumes {', '.join(article.assumes)}"
+        if article.open:
             # An open statement is not conditional: its own proof is missing.
             line = f"open: {article.id} ({', '.join(article.declarations)})"
             print(_human_text(f"{line} {assumes}" if article.assumes else line))
-        elif node.status.state == "conditional":
-            print(_human_text(f"conditional: {node.id} {assumes}"))
-        elif article is not None and article.assumes:
+        elif article.state == "conditional":
+            print(_human_text(f"conditional: {article.id} {assumes}"))
+        elif article.assumes:
             # Not proved, so nothing is conditional yet; its proof would rest on these.
             print(_human_text(f"unproved: {article.id} {assumes}"))
     return 0
