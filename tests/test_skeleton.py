@@ -3926,47 +3926,6 @@ def test_a_project_constant_in_the_helper_namespace_is_named_as_the_cause(tmp_pa
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_node_selection_does_not_change_a_declarations_evidence(tmp_path: Path) -> None:
-    # Only the other article's module declares the notation. Each declaration
-    # is printed where its own module is imported, so neither selecting nor
-    # adding that article changes the packet `review record` re-extracts.
-    project = _project(tmp_path)
-    (project / "Skel" / "PktWrap.lean").write_text(
-        "namespace Skel.PktWrap\n"
-        "def wrap (n : Nat) : Nat := n\n"
-        "theorem wrap_two : wrap 2 = 2 := rfl\n"
-        "end Skel.PktWrap\n",
-        encoding="utf-8",
-    )
-    (project / "Skel" / "PktWrapNotation.lean").write_text(
-        "import Skel.PktWrap\n"
-        "namespace Skel.PktWrap\n"
-        'notation "⟪" x "⟫" => wrap x\n'
-        "theorem wrap_three : wrap 3 = 3 := rfl\n"
-        "end Skel.PktWrap\n",
-        encoding="utf-8",
-    )
-    _build(project, "Skel.PktWrap", "Skel.PktWrapNotation")
-    blueprint = _blueprint(
-        tmp_path, lean={"two": "Skel.PktWrap.wrap_two", "three": "Skel.PktWrap.wrap_three"}
-    )
-
-    full = extract_skeletons(blueprint, lean_root=project)
-    scoped = extract_skeletons(blueprint, lean_root=project, node_ids=("basics/two",))
-    alone = extract_skeletons(
-        _blueprint(tmp_path / "alone", lean={"two": "Skel.PktWrap.wrap_two"}), lean_root=project
-    )
-
-    assert full.clean and scoped.clean and alone.clean
-    (declaration,) = full.declarations("basics/two")
-    assert declaration.signature == "Skel.PktWrap.wrap_two : Skel.PktWrap.wrap 2 = 2"
-    assert scoped.node("basics/two") == full.node("basics/two")
-    assert alone.node("basics/two").review_hash == full.node("basics/two").review_hash
-    (three,) = full.declarations("basics/three")
-    assert three.signature == "Skel.PktWrap.wrap_three : ⟪3⟫ = 3"
-
-
-@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_an_unrelated_modules_attribute_does_not_change_a_trusted_declaration(tmp_path: Path) -> None:
     # `attribute [instance]` in another article's module would make `natInh` an
     # instance in a probe that imported both modules.
@@ -4007,11 +3966,17 @@ def test_an_unrelated_modules_attribute_does_not_change_a_trusted_declaration(tm
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_a_trusted_declaration_reads_as_each_root_module_prints_it(tmp_path: Path) -> None:
+def test_a_declaration_reads_as_its_own_root_module_prints_it(tmp_path: Path) -> None:
+    # Only PktWrapNotation declares the notation. Each declaration is printed
+    # where its own module is imported, so neither selecting nor adding another
+    # article changes the packet `review record` re-extracts, and a trusted
+    # declaration reads as each root module that reaches it prints it.
     project = _project(tmp_path)
     modules = {
-        "PktWrap": "namespace Skel.PktWrap\ndef wrap (n : Nat) : Nat := n\nend Skel.PktWrap\n",
-        "PktWrapNotation": 'import Skel.PktWrap\nnamespace Skel.PktWrap\nnotation "⟪" x "⟫" => wrap x\nend Skel.PktWrap\n',
+        "PktWrap": "namespace Skel.PktWrap\ndef wrap (n : Nat) : Nat := n\n"
+        "theorem wrap_two : wrap 2 = 2 := rfl\nend Skel.PktWrap\n",
+        "PktWrapNotation": 'import Skel.PktWrap\nnamespace Skel.PktWrap\nnotation "⟪" x "⟫" => wrap x\n'
+        "theorem wrap_three : wrap 3 = 3 := rfl\nend Skel.PktWrap\n",
         "PktWrapUser": "import Skel.PktWrap\nnamespace Skel.PktWrap\n"
         "def needsTwo (h : wrap 2 = 2) : Nat := 0\n"
         "theorem uses_needsTwo : needsTwo rfl = 0 := rfl\nend Skel.PktWrap\n",
@@ -4022,12 +3987,26 @@ def test_a_trusted_declaration_reads_as_each_root_module_prints_it(tmp_path: Pat
         (project / "Skel" / f"{module}.lean").write_text(source, encoding="utf-8")
     _build(project, "Skel.PktWrapUser", "Skel.PktWrapUser2")
     blueprint = _blueprint(
-        tmp_path, lean={"u1": "Skel.PktWrap.uses_needsTwo", "u2": "Skel.PktWrap.uses_needsTwo'"}
+        tmp_path, lean={"two": "Skel.PktWrap.wrap_two", "three": "Skel.PktWrap.wrap_three"}
     )
 
-    report = extract_skeletons(blueprint, lean_root=project)
+    full = extract_skeletons(blueprint, lean_root=project)
+    scoped = extract_skeletons(blueprint, lean_root=project, node_ids=("basics/two",))
+    alone = extract_skeletons(
+        _blueprint(tmp_path / "alone", lean={"two": "Skel.PktWrap.wrap_two"}), lean_root=project
+    )
+    report = extract_skeletons(
+        _blueprint(tmp_path / "users", lean={"u1": "Skel.PktWrap.uses_needsTwo", "u2": "Skel.PktWrap.uses_needsTwo'"}),
+        lean_root=project,
+    )
 
-    assert report.clean
+    assert full.clean and scoped.clean and alone.clean and report.clean
+    (declaration,) = full.declarations("basics/two")
+    assert declaration.signature == "Skel.PktWrap.wrap_two : Skel.PktWrap.wrap 2 = 2"
+    assert scoped.node("basics/two") == full.node("basics/two")
+    assert alone.node("basics/two").review_hash == full.node("basics/two").review_hash
+    (three,) = full.declarations("basics/three")
+    assert three.signature == "Skel.PktWrap.wrap_three : ⟪3⟫ = 3"
     (u1,) = report.declarations("basics/u1")
     (u2,) = report.declarations("basics/u2")
     (plain,) = (item for item in u1.trusted if item.name == "Skel.PktWrap.needsTwo")
