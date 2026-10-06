@@ -781,35 +781,9 @@ def test_a_budget_spent_outside_a_candidate_is_refused_at_the_ceiling_and_unchec
     assert verifier.unchecked == verifier.reasons
 
 
-def test_a_failed_request_refuses_only_the_approvals_that_need_it(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "alice", "APPROVED", head)
-    _branch(root, "other")
-    _approve(root, "other", _OTHER_HASH)
-    _commit(root, "Approve the other article")
-    other_head = github.open_pull(8, "bob")
-    github.review(8, "alice", "APPROVED", other_head)
-    _land(root, github, 8)
-    answer = github.get
-
-    def flaky(path: str, query: dict | None = None) -> object | None:
-        if path == "/pulls/8/files":
-            raise GitHubUnavailable(f"GitHub API GET {path} failed with HTTP 502: Bad Gateway")
-        return answer(path, query)
-
-    github.get = flaky  # type: ignore[method-assign]
-    statuses = _verify(root, github)
-
-    assert statuses["basics/result"].authenticated
-    assert not statuses["basics/other"].authenticated
-    assert "HTTP 502" in (statuses["basics/other"].reason or "")
-
-
 def test_a_failed_request_in_the_gate_refuses_only_the_approval_that_needs_it(tmp_path: Path) -> None:
-    """Deliberate guard: the gate tries no candidate commits, so a failure
-    reaches the per-approval handling the test above no longer exercises."""
+    """Deliberate guard: the gate tries no candidate commits, so a failure reaches
+    the per-approval handling that the tests of merged pull requests no longer exercise."""
 
     root = _project(tmp_path)
     github = FakeGitHub(root)
@@ -832,31 +806,6 @@ def test_a_failed_request_in_the_gate_refuses_only_the_approval_that_needs_it(tm
     assert statuses["basics/result"].authenticated
     assert not statuses["basics/other"].authenticated
     assert "HTTP 502" in (statuses["basics/other"].reason or "")
-
-
-def test_a_budget_spent_after_the_setup_refuses_only_the_approvals_left(tmp_path: Path) -> None:
-    """Deliberate guard: the budget test above now runs out during the setup."""
-
-    root = _project(tmp_path)
-    github = FakeGitHub(root)
-    head = _pull_approving(root, github)
-    github.review(7, "alice", "APPROVED", head)
-    _branch(root, "other")
-    _approve(root, "other", _OTHER_HASH)
-    _commit(root, "Approve the other article")
-    other_head = github.open_pull(8, "bob")
-    github.review(8, "alice", "APPROVED", other_head)
-    _land(root, github, 8)
-
-    # The setup with alice's permission, then the nine requests for #8, which "basics/other" sorts first to use.
-    budget = len(_SETUP_CALLS) + 1 + 9
-    github.hourly = (1000, budget + 50)
-    statuses = _verify(root, github)
-
-    assert len(github.calls) == budget
-    assert statuses["basics/other"].authenticated, statuses["basics/other"].reason
-    assert not statuses["basics/result"].authenticated
-    assert f"budget of {budget} GitHub API requests" in (statuses["basics/result"].reason or "")
 
 
 @pytest.mark.parametrize("failure", ["HTTP 502", "HTTP 404", "HTTP 422", "oversized"])
@@ -892,14 +841,19 @@ def test_only_an_approval_a_later_run_may_authenticate_is_unchecked(tmp_path: Pa
 
     assert list(verifier.reasons) == ["basics/other"]
     assert verifier.unchecked == (verifier.reasons if failure == "HTTP 502" else {})
+    if failure == "HTTP 502":
+        assert "HTTP 502" in verifier.reasons["basics/other"]
 
     github.get = answer  # type: ignore[method-assign]
     # The setup with alice's permission, then the nine requests for #8, which "basics/other" sorts first to use.
     budget = len(_SETUP_CALLS) + 1 + 9
     github.hourly = (1000, budget + 50)
+    github.calls.clear()
     verifier = _verified(root, github)
+    assert len(github.calls) == budget
     assert list(verifier.reasons) == ["basics/result"]
     assert verifier.unchecked == verifier.reasons
+    assert f"budget of {budget} GitHub API requests" in verifier.reasons["basics/result"]
     # Spent before the rules, past the head check, it leaves every approval for a later run.
     github.hourly = (1000, 52)
     assert sorted(_verified(root, github).unchecked) == ["basics/other", "basics/result"]
