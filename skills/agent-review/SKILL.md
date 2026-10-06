@@ -29,7 +29,9 @@ Select the rubric from the artifact under review.
 Keep objective evidence separate from judgment. Never claim compilation,
 declaration resolution, axiom cleanliness, source coverage, or dependency
 correctness without showing how it was checked. If required sources are absent,
-return insufficient evidence rather than guessing.
+return insufficient evidence rather than guessing. In a project that allows
+open statements, a proof resting on declared open statements is conditional:
+name the statements it assumes and never call it axiom-clean.
 
 Except in the isolated read-back-judge role, regenerate skeleton evidence from
 the exact candidate after its Lean build.

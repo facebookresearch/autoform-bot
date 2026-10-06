@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .runtime import RuntimeNode, load_runtime_graph
+from .status import is_definition
 
 
-WORK_SCHEMA = "autoform-work/v1"
+WORK_SCHEMA = "autoform-work/v2"
+ASSUMPTIONS_SCHEMA = "autoform-assumptions/v1"
 
 
 class WorkError(ValueError):
@@ -42,6 +44,11 @@ class WorkItem:
     dependencies: tuple[str, ...]
     source_targets: tuple[str, ...]
     lean_targets: tuple[WorkLeanTarget, ...]
+    assumes: tuple[str, ...] = ()
+    open_statements: bool = False
+    #: The article records ``statement: retracted``: a revision retracted its
+    #: statement, so the work starts from ``autoform work impact``.
+    revision: bool = False
 
     @property
     def ready(self) -> bool:
@@ -52,13 +59,16 @@ class WorkItem:
             "article_id": self.article_id,
             "article_path": self.article_path,
             "article_revision": self.article_revision,
+            "assumes": list(self.assumes),
             "blockers": list(self.blockers),
             "claim_target": self.claim_target,
             "dependencies": list(self.dependencies),
             "lean_targets": [target.as_dict() for target in self.lean_targets],
             "node_id": self.node_id,
+            "open_statements": self.open_statements,
             "phase": self.phase,
             "ready": self.ready,
+            "revision": self.revision,
             "source_targets": list(self.source_targets),
             "state": self.state,
             "title": self.title,
@@ -69,10 +79,12 @@ class WorkItem:
 class WorkFrontier:
     source_revision: str
     items: tuple[WorkItem, ...]
+    open_statements: bool = False
 
     def as_dict(self) -> dict[str, object]:
         return {
             "schema": WORK_SCHEMA,
+            "open_statements": self.open_statements,
             "source_revision": self.source_revision,
             "items": [item.as_dict() for item in self.items],
         }
@@ -87,7 +99,7 @@ def _phase(node: RuntimeNode, blockers: tuple[str, ...]) -> str | None:
     return "proof" if node.status.stated else "statement"
 
 
-def _blockers(nodes: dict[str, RuntimeNode], node: RuntimeNode) -> tuple[str, ...]:
+def _blockers(node: RuntimeNode) -> tuple[str, ...]:
     # Report each reason where `list_ready_work` enforces it: finished articles
     # need no metadata, and an unfinished leaf needs it even when not ready.
     if not node.dispatchable:
@@ -103,24 +115,14 @@ def _blockers(nodes: dict[str, RuntimeNode], node: RuntimeNode) -> tuple[str, ..
         return tuple(metadata_blockers)
     if node.assertions.not_ready:
         return ("roadmap:not-ready",)
-    # Project CI rejects `sorry`, so a theorem's statement can only land with its
-    # proof: both phases wait for the proof prerequisites as well.
-    blocked = [
-        dependency
-        for dependency in node.statement_dependencies
-        if (resolved := nodes.get(dependency)) is None or not resolved.status.stated
-    ]
-    blocked.extend(
-        dependency
-        for dependency in node.proof_dependencies
-        if dependency not in blocked
-        and ((resolved := nodes.get(dependency)) is None or not resolved.status.proved)
-    )
-    return tuple(blocked)
+    # Readiness comes from the derived status, which applies the project's
+    # open-statement policy: strict projects wait for proof prerequisites to be
+    # proved, open-statement projects only for prerequisites to be stated.
+    return node.status.waiting_on
 
 
-def _item(nodes: dict[str, RuntimeNode], node: RuntimeNode) -> WorkItem:
-    blockers = _blockers(nodes, node)
+def _item(node: RuntimeNode, *, open_statements: bool) -> WorkItem:
+    blockers = _blockers(node)
     return WorkItem(
         node_id=node.id,
         article_id=node.article_id,
@@ -137,6 +139,9 @@ def _item(nodes: dict[str, RuntimeNode], node: RuntimeNode) -> WorkItem:
             WorkLeanTarget(target.declaration, target.source_file)
             for target in node.lean_targets
         ),
+        assumes=node.status.assumes,
+        open_statements=open_statements,
+        revision=node.assertions.statement_retracted,
     )
 
 
@@ -174,13 +179,12 @@ def list_ready_work(
             "formalizable leaves need durable article revision metadata: "
             + ", ".join(unversioned)
         )
-    nodes = {node.id: node for node in runtime.nodes}
     items = tuple(
         item
         for node in runtime.nodes
-        if (item := _item(nodes, node)).ready
+        if (item := _item(node, open_statements=runtime.open_statements)).ready
     )
-    return WorkFrontier(runtime.source_revision, items)
+    return WorkFrontier(runtime.source_revision, items, open_statements=runtime.open_statements)
 
 
 def work_context(
@@ -190,7 +194,6 @@ def work_context(
     lean_root: str | Path | None = None,
 ) -> tuple[str, WorkItem]:
     runtime = load_runtime_graph(project_or_blueprint, lean_root=lean_root)
-    nodes = {node.id: node for node in runtime.nodes}
     matches = [
         node
         for node in runtime.nodes
@@ -206,15 +209,104 @@ def work_context(
             f"{selector!r} matches more than one article: "
             + ", ".join(node.id for node in matches)
         )
-    return runtime.source_revision, _item(nodes, matches[0])
+    return runtime.source_revision, _item(matches[0], open_statements=runtime.open_statements)
+
+
+@dataclass(frozen=True, slots=True)
+class AssumptionArticle:
+    id: str
+    article_id: str | None
+    state: str
+    declarations: tuple[str, ...]
+    open: bool
+    assumes: tuple[str, ...]
+    allowed_open_declarations: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "allowed_open_declarations": list(self.allowed_open_declarations),
+            "article_id": self.article_id,
+            "assumes": list(self.assumes),
+            "declarations": list(self.declarations),
+            "id": self.id,
+            "open": self.open,
+            "state": self.state,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AssumptionContract:
+    open_statements: bool
+    source_revision: str
+    articles: tuple[AssumptionArticle, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema": ASSUMPTIONS_SCHEMA,
+            "open_statements": self.open_statements,
+            "source_revision": self.source_revision,
+            "articles": [article.as_dict() for article in self.articles],
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
+
+
+def assumption_contract(project_or_blueprint: str | Path) -> AssumptionContract:
+    """Record which open statements each article's Lean code may reach.
+
+    CI audits the Lean build against this: an open article's own declarations
+    may keep a ``sorry`` proof, and every other article may reach only the open
+    statements its Markdown dependencies declare. A theorem recording
+    ``statement: retracted`` stays open while its ``lean:`` names the old
+    declaration; a theorem that was never stated is not open, even with a
+    ``lean:`` name, so CI rejects its ``sorry``. Mathlib articles are listed too,
+    never open and allowed nothing, so CI can check that their names exist and
+    reach no open statement. Under the strict policy no article is open and
+    nothing is allowed.
+    """
+    runtime = load_runtime_graph(project_or_blueprint)
+    declarations = {
+        node.id: tuple(target.declaration for target in node.lean_targets)
+        for node in runtime.nodes
+    }
+    articles: list[AssumptionArticle] = []
+    for node in sorted(runtime.nodes, key=lambda candidate: candidate.id):
+        if not declarations[node.id]:
+            continue
+        is_open = (
+            runtime.open_statements
+            and not node.status.proved
+            and not is_definition(node)
+            and (node.status.stated or node.assertions.statement_retracted)
+        )
+        allowed = {name for assumed in node.status.assumes for name in declarations.get(assumed, ())}
+        if is_open:
+            allowed.update(declarations[node.id])
+        articles.append(
+            AssumptionArticle(
+                id=node.id,
+                article_id=node.article_id,
+                state=node.status.state,
+                declarations=declarations[node.id],
+                open=is_open,
+                assumes=node.status.assumes,
+                allowed_open_declarations=tuple(sorted(allowed)),
+            )
+        )
+    return AssumptionContract(runtime.open_statements, runtime.source_revision, tuple(articles))
 
 
 __all__ = [
+    "ASSUMPTIONS_SCHEMA",
     "WORK_SCHEMA",
+    "AssumptionArticle",
+    "AssumptionContract",
     "WorkError",
     "WorkFrontier",
     "WorkItem",
     "WorkLeanTarget",
+    "assumption_contract",
     "list_ready_work",
     "work_context",
 ]
