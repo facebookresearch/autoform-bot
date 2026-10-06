@@ -8,6 +8,7 @@ contacts a network service or writes generated state back into the blueprint.
 from __future__ import annotations
 
 import json
+import re
 import statistics
 from bisect import bisect_right
 from dataclasses import asdict, dataclass
@@ -16,7 +17,15 @@ from pathlib import Path
 from . import status
 from .coverage import CoverageSummary, load_coverage
 from .graph import Graph, GraphValidationError, Node, load_graph
-from .lean import SourceIndex, declaration_names, index_failure_message, index_project
+from .lean import (
+    _DECLARATION,
+    Declaration,
+    SourceIndex,
+    _without_lean_comments,
+    declaration_names,
+    index_failure_message,
+    snapshot_project_sources,
+)
 from .markdown import FENCE as _FENCE
 from .markdown import frontmatter_end as _frontmatter_end
 from .markdown import HEADING as _HEADING
@@ -50,6 +59,17 @@ _DECLARATION_KEYWORDS = {
     "structure": frozenset({"structure"}),
     "theorem": frozenset({"lemma", "theorem"}),
 }
+
+#: One ``@[...]`` attribute list; a string literal inside it may hold brackets.
+_ATTRIBUTE_LIST = r'@\[(?:[^\]"]|"(?:[^"\\]|\\.)*")*\]'
+#: The attribute lists and modifiers a declaration keyword closes, starting at
+#: a line start, so contiguous attribute lines above the keyword's line count.
+_DECLARATION_HEADER = re.compile(
+    rf"(?:\A|\n)[ \t]*((?:{_ATTRIBUTE_LIST}\s*)*)"
+    r"(?:(?:private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*\Z"
+)
+_STRING_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"')
+_DEPRECATED_ATTRIBUTE = re.compile(r"(?:\[|,)\s*(?:(?:scoped|local)\s+)?deprecated\b")
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -368,7 +388,7 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
 
     findings: list[AuditFinding] = []
     try:
-        index = index_project(root)
+        snapshot = snapshot_project_sources(root)
     except OSError as error:
         return [
             AuditFinding(
@@ -377,8 +397,10 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
                 index_failure_message(error),
             )
         ]
+    index = snapshot.index
     spans = _source_spans(index)
     sizes: dict[str, int] = {}
+    sources = _captured_source_lines(snapshot.source_files)
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
@@ -407,6 +429,16 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
             else:
                 resolved.append(declaration)
 
+        for declaration in resolved:
+            if _declared_deprecated(declaration, sources):
+                findings.append(
+                    AuditFinding(
+                        article_path,
+                        "lean-target-deprecated",
+                        f"lean target {declaration.name} is deprecated; point lean: at its replacement",
+                    )
+                )
+
         expected = _DECLARATION_KEYWORDS.get((node.declaration or "").casefold())
         if expected and resolved and not any(declaration.keyword in expected for declaration in resolved):
             actual = ", ".join(sorted({declaration.keyword for declaration in resolved}))
@@ -423,6 +455,49 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
 
     findings.extend(_size_findings(graph, sizes))
     return findings
+
+
+def _captured_source_lines(
+    source_files: tuple[tuple[Path, bytes], ...],
+) -> dict[Path, list[str] | None]:
+    """Decode the already captured source generation for lexical checks."""
+
+    sources: dict[Path, list[str] | None] = {}
+    for path, data in source_files:
+        try:
+            text = data.decode("utf-8")
+        except UnicodeError:
+            sources[path] = None
+        else:
+            sources[path] = _without_lean_comments(text).splitlines()
+    return sources
+
+
+def _declared_deprecated(declaration: Declaration, sources: dict[Path, list[str] | None]) -> bool:
+    """Whether the source declaration carries the ``deprecated`` attribute lexically.
+
+    Only ``@[...]`` lists before the keyword count: on the declaration's line,
+    or on the contiguous attribute lines directly above it. Comments are
+    blanked first, so a commented-out attribute does not count.
+    """
+
+    lines = sources.get(declaration.path)
+    if lines is None or not 0 < declaration.line <= len(lines):
+        return False
+    line = lines[declaration.line - 1]
+    keyword = _DECLARATION.match(line)
+    if keyword is None:
+        return False
+    # The attribute lines cannot reach above the previous declaration, so the
+    # search never rescans the whole file.
+    first = declaration.line - 1
+    while first and not _DECLARATION.match(lines[first - 1]):
+        first -= 1
+    header = _DECLARATION_HEADER.search("\n".join([*lines[first : declaration.line - 1], line[: keyword.start(1)]]))
+    return header is not None and any(
+        _DEPRECATED_ATTRIBUTE.search(_STRING_LITERAL.sub('""', attributes))
+        for attributes in re.findall(_ATTRIBUTE_LIST, header.group(1))
+    )
 
 
 def _source_spans(index: SourceIndex) -> dict[str, int]:
