@@ -114,6 +114,19 @@ def _prepare_and_record(
     return code, bundle, packet
 
 
+def _approve(article: Path, approval: str) -> None:
+    """Set the article's ``review_approved`` to ``approval``, adding it after the
+    statement if the article has none. The edit must change the article."""
+
+    text = article.read_text(encoding="utf-8")
+    if "review_approved: " in text:
+        edited = re.sub(r"review_approved: \S+", f"review_approved: {approval}", text)
+    else:
+        edited = text.replace("statement: formalized\n", f"statement: formalized\nreview_approved: {approval}\n")
+    assert edited != text
+    article.write_text(edited, encoding="utf-8")
+
+
 def test_review_cli_prepares_records_and_checks_exact_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -163,15 +176,7 @@ def test_review_cli_prepares_records_and_checks_exact_evidence(
     output = capsys.readouterr().out
     assert "review-unapproved" in output
 
-    approval = bundle.review_hash("af_0123456789abcdef01234567", cards)
-    article = blueprint / "roadmap/basics/result.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace(
-            "statement: formalized\n",
-            f"statement: formalized\nreview_approved: {approval}\n",
-        ),
-        encoding="utf-8",
-    )
+    _approve(blueprint / "roadmap/basics/result.md", bundle.review_hash("af_0123456789abcdef01234567", cards))
     assert main(
         [
             "review",
@@ -217,13 +222,7 @@ def test_check_and_render_derive_the_bundle_from_their_own_extraction(
 
     # The derived bundle is the prepared one: an approval of either holds for both.
     approval = load_review_bundle(bundle_path).review_hash("af_0123456789abcdef01234567", load_readbacks(blueprint))
-    article = blueprint / "roadmap/basics/result.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace(
-            "statement: formalized\n", f"statement: formalized\nreview_approved: {approval}\n"
-        ),
-        encoding="utf-8",
-    )
+    _approve(blueprint / "roadmap/basics/result.md", approval)
     assert main(check) == 0
     assert "OK: statement reviews match" in capsys.readouterr().out
     assert extraction_scopes == [None, None]
@@ -277,13 +276,7 @@ def test_check_and_render_refuse_the_blank_passage_prepare_refuses(
     cite(blank)
     prepared = load_review_bundle(bundle_path)
     offered = replace(prepared, articles=(replace(prepared.articles[0], passage=blank),))
-    approval = offered.review_hash("af_0123456789abcdef01234567", load_readbacks(blueprint))
-    article.write_text(
-        article.read_text(encoding="utf-8").replace(
-            "statement: formalized\n", f"statement: formalized\nreview_approved: {approval}\n"
-        ),
-        encoding="utf-8",
-    )
+    _approve(article, offered.review_hash("af_0123456789abcdef01234567", load_readbacks(blueprint)))
     capsys.readouterr()
 
     assert main(prepare) == 2
@@ -2266,14 +2259,7 @@ def _approved_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extraction:
     cards = load_readbacks(blueprint)
     prepared = load_review_bundle(bundle)
     for name, article_id in (("result", _RESULT_ID), ("other", _OTHER_ID)):
-        article = blueprint / "roadmap" / "basics" / f"{name}.md"
-        article.write_text(
-            article.read_text(encoding="utf-8").replace(
-                "statement: formalized\n",
-                f"statement: formalized\nreview_approved: {prepared.review_hash(article_id, cards)}\n",
-            ),
-            encoding="utf-8",
-        )
+        _approve(blueprint / "roadmap" / "basics" / f"{name}.md", prepared.review_hash(article_id, cards))
     return blueprint
 
 
@@ -2294,10 +2280,7 @@ def test_check_judges_the_blueprint_its_extraction_read(
     article = blueprint / "roadmap" / "basics" / "result.md"
 
     def approve_something_else() -> None:
-        text = article.read_text(encoding="utf-8")
-        article.write_text(
-            re.sub(r"review_approved: \S+", "review_approved: sha256:" + "f" * 64, text), encoding="utf-8"
-        )
+        _approve(article, "sha256:" + "f" * 64)
 
     extraction.on_extract = approve_something_else
     assert _check(blueprint, tmp_path) == 2
@@ -2405,10 +2388,7 @@ def test_check_judges_the_statement_its_snapshot_parsed(
 
     def restore_the_statement_and_approve_something_else() -> None:
         _write_statement(article, "Every object is equal to itself.")
-        text = article.read_text(encoding="utf-8")
-        article.write_text(
-            re.sub(r"review_approved: \S+", "review_approved: sha256:" + "e" * 64, text), encoding="utf-8"
-        )
+        _approve(article, "sha256:" + "e" * 64)
 
     _once_the_cards_are_rechecked(monkeypatch, restore_the_statement_and_approve_something_else)
     assert main(check) == stale_exit
@@ -2478,8 +2458,7 @@ def test_render_refuses_articles_edited_after_the_review_check(
     blueprint = _approved_batch(tmp_path, monkeypatch, _Extraction())
     _, skeleton, bundle, cards = _current_review(blueprint, lean_root=tmp_path, bundle_path=None)
     article = blueprint / "roadmap" / "basics" / "result.md"
-    text = article.read_text(encoding="utf-8")
-    article.write_text(re.sub(r"review_approved: \S+", "review_approved: sha256:" + "f" * 64, text), encoding="utf-8")
+    _approve(article, "sha256:" + "f" * 64)
     site = tmp_path / "site"
 
     with pytest.raises(PublicationError, match="the blueprint changed after its review evidence was extracted"):
@@ -2574,8 +2553,7 @@ def test_audit_refuses_articles_edited_after_the_review_check(
     def edit_the_card_and_approve_it() -> None:
         _edit_card(card)
         approval = load_review_bundle(tmp_path / "review.json").review_hash(_RESULT_ID, load_readbacks(blueprint))
-        text = article.read_text(encoding="utf-8")
-        article.write_text(re.sub(r"review_approved: \S+", f"review_approved: {approval}", text), encoding="utf-8")
+        _approve(article, approval)
 
     _after_the_check(monkeypatch, edit_the_card_and_approve_it)
     capsys.readouterr()
