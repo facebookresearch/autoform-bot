@@ -17,7 +17,7 @@ from .graph import Graph, load_graph
 from .lean import declaration_names, index_failure_message, index_project
 from .status import derive, is_definition
 
-RUNTIME_SCHEMA = "autoform-runtime/v3"
+RUNTIME_SCHEMA = "autoform-runtime/v4"
 RUNTIME_AUTHORITY = "markdown-articles"
 
 
@@ -152,7 +152,7 @@ class RuntimeNode:
 
 
 def _runtime_node_getstate(node: RuntimeNode) -> list[object]:
-    """Keep the v2 append-only field compatible with v1 pickles."""
+    """Keep the appended catalog field compatible with the previous shape."""
 
     return [getattr(node, item.name) for item in fields(node)]
 

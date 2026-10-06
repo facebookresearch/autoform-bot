@@ -602,6 +602,7 @@ def test_loads_canonical_coverage_summary_with_stable_json(tmp_path: Path) -> No
     assert issues == repeated_issues == ()
     assert first == second
     assert first is not None
+    assert COVERAGE_SCHEMA == "autoform-coverage/v2"
     assert first.schema == COVERAGE_SCHEMA
     assert first.source_path == "coverage/README.md"
     assert first.source_sha256 == hashlib.sha256(path.read_bytes()).hexdigest()

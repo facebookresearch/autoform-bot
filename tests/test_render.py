@@ -973,7 +973,7 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path
                 "MAPPED": 1,
                 "OUT": 0,
             },
-            "schema": "autoform-coverage/v1",
+            "schema": "autoform-coverage/v2",
             "source_path": "coverage/README.md",
             "source_sha256": manifest["coverage"]["source_sha256"],
         },
@@ -1199,7 +1199,7 @@ def test_manifest_records_machine_checkable_coverage_aggregates(tmp_path: Path) 
             "MAPPED": 1,
             "OUT": 1,
         },
-        "schema": "autoform-coverage/v1",
+        "schema": "autoform-coverage/v2",
         "source_path": "coverage/README.md",
         "source_sha256": manifest["coverage"]["source_sha256"],
     }

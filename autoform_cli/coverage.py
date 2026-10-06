@@ -31,7 +31,7 @@ from .markdown import (
 if TYPE_CHECKING:
     from .graph import Graph
 
-COVERAGE_SCHEMA = "autoform-coverage/v1"
+COVERAGE_SCHEMA = "autoform-coverage/v2"
 COVERAGE_DISPOSITIONS = ("MAPPED", "DECOMPOSED", "INVENTORIED", "DEFERRED", "OUT")
 _EXPECTED_HEADER = ("Area", "Coverage", "Evidence")
 _SEPARATOR = re.compile(r"^:?-{3,}:?$")

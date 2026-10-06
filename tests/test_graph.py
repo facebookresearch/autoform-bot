@@ -164,6 +164,22 @@ def test_atlas_manifest_rejects_unknown_and_duplicate_assignments(tmp_path: Path
     assert "belongs to both 'One' and 'Two'" in str(error.value)
 
 
+def test_dangling_atlas_manifest_link_is_not_treated_as_absent(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", "# Result\n")
+    try:
+        (blueprint / "atlas.json").symlink_to(tmp_path / "missing-atlas.json")
+    except OSError:
+        pytest.skip("the test filesystem cannot create symbolic links")
+
+    with pytest.raises(GraphValidationError) as error:
+        load_graph(blueprint)
+
+    assert error.value.issues == (
+        "atlas.json: taxonomy must be a regular file inside the blueprint",
+    )
+
+
 def test_loads_a_non_dispatchable_module_catalog_status(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     ledger = blueprint / "sources/module.md"

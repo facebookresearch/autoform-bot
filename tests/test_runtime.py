@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pickle
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
@@ -84,7 +85,7 @@ def test_loads_identical_runtime_from_project_or_blueprint(tmp_path: Path) -> No
     from_project = load_runtime_graph(project)
     from_blueprint = load_runtime_graph(project / "blueprint")
 
-    assert RUNTIME_SCHEMA == "autoform-runtime/v3"
+    assert RUNTIME_SCHEMA == "autoform-runtime/v4"
     assert from_project == from_blueprint
     assert from_project.schema == RUNTIME_SCHEMA
     assert from_project.authority == RUNTIME_AUTHORITY
@@ -101,6 +102,7 @@ def test_loads_identical_runtime_from_project_or_blueprint(tmp_path: Path) -> No
     assert from_project.dispatchable_count == 2
     assert from_project.dependency_count == 1
     assert from_project.maximum_depth == 3
+    assert from_project.nodes[0].as_dict()["catalog"] is None
 
 
 def test_preserves_hierarchy_typed_dependencies_and_dispatchability(tmp_path: Path) -> None:
@@ -158,7 +160,7 @@ def test_runtime_exposes_a_settled_module_catalog_without_dispatching_it(tmp_pat
     assert catalog.status.state == "fully_proved"
 
 
-def test_runtime_node_loads_the_v1_pickle_shape(tmp_path: Path) -> None:
+def test_runtime_node_loads_the_previous_v3_pickle_shape(tmp_path: Path) -> None:
     node = load_runtime_graph(_project(tmp_path)).nodes[0]
     previous_state = node.__getstate__()[:-1]
     restored = object.__new__(type(node))
@@ -167,6 +169,13 @@ def test_runtime_node_loads_the_v1_pickle_shape(tmp_path: Path) -> None:
 
     assert restored == node
     assert restored.catalog is None
+
+
+@pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
+def test_runtime_node_pickle_round_trip(tmp_path: Path, protocol: int) -> None:
+    node = load_runtime_graph(_project(tmp_path)).nodes[0]
+
+    assert pickle.loads(pickle.dumps(node, protocol=protocol)) == node
 
 
 def test_exposes_provenance_mathlib_and_optional_lean_locations(tmp_path: Path) -> None:

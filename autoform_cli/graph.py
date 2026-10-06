@@ -323,9 +323,12 @@ def _apply_atlas_manifest(
 ) -> None:
     """Apply an optional authored taxonomy without coupling it to file layout."""
     path = blueprint / "atlas.json"
+    if path.is_symlink():
+        issues.append("atlas.json: taxonomy must be a regular file inside the blueprint")
+        return
     if not path.exists():
         return
-    if path.is_symlink() or not path.is_file():
+    if not path.is_file():
         issues.append("atlas.json: taxonomy must be a regular file inside the blueprint")
         return
     try:

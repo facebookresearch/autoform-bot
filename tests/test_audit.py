@@ -188,7 +188,13 @@ def test_audit_accepts_an_explicit_non_dispatchable_module_catalog(tmp_path: Pat
         encoding="utf-8",
     )
 
-    assert audit_blueprint(blueprint, lean_root=lean_root).clean
+    result = audit_blueprint(blueprint, lean_root=lean_root)
+
+    assert result.clean
+    payload = json.loads(result.to_json())
+    assert payload["coverage"]["schema"] == "autoform-coverage/v2"
+    assert payload["coverage"]["counts"]["INVENTORIED"] == 1
+    assert payload["coverage"]["entries"][0]["disposition"] == "INVENTORIED"
 
 
 def test_audit_requires_module_catalog_lean_targets_to_resolve(tmp_path: Path) -> None:

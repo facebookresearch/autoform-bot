@@ -462,9 +462,10 @@ target metrics.
 For an existing blueprint, migrate a catalog-only `DECOMPOSED` row to
 `INVENTORIED`. If the same source also has declaration articles, keep that
 inventory row and add distinct, axis-qualified `DECOMPOSED` rows for the
-mathematical scopes; do not overwrite the inventory claim. This is a
-backward-compatible extension of `autoform-coverage/v1`: existing Markdown and
-frontmatter still parse. The shared-explorer publication manifest uses
+mathematical scopes; do not overwrite the inventory claim. Existing coverage
+Markdown remains readable, but emitted audit and publication coverage uses
+`autoform-coverage/v2`: `INVENTORIED` is a new disposition, terminal meaning,
+and counts key. The shared-explorer publication manifest uses
 `autoform-publication/v2`, as described below. Until migrated, a catalog-only
 `DECOMPOSED` row
 remains syntactically accepted but audit reports `coverage-role-mismatch`; a
@@ -1184,7 +1185,7 @@ doctor, separate from any future worker fleet or machine-capability preflight.
 ## Runtime contract
 
 `autoform_cli.runtime` projects the canonical Markdown graph into the versioned,
-deeply immutable in-memory schema `autoform-runtime/v3`. Its declared authority
+deeply immutable in-memory schema `autoform-runtime/v4`. Its declared authority
 is `markdown-articles`: the adapter copies hierarchy, typed statement and proof
 dependencies, authored assertions, derived progress, provenance, and optional
 local Lean source locations, but it provides no persistence or write API.
@@ -1201,9 +1202,9 @@ article paths and bytes, excluding timestamps, absolute paths, Git state, and
 operational state. Optional Lean locations come from a local lexical scan and do
 not by themselves establish compilation or proof correctness.
 
-Schema v3 retains non-dispatchable module catalogs and optional durable
-`article_id` metadata beside the graph's path-derived `id`. It adds the project
-`open_statements` policy,
+Schema v4 adds a nullable catalog discriminator for non-dispatchable module
+inventories. It retains v3's optional durable `article_id` metadata beside the
+graph's path-derived `id`, project `open_statements` policy,
 `statement_retracted` assertions, and each status's `assumes` and `waiting_on`
 fields. Temporary claims and local dashboard hooks may fall back to the path ID,
 but durable queues, reviews, recovery records, PR markers, execution records,
