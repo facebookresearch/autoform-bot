@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 from contextlib import ExitStack
+from types import SimpleNamespace
 
 import pytest
 
@@ -122,7 +123,14 @@ def test_close_kills_descendant_after_repl_wrapper_already_exited():
     )
     assert wrapper.stdout is not None
     child_pid = int(wrapper.stdout.readline())
-    wrapper.wait(timeout=2)
+    import psutil
+
+    deadline = time.monotonic() + 2
+    while psutil.Process(wrapper.pid).status() != psutil.STATUS_ZOMBIE:
+        if time.monotonic() >= deadline:
+            pytest.fail("REPL wrapper did not become a zombie")
+        time.sleep(0.01)
+    assert wrapper.returncode is None
 
     repl = repl_core.LeanRepl(
         repl_core.LeanReplConfig(
@@ -134,18 +142,14 @@ def test_close_kills_descendant_after_repl_wrapper_already_exited():
     repl._process_group_id = wrapper.pid
     try:
         repl.close()
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            try:
-                os.kill(child_pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.01)
-        else:
-            pytest.fail("REPL descendant survived process-group cleanup")
+        assert wrapper.returncode == 0
+        try:
+            assert psutil.Process(child_pid).status() == psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            pass
     finally:
         try:
-            os.kill(child_pid, signal.SIGKILL)
+            os.killpg(wrapper.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
 
@@ -251,6 +255,25 @@ def test_process_group_cleanup_does_not_signal_an_all_zombie_group(monkeypatch):
     repl_core._kill_subprocesses(object(), 1234)
 
     assert signals == [(1234, signal.SIGTERM)]
+
+
+def test_process_group_cleanup_refuses_a_pre_reaped_leader_with_live_members(
+    monkeypatch,
+):
+    process = SimpleNamespace(returncode=0)
+    monkeypatch.setattr(
+        repl_core,
+        "_process_group_has_live_members",
+        lambda process_group_id: True,
+    )
+    monkeypatch.setattr(
+        repl_core.os,
+        "killpg",
+        lambda *args: pytest.fail("a reused process group was signalled"),
+    )
+
+    with pytest.raises(RuntimeError, match="leader was reaped"):
+        repl_core._kill_subprocesses(process, 1234)
 
 
 def test_split_imports_preserves_body_offset_after_comments_and_blank_lines():
