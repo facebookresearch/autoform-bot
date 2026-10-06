@@ -31,6 +31,7 @@ from .skeleton import (
     DeclarationSkeleton,
     OutputTransaction,
     SkeletonReport,
+    _article_path,
     blueprint_hash,
     validate_managed_output,
 )
@@ -996,13 +997,6 @@ def _joint_packet(declarations: tuple[ReviewDeclaration, ...]) -> str:
     parts = [f"-- article with {len(declarations)} declaration(s)"]
     parts.extend(item.packet for item in declarations)
     return "\n".join(parts)
-
-
-def _article_path(node: Node, graph: Graph) -> str:
-    try:
-        return node.path.relative_to(graph.blueprint_dir).as_posix()
-    except ValueError:
-        return node.path.name
 
 
 def _approval_identity_findings(graph: Graph, bundle: ReviewBundle) -> list[ReviewFinding]:
