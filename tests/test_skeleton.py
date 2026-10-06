@@ -730,12 +730,16 @@ def _assert_no_survivors(pid_files: list[Path]) -> None:
     assert not survivors
 
 
-def test_probe_pool_interruption_kills_every_workers_process_group(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("workers", [2, 1], ids=["both-running", "one-queued"])
+def test_probe_pool_interruption_kills_running_probes_and_starts_no_queued_one(
+    tmp_path: Path, monkeypatch, workers: int
+) -> None:
     pid_files = [tmp_path / "a.pids", tmp_path / "b.pids"]
 
-    def interrupt_once_both_run(*args, **kwargs):
+    def interrupt_once_the_workers_run(*args, **kwargs):
         deadline = time.monotonic() + 20
-        while not all(path.exists() and len(path.read_text(encoding="utf-8").split()) == 2 for path in pid_files):
+        running = pid_files[:workers]
+        while not all(path.exists() and len(path.read_text(encoding="utf-8").split()) == 2 for path in running):
             assert time.monotonic() < deadline
             time.sleep(0.01)
         raise KeyboardInterrupt
@@ -743,35 +747,13 @@ def test_probe_pool_interruption_kills_every_workers_process_group(tmp_path: Pat
     def run(program: str, root: Path) -> str:
         return _run_bounded_command([sys.executable, "-c", program], cwd=root, timeout=60, context="test probe").stdout
 
-    monkeypatch.setattr("autoform_cli.skeleton._probe_workers", lambda jobs: jobs)
-    monkeypatch.setattr("autoform_cli.skeleton.wait", interrupt_once_both_run)
+    monkeypatch.setattr("autoform_cli.skeleton._probe_workers", lambda jobs: workers)
+    monkeypatch.setattr("autoform_cli.skeleton.wait", interrupt_once_the_workers_run)
 
     with pytest.raises(KeyboardInterrupt):
         _run_module_probes([("A", _sleeping_probe(pid_files[0])), ("B", _sleeping_probe(pid_files[1]))], run, tmp_path)
 
-    _assert_no_survivors(pid_files)
-
-
-def test_probe_pool_does_not_start_queued_probes_after_an_interrupt(tmp_path: Path, monkeypatch) -> None:
-    pid_files = [tmp_path / "a.pids", tmp_path / "b.pids"]
-
-    def interrupt_once_one_runs(*args, **kwargs):
-        deadline = time.monotonic() + 20
-        while not (pid_files[0].exists() and len(pid_files[0].read_text(encoding="utf-8").split()) == 2):
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
-        raise KeyboardInterrupt
-
-    def run(program: str, root: Path) -> str:
-        return _run_bounded_command([sys.executable, "-c", program], cwd=root, timeout=60, context="test probe").stdout
-
-    monkeypatch.setattr("autoform_cli.skeleton._probe_workers", lambda jobs: 1)
-    monkeypatch.setattr("autoform_cli.skeleton.wait", interrupt_once_one_runs)
-
-    with pytest.raises(KeyboardInterrupt):
-        _run_module_probes([("A", _sleeping_probe(pid_files[0])), ("B", _sleeping_probe(pid_files[1]))], run, tmp_path)
-
-    assert not pid_files[1].exists()
+    assert pid_files[1].exists() == (workers == 2)
     _assert_no_survivors(pid_files)
 
 
