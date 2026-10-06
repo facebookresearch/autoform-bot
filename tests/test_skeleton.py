@@ -3399,6 +3399,18 @@ def test_a_source_shows_only_comments_every_possible_token_table_agrees_on(tmp_p
         assert item.source is None and item.source_withheld, item.name
 
 
+def _assert_withheld(report: SkeletonReport, node_id: str, *names: str) -> None:
+    """Assert that ``node_id`` of the clean ``report`` trusts exactly ``names``, all withheld, and shows no secret."""
+
+    node = report.node(node_id)
+    assert report.clean and node is not None
+    trusted = node.declarations[0].trusted
+    assert sorted(item.name for item in trusted) == sorted(names)
+    for item in trusted:
+        assert item.source is None and item.source_withheld, item.name
+    assert "SECRET" not in node.blind_text()
+
+
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_a_token_registered_without_a_placeable_declaration_withholds_the_source(tmp_path: Path) -> None:
     # Both modules make `!"` a token before their sources, so Lean read the
@@ -3449,14 +3461,8 @@ def test_a_token_registered_without_a_placeable_declaration_withholds_the_source
 
     report = extract_skeletons(blueprint, lean_root=project)
 
-    assert report.clean
     for node_id, name in [("basics/attr", "Skel.attrLeak"), ("basics/raw", "Skel.rawLeak")]:
-        node = report.node(node_id)
-        assert node is not None
-        (item,) = node.declarations[0].trusted
-        assert item.name == name
-        assert item.source is None and item.source_withheld, name
-        assert "SECRET" not in node.blind_text()
+        _assert_withheld(report, node_id, name)
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_a_metaprogram_token_before_a_later_parser_entry_withholds_the_source(tmp_path: Path) -> None:
@@ -3488,13 +3494,7 @@ def test_a_metaprogram_token_before_a_later_parser_entry_withholds_the_source(tm
 
     report = extract_skeletons(blueprint, lean_root=project)
 
-    assert report.clean
-    node = report.node("basics/tie")
-    assert node is not None
-    (item,) = node.declarations[0].trusted
-    assert item.name == "Skel.tieLeak"
-    assert item.source is None and item.source_withheld
-    assert "SECRET" not in node.blind_text()
+    _assert_withheld(report, "basics/tie", "Skel.tieLeak")
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
@@ -3529,14 +3529,7 @@ def test_a_scoped_token_an_open_may_activate_withholds_the_source(tmp_path: Path
 
     report = extract_skeletons(blueprint, lean_root=project)
 
-    assert report.clean
-    node = report.node("basics/scope")
-    assert node is not None
-    trusted = {item.name: item for item in node.declarations[0].trusted}
-    assert set(trusted) == {"Skel.scopeLeak", "Skel.tabLeak"}
-    for item in trusted.values():
-        assert item.source is None and item.source_withheld, item.name
-    assert "SECRET" not in node.blind_text()
+    _assert_withheld(report, "basics/scope", "Skel.scopeLeak", "Skel.tabLeak")
 
 
 
@@ -3625,12 +3618,7 @@ def test_an_open_inside_a_source_withholds_only_what_follows_it(tmp_path: Path) 
     instmt = report.node("basics/instmt")
     assert instmt is not None
     assert instmt.declarations[0].statement is None
-    inner = report.node("basics/inner")
-    assert inner is not None
-    (item,) = inner.declarations[0].trusted
-    assert item.name == "Skel.innerLeak"
-    assert item.source is None and item.source_withheld
-    assert "SECRET" not in inner.blind_text()
+    _assert_withheld(report, "basics/inner", "Skel.innerLeak")
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
