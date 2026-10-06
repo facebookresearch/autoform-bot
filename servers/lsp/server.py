@@ -210,15 +210,11 @@ class LeanLspSession:
             )
         finally:
             try:
-                remaining = deadline - time.monotonic()
-                if remaining > 0:
-                    self._send_notification(
-                        "textDocument/didClose",
-                        {"textDocument": {"uri": uri}},
-                        timeout=remaining,
-                    )
-                else:
-                    raise TimeoutError("no time remained to close the document")
+                self._send_notification(
+                    "textDocument/didClose",
+                    {"textDocument": {"uri": uri}},
+                    timeout=self._remaining(deadline, operation_timeout),
+                )
             except Exception:
                 # An unclosed document or a partial frame desynchronizes the
                 # stream; keep this result but never reuse the session.
@@ -287,15 +283,11 @@ class LeanLspSession:
             )
         finally:
             try:
-                remaining = deadline - time.monotonic()
-                if remaining > 0:
-                    self._send_notification(
-                        "textDocument/didClose",
-                        {"textDocument": {"uri": uri}},
-                        timeout=remaining,
-                    )
-                else:
-                    raise TimeoutError("no time remained to close the document")
+                self._send_notification(
+                    "textDocument/didClose",
+                    {"textDocument": {"uri": uri}},
+                    timeout=self._remaining(deadline, timeout),
+                )
             except Exception:
                 # An unclosed document or a partial frame desynchronizes the
                 # stream; keep this result but never reuse the session.
