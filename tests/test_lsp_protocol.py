@@ -260,8 +260,12 @@ def test_is_alive_does_not_reap_the_group_leader(monkeypatch):
 
 
 @pytest.mark.parametrize("operation", ["diagnostics", "hover"])
-def test_retirement_stops_a_queued_operation_before_dispatch(monkeypatch, operation):
+def test_retirement_stops_a_queued_operation_before_dispatch(
+    tmp_path, monkeypatch, operation
+):
     session = lsp.LeanLspSession(lsp.LspConfig())
+    source = tmp_path / "Queued.lean"
+    source.write_text("#check Nat\n")
     calls = []
     errors = []
     started = threading.Event()
@@ -281,9 +285,9 @@ def test_retirement_stops_a_queued_operation_before_dispatch(monkeypatch, operat
         started.set()
         try:
             if operation == "diagnostics":
-                session.get_diagnostics("ignored.lean")
+                session.get_diagnostics(str(source))
             else:
-                session.hover("ignored.lean", 0, 0)
+                session.hover(str(source), 0, 0)
         except BaseException as error:
             errors.append(error)
 
@@ -334,6 +338,18 @@ def test_did_close_failure_keeps_result_but_retires_session(
             session.get_diagnostics(str(source))
         else:
             session.hover(str(source), 0, 0)
+
+
+def test_hover_input_decode_failure_keeps_healthy_session(tmp_path):
+    source = tmp_path / "Invalid.lean"
+    source.write_bytes(b"\xff")
+    session = _owned_session(_FakeProcess())
+
+    with pytest.raises(UnicodeDecodeError):
+        session.hover(str(source), 0, 0)
+
+    assert session.is_alive() is True
+    assert session._retire_pending is False
 
 
 def test_abort_refuses_to_signal_a_pre_reaped_leader_with_live_group(monkeypatch):
