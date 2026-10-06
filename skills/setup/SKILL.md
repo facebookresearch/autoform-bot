@@ -95,10 +95,7 @@ is also the repair path; it reports what it left alone. See the
 The site's MathJax configuration is not part of the vault: `autoform render`
 writes `javascripts/mathjax.js` on every build. Put the project's notation in
 `blueprint/tex-macros.json`, an object from macro names to MathJax `tex.macros`
-definitions, rather than defining it in an article, which `autoform check`
-refuses. See the [CLI reference](../../autoform_cli/README.md#commands) for
-what the script loads and how a project scaffolded with a copy of it is
-handled.
+definitions; `autoform check` refuses notation defined in an article.
 
 `init` pins the generated workflows to the Autoform commit that ran it, using a
 safe remote only when a cached remote-tracking ref contains that commit. It
@@ -125,22 +122,15 @@ theorem axioms on pull requests; `autoform-review-gate.yml`, which tells a pull
 request early whether a code owner has authenticated the statement approvals
 it adds; and `blueprint-pages.yml`, which validates the DAG and its `lean:`
 declarations, renders the blueprint, builds MkDocs, and deploys GitHub Pages.
-Pages builds Lean and extracts the statement skeletons in one job, then labels
-approvals and builds the site in a second job that never runs Lake and takes
-only the skeleton report from the first. Pages also runs every hour on a
-schedule, and rebuilds the default branch's head only when the site has no
-complete build of it or that build is a day old. Pass `--autoform-ref` to pin
-them at an immutable commit.
+Pass `--autoform-ref` to pin them at an immutable commit.
 
 Approvals read "approved by" only when the default branch has rulesets, none
 the workflow token can bypass, requiring code owner review, dismissing stale
 approvals on push, and requiring approval of the most recent push, and
-`CODEOWNERS`, which GitHub must read without error, gives every path an
-owner: a `*` rule and every rule after the last one name a team of the
-repository's owner or an individual owner with write access. Classic branch
-protection does not count. Tell the user this when statement review is on; adding the
-ruleset and `CODEOWNERS` is their decision. The
+`CODEOWNERS` gives every path an owner; the
 [CLI reference](../../autoform_cli/README.md#commands) states the full rule.
+Classic branch protection does not count. Tell the user this when statement
+review is on; adding the ruleset and `CODEOWNERS` is their decision.
 
 After it runs, fill in what only a human or a source can supply: the project
 description in `blueprint/README.md`, the coverage contract, and a verified
