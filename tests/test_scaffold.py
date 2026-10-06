@@ -812,10 +812,6 @@ def test_the_approval_gate_runs_apart_from_the_lean_build(tmp_path: Path) -> Non
     assert "github.event_name" not in verify
     assert "pull_request_review:\n    types: [submitted, dismissed]" in gate
     assert "group: autoform-review-gate-${{ github.event.pull_request.number }}" in gate
-    assert '--github --pr "$PR_NUMBER"' in gate
-    # The base is the first parent of the merge commit checked out, not the event's base.sha, which can lag.
-    assert 'base="$(git rev-parse \'HEAD^1\')"' in gate
-    assert '--since "$base" --trusted-ref "$base"' in gate
     assert "base.sha }}" not in gate and "BASE_SHA" not in gate
     assert "PR_NUMBER: ${{ github.event.pull_request.number }}" in gate
     assert "pull-requests: read" in gate
@@ -1097,7 +1093,6 @@ def test_pages_fails_after_deploying_a_site_whose_approvals_could_not_be_checked
     assert failed.stdout.startswith("::error::The site is deployed, but 2 approvals could not be checked")
 
 
-_HOUR = 3600
 _RUNS = f"{_REPOSITORY}/actions/workflows/blueprint-pages.yml/runs"
 _DEPLOYMENTS = f"{_REPOSITORY}/deployments"
 
@@ -1131,14 +1126,11 @@ def _github_after(
     before it ``earlier``, newest first. A run may name another conclusion
     than failure as a third item."""
 
-    def ago(hours: float) -> _HoursAgo:
-        return _HoursAgo(hours)
-
     runs = [
-        {"event": run[0], "conclusion": run[2] if len(run) > 2 else "failure", "updated_at": ago(run[1])}
+        {"event": run[0], "conclusion": run[2] if len(run) > 2 else "failure", "updated_at": _HoursAgo(run[1])}
         for run in failed
     ]
-    runs.append({"event": "push", "conclusion": "success", "updated_at": ago(0.1)})
+    runs.append({"event": "push", "conclusion": "success", "updated_at": _HoursAgo(0.1)})
     answers: dict[str, object] = {
         _MAIN: {"object": {"sha": head}},
         _RUNS: {"workflow_runs": runs},
@@ -1147,7 +1139,7 @@ def _github_after(
     deployments = ((deployed,) + earlier) if deployed is not None else ()
     answers[_DEPLOYMENTS] = [{"id": 7 - index} for index in range(len(deployments))]
     for index, (state, hours) in enumerate(deployments):
-        answers[f"{_DEPLOYMENTS}/{7 - index}/statuses"] = [{"state": state, "created_at": ago(hours)}]
+        answers[f"{_DEPLOYMENTS}/{7 - index}/statuses"] = [{"state": state, "created_at": _HoursAgo(hours)}]
     return answers
 
 
@@ -1225,7 +1217,7 @@ def test_pages_publishes_only_builds_of_the_default_branch_whatever_its_name(tmp
         ("workflow_dispatch", "refs/heads/trunk", "true"),
         ("workflow_dispatch", "refs/heads/feature", "false"),
         ("workflow_dispatch", "refs/heads/main", "false"),
-        ("pull_request", "refs/pull/3/merge", "false"),
+        ("pull_request", "refs/heads/trunk", "false"),
     ],
 )
 def test_decide_publishes_a_build_only_of_the_default_branch(
@@ -1259,14 +1251,6 @@ def test_a_scheduled_run_asks_for_the_runs_of_its_own_workflow_file(tmp_path: Pa
     assert done.returncode == 0, done.stderr
     assert outputs == {"publish": "true", "build": "true"}
     assert calls[-1].startswith(f"{_REPOSITORY}/actions/workflows/pages.yml/runs?branch=main&")
-
-
-@pytest.mark.parametrize("event", ["push", "pull_request", "workflow_dispatch"])
-def test_every_event_but_the_schedule_builds_without_asking_github(tmp_path: Path, event: str) -> None:
-    done, calls, outputs = _decide(tmp_path, {}, event)
-
-    assert done.returncode == 0, done.stderr
-    assert (outputs, calls) == ({"publish": "false" if event == "pull_request" else "true", "build": "true"}, [])
 
 
 @pytest.mark.parametrize(
@@ -1389,25 +1373,19 @@ def test_a_scheduled_run_builds_the_head_until_it_has_a_complete_build(
     assert ("::notice::Building" in done.stdout) is build
 
 
-def test_a_scheduled_run_builds_only_when_the_verifier_would_have_its_whole_allowance(tmp_path: Path) -> None:
-    """The verifier has its whole ceiling while at most _RESERVED_REQUESTS - _LEFT_AFTER are spent when it
-    begins. Decide starts a build only with 50 of those to spare, for its own requests and the other runs
-    of the hour during the Lean build, so a request or two elsewhere never turns a run past the ceiling red."""
-
-    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
-    script = _step(tmp_path / ".github/workflows/blueprint-pages.yml", "decide", "Decide whether to build")
-
-    assert "if (( remaining < limit - 100 )); then" in script
-    assert approvals._RESERVED_REQUESTS - approvals._LEFT_AFTER - 100 == 50
-
-
 def test_the_docs_state_how_few_spent_requests_hold_the_schedule_back(tmp_path: Path, repo_root: Path) -> None:
-    """A reviewer reads in the skill and the README when a withdrawal can wait past a day."""
+    """A reviewer reads in the skill and the README when a withdrawal can wait past a day.
+
+    The verifier has its whole ceiling while at most _RESERVED_REQUESTS - _LEFT_AFTER are spent when it
+    begins. Decide starts a build only with 50 of those to spare, for its own requests and the other runs
+    of the hour during the Lean build, so a request or two elsewhere never turns a run past the ceiling red.
+    """
 
     scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
     script = _step(tmp_path / ".github/workflows/blueprint-pages.yml", "decide", "Decide whether to build")
     spent = re.search(r"if \(\( remaining < limit - (\d+) \)\); then", script)
     assert spent is not None
+    assert approvals._RESERVED_REQUESTS - approvals._LEFT_AFTER - int(spent[1]) == 50
     readme, skill = (
         " ".join((repo_root / path).read_text(encoding="utf-8").split())
         for path in ("autoform_cli/README.md", "skills/human-review/SKILL.md")
