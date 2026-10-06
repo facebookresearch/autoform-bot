@@ -405,6 +405,7 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
         Path(directory, name) for directory, _, files in os.walk(roadmap_root, onerror=unlistable) for name in files
     )
     pages: list[Path] = []
+    unchecked = False
     for path in entries:
         if path.suffix != ".md" and path.name.casefold() != "readme.md":
             continue
@@ -416,6 +417,7 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
             continue  # a dangling link, like an editor's lock file, or a page removed since the walk
         except OSError as exc:
             issues.append(f"{relative}: cannot read roadmap page: {exc}")
+            unchecked = True
             continue
         if path.name.casefold() == "readme.md" and path.name != "README.md":
             issues.append(
@@ -452,8 +454,8 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
             _NodeSource(node_id, canonical, content, text, hashlib.sha256(content).hexdigest())
         )
 
-    if not issues:
-        # A chapter page that could not be read is named above; calling it missing would mislead.
+    if not unchecked:
+        # A chapter page that could not be checked is named above; calling it missing would mislead.
         issues.extend(_chapter_issues(roadmap_root))
     return sources, issues
 

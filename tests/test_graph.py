@@ -370,6 +370,19 @@ def test_a_readme_that_links_to_itself_is_refused_rather_than_called_missing(tmp
     assert caught.value.issues == (f"chapter/README.md: cannot read roadmap page: {loop}",)
 
 
+def test_a_page_that_cannot_be_decoded_does_not_hide_a_chapter_without_a_readme(tmp_path: Path) -> None:
+    """Any discovery error held the chapter check back, though only a page that cannot be checked needs to."""
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    _node(blueprint, "chapter/result.md", "# Result\n").write_bytes(b"# Result \xff\n")
+    _roadmap_page(blueprint, "orphan/leaf.md", "# Leaf\n")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert [issue.split(":", 1)[0] for issue in caught.value.issues] == ["chapter/result.md", "orphan"]
+
+
 def test_splits_statement_and_proof_dependencies(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "objects.md", "# Objects\n")
