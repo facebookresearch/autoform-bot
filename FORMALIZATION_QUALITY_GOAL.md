@@ -147,6 +147,14 @@ Every quality subject must declare `origin` explicitly. Missing origin produces
 The mapping is total: `origin: cited` requires `source-fidelity: passed` with
 the current hash-bound `agrees` bundle; `origin: bridged` and
 `origin: background` require justified `source-fidelity: not-applicable`.
+`source-fidelity: blocked` remains a valid failing status for every origin and
+produces `blocked-quality-gate`. A cited N/A uses the matrix's
+`invalid-not-applicable`; `invalid-source-fidelity-origin` is reserved for a
+nonblocked `passed` status where bridged/background requires N/A. Unsupported
+origin values fail graph validation before quality policy runs.
+Emit exactly one source-fidelity status code, in this order: missing origin;
+`blocked`; invalid N/A under the matrix; invalid nonblocked origin/status pair;
+then bundle validation for cited `passed`.
 
 Applicability is default-deny:
 
@@ -163,14 +171,37 @@ Applicability is default-deny:
 Any case not explicitly allowed by this matrix is
 `invalid-not-applicable`. Missing `origin` never grants an exemption.
 
-Proof applicability and declaration intent use freshly resolved
-`DeclarationSkeleton.kind` values, never the authored `declaration` label. For
-`mathlib: true`, aggregate every compiled root: any theorem or axiom makes the
-subject proof-bearing; only an all-definition-like set may use justified
-proof-integrity N/A when no other proof completion is claimed. A mixed set is
-proof-bearing. An unresolved, unsupported, or incomplete kind blocks and can
-never grant N/A. Compare every compiled root against one centralized
-declaration-intent compatibility map; a mismatch produces
+Proof applicability and declaration intent use freshly resolved, hash-bound
+`DeclarationSkeleton.kind` values and proof facts, never the authored
+`declaration` label. P02 must version the
+skeleton schema and add `DeclarationSkeleton.type_is_prop`, computed from
+Lean's `Meta.isProof` for each root and included in the verified artifact hash.
+For `mathlib: true`, aggregate every compiled root. A root is proof-bearing when
+its kind is `theorem` or `axiom`, or when `type_is_prop: true`; this includes
+data-valued axioms and proof-valued `def`/`opaque` roots. Only roots with
+`type_is_prop: false` and a definition-like kind may contribute to an
+all-definition-like set that uses justified proof-integrity N/A when no other
+proof completion is claimed. A mixed set is proof-bearing.
+
+Supported compiled kinds are `theorem`, `axiom`, `def`, `instance`, `opaque`,
+`inductive`, `class`, `structure`, `constructor`, `recursor`, and `quot`.
+Definition-like means exactly that set minus `theorem` and `axiom`.
+`unknown`, any future kind outside that set, a missing `type_is_prop`, an
+unresolved root, or an incomplete skeleton produces
+`unsupported-quality-declaration-kind` or `unresolved-quality-declaration` and
+can never grant N/A. A `theorem` with `type_is_prop: false` is internally
+inconsistent and produces `inconsistent-quality-declaration-kind`; an `axiom`
+with false remains conservatively proof-bearing.
+
+Compare every compiled root against one centralized declaration-intent
+compatibility map. Trim and case-fold the authored value and ignore only the
+supported Lean modifiers `private`, `protected`, `noncomputable`, `partial`,
+`unsafe`, `scoped`, and `local`. Normalize `theorem`, `lemma`, `corollary`, and
+`proposition` to compiled `theorem`; normalize `def`, `definition`, `abbrev`,
+and `irreducible_def` to compiled `def`; map `axiom`, `class`, `inductive`,
+`instance`, `opaque`, and `structure` directly. A missing authored intent skips
+only this compatibility comparison and never changes compiled proof
+applicability. Any present unknown intent or incompatible root produces
 `quality-target-kind-mismatch`, so relabeling a theorem as a definition cannot
 weaken the proof gate.
 
@@ -194,6 +225,22 @@ For `origin: cited`, the current bundle must contain a nonempty extracted
 passage and its canonical contained `#L<start>-L<end>` locator. A nonnull review
 hash with `passage: null` is insufficient and produces
 `missing-quality-passage`.
+
+The cited verdict must bind identity as well as bytes. The subject must have a
+nonempty durable `article_id`; otherwise emit `missing-quality-article-id`.
+The verdict's `item` must equal that exact ID, or emit
+`quality-verdict-item-mismatch`. Every declaration must have a nonempty raw
+read-back, or emit `missing-quality-readback`. An overall `agrees` decision is
+valid only when the worst decision implied by every
+`discrepancies[].category` under the read-back rubric's ordering is `agrees`.
+Require a nonempty discrepancies array, recompute its decision, and require it
+to equal `decision`; reject unknown categories. Require `equivalence_to_settle`
+to be null unless the recomputed
+decision is `review`, and nonempty for `review`. Require `passage_card`,
+`read_back_card`, and the human-readable `verdict` to be present and
+structurally valid, but never infer status by scanning their prose. Any
+contradiction produces `inconsistent-quality-verdict`. Content hashes alone
+cannot authorize reusing a verdict for a different article.
 
 `provenance: passed` evidence must visibly record
 `author=<human|model>:<local-id>`,
@@ -290,11 +337,18 @@ documented change:
 - `invalid-quality-subject`
 - `retracted-quality-subject`
 - `missing-quality-origin`
+- `invalid-source-fidelity-origin`
+- `missing-quality-article-id`
 - `missing-quality-target`
 - `missing-quality-passage`
+- `missing-quality-readback`
+- `quality-verdict-item-mismatch`
+- `inconsistent-quality-verdict`
 - `unresolved-quality-link`
 - `unresolved-quality-declaration`
 - `quality-target-kind-mismatch`
+- `unsupported-quality-declaration-kind`
+- `inconsistent-quality-declaration-kind`
 - `unverified-lean-validity`
 
 ### 4. Integrate without breaking empty projects
@@ -388,15 +442,24 @@ Test these complete article cases:
 | `statement: retracted`, with or without a complete table | fail |
 | `proof: formalized`, proof integrity passed | pass |
 | `proof: formalized`, proof integrity N/A | fail |
-| Cited statement, source fidelity N/A | fail |
+| Cited statement, source fidelity N/A | fail (`invalid-not-applicable`) |
 | Bridged statement, source fidelity N/A with bridge rationale | pass |
-| Bridged statement, source fidelity N/A without rationale | fail |
-| Omitted origin, source fidelity N/A | fail |
+| Bridged statement, source fidelity N/A without rationale | fail (`invalid-not-applicable`) |
+| Bridged statement, source fidelity passed | fail (`invalid-source-fidelity-origin`) |
+| Omitted origin, source fidelity N/A | fail (`missing-quality-origin`) |
 | Omitted origin, source fidelity passed with otherwise current evidence | fail (`missing-quality-origin`) |
 | Background lemma, justified source fidelity N/A | pass |
-| Background lemma, source fidelity N/A without rationale | fail |
-| Source fidelity passed with a current hash-bound `agrees` verdict | pass |
+| Background lemma, source fidelity N/A without rationale | fail (`invalid-not-applicable`) |
+| Background lemma, source fidelity passed | fail (`invalid-source-fidelity-origin`) |
+| Any explicit origin, source fidelity blocked | fail (`blocked-quality-gate`) |
+| Cited source fidelity passed with a current hash-bound `agrees` verdict | pass |
 | Source fidelity passed with bare self-attestation prose | fail |
+| Cited verdict `item` differs from the subject `article_id` | fail (`quality-verdict-item-mismatch`) |
+| Cited subject has no durable `article_id` | fail (`missing-quality-article-id`) |
+| Cited verdict links an empty raw read-back | fail (`missing-quality-readback`) |
+| Overall `agrees` contradicts discrepancy-category decision ordering | fail (`inconsistent-quality-verdict`) |
+| `equivalence_to_settle` is inconsistent with the recomputed decision | fail (`inconsistent-quality-verdict`) |
+| `passage_card`, `read_back_card`, or human-readable verdict is missing or malformed | fail (`inconsistent-quality-verdict`) |
 | Verdict omits, reorders, or mismatches a linked raw read-back | fail |
 | Cited verdict has a review hash but no current passage/line locator | fail |
 | Source fidelity verdict carries a stale article review hash | fail |
@@ -413,13 +476,22 @@ Test these complete article cases:
 | Statement-only claim, proof integrity N/A | pass |
 | Explicitly allowed open theorem, proof integrity N/A with rationale | pass |
 | Open theorem when project policy forbids open statements | fail in integrity audit |
-| Mathlib theorem claim, proof integrity N/A | fail |
-| Mathlib definition claim, proof integrity N/A | pass |
+| Mathlib theorem claim, proof integrity N/A | fail (`invalid-not-applicable`) |
+| Mathlib data definition, `type_is_prop: false`, proof integrity N/A | pass |
+| Mathlib predicate definition, `type_is_prop: false`, proof integrity N/A | pass |
+| Proof-valued Mathlib `def`, `type_is_prop: true`, proof integrity N/A | fail (`invalid-not-applicable`) |
+| Proof-valued Mathlib `opaque`, `type_is_prop: true`, proof integrity N/A | fail (`invalid-not-applicable`) |
 | Mathlib theorem mislabeled as a definition | fail (`quality-target-kind-mismatch`) |
 | Mathlib definition mislabeled as a theorem | fail (`quality-target-kind-mismatch`) |
-| Mixed Mathlib definition and theorem roots, proof integrity N/A | fail |
-| All-definition Mathlib roots, proof integrity N/A | pass |
-| Unresolved or unsupported compiled declaration kind | fail |
+| Mathlib definition then theorem roots, no authored intent, proof integrity N/A | fail (`invalid-not-applicable`) |
+| Mathlib theorem then definition roots, no authored intent, proof integrity N/A | fail (`invalid-not-applicable`) |
+| Mathlib axiom plus definition roots, no authored intent, proof integrity N/A | fail (`invalid-not-applicable`) |
+| All-definition Mathlib roots with `type_is_prop: false`, proof integrity N/A | pass |
+| Valid Mathlib definition plus unresolved root, proof integrity N/A | fail (`unresolved-quality-declaration`) |
+| Valid Mathlib definition plus unsupported root kind, proof integrity N/A | fail (`unsupported-quality-declaration-kind`) |
+| Data-valued Mathlib axiom, `type_is_prop: false`, proof integrity N/A | fail (`invalid-not-applicable`) |
+| Mathlib theorem kind with `type_is_prop: false` | fail (`inconsistent-quality-declaration-kind`) |
+| Unknown authored declaration intent | fail (`quality-target-kind-mismatch`) |
 | Any mandatory gate blocked | fail |
 | Resolved local evidence link | pass |
 | Escaping or missing evidence link | fail |

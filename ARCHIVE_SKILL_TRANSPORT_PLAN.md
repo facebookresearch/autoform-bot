@@ -63,7 +63,7 @@ details, or service instructions.
 ## Repository baseline and prior work
 
 This plan was recalibrated against canonical `main` commit
-`dd908202793bc811c832fdcf73905e0c15cb7b33`. Six merged capabilities materially
+`7fa6d1d6dcda161d5575a588bb723271ac58467c`. Seven merged capabilities materially
 change the original archive review:
 
 - PR #12 already provides environment-backed skeleton extraction, and PR #53
@@ -82,6 +82,10 @@ change the original archive review:
   may use justified `proof-integrity: not-applicable` until its proof is
   completed. Later specialists reuse `autoform work impact` rather than
   inventing a second revision graph.
+- PR #158 makes formalized statement/proof states require a nonempty parseable
+  `lean:` declaration name and rejects a formalized proof without its statement.
+  Quality fixtures must enter through that graph contract rather than duplicate
+  or bypass it.
 - PR #96 makes catalog-backed `autoform project new` the primary atomic project
   creation path, with release/toolchain selection and cache setup. P05 may merge
   only demonstrably missing build-evidence or server-smoke rules into Setup; it
@@ -402,6 +406,8 @@ Required tests:
 - compiled declaration kinds, not authored labels, govern Mathlib proof
   applicability; mixed theorem/definition roots, spoofed intent, and unresolved
   kinds fail closed;
+- P02 versions and hashes Lean's compiled `type_is_prop` fact; proof-valued
+  `def`/`opaque` roots fail proof N/A while data and predicate definitions pass;
 - every missing, blocked, malformed, hidden, or internally inconsistent gate
   fails with a stable finding code;
 - source-fidelity pass for cited work requires a current hash-bound read-back

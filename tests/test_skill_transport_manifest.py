@@ -394,6 +394,9 @@ def test_delivery_plan_and_manifest_have_identical_machine_fields(
 def test_manifest_records_the_reviewed_repository_baseline(repo_root: Path) -> None:
     manifest = _manifest(repo_root)
     baseline = manifest["baseline"]
+    plan = (repo_root / "ARCHIVE_SKILL_TRANSPORT_PLAN.md").read_text(
+        encoding="utf-8"
+    )
 
     assert set(baseline) == {
         "canonical_repository",
@@ -412,6 +415,13 @@ def test_manifest_records_the_reviewed_repository_baseline(repo_root: Path) -> N
         "project_creation": "#96",
         "formalized_work_load_invariants": "#158",
     }
+    baseline_section = plan.split("## Repository baseline and prior work", 1)[1].split(
+        "## Admission tests", 1
+    )[0]
+    assert baseline["main_commit"] in baseline_section
+    assert "Seven merged capabilities" in baseline_section
+    for pull_request in baseline["landed_capabilities"].values():
+        assert pull_request in baseline_section
 
     source_names = {skill["name"] for skill in manifest["skills"]}
     for skill in manifest["repository_skills"]:
@@ -490,12 +500,42 @@ def test_quality_goal_documents_evidence_selection_and_default_deny(
     assert "Any case not explicitly allowed" in applicability
     assert "Every quality subject must declare `origin` explicitly" in normalized
     assert "`missing-quality-origin`" in normalized
+    assert "`invalid-source-fidelity-origin`" in normalized
+    assert "`origin: bridged` and `origin: background` require justified" in normalized
+    assert "Emit exactly one source-fidelity status code, in this order" in normalized
     assert "`DeclarationSkeleton.kind` values" in normalized
     assert "never the authored `declaration` label" in normalized
-    assert "any theorem or axiom makes the subject proof-bearing" in normalized
-    assert "only an all-definition-like set" in normalized
+    assert "`DeclarationSkeleton.type_is_prop`" in normalized
+    assert "Lean's `Meta.isProof`" in normalized
+    assert "included in the verified artifact hash" in normalized
+    assert "A root is proof-bearing when its kind is `theorem` or `axiom`" in normalized
+    assert "data-valued axioms and proof-valued `def`/`opaque` roots" in normalized
+    assert "Supported compiled kinds are" in normalized
+    for definition_kind in (
+        "`def`",
+        "`instance`",
+        "`opaque`",
+        "`inductive`",
+        "`class`",
+        "`structure`",
+        "`constructor`",
+        "`recursor`",
+        "`quot`",
+    ):
+        assert definition_kind in normalized
+    assert "Definition-like means exactly that set minus `theorem` and `axiom`" in normalized
+    assert "Only roots with `type_is_prop: false`" in normalized
     assert "A mixed set is proof-bearing" in normalized
     assert "quality-target-kind-mismatch" in normalized
+    assert "unsupported-quality-declaration-kind" in normalized
+    assert "inconsistent-quality-declaration-kind" in normalized
+    assert "`def`, `definition`, `abbrev`, and `irreducible_def` to compiled `def`" in normalized
+    assert "missing authored intent skips only this compatibility comparison" in normalized
+    assert "Any present unknown intent" in normalized
+    assert "worst decision implied by every `discrepancies[].category`" in normalized
+    assert "Require a nonempty discrepancies array" in normalized
+    assert "require it to equal `decision`" in normalized
+    assert "never infer status by scanning their prose" in normalized
 
 
 def test_quality_goal_documents_current_compiled_and_review_evidence(
@@ -514,7 +554,14 @@ def test_quality_goal_documents_current_compiled_and_review_evidence(
         "unverified-lean-validity",
         "unresolved-quality-declaration",
         "missing-quality-origin",
+        "invalid-source-fidelity-origin",
+        "missing-quality-article-id",
+        "missing-quality-readback",
+        "quality-verdict-item-mismatch",
+        "inconsistent-quality-verdict",
         "quality-target-kind-mismatch",
+        "unsupported-quality-declaration-kind",
+        "inconsistent-quality-declaration-kind",
         "missing-quality-passage",
         "definitely_not_a_tactic",
         "stale `.olean`",
@@ -530,6 +577,92 @@ def test_quality_goal_documents_current_compiled_and_review_evidence(
     assert p03_contract.index("`lake build`") < p03_contract.index(
         "`autoform quality`"
     ) < p03_contract.index("integrity audit")
+
+
+def test_quality_policy_matrix_pins_origin_and_kind_failure_codes(
+    repo_root: Path,
+) -> None:
+    quality = (repo_root / "FORMALIZATION_QUALITY_GOAL.md").read_text(
+        encoding="utf-8"
+    )
+    section = quality.split("### Policy tests", 1)[1].split(
+        "### CLI integration tests", 1
+    )[0]
+    cases: dict[str, str] = {}
+    for line in section.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) == 2 and cells[0] not in {"Case", "---"}:
+            cases[cells[0]] = cells[1]
+
+    assert cases["Omitted origin, source fidelity passed with otherwise current evidence"] == (
+        "fail (`missing-quality-origin`)"
+    )
+    assert cases["Omitted origin, source fidelity N/A"] == (
+        "fail (`missing-quality-origin`)"
+    )
+    assert cases["Cited statement, source fidelity N/A"] == (
+        "fail (`invalid-not-applicable`)"
+    )
+    assert cases["Bridged statement, source fidelity N/A without rationale"] == (
+        "fail (`invalid-not-applicable`)"
+    )
+    assert cases["Background lemma, source fidelity N/A without rationale"] == (
+        "fail (`invalid-not-applicable`)"
+    )
+    assert cases["Bridged statement, source fidelity passed"] == (
+        "fail (`invalid-source-fidelity-origin`)"
+    )
+    assert cases["Background lemma, source fidelity passed"] == (
+        "fail (`invalid-source-fidelity-origin`)"
+    )
+    assert cases["Any explicit origin, source fidelity blocked"] == (
+        "fail (`blocked-quality-gate`)"
+    )
+    assert cases["Cited verdict `item` differs from the subject `article_id`"] == (
+        "fail (`quality-verdict-item-mismatch`)"
+    )
+    assert cases["Cited verdict links an empty raw read-back"] == (
+        "fail (`missing-quality-readback`)"
+    )
+    assert cases["Cited subject has no durable `article_id`"] == (
+        "fail (`missing-quality-article-id`)"
+    )
+    assert cases["Overall `agrees` contradicts discrepancy-category decision ordering"] == (
+        "fail (`inconsistent-quality-verdict`)"
+    )
+    assert cases[
+        "`equivalence_to_settle` is inconsistent with the recomputed decision"
+    ] == "fail (`inconsistent-quality-verdict`)"
+    assert cases[
+        "`passage_card`, `read_back_card`, or human-readable verdict is missing or malformed"
+    ] == "fail (`inconsistent-quality-verdict`)"
+    for case in (
+        "Mathlib definition then theorem roots, no authored intent, proof integrity N/A",
+        "Mathlib theorem then definition roots, no authored intent, proof integrity N/A",
+        "Mathlib axiom plus definition roots, no authored intent, proof integrity N/A",
+    ):
+        assert cases[case] == "fail (`invalid-not-applicable`)"
+    assert cases[
+        "Valid Mathlib definition plus unresolved root, proof integrity N/A"
+    ] == "fail (`unresolved-quality-declaration`)"
+    assert cases[
+        "Valid Mathlib definition plus unsupported root kind, proof integrity N/A"
+    ] == "fail (`unsupported-quality-declaration-kind`)"
+    assert cases[
+        "Proof-valued Mathlib `def`, `type_is_prop: true`, proof integrity N/A"
+    ] == "fail (`invalid-not-applicable`)"
+    assert cases[
+        "Proof-valued Mathlib `opaque`, `type_is_prop: true`, proof integrity N/A"
+    ] == "fail (`invalid-not-applicable`)"
+    assert cases[
+        "Data-valued Mathlib axiom, `type_is_prop: false`, proof integrity N/A"
+    ] == "fail (`invalid-not-applicable`)"
+    assert cases["Mathlib theorem kind with `type_is_prop: false`"] == (
+        "fail (`inconsistent-quality-declaration-kind`)"
+    )
+    assert cases["Unknown authored declaration intent"] == (
+        "fail (`quality-target-kind-mismatch`)"
+    )
 
 
 def test_quality_goal_documents_all_hosts_and_merged_owners(
@@ -553,11 +686,27 @@ def test_quality_goal_documents_all_hosts_and_merged_owners(
 
     for policy_case in (
         "Omitted origin, source fidelity passed with otherwise current evidence",
+        "Bridged statement, source fidelity passed",
+        "Background lemma, source fidelity passed",
+        "Cited verdict `item` differs from the subject `article_id`",
+        "Cited subject has no durable `article_id`",
+        "Cited verdict links an empty raw read-back",
+        "Overall `agrees` contradicts discrepancy-category decision ordering",
+        "`equivalence_to_settle` is inconsistent with the recomputed decision",
+        "`passage_card`, `read_back_card`, or human-readable verdict is missing or malformed",
         "Mathlib theorem mislabeled as a definition",
         "Mathlib definition mislabeled as a theorem",
-        "Mixed Mathlib definition and theorem roots, proof integrity N/A",
-        "All-definition Mathlib roots, proof integrity N/A",
-        "Unresolved or unsupported compiled declaration kind",
+        "Mathlib definition then theorem roots, no authored intent, proof integrity N/A",
+        "Mathlib theorem then definition roots, no authored intent, proof integrity N/A",
+        "Mathlib axiom plus definition roots, no authored intent, proof integrity N/A",
+        "Proof-valued Mathlib `def`, `type_is_prop: true`, proof integrity N/A",
+        "Proof-valued Mathlib `opaque`, `type_is_prop: true`, proof integrity N/A",
+        "All-definition Mathlib roots with `type_is_prop: false`, proof integrity N/A",
+        "Valid Mathlib definition plus unresolved root, proof integrity N/A",
+        "Valid Mathlib definition plus unsupported root kind, proof integrity N/A",
+        "Data-valued Mathlib axiom, `type_is_prop: false`, proof integrity N/A",
+        "Mathlib theorem kind with `type_is_prop: false`",
+        "Unknown authored declaration intent",
     ):
         assert policy_case in quality
 
