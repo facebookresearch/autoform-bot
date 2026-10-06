@@ -98,6 +98,8 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     assert "repeated pathname reads are not a generation boundary" in normalized
     assert "marker schema in its owning feature" in normalized
     assert "match the blob at the stable detected commit" in normalized
+    assert "toolchain-matched Lean parse names and decide semantic facts" in normalized
+    assert "Python handles bounded transport and presentation" in normalized
 
 
 def test_development_guidance_uses_progressive_command_reference(repo_root: Path) -> None:
@@ -468,7 +470,9 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "https://github.com/facebookresearch/autoform-bot" in theme
     assert '<a href="{{ config.repo_url }}">Formalization source</a>.' in theme
     workflow = (example / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8")
-    assert "autoform check blueprint --lean-root ." in workflow
+    assert "workflow_call:" in workflow
+    assert "uses: ./.github/workflows/autoform-verify.yml" not in workflow
+    assert "autoform check blueprint" not in workflow
     assert "autoform render blueprint" in workflow
     assert "--require-declarations" in workflow
     assert "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128" in workflow
@@ -476,23 +480,30 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
 
     verify = (example / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
     assert "autoform check blueprint" in verify
-    assert 'lake clean "$root_package"' in verify
-    assert "lake build" in verify
     assert "Reject kernel-check bypass options" in verify
-    assert "Audit every root-package declaration" in verify
-    assert "python3 .github/autoform_audit.py" in verify
-    assert "lake pack" in verify
+    assert "Preflight artifact claims" in verify
+    assert "python -I .github/autoform_audit.py preflight blueprint" in verify
+    assert "Verify roadmap claims and build artifacts" in verify
+    assert "python -I .github/autoform_audit.py verify" in verify
+    assert "lake build" not in verify
+    assert "lake pack" not in verify
     assert "lake-modules" not in verify
-    assert "contains no ILean artifacts" in (
-        example / ".github/autoform_audit.py"
-    ).read_text(encoding="utf-8")
+    assert verify.index("Preflight artifact claims") < verify.index("Validate the theorem DAG")
+    assert verify.index("Preflight artifact claims") < verify.index("Install elan")
+    assert verify.index("Preflight artifact claims") < verify.index("Fetch the Mathlib build cache")
+    helper = (example / ".github/autoform_audit.py").read_text(encoding="utf-8")
+    assert "from autoform_cli.artifact_audit import main" in helper
+    assert len(helper.splitlines()) < 12
     assert 'forbidden="skip""KernelTC"' in verify
     assert 'git grep -n -I "$forbidden" -- .' in verify
     assert 'version: "0.12.1"' in verify
     assert "elan/releases/download/v4.2.3" in verify
     assert "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2" in verify
     assert "github.ref == 'refs/heads/main'" in workflow
-    assert workflow.count('- "theme/**"') == 2
+    assert "paths:" not in workflow
+    assert "paths:" not in verify
+    assert "uses: ./.github/workflows/blueprint-pages.yml" in verify
+    assert "needs: build" in verify
     assert 'version: "0.12.1"' in workflow
     assert "@main" not in verify
 
@@ -833,7 +844,7 @@ def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None
 
     substitutions = {
         "{{AUTOFORM_SOURCE_YAML}}": '"https://github.com/facebookresearch/autoform-bot.git"',
-        "{{AUTOFORM_REF_YAML}}": '"c994d83f9fab1f40d69b2f279d4c62ca937a0186"',
+        "{{AUTOFORM_REF_YAML}}": '"e1317a35eee4e737154532d178deff9ece23d050"',
     }
     template_dir = repo_root / "autoform_cli/templates/github/workflows"
     example_dir = repo_root / _EXAMPLE / ".github/workflows"
@@ -847,6 +858,47 @@ def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None
             expected = expected.replace(placeholder, value)
         actual = (example_dir / name).read_text(encoding="utf-8")
         assert actual == expected
+
+
+def test_setup_and_roadmap_explain_the_artifact_gate(repo_root: Path) -> None:
+    setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
+    roadmap = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8")
+
+    assert "reusable gate" in setup
+    assert "before rendering" in setup
+    assert "before installing elan" in setup
+    assert "local artifact gate" in roadmap
+    assert "rejects `mathlib: true`" in roadmap
+
+
+def test_verification_is_the_only_entry_point_and_gates_pages(repo_root: Path) -> None:
+    workflows = repo_root / _EXAMPLE / ".github/workflows"
+    verify = (workflows / "autoform-verify.yml").read_text(encoding="utf-8")
+    pages = (workflows / "blueprint-pages.yml").read_text(encoding="utf-8")
+
+    assert "\n  pull_request:\n" in verify
+    assert "\n  push:\n" in verify
+    assert "\n  workflow_dispatch:\n" in verify
+    assert "workflow_call:" not in verify
+    assert "paths:" not in verify
+    assert "\n  build:\n    name: build" in verify
+    assert "uses: ./.github/workflows/blueprint-pages.yml" in verify
+    assert "needs: build" in verify
+    assert "autoform-verification-" in verify
+
+    assert "\n  workflow_call:\n" in pages
+    assert "\n  pull_request:" not in pages
+    assert "\n  push:" not in pages
+    assert "\n  workflow_dispatch:" not in pages
+    assert "paths:" not in pages
+    assert "autoform check blueprint" not in pages
+    assert "autoform_audit.py" not in pages
+    assert "group: blueprint-pages-" in pages
+    assert "autoform render blueprint" in pages
+    assert "pages: write" in verify
+    assert "id-token: write" in verify
+    assert "pages: write" in pages
+    assert "id-token: write" in pages
 
 
 def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> None:

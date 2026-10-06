@@ -87,7 +87,7 @@ An article asserts only facts a human or agent verified:
 | `proof: formalized` | The Lean proof is complete. |
 | `mathlib: true` | The result is upstreamed into Mathlib. |
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
-| `lean: Ns.decl` | Declaration name(s) that discharge the article. |
+| `lean: Ns.decl` | Primary declaration, followed by any supporting declarations that discharge the article. |
 | `discussion: 42` | Issue number or URL where the article is being discussed. |
 | `article_id: af_...` | Durable identity, `af_` plus 24 lowercase hex digits; `autoform work` requires it on unfinished formalizable leaves. |
 
@@ -280,6 +280,17 @@ nonterminal; the other three explicitly disposition an area. Audit JSON includes
 canonical rows, counts, and the exact coverage source hash, while
 `publication.json` records aggregate counts without duplicating the authored
 rows.
+
+Generated repositories also run a local artifact gate in GitHub Actions. It
+retains bounded project-input snapshots while rebuilding the root package,
+requires complete packed `.ilean`/`.olean`/`.trace` triples, and runs Lean at
+trust level zero. The first `lean:` name must have the article's declared kind;
+every named declaration must exist and belong to a root module. Unfinished,
+unsafe, partial, and unexpected-axiom dependencies fail. The gate rejects
+`declaration: axiom` and `mathlib: true` until separate policy gates are
+installed, and Pages reuses the same gate before publishing. The snapshots
+detect ordinary concurrent changes; they do not sandbox malicious Lake code or
+same-user processes capable of exact ABA restoration.
 
 The contract is read as published Markdown and fails closed. A table inside an
 HTML comment, a fenced block, or a four-space-indented block is documentation

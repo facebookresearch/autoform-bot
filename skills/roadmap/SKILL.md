@@ -68,8 +68,10 @@ under `## Depends on` and proof-only prerequisites under `## Proof depends on`.
 Assign durable `article_id` metadata to new articles; use
 `autoform migrate article-ids blueprint --json` to obtain deterministic IDs
 after creating the pages.
-Assert formalization or `mathlib: true` only after exact verification. Before
-revising a formalizable leaf, acquire the `claim_target` that `autoform work
+Assert formalization or `mathlib: true` only after exact verification. The
+generated local artifact gate rejects `mathlib: true` until a separate Mathlib
+verification gate is installed. Before revising a formalizable leaf, acquire
+the `claim_target` that `autoform work
 context` reports for it, passing your own `--worker-id`; renew it while editing
 and release it once the committed revision is on the branch Formalize works
 from. A refused acquire means another agent owns the article: leave it and

@@ -1,14 +1,12 @@
 ---
 name: develop-plugin
-description: >-
-  Develop AutoformBot CLI, servers, skills, manifests, tests, examples, and
-  installation.
+description: Maintain AutoformBot plugin infrastructure.
 ---
 
-# Develop Autoform from consumer nudges
+# Develop Autoform
 
 Treat Autoform as an example-based plugin for an independent formalization
-repository. Use Cabannes thesis as consumer.
+repository.
 
 Inspect the worktree: state a consumer scenario, behavior, and invariant. Treat
 user nudges as product evidence; preserve insight, not the transcript, in a
@@ -27,6 +25,8 @@ Source indexes, revisions, and links are one evidence boundary: retain
 descriptors because repeated pathname reads are not a generation boundary.
 Read bounded outputs before descendants, with each marker schema in its owning
 feature. Auto-detected links must match the blob at the stable detected commit.
+Let toolchain-matched Lean parse names and decide semantic facts; Python handles
+bounded transport and presentation.
 
 Normally run:
 

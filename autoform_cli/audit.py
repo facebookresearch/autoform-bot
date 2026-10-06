@@ -16,6 +16,7 @@ from pathlib import Path
 
 from . import status
 from .coverage import CoverageSummary, load_coverage
+from .declaration_kinds import declaration_keywords
 from .graph import Graph, GraphValidationError, Node, load_graph
 from .lean import (
     _DECLARATION,
@@ -43,22 +44,6 @@ _MAX_DIRECT_CHILDREN = 24
 #: meaningful median cannot clear the multiple at all.
 _NODE_SIZE_FLOOR = 200
 _NODE_SIZE_MULTIPLE = 4
-
-_DECLARATION_KEYWORDS = {
-    "abbrev": frozenset({"abbrev"}),
-    "axiom": frozenset({"axiom"}),
-    "class": frozenset({"class"}),
-    "corollary": frozenset({"lemma", "theorem"}),
-    "def": frozenset({"def"}),
-    "definition": frozenset({"def"}),
-    "inductive": frozenset({"inductive"}),
-    "instance": frozenset({"instance"}),
-    "lemma": frozenset({"lemma", "theorem"}),
-    "opaque": frozenset({"opaque"}),
-    "proposition": frozenset({"lemma", "theorem"}),
-    "structure": frozenset({"structure"}),
-    "theorem": frozenset({"lemma", "theorem"}),
-}
 
 #: One ``@[...]`` attribute list; a string literal inside it may hold brackets.
 _ATTRIBUTE_LIST = r'@\[(?:[^\]"]|"(?:[^"\\]|\\.)*")*\]'
@@ -439,9 +424,10 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
                     )
                 )
 
-        expected = _DECLARATION_KEYWORDS.get((node.declaration or "").casefold())
-        if expected and resolved and not any(declaration.keyword in expected for declaration in resolved):
-            actual = ", ".join(sorted({declaration.keyword for declaration in resolved}))
+        expected = declaration_keywords(node.declaration)
+        primary = index.find(names[0]) if names else None
+        if primary is not None and expected is not None and primary.keyword not in expected:
+            actual = primary.keyword
             findings.append(
                 AuditFinding(
                     article_path,
