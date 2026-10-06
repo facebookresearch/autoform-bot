@@ -140,15 +140,17 @@ def _blueprint(
     return blueprint
 
 
+def _edit(path: Path, old: str, new: str) -> None:
+    """Replace ``old`` with ``new`` in the file at ``path``, which must contain it."""
+
+    text = path.read_text(encoding="utf-8")
+    assert old in text
+    path.write_text(text.replace(old, new), encoding="utf-8")
+
+
 def _approve(blueprint: Path, value: str) -> None:
     article = blueprint / "roadmap" / "basics" / "result.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace(
-            "statement: formalized\n",
-            f"statement: formalized\nreview_approved: {value}\n",
-        ),
-        encoding="utf-8",
-    )
+    _edit(article, "statement: formalized\n", f"statement: formalized\nreview_approved: {value}\n")
 
 
 def test_bundle_round_trip_binds_the_complete_prepared_evidence(tmp_path: Path) -> None:
@@ -175,13 +177,11 @@ def test_bundle_round_trip_binds_the_complete_prepared_evidence(tmp_path: Path) 
 def test_canonical_statement_keeps_headings_inside_a_fenced_block(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     article = blueprint / "roadmap" / "basics" / "result.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace(
-            "A supremum is **unique**.",
-            "A claim.\n\n```text\n## not a section\n``` trailing text\n"
-            "## still inside the fence\n```\n\nAfter the fence.",
-        ),
-        encoding="utf-8",
+    _edit(
+        article,
+        "A supremum is **unique**.",
+        "A claim.\n\n```text\n## not a section\n``` trailing text\n"
+        "## still inside the fence\n```\n\nAfter the fence.",
     )
 
     graph = load_graph(blueprint)
@@ -193,13 +193,7 @@ def test_canonical_statement_keeps_headings_inside_a_fenced_block(tmp_path: Path
 def test_canonical_statement_preserves_visible_comments_inside_fences(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     article = blueprint / "roadmap" / "basics" / "result.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace(
-            "A supremum is **unique**.",
-            "<!-- hidden note -->\nA claim.\n\n```text\n<!-- visible code -->\n```",
-        ),
-        encoding="utf-8",
-    )
+    _edit(article, "A supremum is **unique**.", "<!-- hidden note -->\nA claim.\n\n```text\n<!-- visible code -->\n```")
 
     graph = load_graph(blueprint)
     statement = canonical_statement(graph, graph.nodes["basics/result"])
@@ -212,13 +206,11 @@ def test_fenced_fake_source_section_cannot_replace_review_evidence(tmp_path: Pat
     article = blueprint / "roadmap" / "basics" / "result.md"
     fake = blueprint / "roadmap" / "basics" / "sources" / "fake.txt"
     fake.write_text("Fake source.\n", encoding="utf-8")
-    article.write_text(
-        article.read_text(encoding="utf-8").replace(
-            "A supremum is **unique**.",
-            "A supremum is **unique**.\n\n```text\n``` trailing text\n"
-            "## Sources\n[Fake](sources/fake.txt#L1-L1)\n```",
-        ),
-        encoding="utf-8",
+    _edit(
+        article,
+        "A supremum is **unique**.",
+        "A supremum is **unique**.\n\n```text\n``` trailing text\n"
+        "## Sources\n[Fake](sources/fake.txt#L1-L1)\n```",
     )
 
     graph = load_graph(blueprint)
@@ -290,10 +282,7 @@ def test_bundle_requires_a_durable_article_id(tmp_path: Path) -> None:
 def test_bundle_requires_a_rendered_declaration_sized_article(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     article = blueprint / "roadmap" / "basics" / "result.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace("declaration: theorem\n", ""),
-        encoding="utf-8",
-    )
+    _edit(article, "declaration: theorem\n", "")
 
     graph = load_graph(blueprint)
     with pytest.raises(ReviewError) as error:
@@ -307,10 +296,7 @@ def test_recording_refuses_an_article_that_is_no_longer_declaration_sized(tmp_pa
     graph = load_graph(blueprint)
     bundle = build_review_bundle(graph, _extracted(graph))
     article = blueprint / "roadmap" / "basics" / "result.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace("declaration: theorem\n", ""),
-        encoding="utf-8",
-    )
+    _edit(article, "declaration: theorem\n", "")
 
     edited = load_graph(blueprint)
     report = _extracted(edited)
@@ -323,10 +309,7 @@ def test_recording_refuses_an_article_that_is_no_longer_declaration_sized(tmp_pa
 def test_bundle_requires_exact_source_passage_for_cited_lean_article(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     article = blueprint / "roadmap" / "basics" / "result.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace("#L2-L2", ""),
-        encoding="utf-8",
-    )
+    _edit(article, "#L2-L2", "")
     report = replace(_report(), nodes=(replace(_report().nodes[0], passage=None, passage_locator=None),))
 
     graph = load_graph(blueprint)
@@ -351,10 +334,7 @@ def test_bundle_resolves_url_encoded_source_paths(tmp_path: Path) -> None:
     encoded_source = source.with_name("book notes.txt")
     source.rename(encoded_source)
     article = blueprint / "roadmap" / "basics" / "result.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace("book.txt", "book%20notes.txt"),
-        encoding="utf-8",
-    )
+    _edit(article, "book.txt", "book%20notes.txt")
     node = replace(
         _report().nodes[0],
         passage_locator="roadmap/basics/sources/book notes.txt#L2-L2",
@@ -372,19 +352,13 @@ def test_validation_detects_article_source_and_lean_packet_drift(tmp_path: Path)
     bundle = build_review_bundle(graph, _extracted(graph, report))
 
     article = blueprint / "roadmap" / "basics" / "result.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace("A supremum is **unique**.", "A different claim."),
-        encoding="utf-8",
-    )
+    _edit(article, "A supremum is **unique**.", "A different claim.")
     graph = load_graph(blueprint)
     assert {item.code for item in validate_review_bundle(graph, bundle, _extracted(graph, report))} == {
         "review-bundle-drift"
     }
 
-    article.write_text(
-        article.read_text(encoding="utf-8").replace("A different claim.", "A supremum is **unique**."),
-        encoding="utf-8",
-    )
+    _edit(article, "A different claim.", "A supremum is **unique**.")
     source = blueprint / "roadmap" / "basics" / "sources" / "book.txt"
     source.write_text("Heading\nChanged source.\n", encoding="utf-8")
     graph = load_graph(blueprint)
@@ -402,10 +376,7 @@ def test_validation_binds_the_visible_article_title(tmp_path: Path) -> None:
     graph = load_graph(blueprint)
     bundle = build_review_bundle(graph, _extracted(graph))
     article = blueprint / "roadmap" / "basics" / "result.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace("# Result", "# Different theorem"),
-        encoding="utf-8",
-    )
+    _edit(article, "# Result", "# Different theorem")
 
     graph = load_graph(blueprint)
     assert [item.code for item in validate_review_bundle(graph, bundle, _extracted(graph))] == [
@@ -437,10 +408,7 @@ def test_approval_hash_binds_ordered_strict_testimony(tmp_path: Path) -> None:
     assert audit_blueprint(blueprint, skeleton=report, review_bundle=bundle).clean
 
     card_path = next(iter(cards.values())).path
-    card_path.write_text(
-        card_path.read_text(encoding="utf-8").replace("Equality is symmetric.", "A changed account."),
-        encoding="utf-8",
-    )
+    _edit(card_path, "Equality is symmetric.", "A changed account.")
     findings = review_findings(graph, bundle, report)
     assert [item.code for item in findings] == ["review-drift"]
 
@@ -464,10 +432,7 @@ def test_approval_is_unavailable_until_every_card_is_strict_and_current(tmp_path
         packet_text=report.nodes[0].declarations[0].blind_text(),
     )
     card = next(iter(load_readbacks(blueprint).values()))
-    card.path.write_text(
-        card.path.read_text(encoding="utf-8").replace("packet: sha256:", "packet: invalid-"),
-        encoding="utf-8",
-    )
+    _edit(card.path, "packet: sha256:", "packet: invalid-")
     assert [item.code for item in review_findings(graph, bundle, report)] == ["readback-invalid"]
 
 
@@ -477,9 +442,7 @@ def test_a_long_named_card_that_is_not_utf8_is_one_invalid_card_not_a_missing_ca
     name = "Skel." + "α" * 40
     blueprint = _blueprint(tmp_path)
     article = blueprint / "roadmap" / "basics" / "result.md"
-    article.write_text(
-        article.read_text(encoding="utf-8").replace("lean: Skel.sup_unique", f"lean: {name}"), encoding="utf-8"
-    )
+    _edit(article, "lean: Skel.sup_unique", f"lean: {name}")
     graph = load_graph(blueprint)
     report = _extracted(graph, _report(_declaration(name)))
     bundle = build_review_bundle(graph, report)
@@ -684,13 +647,7 @@ def test_article_move_preserves_bundle_card_and_approval(tmp_path: Path) -> None
     (moved_dir / "README.md").write_text("# Moved\n", encoding="utf-8")
     moved_path = moved_dir / "result.md"
     old_path.rename(moved_path)
-    moved_path.write_text(
-        moved_path.read_text(encoding="utf-8").replace(
-            "sources/book.txt#L2-L2",
-            "../basics/sources/book.txt#L2-L2",
-        ),
-        encoding="utf-8",
-    )
+    _edit(moved_path, "sources/book.txt#L2-L2", "../basics/sources/book.txt#L2-L2")
     current_graph = load_graph(blueprint)
     current_report = _extracted(
         current_graph,
@@ -749,23 +706,14 @@ def test_scoped_validation_ignores_unrelated_drift_but_rejects_target_drift(
         nodes=(target,),
     )
 
-    other_path.write_text(
-        other_path.read_text(encoding="utf-8").replace("An unrelated claim.", "Changed elsewhere."),
-        encoding="utf-8",
-    )
+    _edit(other_path, "An unrelated claim.", "Changed elsewhere.")
     # A record extracts the article it files, and the report still names the
     # whole blueprint as it is then, other article included.
     graph = load_graph(blueprint)
     assert validate_review_article(graph, bundle, _extracted(graph, scoped), _ARTICLE_ID) == ()
 
     target_path = blueprint / "roadmap" / "basics" / "result.md"
-    target_path.write_text(
-        target_path.read_text(encoding="utf-8").replace(
-            "A supremum is **unique**.",
-            "The selected claim changed.",
-        ),
-        encoding="utf-8",
-    )
+    _edit(target_path, "A supremum is **unique**.", "The selected claim changed.")
     graph = load_graph(blueprint)
     assert [
         finding.code
