@@ -114,9 +114,10 @@ This section is the single source of truth for the command line. Skills
 describe what to achieve and link here; they do not restate flags, so a change
 to the CLI lands in one place.
 
-The commands below are written as they appear on `PATH`. Inside a consumer
-project the plugin is not installed, so resolve `<AUTOFORM_PLUGIN_ROOT>` from
-the loaded plugin and prefix each one, running from the project root:
+The commands below are written as they appear on `PATH` once this Python
+package is installed. Inside a consumer project the package is not installed,
+so resolve `<AUTOFORM_PLUGIN_ROOT>` from the loaded plugin and prefix each one,
+running from the project root:
 
 ```bash
 uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform check blueprint --lean-root .
@@ -680,9 +681,7 @@ worktree each and serialize `lake build` behind a `lake-build` claim, because
 builds share the elan toolchain and the Mathlib cache even when the checkouts
 are separate.
 
-Claims are temporary operational state, never article frontmatter. Future
-Deicyde workers may share this protocol, but their current continue-uncoordinated
-failure behavior must be removed before they use the canonical claim API.
+Claims are temporary operational state, never article frontmatter.
 
 ## Local runtime doctor
 
@@ -706,7 +705,7 @@ This command is strictly read-only and local. It does not invoke Git, GitHub,
 subprocesses, network services, claims, queues, reviews, recovery state,
 providers, workers, renderers, or dashboards, and it creates no cache, scratch
 repository, service, state directory, or `graph.json`. It is a project/runtime
-doctor, separate from any future Deicyde fleet or machine-capability preflight.
+doctor, separate from any future worker fleet or machine-capability preflight.
 
 ## Runtime contract
 
