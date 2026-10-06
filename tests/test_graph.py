@@ -181,6 +181,18 @@ def test_execution_notes_must_follow_the_mathematical_statement(tmp_path: Path) 
         load_graph(blueprint)
 
 
+def test_execution_notes_follow_statement_text_under_a_subheading(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "result.md",
+        "# Result\n\n### Named case\n\nA mathematical statement.\n\n"
+        "## Execution notes\n\nTry induction.\n",
+    )
+
+    assert load_graph(blueprint).nodes["result"].title == "Result"
+
+
 @pytest.mark.parametrize(
     ("section", "statement_dependencies", "proof_dependencies", "sources"),
     [

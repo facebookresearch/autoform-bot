@@ -431,7 +431,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
                 if title is None:
                     title = heading_text
                     statement_open = True
-            elif title is not None:
+            elif title is not None and level <= 2:
                 statement_open = False
             if heading_key == "execution notes":
                 section = None
