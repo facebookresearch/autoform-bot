@@ -148,10 +148,8 @@ def test_close_kills_descendant_after_repl_wrapper_already_exited():
         except psutil.NoSuchProcess:
             pass
     finally:
-        try:
-            os.killpg(wrapper.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        if wrapper.returncode is None:
+            repl.close()
 
 
 def test_close_retains_process_handle_until_cleanup_succeeds(monkeypatch):

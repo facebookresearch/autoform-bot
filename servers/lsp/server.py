@@ -222,12 +222,18 @@ class LeanLspSession:
                 f"timed out after {self.config.timeout:g}s waiting for the Lean LSP session"
             )
         try:
+            if self._retire_pending:
+                raise LspProtocolError("Lean LSP session is retiring after a failed operation")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise LspBusyError(
                     f"timed out after {self.config.timeout:g}s waiting for the Lean LSP session"
                 )
-            return self._get_diagnostics(file_path, timeout=remaining)
+            try:
+                return self._get_diagnostics(file_path, timeout=remaining)
+            except BaseException:
+                self._retire_pending = True
+                raise
         finally:
             self._operation_lock.release()
 
@@ -266,13 +272,15 @@ class LeanLspSession:
         finally:
             try:
                 remaining = deadline - time.monotonic()
-                if remaining > 0:
-                    self._send_notification(
-                        "textDocument/didClose",
-                        {"textDocument": {"uri": uri}},
-                        timeout=remaining,
-                    )
+                if remaining <= 0:
+                    raise TimeoutError("no LSP operation budget remains for didClose")
+                self._send_notification(
+                    "textDocument/didClose",
+                    {"textDocument": {"uri": uri}},
+                    timeout=remaining,
+                )
             except Exception:
+                self._retire_pending = True
                 logger.warning("failed to close LSP document %s", uri, exc_info=True)
 
     def hover(self, file_path: str, line: int, character: int) -> str | None:
@@ -283,12 +291,18 @@ class LeanLspSession:
                 f"timed out after {self.config.timeout:g}s waiting for the Lean LSP session"
             )
         try:
+            if self._retire_pending:
+                raise LspProtocolError("Lean LSP session is retiring after a failed operation")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise LspBusyError(
                     f"timed out after {self.config.timeout:g}s waiting for the Lean LSP session"
                 )
-            return self._hover(file_path, line, character, timeout=remaining)
+            try:
+                return self._hover(file_path, line, character, timeout=remaining)
+            except BaseException:
+                self._retire_pending = True
+                raise
         finally:
             self._operation_lock.release()
 
@@ -328,13 +342,15 @@ class LeanLspSession:
         finally:
             try:
                 remaining = deadline - time.monotonic()
-                if remaining > 0:
-                    self._send_notification(
-                        "textDocument/didClose",
-                        {"textDocument": {"uri": uri}},
-                        timeout=remaining,
-                    )
+                if remaining <= 0:
+                    raise TimeoutError("no LSP operation budget remains for didClose")
+                self._send_notification(
+                    "textDocument/didClose",
+                    {"textDocument": {"uri": uri}},
+                    timeout=remaining,
+                )
             except Exception:
+                self._retire_pending = True
                 logger.warning("failed to close LSP document %s", uri, exc_info=True)
         if result and "contents" in result:
             contents = result["contents"]

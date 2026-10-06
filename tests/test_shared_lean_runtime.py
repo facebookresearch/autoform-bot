@@ -1747,6 +1747,49 @@ def test_failed_lsp_request_returns_while_verified_cleanup_runs(tmp_path):
         services.close()
 
 
+def test_successful_lsp_result_retires_a_session_poisoned_by_did_close(tmp_path):
+    project = make_lake_project(tmp_path, "lsp-successful-retirement")
+    (project / "Main.lean").write_text("#check Nat\n")
+    close_started = threading.Event()
+    release_close = threading.Event()
+
+    class Session(FakeLsp):
+        def __init__(self, root):
+            super().__init__(root)
+            self.retiring = False
+
+        def get_diagnostics(self, file_path):
+            self.retiring = True
+            return []
+
+        def is_alive(self):
+            return not self.retiring and not self.closed
+
+        def close(self):
+            close_started.set()
+            assert release_close.wait(timeout=2)
+            self.closed = True
+
+    services = LeanRuntimeServices(
+        runtime_config(max_projects=1),
+        repl_factory=FakePool,
+        lsp_factory=Session,
+        start_sweepers=False,
+    )
+    try:
+        result = services.dispatch(
+            "lsp.diagnostics",
+            {"project_dir": str(project), "file_path": "Main.lean"},
+        )
+
+        assert result.startswith("No diagnostics")
+        assert close_started.wait(timeout=1)
+        assert services.lsp_projects.stats()["retiring"] == [str(project.resolve())]
+    finally:
+        release_close.set()
+        services.close()
+
+
 @pytest.mark.parametrize("method", ["lsp.diagnostics", "lsp.hover"])
 def test_failed_lsp_invalidation_survives_project_deletion(tmp_path, method):
     from servers.lsp.server import LspProtocolError

@@ -259,6 +259,83 @@ def test_is_alive_does_not_reap_the_group_leader(monkeypatch):
     assert process.returncode is None
 
 
+@pytest.mark.parametrize("operation", ["diagnostics", "hover"])
+def test_retirement_stops_a_queued_operation_before_dispatch(monkeypatch, operation):
+    session = lsp.LeanLspSession(lsp.LspConfig())
+    calls = []
+    errors = []
+    started = threading.Event()
+    session._operation_lock.acquire()
+    monkeypatch.setattr(
+        session,
+        "_get_diagnostics",
+        lambda *args, **kwargs: calls.append("diagnostics") or [],
+    )
+    monkeypatch.setattr(
+        session,
+        "_hover",
+        lambda *args, **kwargs: calls.append("hover") or None,
+    )
+
+    def run():
+        started.set()
+        try:
+            if operation == "diagnostics":
+                session.get_diagnostics("ignored.lean")
+            else:
+                session.hover("ignored.lean", 0, 0)
+        except BaseException as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    assert started.wait(timeout=1)
+    time.sleep(0.05)
+    assert thread.is_alive()
+    session.retire()
+    session._operation_lock.release()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert calls == []
+    assert len(errors) == 1
+    assert isinstance(errors[0], lsp.LspProtocolError)
+    assert "retiring" in str(errors[0])
+
+
+@pytest.mark.parametrize("operation", ["diagnostics", "hover"])
+def test_did_close_failure_keeps_result_but_retires_session(
+    tmp_path, monkeypatch, operation
+):
+    source = tmp_path / "Test.lean"
+    source.write_text("#check Nat\n")
+    session = _owned_session(_FakeProcess())
+
+    def notify(method, params, **kwargs):
+        if method == "textDocument/didClose":
+            raise TimeoutError("didClose write timed out")
+
+    monkeypatch.setattr(session, "_send_notification", notify)
+    monkeypatch.setattr(session, "_collect_diagnostics", lambda uri, timeout: [])
+    monkeypatch.setattr(
+        session,
+        "_send_request",
+        lambda method, params, timeout=30: {"contents": "Nat : Type"},
+    )
+
+    if operation == "diagnostics":
+        assert session.get_diagnostics(str(source)) == []
+    else:
+        assert session.hover(str(source), 0, 0) == "Nat : Type"
+
+    assert session.is_alive() is False
+    with pytest.raises(lsp.LspProtocolError, match="retiring"):
+        if operation == "diagnostics":
+            session.get_diagnostics(str(source))
+        else:
+            session.hover(str(source), 0, 0)
+
+
 def test_abort_refuses_to_signal_a_pre_reaped_leader_with_live_group(monkeypatch):
     process = _FakeProcess()
     process.returncode = 0

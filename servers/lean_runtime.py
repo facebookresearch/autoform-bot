@@ -656,12 +656,14 @@ class ProjectResourceCache(Generic[T]):
 
         not_created = object()
         owned: T | object = not_created
+        retirement_finalized = False
         try:
             result = self._factory(root)
             if isinstance(result, _FailedResourceCreation):
                 owned = result.resource
                 with self._condition:
                     self._ensure_unleased_resource_retiring_locked(root, owned)
+                    retirement_finalized = True
                 raise result.cause.with_traceback(result.cause.__traceback__) from None
 
             created = result
@@ -673,9 +675,11 @@ class ProjectResourceCache(Generic[T]):
                 if self._closed:
                     closed_during_startup = True
                     self._retire_locked(root, created)
+                    retirement_finalized = True
                 elif deadline is not None and self._clock() >= deadline:
                     startup_expired = True
                     self._retire_locked(root, created)
+                    retirement_finalized = True
                 else:
                     self._entries[root] = _CacheEntry(
                         resource=created,
@@ -693,9 +697,10 @@ class ProjectResourceCache(Generic[T]):
             return created
         except BaseException:
             with self._condition:
-                self._creating.discard(root)
-                if owned is not not_created:
-                    self._ensure_unleased_resource_retiring_locked(root, owned)
+                if not retirement_finalized:
+                    self._creating.discard(root)
+                    if owned is not not_created:
+                        self._ensure_unleased_resource_retiring_locked(root, owned)
                 self._condition.notify_all()
             raise
 
@@ -952,6 +957,8 @@ class LeanRuntimeServices:
                     session.retire()
                     self.lsp_projects.invalidate_resolved(root, session)
                     raise
+                if not session.is_alive():
+                    self.lsp_projects.invalidate_resolved(root, session)
             return format_lsp_diagnostics(diagnostics)
         if method == "lsp.hover":
             project_dir = self._string_param(params, "project_dir")
@@ -975,6 +982,8 @@ class LeanRuntimeServices:
                     session.retire()
                     self.lsp_projects.invalidate_resolved(root, session)
                     raise
+                if not session.is_alive():
+                    self.lsp_projects.invalidate_resolved(root, session)
             return result or "No hover information at this position."
         raise ValueError(f"unknown Lean runtime method: {method}")
 
