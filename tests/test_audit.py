@@ -562,6 +562,21 @@ def test_audit_reports_a_chapter_it_can_list_but_not_enter(tmp_path: Path) -> No
     ]
 
 
+def test_audit_points_a_noncanonical_readme_at_the_page_itself(tmp_path: Path) -> None:
+    """Only a key ending in a lowercase .md fell back to the page, so this pointed at README.MD.md."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "chapter/result.md", declaration="theorem")
+    chapter = blueprint / "roadmap" / "chapter"
+    (chapter / "README.md").rename(chapter / "README.MD")
+
+    result = audit_blueprint(blueprint)
+
+    assert [finding.article_path for finding in result.findings if finding.reason.startswith("chapter/README.MD:")] == [
+        "roadmap/chapter/README.MD"
+    ]
+
+
 def test_audit_reports_a_container_holding_too_many_articles(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)

@@ -610,7 +610,7 @@ def _validation_article_path(blueprint: Path, issue: str) -> str:
         readme = roadmap / node_id / "README.md"
         # os.path.exists is False for a path it cannot stat; Path.exists raises before 3.14.
         candidate = readme if os.path.exists(readme) else roadmap / f"{node_id}.md"
-        if node_id.endswith(".md") and not os.path.exists(candidate):
+        if node_id.casefold().endswith(".md") and not os.path.exists(candidate):
             candidate = roadmap / node_id  # discovery names a page it could not load by its file
     if roadmap.exists():
         return _relative_path(candidate, blueprint)
