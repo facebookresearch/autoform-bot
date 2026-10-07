@@ -220,13 +220,19 @@ LOOM_LAKEFILE = 'name = "Example"\n\n[[require]]\nname = "loom"\ngit = "https://
 LOOM = _mathlib(name="loom", url="https://example.com/loom", rev=OTHER_COMMIT, input_rev=None)
 
 
-def test_inherited_mathlib_under_other_requirements_is_not_proof_of_use(tmp_path: Path) -> None:
-    inherited = {**_mathlib(), "inherited": True}
-    result = inspect_project(_project(tmp_path, lakefile=LOOM_LAKEFILE, manifest=(LOOM, inherited)))
+def _assert_mathlib_unused(result) -> None:
+    """A locked Mathlib that no requirement pulls in decides no release pair."""
 
     assert result.mathlib is None
     assert result.compatibility.status == "indeterminate"
     assert "mathlib-manifest-unused" in _codes(result)
+
+
+def test_inherited_mathlib_under_other_requirements_is_not_proof_of_use(tmp_path: Path) -> None:
+    inherited = {**_mathlib(), "inherited": True}
+    result = inspect_project(_project(tmp_path, lakefile=LOOM_LAKEFILE, manifest=(LOOM, inherited)))
+
+    _assert_mathlib_unused(result)
 
 
 @pytest.mark.skipif(shutil.which("lake") is None, reason="needs Lake 4.32.2")
@@ -282,17 +288,13 @@ def test_stale_inherited_mathlib_is_ignored_by_real_lake(tmp_path: Path) -> None
     assert not (tmp_path / "mathlib").exists()
     assert (root / "lake-manifest.json").read_bytes() == manifest_before
     inspection = inspect_project(root)
-    assert inspection.mathlib is None
-    assert inspection.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(inspection)
+    _assert_mathlib_unused(inspection)
 
 
 def test_direct_lock_without_a_requirement_is_unused(tmp_path: Path) -> None:
     result = inspect_project(_project(tmp_path, lakefile=LOOM_LAKEFILE, manifest=(LOOM, _mathlib())))
 
-    assert result.mathlib is None
-    assert result.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(result)
+    _assert_mathlib_unused(result)
     (unused,) = [d for d in result.diagnostics if d.code == "mathlib-manifest-unused"]
     assert "does not build" not in unused.message and "dependency" in unused.message
 
@@ -302,9 +304,7 @@ def test_lock_without_any_requirement_is_unused(tmp_path: Path, inherited: bool)
     manifest = ({**_mathlib(), "inherited": inherited},)
     result = inspect_project(_project(tmp_path, lakefile='name = "Example"\n', manifest=manifest))
 
-    assert result.mathlib is None
-    assert result.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(result)
+    _assert_mathlib_unused(result)
 
 
 def test_root_named_mathlib_also_satisfies_transitive_requirements(tmp_path: Path) -> None:
@@ -312,9 +312,7 @@ def test_root_named_mathlib_also_satisfies_transitive_requirements(tmp_path: Pat
     lakefile = LOOM_LAKEFILE.replace('"Example"', '"mathlib"')
     result = inspect_project(_project(tmp_path, lakefile=lakefile, manifest=(LOOM, inherited)))
 
-    assert result.mathlib is None
-    assert result.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(result)
+    _assert_mathlib_unused(result)
 
 
 def test_self_requirement_alone_pulls_in_no_mathlib(tmp_path: Path) -> None:
@@ -322,9 +320,7 @@ def test_self_requirement_alone_pulls_in_no_mathlib(tmp_path: Path) -> None:
     lakefile = 'name = "selfy"\n\n[[require]]\nname = "selfy"\npath = "."\n'
     result = inspect_project(_project(tmp_path, lakefile=lakefile, manifest=(LOOM, inherited)))
 
-    assert result.mathlib is None
-    assert result.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(result)
+    _assert_mathlib_unused(result)
 
 
 def test_inherited_override_does_not_make_an_unrecorded_mathlib_used(tmp_path: Path) -> None:
@@ -333,9 +329,7 @@ def test_inherited_override_does_not_make_an_unrecorded_mathlib_used(tmp_path: P
 
     result = inspect_project(root)
 
-    assert result.mathlib is None
-    assert result.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(result)
+    _assert_mathlib_unused(result)
 
 
 @pytest.mark.parametrize("override_inherited", [False, True])
@@ -345,9 +339,7 @@ def test_override_of_an_inherited_lock_does_not_prove_use(tmp_path: Path, overri
 
     result = inspect_project(root)
 
-    assert result.mathlib is None
-    assert result.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(result)
+    _assert_mathlib_unused(result)
 
 
 def _write_overrides(root: Path, *packages: dict, schema_version: object = "1.1.0") -> None:
