@@ -23,6 +23,28 @@ from autoform_cli._tree_snapshot import (
 )
 
 
+def _require_descriptor_capture() -> None:
+    if not (
+        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
+        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
+    ):
+        pytest.skip("directory descriptor capture is unavailable")
+
+
+def _use_portable_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(directory_binding_module, "DIRECTORY_BINDING_SUPPORTED", False)
+
+
+def _forbid_unbounded_listdir(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disable streaming enumeration and fail if the capture falls back to `os.listdir`."""
+
+    def unexpected_listdir(*_args, **_kwargs):
+        raise AssertionError("unexpected unbounded os.listdir call")
+
+    monkeypatch.setattr(tree_snapshot_module, "_DESCRIPTOR_SCANDIR_SUPPORTED", False)
+    monkeypatch.setattr(tree_snapshot_module.os, "listdir", unexpected_listdir)
+
+
 def _capture(
     root: Path,
     selection: TreeSelection,
@@ -30,17 +52,10 @@ def _capture(
     portable: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> TreeSnapshot:
-    if not portable and not (
-        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
-        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
-    ):
-        pytest.skip("directory descriptor capture is unavailable")
     if portable:
-        monkeypatch.setattr(
-            directory_binding_module,
-            "DIRECTORY_BINDING_SUPPORTED",
-            False,
-        )
+        _use_portable_capture(monkeypatch)
+    else:
+        _require_descriptor_capture()
     with bind_directory_tree(root, selection=selection) as bound:
         return bound.capture()
 
@@ -139,16 +154,9 @@ def test_capture_and_close_are_serialized(
     portable: bool,
 ) -> None:
     if portable:
-        monkeypatch.setattr(
-            directory_binding_module,
-            "DIRECTORY_BINDING_SUPPORTED",
-            False,
-        )
-    elif not (
-        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
-        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
-    ):
-        pytest.skip("directory descriptor capture is unavailable")
+        _use_portable_capture(monkeypatch)
+    else:
+        _require_descriptor_capture()
     root = tmp_path / "tree"
     root.mkdir()
     (root / "payload").write_bytes(b"payload")
@@ -538,20 +546,11 @@ def test_descriptor_fallback_fails_before_unbounded_listdir(
     monkeypatch: pytest.MonkeyPatch,
     limits: TreeCaptureLimits,
 ) -> None:
-    if not (
-        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
-        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
-    ):
-        pytest.skip("directory descriptor capture is unavailable")
+    _require_descriptor_capture()
     root = tmp_path / "tree"
     root.mkdir()
     (root / "payload").write_bytes(b"payload")
-    monkeypatch.setattr(tree_snapshot_module, "_DESCRIPTOR_SCANDIR_SUPPORTED", False)
-
-    def unexpected_listdir(*_args, **_kwargs):
-        raise AssertionError("finite structural limits must not call os.listdir")
-
-    monkeypatch.setattr(tree_snapshot_module.os, "listdir", unexpected_listdir)
+    _forbid_unbounded_listdir(monkeypatch)
 
     with pytest.raises(TreeSnapshotError, match="bounded directory enumeration"):
         _capture(
@@ -566,21 +565,12 @@ def test_expected_child_precheck_fails_before_unbounded_listdir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not (
-        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
-        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
-    ):
-        pytest.skip("directory descriptor capture is unavailable")
+    _require_descriptor_capture()
     root = tmp_path / "tree"
     child = root / "child"
     child.mkdir(parents=True)
     identity = (child.stat().st_dev, child.stat().st_ino)
-    monkeypatch.setattr(tree_snapshot_module, "_DESCRIPTOR_SCANDIR_SUPPORTED", False)
-
-    def unexpected_listdir(*_args, **_kwargs):
-        raise AssertionError("bounded expected-child checks must not call os.listdir")
-
-    monkeypatch.setattr(tree_snapshot_module.os, "listdir", unexpected_listdir)
+    _forbid_unbounded_listdir(monkeypatch)
 
     with pytest.raises(TreeSnapshotError, match="bounded directory enumeration"):
         BoundDirectoryTree(
@@ -594,22 +584,13 @@ def test_expected_child_postcheck_uses_capture_override_limits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not (
-        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
-        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
-    ):
-        pytest.skip("directory descriptor capture is unavailable")
+    _require_descriptor_capture()
     root = tmp_path / "tree"
     child = root / "child"
     child.mkdir(parents=True)
     identity = (child.stat().st_dev, child.stat().st_ino)
     bound = BoundDirectoryTree(root, expected_children={"child": identity})
-    monkeypatch.setattr(tree_snapshot_module, "_DESCRIPTOR_SCANDIR_SUPPORTED", False)
-
-    def unexpected_listdir(*_args, **_kwargs):
-        raise AssertionError("bounded expected-child checks must not call os.listdir")
-
-    monkeypatch.setattr(tree_snapshot_module.os, "listdir", unexpected_listdir)
+    _forbid_unbounded_listdir(monkeypatch)
     try:
         with pytest.raises(TreeSnapshotError, match="bounded directory enumeration"):
             bound.capture(
@@ -623,11 +604,7 @@ def test_expected_child_postcheck_fails_before_unbounded_listdir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not (
-        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
-        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
-    ):
-        pytest.skip("directory descriptor capture is unavailable")
+    _require_descriptor_capture()
     root = tmp_path / "tree"
     child = root / "child"
     child.mkdir(parents=True)
@@ -640,17 +617,9 @@ def test_expected_child_postcheck_fails_before_unbounded_listdir(
     )
     original_capture = tree_snapshot_module.capture_directory_descriptor
 
-    def unexpected_listdir(*_args, **_kwargs):
-        raise AssertionError("bounded expected-child checks must not call os.listdir")
-
     def capture_then_disable_streaming(*args, **kwargs):
         snapshot = original_capture(*args, **kwargs)
-        monkeypatch.setattr(
-            tree_snapshot_module,
-            "_DESCRIPTOR_SCANDIR_SUPPORTED",
-            False,
-        )
-        monkeypatch.setattr(tree_snapshot_module.os, "listdir", unexpected_listdir)
+        _forbid_unbounded_listdir(monkeypatch)
         return snapshot
 
     monkeypatch.setattr(
@@ -669,11 +638,7 @@ def test_descriptor_and_portable_limits_capture_the_same_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not (
-        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
-        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
-    ):
-        pytest.skip("directory descriptor capture is unavailable")
+    _require_descriptor_capture()
     root = tmp_path / "tree"
     (root / "nested").mkdir(parents=True)
     (root / "nested" / "included").write_bytes(b"data")
@@ -728,11 +693,7 @@ def test_portable_capture_sanitizes_unsupported_reparse_points(
     def unsupported_readlink(_path) -> str:
         raise ValueError("private unsupported reparse tag")
 
-    monkeypatch.setattr(
-        directory_binding_module,
-        "DIRECTORY_BINDING_SUPPORTED",
-        False,
-    )
+    _use_portable_capture(monkeypatch)
     monkeypatch.setattr(tree_snapshot_module, "_is_reparse_point", is_reparse)
     monkeypatch.setattr(tree_snapshot_module.os, "readlink", unsupported_readlink)
 
