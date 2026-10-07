@@ -84,6 +84,11 @@ def test_fixture_exposes_escaped_module_traversal_without_policy_validation():
         ((), "--/ harmless line comment\n#check Nat", None),
         ((), "#check Nat\n/- body --/", None),
         (("Mathlib",), "#check autoformWarmupMarker", None),
+        (
+            ("Mathlib",),
+            "import Mathlib.TraversalAnchor\n#check autoformWarmupMarker",
+            None,
+        ),
         (("Mathlib",), "module\npublic import REPL.Frontend\n", None),
         (("Mathlib",), "prelude\nimport REPL.Frontend\n#check Nat", None),
     ],
@@ -104,6 +109,26 @@ def test_disposable_imports_are_checked_by_lean(warmup, code, expected_error):
         assert not any(message["severity"] == "error" for message in response.get("messages", []))
     else:
         assert expected_error in response["repl_error"]
+    assert repl.is_clean()
+
+
+def test_unvalidated_module_header_is_sent_without_a_warmup_prefix():
+    repl = LeanRepl(
+        LeanReplConfig(
+            cwd=str(REPL_FIXTURE),
+            validate_imports=False,
+        )
+    )
+
+    response = repl.run_disposable(
+        "module\npublic import REPL.Frontend\n",
+        timeout=180,
+    )
+
+    assert "repl_error" not in response
+    assert not any(
+        message["severity"] == "error" for message in response.get("messages", [])
+    )
     assert repl.is_clean()
 
 

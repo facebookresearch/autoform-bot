@@ -1035,7 +1035,7 @@ class LeanRepl:
                 if os.name != "posix":
                     raise RuntimeError("Lean REPL transport requires a POSIX platform")
                 imports, _, _ = _split_imports_and_body(code)
-                accepts_leading_imports = True
+                accepts_leading_imports = False
                 if (
                     self.config.validate_imports
                     and self._allowed_import_roots is not None
@@ -1055,6 +1055,7 @@ class LeanRepl:
                     else:
                         imports = list(header.modules)
                         accepts_leading_imports = header.accepts_leading_imports
+                submitted_modules = set(imports)
                 submitted_roots = {statement.split(".")[0] for statement in imports}
                 if (
                     result is None
@@ -1075,7 +1076,7 @@ class LeanRepl:
                     added_imports = tuple(
                         root
                         for root in sorted(self.config.warmup_imports)
-                        if accepts_leading_imports and root not in submitted_roots
+                        if accepts_leading_imports and root not in submitted_modules
                     )
                     prefix = "\n".join(
                         f"import {root}" for root in added_imports

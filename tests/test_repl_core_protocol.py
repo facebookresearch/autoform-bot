@@ -761,7 +761,7 @@ def _patch_pipe_reads(monkeypatch, process: _PipeProcess):
 def test_disposable_call_uses_one_frame_and_removes_process_handles(monkeypatch):
     repl = repl_core.LeanRepl(
         repl_core.LeanReplConfig(
-            validate_imports=False,
+            validate_imports=True,
             warmup_imports=frozenset({"Mathlib"}),
         )
     )
@@ -781,6 +781,11 @@ def test_disposable_call_uses_one_frame_and_removes_process_handles(monkeypatch)
 
     monkeypatch.setattr(repl, "close", close)
     monkeypatch.setattr(repl, "start", start)
+    monkeypatch.setattr(
+        repl,
+        "_check_header",
+        lambda code, deadline: repl_core._LeanHeaderAnalysis((), True),
+    )
 
     def run(code, env_id, timeout):
         calls.append((code, env_id, timeout))
@@ -909,7 +914,7 @@ def test_disposable_timeout_names_the_expired_phase(monkeypatch, expired_phase):
 def test_disposable_backlog_adjusts_prefixed_positions(monkeypatch):
     repl = repl_core.LeanRepl(
         repl_core.LeanReplConfig(
-            validate_imports=False,
+            validate_imports=True,
             warmup_imports=frozenset({"Mathlib"}),
         )
     )
@@ -920,6 +925,11 @@ def test_disposable_backlog_adjusts_prefixed_positions(monkeypatch):
 
     monkeypatch.setattr(repl, "close", close)
     monkeypatch.setattr(repl, "start", lambda **kwargs: None)
+    monkeypatch.setattr(
+        repl,
+        "_check_header",
+        lambda code, deadline: repl_core._LeanHeaderAnalysis((), True),
+    )
     response = {
         "env": 4,
         "messages": [
@@ -949,7 +959,17 @@ def test_disposable_backlog_adjusts_prefixed_positions(monkeypatch):
     }
 
 
-def test_disposable_call_does_not_shift_positions_without_a_prefix(monkeypatch):
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import Mathlib\n#check Nat",
+        "module\npublic import REPL.Frontend\n",
+        "prelude\nimport REPL.Frontend\n#check Nat",
+    ],
+)
+def test_unvalidated_disposable_call_never_invents_a_warmup_prefix(
+    monkeypatch, code
+):
     repl = repl_core.LeanRepl(
         repl_core.LeanReplConfig(
             validate_imports=False,
@@ -963,10 +983,11 @@ def test_disposable_call_does_not_shift_positions_without_a_prefix(monkeypatch):
 
     monkeypatch.setattr(repl, "close", close)
     monkeypatch.setattr(repl, "start", lambda **kwargs: None)
-    monkeypatch.setattr(
-        repl,
-        "_run",
-        lambda **kwargs: {
+    frames = []
+
+    def run(**kwargs):
+        frames.append(kwargs["code"])
+        return {
             "env": 4,
             "messages": [
                 {
@@ -975,10 +996,11 @@ def test_disposable_call_does_not_shift_positions_without_a_prefix(monkeypatch):
                     "pos": {"line": 1, "column": 1},
                 }
             ],
-        },
-    )
+        }
 
-    assert repl.run_disposable("import Mathlib\n#check Nat", timeout=3) == {
+    monkeypatch.setattr(repl, "_run", run)
+
+    assert repl.run_disposable(code, timeout=3) == {
         "messages": [
             {
                 "severity": "info",
@@ -987,6 +1009,7 @@ def test_disposable_call_does_not_shift_positions_without_a_prefix(monkeypatch):
             }
         ]
     }
+    assert frames == [code]
 
 
 def test_disposable_call_does_not_return_a_result_before_verified_cleanup(monkeypatch):
@@ -1292,6 +1315,11 @@ _LEGACY_INIT_ONLY = json.dumps(
     ("deps_output", "code", "frame"),
     [
         (_deps_json(), "#check Nat", "import Mathlib\n#check Nat"),
+        (
+            _deps_json("Mathlib.TraversalAnchor"),
+            "import Mathlib.TraversalAnchor\n#check autoformWarmupMarker",
+            "import Mathlib\nimport Mathlib.TraversalAnchor\n#check autoformWarmupMarker",
+        ),
         (
             _deps_json("REPL.Frontend", is_module=True),
             "module\npublic import REPL.Frontend\n",

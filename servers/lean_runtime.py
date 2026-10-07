@@ -214,6 +214,11 @@ class LeanRuntimeConfig:
             "AUTOFORM_MAX_REPL_REQUEST_SECONDS",
             DEFAULT_MAX_REPL_REQUEST_SECONDS,
         )
+        if max_repl_request_seconds > DEFAULT_MAX_REPL_REQUEST_SECONDS:
+            raise ValueError(
+                "AUTOFORM_MAX_REPL_REQUEST_SECONDS cannot exceed "
+                f"{DEFAULT_MAX_REPL_REQUEST_SECONDS:g} seconds"
+            )
         if repl_request_timeout > max_repl_request_seconds:
             raise ValueError(
                 "AUTOFORM_REPL_REQUEST_TIMEOUT cannot exceed "

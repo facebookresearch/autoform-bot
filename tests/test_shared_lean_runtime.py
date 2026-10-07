@@ -617,6 +617,9 @@ def test_shared_runtime_disables_ambiguous_repl_retries(tmp_path, monkeypatch):
             {"project_dir": str(project), "code": "#check Nat", "timeout": 1},
         )
         assert configs[0].max_retries == 0
+        assert configs[0].header_deps_command == list(
+            services.config.repl_header_command
+        )
     finally:
         services.close()
 
@@ -1637,6 +1640,7 @@ def test_connected_send_failure_is_never_retried(runtime_dir, monkeypatch):
         ("LEAN_NUM_REPLS", "-1", "nonnegative integer"),
         ("LEAN_REPL_CMD", "   ", "must not be empty"),
         ("AUTOFORM_LEAN_IDLE_SECONDS", "nan", "finite nonnegative"),
+        ("AUTOFORM_MAX_REPL_REQUEST_SECONDS", "241", "cannot exceed 240"),
         ("LEAN_LSP_TIMEOUT", "601", "cannot exceed"),
         ("AUTOFORM_RUNTIME_RESPONSE_TIMEOUT", "100", "too small"),
     ],

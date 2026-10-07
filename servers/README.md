@@ -16,8 +16,9 @@ no process-owned environment or proof-state handle survives the response.
 Before that child starts, the selected Lake toolchain's `lean --deps-json`
 parser validates the submitted header and its complete import set; a rejected
 or unrecognized parser response fails closed. Allowlisted imports require
-plain, nonempty module components; quoted or path-like components are refused
-instead of being reduced to a misleading allowlisted root. Execution names the
+plain, nonempty canonical module components; names that remain quoted or
+path-like after Lean parsing are refused instead of being reduced to a
+misleading allowlisted root. Execution names the
 package-qualified `@repl/repl` target so a project target cannot shadow it.
 Closing the session that started it does not stop it; after a crash, the next
 tool call starts it again. Runtime sockets include a code fingerprint, so an

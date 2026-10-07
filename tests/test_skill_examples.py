@@ -175,7 +175,7 @@ def test_public_repl_calls_are_documented_as_process_disposable(repo_root: Path)
     assert "no process-owned environment or proof-state handle survives" in servers
     assert "toolchain's `lean --deps-json`" in servers
     assert "unrecognized parser response fails closed" in servers
-    assert "quoted or path-like components are refused" in servers
+    assert "names that remain quoted or\npath-like after Lean parsing are refused" in servers
     assert "package-qualified `@repl/repl` target" in servers
     assert "one total post-admission budget" in servers
     assert "default and maximum are 240 seconds" in servers
@@ -320,10 +320,15 @@ def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
     assert (example / "src/CabannesThesis.lean").is_file()
     assert (example / "src/CabannesThesis/Basic.lean").is_file()
     toolchain = (example / "lean-toolchain").read_text(encoding="utf-8").strip()
-    manifest = tomllib.loads((example / "lakefile.toml").read_text(encoding="utf-8"))
+    lakefile = tomllib.loads((example / "lakefile.toml").read_text(encoding="utf-8"))
+    manifest = json.loads((example / "lake-manifest.json").read_text(encoding="utf-8"))
     assert toolchain == "leanprover/lean4:v4.32.2"
-    assert manifest["require"][0]["rev"] == "v4.32.2"
-    assert manifest["lean_lib"][0]["srcDir"] == "src"
+    requirements = {entry["name"]: entry for entry in lakefile["require"]}
+    packages = {entry["name"]: entry for entry in manifest["packages"]}
+    assert requirements["mathlib"]["rev"] == "v4.32.2"
+    assert requirements["repl"]["rev"] == packages["repl"]["inputRev"]
+    assert packages["repl"]["rev"] == requirements["repl"]["rev"]
+    assert lakefile["lean_lib"][0]["srcDir"] == "src"
 
 
 def test_roadmap_example_is_structural_not_a_completion_fixture(
