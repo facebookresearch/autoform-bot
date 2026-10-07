@@ -274,7 +274,6 @@ def render_probe(
 
     if not modules:
         raise AuditInputError("refusing to render an empty kernel-trust audit")
-    imports = "\n".join(f"import {module}" for module in modules)
     target_modules = ", ".join(_lean_name(module) for module in modules)
     # The open probe's technique: one string literal, not a Lean term.
     table = json.dumps(
@@ -283,18 +282,15 @@ def render_probe(
         separators=(",", ":"),
     )
     target_table = json.dumps(table, ensure_ascii=False)
-    return f"""{imports}
-import Lean.Util.CollectAxioms
-import Lean.Elab.Command
+    return f"""import Lean.Elab.Command
 import Lean.Data.Json
 import Lean.Replay
 
 open Lean Elab Command
 
--- No namespace: inside one, a root constant under that namespace would take
--- precedence over a helper or the parser. At the top level a root constant with a
--- helper's name makes the helper's definition fail as already declared, and the
--- audit below then refuses to run. The parser is fully qualified.
+-- The header is the toolchain's Lean alone. The build is imported at run time,
+-- into an environment of its own, so none of its declarations, instances,
+-- macros, elaborators or initializers apply to this file.
 
 /-- A name spelled as its components: strings, and numbers for numeric ones. -/
 def autoformAuditNameOf (json : Json) : Except String Name := do
@@ -311,28 +307,22 @@ def autoformAuditReadTargets (text : String) : Except String (Array (Name × Str
     let declName ← autoformAuditNameOf (← entry.getArrVal? 0)
     let article ← (← entry.getArrVal? 1).getStr?
     return (declName, article)
-
+{_AXIOM_WALK}
 -- `Lean.Environment.replay` is deprecated from v4.34 in favor of the kernel
 -- environment's; it keeps one spelling for every supported toolchain.
 set_option linter.deprecated false in
 run_cmd do
-  -- A helper whose definition failed as already declared would resolve to the
-  -- imported constant of that name instead.
-  for helper in [``autoformAuditNameOf, ``autoformAuditReadTargets] do
-    if ((← getEnv).getModuleIdxFor? helper).isSome then
-      throwError "{{helper}} is declared by an imported module instead of this probe; rename that declaration so the audit can run"
   let targetModules : List Name := [{target_modules}]
   let allowed : List Name := [``propext, ``Classical.choice, ``Quot.sound]
   let targets ← match autoformAuditReadTargets {target_table} with
     | .ok targets => pure targets
     | .error message => throwError "cannot read the target table: {{message}}"
-  let env ← getEnv
-  let isRoot (declName : Name) : Bool :=
+{_IMPORT_BUILD}  let isRoot (declName : Name) : Bool :=
     match env.getModuleIdxFor? declName with
     | some moduleIdx => targetModules.contains env.header.moduleNames[moduleIdx.toNat]!
     | none => false
   let mut errors : Array MessageData := #[]
-{_KERNEL_REPLAY}  let mut checked : Nat := 0
+  let mut checked : Nat := 0
   let mut badSafety : Array Name := #[]
   let mut badAxioms : Array (Name × Name) := #[]
   for (declName, info) in env.constants do
@@ -340,42 +330,143 @@ run_cmd do
       checked := checked + 1
       if info.isUnsafe || info.isPartial then
         badSafety := badSafety.push declName
-      for usedAxiom in (← Lean.collectAxioms declName) do
+      for usedAxiom in (← axiomsOf declName) do
         unless allowed.contains usedAxiom do
           badAxioms := badAxioms.push (declName, usedAxiom)
   for (declName, article) in targets do
-    -- Every imported constant has a module index. One without was declared by
-    -- this probe, as its helpers and their auxiliaries are, not by the build.
-    let declared := if (env.getModuleIdxFor? declName).isSome then env.find? declName else none
-    match declared with
+    match env.find? declName with
     | none =>
       errors := errors.push m!"{{declName}} [{{article}}] is not a declaration of the Lean build; fix the article's lean: name or build the module that declares it"
     | some info =>
       unless isRoot declName do
         if info.isUnsafe || info.isPartial then
           errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and is unsafe or partial"
-        for usedAxiom in (← Lean.collectAxioms declName) do
-          unless allowed.contains usedAxiom do
+        for usedAxiom in (← axiomsOf declName) do
+          if (env.find? usedAxiom).isNone then
+            errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and depends on {{usedAxiom}}, which no module of the build declares"
+          else unless allowed.contains usedAxiom do
             errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and depends on unexpected axiom {{usedAxiom}}"
   for declName in badSafety do
     logError m!"unsafe or partial declaration: {{declName}}"
   for (declName, usedAxiom) in badAxioms do
-    logError m!"{{declName}} depends on unexpected axiom {{usedAxiom}}"
+    if (env.find? usedAxiom).isNone then
+      logError m!"{{declName}} depends on {{usedAxiom}}, which no module of the build declares"
+    else
+      logError m!"{{declName}} depends on unexpected axiom {{usedAxiom}}"
   for error in errors do
     logError error
   if checked == 0 then
     throwError "kernel-trust audit found no root-package declarations"
   unless badSafety.isEmpty && badAxioms.isEmpty && errors.isEmpty do
+    logInfo m!"kernel replay of the root package skipped: it runs once every other check passes"
+    throwError "root-package declarations failed the kernel-trust audit"
+{_KERNEL_REPLAY}  if replayed matches .error _ then
     throwError "root-package declarations failed the kernel-trust audit"
   logInfo m!"kernel trust clean ({{checked}} root-package declaration(s) audited)"
 """
 
 
-# Both probes splice this in where `env`, `targetModules`, `isRoot` and a
-# mutable `errors` are in scope.
-_KERNEL_REPLAY = """  -- `collectAxioms` trusts whatever the environment holds, and a root `run_cmd`
-  -- can add a declaration with kernel checking off. Send every root constant
+# Both probes define these helpers after their own.
+_AXIOM_WALK = """
+/-- The types and constructors of one mutual inductive block refer to each
+other. Nothing else in a safe environment does, so the walk treats a block as
+one node and needs no cycle handling. -/
+def autoformAuditBlockOf (env : Environment) (declName : Name) : Name :=
+  let induct := match env.find? declName with
+    | some (.ctorInfo info) => info.induct
+    | _ => declName
+  match env.find? induct with
+  | some (.inductInfo info) => info.all.head?.getD induct
+  | _ => declName
+
+/-- The constants a node refers to, as `collectAxioms` follows them, except that
+an open statement's proof is not entered: a dependent rests on the statement,
+whatever its proof uses. -/
+def autoformAuditEdges (env : Environment) (openSet : Std.HashSet Name) (node : Name) : Array Name :=
+  match env.find? node with
+  | some (.inductInfo info) =>
+    info.all.foldl (init := (#[] : Array Name)) fun used induct =>
+      match env.find? induct with
+      | some (.inductInfo block) =>
+        block.ctors.foldl (init := used ++ block.type.getUsedConstants) fun used ctor =>
+          used ++ ((env.find? ctor).map (·.type.getUsedConstants)).getD #[]
+      | _ => used
+  | some (.thmInfo info) =>
+    if openSet.contains node then info.type.getUsedConstants
+    else info.type.getUsedConstants ++ info.value.getUsedConstants
+  | some (.defnInfo info) => info.type.getUsedConstants ++ info.value.getUsedConstants
+  | some (.opaqueInfo info) => info.type.getUsedConstants ++ info.value.getUsedConstants
+  | some info => info.type.getUsedConstants
+  | none => #[]
+
+/-- The axioms a node depends on, sorted as `collectAxioms` sorts them. The
+walk reads types and values itself instead of the axiom tables the oleans
+store, keeps an explicit stack because dependency chains are deep and this
+runs in the interpreter, and shares its cache across calls. A name that no
+module declares counts as an axiom, so every check fails closed on it. -/
+def autoformAuditAxioms (env : Environment) (declName : Name) :
+    StateM (Std.HashMap Name (Array Name)) (Array Name) := do
+  let start := autoformAuditBlockOf env declName
+  if let some known := (← get).get? start then
+    return known
+  modify (·.insert start #[])
+  let mut stack : Array (Name × Array Name × Nat) := #[(start, autoformAuditEdges env {} start, 0)]
+  while !stack.isEmpty do
+    let (node, edges, next) := stack.back!
+    if h : next < edges.size then
+      stack := stack.set! (stack.size - 1) (node, edges, next + 1)
+      let target := autoformAuditBlockOf env edges[next]
+      unless (← get).contains target do
+        modify (·.insert target #[])
+        stack := stack.push (target, autoformAuditEdges env {} target, 0)
+    else
+      let mut axioms : Array Name := match env.find? node with
+        | some (.axiomInfo _) | none => #[node]
+        | _ => #[]
+      for used in edges do
+        for found in ((← get).get? (autoformAuditBlockOf env used)).getD #[] do
+          unless axioms.contains found do
+            axioms := axioms.push found
+      modify (·.insert node (axioms.qsort Name.lt))
+      stack := stack.pop
+  return ((← get).get? start).getD #[]
+"""
+
+
+# Both probes splice this in where `targetModules` is in scope. It defines
+# `env`, the build, and `axiomsOf`, the walk over it with one cache.
+_IMPORT_BUILD = """  -- `lake env` puts the project's libraries ahead of the toolchain's, so a
+  -- root module under `Lean` or `Init` could have replaced this header.
+  if (← IO.getEnv "LEAN_PATH").isSome then
+    throwError "LEAN_PATH is set, so this probe's imports may come from the project; run it with plain lean, not lake env: AUTOFORM_AUDIT_LEAN_PATH=\\"$(lake env printenv LEAN_PATH)\\" lean PROBE"
+  let some projectPath ← IO.getEnv "AUTOFORM_AUDIT_LEAN_PATH"
+    | throwError "AUTOFORM_AUDIT_LEAN_PATH is not set; run the probe as AUTOFORM_AUDIT_LEAN_PATH=\\"$(lake env printenv LEAN_PATH)\\" lean PROBE"
+  -- The toolchain's library comes first, so `propext` and every other core
+  -- name mean the toolchain's constants. A root module under one of its
+  -- entries would load the toolchain's file instead and go unaudited.
+  let libDir ← getLibDir (← getBuildDir)
+  for moduleName in targetModules do
+    let root := moduleName.getRoot.toString (escape := false)
+    if (← (libDir / root).isDir) || (← (libDir / (root ++ ".olean")).pathExists) then
+      throwError "root module {moduleName} shares its first component {root} with the toolchain's library; rename the module so the audit can run"
+  searchPathRef.set (libDir :: System.SearchPath.parse projectPath)
+  -- Without extensions no `initialize` block of the build runs.
+  let env ← importModules (targetModules.toArray.map ({ module := · })) {} (loadExts := false)
+  let axiomCache ← IO.mkRef ({} : Std.HashMap Name (Array Name))
+  let axiomsOf (declName : Name) : IO (Array Name) := do
+    let (found, cache) := Id.run ((autoformAuditAxioms env declName).run (← axiomCache.get))
+    axiomCache.set cache
+    return found
+"""
+
+
+# Both probes splice this in once every other check has passed, where `env`,
+# `targetModules` and `isRoot` are in scope.
+_KERNEL_REPLAY = """  -- The axiom walk trusts whatever the oleans hold, and a root `run_cmd` can
+  -- add a declaration with kernel checking off. Send every root constant
   -- through the kernel again, on top of a fresh import of the other modules.
+  -- This runs last: replaying a constant that reaches `Lean.reduceBool` runs
+  -- compiled project code, and the axiom check refuses exactly those.
   let baseImports := env.header.moduleNames.filterMap fun moduleName =>
     if targetModules.contains moduleName then none else some ({ module := moduleName } : Import)
   let mut rootConstants : Std.HashMap Name ConstantInfo := {}
@@ -383,10 +474,10 @@ _KERNEL_REPLAY = """  -- `collectAxioms` trusts whatever the environment holds, 
     if isRoot declName then
       rootConstants := rootConstants.insert declName info
   let replayed ← (do
-      let base ← importModules baseImports {}
+      let base ← importModules baseImports {} (loadExts := false)
       discard <| Lean.Environment.replay rootConstants base : IO Unit).toBaseIO
   if let .error error := replayed then
-    errors := errors.push m!"kernel replay of the root package failed: {error}"
+    logError m!"kernel replay of the root package failed: {error}"
 """
 
 
@@ -547,7 +638,6 @@ def render_open_probe(
 
     if not modules:
         raise AuditInputError("refusing to render an empty open-statement audit")
-    imports = "\n".join(f"import {module}" for module in modules)
     target_modules = ", ".join(_lean_name(module) for module in modules)
     # One string literal, not a Lean term: a term with thousands of entries
     # exceeds the elaborator's and code generator's recursion limits.
@@ -565,21 +655,15 @@ def render_open_probe(
         separators=(",", ":"),
     )
     articles = json.dumps(table, ensure_ascii=False)
-    return f"""{imports}
-import Lean.Util.CollectAxioms
-import Lean.Elab.Command
+    return f"""import Lean.Elab.Command
 import Lean.Data.Json
 import Lean.Replay
 
 open Lean Elab Command
 
--- No namespace: inside one, Lean resolves a name to a constant under that
--- namespace before any other, so a root module could define, say,
--- `<namespace>.Json.parse` and silently replace the parser. At the top level a
--- root constant with a helper's name makes the helper's definition fail as
--- already declared, and the audit below then refuses to run; one that matches a
--- library name makes the reference ambiguous. Both fail closed. The parser is
--- fully qualified, so a project's own `Json.parse` does not even do that.
+-- The header is the toolchain's Lean alone. The build is imported at run time,
+-- into an environment of its own, so none of its declarations, instances,
+-- macros, elaborators or initializers apply to this file.
 
 /-- A name spelled as its components: strings, and numbers for numeric ones. -/
 def autoformOpenAuditNameOf (json : Json) : Except String Name := do
@@ -599,38 +683,7 @@ def autoformOpenAuditReadArticles (text : String) : Except String (Array (Name �
     let isOpen ← (← entry.getArrVal? 2).getBool?
     let allowedOpen ← (← (← entry.getArrVal? 3).getArr?).mapM autoformOpenAuditNameOf
     return (declName, article, isOpen, allowedOpen)
-
-/-- The types and constructors of one mutual inductive block refer to each
-other. Nothing else in a safe environment does, so the walk treats a block as
-one node and needs no cycle handling. -/
-def autoformOpenAuditBlockOf (env : Environment) (declName : Name) : Name :=
-  let induct := match env.find? declName with
-    | some (.ctorInfo info) => info.induct
-    | _ => declName
-  match env.find? induct with
-  | some (.inductInfo info) => info.all.head?.getD induct
-  | _ => declName
-
-/-- The constants a node refers to, as `collectAxioms` follows them, except that
-an open statement's proof is not entered: a dependent rests on the statement,
-whatever its proof uses. -/
-def autoformOpenAuditEdges (env : Environment) (openSet : Std.HashSet Name) (node : Name) : Array Name :=
-  match env.find? node with
-  | some (.inductInfo info) =>
-    info.all.foldl (init := (#[] : Array Name)) fun used induct =>
-      match env.find? induct with
-      | some (.inductInfo block) =>
-        block.ctors.foldl (init := used ++ block.type.getUsedConstants) fun used ctor =>
-          used ++ ((env.find? ctor).map (·.type.getUsedConstants)).getD #[]
-      | _ => used
-  | some (.thmInfo info) =>
-    if openSet.contains node then info.type.getUsedConstants
-    else info.type.getUsedConstants ++ info.value.getUsedConstants
-  | some (.defnInfo info) => info.type.getUsedConstants ++ info.value.getUsedConstants
-  | some (.opaqueInfo info) => info.type.getUsedConstants ++ info.value.getUsedConstants
-  | some info => info.type.getUsedConstants
-  | none => #[]
-
+{_AXIOM_WALK}
 /-- The open statements a node rests on. A constant outside the root package
 contributes none: the audit requires those to be free of `sorry`. -/
 partial def autoformOpenAuditOpenHits (env : Environment) (isRoot : Name → Bool) (openSet : Std.HashSet Name)
@@ -640,10 +693,10 @@ partial def autoformOpenAuditOpenHits (env : Environment) (isRoot : Name → Boo
   -- In progress. Only unsafe recursion comes back here, and the audit rejects it.
   modify (·.insert node #[])
   let mut hits : Array Name := if openSet.contains node then #[node] else #[]
-  for used in autoformOpenAuditEdges env openSet node do
+  for used in autoformAuditEdges env openSet node do
     if used == ``sorryAx || !isRoot used then
       continue
-    let target := autoformOpenAuditBlockOf env used
+    let target := autoformAuditBlockOf env used
     if target == node then
       continue
     for hit in (← autoformOpenAuditOpenHits env isRoot openSet target) do
@@ -663,12 +716,12 @@ partial def autoformOpenAuditReachesFailed (env : Environment) (isRoot : Name �
     return known
   modify (·.insert node false)
   let mut broken := failed.contains node
-  for used in autoformOpenAuditEdges env openSet node do
+  for used in autoformAuditEdges env openSet node do
     if broken then
       break
     if used == ``sorryAx || !isRoot used then
       continue
-    let target := autoformOpenAuditBlockOf env used
+    let target := autoformAuditBlockOf env used
     if target == node then
       continue
     broken := failed.contains used || (← autoformOpenAuditReachesFailed env isRoot openSet failed target)
@@ -682,27 +735,16 @@ def autoformOpenAuditNameList (names : Array Name) : MessageData :=
 -- environment's; it keeps one spelling for every supported toolchain.
 set_option linter.deprecated false in
 run_cmd do
-  -- A helper whose definition failed as already declared would resolve to the
-  -- imported constant of that name instead.
-  for helper in [``autoformOpenAuditNameOf, ``autoformOpenAuditReadArticles, ``autoformOpenAuditBlockOf,
-      ``autoformOpenAuditEdges, ``autoformOpenAuditOpenHits, ``autoformOpenAuditReachesFailed,
-      ``autoformOpenAuditNameList] do
-    if ((← getEnv).getModuleIdxFor? helper).isSome then
-      throwError "{{helper}} is declared by an imported module instead of this probe; rename that declaration so the audit can run"
   let targetModules : List Name := [{target_modules}]
   let allowed : List Name := [``propext, ``Classical.choice, ``Quot.sound]
   let articles ← match autoformOpenAuditReadArticles {articles} with
     | .ok articles => pure articles
     | .error message => throwError "cannot read the article table: {{message}}"
-  let env ← getEnv
-  let isRoot (declName : Name) : Bool :=
+{_IMPORT_BUILD}  let isRoot (declName : Name) : Bool :=
     match env.getModuleIdxFor? declName with
     | some moduleIdx => targetModules.contains env.header.moduleNames[moduleIdx.toNat]!
     | none => false
   let mut errors : Array MessageData := #[]
-{_KERNEL_REPLAY}  -- The replay names only the first declaration it rejects, so after a failure
-  -- no article gets a line that reads as a clean result.
-  let replayFailed := replayed matches .error _
   let mut openSet : Std.HashSet Name := {{}}
   for (declName, _, isOpen, _) in articles do
     if isOpen && isRoot declName then
@@ -714,7 +756,6 @@ run_cmd do
       roots := roots.push declName
   roots := roots.qsort Name.lt
   let mut hitCache : Std.HashMap Name (Array Name) := {{}}
-  let mut externalSorry : Std.HashMap Name Bool := {{}}
   -- Declarations with an error, and those resting on one, get no info line that
   -- reads as a clean result.
   let mut failed : Std.HashSet Name := {{}}
@@ -724,9 +765,11 @@ run_cmd do
     let reported := errors.size
     if info.isUnsafe || info.isPartial then
       errors := errors.push m!"unsafe or partial declaration: {{declName}}"
-    let usedAxioms ← Lean.collectAxioms declName
+    let usedAxioms ← axiomsOf declName
     for usedAxiom in usedAxioms do
-      unless usedAxiom == ``sorryAx || allowed.contains usedAxiom do
+      if (env.find? usedAxiom).isNone then
+        errors := errors.push m!"{{declName}} depends on {{usedAxiom}}, which no module of the build declares"
+      else unless usedAxiom == ``sorryAx || allowed.contains usedAxiom do
         errors := errors.push m!"{{declName}} depends on unexpected axiom {{usedAxiom}}"
     let typeConstants := info.type.getUsedConstants
     -- Values are read by kind: `ConstantInfo.value?` hides theorem proofs by
@@ -745,16 +788,10 @@ run_cmd do
       if used == ``sorryAx || isRoot used || external.contains used then
         continue
       external := external.push used
-      let mut tainted := false
-      if let some known := externalSorry.get? used then
-        tainted := known
-      else
-        tainted := (← Lean.collectAxioms used).contains ``sorryAx
-        externalSorry := externalSorry.insert used tainted
-      if tainted then
+      if (← axiomsOf used).contains ``sorryAx then
         errors := errors.push m!"{{declName}} uses {{used}}, which is outside the root package and depends on sorry"
     let (hits, cache) := Id.run ((autoformOpenAuditOpenHits env isRoot openSet
-      (autoformOpenAuditBlockOf env declName)).run hitCache)
+      (autoformAuditBlockOf env declName)).run hitCache)
     hitCache := cache
     if errors.size == reported && usedAxioms.contains ``sorryAx && hits.isEmpty then
       errors := errors.push m!"{{declName}} depends on sorry outside every declared open statement"
@@ -762,33 +799,33 @@ run_cmd do
       failed := failed.insert declName
   let mut openCount : Nat := 0
   let mut conditionalCount : Nat := 0
+  let mut statusLines : Array MessageData := #[]
   for (declName, article, isOpen, allowedOpen) in articles do
     let reported := errors.size
-    -- Every imported constant has a module index. One without was declared by
-    -- this probe, as its helpers and their auxiliaries are, not by the build.
-    let declared := if (env.getModuleIdxFor? declName).isSome then env.find? declName else none
-    match declared with
+    match env.find? declName with
     | none =>
       errors := errors.push m!"{{declName}} [{{article}}] is not a declaration of the Lean build; fix the article's lean: name or build the module that declares it"
     | some info =>
       if !isRoot declName then
         if info.isUnsafe || info.isPartial then
           errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and is unsafe or partial"
-        for usedAxiom in (← Lean.collectAxioms declName) do
-          if usedAxiom == ``sorryAx then
+        for usedAxiom in (← axiomsOf declName) do
+          if (env.find? usedAxiom).isNone then
+            errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and depends on {{usedAxiom}}, which no module of the build declares"
+          else if usedAxiom == ``sorryAx then
             errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and depends on sorry"
           else unless allowed.contains usedAxiom do
             errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and depends on unexpected axiom {{usedAxiom}}"
         if errors.size == reported then
-          logInfo m!"sorry-free: {{declName}} [{{article}}]"
+          statusLines := statusLines.push m!"sorry-free: {{declName}} [{{article}}]"
       else
-        let block := autoformOpenAuditBlockOf env declName
+        let block := autoformAuditBlockOf env declName
         let (hits, cache) := Id.run ((autoformOpenAuditOpenHits env isRoot openSet block).run hitCache)
         hitCache := cache
         let (reachesFailed, cache) := Id.run
           ((autoformOpenAuditReachesFailed env isRoot openSet failed block).run brokenCache)
         brokenCache := cache
-        let broken := replayFailed || failed.contains declName || reachesFailed
+        let broken := failed.contains declName || reachesFailed
         let undeclared := hits.filter (fun hit => !allowedOpen.contains hit)
         unless undeclared.isEmpty do
           errors := errors.push m!"{{declName}} [{{article}}] rests on open statement(s) {{autoformOpenAuditNameList undeclared}}, which its article's Markdown dependencies do not reach; add the dependency to the article or stop using them"
@@ -801,24 +838,33 @@ run_cmd do
             | _ => false
           if errors.size == reported && !broken then
             if ownSorry then
-              logInfo m!"open statement (proof is sorry): {{declName}} [{{article}}]"
-            else if (← Lean.collectAxioms declName).contains ``sorryAx then
-              logInfo m!"open statement (proof depends on sorry elsewhere): {{declName}} [{{article}}]"
+              statusLines := statusLines.push m!"open statement (proof is sorry): {{declName}} [{{article}}]"
+            else if (← axiomsOf declName).contains ``sorryAx then
+              statusLines := statusLines.push m!"open statement (proof depends on sorry elsewhere): {{declName}} [{{article}}]"
             else
-              logInfo m!"open statement (proof is sorry-free; restate it if retracted, then record proof: formalized): {{declName}} [{{article}}]"
+              statusLines := statusLines.push m!"open statement (proof is sorry-free; restate it if retracted, then record proof: formalized): {{declName}} [{{article}}]"
         else if !hits.isEmpty then
           conditionalCount := conditionalCount + 1
           if errors.size == reported && !broken then
-            logInfo m!"conditional: {{declName}} [{{article}}] rests on open statement(s) {{autoformOpenAuditNameList hits}}"
-        else unless (← Lean.collectAxioms declName).contains ``sorryAx do
+            statusLines := statusLines.push m!"conditional: {{declName}} [{{article}}] rests on open statement(s) {{autoformOpenAuditNameList hits}}"
+        else unless (← axiomsOf declName).contains ``sorryAx do
           if errors.size == reported && !broken then
-            logInfo m!"sorry-free: {{declName}} [{{article}}]"
-  for error in errors do
-    logError error
-  if roots.isEmpty then
-    throwError "open-statement audit found no root-package declarations"
-  unless errors.isEmpty do
+            statusLines := statusLines.push m!"sorry-free: {{declName}} [{{article}}]"
+  if roots.isEmpty || !errors.isEmpty then
+    for line in statusLines do
+      logInfo line
+    for error in errors do
+      logError error
+    if roots.isEmpty then
+      throwError "open-statement audit found no root-package declarations"
+    logInfo m!"kernel replay of the root package skipped: it runs once every other check passes"
     throwError "root-package declarations failed the open-statement audit"
+{_KERNEL_REPLAY}  -- The replay names only the first declaration it rejects, so after a failure
+  -- no article gets a line that reads as a clean result.
+  if replayed matches .error _ then
+    throwError "root-package declarations failed the open-statement audit"
+  for line in statusLines do
+    logInfo line
   logInfo m!"kernel trust clean except declared open statements ({{roots.size}} root-package declaration(s) audited; {{openCount}} open statement(s), {{conditionalCount}} conditional declaration(s))"
 """
 

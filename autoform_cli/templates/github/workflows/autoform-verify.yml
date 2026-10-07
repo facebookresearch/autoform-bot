@@ -93,7 +93,8 @@ jobs:
           probe="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-axiom-probe.XXXXXX.lean")"
           contract="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-assumptions.XXXXXX.json")"
           errors="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-assumptions.XXXXXX.err")"
-          trap 'rm -f "$archive" "$probe" "$contract" "$errors"' EXIT
+          output="$(mktemp "${RUNNER_TEMP:-/tmp}/autoform-axiom-probe.XXXXXX.out")"
+          trap 'rm -f "$archive" "$probe" "$contract" "$errors" "$output"' EXIT
           # Lake resolves both manifest languages and package/custom buildDir.
           # `lake pack` archives only the root package's actual build directory,
           # leaving dependency package artifacts outside the audit boundary.
@@ -125,4 +126,12 @@ jobs:
           else
             python3 .github/autoform_audit.py "$AUTOFORM_ROOT_PACKAGE" "$archive" "$probe"
           fi
-          lake env lean "$probe"
+          # Plain lean, so the probe's own imports are the toolchain's. The probe
+          # loads the build itself, from the search path Lake reports.
+          lean_path="$(lake env printenv LEAN_PATH)"
+          AUTOFORM_AUDIT_LEAN_PATH="$lean_path" lean "$probe" | tee "$output"
+          # Exit status 0 alone does not show that every check ran.
+          if ! tail -n 1 "$output" | grep -Eq '^kernel trust clean( except declared open statements)? \('; then
+            echo "the audit probe did not end with its success line" >&2
+            exit 1
+          fi
