@@ -880,7 +880,6 @@ def test_probe_failures_name_the_impact_probe(
 
 
 def test_impact_probe_freshness_messages_never_mention_skeletons(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
     monkeypatch.setattr(
         "autoform_cli.skeleton._run_bounded_command",
         lambda command, **kwargs: subprocess.CompletedProcess(command, 3, stdout="", stderr="Demo is out of date"),
@@ -892,6 +891,11 @@ def test_impact_probe_freshness_messages_never_mention_skeletons(tmp_path: Path,
             skeleton.run_probe(probe, tmp_path, **({} if label is None else {"label": label}))
         return caught.value.issues
 
+    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: None)
+    no_lake = "lake is not on PATH;"
+    assert issues("impact probe") == (f"{no_lake} running the impact probe requires a built Lean project",)
+    assert issues(None) == (f"{no_lake} extracting skeletons requires a built Lean project",)
+    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
     missing = "lake-manifest.json is missing; run `lake build` before"
     assert issues("impact probe") == (f"{missing} running the impact probe",)
     assert issues(None) == (f"{missing} extracting skeletons",)

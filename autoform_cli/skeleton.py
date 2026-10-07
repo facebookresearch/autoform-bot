@@ -1453,7 +1453,7 @@ def run_probe(
 
     lake = shutil.which("lake")
     if lake is None:
-        raise SkeletonError(["lake is not on PATH; a built Lean project is required to extract skeletons"])
+        raise SkeletonError([f"lake is not on PATH; {_probe_purpose(label)} requires a built Lean project"])
     if not (lean_root / "lake-manifest.json").is_file():
         raise SkeletonError(
             [f"lake-manifest.json is missing; run `lake build` before {_probe_purpose(label)}"]
