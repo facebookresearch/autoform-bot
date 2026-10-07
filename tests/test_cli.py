@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from autoform_cli.__main__ import main
 from autoform_cli.runtime import load_runtime_graph
 
@@ -67,6 +69,41 @@ def test_doctor_cli_returns_failure_without_traceback(tmp_path: Path, capsys) ->
         "name": "blueprint",
         "ok": False,
     }
+
+
+def _symlink_loop(tmp_path: Path) -> str:
+    loop = tmp_path / "la"
+    try:
+        loop.symlink_to(tmp_path / "lb")
+        (tmp_path / "lb").symlink_to(loop)
+    except OSError:
+        pytest.skip("symbolic links are unavailable")
+    return str(loop)
+
+
+def _unknown_home(tmp_path: Path) -> str:
+    root = "~autoform-no-such-user/lean"
+    try:
+        Path(root).expanduser()
+    except RuntimeError:
+        return root
+    pytest.skip("this platform expands an unknown ~user")
+
+
+@pytest.mark.parametrize("lean_root", [_symlink_loop, _unknown_home])
+def test_lean_root_commands_report_an_unresolvable_root_without_traceback(tmp_path: Path, capsys, lean_root) -> None:
+    blueprint = str(_clean_blueprint(tmp_path))
+    root = lean_root(tmp_path)
+
+    # expanduser() raises RuntimeError for an unknown ~user, as resolve() does
+    # for a loop before Python 3.13; 3.13 returns the loop path, so check fails
+    # later, when it reads the sources.
+    assert main(["check", blueprint, "--lean-root", root]) == 1
+    assert capsys.readouterr().out.startswith("error: Lean sources could not be indexed")
+    assert main(["audit", blueprint, "--lean-root", root]) == 1
+    assert "error: .: invalid-lean-root: Lean root does not exist or is not a directory\n" in capsys.readouterr().out
+    assert main(["skeleton", blueprint, "--lean-root", root]) == 2
+    assert capsys.readouterr().err.startswith("error: ")
 
 
 def test_audit_cli_reports_clean_human_output(tmp_path: Path, capsys) -> None:

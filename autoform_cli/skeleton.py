@@ -2047,7 +2047,11 @@ def extract_skeletons(
         graph = load_graph(blueprint_dir)
     except GraphValidationError as exc:
         raise SkeletonError(exc.issues) from exc
-    root = Path(lean_root).expanduser().resolve()
+    try:
+        root = Path(lean_root).expanduser().resolve()
+    except RuntimeError as error:
+        # An unknown ~user, or before Python 3.13 a symbolic link loop.
+        raise SkeletonError([f"Lean root {lean_root} cannot be resolved: {error}"]) from error
     graph_snapshot = _graph_snapshot(graph)
     control_snapshot = _project_control_snapshot(root)
     libraries = lean_libraries(root)
