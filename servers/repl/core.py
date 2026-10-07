@@ -1036,10 +1036,11 @@ class LeanRepl:
                     raise RuntimeError("Lean REPL transport requires a POSIX platform")
                 imports, _, _ = _split_imports_and_body(code)
                 accepts_leading_imports = False
-                if (
+                needs_header_analysis = bool(self.config.warmup_imports) or (
                     self.config.validate_imports
                     and self._allowed_import_roots is not None
-                ):
+                )
+                if needs_header_analysis:
                     try:
                         header = self._check_header(code, deadline)
                         normalized = _normalize_legacy_deps_json_comment_closes(code)

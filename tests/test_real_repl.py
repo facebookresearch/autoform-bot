@@ -112,7 +112,15 @@ def test_disposable_imports_are_checked_by_lean(warmup, code, expected_error):
     assert repl.is_clean()
 
 
-def test_unvalidated_module_header_is_sent_without_a_warmup_prefix():
+@pytest.mark.parametrize(
+    "code",
+    [
+        "#check autoformWarmupMarker",
+        "module\npublic import REPL.Frontend\n",
+        "prelude\nimport REPL.Frontend\n#check Nat",
+    ],
+)
+def test_unvalidated_calls_use_warmup_only_when_composition_is_proven(code):
     repl = LeanRepl(
         LeanReplConfig(
             cwd=str(REPL_FIXTURE),
@@ -120,10 +128,7 @@ def test_unvalidated_module_header_is_sent_without_a_warmup_prefix():
         )
     )
 
-    response = repl.run_disposable(
-        "module\npublic import REPL.Frontend\n",
-        timeout=180,
-    )
+    response = repl.run_disposable(code, timeout=180)
 
     assert "repl_error" not in response
     assert not any(

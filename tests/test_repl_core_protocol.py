@@ -960,15 +960,32 @@ def test_disposable_backlog_adjusts_prefixed_positions(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "code",
+    ("code", "analysis", "expected_frame"),
     [
-        "import Mathlib\n#check Nat",
-        "module\npublic import REPL.Frontend\n",
-        "prelude\nimport REPL.Frontend\n#check Nat",
+        (
+            "#check autoformWarmupMarker",
+            repl_core._LeanHeaderAnalysis((), True),
+            "import Mathlib\n#check autoformWarmupMarker",
+        ),
+        (
+            "import Mathlib\n#check Nat",
+            repl_core._LeanHeaderAnalysis(("Mathlib",), True),
+            "import Mathlib\n#check Nat",
+        ),
+        (
+            "module\npublic import REPL.Frontend\n",
+            repl_core._LeanHeaderAnalysis(("REPL.Frontend",), False),
+            "module\npublic import REPL.Frontend\n",
+        ),
+        (
+            "prelude\nimport REPL.Frontend\n#check Nat",
+            repl_core._LeanHeaderAnalysis(("REPL.Frontend",), False),
+            "prelude\nimport REPL.Frontend\n#check Nat",
+        ),
     ],
 )
-def test_unvalidated_disposable_call_never_invents_a_warmup_prefix(
-    monkeypatch, code
+def test_unvalidated_disposable_composes_only_proven_ordinary_headers(
+    monkeypatch, code, analysis, expected_frame
 ):
     repl = repl_core.LeanRepl(
         repl_core.LeanReplConfig(
@@ -983,33 +1000,17 @@ def test_unvalidated_disposable_call_never_invents_a_warmup_prefix(
 
     monkeypatch.setattr(repl, "close", close)
     monkeypatch.setattr(repl, "start", lambda **kwargs: None)
+    monkeypatch.setattr(repl, "_check_header", lambda code, deadline: analysis)
     frames = []
 
     def run(**kwargs):
         frames.append(kwargs["code"])
-        return {
-            "env": 4,
-            "messages": [
-                {
-                    "severity": "info",
-                    "data": "ok",
-                    "pos": {"line": 1, "column": 1},
-                }
-            ],
-        }
+        return {"env": 4, "messages": []}
 
     monkeypatch.setattr(repl, "_run", run)
 
-    assert repl.run_disposable(code, timeout=3) == {
-        "messages": [
-            {
-                "severity": "info",
-                "data": "ok",
-                "pos": {"line": 1, "column": 1},
-            }
-        ]
-    }
-    assert frames == [code]
+    assert repl.run_disposable(code, timeout=3) == {"messages": []}
+    assert frames == [expected_frame]
 
 
 def test_disposable_call_does_not_return_a_result_before_verified_cleanup(monkeypatch):
