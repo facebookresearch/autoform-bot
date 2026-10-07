@@ -467,23 +467,16 @@ def _locked_mathlib(
         layout = _manifest_layout(version)
         if layout is None:
             raise ValueError(relative)
-    except (AttributeError, RecursionError, ValueError):
-        kind = "Lake manifest" if relative == _MANIFEST else "Lake package-overrides file"
-        diagnostics.append(
-            ProjectDiagnostic("error", "invalid-lake-manifest", f"{relative} is not a {kind} Autoform reads.", relative)
-        )
-        return False, None
-    if layout == "legacy":
-        if relative == _MANIFEST:
-            message = (
-                f"Lake still reads the legacy layout of {relative}, but Autoform does not; "
-                "`lake update` rewrites it."
-            )
-        else:
-            message = f"Lake still reads the legacy layout of {relative}, but Autoform does not decode it."
-        diagnostics.append(ProjectDiagnostic("warning", "unsupported-lake-manifest", message, relative))
-        return False, None
-    try:
+        if layout == "legacy":
+            if relative == _MANIFEST:
+                message = (
+                    f"Lake still reads the legacy layout of {relative}, but Autoform does not; "
+                    "`lake update` rewrites it."
+                )
+            else:
+                message = f"Lake still reads the legacy layout of {relative}, but Autoform does not decode it."
+            diagnostics.append(ProjectDiagnostic("warning", "unsupported-lake-manifest", message, relative))
+            return False, None
         if relative == _MANIFEST:
             _validate_manifest_root(payload)
         packages = payload.get("packages")
