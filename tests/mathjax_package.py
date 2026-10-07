@@ -5,7 +5,7 @@ package, the directory holding its ``package.json`` and ``es5/``, named by
 the environment variable ``AUTOFORM_MATHJAX_DIR``. MathJax is not part of
 the repository. To run them::
 
-    AUTOFORM_MATHJAX_DIR=/path/to/MathJax-3.2.2 pytest tests/test_site_math.py tests/test_testimony_mathjax.py
+    AUTOFORM_MATHJAX_DIR=/path/to/MathJax-3.2.2 pytest tests/test_site_math.py
 
 Only the package root is accepted, not its ``es5`` directory: the tests
 check the release against ``package.json``, and one convention leaves no
