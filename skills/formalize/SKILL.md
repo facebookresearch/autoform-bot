@@ -146,14 +146,8 @@ the claim under its own ID and repeats the reload gate before integrating.
 Release the claim once the result is visible that way, or when abandoning the
 leaf without a candidate.
 
-Once an attempt is over and its claim released or handed off, the agent that
-worked it asks `autoform debrief form` for that article and phase (see the [CLI
-reference](../../autoform_cli/README.md#commands)). If debriefs are enabled, it
-answers the form from its own experience of the attempt, stores the answer with
-`autoform debrief record`, and corrects and resubmits an answer the command
-rejects. A subagent does this before reporting, because only it witnessed the
-searches and dead ends. The debrief never edits the project and never changes
-the outcome.
+When `AUTOFORM_DEBRIEF=1`, the agent that worked an attempt then follows the
+[debrief skill](../debrief/SKILL.md) before reporting.
 
 Re-read the work frontier from the updated shared branch and repeat while
 independent ready leaves and authorized capacity remain. Stop when the frontier

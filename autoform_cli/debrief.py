@@ -36,7 +36,6 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -44,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from . import debrief_store as store
+from .lean import _git
 from .runtime import RuntimeNode, load_runtime_graph, resolve_runtime_paths
 
 SCHEMA_VERSION = 1
@@ -63,7 +63,6 @@ MAX_GOAL = 2000
 MAX_NOTE = 2000
 MAX_OTHER_FIELDS = 10
 MAX_KEY = 64
-GIT_TIMEOUT_SECONDS = 10.0
 
 DEFAULT_QUESTION = """This attempt is finished and its outcome is already recorded in the roadmap —
 **nothing you say now changes it**, and there is nothing left to fix. This is a
@@ -158,18 +157,9 @@ def enabled() -> bool:
 
 
 def _git_common_dir(project: Path) -> Path | None:
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(project), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            capture_output=True,
-            text=True,
-            timeout=GIT_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    path = Path(result.stdout.strip())
-    return path.resolve() if result.returncode == 0 and path.is_absolute() and path.is_dir() else None
+    output = _git(project, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    path = Path(output) if output else None
+    return path.resolve() if path is not None and path.is_absolute() and path.is_dir() else None
 
 
 def debrief_root(project_or_blueprint: str | Path) -> Path:
@@ -504,11 +494,13 @@ def record(
     answer_text: str,
     *,
     phase: str,
+    worker_id: str | None,
     note: str = "",
-    worker_id: str = "",
     lean_root: str | Path | None = None,
 ) -> tuple[DebriefRecord, Path]:
     """Validate an answer and store it as a new record; return it and its path."""
+    if not (worker_id or "").strip():
+        raise DebriefError("--worker-id or AUTOFORM_WORKER_ID is required")
     if len(answer_text.encode("utf-8", "surrogatepass")) > MAX_ANSWER_BYTES:
         raise DebriefError(f"the answer exceeds {MAX_ANSWER_BYTES} bytes")
     answer = DebriefAnswer.from_model(parse_answer(answer_text))

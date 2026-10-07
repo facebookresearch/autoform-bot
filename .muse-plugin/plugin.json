@@ -27,6 +27,11 @@
         "enabledDefault": true
       },
       {
+        "id": "debrief",
+        "path": "skills/debrief/SKILL.md",
+        "enabledDefault": true
+      },
+      {
         "id": "human-review",
         "path": "skills/human-review/SKILL.md",
         "enabledDefault": true

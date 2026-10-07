@@ -5,7 +5,8 @@ opened with ``O_NOFOLLOW``, so a symlink planted at any directory or file name
 inside the store is refused instead of followed. Records are published with
 exclusive creation (a hard link from a private temporary, which fails if the
 name exists), so a record is either absent or complete and is never
-overwritten. Only derived views use replace-on-write.
+overwritten. Only derived views use replace-on-write. Platforms that cannot
+retain directory descriptors (Windows) refuse every store operation.
 """
 
 from __future__ import annotations
@@ -18,11 +19,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import _directory_binding as directory_binding
+
 MAX_FILE_BYTES = 512 * 1024
 
 _NAME = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
-_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-_CREATE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _NOFOLLOW
+_CREATE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW
 
 
 class UnsafeStoreError(OSError):
@@ -42,12 +46,14 @@ def open_root(root: Path) -> Iterator[int]:
     ``root`` must already be resolved: its ancestors may legitimately be
     symlinks (``/tmp`` on macOS), but its final component may not.
     """
+    if not directory_binding.DIRECTORY_BINDING_SUPPORTED:
+        raise UnsafeStoreError("debrief records need directory descriptors, which this platform lacks")
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(root, _DIR_FLAGS)
+    binding = directory_binding.open_directory(root)
     try:
-        yield fd
+        yield binding.descriptor
     finally:
-        os.close(fd)
+        binding.close()
 
 
 @contextmanager
@@ -103,14 +109,9 @@ def replace_atomic(dir_fd: int, name: str, data: bytes) -> None:
         raise
 
 
-def open_exclusive(dir_fd: int, name: str) -> int:
-    """Return a write descriptor for a new file ``name`` (for logs)."""
-    return os.open(_check_name(name), _CREATE_FLAGS, 0o600, dir_fd=dir_fd)
-
-
 def read_bounded(dir_fd: int, name: str) -> bytes:
     """Read a regular file without following symlinks, refusing anything over the bound."""
-    fd = os.open(_check_name(name), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+    fd = os.open(_check_name(name), os.O_RDONLY | _NOFOLLOW | getattr(os, "O_NONBLOCK", 0), dir_fd=dir_fd)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise UnsafeStoreError(f"{name} is not a regular file")
@@ -126,29 +127,5 @@ def read_bounded(dir_fd: int, name: str) -> bytes:
         os.close(fd)
 
 
-def exists(dir_fd: int, name: str) -> bool:
-    try:
-        os.stat(_check_name(name), dir_fd=dir_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        return False
-    return True
-
-
 def list_names(dir_fd: int, suffix: str) -> list[str]:
     return sorted(name for name in os.listdir(dir_fd) if name.endswith(suffix) and _NAME.match(name))
-
-
-def move(src_fd: int, name: str, dst_fd: int) -> bool:
-    """Atomically move ``name`` between store directories; ``False`` if another process took it."""
-    try:
-        os.rename(_check_name(name), name, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
-    except FileNotFoundError:
-        return False
-    return True
-
-
-def remove(dir_fd: int, name: str) -> None:
-    try:
-        os.unlink(_check_name(name), dir_fd=dir_fd)
-    except FileNotFoundError:
-        pass

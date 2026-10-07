@@ -237,8 +237,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             command.add_argument("--answer", type=Path, help="answer file (default: standard input)")
             command.add_argument(
                 "--worker-id",
-                default=os.environ.get("AUTOFORM_WORKER_ID") or "",
-                help="this agent's worker ID (or set AUTOFORM_WORKER_ID)",
+                default=os.environ.get("AUTOFORM_WORKER_ID"),
+                help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
             )
             command.add_argument("--json", action="store_true", help="write stable machine-readable output")
     debrief_render = debrief_subparsers.add_parser("render", help="rebuild Markdown views of the records")

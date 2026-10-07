@@ -756,9 +756,11 @@ proof (for `proof`) is now recorded as formalized. Pass `--note` with the reason
 when it did not. `record` reads one JSON object answering the form from
 `--answer` or standard input, refuses anything else, re-reads the outcome from
 the runtime rather than trusting the caller, and stores a new versioned record;
-it never edits the project. Records are bounded, normalised, and created
+it never edits the project. Like the claim commands, it requires `--worker-id`
+or `AUTOFORM_WORKER_ID`. Records are bounded, normalised, and created
 exclusively without following symbolic links, so a record is complete or absent
-and never overwritten. They live under `autoform/debriefs/records/` in the
+and never overwritten; platforms that cannot retain directory descriptors, such
+as Windows, refuse to read or write them. They live under `autoform/debriefs/records/` in the
 repository's Git common directory, which every worktree shares and Git does not
 track; outside Git they fall back to `$XDG_STATE_HOME/autoform/debriefs/`. Set
 `AUTOFORM_DEBRIEF_DIR` to an absolute path outside the working tree to choose

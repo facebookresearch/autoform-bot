@@ -21,7 +21,9 @@ ANSWER = json.dumps({"nothing_to_report": True})
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch, tmp_path: Path):
-    for name in (debrief.DEBRIEF_ENV, debrief.DEBRIEF_DIR_ENV, debrief.DEBRIEF_QUESTION_FILE_ENV):
+    for name in (
+        debrief.DEBRIEF_ENV, debrief.DEBRIEF_DIR_ENV, debrief.DEBRIEF_QUESTION_FILE_ENV, "AUTOFORM_WORKER_ID"
+    ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
 
@@ -62,7 +64,7 @@ def test_worktrees_of_one_repository_share_an_untracked_store(tmp_path: Path) ->
 
     assert root == (project / ".git" / "autoform" / "debriefs").resolve()
     assert debrief.debrief_root(worktree) == root
-    debrief.record(worktree, PROVE, ANSWER, phase="proof")
+    debrief.record(worktree, PROVE, ANSWER, phase="proof", worker_id="w1")
     assert _git(project, "status", "--porcelain") == ""
     assert len(debrief.load_records(root)) == 1
 
@@ -114,10 +116,10 @@ def test_record_reads_the_outcome_from_the_runtime_not_the_caller(tmp_path: Path
     assert len(entry.article_revision) == len(entry.source_revision) == 64
     assert json.loads(path.read_text())["schema_version"] == 1
 
-    succeeded, _ = debrief.record(project, "chapter/state", ANSWER, phase="statement")
+    succeeded, _ = debrief.record(project, "chapter/state", ANSWER, phase="statement", worker_id="w1")
     assert succeeded.outcome == "not-succeeded"
     _edit(project, "state.md", "declaration: theorem", "declaration: theorem\nstatement: formalized\nlean: P.s")
-    succeeded, _ = debrief.record(project, "chapter/state", ANSWER, phase="statement")
+    succeeded, _ = debrief.record(project, "chapter/state", ANSWER, phase="statement", worker_id="w1")
     assert succeeded.outcome == "succeeded"
 
 
@@ -127,8 +129,33 @@ def test_record_reads_the_outcome_from_the_runtime_not_the_caller(tmp_path: Path
 )
 def test_record_rejects_answers_that_are_not_one_bounded_object(monkeypatch, tmp_path, answer, message) -> None:
     project = _project(tmp_path)
-    code, _, err = _cli(["debrief", "record", PROVE, str(project), "--phase", "proof"], monkeypatch, answer)
+    code, _, err = _cli(
+        ["debrief", "record", PROVE, str(project), "--phase", "proof", "--worker-id", "w1"], monkeypatch, answer
+    )
     assert code == 2 and message in err
+    assert not debrief.debrief_root(project).exists()
+
+
+def test_record_requires_a_worker_id(monkeypatch, tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    code, _, err = _cli(["debrief", "record", PROVE, str(project), "--phase", "proof"], monkeypatch, ANSWER)
+    assert code == 2 and "--worker-id or AUTOFORM_WORKER_ID is required" in err
+    assert not debrief.debrief_root(project).exists()
+
+    monkeypatch.setenv("AUTOFORM_WORKER_ID", "from-env")
+    code, out, _ = _cli(["debrief", "record", PROVE, str(project), "--phase", "proof", "--json"], monkeypatch, ANSWER)
+    assert code == 0
+    [entry] = debrief.load_records(debrief.debrief_root(project))
+    assert entry.worker_id == "from-env"
+
+
+def test_record_refuses_cleanly_without_directory_descriptors(monkeypatch, tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    monkeypatch.setattr(store.directory_binding, "DIRECTORY_BINDING_SUPPORTED", False)
+    code, _, err = _cli(
+        ["debrief", "record", PROVE, str(project), "--phase", "proof", "--worker-id", "w1"], monkeypatch, ANSWER
+    )
+    assert code == 2 and "directory descriptors" in err
     assert not debrief.debrief_root(project).exists()
 
 
@@ -144,7 +171,7 @@ def test_answers_are_normalised_bounded_and_encodable(monkeypatch, tmp_path: Pat
         }
     )
     code, out, _ = _cli(
-        ["debrief", "record", PROVE, str(project), "--phase", "proof", "--json"], monkeypatch, answer
+        ["debrief", "record", PROVE, str(project), "--phase", "proof", "--worker-id", "w1", "--json"], monkeypatch, answer
     )
     assert code == 0
     [entry] = debrief.load_records(debrief.debrief_root(project))
@@ -159,7 +186,7 @@ def test_answers_are_normalised_bounded_and_encodable(monkeypatch, tmp_path: Pat
 
 def test_load_records_skips_tampered_and_unversioned_files(tmp_path: Path) -> None:
     project = _project(tmp_path)
-    _, path = debrief.record(project, PROVE, ANSWER, phase="proof")
+    _, path = debrief.record(project, PROVE, ANSWER, phase="proof", worker_id="w1")
     (path.parent / f"{'0' * 32}.json").write_text(path.read_text())
     (path.parent / f"{'1' * 32}.json").write_text(json.dumps({"schema_version": 99}))
     assert len(debrief.load_records(path.parent.parent)) == 1
@@ -196,7 +223,9 @@ def test_a_symlinked_records_directory_is_refused(monkeypatch, tmp_path: Path) -
     root.mkdir()
     os.symlink(elsewhere, root / "records")
     monkeypatch.setenv(debrief.DEBRIEF_DIR_ENV, str(root))
-    code, _, err = _cli(["debrief", "record", PROVE, str(project), "--phase", "proof"], monkeypatch, ANSWER)
+    code, _, err = _cli(
+        ["debrief", "record", PROVE, str(project), "--phase", "proof", "--worker-id", "w1"], monkeypatch, ANSWER
+    )
     assert code == 2 and err.startswith("error:")
     assert list(elsewhere.iterdir()) == []
 
@@ -213,7 +242,7 @@ def test_render_escapes_agent_text_and_derives_the_index(monkeypatch, tmp_path: 
             "infrastructure_proposals": [{"kind": "import-export", "name": hostile, "what": "w"}],
         }
     )
-    debrief.record(project, PROVE, answer, phase="proof", note=hostile)
+    debrief.record(project, PROVE, answer, phase="proof", note=hostile, worker_id="w1")
 
     code, out, _ = _cli(["debrief", "render", str(project), "--out", str(tmp_path / "views")], monkeypatch)
 
