@@ -1261,6 +1261,13 @@ def test_legacy_deps_json_normalizer_does_not_decide_lexical_context(code):
     assert normalized != code
 
 
+def test_legacy_deps_json_normalizer_rewrites_long_runs_linearly():
+    assert repl_core._normalize_legacy_deps_json_comment_closes("--/" * 10_000) == (
+        "-/" * 10_000
+    )
+    assert repl_core._normalize_legacy_deps_json_comment_closes("---/") == "---/"
+
+
 def test_disposable_call_refuses_non_posix_before_spawning_header_parser(monkeypatch):
     repl = repl_core.LeanRepl(repl_core.LeanReplConfig())
     monkeypatch.setattr(repl_core.os, "name", "nt")
@@ -1347,6 +1354,19 @@ def test_header_check_kills_a_command_that_outlives_the_deadline():
         _header_modules([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.2)
 
     assert time.monotonic() - started < 5
+
+
+def test_header_check_never_spawns_after_its_shared_deadline(monkeypatch):
+    repl = repl_core.LeanRepl(repl_core.LeanReplConfig())
+    monkeypatch.setattr(repl_core.time, "monotonic", lambda: 2.0)
+    monkeypatch.setattr(
+        repl_core.subprocess,
+        "Popen",
+        lambda *args, **kwargs: pytest.fail("expired header check spawned Lean"),
+    )
+
+    with pytest.raises(TimeoutError, match="timed out checking the Lean header"):
+        repl._check_header("#check Nat", deadline=1.0)
 
 
 def test_header_check_rejects_output_over_the_combined_limit():

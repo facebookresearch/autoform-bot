@@ -10,6 +10,7 @@ import errno
 import json
 import os
 import random
+import re
 import select
 import signal
 import subprocess
@@ -35,6 +36,7 @@ _VALID_DIAGNOSTIC_SEVERITIES = frozenset({"trace", "info", "warning", "error"})
 _STDERR_TAIL_BYTES = 200
 _PUBLIC_DIAGNOSTIC_FIELDS = frozenset({"severity", "data", "pos", "endPos"})
 _PUBLIC_SORRY_FIELDS = frozenset({"goal", "pos", "endPos"})
+_LEGACY_DEPS_JSON_SUSPECT_CLOSE = re.compile(r"(?<!-)(?:--)+/")
 LEAN_HEADER_LAUNCHER = (
     "import os; "
     "lean = os.path.join(os.environ['LEAN_SYSROOT'], 'bin', 'lean'); "
@@ -524,22 +526,12 @@ def _normalize_legacy_deps_json_comment_closes(code: str) -> str:
     lexer or duplicated Lean grammar.
     """
 
-    index = 0
-    remove: set[int] = set()
-    while index < len(code):
-        if code[index] != "-":
-            index += 1
-            continue
-        end = index
-        while end < len(code) and code[end] == "-":
-            end += 1
-        if end < len(code) and code[end] == "/" and (end - index) % 2 == 0:
-            remove.add(index)
-        index = end + 1 if end < len(code) and code[end] == "/" else end
-
-    if not remove:
+    if _LEGACY_DEPS_JSON_SUSPECT_CLOSE.search(code) is None:
         return code
-    return "".join(character for position, character in enumerate(code) if position not in remove)
+    return _LEGACY_DEPS_JSON_SUSPECT_CLOSE.sub(
+        lambda match: match.group(0)[1:],
+        code,
+    )
 
 
 def _split_imports_and_body(code: str) -> tuple[list[str], str, int]:
@@ -987,6 +979,8 @@ class LeanRepl:
         The parser is this wrapper's process generation until close() verifies
         that it exited, so a failed cleanup is retried before the slot is reused.
         """
+        if deadline <= time.monotonic():
+            raise TimeoutError("timed out checking the Lean header")
         env = _inherit_clean_env()
         env.update(self.config.env)
         self.process = subprocess.Popen(

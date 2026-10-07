@@ -31,6 +31,27 @@ def test_disposable_call_matches_the_pinned_repl_protocol():
     assert repl.is_clean()
 
 
+def test_fixture_exposes_escaped_module_traversal_without_policy_validation():
+    repl = LeanRepl(
+        LeanReplConfig(
+            cwd=str(REPL_FIXTURE),
+            warmup_imports=frozenset(),
+            validate_imports=False,
+        )
+    )
+
+    response = repl.run_disposable(
+        "import Mathlib.«..».Secret\n#check escapedTraversalMarker",
+        timeout=180,
+    )
+
+    assert "repl_error" not in response
+    assert not any(
+        message["severity"] == "error" for message in response.get("messages", [])
+    )
+    assert repl.is_clean()
+
+
 @pytest.mark.parametrize(
     ("warmup", "code", "expected_error"),
     [
