@@ -977,6 +977,19 @@ def test_project_modules_select_from_captured_files_not_empty_directory_metadata
     assert project_modules([_library(src, "Demo.*")], snapshot) == (("Demo",), ("Demo",))
 
 
+def test_project_modules_read_a_dotted_file_stem_as_one_component(tmp_path: Path) -> None:
+    src = _sources(tmp_path, "Demo", "Demo.Foo")
+    # Lake names these Demo.«Foo.Bar» and Demo.«Foo.x»y», not submodules of Demo.Foo.
+    for name in ("Foo.Bar.lean", "Foo.x»y.lean"):
+        (tmp_path / "Demo" / name).write_text("", encoding="utf-8")
+    snapshot = snapshot_project_sources(tmp_path)
+
+    assert project_modules([_library(src, "Demo.Foo.*")], snapshot) == (
+        ("Demo.Foo",),
+        ("Demo", "Demo.Foo", "Demo.«Foo.Bar»"),
+    )
+
+
 @pytest.mark.parametrize(
     ("glob", "message"),
     [
@@ -986,12 +999,18 @@ def test_project_modules_select_from_captured_files_not_empty_directory_metadata
         ("Demo.Missing.*", "module Demo.Missing has no source file"),
         ("Demo.Missing.+", "the Lake configuration selects no modules"),
         ("Demo.Odd.+", r"cannot import .*bad-name\.lean"),
+        # Lake builds this one as Demo.«Foo», which `import Demo.«Foo»` cannot name.
+        ("Demo.Quoted.+", r"cannot import .*«Foo»\.lean"),
+        ("Demo.Unquotable.+", r"cannot import .*x»y\.lean"),
         ("Demo.Empty.+", "the Lake configuration selects no modules"),
     ],
 )
 def test_project_modules_fail_closed(tmp_path: Path, glob: str, message: str) -> None:
     src = _sources(tmp_path, "Demo", "Demo.Odd.Fine")
     (tmp_path / "Demo" / "Odd" / "bad-name.lean").write_text("", encoding="utf-8")
+    for name in ("Quoted/«Foo».lean", "Unquotable/x»y.lean"):
+        (tmp_path / "Demo" / name).parent.mkdir()
+        (tmp_path / "Demo" / name).write_text("", encoding="utf-8")
     (tmp_path / "Demo" / "Empty").mkdir()
     snapshot = snapshot_project_sources(tmp_path)
 
@@ -1401,6 +1420,43 @@ def test_helpers_are_located_by_source_name_in_their_module_s_file(tmp_path: Pat
         ("Demo.twin", "Demo.lean", None),
         ("_private.Demo.Extra.0.Demo.secret", "Demo/Extra.lean", 3),
     ]
+
+
+def test_unselected_source_with_a_quoted_module_name_stays_local(tmp_path: Path, monkeypatch, capsys) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    (lean_root / "Demo").mkdir()
+    # A Finder duplicate the library's roots never select.
+    (lean_root / "Demo" / "Basic copy.lean").write_text("", encoding="utf-8")
+    (lean_root / "Demo" / "α.lean").write_text("", encoding="utf-8")
+    # Python 3.13's with_suffix("") rejects this stem; Lean names it Demo.«.».
+    (lean_root / "Demo" / "..lean").write_text("", encoding="utf-8")
+    # Nothing can import a module whose name has no quoted spelling.
+    (lean_root / "Demo" / "x»y.lean").write_text("", encoding="utf-8")
+    calls = _stub_probe(
+        monkeypatch,
+        [
+            *_STUB_RECORDS,
+            _payload("Demo.copied", module="Demo.«Basic copy»", type_uses=["Demo.base"]),
+            # Lean prints this component unquoted; it is still the same module.
+            _payload("Demo.greek", module="Demo.α", type_uses=["Demo.base"]),
+        ],
+    )
+
+    code = cli.main(["work", "impact", _BASE_ID, str(project), "--lean-root", str(lean_root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    # The probe imports only the selected root but counts the quoted module as
+    # local, and the module's constants are located by its source file.
+    (call,) = calls
+    assert str(call["probe"]).startswith("import Demo\n-- Autoform impact probe.")
+    assert 'Name.str (Name.str (Name.anonymous) "Demo") "Basic copy"' in str(call["probe"])
+    assert 'Name.str (Name.str (Name.anonymous) "Demo") "."' in str(call["probe"])
+    assert "x»y" not in str(call["probe"])
+    helpers = {helper["name"]: helper["path"] for helper in json.loads(output.out)["helpers"]}
+    assert helpers["Demo.copied"] == "Demo/Basic copy.lean"
+    assert helpers["Demo.greek"] == "Demo/α.lean"
 
 
 def _rewrite_base(project: Path) -> None:
