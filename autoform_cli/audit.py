@@ -177,13 +177,25 @@ def audit_graph(
         if node.parent is not None:
             contained.setdefault(node.parent, []).append(node.id)
 
-    def formalizable_descendants(node_id: str) -> tuple[str, ...]:
-        descendants: list[str] = []
+    scope_has_formalizable: dict[str, bool] = {}
+    scope_fully_implemented: dict[str, bool] = {}
+    for node_id in sorted(
+        graph.nodes, key=lambda candidate: graph.nodes[candidate].depth, reverse=True
+    ):
+        has_formalizable = False
+        fully_implemented = True
         for child_id in contained.get(node_id, ()):
-            if graph.nodes[child_id].formalizable:
-                descendants.append(child_id)
-            descendants.extend(formalizable_descendants(child_id))
-        return tuple(descendants)
+            child = graph.nodes[child_id]
+            if child.formalizable:
+                has_formalizable = True
+                fully_implemented = fully_implemented and derived[child_id].proved
+            if scope_has_formalizable[child_id]:
+                has_formalizable = True
+                fully_implemented = (
+                    fully_implemented and scope_fully_implemented[child_id]
+                )
+        scope_has_formalizable[node_id] = has_formalizable
+        scope_fully_implemented[node_id] = fully_implemented
 
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
@@ -191,9 +203,8 @@ def audit_graph(
         children = contained.get(node_id, ())
         article = _read_article(node.path)
 
-        descendants = formalizable_descendants(node_id) if children else ()
         implementation_done = derived[node_id].proved or (
-            bool(descendants) and all(derived[child_id].proved for child_id in descendants)
+            scope_has_formalizable[node_id] and scope_fully_implemented[node_id]
         )
         if node.article_id is not None and implementation_done:
             note = graph.blueprint_dir / IMPLEMENTATION_NOTES_DIR / f"{node.article_id}.md"

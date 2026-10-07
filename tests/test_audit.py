@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 import autoform_cli.audit as audit_module
-from autoform_cli.audit import audit_blueprint
+from autoform_cli.audit import audit_blueprint, audit_graph
+from autoform_cli.graph import Graph, Node
 from autoform_cli.lean import LeanSourceError
 
 
@@ -187,6 +188,42 @@ def test_container_note_is_stale_when_its_formalizable_subtree_is_proved(
     codes = {finding.code for finding in audit_blueprint(blueprint).findings}
 
     assert ("stale-implementation-note" in codes) is stale
+
+
+def test_container_note_audit_handles_deep_containment_iteratively(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir(parents=True)
+    article_id = "af_0123456789abcdef01234567"
+    (notes / f"{article_id}.md").write_text("deep route\n", encoding="utf-8")
+    nodes: dict[str, Node] = {}
+    for index in range(1_200):
+        node_id = f"n{index}"
+        nodes[node_id] = Node(
+            id=node_id,
+            title=node_id,
+            path=blueprint / "roadmap" / f"{node_id}.md",
+            dependencies=(),
+            parent=f"n{index - 1}" if index else None,
+            depth=index,
+            article_id=article_id if index == 0 else None,
+            declaration="theorem" if index == 1_199 else None,
+            statement_formalized=index == 1_199,
+            proof_formalized=index == 1_199,
+            lean="Project.result" if index == 1_199 else None,
+        )
+    graph = Graph(blueprint_dir=blueprint, nodes=nodes)
+    monkeypatch.setattr(
+        audit_module,
+        "_read_article",
+        lambda _path: audit_module._ArticleShape(True, True),
+    )
+
+    result = audit_graph(graph, coverage_findings=[])
+
+    assert any(finding.code == "stale-implementation-note" for finding in result.findings)
 
 
 @pytest.mark.parametrize(
