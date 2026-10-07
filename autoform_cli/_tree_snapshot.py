@@ -941,20 +941,14 @@ class BoundDirectoryTree:
     ) -> None:
         if not self.expected_children:
             return
+
+        def capture_names() -> tuple[str, ...]:
+            if descriptor is None:
+                return _capture_path_names(self.root, budget=_CaptureBudget(limits), depth=1)
+            return _capture_directory_names(descriptor, budget=_CaptureBudget(limits), depth=1)
+
         try:
-            names = (
-                _capture_directory_names(
-                    descriptor,
-                    budget=_CaptureBudget(limits),
-                    depth=1,
-                )
-                if descriptor is not None
-                else _capture_path_names(
-                    self.root,
-                    budget=_CaptureBudget(limits),
-                    depth=1,
-                )
-            )
+            names = capture_names()
             folded_names: set[str] = set()
             for name, expected in self.expected_children.items():
                 if not _valid_name(name):
@@ -977,20 +971,7 @@ class BoundDirectoryTree:
                     metadata.st_ino,
                 ) != expected:
                     raise TreeChangedError("directory tree changed before it was captured")
-            final_names = (
-                _capture_directory_names(
-                    descriptor,
-                    budget=_CaptureBudget(limits),
-                    depth=1,
-                )
-                if descriptor is not None
-                else _capture_path_names(
-                    self.root,
-                    budget=_CaptureBudget(limits),
-                    depth=1,
-                )
-            )
-            if final_names != names:
+            if capture_names() != names:
                 raise TreeChangedError("directory tree changed before it was captured")
         except (OSError, _TreeChanged) as error:
             raise TreeChangedError("directory tree changed before it was captured") from error
