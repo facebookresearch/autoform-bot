@@ -89,6 +89,76 @@ def test_formalize_replaces_custom_orchestration_with_the_markdown_frontier(
     assert '"id": "formalize"' in muse
 
 
+def test_import_edits_use_reported_scope_instead_of_a_blanket_ban(
+    repo_root: Path,
+) -> None:
+    paths = (
+        "AGENTS.md",
+        "skills/formalize/SKILL.md",
+        "skills/develop-plugin/SKILL.md",
+        "autoform_cli/README.md",
+    )
+    documents = {
+        path: (repo_root / path).read_text(encoding="utf-8") for path in paths
+    }
+
+    for path, document in documents.items():
+        assert "autoform work import-impact" in " ".join(document.split()), path
+
+    for path in ("AGENTS.md", "skills/formalize/SKILL.md"):
+        assert "blanket import" in " ".join(documents[path].split()), path
+
+    cli = " ".join(documents["autoform_cli/README.md"].split())
+    assert (
+        "autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH "
+        "[--json] [--timeout SECONDS]"
+    ) in cli
+    assert "advisory and does not edit authored roadmap or Lean source" in cli
+    assert "freshness check may refresh build hash sidecars" in cli
+    assert "`autoform-module-import-impact/v1`" in cli
+    assert "`module_scope` is `loaded-root-library-graph`" in cli
+    assert "`module_claim_target`" in cli
+    assert "`lean-module/<lowercase-slug>-<sha256[:16]>`" in cli
+    assert "Required `claim_targets` contain only the selected article" in cli
+    assert "`affected_claim_targets`" in cli
+    assert "downstream warnings, not pre-emptive ownership requirements" in cli
+    assert "`claim_keys`" in cli
+    assert "`affected_claim_keys`" in cli
+    assert "`module_graph_revision`" in cli
+    assert "captured root source and configured root-package artifact" in cli
+    assert "complete over the root libraries' loaded Lake roots/globs" in cli
+    assert "not dormant source files outside that build boundary" in cli
+    assert "`unresolved_articles`" in cli
+    assert "without globally blocking unrelated edits" in cli
+    assert "`affected_unowned_helpers` entry includes its own claim target and key" in cli
+    assert "`autoform claim list --worker-id WORKER`" in cli
+    assert "Imports are allowed regardless of reported breadth" in cli
+    assert "Formalize import workflow" in cli
+
+    formalize = " ".join(documents["skills/formalize/SKILL.md"].split())
+    assert "Lean imports are allowed; do not pre-block" in formalize
+    assert "already-held same-worker article claim is upgraded, not released first" in formalize
+    assert "best-effort coordination, not a lock" in formalize
+    assert "Do not acquire or edit them merely because they are listed" in formalize
+    assert "Capture baseline skeleton evidence" in formalize
+    assert "malformed evidence is unverifiable" in formalize
+    assert "An expired valid claim is not active" in formalize
+    assert "Disclosure alone is not a conflict or failed validation" in formalize
+    assert "atomically acquire the full held set plus its targets" in formalize
+    assert "On any acquisition refusal or recheck conflict" in formalize
+    assert "release the complete currently held import set before waiting or reporting" in formalize
+    assert "unless handing off an existing verified candidate" in formalize
+    assert "Renew, hand off, and release the full import claim set together" in formalize
+
+    agents = " ".join(documents["AGENTS.md"].split())
+    assert "consumer formalization work" in agents
+    assert "active conflicts" in agents
+
+    development = " ".join(documents["skills/develop-plugin/SKILL.md"].split())
+    assert "Keep imports permissive" in development
+    assert "plugin changes preserve it" in development
+
+
 def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path) -> None:
     development = (repo_root / "skills" / "develop-plugin" / "SKILL.md").read_text(
         encoding="utf-8"

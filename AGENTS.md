@@ -29,6 +29,10 @@ workflow and cross-file maintenance.
 - Markdown under `blueprint/` is the authored roadmap and dependency graph.
   Rendered sites, Mermaid graphs, dashboards, and runtime projections are
   derived views, not another durable scheduler or graph.
+- In consumer formalization work, Lean imports are allowed. Follow Formalize's
+  `autoform work import-impact` policy: claim the article/module, check reported
+  claim keys for active conflicts, and expand ownership only for validated
+  downstream changes. Never replace that evidence boundary with a blanket import ban.
 - Public CLI and JSON shapes are contracts. Lean server work requires an
   explicit project root, bounded time and output, verified descendant cleanup,
   and no retry after dispatch with an unknown outcome. A project root is not an

@@ -11,7 +11,7 @@ import socket
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from . import status
@@ -21,7 +21,15 @@ from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_k
 from .doctor import diagnose_project
 from .dashboard import publication_bound_live_state, serve_dashboard
 from .graph import GraphValidationError, load_graph
-from .impact import ImpactError, format_impact, revision_impact
+from .impact import (
+    ImpactError,
+    ImpactReport,
+    ModuleImportImpactReport,
+    format_impact,
+    format_module_import_impact,
+    module_import_impact,
+    revision_impact,
+)
 from .lean import build_linker, declaration_names, index_failure_message
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
 from .render import PublicationError, render_site
@@ -198,6 +206,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     work_impact.add_argument("--json", action="store_true", help="write stable machine-readable output")
     work_impact.add_argument(
+        "--timeout",
+        type=_positive_seconds,
+        metavar="SECONDS",
+        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g}); "
+        "the Lake freshness check before it has its own budget",
+    )
+    work_import_impact = work_subparsers.add_parser(
+        "import-impact",
+        help="report the conservative claim and review scope of editing a Lean module's imports",
+    )
+    work_import_impact.add_argument("selector", help="path-derived node id or durable article_id")
+    work_import_impact.add_argument("module", help="project module whose imports may change")
+    work_import_impact.add_argument(
+        "target", nargs="?", default=".", help="project root or blueprint directory"
+    )
+    work_import_impact.add_argument(
+        "--lean-root", type=Path, required=True, metavar="PATH", help="the built Lean project"
+    )
+    work_import_impact.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    work_import_impact.add_argument(
         "--timeout",
         type=_positive_seconds,
         metavar="SECONDS",
@@ -576,6 +604,8 @@ def _work(args: argparse.Namespace) -> int:
         return _work_assumptions(args)
     if args.work_command == "impact":
         return _work_impact(args)
+    if args.work_command == "import-impact":
+        return _work_import_impact(args)
     # Only loading the roadmap can fail on the project's paths; printing the
     # result stays outside, so an output error is not reported as one.
     try:
@@ -693,14 +723,43 @@ def _work_assumptions(args: argparse.Namespace) -> int:
 
 
 def _work_impact(args: argparse.Namespace) -> int:
-    try:
-        report = revision_impact(
+    return _run_impact_command(
+        lambda: revision_impact(
             args.target,
             args.selector,
             lean_root=args.lean_root,
             declarations=args.declarations,
             timeout=args.timeout,
-        )
+        ),
+        json_output=args.json,
+        formatter=format_impact,
+    )
+
+
+def _work_import_impact(args: argparse.Namespace) -> int:
+    return _run_impact_command(
+        lambda: module_import_impact(
+            args.target,
+            args.selector,
+            args.module,
+            lean_root=args.lean_root,
+            timeout=args.timeout,
+        ),
+        json_output=args.json,
+        formatter=format_module_import_impact,
+    )
+
+
+def _run_impact_command(
+    query: Callable[[], ImpactReport | ModuleImportImpactReport],
+    *,
+    json_output: bool,
+    formatter: Callable[[ImpactReport | ModuleImportImpactReport], list[str]],
+) -> int:
+    """Run either freshness-bound impact query through one error contract."""
+
+    try:
+        report = query()
     except (GraphValidationError, RuntimeProjectionError) as error:
         for issue in error.issues:
             print(f"error: {_human_text(issue)}", file=sys.stderr)
@@ -718,10 +777,10 @@ def _work_impact(args: argparse.Namespace) -> int:
         print("error: project, blueprint, or Lean root path cannot be read", file=sys.stderr)
         return 2
 
-    if args.json:
+    if json_output:
         print(report.to_json())
         return 0
-    for line in format_impact(report):
+    for line in formatter(report):
         print(_human_text(line))
     return 0
 

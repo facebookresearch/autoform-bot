@@ -692,6 +692,36 @@ or sandbox. It compares elaborated types and values; changes to notation,
 attributes, instance priority, or unreported generated declarations still
 require human review.
 
+Report the coordination and review scope of an import edit without forbidding
+the edit:
+
+```bash
+autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH [--json] [--timeout SECONDS]
+```
+
+`import-impact` is advisory and does not edit authored roadmap or Lean source;
+its Lake freshness check may refresh build hash sidecars. `SELECTOR` identifies
+the working article and `MODULE` the module whose effective header would change.
+Lean supplies the loaded module graph; Autoform binds every node to its captured
+root source and configured root-package artifact so dependencies cannot shadow it.
+`affected_modules` is complete over the root libraries' loaded Lake roots/globs,
+not dormant source files outside that build boundary.
+
+JSON uses `autoform-module-import-impact/v1` and binds the graph with
+`module_graph_revision`; `module_scope` is `loaded-root-library-graph`.
+Required `claim_targets` contain only the selected
+article and a stable `module_claim_target` resource,
+`lean-module/<lowercase-slug>-<sha256[:16]>`. `affected_claim_targets` are
+downstream warnings, not pre-emptive ownership requirements; `claim_keys` and
+`affected_claim_keys` match the JSON from `autoform claim list --worker-id
+WORKER`. `unresolved_articles` reports local declarations absent from the
+loaded environment without globally blocking unrelated edits, while every
+`affected_unowned_helpers` entry includes its own claim target and key.
+
+Imports are allowed regardless of reported breadth. Follow the
+[Formalize import workflow](../skills/formalize/SKILL.md#import-edits) for
+baseline evidence, conflict checks, claim lifecycle, and post-build review.
+
 Plan durable article identity metadata without changing the blueprint:
 
 ```bash
