@@ -802,7 +802,8 @@ def test_strict_probe_embeds_its_targets_and_imports_the_build_itself(helper: Mo
         assert "Lean.Environment.replay rootConstants base" in text
         assert "kernel replay of the root package failed" in text
         assert "kernel replay of the root package skipped" in text
-        assert "searchPathRef.set (libDir :: System.SearchPath.parse projectPath)" in text
+        assert "searchPathRef.set (libDir :: projectEntries)" in text
+        assert "with another library on the search path" in text
         assert "(loadExts := false)" in text
         assert "({ module := `Init } : Import)" in text
         assert "is declared by an imported module" not in text
@@ -1510,6 +1511,15 @@ def hostile_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tupl
              "Fixture/Core.lean": "prelude\naxiom propext (p : Prop) : p\n"},
             'name = "Fixture"\n',
         ),
+        (
+            # A dependency library whose clean `Fixture` comes first on the search path.
+            "shadow",
+            {"Fixture.lean": "theorem Fixture.cheat : 2 + 2 = 5 := sorry\n",
+             "evildep/lean-toolchain": "leanprover/lean4:v4.32.2\n",
+             "evildep/lakefile.toml": 'name = "evildep"\n\n[[lean_lib]]\nname = "Shadow"\nroots = ["Fixture"]\nsrcDir = "src"\n',
+             "evildep/src/Fixture.lean": "theorem Fixture.cheat : 2 + 2 = 4 := rfl\n"},
+            'name = "Fixture"\nneeds = ["evildep/Shadow"]\n\n[[require]]\nname = "evildep"\npath = "evildep"\n',
+        ),
     ):
         project = root / name
         marker = json.dumps(str(project / "marker"))
@@ -1579,6 +1589,21 @@ def test_both_probes_refuse_a_root_module_named_after_the_toolchain_library(
             "rename the module so the audit can run"
         ) in output
         assert not (project[0] / "marker").exists()
+
+
+def test_both_probes_refuse_a_root_module_another_library_also_provides(
+    helper: ModuleType, hostile_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    project = hostile_projects["shadow"]
+    assert helper.modules_from_archive(project[1], "Fixture") == ("Fixture",)
+    for audited, _ in _both_probes(helper, project, [_article("cheat", ["Fixture.cheat"])]):
+        output = audited.stdout + audited.stderr
+        assert audited.returncode != 0, output
+        assert (
+            "root module Fixture shares its first component Fixture with another library on the search path; "
+            "rename the module so the audit can run"
+        ) in output
+        assert "kernel trust clean" not in output
 
 
 def test_both_probes_refuse_a_build_that_declares_a_core_name_of_its_own(

@@ -445,11 +445,27 @@ _IMPORT_BUILD = """  -- `lake env` puts the project's libraries ahead of the too
   -- name mean the toolchain's constants. A root module under one of its
   -- entries would load the toolchain's file instead and go unaudited.
   let libDir ← getLibDir (← getBuildDir)
+  let projectEntries := System.SearchPath.parse projectPath
+  let mut seenRoots : Array String := #[]
   for moduleName in targetModules do
     let root := moduleName.getRoot.toString (escape := false)
     if (← (libDir / root).isDir) || (← (libDir / (root ++ ".olean")).pathExists) then
       throwError "root module {moduleName} shares its first component {root} with the toolchain's library; rename the module so the audit can run"
-  searchPathRef.set (libDir :: System.SearchPath.parse projectPath)
+    if seenRoots.contains root then
+      continue
+    seenRoots := seenRoots.push root
+    -- Lean loads a module from the first entry that holds its first component,
+    -- and Lake lists dependency libraries first, so a dependency that ships a
+    -- file under the same component would stand in for the root package's.
+    let mut holders : Array System.FilePath := #[]
+    for entry in projectEntries do
+      if (← (entry / root).isDir) || (← (entry / (root ++ ".olean")).pathExists) then
+        let real ← IO.FS.realPath entry
+        unless holders.contains real do
+          holders := holders.push real
+    if holders.size > 1 then
+      throwError "root module {moduleName} shares its first component {root} with another library on the search path; rename the module so the audit can run"
+  searchPathRef.set (libDir :: projectEntries)
   -- Without extensions no `initialize` block of the build runs. `Init` comes
   -- along even when the build never imports it, so a build that declares a
   -- core name of its own, such as `propext`, clashes with the toolchain's

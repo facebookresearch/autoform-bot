@@ -959,8 +959,14 @@ axiom allowlist, which compares names. A root module whose first component
 names an entry of the toolchain's library, such as `Lean.Hack`, would load the
 toolchain's file in its place, so the audit refuses it with `root module M
 shares its first component R with the toolchain's library; rename the module so
-the audit can run`. The workflow requires the probe's success line as its last
-line, so a probe that stops early fails the step even when it exits 0.
+the audit can run`. Lean loads a module from the first search-path entry that
+holds its first component, and Lake lists dependency libraries before the root
+package's, so a dependency library that also provides a root module's first
+component could stand in for the root package's files. The audit refuses that
+with `root module M shares its first component R with another library on the
+search path; rename the module so the audit can run`. The workflow requires the
+probe's success line as its last line, so a probe that stops early fails the
+step even when it exits 0.
 
 The audit does not cover build-time IO. `lake build` runs root and dependency
 code, and the Lake configuration, on the same runner before the audit, so that
