@@ -450,8 +450,12 @@ _IMPORT_BUILD = """  -- `lake env` puts the project's libraries ahead of the too
     if (← (libDir / root).isDir) || (← (libDir / (root ++ ".olean")).pathExists) then
       throwError "root module {moduleName} shares its first component {root} with the toolchain's library; rename the module so the audit can run"
   searchPathRef.set (libDir :: System.SearchPath.parse projectPath)
-  -- Without extensions no `initialize` block of the build runs.
-  let env ← importModules (targetModules.toArray.map ({ module := · })) {} (loadExts := false)
+  -- Without extensions no `initialize` block of the build runs. `Init` comes
+  -- along even when the build never imports it, so a build that declares a
+  -- core name of its own, such as `propext`, clashes with the toolchain's
+  -- and fails to load instead of passing the allowlist by name.
+  let env ← importModules (#[({ module := `Init } : Import)] ++ targetModules.toArray.map ({ module := · }))
+    {} (loadExts := false)
   let axiomCache ← IO.mkRef ({} : Std.HashMap Name (Array Name))
   let axiomsOf (declName : Name) : IO (Array Name) := do
     let (found, cache) := Id.run ((autoformAuditAxioms env declName).run (← axiomCache.get))

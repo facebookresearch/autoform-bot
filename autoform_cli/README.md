@@ -952,12 +952,15 @@ path and no environment extensions, so no `initialize` block runs and no
 project instance, macro, or elaborator applies to the probe's own code. It
 finds each declaration's axioms by walking types and values itself, not from
 the axiom tables the `.olean` files store, and counts a name that no module
-declares as an axiom. A root module whose first component names an entry of
-the toolchain's library, such as `Lean.Hack`, would load the toolchain's file
-in its place, so the audit refuses it with `root module M shares its first
-component R with the toolchain's library; rename the module so the audit can
-run`. The workflow requires the probe's success line as its last line, so a
-probe that stops early fails the step even when it exits 0.
+declares as an axiom. It imports the toolchain's `Init` along with the build,
+so a build that declares a core name of its own, such as `propext`, fails to
+load with `environment already contains 'propext'` instead of passing the
+axiom allowlist, which compares names. A root module whose first component
+names an entry of the toolchain's library, such as `Lean.Hack`, would load the
+toolchain's file in its place, so the audit refuses it with `root module M
+shares its first component R with the toolchain's library; rename the module so
+the audit can run`. The workflow requires the probe's success line as its last
+line, so a probe that stops early fails the step even when it exits 0.
 
 The audit does not cover build-time IO. `lake build` runs root and dependency
 code, and the Lake configuration, on the same runner before the audit, so that
