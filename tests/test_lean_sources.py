@@ -6,6 +6,7 @@ import os
 import re
 import stat
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -67,11 +68,58 @@ def toplevel : Nat := 3
 """
 
 
+def _require_directory_descriptors() -> None:
+    if not directory_binding_module.DIRECTORY_BINDING_SUPPORTED:
+        pytest.skip("directory descriptors are unavailable")
+
+
+def _require_descriptor_capture() -> None:
+    if not (
+        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
+        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
+    ):
+        pytest.skip("directory descriptor capture is unavailable")
+
+
+def _use_portable_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(directory_binding_module, "DIRECTORY_BINDING_SUPPORTED", False)
+
+
 def _index(tmp_path: Path, text: str = _SOURCE, name: str = "Project/Basic.lean"):
     path = tmp_path / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return index_project(tmp_path)
+
+
+def _on_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    event: str,
+    action: Callable[[], None],
+    relative: str | None = None,
+) -> None:
+    """Run `action` at each tree snapshot checkpoint named `event`, optionally only at `relative`."""
+    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
+
+    def checkpoint(name: str, path: str) -> None:
+        original_checkpoint(name, path)
+        if name == event and (relative is None or path == relative):
+            action()
+
+    monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", checkpoint)
+
+
+def _count_binds(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+    """Record the arguments of every `bind_project_sources` call, one per capture attempt."""
+    calls: list[tuple] = []
+    original_bind = lean_module.bind_project_sources
+
+    def counted_bind(*args, **kwargs):
+        calls.append(args)
+        return original_bind(*args, **kwargs)
+
+    monkeypatch.setattr(lean_module, "bind_project_sources", counted_bind)
+    return calls
 
 
 def test_qualifies_names_with_their_namespace(tmp_path: Path) -> None:
@@ -197,30 +245,20 @@ def test_changes_inside_an_excluded_build_directory_do_not_invalidate_capture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not (
-        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
-        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
-    ):
-        pytest.skip("directory descriptor capture is unavailable")
+    _require_descriptor_capture()
     _index(tmp_path, "def canonical : Nat := 0\n")
     build_state = tmp_path / ".lake" / "build-state"
     build_state.parent.mkdir()
     build_state.write_text("old\n", encoding="utf-8")
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
     changed = False
 
-    def change_excluded_file(event: str, relative: str) -> None:
+    def change_excluded_file() -> None:
         nonlocal changed
-        original_checkpoint(event, relative)
-        if event == "before-final-verification" and not changed:
+        if not changed:
             changed = True
             build_state.write_text("new\n", encoding="utf-8")
 
-    monkeypatch.setattr(
-        tree_snapshot_module,
-        "_tree_snapshot_checkpoint",
-        change_excluded_file,
-    )
+    _on_checkpoint(monkeypatch, "before-final-verification", change_excluded_file)
     sources = open_project_sources(tmp_path)
     try:
         snapshot = sources.capture()
@@ -261,15 +299,7 @@ def test_direct_snapshot_names_a_stable_invalid_root(
     root = tmp_path / "root"
     if root_kind == "file":
         root.write_text("not a directory\n")
-    attempts = 0
-    original_bind = lean_module.bind_project_sources
-
-    def counted_bind(*args, **kwargs):
-        nonlocal attempts
-        attempts += 1
-        return original_bind(*args, **kwargs)
-
-    monkeypatch.setattr(lean_module, "bind_project_sources", counted_bind)
+    attempts = _count_binds(monkeypatch)
     monkeypatch.setattr(lean_module, "_SNAPSHOT_RETRY_DELAY_SECONDS", 0)
     reason = (
         "directory root does not exist"
@@ -280,7 +310,7 @@ def test_direct_snapshot_names_a_stable_invalid_root(
     with pytest.raises(lean_module.LeanSourceError, match=reason):
         snapshot_project_sources(root)
 
-    assert attempts == lean_module._SNAPSHOT_ATTEMPTS
+    assert len(attempts) == lean_module._SNAPSHOT_ATTEMPTS
 
 
 def test_index_project_keeps_supporting_a_symlinked_root(tmp_path: Path) -> None:
@@ -319,8 +349,7 @@ def test_symlinked_root_preserves_an_absolute_descendant_exclusion(
 
 
 def test_source_binding_rejects_root_replacement(tmp_path: Path) -> None:
-    if not directory_binding_module.DIRECTORY_BINDING_SUPPORTED:
-        pytest.skip("directory descriptors are unavailable")
+    _require_directory_descriptors()
     project = tmp_path / "project"
     _index(project, "def original : Nat := 0\n")
     sources = open_project_sources(project)
@@ -343,28 +372,18 @@ def test_source_capture_rejects_mid_capture_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not (
-        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
-        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
-    ):
-        pytest.skip("directory descriptor capture is unavailable")
+    _require_descriptor_capture()
     source = tmp_path / "Project" / "Basic.lean"
     _index(tmp_path, "def before : Nat := 0\n")
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
     changed = False
 
-    def change_source(event: str, relative: str) -> None:
+    def change_source() -> None:
         nonlocal changed
-        original_checkpoint(event, relative)
-        if event == "before-final-verification" and not changed:
+        if not changed:
             changed = True
             source.write_text("def after : Nat := 1000\n", encoding="utf-8")
 
-    monkeypatch.setattr(
-        tree_snapshot_module,
-        "_tree_snapshot_checkpoint",
-        change_source,
-    )
+    _on_checkpoint(monkeypatch, "before-final-verification", change_source)
 
     sources = open_project_sources(tmp_path)
     try:
@@ -382,17 +401,15 @@ def test_snapshot_retries_a_capture_that_races_one_edit(
 ) -> None:
     source = tmp_path / "Project" / "Basic.lean"
     _index(tmp_path, "def before : Nat := 0\n")
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
     changed = False
 
-    def change_source_once(event: str, relative: str) -> None:
+    def change_source_once() -> None:
         nonlocal changed
-        original_checkpoint(event, relative)
-        if event == "before-final-verification" and not changed:
+        if not changed:
             changed = True
             source.write_text("def after : Nat := 1000\n", encoding="utf-8")
 
-    monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", change_source_once)
+    _on_checkpoint(monkeypatch, "before-final-verification", change_source_once)
     monkeypatch.setattr(lean_module, "_SNAPSHOT_RETRY_DELAY_SECONDS", 0)
 
     snapshot = snapshot_project_sources(tmp_path)
@@ -408,18 +425,15 @@ def test_snapshot_reports_sources_that_keep_changing(
 ) -> None:
     source = tmp_path / "Project" / "Basic.lean"
     _index(tmp_path, "def churn : Nat := 0\n")
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
     edits = 0
 
-    def change_source(event: str, relative: str) -> None:
+    def change_source() -> None:
         nonlocal edits
-        original_checkpoint(event, relative)
-        if event == "before-final-verification":
-            edits += 1
-            # Each edit also changes the size, so coarse timestamps cannot hide it.
-            source.write_text(f"def churn : Nat := {'1' * (edits + 1)}\n", encoding="utf-8")
+        edits += 1
+        # Each edit also changes the size, so coarse timestamps cannot hide it.
+        source.write_text(f"def churn : Nat := {'1' * (edits + 1)}\n", encoding="utf-8")
 
-    monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", change_source)
+    _on_checkpoint(monkeypatch, "before-final-verification", change_source)
     monkeypatch.setattr(lean_module, "_SNAPSHOT_RETRY_DELAY_SECONDS", 0)
 
     with pytest.raises(lean_module.LeanSourceError, match="Lean sources kept changing while they were indexed"):
@@ -432,11 +446,7 @@ def test_snapshot_retries_a_root_replaced_while_it_is_bound(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not (
-        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
-        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
-    ):
-        pytest.skip("directory descriptor capture is unavailable")
+    _require_descriptor_capture()
     project = tmp_path / "project"
     _index(project, "def canonical : Nat := 0\n")
     replacement = tmp_path / "replacement"
@@ -451,22 +461,14 @@ def test_snapshot_retries_a_root_replaced_while_it_is_bound(
             return original_stat(replacement, *args, **kwargs)
         return original_stat(path, *args, **kwargs)
 
-    original_bind = lean_module.bind_project_sources
-    attempts = 0
-
-    def counted_bind(*args, **kwargs):
-        nonlocal attempts
-        attempts += 1
-        return original_bind(*args, **kwargs)
-
-    monkeypatch.setattr(lean_module, "bind_project_sources", counted_bind)
+    attempts = _count_binds(monkeypatch)
     monkeypatch.setattr(lean_module, "_SNAPSHOT_RETRY_DELAY_SECONDS", 0)
     with monkeypatch.context() as context:
         context.setattr(directory_binding_module.os, "stat", stat_once_replaced)
         snapshot = snapshot_project_sources(project)
 
     assert swapped
-    assert attempts == 2
+    assert len(attempts) == 2
     assert snapshot.index.find("canonical") is not None
 
 
@@ -543,14 +545,10 @@ def test_nested_checkout_marker_replacement_retries_one_generation(
     )
 
     changed = False
-    attempts = 0
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
-    original_bind = lean_module.bind_project_sources
 
-    def replace_marker(event: str, relative: str) -> None:
+    def replace_marker() -> None:
         nonlocal changed
-        original_checkpoint(event, relative)
-        if event != "before-final-verification" or changed:
+        if changed:
             return
         changed = True
         if replacement_kind == "file":
@@ -560,19 +558,14 @@ def test_nested_checkout_marker_replacement_retries_one_generation(
             marker.unlink()
             marker.mkdir()
 
-    def counted_bind(*args, **kwargs):
-        nonlocal attempts
-        attempts += 1
-        return original_bind(*args, **kwargs)
-
-    monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", replace_marker)
-    monkeypatch.setattr(lean_module, "bind_project_sources", counted_bind)
+    _on_checkpoint(monkeypatch, "before-final-verification", replace_marker)
+    attempts = _count_binds(monkeypatch)
     monkeypatch.setattr(lean_module, "_SNAPSHOT_RETRY_DELAY_SECONDS", 0)
 
     snapshot = snapshot_project_sources(tmp_path)
 
     assert changed
-    assert attempts == 2
+    assert len(attempts) == 2
     assert snapshot.index.find("toplevel") is not None
     assert snapshot.index.find("nestedWorker") is None
 
@@ -619,11 +612,7 @@ def test_lasting_capture_failure_is_reported_without_retrying(
     monkeypatch: pytest.MonkeyPatch,
     failure: str,
 ) -> None:
-    if not (
-        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
-        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
-    ):
-        pytest.skip("directory descriptor capture is unavailable")
+    _require_descriptor_capture()
     _index(tmp_path, "def canonical : Nat := 0\n")
 
     def fail_read(*_args, **_kwargs):
@@ -636,15 +625,7 @@ def test_lasting_capture_failure_is_reported_without_retrying(
         "_read_file",
         fail_read,
     )
-    original_bind = lean_module.bind_project_sources
-    attempts = 0
-
-    def counted_bind(*args, **kwargs):
-        nonlocal attempts
-        attempts += 1
-        return original_bind(*args, **kwargs)
-
-    monkeypatch.setattr(lean_module, "bind_project_sources", counted_bind)
+    attempts = _count_binds(monkeypatch)
     reason = (
         f"directory tree could not be read: {os.strerror(errno.EIO)}"
         if failure == "io-error"
@@ -654,7 +635,7 @@ def test_lasting_capture_failure_is_reported_without_retrying(
     with pytest.raises(lean_module.LeanSourceError, match=rf"^{re.escape(reason)}$"):
         snapshot_project_sources(tmp_path)
 
-    assert attempts == 1
+    assert len(attempts) == 1
 
 
 @pytest.mark.parametrize(
@@ -699,20 +680,12 @@ def test_unsupported_entry_name_is_reported_without_retrying(
         (tmp_path / "Project" / "Odd\\Name.lean").write_text("def odd : Nat := 0\n", encoding="utf-8")
     except OSError:
         pytest.skip("backslashes in file names are unavailable")
-    original_bind = lean_module.bind_project_sources
-    attempts = 0
-
-    def counted_bind(*args, **kwargs):
-        nonlocal attempts
-        attempts += 1
-        return original_bind(*args, **kwargs)
-
-    monkeypatch.setattr(lean_module, "bind_project_sources", counted_bind)
+    attempts = _count_binds(monkeypatch)
 
     with pytest.raises(lean_module.LeanSourceError, match="directory tree contains an unsupported entry name"):
         snapshot_project_sources(tmp_path)
 
-    assert attempts == 1
+    assert len(attempts) == 1
 
 
 def test_portable_binding_rejects_a_replacement_root_generation(
@@ -724,9 +697,7 @@ def test_portable_binding_rejects_a_replacement_root_generation(
     replacement = tmp_path / "replacement"
     _index(replacement, "def replacement : Nat := 0\n")
     displaced = tmp_path / "displaced"
-    monkeypatch.setattr(
-        directory_binding_module, "DIRECTORY_BINDING_SUPPORTED", False
-    )
+    _use_portable_capture(monkeypatch)
     bound = BoundDirectoryTree(project)
     original_verify = bound.verify
     original_capture = tree_snapshot_module._capture_portable
@@ -767,8 +738,7 @@ def test_descriptor_and_portable_capture_have_identical_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not directory_binding_module.DIRECTORY_BINDING_SUPPORTED:
-        pytest.skip("directory descriptors are unavailable")
+    _require_directory_descriptors()
     root = tmp_path / "tree"
     (root / "a" / "x").mkdir(parents=True)
     (root / "a-").mkdir()
@@ -777,9 +747,7 @@ def test_descriptor_and_portable_capture_have_identical_order(
     with bind_directory_tree(root) as bound:
         descriptor_snapshot = bound.capture()
 
-    monkeypatch.setattr(
-        directory_binding_module, "DIRECTORY_BINDING_SUPPORTED", False
-    )
+    _use_portable_capture(monkeypatch)
     with bind_directory_tree(root) as bound:
         portable_snapshot = bound.capture()
 
@@ -794,8 +762,7 @@ def test_descriptor_and_portable_capture_have_identical_order(
 def test_expected_child_identity_is_checked_during_descriptor_capture(
     tmp_path: Path,
 ) -> None:
-    if not directory_binding_module.DIRECTORY_BINDING_SUPPORTED:
-        pytest.skip("directory descriptors are unavailable")
+    _require_directory_descriptors()
     root = tmp_path / "tree"
     child = root / "child"
     child.mkdir(parents=True)
@@ -819,8 +786,7 @@ def test_expected_child_identity_is_checked_during_descriptor_capture(
 
 
 def test_expected_child_rejects_a_case_colliding_entry(tmp_path: Path) -> None:
-    if not directory_binding_module.DIRECTORY_BINDING_SUPPORTED:
-        pytest.skip("directory descriptors are unavailable")
+    _require_directory_descriptors()
     root = tmp_path / "tree"
     child = root / "child"
     child.mkdir(parents=True)
@@ -855,9 +821,7 @@ def test_portable_binding_rejects_a_symlinked_ancestor(
         alias.symlink_to(real, target_is_directory=True)
     except OSError:
         pytest.skip("symlinks are unavailable")
-    monkeypatch.setattr(
-        directory_binding_module, "DIRECTORY_BINDING_SUPPORTED", False
-    )
+    _use_portable_capture(monkeypatch)
 
     with pytest.raises(TreeSnapshotError, match="unsafe component"):
         BoundDirectoryTree(alias / "project")
@@ -876,9 +840,7 @@ def test_portable_capture_does_not_require_path_stat_no_follow(
             raise NotImplementedError("no-follow stat is unavailable")
         return original_stat(self, *args, **kwargs)
 
-    monkeypatch.setattr(
-        directory_binding_module, "DIRECTORY_BINDING_SUPPORTED", False
-    )
+    _use_portable_capture(monkeypatch)
     monkeypatch.setattr(Path, "stat", stat_without_no_follow)
 
     with bind_directory_tree(root) as bound:
@@ -911,10 +873,6 @@ def test_portable_capture_rejects_an_unrestored_nested_directory_redirection(
             nested.symlink_to(outside, target_is_directory=True)
         return True
 
-    def checkpoint(event: str, _relative: str) -> None:
-        if event == "between-portable-captures":
-            restore()
-
     original_signature = tree_snapshot_module._stat_signature
 
     def coarse_directory_signature(metadata):
@@ -923,8 +881,8 @@ def test_portable_capture_rejects_an_unrestored_nested_directory_redirection(
             return (*signature[:3], 0, 0, 0, 0)
         return signature
 
-    monkeypatch.setattr(directory_binding_module, "DIRECTORY_BINDING_SUPPORTED", False)
-    monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", checkpoint)
+    _use_portable_capture(monkeypatch)
+    _on_checkpoint(monkeypatch, "between-portable-captures", restore)
     monkeypatch.setattr(tree_snapshot_module, "_stat_signature", coarse_directory_signature)
     bound = BoundDirectoryTree(
         root,
@@ -995,7 +953,7 @@ def test_portable_capture_rejects_a_restored_nested_directory_redirection(
             return (*signature[:3], 0, 0, 0, 0)
         return signature
 
-    monkeypatch.setattr(directory_binding_module, "DIRECTORY_BINDING_SUPPORTED", False)
+    _use_portable_capture(monkeypatch)
     monkeypatch.setattr(tree_snapshot_module, "_capture_path_names", redirect_then_list)
     monkeypatch.setattr(tree_snapshot_module, "_read_portable_file", read_then_restore)
     monkeypatch.setattr(tree_snapshot_module, "_stat_signature", coarse_directory_signature)
@@ -1044,9 +1002,7 @@ def test_portable_capture_rejects_a_file_swapped_to_fifo_without_blocking(
     def blocking_path_open(*_args, **_kwargs):
         raise AssertionError("portable capture must use nonblocking os.open")
 
-    monkeypatch.setattr(
-        directory_binding_module, "DIRECTORY_BINDING_SUPPORTED", False
-    )
+    _use_portable_capture(monkeypatch)
     monkeypatch.setattr(Path, "open", blocking_path_open)
     bound = BoundDirectoryTree(
         root,
@@ -1065,9 +1021,7 @@ def test_portable_binding_normalizes_an_invalid_root_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        directory_binding_module, "DIRECTORY_BINDING_SUPPORTED", False
-    )
+    _use_portable_capture(monkeypatch)
 
     with pytest.raises(TreeSnapshotError, match="cannot be inspected safely"):
         BoundDirectoryTree(tmp_path / "bad\0name")
@@ -1085,8 +1039,7 @@ def test_source_binding_normalizes_an_invalid_exclusion_path(
 def test_directory_binding_resolves_dot_dot_after_a_symlinked_ancestor_physically(
     tmp_path: Path,
 ) -> None:
-    if not directory_binding_module.DIRECTORY_BINDING_SUPPORTED:
-        pytest.skip("directory descriptors are unavailable")
+    _require_directory_descriptors()
     holder = tmp_path / "holder"
     (holder / "target").mkdir(parents=True)
     elsewhere = tmp_path / "elsewhere"
@@ -1108,8 +1061,7 @@ def test_directory_binding_resolves_dot_dot_after_a_symlinked_ancestor_physicall
 
 
 def test_directory_binding_refuses_a_symlinked_root(tmp_path: Path) -> None:
-    if not directory_binding_module.DIRECTORY_BINDING_SUPPORTED:
-        pytest.skip("directory descriptors are unavailable")
+    _require_directory_descriptors()
     real = tmp_path / "real"
     real.mkdir()
     alias = tmp_path / "alias"
@@ -1123,8 +1075,7 @@ def test_directory_binding_refuses_a_symlinked_root(tmp_path: Path) -> None:
 
 
 def test_directory_binding_accepts_a_symlinked_ancestor(tmp_path: Path) -> None:
-    if not directory_binding_module.DIRECTORY_BINDING_SUPPORTED:
-        pytest.skip("directory descriptors are unavailable")
+    _require_directory_descriptors()
     real = tmp_path / "real"
     project = real / "project"
     _index(project, "def throughAncestorLink : Nat := 0\n")
@@ -1149,8 +1100,7 @@ def test_directory_binding_accepts_a_symlinked_ancestor(tmp_path: Path) -> None:
 def test_directory_binding_needs_only_search_permission_on_ancestors(
     tmp_path: Path,
 ) -> None:
-    if not directory_binding_module.DIRECTORY_BINDING_SUPPORTED:
-        pytest.skip("directory descriptors are unavailable")
+    _require_directory_descriptors()
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("root bypasses directory permissions")
     ancestor = tmp_path / "search-only"
@@ -1175,8 +1125,7 @@ def test_directory_binding_rejects_an_invalid_path_without_opening_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not directory_binding_module.DIRECTORY_BINDING_SUPPORTED:
-        pytest.skip("directory descriptors are unavailable")
+    _require_directory_descriptors()
     parent = tmp_path / "parent"
     parent.mkdir()
     original_open = os.open
@@ -1203,8 +1152,7 @@ def test_directory_binding_closes_its_descriptor_when_the_root_changes_while_ope
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not directory_binding_module.DIRECTORY_BINDING_SUPPORTED:
-        pytest.skip("directory descriptors are unavailable")
+    _require_directory_descriptors()
     root = tmp_path / "root"
     root.mkdir()
     replacement = tmp_path / "replacement"
@@ -1324,25 +1272,22 @@ def test_exclusion_plan_survives_root_rename_restore_aba(
     _index(replacement, "def replacementOnly : Nat := 0\n", "Other.lean")
     displaced = tmp_path / "displaced"
     sources = open_project_sources(root, exclude_roots=(excluded,))
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
     swapped = False
 
-    def swap_and_restore(event: str, relative: str) -> None:
+    def swap() -> None:
         nonlocal swapped
-        original_checkpoint(event, relative)
-        if event == "after-directory-list" and relative == "" and not swapped:
+        if not swapped:
             root.rename(displaced)
             replacement.rename(root)
             swapped = True
-        elif event == "before-final-verification" and relative == "" and swapped:
+
+    def restore() -> None:
+        if swapped:
             root.rename(replacement)
             displaced.rename(root)
 
-    monkeypatch.setattr(
-        tree_snapshot_module,
-        "_tree_snapshot_checkpoint",
-        swap_and_restore,
-    )
+    _on_checkpoint(monkeypatch, "after-directory-list", swap, relative="")
+    _on_checkpoint(monkeypatch, "before-final-verification", restore, relative="")
     snapshot = None
     try:
         try:
@@ -1434,18 +1379,15 @@ def test_ignored_symlink_target_churn_does_not_invalidate_sources(
         link.symlink_to("target-0")
     except OSError:
         pytest.skip("symlinks are unavailable")
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
     edits = 0
 
-    def churn_link(event: str, relative: str) -> None:
+    def churn_link() -> None:
         nonlocal edits
-        original_checkpoint(event, relative)
-        if event == "before-final-verification" and relative == "":
-            edits += 1
-            link.unlink()
-            link.symlink_to(f"target-{edits}")
+        edits += 1
+        link.unlink()
+        link.symlink_to(f"target-{edits}")
 
-    monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", churn_link)
+    _on_checkpoint(monkeypatch, "before-final-verification", churn_link, relative="")
 
     snapshot = snapshot_project_sources(tmp_path)
 
@@ -1509,6 +1451,25 @@ def test_malformed_manifest_value_does_not_escape_source_indexing(
     assert index.find("visible") is not None
 
 
+def _synthetic_snapshot(
+    *,
+    directories: tuple[str, ...] = ("",),
+    files: tuple[tuple[str, bytes], ...] = (),
+    symlinks: tuple[tuple[str, str], ...] = (),
+) -> TreeSnapshot:
+    """Build a snapshot by hand, with no special entries, placeholders, or identities."""
+    return TreeSnapshot(
+        root_identity=(1, 1),
+        directories=directories,
+        files=files,
+        symlinks=symlinks,
+        special=(),
+        placeholders=(),
+        omitted=(),
+        identities=(),
+    )
+
+
 @pytest.mark.parametrize(
     "relative",
     [
@@ -1528,16 +1489,7 @@ def test_snapshot_materialization_rejects_non_relative_paths(
     tmp_path: Path,
     relative: str,
 ) -> None:
-    snapshot = TreeSnapshot(
-        root_identity=(1, 1),
-        directories=("",),
-        files=((relative, b"escaped\n"),),
-        symlinks=(),
-        special=(),
-        placeholders=(),
-        omitted=(),
-        identities=(),
-    )
+    snapshot = _synthetic_snapshot(files=((relative, b"escaped\n"),))
     destination = tmp_path / "destination"
 
     with pytest.raises(TreeSnapshotError, match="unsafe materialization path"):
@@ -1561,16 +1513,7 @@ def test_snapshot_materialization_rejects_aliases_and_type_conflicts(
     files: tuple[tuple[str, bytes], ...],
     directories: tuple[str, ...],
 ) -> None:
-    snapshot = TreeSnapshot(
-        root_identity=(1, 1),
-        directories=directories,
-        files=files,
-        symlinks=(),
-        special=(),
-        placeholders=(),
-        omitted=(),
-        identities=(),
-    )
+    snapshot = _synthetic_snapshot(directories=directories, files=files)
     destination = tmp_path / "destination"
 
     with pytest.raises(TreeSnapshotError, match="materialization path"):
@@ -1580,15 +1523,9 @@ def test_snapshot_materialization_rejects_aliases_and_type_conflicts(
 
 
 def test_snapshot_materialization_orders_valid_directory_records(tmp_path: Path) -> None:
-    snapshot = TreeSnapshot(
-        root_identity=(1, 1),
+    snapshot = _synthetic_snapshot(
         directories=("", "a/b", "a"),
         files=(("a/b/result.txt", b"result\n"),),
-        symlinks=(),
-        special=(),
-        placeholders=(),
-        omitted=(),
-        identities=(),
     )
     destination = tmp_path / "destination"
 
@@ -1601,32 +1538,20 @@ def test_snapshot_materialization_root_swap_never_redirects_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    snapshot = TreeSnapshot(
-        root_identity=(1, 1),
-        directories=("", "nested"),
-        files=(("result.txt", b"captured\n"),),
-        symlinks=(),
-        special=(),
-        placeholders=(),
-        omitted=(),
-        identities=(),
-    )
+    snapshot = _synthetic_snapshot(directories=("", "nested"), files=(("result.txt", b"captured\n"),))
     destination = tmp_path / "destination"
     displaced = tmp_path / "displaced"
     outside = tmp_path / "outside"
     outside.mkdir()
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
     swapped = False
 
-    def swap_root(event: str, relative: str) -> None:
+    def swap_root() -> None:
         nonlocal swapped
-        original_checkpoint(event, relative)
-        if event == "after-materialization-directory-open" and relative == "":
-            destination.rename(displaced)
-            destination.symlink_to(outside, target_is_directory=True)
-            swapped = True
+        destination.rename(displaced)
+        destination.symlink_to(outside, target_is_directory=True)
+        swapped = True
 
-    monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", swap_root)
+    _on_checkpoint(monkeypatch, "after-materialization-directory-open", swap_root, relative="")
     try:
         with pytest.raises(TreeSnapshotError, match="materialization"):
             snapshot.materialize_regular_files(destination)
@@ -1645,29 +1570,20 @@ def test_snapshot_materialization_nested_swap_never_redirects_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    snapshot = TreeSnapshot(
-        root_identity=(1, 1),
+    snapshot = _synthetic_snapshot(
         directories=("", "nested"),
         files=(("nested/result.txt", b"captured\n"),),
-        symlinks=(),
-        special=(),
-        placeholders=(),
-        omitted=(),
-        identities=(),
     )
     destination = tmp_path / "destination"
     outside = tmp_path / "outside"
     outside.mkdir()
     displaced = destination / "nested-displaced"
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
 
-    def swap_nested(event: str, relative: str) -> None:
-        original_checkpoint(event, relative)
-        if event == "after-materialization-directory-open" and relative == "nested":
-            (destination / "nested").rename(displaced)
-            (destination / "nested").symlink_to(outside, target_is_directory=True)
+    def swap_nested() -> None:
+        (destination / "nested").rename(displaced)
+        (destination / "nested").symlink_to(outside, target_is_directory=True)
 
-    monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", swap_nested)
+    _on_checkpoint(monkeypatch, "after-materialization-directory-open", swap_nested, relative="nested")
     try:
         with pytest.raises(TreeSnapshotError, match="materialization"):
             snapshot.materialize_regular_files(destination)
@@ -1686,16 +1602,7 @@ def test_snapshot_materialization_retries_short_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    snapshot = TreeSnapshot(
-        root_identity=(1, 1),
-        directories=("",),
-        files=(("result.txt", b"captured bytes\n"),),
-        symlinks=(),
-        special=(),
-        placeholders=(),
-        omitted=(),
-        identities=(),
-    )
+    snapshot = _synthetic_snapshot(files=(("result.txt", b"captured bytes\n"),))
     destination = tmp_path / "destination"
     original_write = tree_snapshot_module.os.write
 
@@ -1713,15 +1620,9 @@ def test_snapshot_materialization_closes_descriptors_after_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    snapshot = TreeSnapshot(
-        root_identity=(1, 1),
+    snapshot = _synthetic_snapshot(
         directories=("", "nested"),
         files=(("nested/result.txt", b"captured\n"),),
-        symlinks=(),
-        special=(),
-        placeholders=(),
-        omitted=(),
-        identities=(),
     )
     destination = tmp_path / "destination"
     original_open = tree_snapshot_module.os.open
@@ -1764,28 +1665,16 @@ def test_snapshot_materialization_rejects_final_tree_tampering(
     monkeypatch: pytest.MonkeyPatch,
     attack: str,
 ) -> None:
-    snapshot = TreeSnapshot(
-        root_identity=(1, 1),
+    snapshot = _synthetic_snapshot(
         directories=("", "nested"),
         files=(("first.txt", b"first\n"), ("second.txt", b"second\n")),
-        symlinks=(),
-        special=(),
-        placeholders=(),
-        omitted=(),
-        identities=(),
     )
     destination = tmp_path / "destination"
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
     attacked = False
 
-    def tamper_before_second_file(event: str, relative: str) -> None:
+    def tamper_before_second_file() -> None:
         nonlocal attacked
-        original_checkpoint(event, relative)
-        if (
-            event != "before-materialization-file-open"
-            or relative != "second.txt"
-            or attacked
-        ):
+        if attacked:
             return
         attacked = True
         first = destination / "first.txt"
@@ -1803,10 +1692,11 @@ def test_snapshot_materialization_rejects_final_tree_tampering(
         else:
             os.link(first, tmp_path / "outside-link")
 
-    monkeypatch.setattr(
-        tree_snapshot_module,
-        "_tree_snapshot_checkpoint",
+    _on_checkpoint(
+        monkeypatch,
+        "before-materialization-file-open",
         tamper_before_second_file,
+        relative="second.txt",
     )
     try:
         with pytest.raises(TreeSnapshotError):
@@ -1830,8 +1720,7 @@ def test_outer_managed_marker_ignores_unrelated_files_below_it(
         b'{"kind":"packets","packets":[],"schema":"autoform-skeleton-packets/v2"}\n'
     )
     nested_name = "other.json"
-    snapshot = TreeSnapshot(
-        root_identity=(1, 1),
+    snapshot = _synthetic_snapshot(
         directories=("", "generated", "generated/nested"),
         files=(
             ("generated/nested/Copied.lean", b"def hiddenByOuterMarker : Nat := 0\n"),
@@ -1839,10 +1728,6 @@ def test_outer_managed_marker_ignores_unrelated_files_below_it(
             (f"generated/{outer_name}", outer_data),
         ),
         symlinks=((f"generated/nested/{nested_name.upper()}", "elsewhere"),),
-        special=(),
-        placeholders=(),
-        omitted=(),
-        identities=(),
     )
 
     index = lean_module._indexed_source_snapshot(tmp_path, snapshot, ())
@@ -1869,27 +1754,17 @@ def test_directory_permission_churn_does_not_create_a_stale_generation_revision(
     _index(tmp_path, "def stableAcrossDirectoryMode : Nat := 0\n")
     source_directory.chmod(0o755)
     assert stat.S_IMODE(source_directory.stat().st_mode) == 0o755
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
     changed = False
 
-    def change_directory_mode(event: str, relative: str) -> None:
+    def change_directory_mode() -> None:
         nonlocal changed
-        original_checkpoint(event, relative)
-        if event == "before-final-verification" and relative == "" and not changed:
+        if not changed:
             source_directory.chmod(0o700)
             changed = True
 
-    monkeypatch.setattr(
-        tree_snapshot_module,
-        "_tree_snapshot_checkpoint",
-        change_directory_mode,
-    )
-    during_change = snapshot_project_sources(tmp_path)
-    monkeypatch.setattr(
-        tree_snapshot_module,
-        "_tree_snapshot_checkpoint",
-        original_checkpoint,
-    )
+    with monkeypatch.context() as context:
+        _on_checkpoint(context, "before-final-verification", change_directory_mode, relative="")
+        during_change = snapshot_project_sources(tmp_path)
     after_change = snapshot_project_sources(tmp_path)
 
     assert changed
@@ -2015,17 +1890,14 @@ def test_managed_output_descendant_churn_does_not_retry_source_capture(
     (generated / "manifest.json").write_text(
         '{"kind":"packets","packets":[],"schema":"autoform-skeleton-packets/v2"}\n'
     )
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
     edits = 0
 
-    def churn_output(event: str, relative: str) -> None:
+    def churn_output() -> None:
         nonlocal edits
-        original_checkpoint(event, relative)
-        if event == "before-final-verification" and relative == "":
-            edits += 1
-            packet.write_text(f"def generated : Nat := {edits}\n")
+        edits += 1
+        packet.write_text(f"def generated : Nat := {edits}\n")
 
-    monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", churn_output)
+    _on_checkpoint(monkeypatch, "before-final-verification", churn_output, relative="")
 
     snapshot = snapshot_project_sources(tmp_path)
 
@@ -2047,7 +1919,6 @@ def test_managed_marker_verification_never_reenumerates_opaque_siblings(
     )
     generated_identity = (generated.stat().st_dev, generated.stat().st_ino)
     original_scandir = tree_snapshot_module.os.scandir
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
     opaque_scans = 0
 
     def one_opaque_scan(path):
@@ -2060,18 +1931,12 @@ def test_managed_marker_verification_never_reenumerates_opaque_siblings(
                     raise AssertionError("opaque siblings were re-enumerated")
         return original_scandir(path)
 
-    def add_irrelevant_churn(event: str, relative: str) -> None:
-        original_checkpoint(event, relative)
-        if event == "before-final-verification" and relative == "":
-            for index in range(100):
-                (generated / f"junk-{index}").write_text("junk\n")
+    def add_irrelevant_churn() -> None:
+        for index in range(100):
+            (generated / f"junk-{index}").write_text("junk\n")
 
     monkeypatch.setattr(tree_snapshot_module.os, "scandir", one_opaque_scan)
-    monkeypatch.setattr(
-        tree_snapshot_module,
-        "_tree_snapshot_checkpoint",
-        add_irrelevant_churn,
-    )
+    _on_checkpoint(monkeypatch, "before-final-verification", add_irrelevant_churn, relative="")
 
     snapshot = snapshot_project_sources(
         tmp_path,
@@ -2095,34 +1960,25 @@ def test_managed_output_marker_change_retries_the_whole_capture(
     marker.write_text(
         '{"kind":"packets","packets":[],"schema":"autoform-skeleton-packets/v2"}\n'
     )
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
     changed = False
-    attempts = 0
-    original_bind = lean_module.bind_project_sources
 
-    def change_marker_once(event: str, relative: str) -> None:
+    def change_marker_once() -> None:
         nonlocal changed
-        original_checkpoint(event, relative)
-        if event == "before-final-verification" and relative == "" and not changed:
+        if not changed:
             changed = True
             marker.write_text(
                 '{"kind": "packets", "packets": [], '
                 '"schema": "autoform-skeleton-packets/v2"}\n'
             )
 
-    def counted_bind(*args, **kwargs):
-        nonlocal attempts
-        attempts += 1
-        return original_bind(*args, **kwargs)
-
-    monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", change_marker_once)
-    monkeypatch.setattr(lean_module, "bind_project_sources", counted_bind)
+    _on_checkpoint(monkeypatch, "before-final-verification", change_marker_once, relative="")
+    attempts = _count_binds(monkeypatch)
     monkeypatch.setattr(lean_module, "_SNAPSHOT_RETRY_DELAY_SECONDS", 0)
 
     snapshot = snapshot_project_sources(tmp_path)
 
     assert changed
-    assert attempts == 2
+    assert len(attempts) == 2
     assert snapshot.index.find("authored") is not None
     assert snapshot.index.find("generated") is None
 
@@ -2147,21 +2003,14 @@ def test_root_managed_marker_churn_does_not_invalidate_sources(
     marker.write_text(
         '{"kind":"packets","packets":[],"schema":"autoform-skeleton-packets/v2"}\n'
     )
-    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
     edits = 0
 
-    def churn_root_marker(event: str, relative: str) -> None:
+    def churn_root_marker() -> None:
         nonlocal edits
-        original_checkpoint(event, relative)
-        if event == "before-final-verification" and relative == "":
-            edits += 1
-            marker.write_text(f"{{\"irrelevant\": {edits}}}\n")
+        edits += 1
+        marker.write_text(f"{{\"irrelevant\": {edits}}}\n")
 
-    monkeypatch.setattr(
-        tree_snapshot_module,
-        "_tree_snapshot_checkpoint",
-        churn_root_marker,
-    )
+    _on_checkpoint(monkeypatch, "before-final-verification", churn_root_marker, relative="")
 
     snapshot = snapshot_project_sources(tmp_path)
 
@@ -2445,22 +2294,8 @@ def test_build_linker_rejects_a_captured_index_from_another_root(tmp_path: Path)
         build_linker(second, source_index=index, detect_missing=False)
 
 
-def _init_git_repository(root: Path, *, object_format: str = "sha1") -> str:
-    initialized = subprocess.run(
-        ["git", "init", f"--object-format={object_format}"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if initialized.returncode != 0:
-        pytest.skip(f"Git does not support {object_format} repositories")
-    subprocess.run(
-        ["git", "remote", "add", "origin", "https://github.com/owner/repo.git"],
-        cwd=root,
-        check=True,
-    )
-    subprocess.run(["git", "add", "."], cwd=root, check=True)
+def _git_commit(root: Path, message: str, path: str = ".") -> str:
+    subprocess.run(["git", "add", path], cwd=root, check=True)
     subprocess.run(
         [
             "git",
@@ -2470,7 +2305,7 @@ def _init_git_repository(root: Path, *, object_format: str = "sha1") -> str:
             "user.email=autoform@example.invalid",
             "commit",
             "-m",
-            "fixture",
+            message,
         ],
         cwd=root,
         capture_output=True,
@@ -2483,6 +2318,25 @@ def _init_git_repository(root: Path, *, object_format: str = "sha1") -> str:
         text=True,
         check=True,
     ).stdout.strip()
+
+
+def _init_git_repository(
+    root: Path,
+    *,
+    object_format: str = "sha1",
+    origin: str = "https://github.com/owner/repo.git",
+) -> str:
+    initialized = subprocess.run(
+        ["git", "init", f"--object-format={object_format}"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if initialized.returncode != 0:
+        pytest.skip(f"Git does not support {object_format} repositories")
+    subprocess.run(["git", "remote", "add", "origin", origin], cwd=root, check=True)
+    return _git_commit(root, "fixture")
 
 
 @pytest.mark.parametrize("object_format", ["sha1", "sha256"])
@@ -2529,29 +2383,7 @@ def test_auto_linker_retries_ref_and_source_as_one_unit(
         captures += 1
         if captures == 1:
             source.write_text("def second : Nat := 0\n")
-            subprocess.run(["git", "add", "A.lean"], cwd=root, check=True)
-            subprocess.run(
-                [
-                    "git",
-                    "-c",
-                    "user.name=Autoform Tests",
-                    "-c",
-                    "user.email=autoform@example.invalid",
-                    "commit",
-                    "-m",
-                    "second",
-                ],
-                cwd=root,
-                capture_output=True,
-                check=True,
-            )
-            second_commit = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=root,
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout.strip()
+            second_commit = _git_commit(root, "second", "A.lean")
         return snapshot
 
     monkeypatch.setattr(lean_module, "snapshot_project_sources", capture_then_commit)
@@ -2617,29 +2449,7 @@ def test_auto_linker_ignores_git_replace_objects(tmp_path: Path) -> None:
     source.write_text("def originalTree : Nat := 0\n")
     original = _init_git_repository(root)
     source.write_text("def replacementTree : Nat := 0\n")
-    subprocess.run(["git", "add", "A.lean"], cwd=root, check=True)
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=Autoform Tests",
-            "-c",
-            "user.email=autoform@example.invalid",
-            "commit",
-            "-m",
-            "replacement",
-        ],
-        cwd=root,
-        capture_output=True,
-        check=True,
-    )
-    replacement = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+    replacement = _git_commit(root, "replacement", "A.lean")
     subprocess.run(["git", "checkout", "--detach", original], cwd=root, check=True)
     source.write_text("def replacementTree : Nat := 0\n")
     subprocess.run(["git", "replace", original, replacement], cwd=root, check=True)
@@ -2658,21 +2468,11 @@ def test_explicit_ref_linker_keeps_remote_bound_to_resolved_root(
     first = tmp_path / "first"
     first.mkdir()
     _index(first, "def fromFirstRepository : Nat := 0\n", "A.lean")
-    commit = _init_git_repository(first)
-    subprocess.run(
-        ["git", "remote", "set-url", "origin", "https://github.com/owner/A.git"],
-        cwd=first,
-        check=True,
-    )
+    commit = _init_git_repository(first, origin="https://github.com/owner/A.git")
     second = tmp_path / "second"
     second.mkdir()
     _index(second, "def fromSecondRepository : Nat := 0\n", "B.lean")
-    _init_git_repository(second)
-    subprocess.run(
-        ["git", "remote", "set-url", "origin", "https://github.com/owner/B.git"],
-        cwd=second,
-        check=True,
-    )
+    _init_git_repository(second, origin="https://github.com/owner/B.git")
     alias = tmp_path / "alias"
     try:
         alias.symlink_to(first, target_is_directory=True)
@@ -2708,22 +2508,12 @@ def test_auto_linker_ignores_inherited_repo_and_ci_redirects(
     first = tmp_path / "first"
     first.mkdir()
     (first / "A.lean").write_text("def stableRepository : Nat := 0\n")
-    first_commit = _init_git_repository(first)
-    subprocess.run(
-        ["git", "remote", "set-url", "origin", "https://github.com/owner/A.git"],
-        cwd=first,
-        check=True,
-    )
+    first_commit = _init_git_repository(first, origin="https://github.com/owner/A.git")
     second = tmp_path / "second"
     second.mkdir()
     (second / "A.lean").write_text("def stableRepository : Nat := 0\n")
     (second / "OnlyB.txt").write_text("different tree\n")
-    second_commit = _init_git_repository(second)
-    subprocess.run(
-        ["git", "remote", "set-url", "origin", "https://github.com/owner/B.git"],
-        cwd=second,
-        check=True,
-    )
+    second_commit = _init_git_repository(second, origin="https://github.com/owner/B.git")
     monkeypatch.setenv("GIT_DIR", str(second / ".git"))
     monkeypatch.setenv("GIT_WORK_TREE", str(second))
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")

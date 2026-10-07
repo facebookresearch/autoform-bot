@@ -1063,6 +1063,20 @@ def test_plugin_pin_prefers_canonical_upstream_over_a_containing_fork_origin(
     assert scaffold_module.plugin_pin() == (scaffold_module.DEFAULT_AUTOFORM_SOURCE, head)
 
 
+def test_plugin_pin_skips_a_remote_whose_url_is_not_utf8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = tmp_path / "checkout"
+    head = _autoform_checkout(checkout, "https://example.test/fork.git")
+    _git_output(checkout, "remote", "add", "upstream", scaffold_module.DEFAULT_AUTOFORM_SOURCE)
+    _git_output(checkout, "update-ref", "refs/remotes/upstream/main", head)
+    config = checkout / ".git" / "config"
+    config.write_bytes(config.read_bytes().replace(b"example.test/fork", b"example.test/\xff"))
+    _run_from(monkeypatch, checkout)
+
+    assert scaffold_module.plugin_pin() == (scaffold_module.DEFAULT_AUTOFORM_SOURCE, head)
+
+
 @pytest.mark.parametrize(
     "changed",
     [
