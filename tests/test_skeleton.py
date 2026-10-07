@@ -1053,6 +1053,34 @@ def test_lake_toml_parser_limits_fail_closed(tmp_path: Path) -> None:
         lean_libraries(project)
 
 
+def _project_with_both_lakefiles(tmp_path: Path) -> Path:
+    project = tmp_path / "project"
+    project.mkdir()
+    shutil.copy(_FIXTURE / "lean-toolchain", project / "lean-toolchain")
+    (project / "lakefile.toml").write_text('name = "fromtoml"\n\n[[lean_lib]]\nname = "FromToml"\n', encoding="utf-8")
+    (project / "lakefile.lean").write_text(
+        "import Lake\nopen Lake DSL\n\npackage fromlean\n\nlean_lib FromLean\n", encoding="utf-8"
+    )
+    return project
+
+
+def test_lakefile_lean_wins_when_both_lakefiles_exist(tmp_path: Path, monkeypatch) -> None:
+    project = _project_with_both_lakefiles(tmp_path)
+    translated: list[Path] = []
+
+    def translate(root: Path) -> bytes:
+        translated.append(root)
+        return b'name = "fromlean"\n\n[[lean_lib]]\nname = "FromLean"\n'
+
+    monkeypatch.setattr("autoform_cli.skeleton._translate_lakefile", translate)
+
+    (library,) = lean_libraries(project)
+
+    # Lake builds from lakefile.lean when both exist, so its libraries are the project's.
+    assert translated == [project.resolve()]
+    assert library.name == "FromLean"
+
+
 def test_a_project_without_a_lakefile_is_refused(tmp_path: Path) -> None:
     with pytest.raises(SkeletonError):
         lean_libraries(tmp_path)
@@ -2159,6 +2187,15 @@ def _lean_toolchain_available() -> bool:
         return unavailable("elan toolchain discovery failed")
     available = any(line.split()[:1] == [pinned] for line in listed.stdout.splitlines())
     return available or unavailable(f"{pinned} is not installed")
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_lakefile_lean_wins_through_lake_translate_config(tmp_path: Path) -> None:
+    project = _project_with_both_lakefiles(tmp_path)
+
+    (library,) = lean_libraries(project)
+
+    assert library.name == "FromLean"
 
 
 def test_required_real_lean_tests_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:

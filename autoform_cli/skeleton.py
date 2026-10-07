@@ -1222,16 +1222,17 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
     A TOML manifest is read directly. A Lean manifest is evaluated by Lake
     itself through ``lake translate-config``, the same way the generated verify
     workflow reads the root package name, so both manifest languages are
-    handled without a second parser for Lean syntax.
+    handled without a second parser for Lean syntax. When both exist, Lake
+    builds from ``lakefile.lean``, so that is the one read here too.
     """
 
     root = Path(lean_root).expanduser().resolve()
     toml_snapshot = _read_snapshot_file(root / "lakefile.toml")
     lakefile_snapshot = _read_snapshot_file(root / "lakefile.lean")
-    if toml_snapshot is not None:
-        text = toml_snapshot[0]
-    elif lakefile_snapshot is not None:
+    if lakefile_snapshot is not None:
         text = _translate_lakefile(root)
+    elif toml_snapshot is not None:
+        text = toml_snapshot[0]
     else:
         raise SkeletonError([f"no lakefile.toml or lakefile.lean in {root}"])
     try:
