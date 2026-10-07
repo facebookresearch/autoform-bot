@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -141,6 +142,53 @@ def test_audit_rejects_implementation_notes_left_after_proof(tmp_path: Path) -> 
 
     note.unlink()
     assert audit_blueprint(blueprint).clean
+
+
+def test_audit_allows_implementation_notes_while_work_is_unproved(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    article_id = "af_0123456789abcdef01234567"
+    _article(
+        blueprint,
+        "result.md",
+        article_id=article_id,
+        declaration="theorem",
+        statement="formalized",
+        lean="Project.result",
+    )
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    (notes / f"{article_id}.md").write_text("next route\n", encoding="utf-8")
+
+    assert audit_blueprint(blueprint).clean
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "af_111111111111111111111111.md",
+        "bad name.md",
+        pytest.param(
+            "bad:name.md",
+            marks=pytest.mark.skipif(os.name == "nt", reason="colon is not a Windows filename"),
+        ),
+    ],
+)
+def test_audit_reports_invalid_note_at_its_blueprint_path(
+    tmp_path: Path, filename: str
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "result.md")
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    (notes / filename).write_text("orphan\n", encoding="utf-8")
+
+    result = audit_blueprint(blueprint)
+
+    assert [(finding.article_path, finding.code) for finding in result.findings] == [
+        (f".implementation-notes/{filename}", "invalid-graph")
+    ]
 
 
 def test_audit_reports_formalizable_structure(tmp_path: Path) -> None:

@@ -59,13 +59,12 @@ as the first read and, for a subagent, the same `phase`, `article_revision`,
 `open_statements`, `assumes`, and `revision` it was dispatched with. Unrelated
 parallel articles may legitimately change the graph-wide source revision.
 
-Read the complete article, its
-`blueprint/.implementation-notes/<article_id>.md` when present, cited sources,
-dependency articles, and existing Lean target. Preserve the exact mathematical
-statement. Work only on the selected
-phase: do not modify another article or its Lean declarations, or weaken a
-public statement. The one exception is revising a declaration other articles'
-Lean uses: start from `autoform work impact` and make only the edits the
+Read the complete article, its `blueprint/.implementation-notes/<article_id>.md`
+when present, cited sources, dependency articles, and existing Lean target.
+Preserve the exact mathematical statement. Work only on the selected phase: do
+not modify another article or its Lean declarations, or weaken a public
+statement. The one exception is revising a declaration other articles' Lean
+uses: start from `autoform work impact` and make only the edits the
 [revision contract](../../autoform_cli/README.md#revision-contract) requires,
 under the claims it requires. A work item flagged `revision`, whose article
 records `statement: retracted`, is such a revision; restating it replaces
@@ -124,7 +123,8 @@ route), never a transcript or retry counter, and never a secret or machine-local
 path. The durable ID keeps the note with an article when its roadmap path moves,
 and one file per claimed article avoids cross-worker merge hotspots. Move
 still-useful notes already in the article there and drop the rest. Delete the
-file once the article is proved; an empty file fails `autoform check`. A missing
+file once the article is proved; an empty file fails `autoform check`. Never
+link the hidden note from an article, because publication omits it. A missing
 prerequisite, an incorrect decomposition, a change another article needs, or a
 proof recorded without its statement returns to Roadmap instead of silently
 changing the DAG.

@@ -72,6 +72,9 @@ Articles hold only frontmatter and informal mathematics; put Lean-side findings
 such as Mathlib gaps, prior art, and declaration names in
 `blueprint/.implementation-notes/<article_id>.md`. The hidden per-article file
 stays out of the mathematical wiki and remains valid when the article moves.
+Never link it from an article. Delete it when the article is proved or marked
+`mathlib: true`, and in the same commit that deletes or merges the article;
+an orphaned note blocks every command that loads the graph.
 Assert formalization or `mathlib: true` only after exact verification. Before
 revising a formalizable leaf, acquire the `claim_target` that `autoform work
 context` reports for it, passing your own `--worker-id`; renew it while editing
@@ -91,11 +94,11 @@ only that article and the dependents whose Markdown text the revision rewrites,
 claiming them all in one acquire; the Lean-side impact decides every other
 dependent. For a Lean revision requested in Human Review, record the decision in
 the article's `blueprint/.implementation-notes/<article_id>.md` and retract the
-article the same way, so it returns to the frontier as a statement phase flagged as a
-revision, and leave the Lean change to Formalize, which follows the [revision
-contract](../../autoform_cli/README.md#revision-contract); this skill edits
-only Markdown. For a large source, divide independent sections among available
-agents while retaining one owner for global coverage and dependency
+article the same way, so it returns to the frontier as a statement phase flagged
+as a revision, and leave the Lean change to Formalize, which follows the
+[revision contract](../../autoform_cli/README.md#revision-contract); this skill
+edits only Markdown. For a large source, divide independent sections among
+available agents while retaining one owner for global coverage and dependency
 consistency.
 
 `open_statements` in `roadmap/README.md` is a project policy; absent means

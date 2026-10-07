@@ -198,7 +198,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     open_statements = policy == "allowed"
             parsed.append(node)
 
-    issues.extend(_implementation_note_issues(blueprint, article_ids))
+    if not issues:
+        issues.extend(_implementation_note_issues(blueprint, article_ids))
     if issues:
         raise GraphValidationError(issues)
 
@@ -394,9 +395,12 @@ def _implementation_note_issues(
         return issues
     for path in entries:
         relative = f"{IMPLEMENTATION_NOTES_DIR}/{path.name}"
+        if path.is_symlink():
+            issues.append(f"{relative}: implementation note must be a regular file")
+            continue
         if path.name.startswith("."):
             continue
-        if path.is_symlink() or not path.is_file():
+        if not path.is_file():
             issues.append(f"{relative}: implementation note must be a regular file")
             continue
         if path.suffix != ".md" or not ARTICLE_ID_PATTERN.fullmatch(path.stem):
@@ -404,8 +408,7 @@ def _implementation_note_issues(
                 f"{relative}: implementation note must be named <article_id>.md"
             )
             continue
-        node_id = article_ids.get(path.stem)
-        if node_id is None:
+        if path.stem not in article_ids:
             issues.append(
                 f"{relative}: implementation note names no roadmap article"
             )
@@ -415,7 +418,7 @@ def _implementation_note_issues(
         except (OSError, UnicodeError) as error:
             issues.append(f"{relative}: cannot read implementation note: {error}")
             continue
-        if not text.strip():
+        if not text.replace("\ufeff", "").replace("\u200b", "").strip():
             issues.append(
                 f"{relative}: empty implementation note; delete it instead"
             )

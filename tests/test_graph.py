@@ -553,6 +553,7 @@ def test_implementation_notes_are_keyed_by_durable_article_id(tmp_path: Path) ->
     (notes / f"{article_id}.md").write_text(
         "Mathlib has no `Project.result` yet.\n", encoding="utf-8"
     )
+    (notes / ".DS_Store").write_bytes(b"finder metadata")
 
     graph = load_graph(blueprint)
     assert sorted(graph.nodes) == ["chapter", "chapter/result", "moved", "roadmap"]
@@ -567,8 +568,10 @@ def test_implementation_notes_are_keyed_by_durable_article_id(tmp_path: Path) ->
     ("filename", "contents", "message"),
     [
         ("result.md", "route\n", "must be named <article_id>.md"),
+        ("af_0123456789abcdef01234567.txt", "route\n", "must be named <article_id>.md"),
         ("af_111111111111111111111111.md", "route\n", "names no roadmap article"),
         ("af_0123456789abcdef01234567.md", "\n", "empty implementation note"),
+        ("af_0123456789abcdef01234567.md", "\ufeff\u200b\n", "empty implementation note"),
     ],
 )
 def test_implementation_notes_fail_closed(
@@ -605,6 +608,84 @@ def test_implementation_notes_directory_has_canonical_spelling(tmp_path: Path) -
 
     with pytest.raises(GraphValidationError, match="noncanonical implementation notes"):
         load_graph(blueprint)
+
+
+def test_implementation_note_must_be_utf8(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+    roadmap.mkdir(parents=True)
+    article_id = "af_0123456789abcdef01234567"
+    (roadmap / "result.md").write_text(
+        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
+        encoding="utf-8",
+    )
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    (notes / f"{article_id}.md").write_bytes(b"\xff")
+
+    with pytest.raises(GraphValidationError, match="cannot read implementation note"):
+        load_graph(blueprint)
+
+
+def test_implementation_note_must_not_be_a_symlink(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+    roadmap.mkdir(parents=True)
+    article_id = "af_0123456789abcdef01234567"
+    (roadmap / "result.md").write_text(
+        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
+        encoding="utf-8",
+    )
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    target = tmp_path / "note.md"
+    target.write_text("route\n", encoding="utf-8")
+    try:
+        (notes / f"{article_id}.md").symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    with pytest.raises(GraphValidationError, match="must be a regular file"):
+        load_graph(blueprint)
+
+
+def test_implementation_notes_directory_must_not_be_a_symlink(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+    roadmap.mkdir(parents=True)
+    article_id = "af_0123456789abcdef01234567"
+    (roadmap / "result.md").write_text(
+        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "notes"
+    target.mkdir()
+    try:
+        (blueprint / ".implementation-notes").symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    with pytest.raises(GraphValidationError, match="directory must not be a symlink"):
+        load_graph(blueprint)
+
+
+def test_article_error_does_not_misreport_its_note_as_orphaned(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+    roadmap.mkdir(parents=True)
+    article_id = "af_0123456789abcdef01234567"
+    (roadmap / "result.md").write_text(
+        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\nNo H1.\n",
+        encoding="utf-8",
+    )
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    (notes / f"{article_id}.md").write_text("route\n", encoding="utf-8")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues == ("result: missing H1 title",)
 
 
 @pytest.mark.parametrize(

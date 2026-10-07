@@ -10,10 +10,10 @@ as needed.
 
 ## Articles and containment
 
-Every Markdown file below `blueprint/roadmap/` is an article node. A `README.md`
-represents its directory and strictly contains the articles below it; the
-nearest ancestor `README.md` is the single parent. This supports any number of
-levels, from book to chapter to section to declaration. Ordinary
+Every Markdown file below `blueprint/roadmap/` is an article node. A
+`README.md` represents its directory and strictly contains the articles below
+it; the nearest ancestor `README.md` is the single parent. This supports any
+number of levels, from book to chapter to section to declaration. Ordinary
 files use their path without `.md` as a stable ID; `README.md` uses its
 directory path, with the root article named `roadmap`.
 
@@ -80,12 +80,12 @@ placement needs none at all; only checked facts are recorded.
 Versioned implementation notes live outside the mathematical roadmap at
 `blueprint/.implementation-notes/<article_id>.md`, one file per article. The
 durable ID survives article moves, and article claims keep independent workers
-from editing the same note. `autoform check` rejects malformed, empty, symlinked,
-or orphaned notes; assign the article ID before creating its note. Delete the
-file once its article is proved. The directory is
-hidden, so current and older renderers omit it from the site and publication
-hash without requiring an `AUTOFORM_REF` migration; `autoform audit` reports a
-note left behind after proof.
+from editing the same note. Every command that loads the graph, including
+`autoform check`, rejects malformed, empty, symlinked, or orphaned notes; assign
+the article ID before creating its note. Delete the file once its article is
+proved. The directory is hidden, so current and older renderers omit it from the
+site and publication hash without requiring an `AUTOFORM_REF` migration;
+`autoform audit` reports a note left behind after proof.
 
 ## Assertions and derived status
 
@@ -1088,10 +1088,9 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
      proof that cannot be repaired becomes exactly `sorry` under the open
      policy; otherwise delete the declaration and remove its article's
      `lean:`, `statement`, and `proof`, which works only when nothing else
-     uses it. When neither applies, the
-     revision is blocked: release the claims and report it. Record what
-     happened in each touched article's
-     `blueprint/.implementation-notes/<article_id>.md` file.
+     uses it. When neither applies, the revision is blocked: release the claims
+     and report it. Record what happened in the revision commit and report. Use
+     an article's implementation note only while that article remains unproved.
 
    An unused statement dependency, which rules out the contained route, is
    re-reviewed under the revised meaning, X' on the expand route and X's new

@@ -76,6 +76,16 @@ _DECLARATION_HEADER = re.compile(
 )
 _STRING_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"')
 _DEPRECATED_ATTRIBUTE = re.compile(r"(?:\[|,)\s*(?:(?:scoped|local)\s+)?deprecated\b")
+_IMPLEMENTATION_NOTE_ISSUE_MARKERS = (
+    ": noncanonical implementation notes directory",
+    ": implementation notes directory",
+    ": implementation notes path",
+    ": cannot read directory",
+    ": implementation note must",
+    ": implementation note names",
+    ": cannot read implementation note",
+    ": empty implementation note",
+)
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -547,6 +557,14 @@ def _stable_validation_reason(blueprint: Path, issue: str) -> str:
 
 
 def _validation_article_path(blueprint: Path, issue: str) -> str:
+    issue_root = issue.split("/", 1)[0].split(":", 1)[0]
+    if issue_root.casefold() == IMPLEMENTATION_NOTES_DIR.casefold():
+        for marker in _IMPLEMENTATION_NOTE_ISSUE_MARKERS:
+            boundary = issue.rfind(marker)
+            if boundary >= 0:
+                return issue[:boundary]
+        return IMPLEMENTATION_NOTES_DIR
+
     node_id = issue.split(":", 1)[0]
     if not node_id or " " in node_id or node_id in {"dependency cycle", "rolled-up dependency cycle"}:
         return "."
