@@ -391,11 +391,6 @@ def _focus_view(
     adjacency: dict[str, set[str]],
     order_index: dict[str, int],
 ) -> GraphView:
-    if node_id not in graph.nodes:
-        raise KeyError(f"unknown blueprint node: {node_id}")
-    if radius < 0:
-        raise ValueError("focus radius must be non-negative")
-
     selected = {node_id}
     frontier = {node_id}
     for _ in range(radius):
@@ -446,7 +441,7 @@ def _node_view(
     *,
     ordered: bool = False,
 ) -> GraphView:
-    ordered_ids = list(dict.fromkeys(node_id for node_id in selected if node_id in graph.nodes))
+    ordered_ids = list(selected)
     selected_ids = frozenset(ordered_ids)
     if not ordered:
         order_index = {node_id: index for index, node_id in enumerate(topological_order(graph))}
