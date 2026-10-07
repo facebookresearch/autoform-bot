@@ -172,6 +172,18 @@ def test_root_agent_guidance_routes_to_owning_documents(repo_root: Path) -> None
         assert f"]({relative})" in guidance
         assert (repo_root / relative).is_file()
 
+    normalized_guidance = " ".join(guidance.split()).lower()
+    assert "identify the concrete user outcome or maintenance burden" in normalized_guidance
+    assert "review blockers does not prove that the proposal belongs" in normalized_guidance
+    assert "validate their own planning state" in normalized_guidance
+    assert "only when authorized" in normalized_guidance
+    assert "repository quality" in normalized_guidance
+    assert "line count" in normalized_guidance
+    assert "pr count" in normalized_guidance
+    assert all(word in normalized_guidance for word in ("closing", "deleting", "replacing"))
+    assert "otherwise recommend" in normalized_guidance
+    assert "success" in normalized_guidance
+
 
 def test_agent_review_treats_skeleton_hashes_as_advisory(repo_root: Path) -> None:
     review = (repo_root / "skills" / "agent-review" / "SKILL.md").read_text(

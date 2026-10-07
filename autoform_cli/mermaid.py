@@ -28,8 +28,11 @@ def node_link(node: Node, output: Path, link_extension: str) -> str:
 
 def relative_link(target: Path, output: Path, link_extension: str) -> str:
     """Relative link from the page at *output* to *target*, with its suffix swapped."""
-    relative = os.path.relpath(target.resolve(), output.resolve().parent)
-    return Path(relative).with_suffix(link_extension).as_posix()
+    relative = Path(os.path.relpath(target.resolve(), output.resolve().parent))
+    if not relative.name:
+        # The page's own directory is ``.``, which has no name to take a suffix.
+        return relative.as_posix()
+    return relative.with_suffix(link_extension).as_posix()
 
 
 def source_links(graph: Graph, output: Path, link_extension: str) -> dict[str, str]:

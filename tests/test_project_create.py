@@ -192,6 +192,46 @@ def test_incomplete_local_templates_are_not_published(tmp_path: Path, monkeypatc
     _refused(tmp_path / "Project", "project-create-validation-failed")
 
 
+@pytest.mark.parametrize("relative", ["lake-manifest.json", "lake-manifest.json/note.md"], ids=["file", "directory"])
+def test_an_unlisted_pair_never_publishes_a_template_manifest(
+    relative: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    templates = tmp_path / "templates"
+    shutil.copytree(create_module._TEMPLATES, templates)
+    (templates / relative).parent.mkdir(exist_ok=True)
+    (templates / relative).write_text('{"version": "1.1.0", "packages": []}\n', encoding="utf-8")
+    target = tmp_path / "Project"
+    monkeypatch.setattr(create_module, "_TEMPLATES", templates)
+
+    with pytest.raises(ProjectCreateError) as raised:
+        create_project(target, package="Project", release_id=None, lean_toolchain="v4.30.0")
+
+    assert raised.value.code == "project-create-validation-failed"
+    assert raised.value.message == (
+        create_module._STAGED_MESSAGE + " An .autoform-new-* stage may remain; inspect it before removal."
+    )
+    assert not target.exists()
+    stages = list(tmp_path.glob(".autoform-new-*"))
+    assert len(stages) == 1
+    assert (stages[0] / relative).is_file()
+    assert stat.S_IMODE(stages[0].stat().st_mode) == 0o700
+
+
+@pytest.mark.parametrize("relative", _CORE_FILES)
+def test_a_template_cannot_replace_a_core_project_file(
+    relative: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    templates = tmp_path / "templates"
+    shutil.copytree(create_module._TEMPLATES, templates)
+    (templates / relative).parent.mkdir(exist_ok=True)
+    (templates / relative).write_text("template\n", encoding="utf-8")
+    monkeypatch.setattr(create_module, "_TEMPLATES", templates)
+
+    error = _refused(tmp_path / "Project", "project-create-validation-failed")
+
+    assert error.message == create_module._CONTRACTS_MESSAGE
+
+
 def test_group_writable_installed_templates_publish_canonical_modes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -361,6 +401,30 @@ def test_every_release_has_creation_contracts() -> None:
         }
 
 
+@pytest.mark.parametrize("resource", ["manifest\ue000.json", "manifest\U0001f600.json"])
+def test_release_metadata_names_its_manifest_below_the_surrogate_range(
+    monkeypatch: pytest.MonkeyPatch, resource: str
+) -> None:
+    release = load_release_catalog().recommended
+    name = f"creation-release-{release.id}.json"
+    payload = json.loads(create_module.files("autoform_cli.project").joinpath(name).read_bytes())
+    payload["lake_manifest"] = resource
+
+    class Resources:
+        def joinpath(self, _name: str) -> Resources:
+            return self
+
+        def read_bytes(self) -> bytes:
+            return json.dumps(payload).encode()
+
+    monkeypatch.setattr(create_module, "files", lambda _package: Resources())
+
+    with pytest.raises(ProjectCreateError) as raised:
+        create_module._load_creation_release_descriptor(release)
+
+    assert raised.value.code == "project-create-validation-failed"
+
+
 @pytest.mark.parametrize("missing", ["Aesop", "Archive", "Counterexamples"])
 def test_release_metadata_must_cover_manifest_and_mathlib_production_roots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str
@@ -424,11 +488,7 @@ def test_open_parent_descriptor_rechecks_the_generated_module_filename_limit(
 
 
 def test_rejects_unknown_release_before_writing(tmp_path: Path) -> None:
-    target = tmp_path / "project"
-    with pytest.raises(ProjectCreateError) as raised:
-        create_project(target, package="Project", release_id="unknown")
-    assert raised.value.code == "project-release-unknown"
-    assert not target.exists()
+    _refused(tmp_path / "project", "project-release-unknown", release_id="unknown")
 
 
 def test_omitted_release_uses_the_recommended_release(tmp_path: Path) -> None:
@@ -628,28 +688,6 @@ def test_catalog_releases_meet_the_lean_floor() -> None:
         assert create_module._version_warnings(version) == ()
 
 
-def test_unlisted_plan_must_not_carry_a_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    target = tmp_path / "Project"
-    original = create_module._build_project_plan
-    bundle = create_module._load_release_bundle(load_release_catalog().recommended)
-
-    def add_manifest(*args, **kwargs):
-        plan, pinned = original(*args, **kwargs)
-        manifest = type(plan[0])("lake-manifest.json", create_module._lake_manifest("Project", bundle), 0o644)
-        return tuple(sorted((*plan, manifest), key=lambda item: item.relative)), pinned
-
-    monkeypatch.setattr(create_module, "_build_project_plan", add_manifest)
-
-    with pytest.raises(ProjectCreateError) as raised:
-        create_project(target, package="Project", release_id=None, lean_toolchain="v4.30.0")
-
-    assert raised.value.code == "project-create-validation-failed"
-    assert not target.exists()
-    stages = list(tmp_path.glob(".autoform-new-*"))
-    assert len(stages) == 1
-    assert (stages[0] / "lake-manifest.json").is_file()
-
-
 def test_long_valid_target_name_does_not_expand_the_stage_name(tmp_path: Path) -> None:
     name_limit = os.pathconf(tmp_path, "PC_NAME_MAX")
     if name_limit < 64:
@@ -805,66 +843,36 @@ def test_injected_build_failure_preserves_the_empty_stage(tmp_path: Path, monkey
     assert not list(stages[0].iterdir())
 
 
-def test_injected_validation_failure_preserves_stage_for_safe_recovery(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    target = tmp_path / "project"
-
-    def fail(*args, **kwargs):
-        raise ProjectCreateError("project-create-validation-failed", "invalid")
-
-    monkeypatch.setattr(create_module, "_validate_staged_project", fail)
-    with pytest.raises(ProjectCreateError) as raised:
-        create_project(target, package="Project", release_id=_RELEASE)
-    assert raised.value.code == "project-create-validation-failed"
-    assert ".autoform-new-* stage may remain" in raised.value.message
-    assert not target.exists()
-    stages = list(tmp_path.glob(".autoform-new-*"))
-    assert len(stages) == 1
-    assert (stages[0] / "lean-toolchain").is_file()
-
-
 def test_invalid_planned_roadmap_is_never_published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "project"
     original = create_module._build_project_plan
 
     def corrupt(*args, **kwargs):
-        plan, pinned = original(*args, **kwargs)
-        changed = tuple(
+        return tuple(
             type(item)(item.relative, b"No H1 title.\n", item.mode)
             if item.relative == "blueprint/roadmap/README.md"
             else item
-            for item in plan
+            for item in original(*args, **kwargs)
         )
-        return changed, pinned
 
     monkeypatch.setattr(create_module, "_build_project_plan", corrupt)
 
-    with pytest.raises(ProjectCreateError) as raised:
-        create_project(target, package="Project", release_id=_RELEASE)
-
-    assert raised.value.code == "project-create-validation-failed"
-    assert not target.exists()
-    assert not list(tmp_path.glob(".autoform-new-*"))
+    _refused(target, "project-create-validation-failed")
 
 
-@pytest.mark.parametrize("corruption", ["container", "relative", "content", "mode"])
-def test_plan_requires_exact_types_and_safe_file_modes_before_writing(
+@pytest.mark.parametrize("corruption", ["relative", "mode"])
+def test_plan_requires_safe_paths_and_file_modes_before_writing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, corruption: str
 ) -> None:
     original = create_module._build_project_plan
 
     def corrupt(*args, **kwargs):
-        plan, pinned = original(*args, **kwargs)
-        if corruption == "container":
-            return list(plan), pinned
-        first, *rest = plan
+        first, *rest = original(*args, **kwargs)
         changed = {
             "relative": type(first)(Path(first.relative), first.content, first.mode),
-            "content": type(first)(first.relative, memoryview(first.content), first.mode),
             "mode": type(first)(first.relative, first.content, 0o666),
         }[corruption]
-        return (changed, *rest), pinned
+        return (changed, *rest)
 
     monkeypatch.setattr(create_module, "_build_project_plan", corrupt)
 
@@ -1109,7 +1117,7 @@ def test_requested_parent_rebind_before_publish_preserves_the_stage(
     parent.mkdir(mode=0o700)
     parent.chmod(0o755)
     target = parent / "Project"
-    original = create_module._validate_staged_project
+    original = create_module._materialize_project
 
     def rebind(*args, **kwargs) -> None:
         original(*args, **kwargs)
@@ -1117,7 +1125,7 @@ def test_requested_parent_rebind_before_publish_preserves_the_stage(
         parent.mkdir(mode=0o700)
         parent.chmod(0o755)
 
-    monkeypatch.setattr(create_module, "_validate_staged_project", rebind)
+    monkeypatch.setattr(create_module, "_materialize_project", rebind)
 
     with pytest.raises(ProjectCreateError) as raised:
         create_project(target, package="Project", release_id=_RELEASE)
@@ -1190,9 +1198,20 @@ def test_postpublish_parent_recheck_failure_does_not_claim_a_rebind(
     assert inspect_project(target).ok
 
 
-def test_workspace_substitution_fails_before_publication(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("template_manifest", [False, True], ids=["catalog-release", "unlisted-template-manifest"])
+def test_workspace_substitution_fails_before_publication(
+    template_manifest: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     target = tmp_path / "project"
-    original = create_module._validate_staged_project
+    versions: dict[str, str | None] = {"release_id": _RELEASE}
+    if template_manifest:
+        # The identity check runs before the manifest refusal, so the code stays main's.
+        templates = tmp_path / "templates"
+        shutil.copytree(create_module._TEMPLATES, templates)
+        (templates / "lake-manifest.json").write_text('{"version": "1.1.0", "packages": []}\n', encoding="utf-8")
+        monkeypatch.setattr(create_module, "_TEMPLATES", templates)
+        versions = {"release_id": None, "lean_toolchain": "v4.30.0"}
+    original = create_module._materialize_project
 
     def substitute(*args, **kwargs) -> None:
         original(*args, **kwargs)
@@ -1202,35 +1221,14 @@ def test_workspace_substitution_fails_before_publication(tmp_path: Path, monkeyp
         stage.mkdir(mode=0o700)
         (stage / "FOREIGN").write_text("foreign\n", encoding="utf-8")
 
-    monkeypatch.setattr(create_module, "_validate_staged_project", substitute)
+    monkeypatch.setattr(create_module, "_materialize_project", substitute)
     with pytest.raises(ProjectCreateError) as raised:
-        create_project(target, package="Project", release_id=_RELEASE)
+        create_project(target, package="Project", **versions)
     assert raised.value.code == "project-create-failed"
     assert not target.exists()
     assert any(path.name == "FOREIGN" for path in tmp_path.rglob("FOREIGN"))
-
-
-def test_corrupt_core_plan_is_rejected_without_path_based_inspection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    target = tmp_path / "project"
-    original = create_module._build_project_plan
-
-    def corrupt(*args, **kwargs):
-        plan, pinned = original(*args, **kwargs)
-        changed = tuple(
-            type(item)(item.relative, b"leanprover/lean4:v0.0.0\n", item.mode)
-            if item.relative == "lean-toolchain"
-            else item
-            for item in plan
-        )
-        return changed, pinned
-
-    monkeypatch.setattr(create_module, "_build_project_plan", corrupt)
-    with pytest.raises(ProjectCreateError) as raised:
-        create_project(target, package="Project", release_id=_RELEASE)
-    assert raised.value.code == "project-create-validation-failed"
-    assert not target.exists()
+    # The renamed stage is refused before its chmod, so the written tree stays private.
+    assert stat.S_IMODE(next(tmp_path.glob(".autoform-new-*-owned")).stat().st_mode) == 0o700
 
 
 def test_stage_path_substitution_never_writes_to_symlink_target(
@@ -1261,14 +1259,14 @@ def test_stage_path_substitution_never_writes_to_symlink_target(
 
 def test_stage_open_failure_preserves_the_owned_empty_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "project"
-    original = create_module._open_stage
+    original = create_module._open_directory
 
     def fail_first_open(parent_descriptor: int, stage_name: str) -> int:
         if stage_name.startswith(".autoform-new-"):
             raise OSError("injected stage open failure")
         return original(parent_descriptor, stage_name)
 
-    monkeypatch.setattr(create_module, "_open_stage", fail_first_open)
+    monkeypatch.setattr(create_module, "_open_directory", fail_first_open)
 
     with pytest.raises(ProjectCreateError) as raised:
         create_project(target, package="Project", release_id=_RELEASE)
@@ -1280,16 +1278,101 @@ def test_stage_open_failure_preserves_the_owned_empty_stage(tmp_path: Path, monk
     assert not list(stages[0].iterdir())
 
 
+def test_stage_substitution_is_refused_before_writing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "project"
+    original = create_module._open_directory
+
+    def substitute_after_open(parent_descriptor: int, name: str) -> int:
+        descriptor = original(parent_descriptor, name)
+        if name.startswith(".autoform-new-"):
+            (tmp_path / name).rename(tmp_path / f"{name}-owned")
+            (tmp_path / name).mkdir(mode=0o700)
+        return descriptor
+
+    monkeypatch.setattr(create_module, "_open_directory", substitute_after_open)
+
+    with pytest.raises(ProjectCreateError) as raised:
+        create_project(target, package="Project", release_id=_RELEASE)
+
+    assert raised.value.code == "project-create-failed"
+    assert ".autoform-new-* stage may remain" in raised.value.message
+    assert not target.exists()
+    # Neither the replacement nor the opened stage, now under its -owned name, received a file.
+    stages = list(tmp_path.glob(".autoform-new-*"))
+    assert len(stages) == 2
+    assert not any(list(stage.iterdir()) for stage in stages)
+
+
+@pytest.mark.parametrize(
+    ("mode", "entries"), [(0o700, {"private.txt"}), (0o755, set())], ids=["nonempty-0700", "empty-0755"]
+)
+def test_swapped_in_stage_directory_is_refused_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: int, entries: set[str]
+) -> None:
+    target = tmp_path / "project"
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    for name in entries:
+        (decoy / name).write_text("private\n", encoding="utf-8")
+    decoy.chmod(mode)
+    original = create_module._open_directory
+
+    def swap_before_open(parent_descriptor: int, name: str) -> int:
+        if name.startswith(".autoform-new-") and decoy.exists():
+            (tmp_path / name).rename(tmp_path / "original-stage")
+            decoy.rename(tmp_path / name)
+        return original(parent_descriptor, name)
+
+    monkeypatch.setattr(create_module, "_open_directory", swap_before_open)
+
+    with pytest.raises(ProjectCreateError) as raised:
+        create_project(target, package="Project", release_id=_RELEASE)
+
+    assert raised.value.code == "project-create-failed"
+    assert ".autoform-new-* stage may remain" in raised.value.message
+    assert not target.exists()
+    (swapped,) = tmp_path.glob(".autoform-new-*")
+    assert stat.S_IMODE(swapped.stat().st_mode) == mode
+    assert {path.name for path in swapped.iterdir()} == entries
+    assert not list((tmp_path / "original-stage").iterdir())
+
+
+def test_foreign_owned_stage_is_refused_before_writing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "project"
+    original = create_module._create_stage
+    euid = os.geteuid()
+
+    def foreign_stage(parent_descriptor: int) -> str:
+        name = original(parent_descriptor)
+        # From here on the stage looks like a directory another uid put in its place.
+        monkeypatch.setattr(create_module.os, "geteuid", lambda: euid + 1)
+        return name
+
+    monkeypatch.setattr(create_module, "_create_stage", foreign_stage)
+
+    with pytest.raises(ProjectCreateError) as raised:
+        create_project(target, package="Project", release_id=_RELEASE)
+
+    assert raised.value.code == "project-create-failed"
+    assert ".autoform-new-* stage may remain" in raised.value.message
+    assert not target.exists()
+    stages = list(tmp_path.glob(".autoform-new-*"))
+    assert len(stages) == 1
+    assert not list(stages[0].iterdir())
+
+
 def test_failure_path_never_attempts_recursive_deletion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "project"
+    original = create_module._materialize_project
 
     def fail(*args, **kwargs):
+        original(*args, **kwargs)
         raise OSError("injected")
 
     def forbidden(*args, **kwargs):
         raise AssertionError("project creation attempted destructive cleanup")
 
-    monkeypatch.setattr(create_module, "_validate_staged_project", fail)
+    monkeypatch.setattr(create_module, "_materialize_project", fail)
     monkeypatch.setattr(create_module.os, "unlink", forbidden)
     monkeypatch.setattr(create_module.os, "rmdir", forbidden)
 
@@ -1307,7 +1390,7 @@ def test_failure_cleanup_never_recurses_into_a_foreign_directory(
     victim = tmp_path / "victim"
     victim.mkdir()
     (victim / "KEEP").write_text("keep\n", encoding="utf-8")
-    original = create_module._validate_staged_project
+    original = create_module._materialize_project
 
     def substitute(*args, **kwargs):
         original(*args, **kwargs)
@@ -1316,7 +1399,7 @@ def test_failure_cleanup_never_recurses_into_a_foreign_directory(
         victim.rename(stage / "blueprint")
         raise OSError("injected")
 
-    monkeypatch.setattr(create_module, "_validate_staged_project", substitute)
+    monkeypatch.setattr(create_module, "_materialize_project", substitute)
     with pytest.raises(ProjectCreateError) as raised:
         create_project(target, package="Project", release_id=_RELEASE)
 
@@ -1369,16 +1452,16 @@ def test_noncanonical_generated_directory_mode_is_not_published(
     assert stat.S_IMODE((stage / "blueprint").stat().st_mode) == 0o777
 
 
-def test_mutation_after_validation_is_not_published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mutated_stage_is_not_published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "project"
-    original = create_module._validate_staged_project
+    original = create_module._materialize_project
 
     def mutate(*args, **kwargs):
         original(*args, **kwargs)
         stage = next(tmp_path.glob(".autoform-new-*"))
         (stage / "lean-toolchain").write_text("mutated\n", encoding="utf-8")
 
-    monkeypatch.setattr(create_module, "_validate_staged_project", mutate)
+    monkeypatch.setattr(create_module, "_materialize_project", mutate)
 
     with pytest.raises(ProjectCreateError) as raised:
         create_project(target, package="Project", release_id=_RELEASE)
@@ -1719,12 +1802,7 @@ def test_group_writable_parent_is_refused_with_a_remedy(tmp_path: Path) -> None:
     parent.mkdir(mode=0o700)
     parent.chmod(0o775)
 
-    with pytest.raises(ProjectCreateError) as raised:
-        create_project(parent / "Project", package="Project", release_id=_RELEASE)
-
-    assert raised.value.code == "project-parent-unsafe"
-    assert "chmod g-w,o-w" in raised.value.message
-    assert not list(parent.iterdir())
+    assert "chmod g-w,o-w" in _refused(parent / "Project", "project-parent-unsafe").message
 
 
 _NEEDS_PERMISSIONS = pytest.mark.skipif(

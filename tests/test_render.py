@@ -576,6 +576,40 @@ def test_a_hoisted_body_keeps_its_other_links_working(tmp_path: Path) -> None:
     assert "[Paper](../../sources.md)" in chapter
 
 
+def test_a_link_to_the_chapters_own_directory_is_published(tmp_path: Path) -> None:
+    """``./`` on a chapter page is the page's own directory, which is ``.`` once published."""
+    project = _project(tmp_path)
+    readme = project / "blueprint/roadmap/README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8").replace(
+            "This chapter develops",
+            "See [this folder](./) and [its results](./#results). This chapter develops",
+        ),
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert "[this folder](.)" in chapter
+    assert "[its results](.#results)" in chapter
+
+
+def test_a_hoisted_body_can_link_to_the_chapter_it_lands_on(tmp_path: Path) -> None:
+    """``../`` from a leaf one level below its chapter names the page its body is published on."""
+    project = _project(tmp_path)
+    leaf = project / "blueprint/roadmap/chapter/definitions/deep.md"
+    leaf.parent.mkdir(parents=True)
+    (project / "blueprint/roadmap/chapter/README.md").write_text("# Chapter\n", encoding="utf-8")
+    leaf.write_text(
+        "---\ndeclaration: def\n---\n\n# Deep\n\nSee [the chapter](../).\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    chapter = (tmp_path / "out/roadmap/chapter/README.md").read_text(encoding="utf-8")
+    assert "[the chapter](.)" in chapter
+
+
 def test_unresolved_declarations_are_reported_not_linked(tmp_path: Path) -> None:
     project = _project(tmp_path)
     (project / "blueprint/roadmap/top.md").write_text(

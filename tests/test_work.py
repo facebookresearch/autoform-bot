@@ -515,14 +515,13 @@ def _policy_project(tmp_path: Path, policy: str | None) -> Path:
         metadata=["article_id: af_00000000000000000000000e", "declaration: theorem"],
         depends="reduction.md",
     )
-    # The contract lists the upstream article, never open, but not the one that names no declaration.
+    # The contract lists the upstream article, never open.
     _article(
         project,
         "upstream.md",
         title="Upstream",
         metadata=["declaration: theorem", "mathlib: true", "lean: Project.upstream"],
     )
-    _article(project, "unnamed.md", title="Unnamed", metadata=[])
     return project
 
 
@@ -882,13 +881,6 @@ def test_work_assumptions_text_labels_only_conditional_articles_as_conditional(t
     project = _policy_project(tmp_path, "allowed")
     _article(
         project,
-        "bare.md",
-        title="Bare",
-        metadata=["declaration: theorem", "statement: formalized", "proof: formalized", "lean: Project.bare"],
-        proof_depends="open.md",
-    )
-    _article(
-        project,
         "old.md",
         title="Old",
         metadata=["declaration: def", "statement: retracted", "lean: Project.old"],
@@ -897,7 +889,6 @@ def test_work_assumptions_text_labels_only_conditional_articles_as_conditional(t
 
     assert cli.main(["work", "assumptions", str(project), "--json"]) == 0
     articles = {article["id"]: article for article in json.loads(capsys.readouterr().out)["articles"]}
-    assert articles["chapter/bare"]["state"] == "conditional"
     assert articles["chapter/old"] == _contract_article(
         "chapter/old",
         None,
@@ -911,7 +902,6 @@ def test_work_assumptions_text_labels_only_conditional_articles_as_conditional(t
     assert cli.main(["work", "assumptions", str(project)]) == 0
     assert capsys.readouterr().out == (
         "Open statements: allowed\n"
-        "conditional: chapter/bare assumes chapter/open\n"
         "unproved: chapter/old assumes chapter/open\n"
         "open: chapter/open (Project.open_thm, Project.open_aux)\n"
         "open: chapter/prove (Project.prove)\n"

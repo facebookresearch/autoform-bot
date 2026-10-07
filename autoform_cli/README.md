@@ -619,7 +619,8 @@ worktree or a submodule. Blockers are unmet dependency IDs or one of
 `roadmap:missing-article-revision`, and `roadmap:not-ready`. The claim target
 prefers durable `article_id` metadata. `work list` fails explicitly if an
 unfinished formalizable leaf lacks one; plan the missing IDs with `autoform
-migrate article-ids` and add them to the frontmatter. `work context` may still select that article by its path ID to
+migrate article-ids` and add them to the frontmatter. `work context` may still
+select that article by its path ID to
 report the migration blocker. An item whose article records `statement:
 retracted` is a revision: it carries `revision` true in JSON, and the text of
 `work list` adds a `revision:` line and `work context` a `Revision:` line saying
@@ -1040,10 +1041,10 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
      happened in the `agents.md` beside each touched article.
 
    An unused statement dependency, which rules out the contained route, is
-   re-reviewed under X's new meaning like a statement-impacted article: it
-   keeps `statement` only after an Agent Review of its source faithfulness;
-   otherwise it records `statement: retracted`, loses `proof`, and keeps
-   `lean:`.
+   re-reviewed under the revised meaning, X' on the expand route and X's new
+   meaning in place: it keeps `statement` only after an Agent Review of its
+   source faithfulness; otherwise it records `statement: retracted`, loses
+   `proof`, and keeps `lean:`.
 3. Claim the route's claim set with one `autoform claim acquire`. When it is
    refused, release everything and report the held claim as the blocker. After
    acquiring, re-run `work impact`; if the set grew, release and start over
@@ -1071,11 +1072,10 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
    records the decision and retracts the article: it replaces `statement:
    formalized` with `statement: retracted`, removes `proof: formalized`, and
    keeps `lean:`, which `work impact` needs, so the article returns to the
-   frontier as a revision; an article without `lean:` just loses `statement`
-   and `proof`. It retracts only that article and the dependents whose
-   Markdown text the revision rewrites; the Lean-side impact decides every
-   other dependent. Roadmap edits only Markdown: it releases its claims and
-   leaves the Lean revision to Formalize.
+   frontier as a revision. It retracts only that article and the dependents
+   whose Markdown text the revision rewrites; the Lean-side impact decides
+   every other dependent. Roadmap edits only Markdown: it releases its claims
+   and leaves the Lean revision to Formalize.
 
 ## Local runtime doctor
 
