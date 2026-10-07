@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from . import status
-from .article_identity import plan_article_ids
+from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
 from .audit import audit_blueprint
 from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_key
 from .doctor import diagnose_project
@@ -257,13 +257,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
     article_ids = migrate_subparsers.add_parser(
         "article-ids",
-        help="plan durable roadmap article identifiers without writing files",
+        help="plan durable roadmap article identifiers, or add them with --write",
     )
     article_ids.add_argument("blueprint_dir")
-    article_ids.add_argument(
+    article_ids_mode = article_ids.add_mutually_exclusive_group()
+    article_ids_mode.add_argument(
         "--check",
         action="store_true",
         help="fail when an article is missing article_id frontmatter",
+    )
+    article_ids_mode.add_argument(
+        "--write",
+        action="store_true",
+        help="add each planned article_id to the frontmatter of the article missing one",
     )
     article_ids.add_argument("--json", action="store_true", help="write stable machine-readable output")
 
@@ -941,7 +947,20 @@ def _migrate(args: argparse.Namespace) -> int:
     if args.migrate_command != "article-ids":
         return 2
     try:
+        if args.write:
+            # Beside --json, stdout carries only the plan, so the writes go to stderr.
+            stream = sys.stderr if args.json else sys.stdout
+            for entry in write_article_ids(args.blueprint_dir):
+                print(f"{entry.article_path}: added article_id {entry.article_id}", file=stream)
         plan = plan_article_ids(args.blueprint_dir)
+    except ArticleIdWriteError as error:
+        for entry in error.written:
+            print(f"{entry.article_path}: added article_id {entry.article_id}", file=sys.stderr)
+        for issue in error.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        if error.written:
+            print(f"error: added {len(error.written)} article_id(s) before stopping", file=sys.stderr)
+        return 2
     except GraphValidationError as error:
         for issue in error.issues:
             print(f"error: {issue}", file=sys.stderr)
