@@ -1054,12 +1054,13 @@ def test_lake_toml_parser_limits_fail_closed(tmp_path: Path) -> None:
 
 
 def _project_with_both_lakefiles(tmp_path: Path) -> Path:
-    project = tmp_path / "project"
-    project.mkdir()
-    shutil.copy(_FIXTURE / "lean-toolchain", project / "lean-toolchain")
-    (project / "lakefile.toml").write_text('name = "fromtoml"\n\n[[lean_lib]]\nname = "FromToml"\n', encoding="utf-8")
+    """lakefile.toml builds ``Skel`` from ``src``; lakefile.lean builds a differently laid out library."""
+
+    project = _project(tmp_path, src_dir="src")
     (project / "lakefile.lean").write_text(
-        "import Lake\nopen Lake DSL\n\npackage fromlean\n\nlean_lib FromLean\n", encoding="utf-8"
+        "import Lake\nopen Lake DSL\n\npackage fromlean\n\n"
+        'lean_lib FromLean where\n  srcDir := "lean-src"\n  roots := #[`LeanRoot]\n',
+        encoding="utf-8",
     )
     return project
 
@@ -1070,7 +1071,7 @@ def test_lakefile_lean_wins_when_both_lakefiles_exist(tmp_path: Path, monkeypatc
 
     def translate(root: Path) -> bytes:
         translated.append(root)
-        return b'name = "fromlean"\n\n[[lean_lib]]\nname = "FromLean"\n'
+        return b'name = "fromlean"\n\n[[lean_lib]]\nname = "FromLean"\nsrcDir = "lean-src"\nroots = ["LeanRoot"]\n'
 
     monkeypatch.setattr("autoform_cli.skeleton._translate_lakefile", translate)
 
@@ -1078,7 +1079,32 @@ def test_lakefile_lean_wins_when_both_lakefiles_exist(tmp_path: Path, monkeypatc
 
     # Lake builds from lakefile.lean when both exist, so its libraries are the project's.
     assert translated == [project.resolve()]
-    assert library.name == "FromLean"
+    assert (library.name, library.src_dir, library.roots) == ("FromLean", project.resolve() / "lean-src", ("LeanRoot",))
+
+
+def test_a_project_with_both_lakefiles_is_refused_without_lake(tmp_path: Path, monkeypatch) -> None:
+    project = _project_with_both_lakefiles(tmp_path)
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    # Lake ignores lakefile.toml here, so reading it instead would describe the wrong build.
+    with pytest.raises(SkeletonError, match="lake is not on PATH"):
+        lean_libraries(project)
+
+
+def test_a_failed_translation_reports_the_error_rather_than_lakes_info_line(tmp_path: Path, monkeypatch) -> None:
+    project = _project_with_both_lakefiles(tmp_path)
+    error = f"error: {project / 'lakefile.lean'}:7:12: Unknown identifier `nonsense`"
+    stderr = "info: [root]: lakefile.lean and lakefile.toml are both present; using lakefile.lean\n" + error + "\n"
+    monkeypatch.setattr(shutil, "which", lambda _name: "lake")
+    monkeypatch.setattr(
+        "autoform_cli.skeleton._run_bounded_command",
+        lambda command, **_options: subprocess.CompletedProcess(command, 1, "", stderr),
+    )
+
+    with pytest.raises(SkeletonError) as caught:
+        lean_libraries(project)
+
+    assert caught.value.issues == (f"lake translate-config failed: {error}",)
 
 
 def test_a_project_without_a_lakefile_is_refused(tmp_path: Path) -> None:
@@ -2195,7 +2221,7 @@ def test_lakefile_lean_wins_through_lake_translate_config(tmp_path: Path) -> Non
 
     (library,) = lean_libraries(project)
 
-    assert library.name == "FromLean"
+    assert (library.name, library.src_dir, library.roots) == ("FromLean", project.resolve() / "lean-src", ("LeanRoot",))
 
 
 def test_required_real_lean_tests_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:

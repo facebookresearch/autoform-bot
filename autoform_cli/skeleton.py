@@ -1227,11 +1227,9 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
     """
 
     root = Path(lean_root).expanduser().resolve()
-    toml_snapshot = _read_snapshot_file(root / "lakefile.toml")
-    lakefile_snapshot = _read_snapshot_file(root / "lakefile.lean")
-    if lakefile_snapshot is not None:
+    if _read_snapshot_file(root / "lakefile.lean") is not None:
         text = _translate_lakefile(root)
-    elif toml_snapshot is not None:
+    elif (toml_snapshot := _read_snapshot_file(root / "lakefile.toml")) is not None:
         text = toml_snapshot[0]
     else:
         raise SkeletonError([f"no lakefile.toml or lakefile.lean in {root}"])
@@ -1283,8 +1281,11 @@ def _translate_lakefile(root: Path) -> bytes:
             context="lake translate-config",
         )
         if result.returncode != 0:
-            detail = (result.stderr or result.stdout).strip()[:300]
-            raise SkeletonError([f"lake translate-config failed: {detail}"])
+            output = (result.stderr or result.stdout).strip()
+            # With both lakefiles, Lake opens with an info line saying which one it
+            # uses; leave it out so the error itself fits in the limit.
+            errors = "\n".join(line for line in output.splitlines() if not line.startswith("info:")).strip()
+            raise SkeletonError([f"lake translate-config failed: {(errors or output)[:300]}"])
         translated = _read_snapshot_file(target)
         if translated is None:
             raise SkeletonError(["lake translate-config failed: translated configuration is missing"])
