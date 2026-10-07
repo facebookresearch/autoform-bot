@@ -125,14 +125,7 @@ def inspect_project(target: str | Path, *, catalog: ReleaseCatalog | None = None
         project_root = "/".join([".."] * (len(start.parts) - len(root.parts))) or "."
         autoform_paths = _inspect_autoform_paths(root)
         snapshot = _snapshot._capture_decision_snapshot(root)
-        attempt_diagnostics: list[ProjectDiagnostic] = []
-        result = _inspect_snapshot(
-            catalog,
-            snapshot,
-            attempt_diagnostics,
-            project_root=project_root,
-            autoform_paths=autoform_paths,
-        )
+        result = _inspect_snapshot(catalog, snapshot, project_root=project_root, autoform_paths=autoform_paths)
         verified = _snapshot._capture_decision_snapshot(root)
         if (
             snapshot.stable
@@ -176,11 +169,11 @@ def _inspect_autoform_paths(root: Path) -> tuple[str, ...]:
 def _inspect_snapshot(
     catalog: ReleaseCatalog,
     snapshot: _DecisionSnapshot,
-    diagnostics: list[ProjectDiagnostic],
     *,
     project_root: str,
     autoform_paths: tuple[str, ...],
 ) -> ProjectInspection:
+    diagnostics: list[ProjectDiagnostic] = []
     lake, requirements = _inspect_lake(snapshot, diagnostics)
     requirement = requirements.mathlib if requirements is not None else None
     toolchain = _inspect_toolchain(snapshot, diagnostics)
