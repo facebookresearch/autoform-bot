@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import _directory_binding as directory_binding_module
 from autoform_cli import _tree_snapshot as tree_snapshot_module
 from autoform_cli._tree_snapshot import (
     BoundDirectoryTree,
@@ -21,18 +20,7 @@ from autoform_cli._tree_snapshot import (
     TreeSnapshotError,
     bind_directory_tree,
 )
-
-
-def _require_descriptor_capture() -> None:
-    if not (
-        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
-        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
-    ):
-        pytest.skip("directory descriptor capture is unavailable")
-
-
-def _use_portable_capture(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(directory_binding_module, "DIRECTORY_BINDING_SUPPORTED", False)
+from tests.test_lean_sources import _require_descriptor_capture, _use_portable_capture
 
 
 def _forbid_unbounded_listdir(monkeypatch: pytest.MonkeyPatch) -> None:
