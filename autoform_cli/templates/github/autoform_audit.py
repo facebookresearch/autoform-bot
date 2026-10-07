@@ -485,8 +485,9 @@ _IMPORT_BUILD = """  -- `lake env` puts the project's libraries ahead of the too
 _KERNEL_REPLAY = """  -- The axiom walk trusts whatever the oleans hold, and a root `run_cmd` can
   -- add a declaration with kernel checking off. Send every root constant
   -- through the kernel again, on top of a fresh import of the other modules.
-  -- This runs last: replaying a constant that reaches `Lean.reduceBool` runs
-  -- compiled project code, and the axiom check refuses exactly those.
+  -- This runs last: replaying a constant that reaches `Lean.reduceBool` or
+  -- `Lean.reduceNat` runs compiled project code, and the axiom check refuses
+  -- every such constant, since both depend on `Lean.trustCompiler`.
   let baseImports := env.header.moduleNames.filterMap fun moduleName =>
     if targetModules.contains moduleName then none else some ({ module := moduleName } : Import)
   let mut rootConstants : Std.HashMap Name ConstantInfo := {}

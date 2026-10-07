@@ -909,7 +909,8 @@ article, which assumes nothing, may reach none), a `lean:` name missing from the
 build, and an open statement that its article records as proved. Each article
 declaration gets at most one of these status lines, with `NAME` the declaration
 and `ID` the article's node ID. A declaration with an error, or one that
-reaches a failed declaration, gets none of them:
+reaches a failed declaration, gets none of them, and no declaration gets one
+when the kernel replay fails:
 
 ```text
 open statement (proof is sorry): NAME [ID]
@@ -935,13 +936,13 @@ on sorry`. And both replay every root-package declaration through the kernel
 on top of a fresh import of the modules outside the root package, because the
 build's `.olean` files can hold anything and a root `run_cmd` can add a
 declaration with kernel checking off. The replay runs only once every other
-check has passed: replaying a declaration that reaches `Lean.reduceBool` runs
-compiled project code, and the axiom check rejects every such declaration
-because it depends on `Lean.trustCompiler`. Until then the audit logs `kernel
-replay of the root package skipped: it runs once every other check passes`. A
-declaration the kernel rejects fails with `kernel replay of the root package
-failed: ...`, which names the first one; the workflow's scan for the
-kernel-check bypass option is only lexical.
+check has passed: replaying a declaration that reaches `Lean.reduceBool` or
+`Lean.reduceNat` runs compiled project code, and the axiom check rejects every
+such declaration, since both depend on `Lean.trustCompiler`. Until then the
+audit logs `kernel replay of the root package skipped: it runs once every other
+check passes`. A declaration the kernel rejects fails with `kernel replay of the
+root package failed: ...`, which names the first one; the workflow's scan for
+the kernel-check bypass option is only lexical.
 
 The probe runs no project code. Its header imports only the toolchain's Lean,
 and the workflow runs it with plain `lean`, not `lake env lean`, passing the
@@ -952,22 +953,27 @@ path and no environment extensions, so no `initialize` block runs and no
 project instance, macro, or elaborator applies to the probe's own code. It
 finds each declaration's axioms by walking types and values itself, not from
 the axiom tables the `.olean` files store, and counts a name that no module
-declares as an axiom. It imports the toolchain's `Init` along with the build,
-so a build that declares a core name of its own, such as `propext`, fails to
-load with `environment already contains 'propext'` instead of passing the
-axiom allowlist, which compares names. A root module whose first component
-names an entry of the toolchain's library, such as `Lean.Hack`, would load the
-toolchain's file in its place, so the audit refuses it with `root module M
-shares its first component R with the toolchain's library; rename the module so
-the audit can run`. Lean loads a module from the first search-path entry that
-holds its first component, and Lake lists dependency libraries before the root
-package's, so a dependency library that also provides a root module's first
-component could stand in for the root package's files. The audit refuses that
-with `root module M shares its first component R with another library on the
-search path; rename the module so the audit can run`. The workflow runs the
-probe with `LEAN_ABORT_ON_PANIC=1`, so a panic stops it instead of letting it
-continue with a default value. It also requires the probe's success line as its
-last line, so a probe that stops early fails the step even when it exits 0.
+declares as an axiom, which fails with `NAME depends on X, which no module of
+the build declares`, or for a `lean:` name outside the root package with `NAME
+[ID] is outside the root package and depends on X, which no module of the build
+declares`. The walk takes a mutual inductive block as one node, so each type
+and constructor of the block gets the axioms of the whole block. It imports the
+toolchain's `Init` along with the build, so a build that declares a core name
+of its own, such as `propext`, fails to load with `environment already contains
+'propext'` instead of passing the axiom allowlist, which compares names. A root
+module whose first component names an entry of the toolchain's library, such as
+`Lean.Hack`, would load the toolchain's file in its place, so the audit refuses
+it with `root module M shares its first component R with the toolchain's
+library; rename the module so the audit can run`. Lean loads a module from the
+first search-path entry that holds its first component, and Lake lists
+dependency libraries before the root package's, so a dependency library that
+also provides a root module's first component could stand in for the root
+package's files. The audit refuses that with `root module M shares its first
+component R with another library on the search path; rename the module so the
+audit can run`. The workflow runs the probe with `LEAN_ABORT_ON_PANIC=1`, so a
+panic stops it instead of letting it continue with a default value. It also
+requires the probe's success line as its last line, so a probe that stops early
+fails the step even when it exits 0.
 
 The audit does not cover build-time IO. `lake build` runs root and dependency
 code, and the Lake configuration, on the same runner before the audit, so that
