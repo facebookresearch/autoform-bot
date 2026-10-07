@@ -49,7 +49,7 @@ _SNAPSHOT_ATTEMPTS = 3
 # Rust's ``char::is_whitespace`` set, which ``str::trim`` uses in elan.
 # Python additionally treats U+001C..U+001F as whitespace; accepting those
 # would disagree with elan because they remain control characters there.
-_ELAN_WHITESPACE = frozenset(
+_ELAN_WHITESPACE = (
     "\u0009\u000a\u000b\u000c\u000d\u0020\u0085\u00a0\u1680"
     "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
     "\u2028\u2029\u202f\u205f\u3000"
@@ -414,18 +414,6 @@ def _unused_mathlib(requirements: _Requirements) -> str | None:
     )
 
 
-def _trim_elan_whitespace(value: str) -> str:
-    """Mirror Rust's Unicode whitespace trim without Python's extra C0 separators."""
-
-    start = 0
-    while start < len(value) and value[start] in _ELAN_WHITESPACE:
-        start += 1
-    end = len(value)
-    while end > start and value[end - 1] in _ELAN_WHITESPACE:
-        end -= 1
-    return value[start:end]
-
-
 def _inspect_toolchain(snapshot: _DecisionSnapshot, diagnostics: list[ProjectDiagnostic]) -> str | None:
     if snapshot.file("lean-toolchain").state == "missing":
         diagnostics.append(ProjectDiagnostic("error", "missing-lean-toolchain", "The project has no lean-toolchain."))
@@ -435,7 +423,7 @@ def _inspect_toolchain(snapshot: _DecisionSnapshot, diagnostics: list[ProjectDia
         return None
     # elan reads only the trimmed first line and rejects an existing file when
     # that line is empty or malformed.
-    toolchain = _trim_elan_whitespace(text.split("\n", 1)[0])
+    toolchain = text.split("\n", 1)[0].strip(_ELAN_WHITESPACE)
     if not toolchain or not toolchain.isprintable() or any(character.isspace() for character in toolchain):
         diagnostics.append(
             ProjectDiagnostic(
