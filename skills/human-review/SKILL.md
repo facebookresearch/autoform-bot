@@ -92,11 +92,10 @@ tree.
    Pass the prepared bundle and the exact packet file the agent read. The
    command resolves the durable article ID, re-extracts the current Lean
    evidence, rejects a stale bundle or changed packet, and writes the vault
-   card. With several testimonies, record them as one batch from a manifest:
-   one extraction then serves every card instead of one per card. Record while
-   the blueprint is idle: an edit to any article during the extraction aborts
-   the record with nothing filed, and running it again completes it. Never
-   hand-author or repair a card's path, hashes, or frontmatter.
+   card. Record while the blueprint is idle: an edit to any article during the
+   extraction aborts the record with nothing filed, and running it again
+   completes it. Never hand-author or repair a card's path, hashes, or
+   frontmatter.
 4. Audit and render from that same bundle, then strict-build the site. Both
    commands re-extract current evidence and fail closed if the bundle is stale,
    incomplete, or inconsistent. Every formalized statement gains a *Review*

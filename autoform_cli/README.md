@@ -681,7 +681,7 @@ Autoform's writes to one directory happen one at a time; a write that cannot
 get the lock within ten seconds gives up. An optional expected-card hash makes
 updates compare-and-swap: different content replaces a card only when it names
 that card's hash, and a card that names a hash conflicts with a missing card.
-The conflict check a batch runs first applies the same rule. Filing content
+The conflict check a record runs first applies the same rule. Filing content
 identical to the current card writes nothing, so it succeeds even in a
 read-only directory. Otherwise the write stages the card in a
 `.autoform-readback-*.tmp` file beside it, flushes it to disk, and renames it
@@ -697,7 +697,7 @@ only: an editor's save that lands during a write can be replaced without a
 conflict, so edit cards while no write is running. Publishing needs
 descriptor-relative `open`, `mkdir`, `rename`, and `unlink`, `O_DIRECTORY`,
 `O_NOFOLLOW`, `fchmod`, and `flock`, which Linux and macOS provide; elsewhere,
-including Windows, a write and the batch conflict check are refused before
+including Windows, a write and a record's conflict check are refused before
 anything is created or read, and cards can still be loaded. `model:` remains a
 label supplied by the coordinator, not authenticated provenance.
 
@@ -828,8 +828,6 @@ autoform review record blueprint --lean-root . --bundle review.json \
   --article-id af_0123456789abcdef01234567 --declaration Ns.result \
   --packet review-packets/blind/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.lean \
   --testimony read-back.md --model muse-spark-1.1
-autoform review record blueprint --lean-root . --bundle review.json \
-  --manifest records.json --model muse-spark-1.1
 autoform review check blueprint --lean-root . --bundle review.json
 autoform audit blueprint --lean-root . --review-bundle review.json
 autoform render blueprint --lean-root . --review-bundle review.json
@@ -860,71 +858,35 @@ away an `article_id` the record names, which the rerun then names, or changed
 or removed the evidence of an article it records, which the rerun then refuses.
 Another article's empty or duplicated `lean:` list stops every extraction, so
 nothing is filed until that list is fixed. A record probes only the
-modules of the articles it files, so only those modules need to be built and
+modules of the article it files, so only those modules need to be built and
 fresh, and its packets match the ones `review prepare` wrote from a full
 extraction.
 
-`--manifest` files a batch against one extraction: one Lake freshness check,
-one helper build, and one probe for each module that declares a `lean:`
-target of a batch article. One record per card would pay the freshness check,
-the helper build, and its article's probes each, at least two Lean starts per
-card. A coordinator builds it
-from the packet manifest `review prepare` writes: each record takes an entry's
-`article_id` and `declaration`, its `packet` made relative to the records
-manifest's directory (the packet manifest's paths are relative to the packets
-directory), and a `testimony`. A record refuses the entry's other fields. This
-manifest sits beside `review-packets`:
-
-```json
-{
-  "schema": "autoform-review-records/v1",
-  "records": [
-    {"article_id": "af_0123456789abcdef01234567", "declaration": "Ns.result",
-     "packet": "review-packets/blind/0123….lean", "testimony": "read-back.md"}
-  ]
-}
-```
-
-Paths are relative to the manifest's directory and may not leave it: an
-absolute path, a `..` component, or a link that points outside is refused. A
-record may carry its own `expected_card_hash`, a declaration may appear once,
-and no object may repeat a key. Every packet is read and checked against the
-bundle, and every testimony read and validated (either is refused unread if it
-is not a regular file, such as a FIFO), before Lean starts. So is
-every card the batch would write over: a re-review lands on the path of the
-card it supersedes, which it may replace only by naming that card's hash, and
-the batch lists every card that needs one, with the hash, before extracting,
-along with every card path it cannot safely read (a link, directory, FIFO, or
-file over the card limit). The
-extraction selects the batch's articles, and each article is
-validated against its own part of it, as a single record would be. The
-blueprint is then reloaded, and nothing is filed if a selected article changed
-while Lean ran or the reloaded blueprint is not the one the extraction saw.
-Every card is built and checked before the first is written,
-so one bad record stops the batch. Publishing then goes card by card, each
-under its own compare-and-swap, and each card's article is read again just
-before it is written; a concurrent writer, an article whose card is not yet
-written being edited or made unreadable, or a failed write (a full disk, or an
-I/O or permission error) can stop it midway. Only the article's own file is
-read again, through the
-link if the article is one, and an edit after that read, while the card is
-written, goes unseen. The command says how
-many cards it filed, and because filing identical content is a no-op, running
-the same batch again once the cause is cleared completes it. When the cause is
-a card another writer filed, replaced, or removed meanwhile, the batch's record
-for it must first name the hash of the card now there, or no hash if there is
-none. When it is an article deleted meanwhile, or replaced by something other
-than a regular file, such as a directory or FIFO, the article must be restored
-or its records dropped, and one made unreadable must be readable again. A batch
-with records whose `article_id` is no longer in the blueprint files nothing,
-names each of them, and lists no card conflict in that run; each must be
-dropped, or take its `article_id` from the packet manifest a new
-`review prepare --packets` writes and drop any `expected_card_hash`, which
-names a card filed under the old `article_id`. If that manifest names a
-different packet for it, the record needs that packet and a new testimony
-written from it: packets are named by their content, so the old testimony read
-other text. Either way, any card filed under the old `article_id` stays there,
-and `review check` names its file, which must be deleted.
+The packet is read and checked against the bundle, and the testimony read and
+validated (either is refused unread if it is not a regular file, such as a
+FIFO), before Lean starts. So is the card the record would write over: a
+re-review lands on the path of the card it supersedes, which it may replace
+only by naming that card's hash with `--expected-card-hash`, and the record
+names that hash before extracting, or refuses a card path it cannot safely
+read (a link, directory, FIFO, or file over the card limit). The blueprint is
+reloaded after the extraction, and nothing is filed if the selected article
+changed while Lean ran or the reloaded blueprint is not the one the extraction
+saw. The card is written under its compare-and-swap, and the article is read
+again just before; only the article's own file is read again, through the link
+if the article is one, and an edit after that read, while the card is written,
+goes unseen. When another writer filed, replaced, or removed the card
+meanwhile, the record must name the hash of the card now there, or no hash if
+there is none. When the article was deleted meanwhile, or replaced by something
+other than a regular file, such as a directory or FIFO, it must be restored,
+and one made unreadable must be readable again. A record whose `article_id` is
+no longer in the blueprint files nothing and names no card conflict; it must
+take `--article-id` from the packet manifest a new `review prepare --packets`
+writes and drop any `--expected-card-hash`, which names a card filed under the
+old `article_id`. If that manifest names a different packet for it, the record
+needs that packet and a new testimony written from it: packets are named by
+their content, so the old testimony read other text. Any card filed under the
+old `article_id` stays there, and `review check` names its file, which must be
+deleted.
 
 `review check`, `audit`, and `render` re-extract the
 current Lean evidence and reject unresolved, partial, foreign, or stale

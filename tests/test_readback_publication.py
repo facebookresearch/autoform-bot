@@ -1249,7 +1249,7 @@ def test_an_interruption_as_any_step_of_a_write_returns_leaves_no_lock_or_stagin
 
 
 # --------------------------------------------------------------------------- #
-# The batch conflict check and unsupported platforms
+# The conflict check and unsupported platforms
 # --------------------------------------------------------------------------- #
 
 

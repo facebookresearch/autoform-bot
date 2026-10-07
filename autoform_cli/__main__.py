@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import status
@@ -47,13 +47,11 @@ from .readback import (
 )
 from .render import PublicationError, publication_issues, render_site
 from .review import (
-    RecordRequest,
     ReviewBundle,
     ReviewDeclaration,
     ReviewError,
     ReviewFinding,
     build_review_bundle,
-    load_record_manifest,
     load_review_bundle,
     review_findings,
     validate_review_article,
@@ -336,20 +334,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     review_record = review_subparsers.add_parser(
         "record",
-        help="validate and file testimony about exact prepared packets, one or a batch",
+        help="validate and file testimony about one exact prepared packet",
     )
     review_record.add_argument("blueprint_dir")
     review_record.add_argument("--lean-root", type=Path, required=True)
     review_record.add_argument("--bundle", type=Path, required=True)
-    review_record.add_argument(
-        "--manifest",
-        type=Path,
-        help="file every record this manifest lists against one extraction, instead of the four flags below",
-    )
-    review_record.add_argument("--article-id", metavar="AF_ID")
-    review_record.add_argument("--declaration", metavar="LEAN_NAME")
-    review_record.add_argument("--packet", type=Path)
-    review_record.add_argument("--testimony", type=Path)
+    review_record.add_argument("--article-id", required=True, metavar="AF_ID")
+    review_record.add_argument("--declaration", required=True, metavar="LEAN_NAME")
+    review_record.add_argument("--packet", type=Path, required=True)
+    review_record.add_argument("--testimony", type=Path, required=True)
     review_record.add_argument("--model", required=True)
     review_record.add_argument(
         "--expected-card-hash",
@@ -1176,74 +1169,40 @@ def _review_prepare(args: argparse.Namespace) -> int:
 
 
 def _review_record(args: argparse.Namespace) -> int:
-    single = (args.article_id, args.declaration, args.packet, args.testimony)
-    if args.manifest is not None:
-        if any(value is not None for value in single) or args.expected_card_hash is not None:
-            print(
-                "error: --manifest replaces --article-id, --declaration, --packet, --testimony, "
-                "and --expected-card-hash",
-                file=sys.stderr,
-            )
-            return 2
-    elif any(value is None for value in single):
-        print(
-            "error: record needs --manifest, or all of --article-id, --declaration, --packet, and --testimony",
-            file=sys.stderr,
-        )
-        return 2
-
-    written: list[tuple[Path, str]] = []
-    requests: tuple[RecordRequest, ...] = ()
     try:
-        requests = (
-            load_record_manifest(args.manifest)
-            if args.manifest is not None
-            else (
-                RecordRequest(
-                    article_id=args.article_id,
-                    declaration=args.declaration,
-                    packet=args.packet,
-                    testimony=args.testimony,
-                    expected_card_hash=args.expected_card_hash,
-                ),
-            )
-        )
         bundle = load_review_bundle(args.bundle)
-        # Every input is read, and checked against the prepared bundle, before
-        # any Lean work: a missing file or a changed packet stops the batch
+        # The inputs are read, and checked against the prepared bundle, before
+        # any Lean work: a missing file or a changed packet stops the record
         # without an extraction.
-        inputs = _record_inputs(bundle, requests)
+        item = _record_input(bundle, args)
         # So is a platform that cannot publish, ahead of advice that only helps
         # where cards can be filed.
         readback_conflicts([])
-        # So is every record whose article_id the blueprint no longer has,
-        # ahead of the card check: the hash that check asks for cannot help it.
+        # So is an article_id the blueprint no longer has, ahead of the card
+        # check: the hash that check asks for cannot help it.
         graph = load_graph(args.blueprint_dir)
-        by_flags = args.manifest is None
-        before = _record_snapshot(graph, requests, by_flags=by_flags)
-        # And so is every card that would replace different content without
-        # naming it, or whose existing card cannot be safely read: all of them
-        # at once, rather than one per extraction.
-        _refuse_conflicts(_build_cards(inputs, lambda item: _planned_card(args.blueprint_dir, item, model=args.model)))
-        # Each card's article is read again before the card is written, by its
-        # name rather than the file it resolves to, so that a link pointed at
+        before = _record_snapshot(graph, args)
+        node_id, _, digest = before
+        # And so is a card that would replace different content without
+        # naming it, or whose existing card cannot be safely read, rather than
+        # after an extraction.
+        _refuse_conflict(_build_card(args, lambda: _planned_card(args, item)))
+        # The article is read again before the card is written, by its name
+        # rather than the file it resolves to, so that a link pointed at
         # another file is seen.
-        articles = {
-            article_id: (_named_article_path(graph, node_id), digest) for article_id, node_id, _, digest in before
-        }
-        # One extraction serves every record in the batch.
+        article = _named_article_path(graph, node_id)
         skeleton = extract_skeletons(
             args.blueprint_dir,
             lean_root=args.lean_root,
             timeout=args.timeout,
-            node_ids=tuple(sorted({node_id for _, node_id, _, _ in before})),
+            node_ids=(node_id,),
         )
-        # The extraction must describe the blueprint the cards are filed
-        # against. Reload it and refuse if any selected article changed while
+        # The extraction must describe the blueprint the card is filed
+        # against. Reload it and refuse if the selected article changed while
         # Lean ran; otherwise the evidence below would pair a graph and a Lean
         # state that never coexisted.
         graph = load_graph(args.blueprint_dir)
-        if _record_snapshot(graph, requests, by_flags=by_flags) != before:
+        if _record_snapshot(graph, args) != before:
             raise ReviewError(
                 [
                     ReviewFinding(
@@ -1253,72 +1212,38 @@ def _review_record(args: argparse.Namespace) -> int:
                     )
                 ]
             )
-        findings = [
-            finding
-            for article_id, node_id, _, _ in before
-            for finding in validate_review_article(graph, bundle, _article_report(skeleton, node_id), article_id)
-        ]
+        # The extraction selected only this article, so its report is scoped
+        # as validate_review_article insists.
+        findings = validate_review_article(graph, bundle, skeleton, args.article_id)
         if findings:
             raise ReviewError(findings)
-        cards = _build_cards(inputs, lambda item: _prepared_card(graph, skeleton, item, model=args.model))
-        _refuse_conflicts(cards)
-        # Every card has passed every check. Publish them in order; each keeps
-        # its own compare-and-swap, and filing identical content is a no-op, so
-        # a batch interrupted here is completed by running it again.
-        for card in cards:
-            # Its article is read again just before the card is written. That
-            # narrows the window without closing it: an edit after this read,
-            # while the card is written, goes unseen, and so does an edit to a
-            # source the article cites, which only the reload above compares.
-            _refuse_changed_article(card, *articles[card.article_id])
-            try:
-                path = publish_readback(card)
-            except ValueError as exc:
-                # Named as the conflict check names it: the partial-batch
-                # message points to "that record", so the error must say which.
-                raise ValueError(f"{card.declaration}: {exc}") from exc
-            written.append((path, card.declaration))
+        card = _build_card(args, lambda: _prepared_card(graph, skeleton, args, item))
+        _refuse_conflict(card)
+        # The article is read again just before the card is written. That
+        # narrows the window without closing it: an edit after this read,
+        # while the card is written, goes unseen, and so does an edit to a
+        # source the article cites, which only the reload above compares.
+        _refuse_changed_article(card, article, digest)
+        try:
+            path = publish_readback(card)
+        except ValueError as exc:
+            # Named as the conflict check names it.
+            raise ValueError(f"{card.declaration}: {exc}") from exc
     except (GraphValidationError, ReviewError, SkeletonError) as exc:
-        _report_recorded(written, len(requests))
         for issue in exc.issues:
             print(f"error: {issue}", file=sys.stderr)
         return 2
     except (OSError, UnicodeError, ValueError) as exc:
-        _report_recorded(written, len(requests))
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    except KeyboardInterrupt:
-        # The interrupt still ends the process (exit status 130), once the
-        # cards filed before it are named. A card whose write it lands in may
-        # be filed but not named; running the record again leaves it as it is.
-        _report_recorded(written, len(requests))
-        raise
-    _report_recorded(written, len(requests))
+    print(f"{path}: recorded read-back for {card.declaration}")
     return 0
-
-
-def _article_report(report: SkeletonReport, node_id: str) -> SkeletonReport:
-    """The part of a shared extraction that one article's validation may see.
-
-    ``validate_review_article`` insists on a report scoped to exactly its own
-    article, so that missing evidence cannot pass. A batch extracts several
-    articles at once and hands each its own node and unresolved targets.
-    """
-
-    return replace(
-        report,
-        selection="filtered",
-        selected_nodes=(node_id,),
-        nodes=tuple(node for node in report.nodes if node.node_id == node_id),
-        unresolved=tuple(issue for issue in report.unresolved if issue.node_id == node_id),
-    )
 
 
 @dataclass(frozen=True, slots=True)
 class _RecordInput:
-    """One request, the bundle entry it names, and the two texts it points to."""
+    """The bundle entry a record names, and the two texts it points to."""
 
-    request: RecordRequest
     #: The declaration as ``review prepare`` recorded it: packet and hashes.
     prepared: ReviewDeclaration
     #: The packet the auditor read; equal to ``prepared.packet``.
@@ -1327,72 +1252,60 @@ class _RecordInput:
     testimony: str
 
 
-def _record_inputs(bundle: ReviewBundle, requests: tuple[RecordRequest, ...]) -> list[_RecordInput]:
-    """Read each packet and testimony, and check the packet against the bundle.
+def _record_input(bundle: ReviewBundle, args: argparse.Namespace) -> _RecordInput:
+    """Read the packet and testimony, and check the packet against the bundle."""
 
-    Every request is looked at before anything is refused, so one run names
-    every unknown declaration, unreadable file, and changed packet at once.
-    """
-
-    findings: list[ReviewFinding] = []
-    inputs: list[_RecordInput] = []
-    for request in requests:
-        prepared = bundle.declaration(request.article_id, request.declaration)
-        if prepared is None:
-            findings.append(_review_selection_finding(request.article_id, request.declaration))
-            continue
-        try:
-            packet_bytes = _read_regular_file(request.packet)
-        except OSError as exc:
-            findings.append(_unreadable_input(request, "packet", request.packet, exc))
-            continue
-        if packet_bytes != prepared.packet.encode("utf-8"):
-            findings.append(
+    prepared = bundle.declaration(args.article_id, args.declaration)
+    if prepared is None:
+        raise ReviewError([_review_selection_finding(args.article_id, args.declaration)])
+    try:
+        packet_bytes = _read_regular_file(args.packet)
+    except OSError as exc:
+        raise ReviewError([_unreadable_input(args, "packet", args.packet, exc)]) from exc
+    if packet_bytes != prepared.packet.encode("utf-8"):
+        raise ReviewError(
+            [
                 ReviewFinding(
-                    request.article_id,
+                    args.article_id,
                     "review-packet-mismatch",
-                    f"packet bytes do not match the prepared declaration {request.declaration}",
+                    f"packet bytes do not match the prepared declaration {args.declaration}",
                 )
-            )
-            continue
-        # The limit applies after "\r\n" is read as "\n", which at most halves
-        # a testimony. So at most one byte past twice the limit is read, which
-        # marks a testimony over it, and a huge file costs no more than two
-        # testimonies do.
-        try:
-            raw = _read_regular_file(request.testimony, 2 * TESTIMONY_MAX_BYTES + 1)
-        except OSError as exc:
-            findings.append(_unreadable_input(request, "testimony", request.testimony, exc))
-            continue
-        if len(raw) - raw.count(b"\r\n") > TESTIMONY_MAX_BYTES:
-            findings.append(
+            ]
+        )
+    # The limit applies after "\r\n" is read as "\n", which at most halves
+    # a testimony. So at most one byte past twice the limit is read, which
+    # marks a testimony over it, and a huge file costs no more than two
+    # testimonies do.
+    try:
+        raw = _read_regular_file(args.testimony, 2 * TESTIMONY_MAX_BYTES + 1)
+    except OSError as exc:
+        raise ReviewError([_unreadable_input(args, "testimony", args.testimony, exc)]) from exc
+    if len(raw) - raw.count(b"\r\n") > TESTIMONY_MAX_BYTES:
+        raise ReviewError(
+            [
                 ReviewFinding(
-                    request.article_id,
+                    args.article_id,
                     "review-record-invalid",
-                    f"{request.declaration}: unsafe read-back testimony: {request.testimony} is over the "
+                    f"{args.declaration}: unsafe read-back testimony: {args.testimony} is over the "
                     f"{TESTIMONY_MAX_BYTES}-byte limit",
                 )
-            )
-            continue
-        try:
-            # Decoded as a text file is read: "\r\n" and a lone "\r" end a
-            # line as "\n" does.
-            testimony = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
-        except UnicodeError as exc:
-            findings.append(_unreadable_input(request, "testimony", request.testimony, exc))
-            continue
-        # Equal to the bundle's text, so already valid UTF-8.
-        inputs.append(_RecordInput(request, prepared, packet_bytes.decode("utf-8"), testimony))
-    if findings:
-        raise ReviewError(findings)
-    return inputs
+            ]
+        )
+    try:
+        # Decoded as a text file is read: "\r\n" and a lone "\r" end a
+        # line as "\n" does.
+        testimony = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    except UnicodeError as exc:
+        raise ReviewError([_unreadable_input(args, "testimony", args.testimony, exc)]) from exc
+    # Equal to the bundle's text, so already valid UTF-8.
+    return _RecordInput(prepared, packet_bytes.decode("utf-8"), testimony)
 
 
 def _read_regular_file(path: Path, size: int = -1) -> bytes:
     """Up to ``size`` bytes of the regular file at ``path``, all of it by default."""
 
     # Opened without waiting for a writer, so a FIFO is refused unread
-    # instead of holding the batch.
+    # instead of holding the record.
     nonblocking = getattr(os, "O_NONBLOCK", 0)
     with open(path, "rb", opener=lambda name, flags: os.open(name, flags | nonblocking)) as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
@@ -1400,89 +1313,64 @@ def _read_regular_file(path: Path, size: int = -1) -> bytes:
         return handle.read(size)
 
 
-def _unreadable_input(request: RecordRequest, role: str, path: Path, exc: Exception) -> ReviewFinding:
+def _unreadable_input(args: argparse.Namespace, role: str, path: Path, exc: Exception) -> ReviewFinding:
     return ReviewFinding(
-        request.article_id,
+        args.article_id,
         "review-input-unreadable",
-        f"{request.declaration}: cannot read the {role} {path}: {exc}",
+        f"{args.declaration}: cannot read the {role} {path}: {exc}",
     )
 
 
-def _build_cards(
-    inputs: list[_RecordInput], build: Callable[[_RecordInput], PreparedReadback]
-) -> list[PreparedReadback]:
-    """Build every input's card with *build*, or refuse the batch naming every card that failed."""
+def _build_card(args: argparse.Namespace, build: Callable[[], PreparedReadback]) -> PreparedReadback:
+    """The record's card, built with *build*, or a refusal naming why it cannot be."""
 
-    findings: list[ReviewFinding] = []
-    cards: list[PreparedReadback] = []
-    for item in inputs:
-        try:
-            cards.append(build(item))
-        except ValueError as exc:
-            findings.append(
-                ReviewFinding(item.request.article_id, "review-record-invalid", f"{item.request.declaration}: {exc}")
-            )
-    if findings:
-        raise ReviewError(findings)
-    return cards
+    try:
+        return build()
+    except ValueError as exc:
+        raise ReviewError(
+            [ReviewFinding(args.article_id, "review-record-invalid", f"{args.declaration}: {exc}")]
+        ) from exc
 
 
-def _planned_card(blueprint: str | Path, item: _RecordInput, *, model: str) -> PreparedReadback:
-    """The card the batch would file for *item* if the prepared evidence is current."""
+def _planned_card(args: argparse.Namespace, item: _RecordInput) -> PreparedReadback:
+    """The card the record would file if the prepared evidence is current."""
 
     return planned_readback(
-        blueprint,
-        article_id=item.request.article_id,
-        declaration=item.request.declaration,
+        args.blueprint_dir,
+        article_id=args.article_id,
+        declaration=args.declaration,
         skeleton_hash=item.prepared.skeleton_hash,
         packet_hash=item.prepared.packet_hash,
-        model=model,
+        model=args.model,
         text=item.testimony,
         packet_text=item.packet,
-        expected_card_hash=item.request.expected_card_hash,
+        expected_card_hash=args.expected_card_hash,
     )
 
 
-def _refuse_conflicts(cards: list[PreparedReadback]) -> None:
-    """Refuse the batch if publishing would refuse any card, naming every such card.
+def _refuse_conflict(card: PreparedReadback) -> None:
+    """Refuse the record if publishing would refuse its card.
 
     An existing card that cannot be safely read (a link, a directory, a FIFO,
-    or a file over the card limit) is listed with the conflicts rather than
-    ending the listing.
+    or a file over the card limit) is refused as a conflict too.
     """
 
-    # A platform that cannot publish is refused once, not once per card.
-    readback_conflicts([])
-    conflicts: list[str] = []
-    for card in cards:
-        try:
-            conflicts.extend(readback_conflicts([card]))
-        except ValueError as exc:
-            conflicts.append(f"{card.declaration}: {exc}")
+    try:
+        conflicts = readback_conflicts([card])
+    except ValueError as exc:
+        conflicts = [f"{card.declaration}: {exc}"]
     if conflicts:
         raise ReviewError([ReviewFinding("record", "review-card-conflict", conflict) for conflict in conflicts])
 
 
-def _record_snapshot(
-    graph: Graph, requests: tuple[RecordRequest, ...], *, by_flags: bool
-) -> tuple[tuple[str, str, str, str], ...]:
-    """What each selected article is right now: its node, file, and source hash."""
+def _record_snapshot(graph: Graph, args: argparse.Namespace) -> tuple[str, str, str]:
+    """What the selected article is right now: its node, file, and source hash."""
 
-    state: dict[str, tuple[str, str, str, str]] = {}
-    gone: list[ReviewFinding] = []
-    for request in requests:
-        if request.article_id in state:
-            continue
-        matches = [node for node in graph.nodes.values() if node.article_id == request.article_id]
-        if len(matches) != 1:
-            # Every such record is named, so one run lists all there are to drop or update.
-            gone.append(_record_selection_finding(request, by_flags=by_flags))
-            continue
-        node = matches[0]
-        state[request.article_id] = (request.article_id, node.id, str(node.path), node.source_sha256 or "")
-    if gone:
-        raise ReviewError(gone)
-    return tuple(sorted(state.values()))
+    matches = [node for node in graph.nodes.values() if node.article_id == args.article_id]
+    if len(matches) != 1:
+        raise ReviewError([_record_selection_finding(args)])
+    node = matches[0]
+    return node.id, str(node.path), node.source_sha256 or ""
 
 
 def _named_article_path(graph: Graph, node_id: str) -> str:
@@ -1533,35 +1421,24 @@ def _refuse_changed_article(card: PreparedReadback, path: str, digest: str) -> N
     )
 
 
-def _prepared_card(graph: Graph, skeleton: SkeletonReport, item: _RecordInput, *, model: str) -> PreparedReadback:
-    """Build *item*'s card against the one extraction."""
+def _prepared_card(
+    graph: Graph, skeleton: SkeletonReport, args: argparse.Namespace, item: _RecordInput
+) -> PreparedReadback:
+    """Build the record's card against the extraction."""
 
-    request = item.request
-    node = next(node for node in graph.nodes.values() if node.article_id == request.article_id)
+    node = next(node for node in graph.nodes.values() if node.article_id == args.article_id)
     # validate_review_article matched this article's extracted declarations
-    # to the bundle's, where _record_inputs found this one.
-    current = next(item for item in skeleton.declarations(node.id) if item.name == request.declaration)
+    # to the bundle's, where _record_input found this one.
+    current = next(item for item in skeleton.declarations(node.id) if item.name == args.declaration)
     return prepare_readback(
         graph.blueprint_dir,
-        article_id=request.article_id,
+        article_id=args.article_id,
         declaration=current,
-        model=model,
+        model=args.model,
         text=item.testimony,
         packet_text=item.packet,
-        expected_card_hash=request.expected_card_hash,
+        expected_card_hash=args.expected_card_hash,
     )
-
-
-def _report_recorded(written: list[tuple[Path, str]], total: int) -> None:
-    for path, declaration in written:
-        print(f"{path}: recorded read-back for {declaration}")
-    if written and len(written) < total:
-        print(
-            f"error: {len(written)} of {total} read-back(s) were filed before the failure below; once its cause is "
-            "cleared (for a conflict, by setting that record's expected_card_hash to the card hash it found, or "
-            "removing it if it found none), running the record again files the rest and leaves these as they are",
-            file=sys.stderr,
-        )
 
 
 def _review_check(args: argparse.Namespace) -> int:
@@ -1812,26 +1689,20 @@ def _review_selection_finding(article_id: str, declaration: str) -> ReviewFindin
     )
 
 
-def _record_selection_finding(request: RecordRequest, *, by_flags: bool) -> ReviewFinding:
+def _record_selection_finding(args: argparse.Namespace) -> ReviewFinding:
     """The bundle has this declaration, but the current blueprint no longer has its article_id."""
 
     # A card's path is keyed by its article_id: the card a re-review names
     # stays under the old one, so a record taking the new one must not name it.
     # A packet is named by its content, so a different one is text the
     # testimony was not written from. Only --packets writes a packet manifest.
-    if by_flags:
-        start, id_field, hash_field = "to record it, ", "--article-id", "--expected-card-hash"
-        needs = "pass that --packet and a --testimony"
-    else:
-        start, id_field, hash_field = "drop the record, or ", "its article_id", "its expected_card_hash"
-        needs = "the record needs that packet and a testimony"
-    drop_hash = f" and drop {hash_field}" if request.expected_card_hash is not None else ""
+    drop_hash = " and drop --expected-card-hash" if args.expected_card_hash is not None else ""
     return ReviewFinding(
-        request.article_id,
+        args.article_id,
         "review-selection-missing",
-        f"{request.declaration}: article_id {request.article_id} is no longer in the blueprint; {start}rerun review "
-        f"prepare with --packets and take {id_field} from the new packet manifest{drop_hash}; if that manifest "
-        f"names a different packet for it, {needs} written from it",
+        f"{args.declaration}: article_id {args.article_id} is no longer in the blueprint; to record it, rerun review "
+        f"prepare with --packets and take --article-id from the new packet manifest{drop_hash}; if that manifest "
+        "names a different packet for it, pass that --packet and a --testimony written from it",
     )
 
 

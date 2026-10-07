@@ -28,7 +28,7 @@ from autoform_cli.approvals import (
     parse_codeowners,
 )
 from autoform_cli.graph import load_graph
-from tests.test_review_cli import _approved_batch, _Extraction
+from tests.test_review_cli import _approved_articles, _Extraction
 
 
 _HASH = "sha256:" + "a" * 64
@@ -1420,7 +1420,7 @@ def _authenticated_review_project(
 ) -> tuple[Path, FakeGitHub]:
     """The review CLI fixture, its approvals merged from pull request #3, which a code owner approved."""
 
-    blueprint = _approved_batch(tmp_path, monkeypatch, _Extraction())
+    blueprint = _approved_articles(tmp_path, monkeypatch, _Extraction())
     (tmp_path / ".github").mkdir()
     (tmp_path / ".github" / "CODEOWNERS").write_text(_CODEOWNERS, encoding="utf-8")
     approved = {

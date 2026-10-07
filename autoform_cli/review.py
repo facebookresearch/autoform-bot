@@ -18,7 +18,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Mapping
 
-from .claims import _strict_json_object
 from .graph import ARTICLE_ID_PATTERN, Graph, Node, source_passage
 from .lean import REVIEW_PACKET_SCHEMA, declaration_names
 from .markdown import FENCE, FENCE_CLOSE, HEADING, frontmatter_end, strip_line_comments
@@ -40,7 +39,6 @@ from .skeleton import (
 REVIEW_BUNDLE_SCHEMA = "autoform-review-bundle/v1"
 REVIEW_ARTICLE_SCHEMA = "autoform-review-article/v1"
 REVIEW_APPROVAL_SCHEMA = "autoform-review-approval/v1"
-REVIEW_RECORDS_SCHEMA = "autoform-review-records/v1"
 _HASH_PREFIX = "sha256:"
 _HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
@@ -1070,182 +1068,10 @@ def _validate_bundle_for_write(bundle: ReviewBundle) -> None:
         raise _invalid_bundle("review bundle articles are not in canonical article_id order")
 
 
-@dataclass(frozen=True, slots=True)
-class RecordRequest:
-    """One read-back to file: which declaration, what the auditor read, what it wrote.
-
-    ``review prepare`` writes one blind packet per declaration; an auditor
-    reads one packet and writes a read-back. A request asks ``review record``
-    to file that read-back as the declaration's card, and names only inputs:
-    the card itself is built and checked later, against current Lean evidence.
-    """
-
-    #: Durable id of the article the card belongs to, from its frontmatter.
-    article_id: str
-    #: Full Lean name of the declaration the read-back is about.
-    declaration: str
-    #: The exact packet file the auditor read; its bytes must equal the
-    #: bundle's packet for this declaration.
-    packet: Path
-    #: The auditor's read-back, Markdown.
-    testimony: Path
-    #: Needed only to replace a card that already exists with different
-    #: content: the hash of that card. A first filing, or refiling identical
-    #: content, needs none. Naming what is replaced keeps two reviewers from
-    #: overwriting each other unseen.
-    expected_card_hash: str | None = None
-
-
-_RECORD_FIELDS = frozenset({"article_id", "declaration", "packet", "testimony"})
-_OPTIONAL_RECORD_FIELDS = frozenset({"expected_card_hash"})
-
-
-def _follow_links(path: Path) -> Path:
-    """``path`` with every link in it followed, as open() would follow them.
-
-    Strict, because lenient resolution stops following links once the path it
-    builds is too long to look up and keeps the rest as written, while open()
-    follows each link from where it is, which can lead out of the directory.
-    A missing file is left for the read, which reports it beside every other
-    unreadable input; lenient resolution still finds where a dangling link
-    points. ``os.path.realpath`` raises OSError on a loop, where
-    ``Path.resolve`` on Python 3.10 raises RuntimeError.
-    """
-
-    try:
-        return Path(os.path.realpath(path, strict=True))
-    except FileNotFoundError:
-        return Path(os.path.realpath(path))
-
-
-def _record_path_problem(base: Path, value: str) -> str | None:
-    """Why a record's ``value`` does not name a file inside ``base``, or None if it does.
-
-    Only a packet's bytes are checked against the bundle, so a testimony path
-    that could leave the manifest's directory would file any readable file as
-    a read-back. ``base`` is already resolved.
-    """
-
-    relative = Path(value)
-    if relative.is_absolute():
-        return "is absolute; paths are relative to the manifest's directory"
-    if ".." in relative.parts:
-        return "has a '..' component; paths stay inside the manifest's directory"
-    try:
-        resolved = _follow_links(base / relative)
-    except OSError as exc:
-        return f"cannot be resolved: {exc.strerror or exc}"
-    except RecursionError:
-        # Python before 3.13 follows links by recursion.
-        return "cannot be resolved: too many links"
-    except ValueError as exc:  # a NUL byte
-        return f"cannot be resolved: {exc}"
-    # By identity, not spelling: where the file system ignores case, a link
-    # may spell the directory in other case than the manifest's path does.
-    directory = base.stat()
-    for ancestor in (resolved, *resolved.parents):
-        try:
-            if os.path.samestat(ancestor.stat(), directory):
-                return None
-        except OSError:
-            continue
-    return "resolves outside the manifest's directory"
-
-
-def load_record_manifest(path: str | Path) -> tuple[RecordRequest, ...]:
-    """Strictly read a batch of records for ``review record --manifest``.
-
-    Packet and testimony paths are relative to the manifest's own directory,
-    so a coordinator can write it beside the testimony it lists, and may not
-    leave it, even through a link. One declaration may appear once: two
-    testimonies for it leave nothing to decide which is meant. For the same
-    reason no object may repeat a key.
-    """
-
-    manifest = Path(path).expanduser()
-    # ValueError covers malformed JSON, bytes that are not UTF-8, and a
-    # repeated key; RecursionError, arrays or objects nested deeper than the
-    # decoder recurses.
-    try:
-        payload = json.loads(manifest.read_text(encoding="utf-8"), object_pairs_hook=_strict_json_object)
-        # As in a bundle, an escape such as "\ud800" decodes to half of a
-        # surrogate pair, which no path or card can encode as UTF-8.
-        json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    except UnicodeEncodeError as exc:
-        reason = f"it escapes a lone surrogate, {exc.object[exc.start]!r}, which UTF-8 cannot encode"
-        raise ReviewError(
-            [ReviewFinding("manifest", "review-records-invalid", f"cannot read {manifest}: {reason}")]
-        ) from exc
-    except (OSError, RecursionError, ValueError) as exc:
-        raise ReviewError([ReviewFinding("manifest", "review-records-invalid", f"cannot read {manifest}: {exc}")]) from exc
-    if not isinstance(payload, dict) or payload.keys() != {"records", "schema"}:
-        raise ReviewError([ReviewFinding("manifest", "review-records-invalid", f"{manifest} is not a records manifest")])
-    if payload["schema"] != REVIEW_RECORDS_SCHEMA:
-        raise ReviewError(
-            [ReviewFinding("manifest", "review-records-invalid", f"{manifest}: expected schema {REVIEW_RECORDS_SCHEMA}")]
-        )
-    items = payload["records"]
-    if not isinstance(items, list) or not items:
-        raise ReviewError([ReviewFinding("manifest", "review-records-invalid", f"{manifest}: records must be a non-empty list")])
-
-    base = manifest.resolve().parent
-    findings: list[ReviewFinding] = []
-    requests: list[RecordRequest] = []
-    seen: set[tuple[str, str]] = set()
-    for position, item in enumerate(items, start=1):
-        context = f"{manifest}: record {position}"
-        if (
-            not isinstance(item, dict)
-            or not _RECORD_FIELDS <= item.keys() <= _RECORD_FIELDS | _OPTIONAL_RECORD_FIELDS
-            or not all(isinstance(item[field], str) and item[field] for field in _RECORD_FIELDS)
-        ):
-            findings.append(
-                ReviewFinding("manifest", "review-records-invalid", f"{context} needs exactly {', '.join(sorted(_RECORD_FIELDS))}")
-            )
-            continue
-        expected = item.get("expected_card_hash")
-        if expected is not None and (not isinstance(expected, str) or not _HASH.fullmatch(expected)):
-            findings.append(ReviewFinding("manifest", "review-records-invalid", f"{context}: invalid expected_card_hash"))
-            continue
-        escapes = [
-            ReviewFinding("manifest", "review-records-invalid", f"{context}: {field} {item[field]!r} {problem}")
-            for field in ("packet", "testimony")
-            if (problem := _record_path_problem(base, item[field])) is not None
-        ]
-        if escapes:
-            findings.extend(escapes)
-            continue
-        key = (item["article_id"], item["declaration"])
-        if key in seen:
-            findings.append(
-                ReviewFinding(
-                    item["article_id"],
-                    "review-records-invalid",
-                    f"{context}: {item['declaration']} is already recorded earlier in this manifest",
-                )
-            )
-            continue
-        seen.add(key)
-        requests.append(
-            RecordRequest(
-                article_id=item["article_id"],
-                declaration=item["declaration"],
-                packet=base / item["packet"],
-                testimony=base / item["testimony"],
-                expected_card_hash=expected,
-            )
-        )
-    if findings:
-        raise ReviewError(findings)
-    return tuple(requests)
-
-
 __all__ = [
     "REVIEW_APPROVAL_SCHEMA",
     "REVIEW_BUNDLE_SCHEMA",
     "REVIEW_PACKET_SCHEMA",
-    "REVIEW_RECORDS_SCHEMA",
-    "RecordRequest",
     "ReviewArticle",
     "ReviewBundle",
     "ReviewDeclaration",
@@ -1253,7 +1079,6 @@ __all__ = [
     "ReviewFinding",
     "build_review_bundle",
     "canonical_statement",
-    "load_record_manifest",
     "load_review_bundle",
     "review_findings",
     "validate_review_article",

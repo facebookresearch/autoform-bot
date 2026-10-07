@@ -638,8 +638,8 @@ class PreparedReadback:
     A request names inputs (a packet file and a testimony file); this is the
     output built from them: the card's destination and its complete text, with
     the packet and testimony embedded. :func:`prepare_readback` builds one only
-    after every check passes, so a batch can check all its cards before
-    :func:`publish_readback` writes the first.
+    after every check passes, so a record can check its card for conflicts
+    before :func:`publish_readback` writes it.
     """
 
     #: The blueprint the card is filed in; publishing opens it without
@@ -674,8 +674,7 @@ def prepare_readback(
     expected_card_hash: str | None = None,
 ) -> PreparedReadback:
     """Run every check a card must pass, and build it, without touching the
-    filesystem. A caller filing several cards prepares them all first, so
-    that one bad card stops the batch before any is written.
+    filesystem, so that a bad card is refused before anything is written.
 
     ``packet_text`` is required because the card attests to what the independent
     reader actually received, not to a packet reconstructed later. A differing
@@ -735,8 +734,8 @@ def planned_readback(
     It is not checked against the current Lean tree, so it must never be
     published as built here; :func:`prepare_readback` checks the packet
     against a declaration first and returns the card that is. When the
-    prepared evidence is current, the two are identical, so a batch can find
-    the cards it would conflict with before paying for an extraction.
+    prepared evidence is current, the two are identical, so a record can find
+    the card it would conflict with before paying for an extraction.
     """
 
     blueprint_path = Path(blueprint).expanduser().resolve()
@@ -767,7 +766,7 @@ def readback_conflicts(cards: Iterable[PreparedReadback]) -> list[str]:
     """Every card publishing would refuse, found without writing anything.
 
     This is the compare-and-swap rule :func:`publish_readback` applies, checked
-    for a whole batch first: a card may replace existing different content
+    before anything is written: a card may replace existing different content
     only when it names the hash of that content's bytes, and a card that names
     a hash replaces only that content, not a missing card. A card identical to
     the one filed is no conflict, since publishing it writes nothing. Each
