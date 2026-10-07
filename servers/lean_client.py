@@ -467,10 +467,6 @@ class LeanRuntimeClient:
                     f"Lean runtime is not listening at {self.paths.socket}"
                 ) from error
             except OSError as error:
-                if error.errno in {2, 61, 111}:
-                    raise LeanRuntimeUnavailable(
-                        f"Lean runtime is not listening at {self.paths.socket}"
-                    ) from error
                 raise LeanRuntimeError(f"cannot connect to Lean runtime: {error}") from error
 
             connection.settimeout(response_timeout or self.response_timeout)
