@@ -504,6 +504,10 @@ def _cleanup_materialization(
             pass
 
 
+def _invalid_limit(value: object) -> bool:
+    return isinstance(value, bool) or not isinstance(value, int) or value < 0
+
+
 @dataclass(frozen=True, slots=True)
 class TreeCaptureLimits:
     """Optional bounds on observed entries and captured regular-file bytes.
@@ -525,9 +529,7 @@ class TreeCaptureLimits:
             "max_total_bytes",
         ):
             value = getattr(self, name)
-            if value is not None and (
-                isinstance(value, bool) or not isinstance(value, int) or value < 0
-            ):
+            if value is not None and _invalid_limit(value):
                 raise ValueError(f"{name} must be a non-negative integer or None")
 
 
@@ -565,11 +567,7 @@ class OpaqueDirectoryMarker:
             raise ValueError("opaque marker name must be one portable path component")
         if not isinstance(self.presence_only, bool):
             raise ValueError("opaque marker presence_only must be a boolean")
-        if (
-            isinstance(self.max_bytes, bool)
-            or not isinstance(self.max_bytes, int)
-            or self.max_bytes < 0
-        ):
+        if _invalid_limit(self.max_bytes):
             raise ValueError("opaque marker max_bytes must be a non-negative integer")
 
 
@@ -725,11 +723,7 @@ class _CaptureBudget:
             raise TreeCaptureLimitError("max_entries", self.limits.max_entries)
 
     def file_read_limit(self, size: int, selected_limit: int | None) -> int | None:
-        if selected_limit is not None and (
-            isinstance(selected_limit, bool)
-            or not isinstance(selected_limit, int)
-            or selected_limit < 0
-        ):
+        if selected_limit is not None and _invalid_limit(selected_limit):
             raise TreeSnapshotError(
                 "tree selection byte limit must be a non-negative integer or None"
             )
