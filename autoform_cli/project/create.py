@@ -15,13 +15,13 @@ from importlib.resources import files
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-from .. import scaffold
 from ..claims import _reject_json_constant, _strict_json_object
 from ..graph import _parse_node
 from ..scaffold import (
-    DEFAULT_AUTOFORM_SOURCE,
     ScaffoldError,
+    _FULL_SHA,
     _TEMPLATES,
+    _checkout_pin,
     _normalize_autoform_source,
     _read_templates,
     _require_complete_templates,
@@ -33,7 +33,6 @@ from .catalog import SupportedRelease, load_release_catalog
 PROJECT_CREATION_SCHEMA = "autoform-project-creation/v1"
 _CREATION_RELEASE_SCHEMA = "autoform-project-creation-release/v1"
 _PACKAGE_NAME = re.compile(r"[A-Z][A-Za-z0-9]*")
-_FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _RESERVED_PACKAGE_NAMES = frozenset({"Prop", "Sort", "Type"})
 _RELEASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _STAGE_ATTEMPTS = 32
@@ -437,12 +436,8 @@ def _resolve_workflow_pin(source: str, ref: str, *, templates: tuple[tuple[str, 
                 "The Autoform workflow source must be a safe credential-free HTTPS Git URL ending in .git.",
             )
         return given_source, given_ref
-    # Looked up on the module so one replacement governs `init` and `project new`.
-    pinned_source, pinned_ref = scaffold.plugin_pin(templates)
-    safe_pinned_source = _normalize_autoform_source(pinned_source, allow_github_scp=True)
-    if safe_pinned_source is None or _FULL_SHA.fullmatch(pinned_ref.lower()) is None:
-        safe_pinned_source, pinned_ref = None, ""
-    return safe_pinned_source or DEFAULT_AUTOFORM_SOURCE, given_ref or pinned_ref.lower()
+    pinned_source, pinned_ref = _checkout_pin(templates)
+    return pinned_source, given_ref or pinned_ref
 
 
 def _validate_target(target: str | Path | None) -> Path:
