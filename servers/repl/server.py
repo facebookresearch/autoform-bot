@@ -15,12 +15,14 @@ def create_repl_server(runtime: LeanRuntimeClient) -> FastMCP:
 
     @server.tool
     def run_lean_code(project_dir: str, code: str, timeout: float | None = None) -> str:
-        """Compile a Lean snippet in a project's persistent REPL.
+        """Compile a Lean snippet in a fresh project-scoped REPL process.
 
         Args:
             project_dir: Absolute path to the Lake project root.
             code: Lean code to execute.
-            timeout: Optional timeout in seconds.
+            timeout: Optional total post-admission timeout in seconds. It
+                covers the idle-slot wait, Lean header validation, disposable
+                child startup, generated imports, and submitted code.
         """
         return runtime.request(
             "repl.run",

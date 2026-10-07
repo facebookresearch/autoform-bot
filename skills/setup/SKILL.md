@@ -82,6 +82,13 @@ For an incomplete existing repository, preserve its authored configuration and
 run `autoform init` through the same `uv run --project "$AUTOFORM_PLUGIN_ROOT"`
 prefix only for the Autoform vault/site repair overlay.
 
+Neither `project new` nor `init` adds the Lean REPL that the REPL tool runs.
+Declare `leanprover-community/repl` at an immutable revision tested against the
+project's exact Lean toolchain, such as the bundled example's pin for v4.32.2,
+run `lake update repl` so an existing manifest locks it without moving Mathlib,
+commit the manifest, then verify `lake build @repl/repl`; never guess a
+compatible revision.
+
 `autoform init` is the whole vault: `blueprint/` with its landing page,
 `roadmap/README.md`, `coverage/`, and `sources/`, plus `mkdocs.yml`, the theme
 override, both workflows, and ignore rules. Do not hand-build any of it and do
@@ -136,8 +143,10 @@ then run the publication sequence:
 
 ```bash
 lake update          # only when the project has no lake-manifest.json
+lake update repl     # after adding the REPL require to an existing manifest
 lake exe cache get   # skip only when the project has no Mathlib dependency
 lake build
+lake build @repl/repl
 ```
 
 Then validate, visualize, render, and strict-build the site, keeping

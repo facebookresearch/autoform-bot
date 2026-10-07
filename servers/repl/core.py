@@ -10,9 +10,11 @@ import errno
 import json
 import os
 import random
+import re
 import select
 import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -34,6 +36,12 @@ _VALID_DIAGNOSTIC_SEVERITIES = frozenset({"trace", "info", "warning", "error"})
 _STDERR_TAIL_BYTES = 200
 _PUBLIC_DIAGNOSTIC_FIELDS = frozenset({"severity", "data", "pos", "endPos"})
 _PUBLIC_SORRY_FIELDS = frozenset({"goal", "pos", "endPos"})
+_LEGACY_DEPS_JSON_SUSPECT_CLOSE = re.compile(r"(?<!-)(?:--)+/")
+LEAN_HEADER_LAUNCHER = (
+    "import os; "
+    "lean = os.path.join(os.environ['LEAN_SYSROOT'], 'bin', 'lean'); "
+    "os.execv(lean, [lean, '--deps-json', '/dev/stdin'])"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +324,216 @@ def _validate_command_response(
     return environment, messages
 
 
+def _communicate_bounded(
+    process: subprocess.Popen[bytes],
+    input_bytes: bytes,
+    *,
+    deadline: float,
+    max_output_bytes: int,
+) -> tuple[bytes, bytes]:
+    """Exchange bytes with a child without unbounded output or time."""
+    stdin_fd = process.stdin.fileno()
+    stdout_fd = process.stdout.fileno()
+    stderr_fd = process.stderr.fileno()
+    for fd in (stdin_fd, stdout_fd, stderr_fd):
+        os.set_blocking(fd, False)
+
+    pending = memoryview(input_bytes)
+    offset = 0
+    stdin_open = True
+    stdout_open = True
+    stderr_open = True
+    stdout = bytearray()
+    stderr = bytearray()
+
+    def close_stdin() -> None:
+        nonlocal stdin_open
+        if not stdin_open:
+            return
+        stdin_open = False
+        try:
+            process.stdin.close()
+        except OSError:
+            pass
+
+    while stdin_open or stdout_open or stderr_open:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("timed out checking the Lean header")
+        readable_fds: list[int] = []
+        if stdout_open:
+            readable_fds.append(stdout_fd)
+        if stderr_open:
+            readable_fds.append(stderr_fd)
+        writable_fds = [stdin_fd] if stdin_open else []
+        try:
+            readable, writable, _ = select.select(
+                readable_fds,
+                writable_fds,
+                [],
+                remaining,
+            )
+        except InterruptedError:
+            continue
+        if not readable and not writable:
+            raise TimeoutError("timed out checking the Lean header")
+
+        for fd, target in ((stdout_fd, stdout), (stderr_fd, stderr)):
+            if fd not in readable:
+                continue
+            try:
+                chunk = os.read(fd, 65536)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                if fd == stdout_fd:
+                    stdout_open = False
+                else:
+                    stderr_open = False
+                continue
+            if len(stdout) + len(stderr) + len(chunk) > max_output_bytes:
+                raise ValueError(
+                    f"Lean header parser output exceeded {max_output_bytes} bytes"
+                )
+            target.extend(chunk)
+
+        if stdin_fd in writable:
+            try:
+                written = os.write(stdin_fd, pending[offset : offset + 65536])
+            except BlockingIOError:
+                continue
+            except BrokenPipeError:
+                close_stdin()
+            else:
+                if written <= 0:
+                    close_stdin()
+                else:
+                    offset += written
+                    if offset == len(pending):
+                        close_stdin()
+
+    close_stdin()
+    # Do not poll or wait here. Process-group cleanup must verify that the
+    # whole group is retired before reaping its leader, or a reused numeric
+    # PGID could be signalled after the parser leaves a descendant behind.
+    return bytes(stdout), bytes(stderr)
+
+
+@dataclass(frozen=True)
+class _LeanHeaderAnalysis:
+    """Lean-owned facts needed to validate and compose one submitted header."""
+
+    modules: tuple[str, ...]
+    accepts_leading_imports: bool
+
+
+def _decode_header_analysis(stdout: bytes) -> _LeanHeaderAnalysis:
+    """Decode the strict schemas emitted by Lean's fast import parser."""
+    try:
+        payload = _decode_repl_json(stdout)
+        if not isinstance(payload, dict) or set(payload) != {"imports"}:
+            raise ValueError
+        entries = payload["imports"]
+        if not isinstance(entries, list) or len(entries) != 1:
+            raise ValueError
+        entry = entries[0]
+        if not isinstance(entry, dict):
+            raise ValueError
+        errors = entry.get("errors")
+        if not isinstance(errors, list) or not all(
+            isinstance(error, str) and error for error in errors
+        ):
+            raise ValueError
+        if errors:
+            raise ValueError(errors[0])
+
+        has_result = "result" in entry
+        has_imports = "imports" in entry
+        if has_result == has_imports:
+            raise ValueError
+        is_module: bool | None = None
+        if has_result:
+            result = entry["result"]
+            if not isinstance(result, dict):
+                raise ValueError
+            imports = result.get("imports")
+            is_module = result.get("isModule")
+            if is_module is not None and type(is_module) is not bool:
+                raise ValueError
+        else:
+            imports = entry["imports"]
+        if not isinstance(imports, list):
+            raise ValueError
+
+        modules: list[str] = []
+        has_implicit_init = False
+        has_composition_metadata = has_result and is_module is not None
+        for item in imports:
+            if not isinstance(item, dict):
+                raise ValueError
+            module = item.get("module")
+            if not isinstance(module, str) or not module:
+                raise ValueError
+            components = module.split(".")
+            if (
+                "/" in module
+                or "\\" in module
+                or "«" in module
+                or "»" in module
+                or any(not component for component in components)
+            ):
+                raise ValueError(
+                    "Lean header imports must use plain, nonempty module components"
+                )
+            if has_result:
+                is_meta = item.get("isMeta")
+                if is_meta is not None and type(is_meta) is not bool:
+                    raise ValueError
+                if is_meta is None:
+                    has_composition_metadata = False
+                if module == "Init" and is_meta:
+                    has_implicit_init = True
+            if module != "Init":
+                modules.append(module)
+        # Only the current schema exposes enough parser state to distinguish
+        # Lean's implicit Init imports from an explicit ``prelude``/``module``
+        # header. The legacy schema remains valid for allowlist checks, but
+        # fails closed on source rewriting and sends the validated frame exact.
+        return _LeanHeaderAnalysis(
+            modules=tuple(modules),
+            accepts_leading_imports=(
+                has_composition_metadata
+                and has_implicit_init
+                and is_module is False
+            ),
+        )
+    except (ReplProtocolError, TypeError, KeyError, json.JSONDecodeError):
+        raise ValueError("unrecognized output from lean --deps-json") from None
+    except ValueError as error:
+        if str(error):
+            raise
+        raise ValueError("unrecognized output from lean --deps-json") from None
+
+
+def _normalize_legacy_deps_json_comment_closes(code: str) -> str:
+    """Normalize suspect closes for a differential Lean 4.30--4.32 parse.
+
+    Those releases skip one character too many when an even run of dashes
+    precedes ``/`` inside a block comment. Removing one dash globally is
+    intentionally context-free: callers compare Lean's authoritative header
+    facts for both byte strings and reject only when they differ. Strings,
+    line comments, body text, and quoted identifiers therefore need no Python
+    lexer or duplicated Lean grammar.
+    """
+
+    if _LEGACY_DEPS_JSON_SUSPECT_CLOSE.search(code) is None:
+        return code
+    return _LEGACY_DEPS_JSON_SUSPECT_CLOSE.sub(
+        lambda match: match.group(0)[1:],
+        code,
+    )
+
+
 def _split_imports_and_body(code: str) -> tuple[list[str], str, int]:
     """Split Lean code into import statements and body.
 
@@ -352,7 +570,7 @@ class LeanReplConfig:
     cwd: str = "."
     env: dict[str, str] = field(default_factory=dict)
 
-    request_timeout: float = 30.0
+    request_timeout: float = 240.0
     startup_timeout: float = DEFAULT_REPL_STARTUP_TIMEOUT
     chunk_size: int = 4096
 
@@ -362,7 +580,10 @@ class LeanReplConfig:
     allowed_imports: frozenset[str] = ALLOWED_IMPORTS
     warmup_imports: frozenset[str] = WARMUP_IMPORTS
 
-    repl_command: list[str] = field(default_factory=lambda: ["lake", "exe", "repl"])
+    repl_command: list[str] = field(default_factory=lambda: ["lake", "exe", "@repl/repl"])
+    header_deps_command: list[str] = field(
+        default_factory=lambda: ["lake", "env", sys.executable, "-c", LEAN_HEADER_LAUNCHER]
+    )
 
     # stdout is capped per response. stderr has no protocol framing, so its
     # ceiling applies to the entire process generation and resets on restart.
@@ -555,6 +776,14 @@ class ReplStderrBacklog(RuntimeError):
         self.response = response
 
 
+class ReplCleanupError(RuntimeError):
+    """A disposable result is valid but its wrapper still owns a process."""
+
+    def __init__(self, message: str, result: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.result = result
+
+
 class LeanRepl:
     """Lean REPL process manager.
 
@@ -591,6 +820,8 @@ class LeanRepl:
     def start(
         self,
         startup_timeout: float | None = None,
+        *,
+        warm: bool = True,
     ) -> None:
         """Start and warm the Lean REPL within one startup deadline."""
         if os.name != "posix":
@@ -625,7 +856,7 @@ class LeanRepl:
             self._stderr_bytes = 0
             self._stderr_tail.clear()
 
-            if self.config.warmup_imports:
+            if warm and self.config.warmup_imports:
                 header = "\n".join(
                     f"import {root}" for root in self.config.warmup_imports
                 )
@@ -737,6 +968,191 @@ class LeanRepl:
     def get_memory_usage(self) -> float:
         """Return memory usage in GB."""
         return _get_process_memory_gb(self.process)
+
+    def is_clean(self) -> bool:
+        """Return whether this wrapper owns no process generation."""
+        return self.process is None and self._process_group_id is None
+
+    def _check_header(self, code: str, deadline: float) -> _LeanHeaderAnalysis:
+        """Analyze the submitted header with the selected toolchain's Lean parser.
+
+        The parser is this wrapper's process generation until close() verifies
+        that it exited, so a failed cleanup is retried before the slot is reused.
+        """
+        if deadline <= time.monotonic():
+            raise TimeoutError("timed out checking the Lean header")
+        env = _inherit_clean_env()
+        env.update(self.config.env)
+        self.process = subprocess.Popen(
+            self.config.header_deps_command,
+            cwd=self.cwd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            start_new_session=True,
+        )
+        process = self.process
+        self._process_group_id = process.pid
+        stdout, stderr = _communicate_bounded(
+            process,
+            code.encode(),
+            deadline=deadline,
+            max_output_bytes=self.config.max_buffer_bytes,
+        )
+        self.close(deadline=deadline)
+        returncode = process.returncode
+        if returncode != 0:
+            detail = stderr.decode(errors="replace").strip().splitlines()
+            raise ValueError(detail[0] if detail else f"exit status {returncode}")
+        return _decode_header_analysis(stdout)
+
+    def run_disposable(
+        self,
+        code: str,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Run one public call as the only request frame on a fresh process."""
+        timeout = self.request_timeout if timeout is None else timeout
+        deadline = time.monotonic() + timeout
+
+        def remaining(phase: str) -> float:
+            value = deadline - time.monotonic()
+            if value <= 0:
+                raise TimeoutError(
+                    f"Lean REPL {phase} timed out after {timeout:g} seconds"
+                )
+            return value
+
+        with self._process_lock:
+            result: dict[str, Any] | None = None
+            request_error: BaseException | None = None
+            added_imports: tuple[str, ...] = ()
+            try:
+                # A previous failed cleanup must settle before another process
+                # generation can be created from this slot.
+                self.close(deadline=deadline)
+                if os.name != "posix":
+                    raise RuntimeError("Lean REPL transport requires a POSIX platform")
+                imports, _, _ = _split_imports_and_body(code)
+                accepts_leading_imports = False
+                needs_header_analysis = bool(self.config.warmup_imports) or (
+                    self.config.validate_imports
+                    and self._allowed_import_roots is not None
+                )
+                if needs_header_analysis:
+                    try:
+                        header = self._check_header(code, deadline)
+                        normalized = _normalize_legacy_deps_json_comment_closes(code)
+                        if normalized != code:
+                            normalized_header = self._check_header(normalized, deadline)
+                            if normalized_header != header:
+                                raise ValueError(
+                                    "Lean header contains a block-comment close "
+                                    "spelling that lean --deps-json cannot validate safely"
+                                )
+                    except ValueError as error:
+                        result = {"repl_error": f"Rejected Lean header: {error}"}
+                    else:
+                        imports = list(header.modules)
+                        accepts_leading_imports = header.accepts_leading_imports
+                submitted_modules = set(imports)
+                submitted_roots = {statement.split(".")[0] for statement in imports}
+                if (
+                    result is None
+                    and self.config.validate_imports
+                    and self._allowed_import_roots is not None
+                ):
+                    warmup_roots = {root.split(".")[0] for root in self.config.warmup_imports}
+                    disallowed = (submitted_roots | warmup_roots) - self._allowed_import_roots
+                    if disallowed:
+                        result = {
+                            "repl_error": (
+                                f"Disallowed imports: {', '.join(sorted(disallowed))}. "
+                                "Allowed roots: "
+                                f"{', '.join(sorted(self._allowed_import_roots))}."
+                            )
+                        }
+                if result is None:
+                    added_imports = tuple(
+                        root
+                        for root in sorted(self.config.warmup_imports)
+                        if accepts_leading_imports and root not in submitted_modules
+                    )
+                    prefix = "\n".join(
+                        f"import {root}" for root in added_imports
+                    )
+                    command = f"{prefix}\n{code}" if prefix else code
+                    # Do not send startup import or smoke-test frames. The
+                    # submitted command is the generation's only request.
+                    self.start(
+                        startup_timeout=remaining("disposable child startup"),
+                        warm=False,
+                    )
+                    response = self._run(
+                        code=command,
+                        env_id=None,
+                        timeout=remaining("combined command execution"),
+                    )
+                    _validate_command_response(
+                        response,
+                        context="the requested command",
+                        require_environment=True,
+                    )
+                    _adjust_line_numbers(response, -len(added_imports))
+                    result = _without_process_handles(response)
+            except ReplStderrBacklog as error:
+                try:
+                    _validate_command_response(
+                        error.response,
+                        context="the requested command",
+                        require_environment=True,
+                    )
+                except ReplCommandError as command_error:
+                    result = {"repl_error": str(command_error)}
+                except ReplProtocolError as protocol_error:
+                    result = {
+                        "repl_error": str(protocol_error),
+                        "outcome_unknown": True,
+                    }
+                else:
+                    response = _without_process_handles(error.response)
+                    _adjust_line_numbers(response, -len(added_imports))
+                    result = response
+            except ReplCommandError as error:
+                result = {"repl_error": str(error)}
+            except (ReplProtocolError, ReplOutcomeUnknown) as error:
+                result = {"repl_error": str(error), "outcome_unknown": True}
+            except (ReplProcessExited, TimeoutError, RuntimeError, OSError) as error:
+                result = {"repl_error": str(error)}
+            except BaseException as error:
+                request_error = error
+            finally:
+                try:
+                    self.close(
+                        deadline=time.monotonic() + DEFAULT_REPL_CLEANUP_SECONDS
+                    )
+                except BaseException as cleanup_error:
+                    logger.exception(
+                        "failed to retire disposable Lean REPL process"
+                    )
+                    if request_error is not None:
+                        note = f"Lean REPL process cleanup also failed: {cleanup_error}"
+                        add_note = getattr(request_error, "add_note", None)
+                        if add_note is not None:
+                            add_note(note)
+                    elif not isinstance(cleanup_error, Exception):
+                        raise
+                    elif result is not None:
+                        raise ReplCleanupError(
+                            "Disposable Lean REPL cleanup failed after a result "
+                            f"was produced; pool retirement is required: {cleanup_error}",
+                            result,
+                        ) from cleanup_error
+
+            if request_error is not None:
+                raise request_error.with_traceback(request_error.__traceback__)
+            return result
 
     def run(self, code: str, env_id: int | None = None, timeout: float | None = None) -> dict[str, Any]:
         """Send code to the REPL within one deadline across recovery attempts."""

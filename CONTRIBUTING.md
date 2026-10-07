@@ -18,7 +18,9 @@ CI (`.github/workflows/tests.yml`) runs the same four steps on Python 3.10 and
 3.13 for every push and pull request. A separate job runs
 `tests/test_skeleton.py` and one `tests/test_project_inspect.py` test against a
 real Lean toolchain; another runs the inspection, bounded-subprocess, and
-transactional-output tests on Windows. Locally, tests that need Lean skip when
+transactional-output tests on Windows; a third builds `tests/fixtures/repl-smoke`
+and runs `tests/test_real_repl.py` against the pinned upstream REPL. That module
+skips unless `AUTOFORM_RUN_REAL_REPL_TESTS=1`. Locally, tests that need Lean skip when
 `lake` is not on `PATH`. The `tests/test_skeleton.py` ones also skip when the
 toolchain pinned in `tests/fixtures/skeleton-project/lean-toolchain` is
 missing; the others let elan download it. Run `lake build` in

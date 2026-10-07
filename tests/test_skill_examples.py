@@ -164,6 +164,30 @@ def test_quick_start_keeps_the_cli_agent_facing(repo_root: Path) -> None:
     assert "uv run autoform" not in quick_start
 
 
+def test_public_repl_calls_are_documented_as_process_disposable(repo_root: Path) -> None:
+    servers = (repo_root / "servers/README.md").read_text(encoding="utf-8")
+    setup = (repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8")
+    lakefile = (
+        repo_root / "skills/setup/assets/cabannes-thesis-project/lakefile.toml"
+    ).read_text(encoding="utf-8")
+
+    assert "each public REPL call gets a fresh child" in servers
+    assert "no process-owned environment or proof-state handle survives" in servers
+    assert "toolchain's `lean --deps-json`" in servers
+    assert "unrecognized parser response fails closed" in servers
+    assert "names that remain quoted or\npath-like after Lean parsing are refused" in servers
+    assert "package-qualified `@repl/repl` target" in servers
+    assert "one total post-admission budget" in servers
+    assert "default and maximum are 240 seconds" in servers
+    assert "does not mean a REPL subprocess remains resident" in servers
+    assert "`LEAN_REPL_HEADER_CMD`" in servers
+    assert "`leanprover-community/repl` at an immutable revision" in setup
+    assert "run `lake update repl`" in setup
+    assert "commit the manifest" in setup
+    assert "lake build @repl/repl" in setup
+    assert "68a3b3a059787a7db44fb1e6281e4a657efee470" in lakefile
+
+
 def test_setup_guidance_uses_the_offline_atomic_project_creator(repo_root: Path) -> None:
     setup_root = repo_root / "skills" / "setup"
     setup = (setup_root / "SKILL.md").read_text(encoding="utf-8")
@@ -296,10 +320,15 @@ def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
     assert (example / "src/CabannesThesis.lean").is_file()
     assert (example / "src/CabannesThesis/Basic.lean").is_file()
     toolchain = (example / "lean-toolchain").read_text(encoding="utf-8").strip()
-    manifest = tomllib.loads((example / "lakefile.toml").read_text(encoding="utf-8"))
+    lakefile = tomllib.loads((example / "lakefile.toml").read_text(encoding="utf-8"))
+    manifest = json.loads((example / "lake-manifest.json").read_text(encoding="utf-8"))
     assert toolchain == "leanprover/lean4:v4.32.2"
-    assert manifest["require"][0]["rev"] == "v4.32.2"
-    assert manifest["lean_lib"][0]["srcDir"] == "src"
+    requirements = {entry["name"]: entry for entry in lakefile["require"]}
+    packages = {entry["name"]: entry for entry in manifest["packages"]}
+    assert requirements["mathlib"]["rev"] == "v4.32.2"
+    assert requirements["repl"]["rev"] == packages["repl"]["inputRev"]
+    assert packages["repl"]["rev"] == requirements["repl"]["rev"]
+    assert lakefile["lean_lib"][0]["srcDir"] == "src"
 
 
 def test_roadmap_example_is_structural_not_a_completion_fixture(

@@ -1,0 +1,13 @@
+name = "AutoformReplSmoke"
+version = "0.1.0"
+
+[[require]]
+name = "repl"
+git = "https://github.com/leanprover-community/repl.git"
+rev = "68a3b3a059787a7db44fb1e6281e4a657efee470"
+
+[[lean_lib]]
+name = "Mathlib"
+
+[[lean_lib]]
+name = "Secret"
