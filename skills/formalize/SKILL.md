@@ -59,8 +59,9 @@ as the first read and, for a subagent, the same `phase`, `article_revision`,
 `open_statements`, `assumes`, and `revision` it was dispatched with. Unrelated
 parallel articles may legitimately change the graph-wide source revision.
 
-Read the complete article, cited sources, dependency articles, and existing Lean
-target. Preserve the exact mathematical statement. Work only on the selected
+Read the complete article, its section of the `agents.md` beside it, cited
+sources, dependency articles, and existing Lean target. Preserve the exact
+mathematical statement. Work only on the selected
 phase: do not modify another article or its Lean declarations, or weaken a
 public statement. The one exception is revising a declaration other articles'
 Lean uses: start from `autoform work impact` and make only the edits the
@@ -113,9 +114,17 @@ score instead.
 
 On acceptance, update only the claimed article with the exact compiled
 declaration and truthful assertions: `statement: formalized`, plus `proof:
-formalized` once the proof is complete. On a useful failed route, record only
-distilled reusable evidence under `## Execution notes`—the remaining goal,
-checked lemmas, and next route—never a transcript or retry counter. A missing
+formalized` once the proof is complete. The article keeps only frontmatter and
+mathematics. Write notes only in the `agents.md` of its directory, under a
+heading naming the article's file: Lean names, Mathlib gaps, prior art,
+friction, partial progress, and, after a useful failed route, distilled
+reusable evidence (the remaining goal, checked lemmas, and next route), never a
+transcript or retry counter. Edit only that section, keeping the others intact
+through merges. Move still-useful notes already in the article there and drop
+the rest. Delete the section once the article is proved, and the file once it
+is empty. When the project's CI pins an `AUTOFORM_REF` older than `agents.md`
+support, its `autoform check` reads the file as an article and fails: until the
+pin moves, keep notes in your report, along with the old pin. A missing
 prerequisite, an incorrect decomposition, a change another article needs, or a
 proof recorded without its statement returns to Roadmap instead of silently
 changing the DAG.

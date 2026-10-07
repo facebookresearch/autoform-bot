@@ -21,7 +21,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from . import graph_pages, graph_views, mermaid, status
 from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage
-from .graph import Graph, Node, load_graph
+from .graph import Graph, Node, is_agent_notes, load_graph
 from .lean import SourceLinker, build_linker, declaration_names, index_failure_message
 from .status import is_definition
 
@@ -330,7 +330,7 @@ def render_site(
         relative = source.relative_to(blueprint)
         if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
             continue
-        if relative.name in _GENERATED_FILES:
+        if relative.name in _GENERATED_FILES or is_agent_notes(relative):
             continue
         # Source notes leave the site entirely once readers can reach them in
         # the repository, so the book has one reference surface rather than two.
@@ -580,7 +580,7 @@ def _published_source_files(blueprint: Path):
         relative = source.relative_to(blueprint)
         if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
             continue
-        if relative.name in _GENERATED_FILES or not source.is_file():
+        if relative.name in _GENERATED_FILES or is_agent_notes(relative) or not source.is_file():
             continue
         yield source, relative
 
@@ -905,7 +905,7 @@ def _render_structure_page(
     def keep(relative: Path) -> bool:
         if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
             return False
-        if relative.name in _GENERATED_FILES:
+        if relative.name in _GENERATED_FILES or is_agent_notes(relative):
             return False
         return not (sources_base is not None and relative.parts[:1] == (SOURCES_DIR,))
 

@@ -276,7 +276,7 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
             )
 
     for path in entries:
-        if not path.is_file() or path.suffix != ".md":
+        if not path.is_file() or path.suffix != ".md" or is_agent_notes(path):
             continue
         try:
             content = path.read_bytes()
@@ -331,7 +331,7 @@ def _chapter_issues(roadmap_root: Path) -> list[str]:
         return []
     issues = []
     for chapter in chapters:
-        articles = [path for path in chapter.rglob("*.md") if path.is_file()]
+        articles = [path for path in chapter.rglob("*.md") if path.is_file() and not is_agent_notes(path)]
         if not articles:
             continue
         if (chapter / "README.md").is_file():
@@ -343,6 +343,17 @@ def _chapter_issues(roadmap_root: Path) -> list[str]:
             f"add {chapter.name}/README.md with the chapter's H1 title"
         )
     return issues
+
+
+def is_agent_notes(path: Path) -> bool:
+    """Whether ``path`` holds agents' working notes rather than an article.
+
+    Any roadmap directory may keep an ``agents.md`` for notes on the articles
+    beside it, so those notes stay out of the articles themselves. It is not an
+    article: the graph skips it and a rendered book never shows it. The match
+    ignores case, so an ``AGENTS.md`` written on macOS is skipped on Linux too.
+    """
+    return path.name.casefold() == "agents.md"
 
 
 def _article_id(path: Path, roadmap_root: Path) -> str:

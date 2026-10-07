@@ -16,6 +16,7 @@ from autoform_cli.render import (
     PublicationError,
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
+    publication_source_revision,
     render_site,
 )
 from autoform_cli.status import STATES, derive
@@ -991,6 +992,24 @@ def test_render_omits_benign_hidden_files(tmp_path: Path) -> None:
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     assert not (tmp_path / "out/.gitignore").exists()
+
+
+def test_agent_notes_stay_in_the_vault(tmp_path: Path) -> None:
+    """Notes are for the next worker, not the reader.
+
+    Editing them changes nothing a reader can see, so it must not mark the
+    published site stale either.
+    """
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    before = publication_source_revision(blueprint)
+    (blueprint / "roadmap/agents.md").write_text("## top.md\n\nMathlib gap.\n", encoding="utf-8")
+
+    render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    assert not (tmp_path / "out/roadmap/agents.md").exists()
+    assert "agents.md" not in (tmp_path / "out/structure.md").read_text(encoding="utf-8")
+    assert publication_source_revision(blueprint) == before
 
 
 @pytest.mark.parametrize(

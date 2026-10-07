@@ -10,10 +10,10 @@ as needed.
 
 ## Articles and containment
 
-Every Markdown file below `blueprint/roadmap/` is an article node. A
-`README.md` represents its directory and strictly contains the articles below
-it; the nearest ancestor `README.md` is the single parent. This supports any
-number of levels, from book to chapter to section to declaration. Ordinary
+Every Markdown file below `blueprint/roadmap/` except `agents.md` is an article
+node. A `README.md` represents its directory and strictly contains the articles
+below it; the nearest ancestor `README.md` is the single parent. This supports
+any number of levels, from book to chapter to section to declaration. Ordinary
 files use their path without `.md` as a stable ID; `README.md` uses its
 directory path, with the root article named `roadmap`.
 
@@ -76,6 +76,15 @@ target, `bridged` for a result introduced between source targets, and
 
 Frontmatter is optional. A container article that only supplies prose and
 placement needs none at all; only checked facts are recorded.
+
+Any roadmap directory may also hold an `agents.md`: agents' notes on the
+articles beside it, one section per article under a heading naming its file.
+Articles keep only frontmatter and mathematics, so notes on the Lean side,
+progress, and failed routes go there instead. `autoform check` skips it,
+`autoform render` never publishes it, and an article's section is deleted once
+the article is proved. CI's `autoform check` at an older `AUTOFORM_REF` reads
+it as an article and fails, so move the pin first; until then, agents keep
+notes in their reports.
 
 ## Assertions and derived status
 
@@ -1028,7 +1037,7 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
      `lean:`, `statement`, and `proof`, which works only when nothing else
      uses it. When neither applies, the
      revision is blocked: release the claims and report it. Record what
-     happened under `## Execution notes` of each touched article.
+     happened in the `agents.md` beside each touched article.
 
    An unused statement dependency, which rules out the contained route, is
    re-reviewed under X's new meaning like a statement-impacted article: it
@@ -1123,10 +1132,10 @@ from runtime snapshots and publication.
 
 `autoform render` publishes the book, derived progress, and dependency maps at
 project, chapter, nested-scope, local, and full-graph scales. It never reads a
-`graph.json` or an operational queue. Hidden files are omitted, while symlinks,
-credentials, logs, provider state, and agent/task state inside the blueprint
-cause the render to fail rather than silently leak them. Source and output
-directories must be disjoint.
+`graph.json` or an operational queue. Hidden files and `agents.md` notes are
+omitted, while symlinks, credentials, logs, provider state, and agent/task
+state inside the blueprint cause the render to fail rather than silently leak
+them. Source and output directories must be disjoint.
 
 Every render writes `publication.json` with the source-content hash, Git ref,
 article and dependency counts, and available views. It contains no timestamp or

@@ -69,7 +69,7 @@ def test_formalize_replaces_custom_orchestration_with_the_markdown_frontier(
         "claim_target",
         "separate Git worktrees",
         "shared Lean LSP and REPL",
-        "## Execution notes",
+        "`agents.md`",
         "returns to Roadmap",
     ):
         assert required in skill
@@ -87,6 +87,36 @@ def test_formalize_replaces_custom_orchestration_with_the_markdown_frontier(
     assert "$formalize" in metadata
     assert "Formalize the ready Markdown roadmap frontier" in codex
     assert '"id": "formalize"' in muse
+
+
+def test_agent_notes_live_beside_articles_never_in_them(repo_root: Path) -> None:
+    """Notes written into articles crept into published books as Lean commentary.
+
+    Each roadmap directory's `agents.md` is the one place for them, so the
+    articles stay informal mathematics and the notes are cleaned up on proof.
+    A CI pin from before that reads the file as an article, so until the pin
+    moves the notes go in the report instead.
+    """
+
+    def read(relative: str) -> str:
+        return " ".join((repo_root / relative).read_text(encoding="utf-8").split())
+
+    formalize = read("skills/formalize/SKILL.md")
+    roadmap = read("skills/roadmap/SKILL.md")
+    reference = read("autoform_cli/README.md")
+
+    assert "Read the complete article, its section of the `agents.md` beside it" in formalize
+    assert "The article keeps only frontmatter and mathematics." in formalize
+    assert "Write notes only in the `agents.md` of its directory" in formalize
+    assert "Delete the section once the article is proved" in formalize
+    assert "Articles hold only frontmatter and informal mathematics" in roadmap
+    assert "record the decision in the article's section of the `agents.md`" in roadmap
+    assert "Record what happened in the `agents.md` beside each touched article." in reference
+    for text in (formalize, roadmap):
+        assert "older than `agents.md` support" in text
+        assert "keep notes in your report, along with the old pin" in text
+    for text in (formalize, roadmap, reference):
+        assert "Execution notes" not in text
 
 
 def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path) -> None:
