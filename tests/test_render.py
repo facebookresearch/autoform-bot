@@ -67,6 +67,12 @@ def _project(tmp_path: Path) -> Path:
 
 def _render(tmp_path: Path, **kwargs):
     project = _project(tmp_path)
+    basic = project / "Project" / "Basic.lean"
+    basic.write_text(
+        basic.read_text(encoding="utf-8")
+        + "\nnamespace Project\n\ntheorem side : True := trivial\n\nend Project\n",
+        encoding="utf-8",
+    )
     report = render_site(
         project / "blueprint",
         tmp_path / "out",
@@ -263,7 +269,7 @@ def test_the_home_page_project_map_survives_named_chapters(tmp_path: Path) -> No
         encoding="utf-8",
     )
     (chapter / "side.md").write_text(
-        "---\ndeclaration: theorem\nstatement: formalized\nlean: Project.top\n---\n\n"
+        "---\ndeclaration: theorem\nstatement: formalized\nlean: Project.side\n---\n\n"
         "# Side\n\nA statement in a named chapter.\n",
         encoding="utf-8",
     )

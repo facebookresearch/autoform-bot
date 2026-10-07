@@ -250,12 +250,31 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         )
 
     if not issues:
+        issues.extend(_duplicate_formalized_targets(nodes))
+    if not issues:
         issues.extend(_find_cycles(nodes))
     if not issues:
         issues.extend(_find_rollup_cycles(nodes))
     if issues:
         raise GraphValidationError(issues)
     return Graph(blueprint_dir=blueprint, nodes=nodes, open_statements=open_statements)
+
+
+def _duplicate_formalized_targets(nodes: dict[str, Node]) -> list[str]:
+    """Reject progress credit assigned to the same Lean declaration twice."""
+
+    credited: dict[str, list[str]] = {}
+    for node in nodes.values():
+        if not (node.statement_formalized or node.proof_formalized):
+            continue
+        for declaration in declaration_names(node.lean or ""):
+            credited.setdefault(declaration, []).append(node.id)
+    return [
+        f"{declaration}: formalized Lean target is credited to multiple articles: "
+        + ", ".join(sorted(article_ids))
+        for declaration, article_ids in sorted(credited.items())
+        if len(article_ids) > 1
+    ]
 
 
 def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
