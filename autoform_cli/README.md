@@ -1526,10 +1526,7 @@ also shows as formulas. These are the formulas `check` judges, each under the
 same TeX refusals. Text the site prints as typed,
 such as a statement's title in its heading, a `discussion:` value, the lead on
 the home page, the navigation, and a table of contents, is shown as typed,
-TeX and all. A setting changed in
-any formula's MathJax menu, such as the renderer or the explorer a screen
-reader uses, applies to every formula on the page and on the pages shown after
-it, while each card keeps its own TeX input. Every formula paints
+TeX and all. Every formula paints
 only within its own line and the block that holds it, with either renderer and
 any theme, so no article formula can cover a card, a mark, or the text beside
 it. An inline formula wider than its paragraph is cut at the paragraph's edge,

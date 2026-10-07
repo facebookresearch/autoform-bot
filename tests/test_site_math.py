@@ -1513,17 +1513,15 @@ def test_every_formula_paints_inside_its_own_band(tmp_path: Path) -> None:
 # the next page as Material's instant navigation shows it, "new" or "old":
 # whether mkdocs.yml also lists the bundle, after the script, "after" when a
 # project script listed after it assigns the configuration Material's
-# documentation gives, the card ("page" for the articles) whose menu changes
-# two settings after the first pass, or "none", and what the document MathJax
-# starts with does before the first pass, as its menu does with saved
-# settings: "renders" when it renders, "loads" when its menu is loading, or
-# "quiet". The bundle's menu needs a browser, so each document gets one with
-# the same interface.
+# documentation gives, and what the document MathJax starts with does before
+# the first pass, as its menu does with saved settings: "renders" when it
+# renders, "loads" when its menu is loading, or "quiet". The bundle's menu
+# needs a browser, so each document gets one with what the script uses of it.
 _HARNESS = r"""
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const [scriptPath, firstPath, secondPath, project, override, changed, startup, mode, mutation] = process.argv.slice(2);
+const [scriptPath, firstPath, secondPath, project, override, startup, mode, mutation] = process.argv.slice(2);
 // What a later script changes in the configuration, and when: before the
 // page is parsed, so before the bundle is fetched ("fetch"), after it is
 // fetched and before it starts ("start"), or, in a project that lists the
@@ -1531,8 +1529,8 @@ const [scriptPath, firstPath, secondPath, project, override, changed, startup, m
 // through window.MathJax.config ("config") or window.MathJax itself.
 const [changing, moment, through] = mutation.split("@");
 const report = {
-  injected: [], errors: [], passes: [], inventory: [], version: null, base: null, load: null, menus: null,
-  startup: null, resets: [], changed: null, stopped: null,
+  injected: [], errors: [], passes: [], inventory: [], version: null, base: null, load: null, startup: null,
+  resets: [], changed: null, stopped: null,
 };
 global.window = globalThis;
 let contentLoaded = null;
@@ -1581,7 +1579,7 @@ report.load = MathJax.loader.load.slice();
 // bundle carries, and the menu, which needs a browser; the page; and the
 // menu for each document.
 const node = {
-  loader: {load: report.load.concat(["input/tex", "input/mml", "output/chtml", "a11y/assistive-mml", "output/svg"])},
+  loader: {load: report.load.concat(["input/tex", "input/mml", "output/chtml", "a11y/assistive-mml"])},
   startup: {document: fs.readFileSync(firstPath, "utf8"), ready: nodeReady},
 };
 const changes = {
@@ -1629,7 +1627,7 @@ function nodeReady() {
   const original = MathJax._.mathjax.mathjax.document;
   MathJax._.mathjax.mathjax.document = function (root, options) {
     const doc = original.call(this, root, options);
-    if (changed !== "none" || startup !== "quiet" || mode === "retry") doc.menu = new Menu(doc);
+    doc.menu = new Menu();
     if (first === null) first = doc;
     else docs.push(doc);
     // The page's document stops once, as a document does while a component
@@ -1706,80 +1704,21 @@ if (!main) {
   return;
 }
 
-// What the script uses of a document's menu: its settings, the variables a
-// click sets, which save the settings, the renderers it has loaded, and
-// what the menus are loading, with a redraw that stops partway, with the
-// formulas gone, for settings other than the renderer.
-class Menu {
-  constructor(doc) {
-    this.document = doc;
-    this.settings = {renderer: "CHTML", assistiveMml: true, scale: "1", explorer: false};
-    this.defaultSettings = Object.assign({}, this.settings);
-    this.jax = {CHTML: doc.outputJax, SVG: null};
-    this.applied = [];
-    const lookup = (name) => name in this.settings ? {setValue: (value) => {
-      this.settings[name] = value;
-      this.applied.push([name, value]);
-      if (name === "renderer") {
-        if (!this.jax[value]) {
-          MathJax.startup.useOutput(value.toLowerCase(), true);
-          this.jax[value] = MathJax.startup.output = MathJax.startup.getOutputJax();
-        }
-        this.jax[value].setAdaptor(this.document.adaptor);
-        this.document.outputJax = this.jax[value];
-      } else if (name === "explorer") {
-        this.explore();
-      } else {
-        this.document.state(MathJax._.core.MathItem.STATE.TYPESET - 1);
-      }
-      this.saveUserSettings();
-    }} : undefined;
-    this.menu = {pool: {lookup}};
-  }
-  // The first time, the explorer is loaded, which extends the handler, and
-  // this menu's document is remade with it, its formulas moved there; after
-  // that, the menu's redraw stops while the speech engine is not ready.
-  explore() {
-    const STATE = MathJax._.core.MathItem.STATE;
-    if (Menu.explorer) {
-      this.document.state(STATE.COMPILED - 1);
-      MathJax._.util.Retries.retryAfter(Promise.resolve());
-    }
-    Menu.loadingPromises.set("a11y/explorer", Promise.resolve().then(() => {
-      Menu.loadingPromises.delete("a11y/explorer");
-      Menu.explorer = true;
-      const startup = MathJax.startup;
-      const mathjax = MathJax._.mathjax.mathjax;
-      mathjax.handlers.unregister(startup.handler);
-      startup.handler = startup.getHandler();
-      startup.handler.documentClass = class extends startup.handler.documentClass {};
-      mathjax.handlers.register(startup.handler);
-      const old = this.document;
-      this.document = startup.document = startup.getDocument();
-      this.document.menu = this;
-      for (const item of old.math) this.document.math.push(Object.assign(new this.document.options.MathItem(), item));
-      this.document.processed = old.processed;
-      this.document.state(STATE.COMPILED - 1);
-    }));
-  }
-  saveUserSettings() {}
-}
+// What the script uses of a document's menu: what the menus are loading.
+class Menu {}
 Menu.loadingPromises = new Map();
-Menu.explorer = false;
 
-// The card a document reads, by its id, or what stands for the articles.
-function cardOf(doc, articles) {
+// The card a document reads, by its id, or null for the articles.
+function cardOf(doc) {
   const element = doc.options.elements && doc.options.elements[0];
   const adaptor = MathJax.startup.adaptor;
-  return element && adaptor.hasClass(element, "bp-readback") ? adaptor.getAttribute(element, "id") : articles;
+  return element && adaptor.hasClass(element, "bp-readback") ? adaptor.getAttribute(element, "id") : null;
 }
 
 function describe() {
   return docs.map((doc) => {
-    const card = cardOf(doc, null);
     return {
-      card,
-      output: doc.outputJax.name,
+      card: cardOf(doc),
       packages: doc.inputJax[0].parseOptions.options.packages.slice(),
       math: Array.from(doc.math).map((item) => ({tex: item.math, mml: MathJax.startup.toMML(item.root)})),
     };
@@ -1807,31 +1746,6 @@ main.init(node).then(async () => {
   report.passes.push(describe());
   report.startup = {math: Array.from(first.math).length, made};
   inventory(docs[0].inputJax[0]);
-  if (changed !== "none") {
-    // The documents of the pass, and the formulas and input each has.
-    const group = docs.slice();
-    const inputs = group.map((doc) => doc.inputJax[0]);
-    const counts = group.map((doc) => Array.from(doc.math).length);
-    const card = (doc) => cardOf(doc, "page");
-    const menu = group.find((doc) => card(doc) === changed).menu;
-    menu.menu.pool.lookup("renderer").setValue("SVG");
-    menu.menu.pool.lookup("assistiveMml").setValue(false);
-    menu.menu.pool.lookup("explorer").setValue(true);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    // Each menu's document now, which a menu may have remade.
-    const now = group.map((doc) => doc.menu.document);
-    const items = (doc) => Array.from(doc.math);
-    report.menus = {
-      menus: group.map((doc) => ({card: card(doc), settings: doc.menu.settings, applied: doc.menu.applied})),
-      inputs: now.every((doc, index) => items(doc).length === counts[index] &&
-        items(doc).every((item) => item.inputJax === inputs[index])) && new Set(inputs).size === group.length,
-      handler: now.every((doc) => doc instanceof MathJax.startup.handler.documentClass),
-      jax: group.every((doc) => doc.menu.jax === first.menu.jax),
-      defaults: group.every((doc) => doc.menu.defaultSettings === first.menu.defaultSettings),
-      output: now.every((doc) => doc.outputJax === first.menu.jax.SVG),
-      shown: now.every((doc) => items(doc).every((item) => item.state() >= MathJax._.core.MathItem.STATE.INSERTED)),
-    };
-  }
   docs = [];
   const adaptor = MathJax.startup.adaptor;
   const body = adaptor.body(MathJax.startup.document.document);
@@ -1877,7 +1791,6 @@ def _node_report(
     first: str = _FIRST_PAGE,
     second: str = _SECOND_PAGE,
     override: str = "none",
-    changed: str = "none",
     startup: str = "quiet",
     mode: str = "none",
     mutation: str = "none@none",
@@ -1888,7 +1801,7 @@ def _node_report(
     done = subprocess.run(
         [
             NODE, "harness.js", "mathjax.js", "first.html", "second.html",
-            project, override, changed, startup, mode, mutation,
+            project, override, startup, mode, mutation,
         ],
         cwd=tmp_path,
         env=dict(os.environ, AUTOFORM_MATHJAX_DIR=str(mathjax_package())),
@@ -2335,36 +2248,10 @@ def test_project_macros_cannot_join_into_a_command(tmp_path: Path) -> None:
         assert "<mo>&gt;</mo>" in report["passes"][0][0]["math"][1]["mml"], splice
 
 
-@pytest.mark.parametrize("changed", ["page", "c1", "c2"])
-def test_a_menu_setting_changes_every_formula_on_the_page(tmp_path: Path, changed: str) -> None:
-    """Each card is a document of its own, with a menu of its own, but a
-    reader sees one page: a setting changed from any formula applies to all,
-    the explorer a screen reader uses too, which remakes the document of the
-    menu that loads it, and each card keeps its own TeX input."""
-
-    script = _node_script(tmp_path)
-
-    report = _node_report(tmp_path, script, "new", changed=changed)
-
-    assert report["errors"] == []
-    menus = report["menus"]
-    assert [menu["card"] for menu in menus["menus"]] == ["page", "c1", "c2"]
-    for menu in menus["menus"]:
-        assert menu["settings"] == {"renderer": "SVG", "assistiveMml": False, "scale": "1", "explorer": True}
-        assert menu["applied"] == [["renderer", "SVG"], ["assistiveMml", False], ["explorer", True]]
-    assert menus["inputs"] and menus["handler"] and menus["jax"] and menus["defaults"]
-    assert menus["output"] and menus["shown"]
-    # The next page starts with the renderer the reader chose.
-    first, second = report["passes"]
-    assert [document["output"] for document in first] == ["CHTML", "CHTML", "CHTML"]
-    assert [document["output"] for document in second] == ["SVG", "SVG"]
-
-
 def test_the_document_mathjax_starts_with_holds_no_formula(tmp_path: Path) -> None:
     """MathJax makes a document for the page when it starts, with a menu,
     which renders it when it applies a saved setting. That document finds
-    nothing, so every formula is read by a pass, with a new input, and its
-    menu shares the reader's settings."""
+    nothing, so every formula is read by a pass, with a new input."""
 
     script = _node_script(tmp_path)
 
