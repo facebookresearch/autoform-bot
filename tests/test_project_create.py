@@ -911,8 +911,11 @@ def test_close_failure_after_publish_reports_that_the_target_exists(
     assert not list(tmp_path.glob(".autoform-new-*"))
 
 
+@pytest.mark.parametrize(
+    "failure", [OSError("injected fsync failure"), KeyboardInterrupt], ids=["fsync-error", "interrupt"]
+)
 def test_fsync_failure_after_publish_reports_that_the_target_exists(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: BaseException | type[BaseException]
 ) -> None:
     target = tmp_path / "project"
     original_rename = create_module._rename_noreplace
@@ -929,7 +932,7 @@ def test_fsync_failure_after_publish_reports_that_the_target_exists(
         nonlocal failed
         if published and not failed:
             failed = True
-            raise OSError("injected fsync failure")
+            raise failure
         original_fsync(descriptor)
 
     monkeypatch.setattr(create_module, "_rename_noreplace", publish)
@@ -938,32 +941,6 @@ def test_fsync_failure_after_publish_reports_that_the_target_exists(
     error = _fails(target, "project-create-commit-uncertain")
     assert "target names the published project" in error.message
     assert "parent-directory sync was not confirmed" in error.message
-    assert inspect_project(target).ok
-    assert not list(tmp_path.glob(".autoform-new-*"))
-
-
-def test_interrupt_after_publish_reports_that_the_target_exists(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    target = tmp_path / "project"
-    original_rename = create_module._rename_noreplace
-    original_fsync = create_module.os.fsync
-    published = False
-
-    def publish(*args):
-        nonlocal published
-        original_rename(*args)
-        published = True
-
-    def interrupt_after_publish(descriptor):
-        if published:
-            raise KeyboardInterrupt
-        original_fsync(descriptor)
-
-    monkeypatch.setattr(create_module, "_rename_noreplace", publish)
-    monkeypatch.setattr(create_module.os, "fsync", interrupt_after_publish)
-
-    _fails(target, "project-create-commit-uncertain")
     assert inspect_project(target).ok
     assert not list(tmp_path.glob(".autoform-new-*"))
 
