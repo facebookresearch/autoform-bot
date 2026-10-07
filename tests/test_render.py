@@ -1028,7 +1028,7 @@ def test_render_omits_benign_hidden_files(tmp_path: Path) -> None:
     assert not (tmp_path / "out/.gitignore").exists()
 
 
-def test_agent_notes_stay_in_the_vault(tmp_path: Path) -> None:
+def test_implementation_notes_stay_out_of_the_published_wiki(tmp_path: Path) -> None:
     """Notes are for the next worker, not the reader.
 
     Editing them changes nothing a reader can see, so it must not mark the
@@ -1036,14 +1036,30 @@ def test_agent_notes_stay_in_the_vault(tmp_path: Path) -> None:
     """
     project = _project(tmp_path)
     blueprint = project / "blueprint"
+    article_id = "af_0123456789abcdef01234567"
+    top = blueprint / "roadmap/top.md"
+    top.write_text(
+        top.read_text(encoding="utf-8").replace(
+            "---\n", f"---\narticle_id: {article_id}\n", 1
+        ),
+        encoding="utf-8",
+    )
     before = publication_source_revision(blueprint)
-    (blueprint / "roadmap/agents.md").write_text("## top.md\n\nMathlib gap.\n", encoding="utf-8")
+    (blueprint / "agents.md").write_text("# Agents in the source material\n", encoding="utf-8")
+    with_public_page = publication_source_revision(blueprint)
+    assert with_public_page != before
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    (notes / f"{article_id}.md").write_text("Mathlib gap.\n", encoding="utf-8")
 
     render_site(blueprint, tmp_path / "out", lean_root=project)
 
-    assert not (tmp_path / "out/roadmap/agents.md").exists()
-    assert "agents.md" not in (tmp_path / "out/structure.md").read_text(encoding="utf-8")
-    assert publication_source_revision(blueprint) == before
+    assert not (tmp_path / "out/.implementation-notes").exists()
+    assert (tmp_path / "out/agents.md").is_file()
+    assert ".implementation-notes" not in (tmp_path / "out/structure.md").read_text(
+        encoding="utf-8"
+    )
+    assert publication_source_revision(blueprint) == with_public_page
 
 
 @pytest.mark.parametrize(

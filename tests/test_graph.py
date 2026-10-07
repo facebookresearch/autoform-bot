@@ -524,27 +524,87 @@ def test_a_chapter_whose_articles_are_all_in_buckets_is_still_refused(tmp_path: 
 
 
 @pytest.mark.parametrize("name", ["agents.md", "AGENTS.md"])
-def test_agent_notes_are_neither_an_article_nor_a_chapter(tmp_path: Path, name: str) -> None:
-    """Notes beside the articles stay out of the graph.
-
-    Read as an article, a notes file became a node of its own, and notes left
-    in a directory whose articles had moved made it an orphaned chapter.
-    """
+def test_agents_filenames_remain_ordinary_articles(tmp_path: Path, name: str) -> None:
     roadmap = tmp_path / "blueprint" / "roadmap"
+    roadmap.mkdir(parents=True)
+    (roadmap / name).write_text(f"# {name}\n", encoding="utf-8")
+
+    graph = load_graph(tmp_path / "blueprint")
+
+    assert list(graph.nodes) == [Path(name).stem]
+
+
+def test_implementation_notes_are_keyed_by_durable_article_id(tmp_path: Path) -> None:
+    """A hidden per-article note survives a roadmap path move."""
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
     (roadmap / "chapter").mkdir(parents=True)
     (roadmap / "moved").mkdir()
     (roadmap / "README.md").write_text("---\n---\n\n# Roadmap\n", encoding="utf-8")
     (roadmap / "chapter" / "README.md").write_text("---\n---\n\n# Chapter\n", encoding="utf-8")
+    (roadmap / "moved" / "README.md").write_text("---\n---\n\n# Moved\n", encoding="utf-8")
+    article_id = "af_0123456789abcdef01234567"
     (roadmap / "chapter" / "result.md").write_text(
-        "---\ndeclaration: theorem\n---\n\n# Result\n", encoding="utf-8"
+        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
+        encoding="utf-8",
     )
-    notes = "## result.md\n\nMathlib has no `Project.result` yet.\n"
-    (roadmap / "chapter" / name).write_text(notes, encoding="utf-8")
-    (roadmap / "moved" / name).write_text(notes, encoding="utf-8")
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    (notes / f"{article_id}.md").write_text(
+        "Mathlib has no `Project.result` yet.\n", encoding="utf-8"
+    )
 
-    graph = load_graph(tmp_path / "blueprint")
+    graph = load_graph(blueprint)
+    assert sorted(graph.nodes) == ["chapter", "chapter/result", "moved", "roadmap"]
 
-    assert sorted(graph.nodes) == ["chapter", "chapter/result", "roadmap"]
+    (roadmap / "chapter" / "result.md").rename(roadmap / "moved" / "result.md")
+
+    moved = load_graph(blueprint)
+    assert moved.nodes["moved/result"].article_id == article_id
+
+
+@pytest.mark.parametrize(
+    ("filename", "contents", "message"),
+    [
+        ("result.md", "route\n", "must be named <article_id>.md"),
+        ("af_111111111111111111111111.md", "route\n", "names no roadmap article"),
+        ("af_0123456789abcdef01234567.md", "\n", "empty implementation note"),
+    ],
+)
+def test_implementation_notes_fail_closed(
+    tmp_path: Path, filename: str, contents: str, message: str
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+    roadmap.mkdir(parents=True)
+    article_id = "af_0123456789abcdef01234567"
+    (roadmap / "result.md").write_text(
+        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
+        encoding="utf-8",
+    )
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    (notes / filename).write_text(contents, encoding="utf-8")
+
+    with pytest.raises(GraphValidationError, match=message):
+        load_graph(blueprint)
+
+
+def test_implementation_notes_directory_has_canonical_spelling(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+    roadmap.mkdir(parents=True)
+    article_id = "af_0123456789abcdef01234567"
+    (roadmap / "result.md").write_text(
+        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\n# Result\n",
+        encoding="utf-8",
+    )
+    notes = blueprint / ".Implementation-Notes"
+    notes.mkdir()
+    (notes / f"{article_id}.md").write_text("route\n", encoding="utf-8")
+
+    with pytest.raises(GraphValidationError, match="noncanonical implementation notes"):
+        load_graph(blueprint)
 
 
 @pytest.mark.parametrize(

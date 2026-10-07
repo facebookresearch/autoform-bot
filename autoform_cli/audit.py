@@ -16,7 +16,13 @@ from pathlib import Path
 
 from . import status
 from .coverage import CoverageSummary, load_coverage
-from .graph import Graph, GraphValidationError, Node, load_graph
+from .graph import (
+    IMPLEMENTATION_NOTES_DIR,
+    Graph,
+    GraphValidationError,
+    Node,
+    load_graph,
+)
 from .lean import (
     _DECLARATION,
     Declaration,
@@ -166,6 +172,17 @@ def audit_graph(
         article_path = _relative_path(node.path, graph.blueprint_dir)
         children = contained.get(node_id, ())
         article = _read_article(node.path)
+
+        if node.article_id is not None and derived[node_id].proved:
+            note = graph.blueprint_dir / IMPLEMENTATION_NOTES_DIR / f"{node.article_id}.md"
+            if note.is_file():
+                findings.append(
+                    AuditFinding(
+                        article_path,
+                        "stale-implementation-note",
+                        "proved article still has an implementation note; delete the note",
+                    )
+                )
 
         if node.formalizable:
             if children:

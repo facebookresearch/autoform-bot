@@ -51,6 +51,7 @@ _FALSE = frozenset({"false", "no"})
 _STATEMENT_SECTION = "depends on"
 _PROOF_SECTION = "proof depends on"
 _SOURCES_SECTION = "sources"
+IMPLEMENTATION_NOTES_DIR = ".implementation-notes"
 
 
 class GraphValidationError(ValueError):
@@ -197,6 +198,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     open_statements = policy == "allowed"
             parsed.append(node)
 
+    issues.extend(_implementation_note_issues(blueprint, article_ids))
     if issues:
         raise GraphValidationError(issues)
 
@@ -276,7 +278,7 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
             )
 
     for path in entries:
-        if not path.is_file() or path.suffix != ".md" or is_agent_notes(path):
+        if not path.is_file() or path.suffix != ".md":
             continue
         try:
             content = path.read_bytes()
@@ -331,7 +333,7 @@ def _chapter_issues(roadmap_root: Path) -> list[str]:
         return []
     issues = []
     for chapter in chapters:
-        articles = [path for path in chapter.rglob("*.md") if path.is_file() and not is_agent_notes(path)]
+        articles = [path for path in chapter.rglob("*.md") if path.is_file()]
         if not articles:
             continue
         if (chapter / "README.md").is_file():
@@ -345,15 +347,79 @@ def _chapter_issues(roadmap_root: Path) -> list[str]:
     return issues
 
 
-def is_agent_notes(path: Path) -> bool:
-    """Whether ``path`` holds agents' working notes rather than an article.
+def _implementation_note_issues(
+    blueprint: Path, article_ids: dict[str, str]
+) -> list[str]:
+    """Validate hidden, per-article implementation notes.
 
-    Any roadmap directory may keep an ``agents.md`` for notes on the articles
-    beside it, so those notes stay out of the articles themselves. It is not an
-    article: the graph skips it and a rendered book never shows it. The match
-    ignores case, so an ``AGENTS.md`` written on macOS is skipped on Linux too.
+    Notes are keyed by durable ``article_id`` rather than roadmap paths, so an
+    article move does not orphan its handoff and independent articles never
+    share a file. The hidden directory is already omitted by old and current
+    renderers, keeping the format backward-compatible with pinned projects.
     """
-    return path.name.casefold() == "agents.md"
+    issues: list[str] = []
+    try:
+        aliases = [
+            path.name
+            for path in blueprint.iterdir()
+            if path.name.casefold() == IMPLEMENTATION_NOTES_DIR.casefold()
+            and path.name != IMPLEMENTATION_NOTES_DIR
+        ]
+    except OSError as error:
+        return [f"cannot inspect implementation notes: {error}"]
+    for alias in sorted(aliases):
+        issues.append(
+            f"{alias}: noncanonical implementation notes directory; "
+            f"use exactly {IMPLEMENTATION_NOTES_DIR}"
+        )
+
+    root = blueprint / IMPLEMENTATION_NOTES_DIR
+    if root.is_symlink():
+        issues.append(
+            f"{IMPLEMENTATION_NOTES_DIR}: implementation notes directory must not be a symlink"
+        )
+        return issues
+    if not root.exists():
+        return issues
+    if not root.is_dir():
+        issues.append(
+            f"{IMPLEMENTATION_NOTES_DIR}: implementation notes path must be a directory"
+        )
+        return issues
+
+    try:
+        entries = sorted(root.iterdir())
+    except OSError as error:
+        issues.append(f"{IMPLEMENTATION_NOTES_DIR}: cannot read directory: {error}")
+        return issues
+    for path in entries:
+        relative = f"{IMPLEMENTATION_NOTES_DIR}/{path.name}"
+        if path.name.startswith("."):
+            continue
+        if path.is_symlink() or not path.is_file():
+            issues.append(f"{relative}: implementation note must be a regular file")
+            continue
+        if path.suffix != ".md" or not ARTICLE_ID_PATTERN.fullmatch(path.stem):
+            issues.append(
+                f"{relative}: implementation note must be named <article_id>.md"
+            )
+            continue
+        node_id = article_ids.get(path.stem)
+        if node_id is None:
+            issues.append(
+                f"{relative}: implementation note names no roadmap article"
+            )
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            issues.append(f"{relative}: cannot read implementation note: {error}")
+            continue
+        if not text.strip():
+            issues.append(
+                f"{relative}: empty implementation note; delete it instead"
+            )
+    return issues
 
 
 def _article_id(path: Path, roadmap_root: Path) -> str:

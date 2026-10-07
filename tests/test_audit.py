@@ -113,6 +113,36 @@ def test_clean_audit_has_stable_machine_readable_representation(tmp_path: Path) 
     assert str(tmp_path) not in first.to_json()
 
 
+def test_audit_rejects_implementation_notes_left_after_proof(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    article_id = "af_0123456789abcdef01234567"
+    _article(
+        blueprint,
+        "result.md",
+        article_id=article_id,
+        declaration="theorem",
+        statement="formalized",
+        proof="formalized",
+        lean="Project.result",
+    )
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    note = notes / f"{article_id}.md"
+    note.write_text("route\n", encoding="utf-8")
+
+    findings = _finding_map(blueprint)["roadmap/result.md"]
+    assert findings == [
+        (
+            "stale-implementation-note",
+            "proved article still has an implementation note; delete the note",
+        )
+    ]
+
+    note.unlink()
+    assert audit_blueprint(blueprint).clean
+
+
 def test_audit_reports_formalizable_structure(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)

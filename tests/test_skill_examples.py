@@ -69,7 +69,7 @@ def test_formalize_replaces_custom_orchestration_with_the_markdown_frontier(
         "claim_target",
         "separate Git worktrees",
         "shared Lean LSP and REPL",
-        "`agents.md`",
+        "`blueprint/.implementation-notes/<article_id>.md`",
         "returns to Roadmap",
     ):
         assert required in skill
@@ -89,13 +89,11 @@ def test_formalize_replaces_custom_orchestration_with_the_markdown_frontier(
     assert '"id": "formalize"' in muse
 
 
-def test_agent_notes_live_beside_articles_never_in_them(repo_root: Path) -> None:
+def test_implementation_notes_are_hidden_and_keyed_by_article_id(repo_root: Path) -> None:
     """Notes written into articles crept into published books as Lean commentary.
 
-    Each roadmap directory's `agents.md` is the one place for them, so the
-    articles stay informal mathematics and the notes are cleaned up on proof.
-    A CI pin from before that reads the file as an article, so until the pin
-    moves the notes go in the report instead.
+    One hidden file per durable article keeps implementation work out of the
+    mathematical wiki without creating a shared merge hotspot.
     """
 
     def read(relative: str) -> str:
@@ -104,19 +102,22 @@ def test_agent_notes_live_beside_articles_never_in_them(repo_root: Path) -> None
     formalize = read("skills/formalize/SKILL.md")
     roadmap = read("skills/roadmap/SKILL.md")
     reference = read("autoform_cli/README.md")
+    guidance = read("AGENTS.md")
 
-    assert "Read the complete article, its section of the `agents.md` beside it" in formalize
+    assert "Read the complete article, its `blueprint/.implementation-notes/<article_id>.md`" in formalize
     assert "The article keeps only frontmatter and mathematics." in formalize
-    assert "Write notes only in the `agents.md` of its directory" in formalize
-    assert "Delete the section once the article is proved" in formalize
+    assert "Write notes only in the claimed article's `blueprint/.implementation-notes/<article_id>.md`" in formalize
+    assert "one file per claimed article avoids cross-worker merge hotspots" in formalize
+    assert "Delete the file once the article is proved" in formalize
+    assert "never a secret or machine-local path" in formalize
     assert "Articles hold only frontmatter and informal mathematics" in roadmap
-    assert "record the decision in the article's section of the `agents.md`" in roadmap
-    assert "Record what happened in the `agents.md` beside each touched article." in reference
-    for text in (formalize, roadmap):
-        assert "older than `agents.md` support" in text
-        assert "keep notes in your report, along with the old pin" in text
+    assert "`blueprint/.implementation-notes/<article_id>.md`" in roadmap
+    assert "`blueprint/.implementation-notes/<article_id>.md` file" in reference
+    assert "Markdown under `blueprint/roadmap/` is the authored roadmap" in guidance
+    assert "files under `blueprint/.implementation-notes/`" in guidance
     for text in (formalize, roadmap, reference):
         assert "Execution notes" not in text
+        assert "`agents.md`" not in text
 
 
 def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path) -> None:

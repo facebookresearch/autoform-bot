@@ -26,9 +26,11 @@ workflow and cross-file maintenance.
 - Develop the plugin here and exercise installed behavior in an independent Lean
   consumer checkout. The bundled Cabannes thesis is a compatibility example,
   never a source of product-specific exceptions.
-- Markdown under `blueprint/` is the authored roadmap and dependency graph.
-  Rendered sites, Mermaid graphs, dashboards, and runtime projections are
-  derived views, not another durable scheduler or graph.
+- Markdown under `blueprint/roadmap/` is the authored roadmap and dependency
+  graph. Versioned implementation handoffs live only in hidden, per-article
+  files under `blueprint/.implementation-notes/`; they are not mathematics or
+  graph state. Rendered sites, Mermaid graphs, dashboards, and runtime
+  projections are derived views, not another durable scheduler or graph.
 - Public CLI and JSON shapes are contracts. Lean server work requires an
   explicit project root, bounded time and output, verified descendant cleanup,
   and no retry after dispatch with an unknown outcome. A project root is not an

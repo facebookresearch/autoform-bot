@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Sequence
 
 from . import mermaid, status
-from .graph import GraphValidationError, is_agent_notes, load_graph
+from .graph import GraphValidationError, load_graph
 
 
 GENERATED_STRUCTURE_MARKER = "---\nkind: structure\nautoform_generated: true\n---"
@@ -112,7 +112,6 @@ def export_structure(blueprint_dir: Path, output: Path | None = None) -> Path:
         for path in sorted(blueprint_dir.rglob("*.md"))
         if not any(part.startswith(".") for part in path.relative_to(blueprint_dir).parts)
         and path.name not in {"dependencies.md", destination.name}
-        and not is_agent_notes(path)
     ]
     directories: set[Path] = set()
     for path in files:

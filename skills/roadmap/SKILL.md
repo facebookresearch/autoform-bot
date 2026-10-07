@@ -65,15 +65,13 @@ Write milestone pages under `blueprint/roadmap/` by mathematical significance,
 then one fine article per coherent unit with one unique main result. Ground each
 statement and proof sketch in the source. Put genuine statement prerequisites
 under `## Depends on` and proof-only prerequisites under `## Proof depends on`.
-Articles hold only frontmatter and informal mathematics; put Lean-side findings
-such as Mathlib gaps, prior art, and declaration names in the `agents.md` of
-the article's directory, under a heading naming the article's file. When the
-project's CI pins an `AUTOFORM_REF` older than `agents.md` support, its
-`autoform check` reads the file as an article and fails: until the pin moves,
-keep notes in your report, along with the old pin.
 Assign durable `article_id` metadata to new articles; use
 `autoform migrate article-ids blueprint --json` to obtain deterministic IDs
 after creating the pages.
+Articles hold only frontmatter and informal mathematics; put Lean-side findings
+such as Mathlib gaps, prior art, and declaration names in
+`blueprint/.implementation-notes/<article_id>.md`. The hidden per-article file
+stays out of the mathematical wiki and remains valid when the article moves.
 Assert formalization or `mathlib: true` only after exact verification. Before
 revising a formalizable leaf, acquire the `claim_target` that `autoform work
 context` reports for it, passing your own `--worker-id`; renew it while editing
@@ -92,8 +90,8 @@ an open statement, so whatever rests on it stays conditionally proved. Retract
 only that article and the dependents whose Markdown text the revision rewrites,
 claiming them all in one acquire; the Lean-side impact decides every other
 dependent. For a Lean revision requested in Human Review, record the decision in
-the article's section of the `agents.md` beside it and retract the article the
-same way, so it returns to the frontier as a statement phase flagged as a
+the article's `blueprint/.implementation-notes/<article_id>.md` and retract the
+article the same way, so it returns to the frontier as a statement phase flagged as a
 revision, and leave the Lean change to Formalize, which follows the [revision
 contract](../../autoform_cli/README.md#revision-contract); this skill edits
 only Markdown. For a large source, divide independent sections among available
