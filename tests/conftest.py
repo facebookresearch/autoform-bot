@@ -10,6 +10,21 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(scope="session")
+def _session_cache_home(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("cache")
+
+
+@pytest.fixture(autouse=True)
+def _private_cache_home(_session_cache_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every test out of the user's cache directory.
+
+    The directory is shared by the whole session, so real-Lean tests after the
+    first reuse its compiled probe helpers, as later extractions do.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(_session_cache_home))
+
+
 @pytest.fixture
 def repo_root() -> Path:
     """Return the repository root directory."""

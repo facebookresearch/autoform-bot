@@ -1615,38 +1615,133 @@ def _probe_environment() -> dict[str, str]:
 
 
 def _build_probe_helper(lean_root: Path, directory: Path, *, timeout: float) -> Path:
-    """Compile the probe's helpers into ``directory`` and return it.
+    """Compile the probe's helpers into ``directory``, or copy them from the cache, and return it.
 
-    The helpers are elaborated once, with the project's toolchain and no project
+    The helpers are elaborated with the project's toolchain and no project
     module imported, so no project name, notation, or option reaches them. Each
-    probe then finds the module through ``LEAN_PATH``. A failure here concerns
-    every probe, so it stops the extraction.
+    probe then finds the module through ``LEAN_PATH``. The compiled module
+    depends only on the toolchain and the helper source, so it is cached under
+    both, and an extraction that finds an intact cached build copies it instead
+    of compiling. ``timeout`` bounds the cache lookup and the build together.
+    A failure here concerns every probe, so it stops the extraction.
     """
 
     lake = _lake_executable(lean_root)
-    directory.mkdir(parents=True, exist_ok=True)
-    source = directory / f"{_PROBE_HELPER_MODULE}.lean"
-    source.write_text(_render_probe_helper(), encoding="utf-8")
+    deadline = time.monotonic() + timeout
+    text = _render_probe_helper()
+    olean = directory / f"{_PROBE_HELPER_MODULE}.olean"
     try:
+        cache = _probe_helper_cache(lake, lean_root, text, timeout=timeout)
+        if cache is not None and _restore_probe_helper(*cache, olean):
+            return directory
+        directory.mkdir(parents=True, exist_ok=True)
+        source = directory / f"{_PROBE_HELPER_MODULE}.lean"
+        source.write_text(text, encoding="utf-8")
         result = _run_bounded_command(
-            [lake, "env", "lean", f"--root={directory}", "-o", str(source.with_suffix(".olean")), str(source)],
+            [lake, "env", "lean", f"--root={directory}", "-o", str(olean), str(source)],
             cwd=lean_root,
-            timeout=timeout,
+            timeout=max(0.0, deadline - time.monotonic()),
             context="building the skeleton probe helpers",
             env=_probe_environment(),
         )
     except _CommandTimedOut as exc:
         raise _ProbeEnvironmentError(
-            [
-                f"building the skeleton probe helpers timed out after {timeout:g} seconds; "
-                "rerun with --timeout <seconds> for large projects"
-            ]
+            [f"{exc.issues[0]} after {timeout:g} seconds; rerun with --timeout <seconds> for large projects"]
         ) from exc
     if result.returncode != 0:
         detail = _stable_detail((result.stderr or result.stdout).strip(), lean_root, directory)
         _raise_if_core_module_shadowed(detail)
         raise _ProbeEnvironmentError([f"cannot build the skeleton probe helpers\n{detail}"])
+    if cache is not None:
+        _publish_probe_helper(olean, cache[0])
     return directory
+
+
+def _probe_helper_cache(lake: str, lean_root: Path, source: str, *, timeout: float) -> tuple[Path, str] | None:
+    """Return the file that caches this toolchain's build of ``source`` and the toolchain's Git hash, or None.
+
+    ``lake env`` reports the toolchain and the search path every probe uses.
+    The toolchain's Git hash and the size and modification time of its
+    ``Lean.olean`` key the cache with the source, so a toolchain rebuilt at the
+    same commit gets its own entry. Nothing is cached when ``lake env`` exits
+    with an error or its report lacks any of these, when the cache directory
+    is not absolute, or when the search path already provides a module or
+    directory named like the helper: the build then runs, and its check names
+    that module. A lookup that times out stops the extraction, as a build does.
+    """
+
+    env = _probe_environment()
+    # Lake reports an inherited LEAN_GITHASH in place of the toolchain's own.
+    env.pop("LEAN_GITHASH", None)
+    result = _run_bounded_command([lake, "env"], cwd=lean_root, timeout=timeout, context="lake env", env=env)
+    variables = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    githash, sysroot = variables.get("LEAN_GITHASH", ""), variables.get("LEAN_SYSROOT", "")
+    if result.returncode != 0 or "LEAN_PATH" not in variables or not re.fullmatch(r"[0-9a-f]{40}", githash):
+        return None
+    for entry in filter(None, variables["LEAN_PATH"].split(os.pathsep)):
+        # Lean also takes a directory named like the module for its root.
+        for name in (_PROBE_HELPER_MODULE, f"{_PROBE_HELPER_MODULE}.olean"):
+            if os.path.exists(os.path.join(lean_root, entry, name)):
+                return None
+    base = os.environ.get("XDG_CACHE_HOME", "")
+    try:
+        core = os.stat(os.path.join(sysroot, "lib", "lean", "Lean.olean")) if os.path.isabs(sysroot) else None
+        cache = Path(base) if os.path.isabs(base) else Path.home() / ".cache"
+    except (OSError, RuntimeError):
+        return None
+    if core is None or not cache.is_absolute():
+        return None
+    key = hashlib.sha256(f"{githash}\0{core.st_size}\0{core.st_mtime_ns}\0{source}".encode()).hexdigest()
+    return cache / "autoform" / "probe-helper" / key, githash
+
+
+def _restore_probe_helper(cached: Path, githash: str, olean: Path) -> bool:
+    """Copy a cached helper build to ``olean`` if the entry is intact and ours, and say whether it was.
+
+    An entry holds the compiled module followed by its SHA-256, so one that a
+    crash, a partial restore, or a disk fault damaged is a miss, and the
+    helpers are compiled again. So is a module whose header lacks the
+    toolchain's Git hash, which Lean would refuse to load: a toolchain change
+    during a build can publish another toolchain's build under this key.
+    Lean compares only that hash, so neither it nor this check notices a
+    change between two toolchains built from the same commit.
+    """
+
+    try:
+        data = read_regular_file(cached, label="cached probe helpers") or b""
+    except SnapshotError:
+        return False
+    module, digest = data[:-32], data[-32:]
+    if hashlib.sha256(module).digest() != digest or githash.encode() not in module[:128]:
+        return False
+    olean.parent.mkdir(parents=True, exist_ok=True)
+    olean.write_bytes(module)
+    return True
+
+
+def _publish_probe_helper(olean: Path, cached: Path) -> None:
+    """Store a fresh helper build as the entry ``cached``; a failure leaves the cache as it was.
+
+    The entry is written under a temporary name and renamed into place, so
+    another extraction reads the old entry or the new one, never part of one.
+    It gets the build's file mode, which ``mkstemp`` would otherwise restrict.
+    """
+
+    try:
+        module = olean.read_bytes()
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(dir=cached.parent, prefix=".", suffix=".tmp")
+    except OSError:
+        return
+    try:
+        with os.fdopen(descriptor, "wb") as target:
+            target.write(module)
+            target.write(hashlib.sha256(module).digest())
+        shutil.copymode(olean, temporary)
+        os.replace(temporary, cached)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
 
 
 def _raise_if_core_module_shadowed(detail: str, label: str = "skeleton probe") -> None:
@@ -1679,9 +1774,9 @@ def run_probe(
     ``freshness_timeout`` bounds the Lake freshness check that runs first and
     ``timeout`` the probe itself; neither spends the other's budget. Extraction
     checks freshness once for all its probes and passes ``check_freshness=False``.
-    ``helper`` is the directory ``_build_probe_helper`` compiled the helpers
-    into; without one, a probe that imports them builds its own within
-    ``timeout``. ``label`` names the probe in failure messages.
+    ``helper`` is the directory ``_build_probe_helper`` put the helpers in;
+    without one, a probe that imports them gets its own copy, from the cache or
+    compiled, within ``timeout``. ``label`` names the probe in failure messages.
     """
 
     lake = _lake_executable(lean_root, label)
@@ -1699,7 +1794,8 @@ def run_probe(
             if not (helper / f"{_PROBE_HELPER_MODULE}.olean").is_file():
                 raise _ProbeEnvironmentError([f"the skeleton probe helpers are missing from {helper}"])
             # Lake puts the project's own directories first, so the helper cannot
-            # hide a project module; building it refused one with the same name.
+            # hide a project module; building it refused one with the same name,
+            # and a cached build is used only when the search path has none.
             env["LEAN_PATH"] = os.pathsep.join(filter(None, (env.get("LEAN_PATH"), str(helper))))
         source = Path(scratch) / "AutoformSkeletonProbe.lean"
         source.write_text(probe, encoding="utf-8")
@@ -2375,11 +2471,12 @@ def extract_skeletons(
     changes a declaration's evidence. ``runner`` executes one rendered probe and
     returns Lean's standard output; by default each runs with ``lake env lean``
     after one Lake freshness check over every probed module and one build of the
-    probe's helpers, and ``timeout`` bounds the helper build and each probe
-    process. A custom ``runner`` owns its probes' freshness and time limits, so
-    it cannot be combined with ``timeout``. A declaration the lexical index
-    cannot place is reported as unresolved without running Lean, exactly as
-    ``autoform check --lean-root`` reports it.
+    probe's helpers, which later extractions with the same toolchain copy from
+    a cache. ``timeout`` bounds the helpers' cache lookup and build together,
+    and each probe process. A custom ``runner`` owns its probes' freshness and
+    time limits, so it cannot be combined with ``timeout``. A declaration the
+    lexical index cannot place is reported as unresolved without running Lean,
+    exactly as ``autoform check --lean-root`` reports it.
     """
 
     if runner is not None and timeout is not None:

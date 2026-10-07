@@ -490,7 +490,8 @@ def _add_probe_timeout_argument(parser: argparse.ArgumentParser) -> None:
         "--timeout",
         type=_positive_seconds,
         metavar="SECONDS",
-        help=f"seconds the probe helper build and each Lean probe may each run (default {DEFAULT_PROBE_TIMEOUT:g}); "
+        help="seconds the probe helper's lookup and build, and each Lean probe, may each run "
+        f"(default {DEFAULT_PROBE_TIMEOUT:g}); "
         "one probe runs per root module, several in parallel, and the budget is per probe, not a deadline "
         "for the whole extraction; the Lake freshness check before them has its own budget",
     )

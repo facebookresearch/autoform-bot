@@ -441,11 +441,18 @@ command that runs Lean: for each module that declares a selected `lean:`
 target it writes a small probe that imports that module and the probe's
 helper module and makes one fully qualified call, with no `open` or
 `set_option`, and runs it with `lake env lean` against the built project. The
-helpers are compiled once per extraction, with the project's toolchain and no
-project module in scope, into a temporary module named
-`autoform-skeleton-helper`; a project, dependency, or `LEAN_PATH` module of
-that name stops the extraction. Every constant the helper declares is in the
-`AutoformSkeleton` namespace, which is reserved as well: when a module
+helpers are compiled with the project's toolchain and no project module in
+scope into a module named `autoform-skeleton-helper`, which is cached under
+`$XDG_CACHE_HOME/autoform/probe-helper` (by default
+`~/.cache/autoform/probe-helper`), keyed by the toolchain build and the
+helper source, so later extractions with that toolchain copy it instead of
+compiling it, unless the cache cannot be written. An entry is used only if it
+matches the SHA-256 stored with it and its module header names the toolchain's
+Git hash; otherwise the helpers are compiled again. Nothing prunes the cache,
+which holds about 4 MB per toolchain and helper version, and deleting it is
+always safe. A project, dependency, or `LEAN_PATH` module or directory of that
+name stops the extraction. Every constant the helper declares is in
+the `AutoformSkeleton` namespace, which is reserved as well: when a module
 declares a constant there that the helper also declares, its probe cannot
 import the helper, and its targets are unresolved with a reason that names the
 constant. A declaration's packet reads as it does to a
@@ -536,16 +543,24 @@ material's full text.
 Run skeleton extraction only in a trusted checkout or an operating-system
 sandbox. Lake evaluates `lakefile.lean`, and the generated probe imports project
 code whose initializers, macros, and metaprograms may perform arbitrary IO and
-can forge probe output. The timeout and output cap bound the direct batch
+can forge probe output. Each probe runs the helper's code, which later
+extractions take from the cache, so a process that can write the cache can
+run code in later extractions in any project, including trusted ones outside
+a sandbox. A sandbox for an untrusted project must therefore deny writes to
+the cache directory that extractions outside the sandbox use (by default
+`~/.cache/autoform/probe-helper`); setting `XDG_CACHE_HOME` inside the
+sandbox moves only Autoform's own cache, not what the project's code can
+write.
+The timeout and output cap bound the direct batch
 command; on POSIX, Autoform also terminates its process group, for every
 probe, on every failure and on interruption. The Lake freshness check, the
-helper build, and each probe have their own 600-second budget;
-`--timeout SECONDS` sets the helper build's and each probe's, which a large
+helper's lookup and build, and each probe have their own 600-second budget;
+`--timeout SECONDS` sets the helper's and each probe's, which a large
 project may need. The budgets are per probe, not one deadline for the
 extraction: probes run in rounds of parallel probes, so a whole extraction
-can run for the freshness check, the helper build, and one probe budget per
-round, that is, the number of probed modules divided by the parallel probe
-count, rounded up. A shared deadline would make which module times out
+can run for the freshness check, the helper's lookup and build, and one probe
+budget per round, that is, the number of probed modules divided by the parallel
+probe count, rounded up. A shared deadline would make which module times out
 depend on how the pool scheduled its neighbors, so a module's result would
 no longer match extracting it alone. Each probe pays a Lean start and loads its
 module's imports; on a Mathlib project that measured about 10 CPU-seconds and

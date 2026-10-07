@@ -45,6 +45,9 @@ from autoform_cli.skeleton import (
     _PROCESS_TERMINATION_GRACE,
     _ProbeEnvironmentError,
     _SignalGuard,
+    _build_probe_helper,
+    _probe_helper_cache,
+    _publish_probe_helper,
     _declaration,
     _install_output,
     _join_readers,
@@ -849,7 +852,7 @@ def stall():
     time.sleep(60)
 
 
-if args[:1] == ["--rehash"]:
+if args[:1] == ["--rehash"] or args == ["env"]:
     sys.exit(0)
 if "-o" in args:
     if phase == "helper":
@@ -2086,22 +2089,33 @@ def _two_module_blueprint(tmp_path: Path) -> Path:
     )
 
 
-def _fake_lake(monkeypatch, project: Path, answer) -> list[list[str]]:
+def _fake_lake(
+    monkeypatch, project: Path, answer, *, lake_env: str = "", lake_env_status: int = 0
+) -> list[list[str]]:
     """Run the default runner against a fake Lake; ``answer(modules, command, env)`` plays each probe.
 
     Each probe is recorded as its command followed by the modules it imports.
+    ``lake env`` prints ``lake_env`` and exits with ``lake_env_status``; by
+    default it names no toolchain, so the probe helpers are never cached. A
+    helper build writes the Git hash ``lake_env`` names, as Lean's module
+    header does, then its source's path, so a probe shows which build it imports.
     """
 
     (project / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
     calls: list[list[str]] = []
     lock = threading.Lock()
+    githash = dict(line.split("=", 1) for line in lake_env.splitlines() if "=" in line).get("LEAN_GITHASH", "")
 
     def fake_run(command, *, env=None, **kwargs):
+        if command[1:] == ["env"]:
+            with lock:
+                calls.append(command)
+            return subprocess.CompletedProcess(command, lake_env_status, stdout=lake_env, stderr="")
         if command[1] == "--rehash" or "-o" in command:
             with lock:
                 calls.append(command)
             if "-o" in command:
-                Path(command[command.index("-o") + 1]).write_bytes(b"")
+                Path(command[command.index("-o") + 1]).write_bytes(f"{githash} {command[-1]}".encode())
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         modules = _probe_modules(Path(command[-1]).read_text(encoding="utf-8"))
         with lock:
@@ -2135,11 +2149,263 @@ def test_lake_freshness_is_checked_once_before_one_probe_per_module(tmp_path: Pa
 
     assert report.clean
     assert calls[0] == ["/bin/lake", "--rehash", "--no-build", "build", "Skel.Main", "Skel.Uses"]
-    # The helpers are built once, after the freshness check and before any probe.
-    assert calls[1][1:4] == ["env", "lean", f"--root={Path(calls[1][-1]).parent}"]
-    assert calls[1][-1].endswith("/autoform-skeleton-helper.lean")
-    assert all(command[1:3] == ["env", "lean"] and "-o" not in command for command in calls[2:])
-    assert sorted(command[4:] for command in calls[2:]) == [["Skel.Main"], ["Skel.Uses"]]
+    # The helpers are built once, after the freshness check and the cache
+    # lookup, and before any probe.
+    assert calls[1] == ["/bin/lake", "env"]
+    assert calls[2][1:4] == ["env", "lean", f"--root={Path(calls[2][-1]).parent}"]
+    assert calls[2][-1].endswith("/autoform-skeleton-helper.lean")
+    assert all(command[1:3] == ["env", "lean"] and "-o" not in command for command in calls[3:])
+    assert sorted(command[4:] for command in calls[3:]) == [["Skel.Main"], ["Skel.Uses"]]
+
+
+_GITHASH = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _lake_env(tmp_path: Path, *, githash: str = _GITHASH, lean_path: str = "") -> str:
+    """What ``lake env`` prints for a fake toolchain in ``tmp_path``, whose ``Lean.olean`` keys the cache too."""
+
+    core = tmp_path / "toolchain" / "lib" / "lean" / "Lean.olean"
+    if not core.exists():
+        core.parent.mkdir(parents=True)
+        core.write_bytes(b"")
+    lean_path = lean_path or str(tmp_path / "search")
+    return f"LEAN_GITHASH={githash}\nLEAN_SYSROOT={tmp_path / 'toolchain'}\nLEAN_PATH={lean_path}\n"
+
+
+def test_the_probe_helpers_are_compiled_once_per_toolchain_build_and_source(tmp_path: Path, monkeypatch) -> None:
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+    project = _project(tmp_path)
+    blueprint = _two_module_blueprint(tmp_path)
+    helper = _render_probe_helper()
+    imported: list[bytes] = []
+
+    def answer(modules, command, env):
+        directory = Path(env["LEAN_PATH"].split(os.pathsep)[-1])
+        imported.append((directory / "autoform-skeleton-helper.olean").read_bytes())
+        return _answer_records(modules, command, env)
+
+    builds = []
+    core = tmp_path / "toolchain" / "lib" / "lean" / "Lean.olean"
+    for change in ("none", "none", "Git hash", "toolchain touched", "toolchain resized", "helper source"):
+        if change == "toolchain touched":
+            os.utime(core, ns=(1, 1))
+        elif change == "toolchain resized":
+            core.write_bytes(b"rebuilt")
+            os.utime(core, ns=(1, 1))
+        elif change == "helper source":
+            monkeypatch.setattr("autoform_cli.skeleton._render_probe_helper", lambda: helper + "\n")
+        githash = "f" * 40 if change == "Git hash" else _GITHASH
+        calls = _fake_lake(monkeypatch, project, answer, lake_env=_lake_env(tmp_path, githash=githash))
+        assert extract_skeletons(blueprint, lean_root=project).clean
+        builds.append([command[-1] for command in calls if "-o" in command])
+
+    assert [len(built) for built in builds] == [1, 0, 1, 1, 1, 1]
+    assert len(list((cache / "autoform" / "probe-helper").iterdir())) == 5
+    # The second extraction's probes import a copy of the first one's build.
+    assert imported[2:4] == [f"{_GITHASH} {builds[0][0]}".encode()] * 2
+
+
+def test_a_relative_xdg_cache_home_falls_back_to_the_home_cache(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_CACHE_HOME", "relative")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    project = _project(tmp_path)
+    _fake_lake(monkeypatch, project, _answer_records, lake_env=_lake_env(tmp_path))
+
+    assert extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project).clean
+
+    assert len(list((tmp_path / "home" / ".cache" / "autoform" / "probe-helper").iterdir())) == 1
+    assert not (tmp_path / "relative").exists()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "no Git hash",
+        "short Git hash",
+        "no toolchain library",
+        "relative toolchain",
+        "no search path",
+        "failed lake env",
+        "helper module on the search path",
+        "helper directory",
+        "relative home",
+        "unwritable cache",
+    ],
+)
+def test_the_probe_helpers_are_compiled_every_time_the_cache_cannot_serve(
+    tmp_path: Path, monkeypatch, case: str
+) -> None:
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+    project = _project(tmp_path)
+    search = tmp_path / "search"
+    lake_env = _lake_env(tmp_path, lean_path=f"{search}{os.pathsep}.lake/build/lib/lean")
+    if case == "no Git hash":
+        lake_env = lake_env.replace(_GITHASH, "")
+    elif case == "short Git hash":
+        lake_env = lake_env.replace(_GITHASH, _GITHASH[:39])
+    elif case == "no toolchain library":
+        (tmp_path / "toolchain" / "lib" / "lean" / "Lean.olean").unlink()
+    elif case == "relative toolchain":
+        # Lake runs in the project, so a relative toolchain is not this directory's.
+        monkeypatch.chdir(tmp_path)
+        lake_env = lake_env.replace(f"LEAN_SYSROOT={tmp_path / 'toolchain'}", "LEAN_SYSROOT=toolchain")
+    elif case == "no search path":
+        lake_env = "".join(line for line in lake_env.splitlines(keepends=True) if not line.startswith("LEAN_PATH="))
+    elif case == "helper module on the search path":
+        # A relative entry is read from the project, where Lean runs.
+        (project / ".lake" / "build" / "lib" / "lean").mkdir(parents=True)
+        (project / ".lake" / "build" / "lib" / "lean" / "autoform-skeleton-helper.olean").write_bytes(b"")
+    elif case == "helper directory":
+        # Lean takes a directory named like the module for the module's root.
+        (search / "autoform-skeleton-helper").mkdir(parents=True)
+    elif case == "relative home":
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("XDG_CACHE_HOME")
+        monkeypatch.setenv("HOME", "home")
+    elif case == "unwritable cache":
+        cache.write_text("", encoding="utf-8")
+    calls = _fake_lake(
+        monkeypatch, project, _answer_records, lake_env=lake_env, lake_env_status=int(case == "failed lake env")
+    )
+    blueprint = _two_module_blueprint(tmp_path)
+
+    for _ in range(2):
+        assert extract_skeletons(blueprint, lean_root=project).clean
+
+    assert sum("-o" in command for command in calls) == 2
+    if case == "unwritable cache":
+        assert cache.read_text(encoding="utf-8") == ""
+    else:
+        assert not cache.exists() and not (tmp_path / "home").exists()
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "truncated",
+        "altered",
+        "empty",
+        "empty module",
+        "another toolchain's build",
+        pytest.param("pipe", marks=pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")),
+    ],
+)
+def test_a_damaged_or_foreign_cache_entry_is_compiled_again_and_replaced(
+    tmp_path: Path, monkeypatch, damage: str
+) -> None:
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+    project = _project(tmp_path)
+    blueprint = _two_module_blueprint(tmp_path)
+    builds = []
+    for extraction in range(3):
+        if extraction == 1:
+            (entry,) = (cache / "autoform" / "probe-helper").iterdir()
+            data = entry.read_bytes()
+            # A toolchain change during a build can leave an intact entry built by another toolchain.
+            foreign = data[:-32].replace(_GITHASH.encode(), b"f" * 40)
+            entry.unlink()
+            if damage == "pipe":
+                os.mkfifo(entry)
+            else:
+                entry.write_bytes(
+                    {
+                        "truncated": data[:-1],
+                        "altered": b"x" + data[1:],
+                        "empty": b"",
+                        "empty module": hashlib.sha256(b"").digest(),
+                        "another toolchain's build": foreign + hashlib.sha256(foreign).digest(),
+                    }[damage]
+                )
+        calls = _fake_lake(monkeypatch, project, _answer_records, lake_env=_lake_env(tmp_path))
+        assert extract_skeletons(blueprint, lean_root=project).clean
+        builds.append(sum("-o" in command for command in calls))
+
+    assert builds == [1, 1, 0]
+
+
+def test_a_published_helper_build_replaces_the_cache_entry_whole(tmp_path: Path) -> None:
+    olean = tmp_path / "autoform-skeleton-helper.olean"
+    olean.write_bytes(b"new build")
+    olean.chmod(0o644)
+    entry = tmp_path / "cache" / "entry"
+    entry.parent.mkdir()
+    entry.write_bytes(b"old entry")
+
+    with entry.open("rb") as reader:
+        replaced = entry.stat().st_ino
+        _publish_probe_helper(olean, entry)
+        # The new entry is renamed into place, so a reader of the old one keeps it.
+        assert reader.read() == b"old entry"
+
+    assert entry.stat().st_ino != replaced
+    assert entry.read_bytes() == b"new build" + hashlib.sha256(b"new build").digest()
+    assert stat.S_IMODE(entry.stat().st_mode) == 0o644
+    assert os.listdir(entry.parent) == ["entry"]
+
+
+def test_a_helper_build_that_cannot_be_published_leaves_the_cache_as_it_was(tmp_path: Path, monkeypatch) -> None:
+    olean = tmp_path / "autoform-skeleton-helper.olean"
+    olean.write_bytes(b"new build")
+    entry = tmp_path / "cache" / "entry"
+    entry.parent.mkdir()
+    entry.write_bytes(b"old entry")
+
+    def full_disk(source, target):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr("autoform_cli.skeleton.os.replace", full_disk)
+    _publish_probe_helper(olean, entry)
+
+    assert entry.read_bytes() == b"old entry"
+    assert os.listdir(entry.parent) == ["entry"]
+
+
+def test_an_inherited_lean_githash_does_not_key_the_cache(tmp_path: Path, monkeypatch) -> None:
+    report = _lake_env(tmp_path)
+
+    def fake_run(command, *, env, **kwargs):
+        # Lake reports an inherited LEAN_GITHASH in place of the toolchain's own.
+        stdout = report.replace(_GITHASH, env.get("LEAN_GITHASH", _GITHASH))
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
+    monkeypatch.delenv("LEAN_GITHASH", raising=False)
+    entry = _probe_helper_cache("/bin/lake", tmp_path, "helper source", timeout=5)
+    monkeypatch.setenv("LEAN_GITHASH", "f" * 40)
+
+    assert entry is not None
+    assert _probe_helper_cache("/bin/lake", tmp_path, "helper source", timeout=5) == entry
+
+
+@pytest.mark.parametrize("stalled", ["lookup", "build"])
+def test_the_cache_lookup_and_the_helper_build_share_one_budget(
+    tmp_path: Path, monkeypatch, stalled: str
+) -> None:
+    (tmp_path / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
+    budgets: list[float] = []
+
+    def fake_run(command, *, timeout, context, **kwargs):
+        budgets.append(timeout)
+        if command[1:] == ["env"] and stalled == "build":
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise _CommandTimedOut([f"{context} timed out"])
+
+    times = iter((100.0, 103.0))
+    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
+    monkeypatch.setattr("autoform_cli.skeleton.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
+
+    with pytest.raises(_ProbeEnvironmentError) as caught:
+        _build_probe_helper(tmp_path, tmp_path / "helper", timeout=5)
+    assert budgets == ([5] if stalled == "lookup" else [5, 2.0])
+    step = "lake env" if stalled == "lookup" else "building the skeleton probe helpers"
+    assert caught.value.issues == (
+        f"{step} timed out after 5 seconds; rerun with --timeout <seconds> for large projects",
+    )
 
 
 @pytest.mark.parametrize("failure", ["exit", "timeout", "malformed"])
@@ -3254,14 +3520,25 @@ def test_signatures_print_as_in_a_file_that_imports_the_module(tmp_path: Path) -
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_a_project_module_named_like_the_probe_helpers_stops_extraction(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("shadow_kind", ["module", "directory"])
+def test_a_project_module_named_like_the_probe_helpers_stops_extraction(
+    tmp_path: Path, monkeypatch, shadow_kind: str
+) -> None:
     project = _project(tmp_path)
     _build(project, "Skel.Main")
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    # The helpers are cached by now, and a cached build skips the build's check.
+    extract_skeletons(blueprint, lean_root=project)
+    cache = _probe_helper_cache(str(shutil.which("lake")), project, _render_probe_helper(), timeout=600)
+    assert cache is not None and cache[0].is_file()
     shadow = tmp_path / "shadow"
     shadow.mkdir()
-    (shadow / "autoform-skeleton-helper.olean").write_bytes(b"")
+    if shadow_kind == "module":
+        (shadow / "autoform-skeleton-helper.olean").write_bytes(b"")
+    else:
+        # Lean takes a directory named like the module for the module's root.
+        (shadow / "autoform-skeleton-helper").mkdir()
     monkeypatch.setenv("LEAN_PATH", str(shadow))
-    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
 
     with pytest.raises(SkeletonError, match="already provides a module named «autoform-skeleton-helper»"):
         extract_skeletons(blueprint, lean_root=project)
@@ -4681,12 +4958,29 @@ def test_dependency_module_under_a_core_name_is_bound(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_dependency_shadowing_a_toolchain_library_fails_closed(tmp_path: Path) -> None:
+@pytest.mark.parametrize("cache", ["cold", "warm"])
+def test_dependency_shadowing_a_toolchain_library_fails_closed(tmp_path: Path, monkeypatch, cache: str) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    if cache == "warm":
+        # With no helper build to fail, the probe itself meets the hidden library.
+        (tmp_path / "clean").mkdir()
+        clean = _project(tmp_path / "clean")
+        _build(clean, "Skel.Main")
+        _build_probe_helper(clean, tmp_path / "helper", timeout=600)
     project = _project_with_core_named_dependency(tmp_path, "Std.Vendor")
     _build(project, "Skel.UsesDep")
+    commands: list[list[str]] = []
+    bounded = _run_bounded_command
+
+    def record(command, **kwargs):
+        commands.append(command)
+        return bounded(command, **kwargs)
+
+    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", record)
 
     with pytest.raises(SkeletonError, match="cannot load toolchain module Std\\..*hides the toolchain's own `Std`"):
         _probe_declaration(project, "Skel.UsesDep.root", module="Skel.UsesDep")
+    assert any("-o" in command for command in commands) == (cache == "cold")
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")

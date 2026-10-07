@@ -1,8 +1,9 @@
 -- Autoform skeleton probe helpers. This file is a Python-format template: `{{`/`}}`
 -- are literal braces and single-brace fields are filled by autoform_cli.skeleton.
--- Each extraction compiles it once, with `lake env lean -o` inside the built
--- project, into a module in a temporary directory; it never modifies the
--- project. Each probe imports one root module and this module, and only calls
+-- Autoform compiles it with `lake env lean -o` inside the built project into a
+-- module in a temporary directory, and caches the result for later
+-- extractions with the same toolchain; it never modifies the project. Each
+-- probe imports one root module and this module, and only calls
 -- `AutoformSkeleton.main`, so no project name, notation, or option is in scope
 -- while these helpers elaborate.
 import Lean.Util.CollectAxioms
