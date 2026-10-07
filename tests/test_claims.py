@@ -310,6 +310,21 @@ def test_owner_only_renew_and_release(tmp_path: Path, board_repo: Path, monkeypa
     assert owner.release("owned")
 
 
+def test_single_key_operations_read_only_the_exact_claim_ref(tmp_path: Path, board_repo: Path) -> None:
+    # ls-remote for refs/autoform-claims/k also lists the peer's
+    # refs/autoform-claims/a/refs/autoform-claims/k, which ends in the same path.
+    peer = _board(tmp_path, board_repo, "peer")
+    assert peer.acquire("a/refs/autoform-claims/k", ttl=600)
+    board = _board(tmp_path, board_repo, "worker-a")
+
+    assert board.read("k") is None
+    assert board.acquire("k", ttl=600)
+    assert board.holds("k")
+    assert board.renew("k", ttl=600)
+    assert board.release("k")
+    assert peer.holds("a/refs/autoform-claims/k")
+
+
 @pytest.mark.parametrize("now", [float("nan"), float("inf"), float("-inf")])
 def test_expired_rejects_nonfinite_explicit_comparison_clock(now: float) -> None:
     lease = {"expires_at": 200.0}

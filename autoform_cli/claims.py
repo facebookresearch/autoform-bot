@@ -232,9 +232,13 @@ class ClaimBoard:
         return CLAIM_REF_PREFIX + _validate_key(key)
 
     def _remote_oid(self, key: str) -> str | None:
-        proc = self._git(["ls-remote", self.repo_url, self._ref(key)])
-        line = proc.stdout.strip()
-        return line.split("\t", 1)[0] if line else None
+        ref = self._ref(key)
+        proc = self._git(["ls-remote", self.repo_url, ref])
+        for line in proc.stdout.splitlines():
+            oid, _, name = line.partition("\t")
+            if name == ref:
+                return oid
+        return None
 
     def _remote_oids(self, keys: Sequence[str]) -> dict[str, str]:
         """Read every present key's object ID with one ``ls-remote``."""
