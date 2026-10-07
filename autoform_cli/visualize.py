@@ -22,7 +22,7 @@ from ._tree_snapshot import (
     TreeSnapshotError,
     capture_directory_descriptor,
 )
-from .graph import Graph, GraphValidationError, load_graph
+from .graph import Graph, GraphValidationError, is_agent_notes, load_graph
 from .runtime import (
     RuntimePaths,
     RuntimeProjectionError,
@@ -898,6 +898,7 @@ def _prepare_structure_page(
         for relative, _data in snapshot.files
         if Path(relative).suffix == ".md"
         and not any(part.startswith(".") for part in Path(relative).parts)
+        and not is_agent_notes(Path(relative))
     ]
     files.sort()
     directories: set[Path] = set()

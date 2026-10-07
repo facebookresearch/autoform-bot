@@ -604,7 +604,7 @@ def _scan_bound_roadmap_directory(
                 f"{child_relative}: noncanonical README filename; container pages must be named "
                 "exactly README.md for portable behavior on case-sensitive filesystems"
             )
-        if Path(name).suffix != ".md":
+        if Path(name).suffix != ".md" or is_agent_notes(Path(name)):
             continue
         try:
             content = _read_bound_roadmap_file(descriptor, name, child_identity)
@@ -731,7 +731,7 @@ def _portable_roadmap_snapshot(roadmap_root: Path) -> _PortableRoadmapSnapshot:
                 f"{relative}: noncanonical README filename; container pages must be named exactly "
                 "README.md for portable behavior on case-sensitive filesystems"
             )
-        if path.suffix != ".md":
+        if path.suffix != ".md" or is_agent_notes(path):
             continue
         with path.open("rb") as stream:
             opened = os.fstat(stream.fileno())
@@ -934,6 +934,17 @@ def _chapter_issues(
             f"add {chapter}/README.md with the chapter's H1 title"
         )
     return issues
+
+
+def is_agent_notes(path: Path) -> bool:
+    """Whether ``path`` holds agents' working notes rather than an article.
+
+    Any roadmap directory may keep an ``agents.md`` for notes on the articles
+    beside it, so those notes stay out of the articles themselves. It is not an
+    article: the graph skips it and a rendered book never shows it. The match
+    ignores case, so an ``AGENTS.md`` written on macOS is skipped on Linux too.
+    """
+    return path.name.casefold() == "agents.md"
 
 
 def _article_id(path: Path, roadmap_root: Path) -> str:

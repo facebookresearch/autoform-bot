@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
-from .graph import GraphValidationError, SOURCE_UNIT_PATTERN, load_graph
+from .graph import GraphValidationError, SOURCE_UNIT_PATTERN, is_agent_notes, load_graph
 
 from .markdown import (
     INLINE_CODE,
@@ -1456,7 +1456,11 @@ def _is_roadmap_article(target: str, *, coverage_path: Path, roadmap: Path) -> b
             return False
         candidate = (coverage_path.parent / raw_path).resolve()
         candidate.relative_to(roadmap)
-        return candidate.is_file() and candidate.suffix.casefold() == ".md"
+        return (
+            candidate.is_file()
+            and candidate.suffix.casefold() == ".md"
+            and not is_agent_notes(candidate)
+        )
     except (OSError, RuntimeError, ValueError):
         return False
 

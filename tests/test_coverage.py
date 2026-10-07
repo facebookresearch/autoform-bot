@@ -698,6 +698,19 @@ def test_rejects_placeholder_and_unresolved_decomposed_evidence(tmp_path: Path) 
     assert reasons.count("DECOMPOSED coverage evidence has no link to an existing roadmap article") == 1
 
 
+def test_agent_notes_are_not_decomposed_evidence(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _article(blueprint, "README.md")
+    (blueprint / "roadmap" / "agents.md").write_text("## README.md\n\nNotes.\n", encoding="utf-8")
+    _contract(blueprint, "| Main theorem | DECOMPOSED | [Notes](../roadmap/agents.md) |\n")
+
+    summary, issues = load_coverage(blueprint)
+
+    assert summary is None
+    assert [issue.reason for issue in issues] == [
+        "DECOMPOSED coverage evidence has no link to an existing roadmap article"
+    ]
+
 def test_evidence_validation_ignores_decorated_placeholders_and_fake_links(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _article(blueprint, "encoded article.md")

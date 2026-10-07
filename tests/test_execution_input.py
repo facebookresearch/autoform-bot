@@ -265,6 +265,24 @@ def test_hidden_roadmap_markdown_does_not_change_execution_authority(
     assert execution.runtime == direct
 
 
+@pytest.mark.parametrize("name", ["agents.md", "AGENTS.md"])
+def test_agent_notes_do_not_change_the_execution_runtime(tmp_path: Path, name: str) -> None:
+    """The runtime graph skips notes, so the authority checked against it must too.
+
+    Hashed as an article on one side only, the two never agreed, and every read
+    retried until it failed as a concurrent change.
+    """
+    project = _project(tmp_path)
+    (project / "blueprint" / "roadmap" / name).write_text(
+        "## result.md\n\nMathlib gap.\n", encoding="utf-8"
+    )
+
+    direct = load_runtime_graph(project)
+    execution = load_execution_input(project)
+
+    assert execution.runtime == direct
+
+
 def test_execution_input_binds_only_the_selected_workspace_project(
     tmp_path: Path,
 ) -> None:

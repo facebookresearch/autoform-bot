@@ -557,3 +557,35 @@ def test_a_chapter_whose_articles_are_all_in_buckets_is_still_refused(tmp_path: 
         load_graph(tmp_path / "blueprint")
 
     assert "orphan: chapter directory holds 1 article(s) but no README.md" in str(caught.value)
+
+
+@pytest.mark.parametrize("portable", [False, True])
+@pytest.mark.parametrize("name", ["agents.md", "AGENTS.md"])
+def test_agent_notes_are_neither_an_article_nor_a_chapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    portable: bool,
+) -> None:
+    """Notes beside the articles stay out of the graph.
+
+    Read as an article, a notes file became a node of its own, and notes left
+    in a directory whose articles had moved made it an orphaned chapter.
+    """
+    roadmap = tmp_path / "blueprint" / "roadmap"
+    (roadmap / "chapter").mkdir(parents=True)
+    (roadmap / "moved").mkdir()
+    (roadmap / "README.md").write_text("---\n---\n\n# Roadmap\n", encoding="utf-8")
+    (roadmap / "chapter" / "README.md").write_text("---\n---\n\n# Chapter\n", encoding="utf-8")
+    (roadmap / "chapter" / "result.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Result\n", encoding="utf-8"
+    )
+    notes = "## result.md\n\nMathlib has no `Project.result` yet.\n"
+    (roadmap / "chapter" / name).write_text(notes, encoding="utf-8")
+    (roadmap / "moved" / name).write_text(notes, encoding="utf-8")
+    if portable:
+        monkeypatch.setattr(graph_module, "_DIRECTORY_BINDING_SUPPORTED", False)
+
+    graph = load_graph(tmp_path / "blueprint")
+
+    assert sorted(graph.nodes) == ["chapter", "chapter/result", "roadmap"]

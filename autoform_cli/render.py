@@ -39,7 +39,7 @@ from ._tree_snapshot import (
     bind_directory_tree,
 )
 from .coverage import COVERAGE_V2_SCHEMA, CoverageSummary, load_coverage
-from .graph import Graph, Node, load_graph
+from .graph import Graph, Node, is_agent_notes, load_graph
 from .lean import (
     BoundProjectSources,
     IndexedSourceSnapshot,
@@ -737,7 +737,7 @@ def _render_snapshot(
         relative = source.relative_to(blueprint)
         if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
             continue
-        if _is_generated_path(relative):
+        if _is_generated_path(relative) or is_agent_notes(relative):
             continue
         # Source notes leave the site entirely once readers can reach them in
         # the repository, so the book has one reference surface rather than two.
@@ -2187,7 +2187,7 @@ def _published_source_files(blueprint: Path):
         relative = source.relative_to(blueprint)
         if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
             continue
-        if _is_generated_path(relative) or not source.is_file():
+        if _is_generated_path(relative) or is_agent_notes(relative) or not source.is_file():
             continue
         yield source, relative
 
@@ -2624,7 +2624,7 @@ def _render_structure_page(
     def keep(relative: Path) -> bool:
         if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
             return False
-        if _is_generated_path(relative):
+        if _is_generated_path(relative) or is_agent_notes(relative):
             return False
         return not (
             sources_base is not None

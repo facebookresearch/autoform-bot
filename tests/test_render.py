@@ -2111,6 +2111,27 @@ def test_render_omits_benign_hidden_files(tmp_path: Path) -> None:
     assert not (tmp_path / "out/.gitignore").exists()
 
 
+def test_agent_notes_stay_in_the_vault(tmp_path: Path) -> None:
+    """Notes are for the next worker, not the reader.
+
+    Editing them changes nothing a reader can see, so it must not mark the
+    published site stale either.
+    """
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    render_site(blueprint, tmp_path / "before", lean_root=project)
+    (blueprint / "roadmap/agents.md").write_text("## top.md\n\nMathlib gap.\n", encoding="utf-8")
+
+    render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    def revision(site: Path) -> str:
+        return json.loads((site / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["source_revision"]
+
+    assert not (tmp_path / "out/roadmap/agents.md").exists()
+    assert "agents.md" not in (tmp_path / "out/structure.md").read_text(encoding="utf-8")
+    assert revision(tmp_path / "out") == revision(tmp_path / "before")
+
+
 @pytest.mark.parametrize(
     ("remote", "expected"),
     [

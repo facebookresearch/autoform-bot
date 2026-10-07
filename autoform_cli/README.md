@@ -8,12 +8,12 @@ graph: no separate authored or generated graph file exists.
 
 ## Articles and containment
 
-Every Markdown file below a selected vault's `roadmap/` is an article node. A
-`README.md` represents its directory and strictly contains the articles below
-it; the nearest ancestor `README.md` is the single parent. This supports any
-number of levels, from book to chapter to section to declaration. Ordinary
-files use their path without `.md` as the current graph ID; `README.md` uses its
-directory path, with the root article named `roadmap`.
+Every Markdown file below a selected vault's `roadmap/` except `agents.md` is
+an article node. A `README.md` represents its directory and strictly contains
+the articles below it; the nearest ancestor `README.md` is the single parent.
+This supports any number of levels, from book to chapter to section to
+declaration. Ordinary files use their path without `.md` as the current graph
+ID; `README.md` uses its directory path, with the root article named `roadmap`.
 
 The H1 is the article's human title. Container
 prose supplies the mathematical exposition, and a standalone list item linking
@@ -75,6 +75,16 @@ target, `bridged` for a result introduced between source targets, and
 
 Frontmatter is optional. A container article that only supplies prose and
 placement needs none at all; only checked facts are recorded.
+
+Any roadmap directory may also hold an `agents.md` (in any letter case):
+agents' notes on the articles beside it, with no H1 and one `## <file>.md`
+section per article. Articles keep only frontmatter and mathematics, so notes
+on the Lean side, progress, and failed routes go there instead. `autoform
+check` skips it, `autoform render` never publishes it, and an article's section
+is deleted once the article is proved. An older `AUTOFORM_REF` reads it as an
+article: `autoform check` fails on the missing H1, and a notes file given an H1
+would be published. So move the pin first; until then, agents keep notes in
+their reports.
 
 ## Assertions and derived status
 
@@ -743,10 +753,10 @@ and human review continue to support roadmaps while IDs are being migrated.
 
 `autoform render` publishes the book, derived progress, and dependency maps at
 project, chapter, nested-scope, local, and full-graph scales. It never reads a
-`graph.json` or an operational queue. Hidden files are omitted, while symlinks,
-credentials, logs, provider state, and agent/task state inside the blueprint
-cause the render to fail rather than silently leak them. Source and output
-directories must be disjoint.
+`graph.json` or an operational queue. Hidden files and `agents.md` notes are
+omitted, while symlinks, credentials, logs, provider state, and agent/task
+state inside the blueprint cause the render to fail rather than silently leak
+them. Source and output directories must be disjoint.
 
 Every render writes `publication.json` with blueprint and Lean-source hashes,
 Git ref, article and dependency counts, complete file inventory, and available

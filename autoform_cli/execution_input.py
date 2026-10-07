@@ -26,7 +26,7 @@ from .coverage import (
     _roadmap_source_provenance,
     load_coverage,
 )
-from .graph import GraphValidationError, load_graph
+from .graph import GraphValidationError, is_agent_notes, load_graph
 from .lean import (
     BoundProjectSources,
     SourceIndex,
@@ -494,7 +494,11 @@ def _execution_authority_revision(
             coverage_sha256 = file_sha256
         if portable_path[:1] == ("sources",):
             source_sha256s.append((relative, file_sha256))
-        if portable_path[:1] == ("roadmap",) and relative_path.suffix == ".md":
+        if (
+            portable_path[:1] == ("roadmap",)
+            and relative_path.suffix == ".md"
+            and not is_agent_notes(Path(relative_path))
+        ):
             canonical = PurePosixPath("roadmap", *relative_path.parts[1:]).as_posix()
             roadmap_sources.append((canonical, file_sha256))
             roadmap_bytes[canonical] = file_bytes
