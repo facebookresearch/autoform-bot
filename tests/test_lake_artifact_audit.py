@@ -1454,8 +1454,10 @@ _INITIALIZER_LEAN = """initialize do
     IO.Process.exit 0
 """
 
-# The kernel decides `Lean.reduceBool Fixture.evil = true` by running this code.
-_NATIVE_DEP_LEAN = """unsafe def Fixture.evilImpl (_ : Unit) : Bool :=
+# The kernel decides `Lean.reduceBool Dep.evil = true` by running this code. It
+# sits in a dependency because a replay runs it only from the replay's base,
+# which holds the modules outside the root package.
+_NATIVE_DEP_LEAN = """unsafe def Dep.evilImpl (_ : Unit) : Bool :=
   match unsafeIO (do
       if (← IO.getEnv "AUTOFORM_AUDIT_TEST_TRIGGER").isSome then
         IO.FS.writeFile MARKER "native code ran\\n"
@@ -1464,9 +1466,9 @@ _NATIVE_DEP_LEAN = """unsafe def Fixture.evilImpl (_ : Unit) : Bool :=
   | .ok value => value
   | .error _ => true
 
-@[implemented_by Fixture.evilImpl] opaque Fixture.evilSpec : Unit → Bool
+@[implemented_by Dep.evilImpl] opaque Dep.evilSpec : Unit → Bool
 
-def Fixture.evil : Bool := Fixture.evilSpec ()
+def Dep.evil : Bool := Dep.evilSpec ()
 """
 
 # A declaration whose proof names a constant that no module declares.
@@ -1495,9 +1497,11 @@ def hostile_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tupl
         ),
         (
             "native",
-            {"Fixture.lean": "import Fixture.Dep\ntheorem Fixture.t : Lean.reduceBool Fixture.evil = true := rfl\n",
-             "Fixture/Dep.lean": _NATIVE_DEP_LEAN},
-            'name = "Fixture"\n',
+            {"Fixture.lean": "import EvilDep\ntheorem Fixture.t : Lean.reduceBool Dep.evil = true := rfl\n",
+             "evildep/lean-toolchain": "leanprover/lean4:v4.32.2\n",
+             "evildep/lakefile.toml": 'name = "evildep"\ndefaultTargets = ["EvilDep"]\n\n[[lean_lib]]\nname = "EvilDep"\n',
+             "evildep/EvilDep.lean": _NATIVE_DEP_LEAN},
+            'name = "Fixture"\n\n[[require]]\nname = "evildep"\npath = "evildep"\n',
         ),
         (
             "core-named",
@@ -1558,6 +1562,7 @@ def test_both_probes_run_no_initializer_of_the_build(
             or "Fixture.cheat contains sorry but is not an open statement" in output
         ), output
         assert summary in output
+        assert "kernel trust clean" not in output
         assert not (project[0] / "marker").exists()
 
 
@@ -1572,6 +1577,7 @@ def test_both_probes_reject_native_reduction_without_running_it(
         assert "Fixture.t depends on unexpected axiom Lean.trustCompiler" in output
         assert "kernel replay of the root package skipped: it runs once every other check passes" in output
         assert summary in output
+        assert "kernel trust clean" not in output
         assert not (project[0] / "marker").exists()
 
 
@@ -1588,6 +1594,7 @@ def test_both_probes_refuse_a_root_module_named_after_the_toolchain_library(
             "root module Lean.Hack shares its first component Lean with the toolchain's library; "
             "rename the module so the audit can run"
         ) in output
+        assert "kernel trust clean" not in output
         assert not (project[0] / "marker").exists()
 
 
