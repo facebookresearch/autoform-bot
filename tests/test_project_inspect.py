@@ -350,10 +350,10 @@ def test_override_of_an_inherited_lock_does_not_prove_use(tmp_path: Path, overri
     assert "mathlib-manifest-unused" in _codes(result)
 
 
-def _write_overrides(root: Path, *packages: dict) -> None:
+def _write_overrides(root: Path, *packages: dict, schema_version: object = "1.1.0") -> None:
     (root / ".lake").mkdir()
     (root / ".lake/package-overrides.json").write_text(
-        json.dumps({"schemaVersion": "1.1.0", "packages": list(packages)}), encoding="utf-8"
+        json.dumps({"schemaVersion": schema_version, "packages": list(packages)}), encoding="utf-8"
     )
 
 
@@ -670,16 +670,7 @@ def test_arbitrary_precision_manifest_versions_are_compared_lexically(tmp_path: 
 
 def test_package_override_replaces_the_locked_mathlib(tmp_path: Path) -> None:
     root = _project(tmp_path)
-    (root / ".lake").mkdir()
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps(
-            {
-                "schemaVersion": "1.1.0",
-                "packages": [{"name": "mathlib", "type": "path", "dir": "../mathlib4", "inherited": False}],
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_overrides(root, {"name": "mathlib", "type": "path", "dir": "../mathlib4", "inherited": False})
 
     result = inspect_project(root)
 
@@ -703,10 +694,7 @@ def test_override_does_not_suppress_root_manifest_freshness_warning(tmp_path: Pa
 
 def test_override_needs_a_manifest_to_replace(tmp_path: Path) -> None:
     root = _project(tmp_path, manifest=None)
-    (root / ".lake").mkdir()
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps({"schemaVersion": "1.1.0", "packages": [_mathlib()]}), encoding="utf-8"
-    )
+    _write_overrides(root, _mathlib())
 
     assert inspect_project(root).compatibility.status == "indeterminate"
 
@@ -725,10 +713,7 @@ def test_override_is_not_parsed_on_lakes_no_manifest_update_path(tmp_path: Path)
 
 def test_override_without_mathlib_leaves_the_manifest_in_charge(tmp_path: Path) -> None:
     root = _project(tmp_path)
-    (root / ".lake").mkdir()
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps({"schemaVersion": "1.1.0", "packages": []}), encoding="utf-8"
-    )
+    _write_overrides(root)
 
     assert inspect_project(root).compatibility.status == "supported"
 
@@ -802,12 +787,8 @@ def test_legacy_override_of_mathlib_is_not_reported_as_the_lock(tmp_path: Path, 
     # Lake 4.32.2 applies a legacy override (Manifest.getPackages decodes it as
     # PackageEntryV6), so its Mathlib replaces the manifest's; Autoform does not decode it.
     root = _project(tmp_path)
-    (root / ".lake").mkdir()
     legacy = {"name": "mathlib", "opts": {}, "inherited": False, "url": MATHLIB_URL, "rev": OTHER_COMMIT}
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps({"schemaVersion": version, "packages": [{"git": {**legacy, "inputRev?": "master"}}]}),
-        encoding="utf-8",
-    )
+    _write_overrides(root, {"git": {**legacy, "inputRev?": "master"}}, schema_version=version)
 
     result = inspect_project(root)
 
@@ -820,11 +801,8 @@ def test_requirement_recorded_only_by_a_legacy_override_is_not_an_error(tmp_path
     # so it records the requirement even though Autoform does not decode the file.
     lakefile = LAKEFILE + '\n[[require]]\nname = "batteries"\nscope = "leanprover-community"\n'
     root = _project(tmp_path, lakefile=lakefile)
-    (root / ".lake").mkdir()
     legacy = {"name": "batteries", "opts": {}, "inherited": False, "url": "https://example.com/b", "rev": OTHER_COMMIT}
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps({"schemaVersion": 6, "packages": [{"git": legacy}]}), encoding="utf-8"
-    )
+    _write_overrides(root, {"git": legacy}, schema_version=6)
 
     result = inspect_project(root)
 
@@ -835,10 +813,7 @@ def test_requirement_recorded_only_by_a_legacy_override_is_not_an_error(tmp_path
 
 def test_legacy_override_file_cannot_fall_through_to_supported_manifest(tmp_path: Path) -> None:
     root = _project(tmp_path)
-    (root / ".lake").mkdir()
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps({"schemaVersion": 6, "packages": []}), encoding="utf-8"
-    )
+    _write_overrides(root, schema_version=6)
 
     result = inspect_project(root)
 
@@ -1236,10 +1211,7 @@ def test_stably_unreadable_decision_file_is_not_misreported_as_changing(
 ) -> None:
     root = _project(tmp_path)
     if denied == ".lake/package-overrides.json":
-        (root / ".lake").mkdir()
-        (root / denied).write_text(
-            json.dumps({"schemaVersion": "1.1.0", "packages": []}), encoding="utf-8"
-        )
+        _write_overrides(root)
     original = project_snapshot._open_resolved
 
     def deny_one(path: Path, *args):
@@ -1722,16 +1694,7 @@ def test_symlinked_lake_directory_is_followed_like_lake(tmp_path: Path, with_ove
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
 def test_symlinked_package_overrides_file_is_followed_like_lake(tmp_path: Path) -> None:
     root = _project(tmp_path)
-    (root / ".lake").mkdir()
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps(
-            {
-                "schemaVersion": "1.1.0",
-                "packages": [{"name": "mathlib", "type": "path", "dir": "../mathlib4", "inherited": False}],
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_overrides(root, {"name": "mathlib", "type": "path", "dir": "../mathlib4", "inherited": False})
     _move_behind_symlink(root, ".lake/package-overrides.json")
 
     result = inspect_project(root)
