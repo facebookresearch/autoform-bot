@@ -763,6 +763,34 @@ its local context. Point `mkdocs.yml` at `docs_dir: site-src` and enable
 `md_in_html` plus a `pymdownx.superfences` mermaid fence; see the [repository
 example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 
+Publication is staged, synced, validated, and atomically exchanged with the
+previous generated site. This fail-closed transaction requires macOS
+`renameatx_np` or Linux `renameat2`, plus descriptor-relative traversal,
+advisory locking, and directory sync. Autoform exercises no-replace and
+cross-directory exchange inside its private workspace before it inspects the
+live output, so a network or local filesystem that does not implement those
+flags fails without changing the published site. Other platforms, including
+Windows, can still use the remaining supported CLI commands but cannot run
+`autoform render`; Autoform never falls back to a two-rename replacement with a
+missing-site crash window. A legacy
+`autoform-publication/v1` output is never deleted automatically. Remove it
+explicitly or choose an empty output directory once, then subsequent v2 renders
+can replace only the exact checksummed generation they inspected.
+The renderer hashes both the blueprint snapshot and the exact Lean-file
+generation used for declaration links, then rechecks both under the publication
+lock immediately before the atomic rename. That check is the publication
+linearization point; later source edits belong to the next render. Generated
+v1/v2 publication trees and private staging directories are never indexed as
+Lean source.
+Repository links are emitted only when those captured blueprint and Lean bytes
+match one locally available Git commit. Mutable ref names are recorded as that
+commit's full object ID. For dirty, untracked, or otherwise unverifiable inputs,
+the render remains local, keeps source notes in the site, records no Git ref,
+and reports a warning instead of producing a stale or missing link.
+An older v2 publication without the Lean-source hash is not eligible for
+automatic replacement; remove it explicitly or choose an empty output
+directory.
+
 ## Validation
 
 `autoform check` rejects cycles, missing targets, escaping paths,
@@ -1128,6 +1156,18 @@ credentials, logs, provider state, and agent/task state inside the blueprint
 cause the render to fail rather than silently leak them. Source and output
 directories must be disjoint.
 
-Every render writes `publication.json` with the source-content hash, Git ref,
-article and dependency counts, and available views. It contains no timestamp or
-absolute path, so identical inputs produce identical output files.
+Every render writes `publication.json` with blueprint and Lean-source hashes,
+Git ref, article and dependency counts, complete file inventory, and available
+views. It contains no timestamp or absolute path, so identical inputs produce
+identical output files. Autoform validates and syncs the staged tree before one
+atomic filesystem commit, then verifies ownership and syncs both parent
+directories. Once the commit begins, Autoform never tries to exchange a recovery
+path back into the live destination. If it cannot verify the final state or
+durability, it preserves the private workspace instead of deleting a potentially
+unique generation. It reports an exact recovery path only while the bound output
+parent is still addressable. Losing that parent path after commit is an uncertain
+publication error; the parent is checked again after workspace cleanup before
+success is returned. Other post-verification cleanup refusals leave the
+published site in place and return the retained workspace as a warning. A process
+exit immediately after exchange likewise leaves the complete previous generation
+under that workspace while the complete replacement occupies the output path.

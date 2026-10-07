@@ -10,19 +10,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
 
 from .markdown import (
+    EXTERNAL_SCHEMES,
     INLINE_CODE,
     Content,
     PublishedTable,
     content,
     link_targets,
     local_target_issue,
+    markdown_text_anchors,
     published_tables,
     rendered_visible_text,
 )
@@ -138,6 +142,57 @@ def load_coverage(blueprint_dir: str | Path) -> tuple[CoverageSummary | None, tu
             schema=COVERAGE_SCHEMA,
             source_path="coverage/README.md",
             source_sha256=hashlib.sha256(content).hexdigest(),
+            entries=tuple(rows),
+        ),
+        (),
+    )
+
+
+def load_coverage_snapshot(
+    blueprint_dir: str | Path,
+    files: Mapping[str, bytes],
+) -> tuple[CoverageSummary | None, tuple[CoverageIssue, ...]]:
+    """Validate coverage from one immutable captured blueprint generation."""
+
+    blueprint = Path(blueprint_dir).expanduser()
+    if not blueprint.is_absolute():
+        blueprint = Path.cwd() / blueprint
+    normalized: dict[Path, bytes] = {}
+    for raw_relative, data in files.items():
+        relative = PurePosixPath(raw_relative)
+        if (
+            not raw_relative
+            or relative.is_absolute()
+            or relative.as_posix() != raw_relative
+            or ".." in relative.parts
+        ):
+            return None, (CoverageIssue(0, "coverage snapshot has an invalid path"),)
+        normalized[_lexical_path(blueprint.joinpath(*relative.parts))] = data
+    path = _lexical_path(blueprint / "coverage" / "README.md")
+    content_bytes = normalized.get(path)
+    if content_bytes is None:
+        return None, (CoverageIssue(0, "coverage contract is missing"),)
+    try:
+        text = content_bytes.decode("utf-8")
+    except UnicodeError:
+        return None, (CoverageIssue(0, "coverage contract cannot be read as UTF-8"),)
+
+    rows, issues = _parse_table(text)
+    issues.extend(
+        _validate_evidence(
+            rows,
+            blueprint=blueprint,
+            coverage_path=path,
+            captured_files=normalized,
+        )
+    )
+    if issues:
+        return None, tuple(issues)
+    return (
+        CoverageSummary(
+            schema=COVERAGE_SCHEMA,
+            source_path="coverage/README.md",
+            source_sha256=hashlib.sha256(content_bytes).hexdigest(),
             entries=tuple(rows),
         ),
         (),
@@ -467,9 +522,14 @@ def _validate_evidence(
     *,
     blueprint: Path,
     coverage_path: Path,
+    captured_files: Mapping[Path, bytes] | None = None,
 ) -> list[CoverageIssue]:
     issues: list[CoverageIssue] = []
-    roadmap = (blueprint / "roadmap").resolve()
+    roadmap = (
+        (blueprint / "roadmap").resolve()
+        if captured_files is None
+        else _lexical_path(blueprint / "roadmap")
+    )
     for entry in entries:
         visible_evidence = _visible_markdown(entry.evidence)
         if not _has_substance(visible_evidence):
@@ -495,13 +555,31 @@ def _validate_evidence(
         # One good link beside a broken one is a broken claim.
         broken: list[str] = []
         for target in targets:
-            problem = local_target_issue(coverage_path, target, blueprint, label="coverage")
+            problem = (
+                local_target_issue(coverage_path, target, blueprint, label="coverage")
+                if captured_files is None
+                else _captured_local_target_issue(
+                    coverage_path,
+                    target,
+                    blueprint,
+                    captured_files,
+                    label="coverage",
+                )
+            )
             if problem is not None:
                 broken.append(problem[1])
         if broken:
             issues.extend(CoverageIssue(entry.line, reason) for reason in broken)
             continue
-        if not any(_is_roadmap_article(target, coverage_path=coverage_path, roadmap=roadmap) for target in targets):
+        if not any(
+            _is_roadmap_article(
+                target,
+                coverage_path=coverage_path,
+                roadmap=roadmap,
+                captured_files=captured_files,
+            )
+            for target in targets
+        ):
             issues.append(
                 CoverageIssue(
                     entry.line,
@@ -561,7 +639,13 @@ def _is_placeholder(visible: str) -> bool:
     return _MARKER_PUNCTUATION.match(remainder) is not None
 
 
-def _is_roadmap_article(target: str, *, coverage_path: Path, roadmap: Path) -> bool:
+def _is_roadmap_article(
+    target: str,
+    *,
+    coverage_path: Path,
+    roadmap: Path,
+    captured_files: Mapping[Path, bytes] | None = None,
+) -> bool:
     parsed = urlsplit(target)
     if parsed.scheme or parsed.netloc:
         return False
@@ -569,11 +653,67 @@ def _is_roadmap_article(target: str, *, coverage_path: Path, roadmap: Path) -> b
         raw_path = unquote(parsed.path)
         if not raw_path or "\x00" in raw_path:
             return False
-        candidate = (coverage_path.parent / raw_path).resolve()
+        candidate = (
+            (coverage_path.parent / raw_path).resolve()
+            if captured_files is None
+            else _lexical_path(coverage_path.parent / raw_path)
+        )
         candidate.relative_to(roadmap)
-        return candidate.is_file() and candidate.suffix.casefold() == ".md"
+        return (
+            candidate.is_file() if captured_files is None else candidate in captured_files
+        ) and candidate.suffix.casefold() == ".md"
     except (OSError, RuntimeError, ValueError):
         return False
+
+
+def _captured_local_target_issue(
+    source_path: Path,
+    target: str,
+    boundary: Path,
+    files: Mapping[Path, bytes],
+    *,
+    label: str,
+) -> tuple[str, str] | None:
+    split = urlsplit(target)
+    scheme = split.scheme.casefold()
+    if scheme in EXTERNAL_SCHEMES:
+        return None
+    if scheme:
+        return f"unsupported-{label}-link", f"{label} link uses unsupported scheme: {target!r}"
+    if split.netloc:
+        return f"unsupported-{label}-link", f"{label} link uses a network location: {target!r}"
+    raw_path = unquote(split.path)
+    if "\x00" in raw_path:
+        return f"malformed-{label}-link", f"{label} link contains an invalid path: {target!r}"
+    if not raw_path:
+        candidate = _lexical_path(source_path)
+    else:
+        relative = Path(raw_path)
+        if relative.is_absolute():
+            return f"{label}-escapes-blueprint", f"{label} link escapes the blueprint: {target!r}"
+        candidate = _lexical_path(source_path.parent / relative)
+    boundary = _lexical_path(boundary)
+    try:
+        candidate.relative_to(boundary)
+    except ValueError:
+        return f"{label}-escapes-blueprint", f"{label} link escapes the blueprint: {target!r}"
+    data = files.get(candidate)
+    if data is None:
+        return f"{label}-not-found", f"{label} link does not resolve to a file: {target!r}"
+    if split.fragment and candidate.suffix.casefold() == ".md":
+        try:
+            text = data.decode("utf-8")
+        except UnicodeError:
+            anchors: set[str] = set()
+        else:
+            anchors = markdown_text_anchors(text)
+        if unquote(split.fragment) not in anchors:
+            return f"{label}-anchor-not-found", f"{label} link fragment does not resolve: {target!r}"
+    return None
+
+
+def _lexical_path(path: Path) -> Path:
+    return Path(os.path.normpath(os.fspath(path)))
 
 
 def _cells(line: str) -> tuple[str, ...]:
@@ -613,4 +753,5 @@ __all__ = [
     "CoverageIssue",
     "CoverageSummary",
     "load_coverage",
+    "load_coverage_snapshot",
 ]

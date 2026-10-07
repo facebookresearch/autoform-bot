@@ -27,6 +27,7 @@ from .status import NodeStatus
 
 
 NodeLinks = Callable[[Path], Mapping[str, str]]
+PageWriter = Callable[[Path, str], None]
 
 
 def write_graph_pages(
@@ -35,6 +36,7 @@ def write_graph_pages(
     destination: str | Path,
     *,
     node_links: NodeLinks,
+    page_writer: PageWriter | None = None,
 ) -> tuple[Path, ...]:
     """Write project, chapter, local, and full graph pages.
 
@@ -42,7 +44,9 @@ def write_graph_pages(
     each generated page.  Keeping that callback in the site renderer avoids
     duplicating its URL and chapter-anchor policy here.
     """
-    destination = Path(destination).resolve()
+    destination = Path(destination)
+    if page_writer is None:
+        destination = destination.resolve()
     groups = group_nodes(graph)
     local_views = focus_views(graph, statuses)
     project_page = destination / "dependencies.md"
@@ -93,6 +97,7 @@ def write_graph_pages(
                 f"{project_item_count} item{'s' if project_item_count != 1 else ''} across "
                 f"{len(groups)} chapter{'s' if len(groups) != 1 else ''}."
             ),
+            page_writer=page_writer,
         )
     )
 
@@ -129,6 +134,7 @@ def write_graph_pages(
                     "Dashed chapter boxes stand for external prerequisites or dependents."
                 ),
                 navigation=navigation,
+                page_writer=page_writer,
             )
         )
 
@@ -162,6 +168,7 @@ def write_graph_pages(
                     ("Parent map", _markdown_link(parent_page, scope_page)),
                     ("Full theorem DAG", _markdown_link(full_page, scope_page)),
                 ),
+                page_writer=page_writer,
             )
         )
     complete = full_view(graph, statuses)
@@ -177,6 +184,7 @@ def write_graph_pages(
                 "prerequisite to what depends on it; dashed arrows are needed only by proofs."
             ),
             navigation=_navigation(("Project map", _markdown_link(project_page, full_page))),
+            page_writer=page_writer,
         )
     )
 
@@ -204,6 +212,7 @@ def write_graph_pages(
                     "The highlighted item is the current focus."
                 ),
                 navigation=navigation,
+                page_writer=page_writer,
             )
         )
 
@@ -225,6 +234,7 @@ def _write_page(
     lead: str,
     navigation: str = "",
     extra: str = "",
+    page_writer: PageWriter | None = None,
 ) -> Path:
     diagram = mermaid.render_view_diagram(view, links=dict(links), include_classdefs=False)
     sections = [
@@ -244,8 +254,12 @@ def _write_page(
     sections.extend([f"{lead} {tip}".rstrip(), "", diagram, ""])
     if extra:
         sections.extend([extra, ""])
-    page.parent.mkdir(parents=True, exist_ok=True)
-    page.write_text("\n".join(sections).rstrip() + "\n", encoding="utf-8")
+    contents = "\n".join(sections).rstrip() + "\n"
+    if page_writer is None:
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text(contents, encoding="utf-8")
+    else:
+        page_writer(page, contents)
     return page
 
 

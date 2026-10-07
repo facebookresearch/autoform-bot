@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import dataclass
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -11,8 +12,14 @@ from typing import Callable, Protocol
 from urllib.parse import urlsplit
 
 from .claims import ClaimTransportError, author_claim_key
-from .graph import GraphValidationError
-from .render import LIVE_SCRIPT, PUBLICATION_MANIFEST, publication_source_revision
+from .graph import GraphValidationError, Node, load_graph_snapshot
+from .render import (
+    LIVE_SCRIPT,
+    PUBLICATION_MANIFEST,
+    PUBLICATION_MANIFEST_MAX_BYTES,
+    PUBLICATION_SCHEMA,
+    capture_publication_source,
+)
 from .runtime import RuntimeGraph, RuntimeNode, RuntimeProjectionError
 
 
@@ -64,13 +71,22 @@ class ClaimReader(Protocol):
     def list(self) -> list[dict[str, object]]: ...
 
 
-def build_live_state(runtime: RuntimeGraph, leases: list[dict[str, object]]) -> dict[str, object]:
+@dataclass(frozen=True, slots=True)
+class _PublicationLiveGraph:
+    source_revision: str
+    nodes: tuple[Node, ...]
+
+
+def build_live_state(
+    runtime: RuntimeGraph | _PublicationLiveGraph,
+    leases: list[dict[str, object]],
+) -> dict[str, object]:
     """Project live author claims onto nodes without creating durable state."""
 
     # The claim CLI hashes whatever target it is given, so a path-ID claim on an
     # article that has an article_id is a separate lease. Show both, each with
     # the target it was taken on.
-    claims_by_key: dict[str, tuple[RuntimeNode, str]] = {}
+    claims_by_key: dict[str, tuple[RuntimeNode | Node, str]] = {}
     for node in runtime.nodes:
         article_id = getattr(node, "article_id", None)
         for target in (node.id, article_id) if article_id else (node.id,):
@@ -136,7 +152,6 @@ def live_state_loader(
 
 
 def publication_bound_live_state(
-    runtime_loader: Callable[[], RuntimeGraph],
     claims: ClaimReader,
     *,
     blueprint_dir: str | Path,
@@ -144,30 +159,52 @@ def publication_bound_live_state(
 ) -> Callable[[], dict[str, object]]:
     """Refuse live badges when the built publication is stale or incomplete."""
 
-    load = live_state_loader(runtime_loader, claims)
+    lock = threading.Lock()
     blueprint = Path(blueprint_dir)
     manifest_path = Path(site_dir) / PUBLICATION_MANIFEST
 
     def guarded() -> dict[str, object]:
-        try:
-            encoded = manifest_path.read_bytes()
-            if len(encoded) > 64 * 1024:
-                raise ValueError("publication manifest is too large")
-            manifest = json.loads(encoded)
-            if (
-                not isinstance(manifest, dict)
-                or manifest.get("schema") != "autoform-publication/v1"
-                or manifest.get("complete") is not True
-                or manifest.get("source_revision") != publication_source_revision(blueprint)
-            ):
-                raise ValueError("built dashboard is stale; rerun render and the MkDocs build")
-        except (OSError, ValueError) as error:
-            return {
-                "schema": LIVE_SCHEMA,
-                "claims": [],
-                "error": str(error),
-            }
-        return load()
+        with lock:
+            try:
+                encoded = manifest_path.read_bytes()
+                if len(encoded) > PUBLICATION_MANIFEST_MAX_BYTES:
+                    raise ValueError("publication manifest is too large")
+                manifest = json.loads(encoded)
+                snapshot = capture_publication_source(blueprint)
+                if (
+                    not isinstance(manifest, dict)
+                    or manifest.get("schema") != PUBLICATION_SCHEMA
+                    or manifest.get("complete") is not True
+                    or manifest.get("source_revision") != snapshot.revision
+                ):
+                    raise ValueError("built dashboard is stale; rerun render and the MkDocs build")
+                graph = load_graph_snapshot(
+                    snapshot.root,
+                    {
+                        relative.as_posix(): data
+                        for relative, data in snapshot.files.items()
+                    },
+                    directories=(
+                        "" if relative.as_posix() == "." else relative.as_posix()
+                        for relative in snapshot.directories
+                    ),
+                )
+                runtime = _PublicationLiveGraph(
+                    snapshot.revision,
+                    tuple(graph.nodes.values()),
+                )
+                return build_live_state(runtime, claims.list())
+            except (
+                ClaimTransportError,
+                GraphValidationError,
+                OSError,
+                ValueError,
+            ) as error:
+                return {
+                    "schema": LIVE_SCHEMA,
+                    "claims": [],
+                    "error": f"{type(error).__name__}: {error}",
+                }
 
     return guarded
 

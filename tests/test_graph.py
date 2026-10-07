@@ -10,6 +10,7 @@ from autoform_cli.__main__ import main
 from autoform_cli.graph import (
     GraphValidationError,
     load_graph,
+    load_graph_snapshot,
 )
 
 
@@ -571,4 +572,33 @@ def test_open_statements_set_outside_the_roadmap_root_is_refused(
 
     assert caught.value.issues == (
         f"{node_id}: open_statements is a project policy; set it only in roadmap/README.md",
+    )
+
+
+def test_snapshot_policy_path_ignores_a_transient_live_symlink(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+    chapter = roadmap / "chapter"
+    chapter.mkdir(parents=True)
+    (chapter / "README.md").write_text("# Live chapter\n", encoding="utf-8")
+    try:
+        (roadmap / "README.md").symlink_to("chapter/README.md")
+    except OSError:
+        pytest.skip("directory does not permit symlink creation")
+
+    files = {
+        "roadmap/README.md": b"# Captured roadmap\n",
+        "roadmap/chapter/README.md": (
+            b"---\nopen_statements: allowed\n---\n\n# Captured chapter\n"
+        ),
+    }
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph_snapshot(
+            blueprint,
+            files,
+            directories=("", "roadmap", "roadmap/chapter"),
+        )
+
+    assert caught.value.issues == (
+        "chapter: open_statements is a project policy; set it only in roadmap/README.md",
     )

@@ -10,9 +10,11 @@ a second graph file that could drift from the book.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
 
 from .lean import declaration_names
@@ -150,19 +152,71 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     if not blueprint.is_dir():
         raise GraphValidationError([f"blueprint directory does not exist: {blueprint}"])
 
+    sources, discovery_issues = _discover_nodes(blueprint)
+    return _load_graph_sources(
+        blueprint,
+        sources,
+        discovery_issues,
+        canonicalize=lambda path: path.resolve(),
+        is_file=lambda path: path.is_file(),
+    )
+
+
+def load_graph_snapshot(
+    blueprint_dir: str | Path,
+    files: Mapping[str, bytes],
+    *,
+    directories: Iterable[str],
+) -> Graph:
+    """Load a graph from one already captured immutable blueprint generation."""
+
+    blueprint = Path(blueprint_dir).expanduser()
+    if not blueprint.is_absolute():
+        blueprint = Path.cwd() / blueprint
+    normalized_files = {
+        _snapshot_relative(relative): content for relative, content in files.items()
+    }
+    normalized_directories = {
+        _snapshot_relative(relative, allow_root=True) for relative in directories
+    }
+    sources, discovery_issues = _discover_snapshot_nodes(
+        blueprint,
+        normalized_files,
+        normalized_directories,
+    )
+    available = {
+        _lexical_path(blueprint.joinpath(*relative.parts))
+        for relative in normalized_files
+    }
+    return _load_graph_sources(
+        blueprint,
+        sources,
+        discovery_issues,
+        canonicalize=_lexical_path,
+        is_file=lambda path: path in available,
+    )
+
+
+def _load_graph_sources(
+    blueprint: Path,
+    sources: list[_NodeSource],
+    discovery_issues: list[str],
+    *,
+    canonicalize: Callable[[Path], Path],
+    is_file: Callable[[Path], bool],
+) -> Graph:
     issues: list[str] = []
     parsed: list[_ParsedNode] = []
     canonical_ids: dict[Path, str] = {}
     node_ids: dict[str, Path] = {}
-    sources, discovery_issues = _discover_nodes(blueprint)
     issues.extend(discovery_issues)
     article_ids: dict[str, str] = {}
     source_hashes = {source.id: source.source_sha256 for source in sources}
-    policy_page = (blueprint / "roadmap" / "README.md").resolve()
+    policy_page = canonicalize(blueprint / "roadmap" / "README.md")
     open_statements = False
 
     for source in sources:
-        canonical = source.path.resolve()
+        canonical = canonicalize(source.path)
         if canonical in canonical_ids:
             issues.append(f"{source.id}: duplicates node {canonical_ids[canonical]!r}")
             continue
@@ -200,14 +254,21 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     if issues:
         raise GraphValidationError(issues)
 
-    parents = _article_parents(parsed)
+    parents = _article_parents(parsed, canonicalize=canonicalize)
     nodes: dict[str, Node] = {}
     for parsed_node in parsed:
 
         def resolve(targets: tuple[str, ...], node: _ParsedNode = parsed_node) -> list[str]:
             resolved: list[str] = []
             for target in targets:
-                dependency, issue = _resolve_target(node, target, blueprint, canonical_ids)
+                dependency, issue = _resolve_target(
+                    node,
+                    target,
+                    blueprint,
+                    canonical_ids,
+                    canonicalize=canonicalize,
+                    is_file=is_file,
+                )
                 if issue:
                     issues.append(issue)
                 elif dependency == node.id:
@@ -258,6 +319,25 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     return Graph(blueprint_dir=blueprint, nodes=nodes, open_statements=open_statements)
 
 
+def _snapshot_relative(value: str, *, allow_root: bool = False) -> PurePosixPath:
+    if allow_root and value == "":
+        return PurePosixPath(".")
+    path = PurePosixPath(value)
+    if (
+        (not value and not allow_root)
+        or value == "."
+        or path.is_absolute()
+        or path.as_posix() != value
+        or ".." in path.parts
+    ):
+        raise GraphValidationError([f"invalid captured blueprint path: {value!r}"])
+    return path
+
+
+def _lexical_path(path: Path) -> Path:
+    return Path(os.path.normpath(os.fspath(path)))
+
+
 def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
     roadmap_root = blueprint / "roadmap"
     if not roadmap_root.is_dir():
@@ -295,6 +375,61 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
         )
 
     issues.extend(_chapter_issues(roadmap_root))
+    return sources, issues
+
+
+def _discover_snapshot_nodes(
+    blueprint: Path,
+    files: Mapping[PurePosixPath, bytes],
+    directories: set[PurePosixPath],
+) -> tuple[list[_NodeSource], list[str]]:
+    roadmap_relative = PurePosixPath("roadmap")
+    if roadmap_relative not in directories:
+        return [], [f"roadmap directory does not exist: {blueprint / 'roadmap'}"]
+
+    issues: list[str] = []
+    sources: list[_NodeSource] = []
+    roadmap_root = blueprint / "roadmap"
+    roadmap_files = sorted(
+        relative
+        for relative in files
+        if len(relative.parts) > 1 and relative.parts[0] == "roadmap"
+    )
+    for relative in roadmap_files:
+        if relative.name.casefold() == "readme.md" and relative.name != "README.md":
+            issues.append(
+                f"{PurePosixPath(*relative.parts[1:])}: noncanonical README filename; "
+                "container pages must be named exactly README.md for portable behavior "
+                "on case-sensitive filesystems"
+            )
+    for relative in roadmap_files:
+        if relative.suffix != ".md":
+            continue
+        content = files[relative]
+        node_relative = PurePosixPath(*relative.parts[1:])
+        try:
+            text = content.decode("utf-8")
+        except UnicodeError as error:
+            issues.append(f"{node_relative}: cannot read roadmap page: {error}")
+            continue
+        path = blueprint.joinpath(*relative.parts)
+        node_id = _article_id(path, roadmap_root)
+        sources.append(
+            _NodeSource(node_id, path, text, hashlib.sha256(content).hexdigest())
+        )
+
+    chapters: dict[str, list[PurePosixPath]] = {}
+    for relative in roadmap_files:
+        if relative.suffix == ".md" and len(relative.parts) > 2:
+            chapters.setdefault(relative.parts[1], []).append(relative)
+    for chapter, articles in sorted(chapters.items()):
+        readme = PurePosixPath("roadmap", chapter, "README.md")
+        if readme not in files:
+            issues.append(
+                f"{chapter}: chapter directory holds {len(articles)} article(s) but no "
+                f"README.md, so they attach to the roadmap root instead of a chapter; "
+                f"add {chapter}/README.md with the chapter's H1 title"
+            )
     return sources, issues
 
 
@@ -353,9 +488,13 @@ def _article_id(path: Path, roadmap_root: Path) -> str:
     return relative.with_suffix("").as_posix()
 
 
-def _article_parents(parsed: list[_ParsedNode]) -> dict[str, str | None]:
+def _article_parents(
+    parsed: list[_ParsedNode],
+    *,
+    canonicalize: Callable[[Path], Path] = lambda path: path.resolve(),
+) -> dict[str, str | None]:
     """Infer strict single-parent containment from nested README articles."""
-    by_path = {node.path.resolve(): node.id for node in parsed}
+    by_path = {canonicalize(node.path): node.id for node in parsed}
     parents: dict[str, str | None] = {}
     for node in parsed:
         candidate = node.path.parent
@@ -363,7 +502,7 @@ def _article_parents(parsed: list[_ParsedNode]) -> dict[str, str | None]:
             candidate = candidate.parent
         parent: str | None = None
         while candidate != candidate.parent:
-            readme = (candidate / "README.md").resolve()
+            readme = canonicalize(candidate / "README.md")
             if readme in by_path:
                 parent = by_path[readme]
                 break
@@ -545,6 +684,9 @@ def _resolve_target(
     target: str,
     blueprint: Path,
     canonical_ids: dict[Path, str],
+    *,
+    canonicalize: Callable[[Path], Path] = lambda path: path.resolve(),
+    is_file: Callable[[Path], bool] = lambda path: path.is_file(),
 ) -> tuple[str | None, str | None]:
     split = urlsplit(target)
     if split.scheme or split.netloc or split.query:
@@ -556,10 +698,10 @@ def _resolve_target(
     if relative.is_absolute() or relative.suffix != ".md":
         return None, f"{node.id}: dependency target must be a relative .md file: {target!r}"
 
-    resolved = (node.path.parent / relative).resolve()
+    resolved = canonicalize(node.path.parent / relative)
     if not _is_within(resolved, blueprint):
         return None, f"{node.id}: dependency target escapes the blueprint directory: {target!r}"
-    if not resolved.is_file():
+    if not is_file(resolved):
         return None, f"{node.id}: dependency target does not exist: {target!r}"
     dependency = canonical_ids.get(resolved)
     if dependency is None:
@@ -753,4 +895,5 @@ __all__ = [
     "GraphValidationError",
     "Node",
     "load_graph",
+    "load_graph_snapshot",
 ]
