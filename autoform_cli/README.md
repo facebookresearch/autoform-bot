@@ -975,7 +975,10 @@ code can rewrite the audit script, the toolchain, the workflow's inputs, or the
 blueprint before the audit reads them. The audit also does not defend against a
 malicious dependency at build time, edits to the workflow, or crafted `.olean`
 bytes. Closing those needs a separate audit job that runs no project code; the
-generated workflow does not have one.
+generated workflow does not have one. The project's `lean-toolchain` chooses
+the Lean that builds the project and runs the probe: the workflow installs elan
+with `--default-toolchain none`, and elan installs any toolchain the file names,
+including a fork on GitHub, so the audit trusts that toolchain too.
 
 `autoform init` writes `.github/CODEOWNERS.autoform.example`. GitHub ignores
 that filename, so the example cannot mask or replace a repository's active
