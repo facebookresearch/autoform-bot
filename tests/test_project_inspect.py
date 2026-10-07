@@ -82,6 +82,10 @@ def _codes(result) -> set[str]:
     return {diagnostic.code for diagnostic in result.diagnostics}
 
 
+def _unreadable(result) -> list[str]:
+    return [diagnostic.path for diagnostic in result.diagnostics if diagnostic.code == "unreadable-file"]
+
+
 def test_catalog_pair_from_lakes_math_template_is_supported(tmp_path: Path) -> None:
     result = inspect_project(_project(tmp_path))
 
@@ -746,11 +750,7 @@ def test_windows_style_missing_child_of_nondirectory_lake_is_unreadable(
 
     assert not result.ok
     assert result.compatibility.status == "indeterminate"
-    assert any(
-        diagnostic.code == "unreadable-file"
-        and diagnostic.path == ".lake/package-overrides.json"
-        for diagnostic in result.diagnostics
-    )
+    assert ".lake/package-overrides.json" in _unreadable(result)
 
 
 def test_lakefile_lean_cannot_confirm_an_inherited_mathlib(tmp_path: Path) -> None:
@@ -1160,10 +1160,7 @@ def test_oversized_and_non_utf8_files_are_errors(tmp_path: Path) -> None:
 
     result = inspect_project(root)
 
-    assert [diagnostic.path for diagnostic in result.diagnostics if diagnostic.code == "unreadable-file"] == [
-        "lake-manifest.json",
-        "lean-toolchain",
-    ]
+    assert _unreadable(result) == ["lake-manifest.json", "lean-toolchain"]
 
 
 @pytest.mark.parametrize(
@@ -1242,7 +1239,7 @@ def test_chmod_unreadable_decision_file_keeps_its_specific_diagnostic(tmp_path: 
         path.chmod(0o600)
 
     assert not result.ok
-    assert any(diagnostic.code == "unreadable-file" and diagnostic.path == denied for diagnostic in result.diagnostics)
+    assert denied in _unreadable(result)
     assert "project-changed-during-inspection" not in _codes(result)
 
 
@@ -1598,10 +1595,7 @@ def test_nested_symlink_expansion_matches_the_native_kernel(
     if native_state == "unreadable":
         assert not result.ok
         assert result.compatibility.status == "indeterminate"
-        assert any(
-            diagnostic.code == "unreadable-file" and diagnostic.path == "lakefile.toml"
-            for diagnostic in result.diagnostics
-        )
+        assert "lakefile.toml" in _unreadable(result)
     else:
         assert result.ok, result.diagnostics
         assert result.compatibility.status == "supported"
@@ -1720,10 +1714,7 @@ def test_dangling_symlinked_decision_file_is_present_but_unreadable(tmp_path: Pa
     result = inspect_project(root)
 
     assert not result.ok
-    assert any(
-        diagnostic.code == "unreadable-file" and diagnostic.path == "lean-toolchain"
-        for diagnostic in result.diagnostics
-    )
+    assert "lean-toolchain" in _unreadable(result)
     assert "missing-lean-toolchain" not in _codes(result)
     assert "project-changed-during-inspection" not in _codes(result)
 
@@ -1840,7 +1831,7 @@ def test_unusable_symlink_is_identified_by_the_link_not_its_target(
     result = inspect_project(root)
 
     assert touches >= 2
-    assert [diagnostic.path for diagnostic in result.diagnostics if diagnostic.code == "unreadable-file"] == [relative]
+    assert _unreadable(result) == [relative]
     assert "project-changed-during-inspection" not in _codes(result)
 
 
@@ -1951,10 +1942,7 @@ def test_parent_swapped_for_a_link_before_the_open_never_opens_a_device(
     assert swapped
     assert stat.S_IFCHR not in opened
     assert not result.ok
-    assert any(
-        diagnostic.code == "unreadable-file" and diagnostic.path == "lakefile.toml"
-        for diagnostic in result.diagnostics
-    )
+    assert "lakefile.toml" in _unreadable(result)
 
 
 @pytest.mark.skipif(
@@ -1993,9 +1981,7 @@ def test_link_target_that_must_be_a_directory_never_reads_a_file(tmp_path: Path,
 
     result = inspect_project(root)
 
-    assert [diagnostic.path for diagnostic in result.diagnostics if diagnostic.code == "unreadable-file"] == [
-        "lean-toolchain"
-    ]
+    assert _unreadable(result) == ["lean-toolchain"]
     assert "project-changed-during-inspection" not in _codes(result)
 
 
@@ -2039,9 +2025,7 @@ def test_link_through_a_link_with_an_empty_target_is_unreadable(tmp_path: Path) 
 
     result = inspect_project(root)
 
-    assert [diagnostic.path for diagnostic in result.diagnostics if diagnostic.code == "unreadable-file"] == [
-        "lean-toolchain"
-    ]
+    assert _unreadable(result) == ["lean-toolchain"]
     assert "project-changed-during-inspection" not in _codes(result)
 
 
@@ -2069,8 +2053,7 @@ def test_link_chains_are_followed_as_far_as_the_kernel_follows_them(tmp_path: Pa
 
     result = inspect_project(root)
 
-    unreadable = [diagnostic.path for diagnostic in result.diagnostics if diagnostic.code == "unreadable-file"]
-    assert unreadable == (["lean-toolchain"] if extra else [])
+    assert _unreadable(result) == (["lean-toolchain"] if extra else [])
     assert "project-changed-during-inspection" not in _codes(result)
 
 
