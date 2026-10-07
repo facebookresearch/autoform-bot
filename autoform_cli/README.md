@@ -83,9 +83,10 @@ durable ID survives article moves, and article claims keep independent workers
 from editing the same note. Every command that loads the graph, including
 `autoform check`, rejects malformed, empty, symlinked, or orphaned notes; assign
 the article ID before creating its note. Delete the file once its article is
-proved. The directory is hidden, so current and older renderers omit it from the
-site and publication hash without requiring an `AUTOFORM_REF` migration;
-`autoform audit` reports a note left behind after proof.
+proved; for a container, delete it once every formalizable descendant is proved.
+The directory is hidden, so current and older renderers omit it from the site
+and publication hash without requiring an `AUTOFORM_REF` migration; `autoform
+audit` reports a note left behind after that point.
 
 ## Assertions and derived status
 

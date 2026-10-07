@@ -136,7 +136,7 @@ def test_audit_rejects_implementation_notes_left_after_proof(tmp_path: Path) -> 
     assert findings == [
         (
             "stale-implementation-note",
-            "proved article still has an implementation note; delete the note",
+            "completed implementation scope still has a note; delete the note",
         )
     ]
 
@@ -161,6 +161,32 @@ def test_audit_allows_implementation_notes_while_work_is_unproved(tmp_path: Path
     (notes / f"{article_id}.md").write_text("next route\n", encoding="utf-8")
 
     assert audit_blueprint(blueprint).clean
+
+
+@pytest.mark.parametrize(("proof_complete", "stale"), [(False, False), (True, True)])
+def test_container_note_is_stale_when_its_formalizable_subtree_is_proved(
+    tmp_path: Path, proof_complete: bool, stale: bool
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    container_id = "af_0123456789abcdef01234567"
+    _article(blueprint, "chapter/README.md", article_id=container_id)
+    child_metadata = {
+        "article_id": "af_89abcdef0123456701234567",
+        "declaration": "theorem",
+        "statement": "formalized",
+        "lean": "Project.result",
+    }
+    if proof_complete:
+        child_metadata["proof"] = "formalized"
+    _article(blueprint, "chapter/result.md", **child_metadata)
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    (notes / f"{container_id}.md").write_text("chapter route\n", encoding="utf-8")
+
+    codes = {finding.code for finding in audit_blueprint(blueprint).findings}
+
+    assert ("stale-implementation-note" in codes) is stale
 
 
 @pytest.mark.parametrize(

@@ -177,20 +177,32 @@ def audit_graph(
         if node.parent is not None:
             contained.setdefault(node.parent, []).append(node.id)
 
+    def formalizable_descendants(node_id: str) -> tuple[str, ...]:
+        descendants: list[str] = []
+        for child_id in contained.get(node_id, ()):
+            if graph.nodes[child_id].formalizable:
+                descendants.append(child_id)
+            descendants.extend(formalizable_descendants(child_id))
+        return tuple(descendants)
+
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
         children = contained.get(node_id, ())
         article = _read_article(node.path)
 
-        if node.article_id is not None and derived[node_id].proved:
+        descendants = formalizable_descendants(node_id) if children else ()
+        implementation_done = derived[node_id].proved or (
+            bool(descendants) and all(derived[child_id].proved for child_id in descendants)
+        )
+        if node.article_id is not None and implementation_done:
             note = graph.blueprint_dir / IMPLEMENTATION_NOTES_DIR / f"{node.article_id}.md"
             if note.is_file():
                 findings.append(
                     AuditFinding(
                         article_path,
                         "stale-implementation-note",
-                        "proved article still has an implementation note; delete the note",
+                        "completed implementation scope still has a note; delete the note",
                     )
                 )
 
