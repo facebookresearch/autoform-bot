@@ -113,15 +113,6 @@ def test_elan_release_aliases_match_the_catalog(tmp_path: Path, toolchain: str) 
     assert result.compatibility.release == "lean-v4.32.2-mathlib-v4.32.2"
 
 
-def test_git_url_scheme_and_host_case_do_not_change_the_repository(tmp_path: Path) -> None:
-    result = inspect_project(
-        _project(tmp_path, manifest=(_mathlib(url="HTTPS://GITHUB.COM/leanprover-community/mathlib4"),))
-    )
-
-    assert result.compatibility.status == "supported"
-    assert result.compatibility.release == "lean-v4.32.2-mathlib-v4.32.2"
-
-
 def test_json_report_has_a_stable_shape(tmp_path: Path) -> None:
     payload = json.loads(inspect_project(_project(tmp_path)).to_json())
 
@@ -145,11 +136,22 @@ def test_json_report_has_a_stable_shape(tmp_path: Path) -> None:
     }
 
 
-@pytest.mark.parametrize("url", [MATHLIB_URL + ".git", MATHLIB_URL + "/"])
-def test_equivalent_mathlib_url_spellings_match(tmp_path: Path, url: str) -> None:
-    result = inspect_project(_project(tmp_path, manifest=(_mathlib(url=url),)))
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"url": "HTTPS://GITHUB.COM/leanprover-community/mathlib4"},
+        {"url": MATHLIB_URL + ".git"},
+        {"url": MATHLIB_URL + "/"},
+        {"subDir": "./"},
+        {"rev": COMMIT.upper()},
+    ],
+    ids=["url-scheme-host-case", "url-dot-git", "url-trailing-slash", "subdir-current-directory", "uppercase-commit"],
+)
+def test_equivalent_lock_spellings_match_the_catalog(tmp_path: Path, fields: dict) -> None:
+    result = inspect_project(_project(tmp_path, manifest=(_mathlib(**fields),)))
 
     assert result.compatibility.status == "supported"
+    assert result.compatibility.release == "lean-v4.32.2-mathlib-v4.32.2"
 
 
 def test_fork_with_the_catalog_commit_is_unlisted(tmp_path: Path) -> None:
@@ -414,19 +416,6 @@ def test_lakes_default_extensionless_config_resolves_to_mathlibs_lakefile_lean(
     assert result.compatibility.status == "supported"
 
 
-def test_lakes_explicit_current_directory_subdir_is_the_repository_root(tmp_path: Path) -> None:
-    result = inspect_project(_project(tmp_path, manifest=(_mathlib(subDir="./"),)))
-
-    assert result.compatibility.status == "supported"
-    assert result.compatibility.release == "lean-v4.32.2-mathlib-v4.32.2"
-
-
-def test_uppercase_commit_is_the_same_commit(tmp_path: Path) -> None:
-    result = inspect_project(_project(tmp_path, manifest=(_mathlib(rev=COMMIT.upper()),)))
-
-    assert result.compatibility.status == "supported"
-
-
 def test_url_credentials_are_redacted_and_never_match(tmp_path: Path, capsys) -> None:
     secret = "https://user:hunter2@github.com/leanprover-community/mathlib4"
     lakefile = LAKEFILE.replace('scope = "leanprover-community"', f'git = "{secret}"')
@@ -631,15 +620,8 @@ def test_null_or_absent_packages_mean_no_packages(tmp_path: Path, packages: str)
     assert result.compatibility.status == "indeterminate"
 
 
-def test_integer_manifest_versions_are_read(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    _write_manifest(root, _mathlib(), version=7)
-
-    assert inspect_project(root).compatibility.status == "supported"
-
-
-@pytest.mark.parametrize("version", ["1.3.0", "1.9.0"])
-def test_newer_1x_manifest_versions_are_read(tmp_path: Path, version: str) -> None:
+@pytest.mark.parametrize("version", [7, "1.3.0", "1.9.0"])
+def test_integer_and_newer_1x_manifest_versions_are_read(tmp_path: Path, version: object) -> None:
     root = _project(tmp_path)
     _write_manifest(root, _mathlib(), version=version)
 
@@ -942,15 +924,6 @@ def test_empty_toml_names_use_lakes_simple_name_fallback(tmp_path: Path) -> None
     assert result.lake.targets[0].name == ""
 
 
-def test_duplicate_target_names_are_compared_as_lean_names(tmp_path: Path) -> None:
-    lakefile = 'name = "E"\n[[lean_lib]]\nname = "A"\n[[lean_exe]]\nname = "«A»"\n'
-
-    result = inspect_project(_project(tmp_path, lakefile=lakefile))
-
-    assert not result.ok
-    assert "invalid-lakefile-toml" in _codes(result)
-
-
 @pytest.mark.parametrize(
     "targets",
     [
@@ -998,10 +971,10 @@ def test_arbitrary_precision_numeric_names_are_compared_without_python_ints(tmp_
     assert "invalid-lakefile-toml" in _codes(result)
 
 
-@pytest.mark.parametrize(("plain", "escaped"), [("", "«»"), ("a b", "«a b»"), ("[anonymous]", "«[anonymous]»")])
-def test_toml_simple_name_fallback_matches_the_equivalent_escape(
-    tmp_path: Path, plain: str, escaped: str
-) -> None:
+@pytest.mark.parametrize(
+    ("plain", "escaped"), [("A", "«A»"), ("", "«»"), ("a b", "«a b»"), ("[anonymous]", "«[anonymous]»")]
+)
+def test_duplicate_target_names_are_compared_as_lean_names(tmp_path: Path, plain: str, escaped: str) -> None:
     lakefile = f'name = "E"\n[[lean_lib]]\nname = "{plain}"\n[[lean_exe]]\nname = "{escaped}"\n'
 
     result = inspect_project(_project(tmp_path, lakefile=lakefile))
