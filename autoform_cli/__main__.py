@@ -352,7 +352,8 @@ def _init(args: argparse.Namespace) -> int:
     for path in result.written:
         print(f"  + {path}")
     for path in result.skipped:
-        note = "no Autoform ref to pin" if result.unpinned and ".github" in path else "exists, left alone"
+        needs_pin = result.unpinned and path != ".github/CODEOWNERS.autoform.example" and ".github" in path
+        note = "no Autoform ref to pin" if needs_pin else "exists, left alone"
         print(f"  = {path} ({note})")
     print("Next: describe the project in blueprint/README.md, then add chapters "
           "as roadmap/<chapter>/README.md.")

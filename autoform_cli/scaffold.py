@@ -62,6 +62,7 @@ _REQUIRED_TEMPLATE_PATHS = frozenset(
         "blueprint/javascripts/mathjax.js",
         "blueprint/roadmap/README.md",
         "blueprint/sources/README.md",
+        "github/CODEOWNERS.autoform.example",
         "github/autoform_audit.py",
         "github/workflows/autoform-verify.yml",
         "github/workflows/blueprint-pages.yml",
@@ -70,7 +71,6 @@ _REQUIRED_TEMPLATE_PATHS = frozenset(
         "theme/main.html",
     }
 )
-
 #: Where `claude plugin install` records the marketplace each plugin came from.
 _PLUGIN_REGISTRY = Path.home() / ".claude" / "plugins" / "known_marketplaces.json"
 
@@ -771,7 +771,11 @@ def _scaffold_plan(
     skipped: list[str] = []
     for relative, template_content, template_mode in templates:
         destination = _destination(relative)
-        if not autoform_ref and relative.startswith("github/"):
+        if (
+            not autoform_ref
+            and relative.startswith("github/")
+            and relative != "github/CODEOWNERS.autoform.example"
+        ):
             skipped.append(destination)
             continue
         if Path(relative).suffix in {".js", ".html"} or relative.endswith("gitignore"):

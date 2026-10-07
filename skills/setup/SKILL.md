@@ -116,6 +116,12 @@ Markdown DAG, builds Lean, rejects unfinished or unsafe proofs, and audits
 theorem axioms on pull requests, and `blueprint-pages.yml`, which validates the
 DAG and its `lean:` declarations, renders the blueprint, builds MkDocs, and
 deploys GitHub Pages. Pass `--autoform-ref` to pin them at an immutable commit.
+It also writes `.github/CODEOWNERS.autoform.example`. GitHub does not read it,
+so it cannot mask active owners. Do not guess owners or activate it silently.
+With names the user gives, merge its rules into the first CODEOWNERS file
+GitHub reads, then require code-owner review, dismiss stale approvals, and
+audit bypasses. Report that new rules cannot protect their own activation
+unless equivalent coverage already exists on the pull request's base branch.
 
 After it runs, fill in what only a human or a source can supply: the project
 description in `blueprint/README.md`, the coverage contract, and a verified

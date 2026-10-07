@@ -104,7 +104,9 @@ def test_creation_omits_workflows_without_a_usable_checkout_pin(
     result = create_project(target, package="Project", release_id=_RELEASE)
 
     assert not result.workflows_pinned
-    assert not (target / ".github").exists()
+    assert (target / ".github/CODEOWNERS.autoform.example").is_file()
+    assert not (target / ".github/autoform_audit.py").exists()
+    assert not (target / ".github/workflows").exists()
 
 
 def test_an_explicit_source_never_inherits_the_checkout_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,7 +119,9 @@ def test_an_explicit_source_never_inherits_the_checkout_commit(tmp_path: Path, m
     result = create_project(target, package="Project", release_id=_RELEASE, autoform_source=_SOURCE)
 
     assert not result.workflows_pinned
-    assert not (target / ".github").exists()
+    assert (target / ".github/CODEOWNERS.autoform.example").is_file()
+    assert not (target / ".github/autoform_audit.py").exists()
+    assert not (target / ".github/workflows").exists()
 
 
 @pytest.mark.parametrize(

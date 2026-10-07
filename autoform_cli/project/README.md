@@ -98,7 +98,7 @@ wants to point something out.
 | `target-unreadable` | error | The target path cannot be resolved. |
 | `project-not-found` | error | No directory at or above the target has a `lakefile.lean`, `lakefile.toml` or `lean-toolchain`. |
 | `project-changed-during-inspection` | error | The decision files kept changing across every retry, so no single snapshot was read. |
-| `unreadable-file` | error | A decision file is not a regular, readable UTF-8 file of at most 1 MiB. |
+| `unreadable-file` | error | A decision file is not a regular, readable UTF-8 file of at most 1 MiB. Symlinked decision files and a symlinked `.lake` are followed, as Lake follows them; a decision-file link that dangles, loops, exceeds the kernel's expanded-path buffer, or ends on anything other than a regular file is unreadable. A present non-directory `.lake` makes its override path unreadable, not absent. |
 | `missing-lake-config` | error | There is neither `lakefile.toml` nor `lakefile.lean`. |
 | `invalid-lakefile-toml` | error | `lakefile.toml` is not TOML that Autoform can decode safely, including a Lake-valid file beyond the bounded parser's resource limits, or Lake would refuse a field that the report reads (a bad name or version, a malformed require, or a target entry or name Lake rejects). |
 | `missing-lean-toolchain` | error | There is no `lean-toolchain`. |
