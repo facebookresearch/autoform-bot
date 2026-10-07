@@ -35,6 +35,7 @@ _EXPECTED = {
     "blueprint/javascripts/mathjax.js",
     "blueprint/roadmap/README.md",
     "blueprint/sources/README.md",
+    "hooks/title_only_search.py",
     "mkdocs.yml",
     "theme/main.html",
 }
@@ -238,7 +239,13 @@ def test_scaffolded_vault_has_a_valid_incomplete_coverage_contract(tmp_path: Pat
 
     assert issues == ()
     assert coverage is not None
-    assert coverage.counts == {"MAPPED": 1, "DECOMPOSED": 0, "DEFERRED": 0, "OUT": 0}
+    assert coverage.counts == {
+        "MAPPED": 1,
+        "DECOMPOSED": 0,
+        "INVENTORIED": 0,
+        "DEFERRED": 0,
+        "OUT": 0,
+    }
     assert not coverage.complete
 
 
@@ -272,12 +279,81 @@ def test_substitutions_reach_the_site_config(tmp_path: Path) -> None:
     # Quoted: a title is a YAML scalar, not bare text pasted after a colon.
     assert 'site_name: "Finite Flat"' in mkdocs
     assert 'repo_url: "https://example.test/repo"' in mkdocs
+    assert "- navigation.prune" in mkdocs
 
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
     assert 'AUTOFORM_SOURCE: "https://example.test/autoform.git"' in verify
     assert f'AUTOFORM_REF: "{"0" * 40}"' in verify
     assert '"git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in verify
     assert "python3 .github/autoform_audit.py" in verify
+
+
+def test_scaffolded_search_index_contains_one_title_only_record_per_page(
+    tmp_path: Path,
+) -> None:
+    """Search must stay useful without duplicating whole theorem pages.
+
+    Autoform publishes every statement inside its chapter page. Full or
+    section indexing therefore creates many records for one page and embeds
+    theorem bodies in ``search_index.json``. Build the shipped config so this
+    checks MkDocs' actual artifact rather than just the YAML spelling.
+    """
+
+    project = tmp_path / "project"
+    scaffold_project(project, title="Search probe")
+    docs = project / "site-src"
+    chapter = docs / "roadmap/chapter"
+    chapter.mkdir(parents=True)
+    (docs / "README.md").write_text(
+        "# Search landing\n\n"
+        "Landing body sentinel must not enter the index.\n\n"
+        "## Landing section sentinel\n\n"
+        "More landing body.\n",
+        encoding="utf-8",
+    )
+    (chapter / "README.md").write_text(
+        "# Search chapter\n\n"
+        "Chapter body sentinel must not enter the index.\n\n"
+        "## Chapter section sentinel\n\n"
+        "More chapter body.\n",
+        encoding="utf-8",
+    )
+    (docs / "SUMMARY.md").write_text(
+        "---\n"
+        "search:\n"
+        "  exclude: true\n"
+        "---\n\n"
+        "- [Home](README.md)\n"
+        "- Book\n"
+        "    - [Chapter](roadmap/chapter/README.md)\n",
+        encoding="utf-8",
+    )
+
+    # Use the API so strictness covers the config and build without coupling
+    # this artifact assertion to unrelated CLI startup notices.
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    config = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
+    build(config)
+
+    index = json.loads((project / "site/search/search_index.json").read_text(encoding="utf-8"))
+    records = index["docs"]
+    assert {record["title"] for record in records} == {"Search landing", "Search chapter"}
+    assert len(records) == 2
+    assert len({record["location"].split("#", 1)[0] for record in records}) == len(records)
+    assert all("#" not in record["location"] for record in records)
+    assert all(not record.get("text") for record in records)
+
+    serialized = json.dumps(index)
+    assert len(serialized.encode("utf-8")) <= 1024 * len(records)
+    for excluded in (
+        "Landing body sentinel",
+        "Landing section sentinel",
+        "Chapter body sentinel",
+        "Chapter section sentinel",
+    ):
+        assert excluded not in serialized
 
 
 def test_no_placeholder_survives_anywhere(tmp_path: Path) -> None:

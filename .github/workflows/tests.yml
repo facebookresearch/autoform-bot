@@ -26,6 +26,24 @@ jobs:
       - run: uv run pytest -q
       - run: make check-example
 
+  browser:
+    name: WebKit dependency explorer regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          python-version: "3.13"
+          enable-cache: true
+      - name: Install locked browser test environment
+        run: uv sync --frozen --extra dev --extra browser
+      - name: Install WebKit and Linux system dependencies
+        run: uv run --frozen --extra browser playwright install --with-deps webkit
+      - name: Run dependency explorer browser regressions
+        run: uv run --frozen --extra dev --extra browser pytest -q tests/test_dag_viewer_browser.py
+
   real-lean:
     name: real Lean (fixture toolchain)
     runs-on: ubuntu-latest
@@ -83,7 +101,7 @@ jobs:
           AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
 
   windows-hardening:
-    name: Windows inspection, subprocess, and publication hardening
+    name: Windows capability, inspection, subprocess, and publication hardening
     runs-on: windows-latest
     timeout-minutes: 15
     steps:

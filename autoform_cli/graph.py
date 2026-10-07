@@ -10,23 +10,28 @@ a second graph file that could drift from the book.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, fields, replace
+from html import unescape
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .lean import declaration_names
-
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _LINK = re.compile(r"(?<!!)\[[^\]]+\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+[^)]*)?\)")
 _HTML_COMMENT = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
 _INLINE_CODE = re.compile(r"(`+).*?\1")
+_MARKDOWN_LINK_TEXT = re.compile(r"!?\[([^\]]+)\]\([^)]*\)")
+_HTML_TAG = re.compile(r"<[^>]+>")
 ARTICLE_ID_PATTERN = re.compile(r"af_[0-9a-f]{24}\Z")
 _FRONTMATTER_KEYS = frozenset(
     {
         "article_id",
+        "area",
+        "catalog",
         "declaration",
         "lean",
         "statement",
@@ -44,6 +49,9 @@ _FORMALIZED = "formalized"
 _RETRACTED = "retracted"
 _TRUE = frozenset({"true", "yes"})
 _FALSE = frozenset({"false", "no"})
+_CATALOG_DECLARATION_KEYS = frozenset(
+    {"declaration", "mathlib", "mathlib_declaration", "mathlib_file"}
+)
 
 #: ``## Depends on`` carries the prerequisites needed to *state* a node;
 #: ``## Proof depends on`` carries the extra prerequisites its *proof* needs.
@@ -51,6 +59,8 @@ _FALSE = frozenset({"false", "no"})
 _STATEMENT_SECTION = "depends on"
 _PROOF_SECTION = "proof depends on"
 _SOURCES_SECTION = "sources"
+ATLAS_SCHEMA = "autoform-atlas/v1"
+_MAX_ATLAS_BYTES = 1_000_000
 
 
 class GraphValidationError(ValueError):
@@ -97,11 +107,40 @@ class Node:
     depth: int = 0
     article_id: str | None = None
     source_sha256: str | None = None
+    catalog: str | None = None
+    summary: str | None = None
+    area: str | None = None
 
     @property
     def formalizable(self) -> bool:
         """Whether this article names a concrete Lean declaration."""
         return self.declaration is not None
+
+
+
+def _node_getstate(node: Node) -> list[object]:
+    """Keep the public slotted record append-compatible for old pickles."""
+
+    return [getattr(node, item.name) for item in fields(node)]
+
+
+def _node_setstate(node: Node, state: list[object]) -> None:
+    node_fields = fields(node)
+    if len(state) > len(node_fields):
+        raise ValueError("Node pickle has unsupported fields")
+    for item, value in zip(node_fields, state, strict=False):
+        object.__setattr__(node, item.name, value)
+    for item in node_fields[len(state) :]:
+        if item.default is MISSING:
+            raise ValueError(f"Node pickle is missing required field {item.name!r}")
+        object.__setattr__(node, item.name, item.default)
+
+
+# Python 3.10's frozen+slots dataclass transformation overwrites methods defined
+# in the class body. Assign after decoration so every supported Python uses the
+# same append-compatible state contract.
+Node.__getstate__ = _node_getstate  # type: ignore[method-assign]
+Node.__setstate__ = _node_setstate  # type: ignore[method-assign]
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +172,7 @@ class _ParsedNode:
     proof_targets: tuple[str, ...]
     source_targets: tuple[str, ...]
     metadata: dict[str, str]
+    summary: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +263,20 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             dependency for dependency in proof_dependencies if dependency not in dependencies
         )
         metadata = parsed_node.metadata
+        if metadata.get("catalog") is not None:
+            if (
+                metadata.get("statement") == _FORMALIZED
+                or metadata.get("proof") == _FORMALIZED
+            ) and not declaration_names(metadata.get("lean", "")):
+                issues.append(
+                    f"{parsed_node.id}: formalized module catalog must list exact "
+                    "compiled names in 'lean'"
+                )
+            if not _catalog_has_local_ledger(parsed_node, blueprint):
+                issues.append(
+                    f"{parsed_node.id}: module catalog must link a declaration ledger "
+                    "under blueprint/sources from its '## Sources' section"
+                )
         nodes[parsed_node.id] = Node(
             id=parsed_node.id,
             title=parsed_node.title,
@@ -232,6 +286,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             proof_dependencies=tuple(proof_dependencies),
             kind="article",
             declaration=metadata.get("declaration"),
+            catalog=metadata.get("catalog"),
             lean=metadata.get("lean"),
             statement_formalized=metadata.get("statement") == _FORMALIZED,
             statement_retracted=metadata.get("statement") == _RETRACTED,
@@ -247,8 +302,11 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             depth=_article_depth(parsed_node.id, parents),
             article_id=metadata.get("article_id"),
             source_sha256=source_hashes[parsed_node.id],
+            summary=parsed_node.summary,
+            area=metadata.get("area"),
         )
 
+    _apply_atlas_manifest(blueprint, nodes, issues)
     if not issues:
         issues.extend(_find_cycles(nodes))
     if not issues:
@@ -256,6 +314,84 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     if issues:
         raise GraphValidationError(issues)
     return Graph(blueprint_dir=blueprint, nodes=nodes, open_statements=open_statements)
+
+
+def _apply_atlas_manifest(
+    blueprint: Path,
+    nodes: dict[str, Node],
+    issues: list[str],
+) -> None:
+    """Apply an optional authored taxonomy without coupling it to file layout."""
+    path = blueprint / "atlas.json"
+    if path.is_symlink():
+        issues.append("atlas.json: taxonomy must be a regular file inside the blueprint")
+        return
+    if not path.exists():
+        return
+    if not path.is_file():
+        issues.append("atlas.json: taxonomy must be a regular file inside the blueprint")
+        return
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        issues.append(f"atlas.json: cannot read taxonomy: {error}")
+        return
+    if len(raw) > _MAX_ATLAS_BYTES:
+        issues.append(f"atlas.json: exceeds {_MAX_ATLAS_BYTES} bytes")
+        return
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        issues.append(f"atlas.json: invalid JSON: {error}")
+        return
+    if not isinstance(payload, dict) or payload.get("schema") != ATLAS_SCHEMA:
+        issues.append(f"atlas.json: schema must be {ATLAS_SCHEMA!r}")
+        return
+    areas = payload.get("areas")
+    if not isinstance(areas, dict):
+        issues.append("atlas.json: 'areas' must be an object")
+        return
+    assigned: dict[str, str] = {}
+    for area, node_ids in areas.items():
+        if not isinstance(area, str) or not area.strip() or not isinstance(node_ids, list):
+            issues.append("atlas.json: each area must be a non-empty string mapped to an array")
+            continue
+        for node_id in node_ids:
+            if not isinstance(node_id, str) or node_id not in nodes:
+                issues.append(f"atlas.json: unknown roadmap node {node_id!r}")
+                continue
+            previous = assigned.get(node_id)
+            if previous is not None:
+                issues.append(f"atlas.json: node {node_id!r} belongs to both {previous!r} and {area!r}")
+                continue
+            authored = nodes[node_id].area
+            if authored is not None and authored != area:
+                issues.append(
+                    f"atlas.json: node {node_id!r} conflicts with its frontmatter area {authored!r}"
+                )
+                continue
+            assigned[node_id] = area
+    for node_id, area in assigned.items():
+        nodes[node_id] = replace(nodes[node_id], area=area)
+
+
+def _catalog_has_local_ledger(node: _ParsedNode, blueprint: Path) -> bool:
+    sources = (blueprint / "sources").resolve()
+    for target in node.source_targets:
+        split = urlsplit(target)
+        if split.scheme or split.netloc or split.query or not split.path:
+            continue
+        path = Path(unquote(split.path))
+        if path.is_absolute():
+            continue
+        try:
+            candidate = (node.path.parent / path).resolve()
+            candidate.relative_to(sources)
+        except (OSError, ValueError):
+            continue
+        if candidate.is_file():
+            return True
+    return False
 
 
 def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
@@ -441,8 +577,56 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         tuple(targets[_PROOF_SECTION]),
         tuple(targets[_SOURCES_SECTION]),
         metadata,
+        _extract_summary(body),
     )
     return parsed, []
+
+
+def _extract_summary(body: str, *, limit: int = 420) -> str | None:
+    """Return the first reader-facing prose paragraph from a roadmap article."""
+    paragraph: list[str] = []
+    excluded = False
+    fence: tuple[str, int] | None = None
+    for raw in body.splitlines():
+        fence_match = _FENCE.match(raw)
+        if fence_match:
+            marker = fence_match.group(1)
+            if fence is None:
+                fence = (marker[0], len(marker))
+            elif marker[0] == fence[0] and len(marker) >= fence[1]:
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        heading = _HEADING.match(raw)
+        if heading:
+            if paragraph:
+                break
+            excluded = len(heading.group(1)) == 2 and heading.group(2).strip().casefold() in {
+                _STATEMENT_SECTION,
+                _PROOF_SECTION,
+                _SOURCES_SECTION,
+            }
+            continue
+        text = raw.strip()
+        if not text:
+            if paragraph:
+                break
+            continue
+        if excluded or text.startswith(("- ", "* ", "+ ", "> ", "|", "$$", "\\[", "<div")):
+            continue
+        text = _MARKDOWN_LINK_TEXT.sub(r"\1", text)
+        text = _HTML_TAG.sub("", text).replace("**", "").replace("__", "")
+        text = unescape(text).strip()
+        if text:
+            paragraph.append(text)
+    if not paragraph:
+        return None
+    summary = " ".join(" ".join(paragraph).split())
+    if len(summary) <= limit:
+        return summary
+    clipped = summary[: limit - 1].rsplit(" ", 1)[0]
+    return (clipped or summary[: limit - 1]).rstrip() + "…"
 
 
 def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], int, list[str]]:
@@ -480,6 +664,13 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
             continue
         metadata[key] = value
 
+    if "catalog" in metadata:
+        for key in sorted(_CATALOG_DECLARATION_KEYS.intersection(metadata)):
+            issues.append(
+                f"{node_id}: 'catalog' cannot be combined with declaration-specific "
+                f"frontmatter key {key!r}"
+            )
+
     if metadata.get("statement") == _RETRACTED:
         if "lean" not in metadata:
             issues.append(
@@ -496,7 +687,11 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
     if metadata.get("proof") == _FORMALIZED and metadata.get("statement") not in {_FORMALIZED, _RETRACTED}:
         issues.append(f"{node_id}: proof: formalized needs statement: formalized")
     formalized = [key for key in ("statement", "proof") if metadata.get(key) == _FORMALIZED]
-    if formalized and not declaration_names(metadata.get("lean", "")):
+    if (
+        formalized
+        and metadata.get("catalog") is None
+        and not declaration_names(metadata.get("lean", ""))
+    ):
         issues.append(f"{node_id}: {formalized[0]}: formalized needs the lean: declaration that formalizes it")
     return metadata, end + 1, issues
 
@@ -509,6 +704,10 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
         if not ARTICLE_ID_PATTERN.fullmatch(value):
             return value, f"{location}: malformed article_id {value!r}"
         return value, None
+    if key == "catalog":
+        if folded != "module":
+            return value, f"{location}: 'catalog' accepts only 'module'"
+        return folded, None
     if key == "statement":
         if folded not in {_FORMALIZED, _RETRACTED}:
             return value, (

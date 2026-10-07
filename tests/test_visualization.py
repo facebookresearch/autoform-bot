@@ -33,7 +33,7 @@ def _write_node(
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def test_export_writes_a_mermaid_page_linking_to_markdown(tmp_path: Path) -> None:
+def test_export_writes_a_bounded_project_map_linking_to_markdown(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _write_node(blueprint / "roadmap" / "foundations" / "README.md", "Foundations")
     _write_node(blueprint / "roadmap" / "foundations" / "base lemma.md", "Base lemma")
@@ -49,13 +49,14 @@ def test_export_writes_a_mermaid_page_linking_to_markdown(tmp_path: Path) -> Non
     assert output == (blueprint / "dependencies.md").resolve()
     assert "```mermaid" in document
     assert "graph LR" in document
-    # Handles are assigned in sorted order, so pin the links and the edge by
-    # their targets rather than by whichever index a node happens to get.
+    # Obsidian gets a bounded scope projection rather than the unbounded full
+    # graph that exceeds Mermaid's hard text and edge limits.
     handles = dict(re.findall(r'click (n\d+) "([^"]+)"', document))
-    lemma = next(k for k, v in handles.items() if v == "roadmap/foundations/base lemma.md")
-    main = next(k for k, v in handles.items() if v == "roadmap/main.md")
-    assert f"  {lemma} --> {main}" in document
-    assert "Main <result>" in document
+    foundations = next(k for k, v in handles.items() if v == "roadmap/foundations/README.md")
+    roadmap = next(k for k, v in handles.items() if v == "roadmap/main.md")
+    assert f"  {foundations} --> {roadmap}" in document
+    assert "Foundations" in document
+    assert "collapsed into 2 top-level scopes" in document
 
 
 def test_diagram_colours_and_shapes_follow_derived_status(tmp_path: Path) -> None:
@@ -77,9 +78,8 @@ def test_diagram_colours_and_shapes_follow_derived_status(tmp_path: Path) -> Non
 
     document = export_graph(blueprint).read_text(encoding="utf-8")
 
-    # Definitions are rectangles, propositions are rounded.
-    assert 'n0["Base"]:::fully_proved' in document
-    assert 'n1("Top"):::fully_proved' in document
+    # Fine nodes are collapsed; status counts remain visible on the scope.
+    assert 'n0["Roadmap<br/><small>2 items · 2 fully proved</small>"]:::scope' in document
     # The vault copy carries its palette inline; Obsidian has no init script.
     assert f"classDef fully_proved fill:{_state('fully_proved').fill}" in document
     assert '<span class="bp-swatch bp-swatch-fully_proved">' in document
@@ -103,16 +103,20 @@ def test_the_published_graph_defers_its_palette_to_the_theme(tmp_path: Path) -> 
 
 def test_proof_only_dependencies_are_dashed(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
-    _write_node(blueprint / "roadmap" / "tool.md", "Tool")
-    (blueprint / "roadmap" / "result.md").write_text(
-        "---\n---\n\n# Result\n\n## Proof depends on\n\n- [Tool](tool.md)\n",
+    _write_node(blueprint / "roadmap" / "tools" / "README.md", "Tools")
+    _write_node(blueprint / "roadmap" / "tools" / "tool.md", "Tool")
+    result = blueprint / "roadmap" / "results" / "result.md"
+    result.parent.mkdir(parents=True)
+    _write_node(result.parent / "README.md", "Results")
+    result.write_text(
+        "---\n---\n\n# Result\n\n## Proof depends on\n\n- [Tool](../tools/tool.md)\n",
         encoding="utf-8",
     )
 
     document = export_graph(blueprint).read_text(encoding="utf-8")
 
-    assert "  n1 -.-> n0" in document
-    assert "  n1 --> n0" not in document
+    assert "-.->" in document
+    assert " --> " not in document
 
 
 def test_green_stops_at_an_unproved_prerequisite(tmp_path: Path) -> None:
@@ -151,7 +155,9 @@ def test_a_conditional_proof_has_its_own_colour_and_legend_entry(tmp_path: Path)
 
     document = export_graph(blueprint).read_text(encoding="utf-8")
 
-    assert '("Top"):::conditional' in document
+    # The bounded vault map collapses fine nodes into their top-level scope,
+    # but it must keep the conditional state visible in that scope's counts.
+    assert "1 conditional" in document
     assert f"classDef conditional fill:{_state('conditional').fill}" in document
     assert '<span class="bp-swatch bp-swatch-conditional">' in document
     assert "Proof compiles, but rests on an open statement without a recorded Lean proof." in document
@@ -313,6 +319,34 @@ def test_the_vault_gets_a_structure_page_obsidian_can_read(tmp_path: Path) -> No
     # It never lists itself, and never the other generated view.
     assert "structure.md)" not in page
     assert "dependencies.md)" not in page
+
+
+def test_vault_views_label_checked_catalogs_as_module_inventories(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    ledger = blueprint / "sources/catalog.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Catalog declarations\n", encoding="utf-8")
+    catalog = blueprint / "roadmap/catalog.md"
+    _write_node(
+        catalog,
+        "Existing module",
+        catalog="module",
+        lean="Existing.module",
+        statement="formalized",
+        proof="formalized",
+    )
+    with catalog.open("a", encoding="utf-8") as stream:
+        stream.write("\n## Sources\n\n- [Ledger](../sources/catalog.md)\n")
+
+    graph_page = export_graph(blueprint).read_text(encoding="utf-8")
+    structure_page = export_structure(blueprint).read_text(encoding="utf-8")
+
+    assert "1 item · 1 inventory checked" in graph_page
+    assert "fully proved" not in graph_page
+    assert (
+        "[Existing module](roadmap/catalog.md) · module inventory · inventory checked"
+        in structure_page
+    )
 
 
 def test_generated_structure_can_be_refreshed(tmp_path: Path) -> None:

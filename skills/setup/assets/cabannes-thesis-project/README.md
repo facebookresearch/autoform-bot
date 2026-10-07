@@ -14,9 +14,10 @@ Developed with [AutoformBot](https://github.com/facebookresearch/autoform-bot).
   sources, and a seven-node theorem DAG spanning two formalization chapters.
 - `mkdocs.yml` builds the `autoform render` output as a leanblueprint-styled
   mathematical book: an aggregate progress view, numbered statement boxes,
-  direct Lean source icons, collapsed dependency details, and project, chapter,
-  local-context, and full-DAG Mermaid maps. The render also records a
-  deterministic, path-free `publication.json` manifest.
+  direct Lean source icons, collapsed dependency details, and one scalable
+  Canvas plus semantic-DOM explorer across project, chapter, nested-scope, and
+  full-DAG routes. Authored vault Mermaid remains supported. The render also
+  records a deterministic, path-free `publication.json` manifest.
 - `autoform-verify.yml` validates the DAG and Lean project on pull requests.
 - `blueprint-pages.yml` renders and deploys the blueprint with GitHub Pages.
 

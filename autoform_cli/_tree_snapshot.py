@@ -154,6 +154,8 @@ def _materialize_regular_files(
     directories: tuple[tuple[str, tuple[str, ...]], ...],
     files: tuple[tuple[str, tuple[str, ...], bytes], ...],
     placeholders: tuple[tuple[str, tuple[str, ...]], ...],
+    *,
+    verify_bytes: bool,
 ) -> None:
     """Create a snapshot using only retained directory descriptors."""
 
@@ -255,16 +257,27 @@ def _materialize_regular_files(
                 )
             )
 
-        _verify_materialized_snapshot(
-            descriptors[()],
-            root_identity,
-            directories,
-            files,
-            placeholders,
-            directory_identities,
-            directory_permissions,
-            created_files,
-        )
+        _tree_snapshot_checkpoint("before-materialization-final-verification", "")
+        if verify_bytes:
+            _verify_materialized_snapshot(
+                descriptors[()],
+                root_identity,
+                directories,
+                files,
+                placeholders,
+                directory_identities,
+                directory_permissions,
+                created_files,
+            )
+        else:
+            _verify_materialized_metadata(
+                descriptors,
+                directories,
+                files,
+                placeholders,
+                directory_identities,
+                created_files,
+            )
         parent.verify()
         _verify_named_directory(parent.descriptor, name, root_identity)
         succeeded = True
@@ -453,6 +466,55 @@ def _verify_materialized_snapshot(
             raise TreeSnapshotError("materialized file metadata changed before commit")
 
 
+def _verify_materialized_metadata(
+    descriptors: dict[tuple[str, ...], int],
+    directories: tuple[tuple[str, tuple[str, ...]], ...],
+    files: tuple[tuple[str, tuple[str, ...], bytes], ...],
+    placeholders: tuple[tuple[str, tuple[str, ...]], ...],
+    directory_identities: dict[tuple[str, ...], tuple[int, int, int]],
+    created_files: list[tuple[tuple[str, ...], tuple[int, ...]]],
+) -> None:
+    """Verify exact names, kinds and metadata without rereading captured bytes."""
+
+    expected_names: dict[tuple[str, ...], set[str]] = {
+        parts: set() for _relative, parts in directories
+    }
+    for _relative, parts in directories:
+        if parts:
+            expected_names.setdefault(parts[:-1], set()).add(parts[-1])
+    for _relative, parts, _data in files:
+        expected_names.setdefault(parts[:-1], set()).add(parts[-1])
+    for _relative, parts in placeholders:
+        expected_names.setdefault(parts[:-1], set()).add(parts[-1])
+
+    for parts, names in expected_names.items():
+        descriptor = descriptors.get(parts)
+        expected_identity = directory_identities.get(parts)
+        if descriptor is None or expected_identity is None:
+            raise TreeSnapshotError("materialized tree has a missing directory")
+        if _directory_entry_identity(os.fstat(descriptor)) != expected_identity:
+            raise TreeSnapshotError("materialized directory metadata changed before commit")
+        if tuple(sorted(os.listdir(descriptor))) != tuple(sorted(names)):
+            raise TreeSnapshotError("materialized tree changed before commit")
+        if parts:
+            parent_descriptor = descriptors.get(parts[:-1])
+            if parent_descriptor is None:
+                raise TreeSnapshotError("materialized tree has a missing directory")
+            _verify_named_directory(parent_descriptor, parts[-1], expected_identity)
+
+    for parts, expected_signature in created_files:
+        parent_descriptor = descriptors.get(parts[:-1])
+        if parent_descriptor is None:
+            raise TreeSnapshotError("materialized file has a missing parent")
+        observed = os.stat(
+            parts[-1],
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        if _stat_signature(observed) != expected_signature:
+            raise TreeSnapshotError("materialized file metadata changed before commit")
+
+
 def _cleanup_materialization(
     parent: RetainedDirectory | None,
     root_name: str,
@@ -630,16 +692,21 @@ class TreeSnapshot:
             _update_digest(digest, b"identity", relative, encoded)
         return digest.hexdigest()
 
-    def materialize(self, destination: Path) -> None:
+    def materialize(self, destination: Path, *, verify_bytes: bool = True) -> None:
         """Write captured regular files below a fresh private directory."""
 
         issues = self.unsupported_entries()
         if issues:
             relative, reason = issues[0]
             raise TreeSnapshotError(f"{relative}: {reason}")
-        self.materialize_regular_files(destination)
+        self.materialize_regular_files(destination, verify_bytes=verify_bytes)
 
-    def materialize_regular_files(self, destination: Path) -> None:
+    def materialize_regular_files(
+        self,
+        destination: Path,
+        *,
+        verify_bytes: bool = True,
+    ) -> None:
         """Materialize safe content after a caller has recorded invalid entries."""
 
         directory_parts = tuple(
@@ -662,6 +729,7 @@ class TreeSnapshot:
                 for (relative, data), (_validated, parts) in zip(self.files, file_parts)
             ),
             placeholder_parts,
+            verify_bytes=verify_bytes,
         )
 
     def unsupported_entries(self) -> tuple[tuple[str, str], ...]:

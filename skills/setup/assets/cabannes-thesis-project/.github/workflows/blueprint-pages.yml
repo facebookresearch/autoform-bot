@@ -48,7 +48,8 @@ jobs:
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           autoform check blueprint --lean-root .
 
-      # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
+      # Writes site-src/: statement boxes, derived statuses, and one interactive
+      # dependency explorer across project, chapter, nested-scope, and full routes,
       # and permalinks into the Lean code at this exact commit.
       - name: Render the blueprint
         run: >-

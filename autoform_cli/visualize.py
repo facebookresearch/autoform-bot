@@ -8,8 +8,8 @@ import tempfile
 from pathlib import Path
 from typing import Sequence
 
-from . import mermaid, status
-from .graph import GraphValidationError, load_graph
+from . import graph_views, mermaid, status
+from .graph import Graph, GraphValidationError, load_graph
 
 
 GENERATED_STRUCTURE_MARKER = "---\nkind: structure\nautoform_generated: true\n---"
@@ -17,6 +17,21 @@ GENERATED_STRUCTURE_MARKER = "---\nkind: structure\nautoform_generated: true\n--
 
 class VisualizationError(ValueError):
     """Raised when visualization output would overwrite authored content."""
+
+
+def _target_statuses(
+    graph: Graph,
+    statuses: dict[str, status.NodeStatus],
+) -> dict[str, status.NodeStatus]:
+    """Keep inventory articles out of the mathematical progress legend."""
+    containers = frozenset(
+        node.parent for node in graph.nodes.values() if node.parent is not None
+    )
+    return {
+        node_id: statuses[node_id]
+        for node_id, node in graph.nodes.items()
+        if node_id not in containers and node.formalizable
+    }
 
 
 def _destination(path: Path) -> Path:
@@ -77,13 +92,39 @@ def export_graph(
     destination = _destination(output or blueprint_dir / "dependencies.md")
     graph = load_graph(blueprint_dir)
     statuses = status.derive(graph)
-    page = mermaid.render_page(
-        graph,
-        statuses,
-        destination,
-        link_extension=link_extension,
-        title=title,
-    )
+    view = graph_views.project_view(graph, statuses)
+    links = {}
+    for node in view.nodes:
+        scope = node.id.removeprefix("scope:")
+        target = (
+            blueprint_dir / "roadmap/README.md"
+            if scope == "roadmap"
+            else blueprint_dir / "roadmap" / scope / "README.md"
+        )
+        if not target.is_file() and node.members:
+            target = graph.nodes[node.members[0]].path
+        links[node.id] = mermaid.relative_link(target, destination, link_extension)
+    diagram = mermaid.render_view_diagram(view, links=links)
+    legend = mermaid.render_legend(_target_statuses(graph, statuses))
+    sections = [
+        "---",
+        "kind: graph",
+        "graph_view: project",
+        "---",
+        "",
+        f"# {title}",
+        "",
+        (
+            f"{len(graph.nodes)} nodes · {graph.edge_count} dependencies, collapsed into "
+            f"{len(view.nodes)} top-level scopes. Open the rendered site for the searchable full DAG."
+        ),
+        "",
+        diagram,
+        "",
+    ]
+    if legend:
+        sections.extend(["## Legend", "", legend, ""])
+    page = "\n".join(sections)
     _atomic_write(destination, page)
     return destination
 
@@ -129,9 +170,11 @@ def export_structure(blueprint_dir: Path, output: Path | None = None) -> Path:
         if node is None:
             lines.append(f"{indent}- [{entry.name}]({entry.as_posix()}) · prose")
             continue
-        kind = node.declaration or node.kind
+        inventory_checked = node.catalog == "module" and statuses[node.id].fully_proved
+        kind = "module inventory" if node.catalog == "module" else node.declaration or node.kind
+        state_label = "inventory checked" if inventory_checked else statuses[node.id].label
         lines.append(
-            f"{indent}- [{node.title}]({entry.as_posix()}) · {kind} · {statuses[node.id].label}"
+            f"{indent}- [{node.title}]({entry.as_posix()}) · {kind} · {state_label}"
         )
 
     depths = {len(p.relative_to(blueprint_dir).parts) - 1 for p in by_path}

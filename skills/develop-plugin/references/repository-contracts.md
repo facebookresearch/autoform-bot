@@ -3,6 +3,12 @@
 Read these contracts when changing coordination state, publication surfaces,
 generated files, or dependency pins.
 
+## Knowledge-map publication
+
+Full-viewport knowledge maps use authored mathematical areas and prose to drive
+regions and reading panels. Keep containment and dependency distinct; treat
+provenance folders as facets, never geometry. Never fit the whole repository.
+
 ## Coordination and local views
 
 - `refs/autoform-claims/*` is shared cross-machine coordination state. Pushing

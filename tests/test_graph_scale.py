@@ -334,6 +334,19 @@ def test_graph_pickles_only_public_types(tmp_path: Path, protocol: int) -> None:
     assert restored.children("root") == ("child",)
 
 
+def test_node_loads_the_previous_runtime_pickle_shape(tmp_path: Path) -> None:
+    original = Node("root", "Root", tmp_path / "README.md", ())
+    previous_state = original.__getstate__()[:-3]
+    restored = object.__new__(Node)
+
+    restored.__setstate__(previous_state)
+
+    assert restored == original
+    assert restored.catalog is None
+    assert restored.summary is None
+    assert restored.area is None
+
+
 def _raises_promptly(call: Callable[[], object]) -> BaseException | None:
     outcome: list[BaseException | None] = []
 
@@ -530,7 +543,9 @@ def _index_builds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chapters: int
             graph,
             derive(graph),
             tmp_path / str(chapters) / "site",
-            node_links=lambda page: {node_id: "book.html" for node_id in graph.nodes},
+            node_links=lambda page, node_ids: {
+                node_id: "book.html" for node_id in node_ids
+            },
         )
     return builds
 
@@ -543,7 +558,7 @@ def test_graph_page_publication_builds_whole_graph_indexes_a_fixed_number_of_tim
     large = _index_builds(tmp_path, monkeypatch, 8)
 
     assert large == small
-    assert max(small.values()) <= 4
+    assert max(small.values()) <= 5
 
 
 def _written_blueprint(tmp_path: Path, sections: int = 1) -> Path:

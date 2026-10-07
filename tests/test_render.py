@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from autoform_cli import _directory_binding as directory_binding
+from autoform_cli import render as render_module
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS
 from autoform_cli.graph import load_graph
 from autoform_cli.lean import LeanSourceError, _normalize_remote
@@ -16,6 +18,7 @@ from autoform_cli.render import (
     PublicationError,
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
+    publication_source_revision,
     render_site,
 )
 from autoform_cli.status import STATES, derive
@@ -89,13 +92,17 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert not (out / "progress.md").exists()
     assert not (out / "book.md").exists()
     assert (out / "dependencies.md").is_file()
+    assert (out / "dependencies.json").is_file()
     assert (out / "dependencies/chapters/roadmap.md").is_file()
-    assert (out / "dependencies/nodes/base.md").is_file()
-    assert (out / "dependencies/nodes/top.md").is_file()
+    assert (out / "dependencies/chapters/roadmap.json").is_file()
+    assert not (out / "dependencies/nodes").exists()
     assert (out / "dependencies/full.md").is_file()
+    assert (out / "dependencies/full.json").is_file()
+    assert (out / "dependencies/index.json").is_file()
     assert (out / "stylesheets/blueprint.css").is_file()
     assert (out / "javascripts/blueprint-mermaid.js").is_file()
     assert (out / "javascripts/blueprint-live.js").is_file()
+    assert (out / "javascripts/blueprint-dag.js").is_file()
     assert (out / PUBLICATION_MANIFEST).is_file()
     # Nodes are absorbed into their chapter, not published one page each.
     assert not (out / "roadmap/base.md").exists()
@@ -104,9 +111,41 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert not (project / "blueprint" / "dependencies.md").exists()
     assert "## Depends on" in (project / "blueprint/roadmap/top.md").read_text(encoding="utf-8")
 
-    project_map = (out / "dependencies.md").read_text(encoding="utf-8")
-    assert "graph_view: project" in project_map
-    assert '"dependencies/chapters/roadmap.html"' in project_map
+    graph_pages = [out / "dependencies.md", *(out / "dependencies").rglob("*.md")]
+    for graph_page in graph_pages:
+        document = graph_page.read_text(encoding="utf-8")
+        assert 'class="bp-dag-viewer"' in document
+        assert "```mermaid" not in document
+        assert "blueprint-mermaid.js" not in document
+        assert document.count("blueprint-dag.js") == 1
+        assert graph_page.with_suffix(".json").is_file()
+
+    project_page = (out / "dependencies.md").read_text(encoding="utf-8")
+    assert "graph_view: project" in project_page
+    assert 'data-graph-src="dependencies.json"' in project_page
+    assert 'data-catalog-src="dependencies/index.json"' in project_page
+    assert "data-search-src" not in project_page  # Material reserves and strips this prefix.
+    assert "Explore all nodes" not in project_page
+    project_payload = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))
+    assert project_payload["title"] == "Mathematics atlas"
+    assert {node["url"] for node in project_payload["nodes"]} == {
+        "dependencies/chapters/roadmap.html"
+    }
+    chapter_payload = json.loads(
+        (out / "dependencies/chapters/roadmap.json").read_text(encoding="utf-8")
+    )
+    assert chapter_payload["title"] == "Roadmap dependencies"
+    assert chapter_payload["view"]["breadcrumbs"][-1] == {"label": "Roadmap", "url": None}
+    full_page = (out / "dependencies/full.md").read_text(encoding="utf-8")
+    assert 'data-graph-src="full.json"' in full_page
+    payload = json.loads((out / "dependencies/full.json").read_text(encoding="utf-8"))
+    assert payload["schema"] == "autoform-dag-view/v2"
+    assert payload["title"] == "Mathematics atlas"
+    assert payload["node_count"] == 1
+    assert payload["edge_count"] == 0
+    assert all(node["url"] for node in payload["nodes"])
+    search_index = json.loads((out / "dependencies/index.json").read_text(encoding="utf-8"))
+    assert search_index["node_count"] == 3
 
 
 def test_a_graph_page_hides_its_legend_behind_an_icon(tmp_path: Path) -> None:
@@ -126,9 +165,50 @@ def test_a_graph_page_hides_its_legend_behind_an_icon(tmp_path: Path) -> None:
     assert 'class="bp-legend-icon"' in page
     # The legend itself is still there, just not laid out on the page.
     assert 'class="bp-legend-grid"' in page
-    assert page.index("bp-legend-icon") < page.index("```mermaid")
+    assert page.index("bp-legend-icon") < page.index("bp-dag-viewer")
     assert "<button" in page and 'aria-describedby="bp-legend-note"' in page
     assert ".bp-legend-tip:focus-within .bp-legend-note" in css
+
+
+@pytest.mark.parametrize("node_count", (2, 502), ids=("small", "large"))
+def test_small_and_large_chapters_use_the_same_json_explorer(
+    tmp_path: Path,
+    node_count: int,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    chapter = blueprint / "roadmap/large"
+    chapter.mkdir(parents=True)
+    (blueprint / "README.md").write_text("# Book\n\n- [Roadmap](roadmap/README.md)\n", encoding="utf-8")
+    (blueprint / "roadmap/README.md").write_text("# Roadmap\n\n- [Large](large/README.md)\n", encoding="utf-8")
+    (chapter / "README.md").write_text("# Large chapter\n", encoding="utf-8")
+    coverage = blueprint / "coverage/README.md"
+    coverage.parent.mkdir()
+    coverage.write_text(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        "| Large | MAPPED | Synthetic scale fixture |\n",
+        encoding="utf-8",
+    )
+    for index in range(node_count):
+        dependency = (
+            f"\n## Depends on\n\n- [Previous](node-{index - 1}.md)\n"
+            if index
+            else "\n## Depends on\n\nNo prerequisites.\n"
+        )
+        (chapter / f"node-{index}.md").write_text(
+            f"---\ndeclaration: theorem\n---\n\n# Node {index}\n" + dependency,
+            encoding="utf-8",
+        )
+
+    render_site(blueprint, tmp_path / "out")
+
+    page = (tmp_path / "out/dependencies/chapters/large.md").read_text(encoding="utf-8")
+    assert 'class="bp-dag-viewer"' in page
+    assert 'data-graph-src="large.json"' in page
+    assert "```mermaid" not in page
+    assert page.count("blueprint-dag.js") == 1
+    payload = json.loads((tmp_path / "out/dependencies/chapters/large.json").read_text(encoding="utf-8"))
+    assert payload["node_count"] == node_count
+    assert payload["edge_count"] == node_count - 1
 
 
 def test_the_structure_page_shows_the_tree_not_the_content(tmp_path: Path) -> None:
@@ -195,7 +275,9 @@ def test_the_site_publishes_no_second_copy_of_the_vault(tmp_path: Path) -> None:
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
 
     assert not (out / "wiki").exists()
-    assert "Markdown source" not in (out / "SUMMARY.md").read_text(encoding="utf-8")
+    summary = (out / "SUMMARY.md").read_text(encoding="utf-8")
+    assert "Markdown source" not in summary
+    assert summary.startswith("---\nsearch:\n  exclude: true\n---\n")
     # The two things the mirror was there for.
     assert 'id="top"' in chapter
     assert "blueprint/roadmap/top.md" in chapter
@@ -232,28 +314,40 @@ def test_the_site_carries_its_own_mark(tmp_path: Path) -> None:
     assert root.find("{http://www.w3.org/2000/svg}title").text == "Autoform"
 
 
-def _chapter_map_links(page: Path) -> set[str]:
-    return set(re.findall(r'"(dependencies/chapters/[^"]+)\.html"', page.read_text("utf-8")))
+def _chapter_explorer_links(page: Path) -> set[str]:
+    payload_path = page.parent / "dependencies.json" if page.name == "README.md" else page.with_suffix(".json")
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    return {
+        match.group(1)
+        for node in payload["nodes"]
+        if isinstance(node.get("url"), str)
+        and (match := re.fullmatch(r"(dependencies/chapters/.+)\.html", node["url"]))
+    }
 
 
-def test_the_home_page_project_map_links_to_chapter_pages_that_exist(tmp_path: Path) -> None:
-    """The home map and the Graph tab draw the same view but built links apart.
+def test_the_home_page_and_dependency_page_share_one_project_explorer(tmp_path: Path) -> None:
+    """The home page and Graph tab must consume the same project payload.
 
     A project-view node is a chapter, so its id is namespaced `scope:<group>`,
-    and only the Graph tab stripped that before naming the page. The home map
-    asked for `dependencies/chapters/scope:<group>.html`, which is nothing.
+    and only the Graph tab stripped that before naming the page. The old home
+    preview asked for `dependencies/chapters/scope:<group>.html`, which is nothing.
     """
     _render(tmp_path)
     out = tmp_path / "out"
 
-    links = _chapter_map_links(out / "README.md")
-    assert links, "the home page should carry a project map"
-    assert links == _chapter_map_links(out / "dependencies.md")
+    overview = (out / "README.md").read_text(encoding="utf-8")
+    dependencies = (out / "dependencies.md").read_text(encoding="utf-8")
+    assert 'data-graph-src="dependencies.json"' in overview
+    assert 'data-graph-src="dependencies.json"' in dependencies
+    assert overview.count("blueprint-dag.js") == 1
+    links = _chapter_explorer_links(out / "README.md")
+    assert links, "the landing page should carry the project explorer"
+    assert links == _chapter_explorer_links(out / "dependencies.md")
     for link in links:
         assert (out / f"{link}.md").is_file(), f"home page links to a missing page: {link}"
 
 
-def test_the_home_page_project_map_survives_named_chapters(tmp_path: Path) -> None:
+def test_the_home_page_project_explorer_survives_named_chapters(tmp_path: Path) -> None:
     """The flat project exercises the `or 'roadmap'` fallback, not the prefix."""
     project = _project(tmp_path)
     chapter = project / "blueprint" / "roadmap" / "structure"
@@ -271,7 +365,7 @@ def test_the_home_page_project_map_survives_named_chapters(tmp_path: Path) -> No
 
     render_site(project / "blueprint", out, lean_root=project)
 
-    links = _chapter_map_links(out / "README.md")
+    links = _chapter_explorer_links(out / "README.md")
     assert "dependencies/chapters/structure" in links
     assert not any("scope:" in link for link in links)
     for link in links:
@@ -337,8 +431,8 @@ def test_cross_references_point_at_anchors_on_the_chapter(tmp_path: Path) -> Non
     assert '<a class="bp-code-link"' in page
     assert 'aria-label="View Project.top in Lean source"' in page
     assert '<svg class="bp-code-icon"' in page
-    assert '<a class="bp-context-link" href="../dependencies/nodes/top.html"' in page
-    assert 'aria-label="Open local dependency context for Top"' in page
+    assert '<a class="bp-context-link" href="../dependencies/chapters/roadmap.html#node=top"' in page
+    assert 'aria-label="Open dependency explorer for Top"' in page
     assert '<details class="bp-dependencies"><summary>Dependencies</summary>' in page
     assert '<span class="bp-key">Statement uses</span>' in page
     assert 'href="#base">Definition 1 (Base)' in page
@@ -474,7 +568,117 @@ def test_single_target_uses_singular_completion_copy(tmp_path: Path) -> None:
     assert "1 of 1 targets complete" not in overview
 
 
-def test_the_landing_page_is_the_hero_and_the_map_and_nothing_else(tmp_path: Path) -> None:
+def test_module_catalog_is_separate_from_formalization_progress(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    sources = project / "blueprint/sources"
+    sources.mkdir()
+    (sources / "catalog.md").write_text("# Project.Basic declarations\n", encoding="utf-8")
+    (project / "blueprint/roadmap/catalog.md").write_text(
+        "---\ncatalog: module\nlean: Project.Base\nstatement: formalized\n"
+        "proof: formalized\n---\n\n# Existing module\n\n"
+        "A checked inventory of an existing Lean module.\n\n"
+        "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
+        encoding="utf-8",
+    )
+    coverage = project / "blueprint/coverage/README.md"
+    coverage.write_text(
+        coverage.read_text(encoding="utf-8")
+        + "| Existing module | INVENTORIED | [Catalog](../roadmap/catalog.md) |\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out")
+
+    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    assert "2 of 2 targets complete" in overview
+    assert "3 of 3 targets complete" not in overview
+    assert (
+        '<div class="bp-figure bp-figure-neutral"><div class="bp-figure-value">1</div>'
+        '<div class="bp-figure-label">Module inventories</div>'
+        in overview
+    )
+    assert not (tmp_path / "out/roadmap/catalog.md").exists()
+    project_payload = json.loads((tmp_path / "out/dependencies.json").read_text(encoding="utf-8"))
+    roadmap = project_payload["nodes"][0]
+    assert roadmap["member_count"] == 3
+    assert roadmap["status_counts"] == {"fully_proved": 2, "inventory_checked": 1}
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert '<span class="bp-thmcaption">Module</span><span class="bp-thmlabel">1</span>' in chapter
+    assert "A checked inventory of an existing Lean module." in chapter
+    assert "1 module inventory" in chapter
+
+
+def test_catalog_slot_with_bracketed_inline_code_is_absorbed(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    sources = project / "blueprint/sources"
+    sources.mkdir()
+    (sources / "catalog.md").write_text("# Project.Basic declarations\n", encoding="utf-8")
+    (project / "blueprint/roadmap/catalog.md").write_text(
+        "---\ncatalog: module\nlean: Project.Base\nstatement: formalized\n"
+        "proof: formalized\n---\n\n# Existing module on `[0,1]^n`\n\n"
+        "A checked inventory with bracketed mathematics in its title.\n\n"
+        "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
+        encoding="utf-8",
+    )
+    roadmap = project / "blueprint/roadmap/README.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8")
+        + "\n## Existing modules\n\n"
+        "- [Existing module on `[0,1]^n`](catalog.md)\n",
+        encoding="utf-8",
+    )
+    coverage = project / "blueprint/coverage/README.md"
+    coverage.write_text(
+        coverage.read_text(encoding="utf-8")
+        + "| Existing module | INVENTORIED | [Catalog](../roadmap/catalog.md) |\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out")
+
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert not (tmp_path / "out/roadmap/catalog.md").exists()
+    assert "](catalog.md)" not in chapter
+    assert 'id="catalog"' in chapter
+    assert "A checked inventory with bracketed mathematics in its title." in chapter
+    assert chapter.index("## Existing modules") < chapter.index('id="catalog"')
+    assert "## Additional formalization targets" not in chapter
+
+
+def test_partial_module_catalog_is_not_reported_as_dispatchable_work(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    sources = project / "blueprint/sources"
+    sources.mkdir()
+    (sources / "catalog.md").write_text("# Project.Base declarations\n", encoding="utf-8")
+    (project / "blueprint/roadmap/catalog.md").write_text(
+        "---\ncatalog: module\nlean: Project.Base\nstatement: formalized\n---\n\n"
+        "# Existing module\n\nAn incomplete module inventory.\n\n"
+        "## Sources\n\n- [Declaration ledger](../sources/catalog.md)\n",
+        encoding="utf-8",
+    )
+    coverage = project / "blueprint/coverage/README.md"
+    coverage.write_text(
+        coverage.read_text(encoding="utf-8")
+        + "| Existing module | INVENTORIED | [Catalog](../roadmap/catalog.md) |\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out")
+
+    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    assert (
+        '<div class="bp-figure-value">0</div>'
+        '<div class="bp-figure-label">Ready now</div>'
+    ) in overview
+
+
+def test_the_landing_page_is_the_hero_and_project_explorer_and_nothing_else(
+    tmp_path: Path,
+) -> None:
     """A blueprint's subject is the shape of the project, not its front matter.
 
     The map used to sit below the authored prose and the status breakdown,
@@ -490,6 +694,12 @@ def test_the_landing_page_is_the_hero_and_the_map_and_nothing_else(tmp_path: Pat
     assert overview.index("bp-hero") < overview.index('class="bp-map"')
     assert "bp-landing-prose" not in overview
     assert "## Contents" not in overview
+    assert '<span class="bp-map-title">Mathematics atlas</span>' in overview
+    assert 'data-graph-src="dependencies.json"' in overview
+    assert '<a href="dependencies.html">open full-page</a>' in overview
+    assert "```mermaid" not in overview
+    assert overview.count("blueprint-dag.js") == 1
+    assert (tmp_path / "out/dependencies.json").is_file()
     # The legend travels with the map instead of becoming a section of its own.
     assert "## Status breakdown" not in overview
     assert overview.index("bp-map-legend") > overview.index("bp-map-head")
@@ -508,6 +718,10 @@ def test_book_navigation_is_bottom_only_and_never_crosses_into_project_views(tmp
     graph_page = (tmp_path / "out/dependencies.md").read_text(encoding="utf-8")
     assert "bp-book-nav" not in graph_page
     assert "bp-book-nav" not in dependencies
+    summary = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
+    assert summary.count("[Dependency explorer](dependencies.md)") == 1
+    assert "Full dependency graph" not in summary
+    assert "dependencies/full.md" not in summary
 
 
 def test_links_naming_a_node_file_follow_it_onto_the_chapter(tmp_path: Path) -> None:
@@ -600,6 +814,25 @@ def test_stale_generated_files_are_not_republished(tmp_path: Path) -> None:
     assert not (tmp_path / "out/progress.md").exists()
 
 
+def test_authored_mermaid_survives_while_generated_graph_pages_use_the_explorer(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    (project / "blueprint/notes.md").write_text(
+        "# Notes\n\n```mermaid\ngraph LR\n  authored --> diagram\n```\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert "```mermaid" in (tmp_path / "out/notes.md").read_text(encoding="utf-8")
+    graph_pages = [
+        tmp_path / "out/dependencies.md",
+        *(tmp_path / "out/dependencies").rglob("*.md"),
+    ]
+    assert all("```mermaid" not in page.read_text(encoding="utf-8") for page in graph_pages)
+
+
 def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     _render(tmp_path)
     css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
@@ -658,11 +891,10 @@ def test_the_generated_script_is_valid_javascript(tmp_path: Path) -> None:
     if node is None:
         pytest.skip("node is not available")
     _render(tmp_path)
-    script = tmp_path / "out/javascripts/blueprint-mermaid.js"
-
-    result = subprocess.run([node, "--check", str(script)], capture_output=True, text=True)
-
-    assert result.returncode == 0, result.stderr
+    for name in ("blueprint-mermaid.js", "blueprint-dag.js"):
+        script = tmp_path / "out/javascripts" / name
+        result = subprocess.run([node, "--check", str(script)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("destination", ("same", "child", "parent"))
@@ -734,21 +966,211 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path
         "complete": True,
         "coverage": {
             "complete": False,
-            "counts": {"DECOMPOSED": 0, "DEFERRED": 0, "MAPPED": 1, "OUT": 0},
-            "schema": "autoform-coverage/v1",
+            "counts": {
+                "DECOMPOSED": 0,
+                "DEFERRED": 0,
+                "INVENTORIED": 0,
+                "MAPPED": 1,
+                "OUT": 0,
+            },
+            "schema": "autoform-coverage/v2",
             "source_path": "coverage/README.md",
             "source_sha256": manifest["coverage"]["source_sha256"],
         },
         "dependencies": 1,
         "git_ref": "a" * 40,
         "nodes": 3,
-        "schema": "autoform-publication/v1",
+        "schema": "autoform-publication/v2",
         "source": "blueprint/roadmap Markdown",
+        "source_capture": "retained-descriptor",
         "source_revision": manifest["source_revision"],
         "views": ["book", "progress", "project", "chapter", "focus", "full"],
     }
     assert re.fullmatch(r"[0-9a-f]{64}", manifest["source_revision"])
     assert str(tmp_path).encode() not in b"".join(first.values())
+
+
+def test_publication_revision_frames_binary_paths_and_contents() -> None:
+    def snapshot(files: tuple[tuple[str, bytes], ...]):
+        return render_module.TreeSnapshot(
+            root_identity=(1, 1),
+            directories=("",),
+            files=files,
+            symlinks=(),
+            special=(),
+            placeholders=(),
+            omitted=(),
+            identities=(),
+        )
+
+    combined = snapshot((("a", b"x\0b\0y"),))
+    split = snapshot((("a", b"x"), ("b", b"y")))
+
+    assert render_module._snapshot_source_revision(combined) != (
+        render_module._snapshot_source_revision(split)
+    )
+
+
+def test_render_verifies_one_stable_revision_for_both_manifest_states(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    revision = "a" * 64
+    revision_calls = 0
+    manifests: list[tuple[bool, str]] = []
+    original_write = render_module._write_publication_manifest
+
+    def source_revision(_snapshot) -> str:
+        nonlocal revision_calls
+        revision_calls += 1
+        return revision
+
+    def write_manifest(*args, **kwargs) -> None:
+        manifests.append((kwargs["complete"], kwargs["source_revision"]))
+        original_write(*args, **kwargs)
+
+    monkeypatch.setattr(render_module, "_snapshot_source_revision", source_revision)
+    monkeypatch.setattr(render_module, "_write_publication_manifest", write_manifest)
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert revision_calls == 1
+    assert manifests == [(False, revision), (True, revision)]
+    published = json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert published["source_revision"] == revision
+
+
+def test_render_completes_from_its_capture_when_authored_sources_change_mid_render(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    output = tmp_path / "out"
+    original_write = render_module._write_publication_manifest
+    changed = False
+
+    def write_manifest(*args, **kwargs) -> None:
+        nonlocal changed
+        original_write(*args, **kwargs)
+        if not kwargs["complete"] and not changed:
+            changed = True
+            with (blueprint / "README.md").open("a", encoding="utf-8") as stream:
+                stream.write("\nChanged during publication.\n")
+
+    monkeypatch.setattr(render_module, "_write_publication_manifest", write_manifest)
+
+    render_site(blueprint, output, lean_root=project)
+
+    manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert manifest["complete"] is True
+    assert manifest["source_revision"] != publication_source_revision(blueprint)
+    assert "Changed during publication." not in (output / "README.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_render_uses_one_capture_when_authored_sources_change_and_restore(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    overview = blueprint / "README.md"
+    original = overview.read_bytes()
+    output = tmp_path / "out"
+    original_write = render_module._write_publication_manifest
+    original_graph_pages = render_module.graph_pages.write_graph_pages
+    changed = False
+
+    def write_manifest(*args, **kwargs) -> None:
+        nonlocal changed
+        original_write(*args, **kwargs)
+        if not kwargs["complete"] and not changed:
+            changed = True
+            overview.write_bytes(original + b"\nTRANSIENT_ABA\n")
+
+    def write_graph_pages(*args, **kwargs):
+        overview.write_bytes(original)
+        return original_graph_pages(*args, **kwargs)
+
+    monkeypatch.setattr(render_module, "_write_publication_manifest", write_manifest)
+    monkeypatch.setattr(render_module.graph_pages, "write_graph_pages", write_graph_pages)
+
+    render_site(blueprint, output, lean_root=project)
+
+    assert b"TRANSIENT_ABA" not in (output / "README.md").read_bytes()
+    manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert manifest["source_revision"] == publication_source_revision(blueprint)
+
+
+def test_render_portable_capture_is_explicit_and_preserves_publication_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / ".notes").write_text("local\n", encoding="utf-8")
+    linker = render_module.build_linker(project)
+    monkeypatch.setattr(render_module, "build_linker", lambda *_args, **_kwargs: linker)
+    monkeypatch.setattr(directory_binding, "DIRECTORY_BINDING_SUPPORTED", False)
+
+    output = tmp_path / "portable"
+    render_site(blueprint, output, lean_root=project)
+
+    manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert manifest["source_capture"] == "portable-best-effort"
+    assert not (output / ".notes").exists()
+    assert "The base object." in (output / "roadmap/README.md").read_text(encoding="utf-8")
+
+    (blueprint / "secrets.json").write_text("private\n", encoding="utf-8")
+    with pytest.raises(PublicationError, match="local or sensitive.*secrets.json"):
+        render_site(blueprint, tmp_path / "sensitive", lean_root=project)
+    (blueprint / "secrets.json").unlink()
+
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside\n", encoding="utf-8")
+    try:
+        (blueprint / "linked.md").symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+    with pytest.raises(PublicationError, match="refusing symlink.*linked.md"):
+        render_site(blueprint, tmp_path / "symlink", lean_root=project)
+
+
+def test_anchored_links_resolve_only_entries_that_are_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = tmp_path / "site/current.md"
+    targets = {
+        f"node-{index}": (tmp_path / f"site/chapter-{index}.md", f"node-{index}")
+        for index in range(10_000)
+    }
+    calls: list[tuple[Path, Path, str]] = []
+    original_relative_link = render_module.mermaid.relative_link
+
+    def relative_link(target: Path, output: Path, extension: str) -> str:
+        calls.append((target, output, extension))
+        return original_relative_link(target, output, extension)
+
+    monkeypatch.setattr(render_module.mermaid, "relative_link", relative_link)
+    links = render_module._anchored_links(targets, page)
+
+    assert calls == []
+    expected = "chapter-9999.html#node-9999"
+    assert links["node-9999"] == expected
+    assert links["node-9999"] == expected
+    assert len(calls) == 1
+
+    selected = render_module._anchored_links(
+        targets,
+        page,
+        node_ids=("node-2", "node-2", "node-7"),
+    )
+    assert list(selected) == ["node-2", "node-7"]
+    assert len(selected) == 2
 
 
 def test_manifest_records_machine_checkable_coverage_aggregates(tmp_path: Path) -> None:
@@ -770,8 +1192,14 @@ def test_manifest_records_machine_checkable_coverage_aggregates(tmp_path: Path) 
     manifest = json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
     assert manifest["coverage"] == {
         "complete": False,
-        "counts": {"DECOMPOSED": 1, "DEFERRED": 0, "MAPPED": 1, "OUT": 1},
-        "schema": "autoform-coverage/v1",
+        "counts": {
+            "DECOMPOSED": 1,
+            "DEFERRED": 0,
+            "INVENTORIED": 0,
+            "MAPPED": 1,
+            "OUT": 1,
+        },
+        "schema": "autoform-coverage/v2",
         "source_path": "coverage/README.md",
         "source_sha256": manifest["coverage"]["source_sha256"],
     }
@@ -969,18 +1397,25 @@ def test_render_rejects_symlinks_before_cleaning_an_existing_site(tmp_path: Path
 
 
 @pytest.mark.parametrize(
-    "relative",
-    ("task_queue.json", ".autoform/agents_status.json", "sources/dispatcher.log", ".env.local"),
+    ("relative", "reported"),
+    (
+        ("task_queue.json", "task_queue.json"),
+        (".autoform/agents_status.json", ".autoform"),
+        ("sources/dispatcher.log", "sources/dispatcher.log"),
+        (".env.local", ".env.local"),
+    ),
 )
 def test_render_rejects_operational_or_sensitive_inputs(
-    tmp_path: Path, relative: str
+    tmp_path: Path,
+    relative: str,
+    reported: str,
 ) -> None:
     project = _project(tmp_path)
     local = project / "blueprint" / relative
     local.parent.mkdir(parents=True, exist_ok=True)
     local.write_text("private\n", encoding="utf-8")
 
-    with pytest.raises(PublicationError, match="local or sensitive.*" + re.escape(relative)):
+    with pytest.raises(PublicationError, match="local or sensitive.*" + re.escape(reported)):
         render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
 
@@ -1232,12 +1667,14 @@ def test_node_links_resolve_each_target_page_once(tmp_path: Path, monkeypatch: p
 
     links = _anchored_links(targets, page)
 
-    assert sorted(calls) == [chapter, other]
-    # Once to compare it with the current page, once inside relative_link.
-    assert resolved.count(chapter) <= 2
+    assert calls == []
+    assert links["a/0"] == "a.html#n0"
     assert links["a/7"] == "a.html#n7"
     assert links["b"] == "b/index.html"
     assert links["here"] == "#self"
+    assert sorted(calls) == [chapter, other]
+    # Once to compare it with the current page, once inside relative_link.
+    assert resolved.count(chapter) <= 2
 
 
 def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1273,31 +1710,47 @@ def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypa
     assert rewrite("See [X](x.md).\n") == "See [X](a.md#x).\n"
     assert calls == [chapter]
     calls.clear()
+    assert (
+        rewrite("See [X on `[0,1]^n`](x.md).\n")
+        == "See [X on `[0,1]^n`](a.md#x).\n"
+    )
+    assert calls == [chapter]
+    calls.clear()
     # Two nodes on the same chapter page cost one link to it, not one each.
     assert rewrite("[X](x.md), [Z](z.md)\n") == "[X](a.md#x), [Z](a.md#z)\n"
     assert calls == [chapter]
 
 
-def test_a_focus_page_asks_for_its_node_links_once(tmp_path: Path) -> None:
-    """Each request builds a link for every node, so asking twice per focus
-    page doubled the cost of the largest group of generated pages."""
+def test_the_hierarchical_explorer_indexes_nodes_without_a_full_graph(tmp_path: Path) -> None:
+    """Global search jumps into a small scope instead of fitting every node."""
     from autoform_cli.graph_pages import focus_page_path, write_graph_pages
 
     project = _project(tmp_path)
     graph = load_graph(project / "blueprint")
     destination = tmp_path / "out"
-    requested: list[Path] = []
+    requested: list[tuple[Path, tuple[str, ...]]] = []
 
-    def node_links(page: Path) -> dict[str, str]:
-        requested.append(page)
-        return {node_id: f"roadmap.html#{node_id}" for node_id in graph.nodes}
+    def node_links(page: Path, node_ids) -> dict[str, str]:
+        selected = tuple(node_ids)
+        requested.append((page, selected))
+        return {node_id: f"roadmap.html#{node_id}" for node_id in selected}
 
     write_graph_pages(graph, derive(graph), destination, node_links=node_links)
 
-    for node_id in ("base", "top"):
-        page = focus_page_path(destination, node_id)
-        assert requested.count(page) == 1
-        assert f"roadmap.html#{node_id}" in page.read_text(encoding="utf-8")
+    pages = {
+        node_id: focus_page_path(destination, node_id, parent=graph.nodes[node_id].parent)
+        for node_id in ("base", "top")
+    }
+    assert len(set(pages.values())) == 1
+    assert pages["base"] == destination / "dependencies/chapters/roadmap.md"
+    assert not (destination / "dependencies/nodes").exists()
+    index = json.loads((destination / "dependencies/index.json").read_text(encoding="utf-8"))
+    assert index["schema"] == "autoform-dag-search/v1"
+    assert {node["id"] for node in index["nodes"]} == {"roadmap", "base", "top"}
+    assert {node["url"] for node in index["nodes"] if node["id"] in pages} == {
+        "chapters/roadmap.html#node=base",
+        "chapters/roadmap.html#node=top",
+    }
 
 
 def test_a_node_that_is_the_current_page_links_as_a_bare_fragment(tmp_path: Path) -> None:

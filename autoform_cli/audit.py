@@ -13,9 +13,10 @@ import statistics
 from bisect import bisect_right
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from . import status
-from .coverage import CoverageSummary, load_coverage
+from .coverage import CoverageSummary, load_coverage, validate_coverage_roles
 from .graph import Graph, GraphValidationError, Node, load_graph
 from .lean import (
     _DECLARATION,
@@ -27,14 +28,17 @@ from .lean import (
     snapshot_project_sources,
 )
 from .markdown import FENCE as _FENCE
-from .markdown import frontmatter_end as _frontmatter_end
 from .markdown import HEADING as _HEADING
 from .markdown import HTML_COMMENT as _HTML_COMMENT
+from .markdown import frontmatter_end as _frontmatter_end
 from .markdown import local_target_issue as _local_target_issue
 from .markdown import markdown_links as _markdown_links
 
 #: More siblings than this at one level is a table of contents, not a chapter.
 _MAX_DIRECT_CHILDREN = 24
+#: A repository-wide subject index is itself a table of contents and can be
+#: wider than a readable mathematical chapter while remaining navigable.
+_MAX_ROOT_CHILDREN = 64
 
 #: A node is reported as oversized only once its finished Lean work clears both
 #: an absolute floor and a large multiple of this project's own median. The
@@ -176,6 +180,7 @@ def audit_graph(
                         "formalizable article has contained articles; declaration-sized articles must be leaves",
                     )
                 )
+
             if not article.statement_text:
                 findings.append(
                     AuditFinding(
@@ -201,13 +206,51 @@ def audit_graph(
                     )
                 )
 
-        if len(children) > _MAX_DIRECT_CHILDREN:
+        if node.catalog and children:
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "catalog-container",
+                    "catalog article has contained articles; a module catalog must be a leaf",
+                )
+            )
+
+        if node.catalog and not _has_catalog_ledger(graph, node):
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "catalog-without-ledger",
+                    "module catalog has no local declaration ledger under blueprint/sources",
+                )
+            )
+
+        if (
+            node.catalog
+            and (node.statement_formalized or node.proof_formalized)
+            and not declaration_names(node.lean or "")
+        ):
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "catalog-without-lean-targets",
+                    "formalized module catalog has no exact compiled names in lean frontmatter",
+                )
+            )
+
+        repository_subject_index = (
+            node.id == "roadmap"
+            and node.parent is None
+            and bool(children)
+            and all(graph.nodes[child].path.name == "README.md" for child in children)
+        )
+        child_limit = _MAX_ROOT_CHILDREN if repository_subject_index else _MAX_DIRECT_CHILDREN
+        if len(children) > child_limit:
             findings.append(
                 AuditFinding(
                     article_path,
                     "overfull-container",
                     f"article directly contains {len(children)} articles, more than the "
-                    f"{_MAX_DIRECT_CHILDREN}-article limit; group them into chapters",
+                    f"{child_limit}-article limit; group them into chapters",
                 )
             )
 
@@ -229,12 +272,12 @@ def audit_graph(
             or bool(node.mathlib_file)
             or derived[node_id].proved
         )
-        if not children and formalization_evidence and not node.declaration:
+        if not children and formalization_evidence and not (node.declaration or node.catalog):
             findings.append(
                 AuditFinding(
                     article_path,
                     "missing-declaration-intent",
-                    "formalization-bearing leaf has no declaration intent metadata",
+                    "formalization-bearing leaf has neither declaration nor catalog intent metadata",
                 )
             )
 
@@ -243,9 +286,29 @@ def audit_graph(
     if coverage_findings is None:
         coverage, coverage_findings = _coverage_findings(graph.blueprint_dir)
     findings.extend(coverage_findings)
+    if coverage is not None:
+        findings.extend(_coverage_role_findings(graph, coverage))
     if lean_root is not None:
         findings.extend(_lean_findings(graph, lean_root))
     return _result(findings, coverage=coverage)
+
+
+def _has_catalog_ledger(graph: Graph, node: Node) -> bool:
+    """Whether a catalog links a repository-local declaration ledger."""
+
+    sources = (graph.blueprint_dir / "sources").resolve()
+    for target in node.sources:
+        split = urlsplit(target)
+        if split.scheme or split.netloc or split.query or not split.path:
+            continue
+        try:
+            candidate = (node.path.parent / unquote(split.path)).resolve()
+            candidate.relative_to(sources)
+        except (OSError, ValueError):
+            continue
+        if candidate.is_file():
+            return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,6 +429,22 @@ def _coverage_findings(
     return coverage, findings
 
 
+def _coverage_role_findings(
+    graph: Graph,
+    coverage: CoverageSummary,
+) -> list[AuditFinding]:
+    """Project public coverage-role issues into the audit result model."""
+
+    return [
+        AuditFinding(
+            "coverage/README.md",
+            issue.code,
+            f"{issue.reason}{f' (line {issue.line})' if issue.line else ''}",
+        )
+        for issue in validate_coverage_roles(graph, coverage)
+    ]
+
+
 def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
     root = Path(lean_root).expanduser().resolve()
     if not root.is_dir():
@@ -378,8 +457,15 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
         ]
 
     findings: list[AuditFinding] = []
+    names_to_resolve = tuple(
+        dict.fromkeys(
+            name
+            for node in graph.nodes.values()
+            for name in declaration_names(node.lean or "")
+        )
+    )
     try:
-        snapshot = snapshot_project_sources(root)
+        snapshot = snapshot_project_sources(root, names=names_to_resolve)
     except OSError as error:
         return [
             AuditFinding(
@@ -410,6 +496,12 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
             else:
                 resolved.append(declaration)
 
+        # Catalog declarations must resolve like every other asserted Lean
+        # target. Only declaration-specific policy is inapplicable to a
+        # non-dispatchable inventory container.
+        if node.catalog is not None:
+            continue
+
         for declaration in resolved:
             if _declared_deprecated(declaration, sources):
                 findings.append(
@@ -431,7 +523,7 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
                 )
             )
 
-        if resolved:
+        if resolved and node.catalog is None:
             sizes[node_id] = sum(spans[declaration.name] for declaration in resolved)
 
     findings.extend(_size_findings(graph, sizes))

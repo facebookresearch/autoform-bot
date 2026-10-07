@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -93,6 +94,171 @@ def test_loads_nested_wiki_and_metadata(tmp_path: Path) -> None:
     assert graph.edge_count == 1
 
 
+def test_extracts_reader_facing_summary_for_the_wiki_inspector(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "topic.md",
+        """# Compactness theorem
+
+This **theorem** identifies [compact objects](source.md) by a finite-cover condition
+and explains why the characterization matters.
+
+## Depends on
+""",
+        area="Geometry & Topology",
+    )
+
+    node = load_graph(blueprint).nodes["topic"]
+
+    assert node.summary == (
+        "This theorem identifies compact objects by a finite-cover condition "
+        "and explains why the characterization matters."
+    )
+    assert node.area == "Geometry & Topology"
+
+
+def test_authored_atlas_manifest_groups_nodes_independently_of_paths(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "algebra.md", "# Algebra\n")
+    _node(blueprint, "topology.md", "# Topology\n")
+    (blueprint / "atlas.json").write_text(
+        json.dumps(
+            {
+                "schema": "autoform-atlas/v1",
+                "areas": {
+                    "Algebra": ["algebra"],
+                    "Geometry & Topology": ["topology"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["algebra"].area == "Algebra"
+    assert graph.nodes["topology"].area == "Geometry & Topology"
+
+
+def test_atlas_manifest_rejects_unknown_and_duplicate_assignments(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "algebra.md", "# Algebra\n")
+    (blueprint / "atlas.json").write_text(
+        json.dumps(
+            {
+                "schema": "autoform-atlas/v1",
+                "areas": {
+                    "One": ["algebra", "missing"],
+                    "Two": ["algebra"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(GraphValidationError) as error:
+        load_graph(blueprint)
+
+    assert "unknown roadmap node 'missing'" in str(error.value)
+    assert "belongs to both 'One' and 'Two'" in str(error.value)
+
+
+def test_dangling_atlas_manifest_link_is_not_treated_as_absent(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", "# Result\n")
+    try:
+        (blueprint / "atlas.json").symlink_to(tmp_path / "missing-atlas.json")
+    except OSError:
+        pytest.skip("the test filesystem cannot create symbolic links")
+
+    with pytest.raises(GraphValidationError) as error:
+        load_graph(blueprint)
+
+    assert error.value.issues == (
+        "atlas.json: taxonomy must be a regular file inside the blueprint",
+    )
+
+
+def test_loads_a_non_dispatchable_module_catalog_status(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    ledger = blueprint / "sources/module.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Module declarations\n", encoding="utf-8")
+    _node(
+        blueprint,
+        "module.md",
+        "# Existing module\n\n## Sources\n\n- [Ledger](../sources/module.md)\n",
+        catalog="module",
+        lean="Project.alpha Project.beta",
+        statement="formalized",
+        proof="formalized",
+    )
+
+    node = load_graph(blueprint).nodes["module"]
+    assert node.catalog == "module"
+    assert not node.formalizable
+    assert node.statement_formalized
+    assert node.proof_formalized
+
+
+def test_module_catalog_requires_exact_names_and_a_local_ledger(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "module.md",
+        "# Existing module\n",
+        catalog="module",
+        statement="formalized",
+        proof="formalized",
+    )
+
+    with pytest.raises(GraphValidationError) as error:
+        load_graph(blueprint)
+
+    assert "must list exact compiled names" in str(error.value)
+    assert "must link a declaration ledger" in str(error.value)
+
+
+def test_formalized_module_catalog_rejects_an_empty_lean_name_list(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    ledger = blueprint / "sources/module.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Module declarations\n", encoding="utf-8")
+    _node(
+        blueprint,
+        "module.md",
+        "# Existing module\n\n## Sources\n\n- [Ledger](../sources/module.md)\n",
+        catalog="module",
+        lean=",",
+        statement="formalized",
+        proof="formalized",
+    )
+
+    with pytest.raises(GraphValidationError, match="must list exact compiled names"):
+        load_graph(blueprint)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"declaration": "theorem"},
+        {"mathlib": "true"},
+        {"mathlib_declaration": "Mathlib.result"},
+        {"mathlib_file": "Mathlib/Result.lean"},
+    ],
+)
+def test_module_catalog_rejects_declaration_specific_metadata(
+    tmp_path: Path,
+    metadata: dict[str, str],
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "module.md", "# Existing module\n", catalog="module", **metadata)
+
+    with pytest.raises(GraphValidationError, match="catalog.*cannot be combined"):
+        load_graph(blueprint)
+
+
 def test_resolves_links_relative_to_each_node(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "base.md", "# Base\n")
@@ -114,6 +280,7 @@ def test_resolves_links_relative_to_each_node(tmp_path: Path) -> None:
         (_node_text("# First title\n# Second title\n"), "multiple H1 titles"),
         ("---\ndeclaration: theorem\n# Title\n", "unterminated frontmatter"),
         (_node_text("# Title\n", owner="me"), "unsupported frontmatter key"),
+        (_node_text("# Title\n", catalog="book"), "'catalog' accepts only 'module'"),
         (_node_text("# Result\n## Depends on\n[x](missing.md)\n"), "does not exist"),
         (_node_text("# Result\n## Depends on\n[x](note.txt)\n"), "relative .md file"),
         (
@@ -394,7 +561,7 @@ def test_records_origin_and_source_links_without_treating_them_as_edges(tmp_path
 
 def test_check_cli(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
-    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "base.md", "# Base\n", declaration="theorem")
     result = subprocess.run(
         [sys.executable, "-m", "autoform_cli", "check", str(blueprint)],
         check=False,
@@ -406,6 +573,38 @@ def test_check_cli(tmp_path: Path) -> None:
     lines = result.stdout.splitlines()
     assert lines[0] == "OK: 1 articles, 0 dependencies"
     assert lines[1].strip() == "1 ready to state"
+
+
+def test_check_cli_separates_module_inventories_from_target_statuses(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", "# Result\n", declaration="theorem")
+    ledger = blueprint / "sources/catalog.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Catalog declarations\n", encoding="utf-8")
+    _node(
+        blueprint,
+        "catalog.md",
+        "# Existing module\n\n## Sources\n\n- [Ledger](../sources/catalog.md)\n",
+        catalog="module",
+        lean="Project.catalogEntry",
+        statement="formalized",
+        proof="formalized",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "autoform_cli", "check", str(blueprint)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "OK: 2 articles, 0 dependencies",
+        "    1 ready to state",
+        "    1 module inventory",
+    ]
+    assert "fully proved" not in result.stdout
 
 
 def test_check_cli_reports_validation_errors(tmp_path: Path) -> None:
@@ -428,7 +627,7 @@ def test_check_cli_reports_source_index_io_failure_before_success(
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "base.md", "# Base\n", lean="Project.base")
 
-    def fail_linker(root: Path):
+    def fail_linker(root: Path, **_kwargs):
         raise OSError(f"private host detail: {root}")
 
     monkeypatch.setattr("autoform_cli.__main__.build_linker", fail_linker)

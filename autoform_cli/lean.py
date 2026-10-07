@@ -38,11 +38,13 @@ from ._tree_snapshot import (
 )
 
 _NAMESPACE = re.compile(r"^\s*namespace\s+(.+)$")
-_SECTION = re.compile(r"^\s*section\b\s*(\S*)")
+_SECTION = re.compile(
+    r"^\s*(?:(?:public|private|noncomputable|unsafe|local)\s+)*section\b\s*(\S*)"
+)
 _END = re.compile(r"^\s*end\b\s*(\S*)")
 _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
-    r"(?:(?:private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
+    r"(?:(?:public|private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
     r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom|irreducible_def)\s+(.+)$"
 )
 _IGNORED_DIRECTORIES = frozenset(
@@ -117,9 +119,18 @@ class BoundProjectSources:
     tree: BoundDirectoryTree
     excluded: tuple[PurePosixPath, ...]
 
-    def capture(self) -> IndexedSourceSnapshot:
+    def capture(
+        self,
+        *,
+        names: Iterable[str] | None = None,
+    ) -> IndexedSourceSnapshot:
         snapshot = self.tree.capture()
-        return _indexed_source_snapshot(self.root, snapshot, self.excluded)
+        return _indexed_source_snapshot(
+            self.root,
+            snapshot,
+            self.excluded,
+            names=names,
+        )
 
     def verify(self) -> None:
         self.tree.verify()
@@ -138,8 +149,6 @@ class LeanSourceError(OSError):
                 for character in reason
             )
         )
-
-
 def index_failure_message(error: OSError) -> str:
     """Describe an indexing failure without exposing host paths."""
 
@@ -149,7 +158,10 @@ def index_failure_message(error: OSError) -> str:
 
 
 def index_project(
-    root: str | Path, *, exclude_roots: Iterable[str | Path] = ()
+    root: str | Path,
+    *,
+    exclude_roots: Iterable[str | Path] = (),
+    names: Iterable[str] | None = None,
 ) -> SourceIndex:
     """Scan ``*.lean`` beneath *root* and index declarations by full name."""
     requested_root = directory_binding.lexical_absolute_path(root)
@@ -164,6 +176,7 @@ def index_project(
     return snapshot_project_sources(
         root_path,
         exclude_roots=remapped_exclusions,
+        names=names,
     ).index
 
 
@@ -235,6 +248,7 @@ def snapshot_project_sources(
     *,
     exclude_roots: Iterable[str | Path] = (),
     limits: TreeCaptureLimits = TreeCaptureLimits(),
+    names: Iterable[str] | None = None,
 ) -> IndexedSourceSnapshot:
     """Read each Lean source once and derive its index and revision together.
 
@@ -243,6 +257,7 @@ def snapshot_project_sources(
     """
 
     exclusions = tuple(exclude_roots)
+    requested_names = None if names is None else tuple(names)
     changed: TreeChangedError | None = None
     for attempt in range(_SNAPSHOT_ATTEMPTS):
         if attempt:
@@ -253,7 +268,7 @@ def snapshot_project_sources(
                 exclude_roots=exclusions,
                 limits=limits,
             ) as bound:
-                return bound.capture()
+                return bound.capture(names=requested_names)
         except TreeChangedError as error:
             changed = error
         except TreeSnapshotError as error:
@@ -443,7 +458,9 @@ def _lean_tree_selection(
             if _is_managed_output_manifest_name(path.name)
             else None
         ),
-        record_omitted=False,
+        # Omitted marker entries let the immutable snapshot classify nested Git
+        # checkouts without consulting live pathnames after capture.
+        record_omitted=True,
         limits=limits,
         opaque_markers=(
             # A nested Git checkout is another source tree.  Treat the
@@ -511,6 +528,8 @@ def _indexed_source_snapshot(
     root: Path,
     snapshot: TreeSnapshot,
     excluded: tuple[PurePosixPath, ...],
+    *,
+    names: Iterable[str] | None = None,
 ) -> IndexedSourceSnapshot:
     managed_output_manifests: dict[
         PurePosixPath,
@@ -539,6 +558,13 @@ def _indexed_source_snapshot(
         for relative in snapshot.opaque_directories
         if relative
     }
+    ignored_roots.update(
+        marker.parent
+        for relative, kind in snapshot.omitted
+        if kind in {"directory", "file"}
+        and len((marker := PurePosixPath(relative)).parts) > 1
+        and unicodedata.normalize("NFC", marker.name).casefold() == ".git"
+    )
     for parent in sorted(
         managed_output_manifests,
         key=lambda path: (len(path.parts), path.as_posix()),
@@ -561,8 +587,12 @@ def _indexed_source_snapshot(
     # any other ``.lean`` link, live or dangling, is refused.
     tolerated_links = frozenset(
         relative
-        for relative, _target in snapshot.symlinks
-        if PurePosixPath(relative).suffix.casefold() == ".lean"
+        for relative, kind in (
+            *((relative, "symlink") for relative, _target in snapshot.symlinks),
+            *snapshot.omitted,
+        )
+        if kind == "symlink"
+        and PurePosixPath(relative).suffix.casefold() == ".lean"
         and not in_ignored_root(relative)
         and PurePosixPath(relative).name.startswith(".#")
     )
@@ -581,6 +611,11 @@ def _indexed_source_snapshot(
     line_counts: dict[Path, int] = {}
     source_files: list[tuple[Path, bytes]] = []
     digest = hashlib.sha256(b"autoform-lean-source-index/v1\0")
+    wanted_short = (
+        None
+        if names is None
+        else frozenset(_short_name(name) for name in names)
+    )
     for relative_text, data in snapshot.files:
         relative = PurePosixPath(relative_text)
         if relative.suffix.casefold() != ".lean" or _lean_path_is_excluded(
@@ -598,6 +633,8 @@ def _indexed_source_snapshot(
         except UnicodeError:
             continue
         line_counts[relative_path] = len(text.splitlines())
+        if wanted_short is not None and not _may_declare(text, wanted_short):
+            continue
         for declaration in _scan(text, relative_path):
             declarations.setdefault(declaration.name, declaration)
     source_digest = digest.hexdigest()
@@ -612,6 +649,29 @@ def _indexed_source_snapshot(
         _lean_generation_revision(snapshot, ignored_roots, tolerated_links),
         tuple(source_files),
     )
+
+
+def _may_declare(text: str, wanted_short: frozenset[str]) -> bool:
+    """Reject files that cannot contain a requested declaration."""
+
+    if not wanted_short:
+        return False
+    for line in _without_lean_comments(text).splitlines():
+        match = _DECLARATION.match(line)
+        if match is None:
+            continue
+        name = _name_token(match.group(2))
+        if name is not None and _short_name(name.removesuffix(".")) in wanted_short:
+            return True
+    return False
+
+
+def _short_name(name: str) -> str:
+    """Return the last Lean name component without splitting quoted dots."""
+
+    if name.endswith("»") and "«" in name:
+        return name[name.rfind("«") :]
+    return name.rsplit(".", 1)[-1]
 
 
 def _lean_generation_revision(
@@ -636,7 +696,11 @@ def _lean_generation_revision(
     )
     special = tuple(entry for entry in snapshot.special if retained_entry(entry[0]))
     placeholders = tuple(path for path in snapshot.placeholders if retained_entry(path))
-    omitted = tuple(entry for entry in snapshot.omitted if retained_entry(entry[0]))
+    omitted = tuple(
+        entry
+        for entry in snapshot.omitted
+        if retained_entry(entry[0]) and entry[0] not in tolerated_links
+    )
     retained_paths = {
         PurePosixPath(relative)
         for relative, _value in (*files, *symlinks, *special, *omitted)
@@ -744,6 +808,9 @@ def _scan(text: str, relative: Path) -> list[Declaration]:
             name = _name_token(declaration_match.group(2))
             if name is None:
                 continue
+            # `_name_token` stops before the `{` in an explicit universe
+            # binder, leaving the syntactic separator behind.
+            name = re.sub(r"\.\{[^}\n]+\}$", "", name).removesuffix(".")
             qualified = ".".join([*namespaces, name])
             found.append(Declaration(qualified, relative, number, keyword))
     return found
@@ -874,11 +941,12 @@ class SourceLinker:
             )
         ):
             return None
+        encoded_ref = quote_from_bytes(os.fsencode(self.ref), safe="")
         path = "/".join(
             quote_from_bytes(os.fsencode(part), safe="")
             for part in declaration.path.parts
         )
-        return f"{self.repository_url}/blob/{self.ref}/{path}#L{declaration.line}"
+        return f"{self.repository_url}/blob/{encoded_ref}/{path}#L{declaration.line}"
 
 
 def build_linker(
@@ -886,6 +954,7 @@ def build_linker(
     *,
     repository_url: str | None = None,
     ref: str | None = None,
+    names: Iterable[str] | None = None,
     exclude_roots: Iterable[str | Path] = (),
     source_index: SourceIndex | None = None,
     detect_missing: bool = True,
@@ -912,6 +981,7 @@ def build_linker(
             snapshot, detected_url, detected_ref, linkable_paths = _capture_link_state(
                 resolved_root,
                 remapped_exclusions,
+                names=names,
             )
             index = snapshot.index
             resolved_repository_url = repository_url or detected_url
@@ -920,6 +990,7 @@ def build_linker(
             index = index_project(
                 resolved_root,
                 exclude_roots=remapped_exclusions,
+                names=names,
             )
     if detect_missing and resolved_repository_url is None:
         resolved_repository_url = detect_repository_url(resolved_root)
@@ -935,6 +1006,8 @@ def build_linker(
 def _capture_link_state(
     root: Path,
     exclude_roots: Iterable[str | Path],
+    *,
+    names: Iterable[str] | None = None,
 ) -> tuple[
     IndexedSourceSnapshot,
     str | None,
@@ -944,6 +1017,7 @@ def _capture_link_state(
     """Capture source bytes and prove which ones belong to one stable commit."""
 
     exclusions = tuple(exclude_roots)
+    requested_names = None if names is None else tuple(names)
     last_snapshot: IndexedSourceSnapshot | None = None
     last_url: str | None = None
     for attempt in range(_SNAPSHOT_ATTEMPTS):
@@ -951,7 +1025,11 @@ def _capture_link_state(
             time.sleep(_SNAPSHOT_RETRY_DELAY_SECONDS * attempt)
         before_url = detect_repository_url(root)
         before_ref = detect_ref(root)
-        snapshot = snapshot_project_sources(root, exclude_roots=exclusions)
+        snapshot = snapshot_project_sources(
+            root,
+            exclude_roots=exclusions,
+            names=requested_names,
+        )
         last_snapshot = snapshot
         last_url = before_url
         after_url = detect_repository_url(root)

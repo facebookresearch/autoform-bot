@@ -101,8 +101,56 @@ def test_sections_do_not_add_to_the_namespace(tmp_path: Path) -> None:
     assert index.find("Outer.Helpers.beta") is None
 
 
+def test_targeted_index_prefilters_files_but_preserves_file_context_and_digest(
+    tmp_path: Path,
+) -> None:
+    _index(tmp_path)
+    other = tmp_path / "Project/Other.lean"
+    other.write_text("def unrelated : Nat := 0\n", encoding="utf-8")
+    full = index_project(tmp_path)
+
+    targeted = index_project(tmp_path, names=("Outer.alpha",))
+
+    assert targeted.find("Outer.alpha") is not None
+    assert targeted.find("Outer.beta") is not None
+    assert targeted.find("unrelated") is None
+    assert targeted.source_digest == full.source_digest
+
+
+def test_targeted_index_treats_inline_comments_as_lean_whitespace(
+    tmp_path: Path,
+) -> None:
+    _index(tmp_path, "theorem /- separator -/ target : True := by trivial\n")
+
+    targeted = index_project(tmp_path, names=("target",))
+
+    assert targeted.find("target") is not None
+
+
 def test_attributes_and_modifiers_do_not_hide_a_declaration(tmp_path: Path) -> None:
     assert _index(tmp_path).find("Outer.Inner.gamma") is not None
+
+
+def test_public_sections_and_declarations_are_indexed_without_losing_namespace(
+    tmp_path: Path,
+) -> None:
+    index = _index(
+        tmp_path,
+        "namespace Outer\npublic section\npublic theorem visible : True := trivial\n"
+        "end\ntheorem after : True := trivial\nend Outer\n",
+    )
+
+    assert index.find("Outer.visible") is not None
+    assert index.find("Outer.after") is not None
+
+
+def test_universe_binders_are_not_part_of_the_indexed_declaration_name(
+    tmp_path: Path,
+) -> None:
+    index = _index(tmp_path, "universe u\ndef polymorphic.{u} (α : Type u) := α\n")
+
+    assert index.find("polymorphic") is not None
+    assert index.find("polymorphic.{u}") is None
 
 
 def test_commented_out_code_is_not_indexed(tmp_path: Path) -> None:
@@ -1822,6 +1870,75 @@ def test_snapshot_materialization_rejects_final_tree_tampering(
             destination.rmdir()
 
 
+@pytest.mark.parametrize("attack", ["inject", "overwrite", "symlink"])
+def test_fast_snapshot_materialization_rejects_path_tampering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    attack: str,
+) -> None:
+    snapshot = TreeSnapshot(
+        root_identity=(1, 1),
+        directories=("",),
+        files=(("result.txt", b"captured\n"),),
+        symlinks=(),
+        special=(),
+        placeholders=(),
+        omitted=(),
+        identities=(),
+    )
+    destination = tmp_path / "destination"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside\n", encoding="utf-8")
+    original_checkpoint = tree_snapshot_module._tree_snapshot_checkpoint
+
+    def tamper(event: str, relative: str) -> None:
+        original_checkpoint(event, relative)
+        if event != "before-materialization-final-verification":
+            return
+        if attack == "inject":
+            (destination / "injected.lean").write_text("def injected : Nat := 0\n")
+        elif attack == "overwrite":
+            (destination / "result.txt").write_bytes(b"evil!!!!\n")
+        else:
+            (destination / "result.txt").unlink()
+            (destination / "result.txt").symlink_to(outside)
+
+    monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", tamper)
+
+    with pytest.raises(TreeSnapshotError):
+        snapshot.materialize_regular_files(destination, verify_bytes=False)
+
+
+def test_fast_snapshot_materialization_skips_byte_recapture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = TreeSnapshot(
+        root_identity=(1, 1),
+        directories=("", "nested"),
+        files=(("nested/result.txt", b"captured\n"),),
+        symlinks=(),
+        special=(),
+        placeholders=(),
+        omitted=(),
+        identities=(),
+    )
+
+    def fail_recapture(*_args, **_kwargs):
+        raise AssertionError("fast materialization reread captured bytes")
+
+    monkeypatch.setattr(
+        tree_snapshot_module,
+        "capture_directory_descriptor",
+        fail_recapture,
+    )
+
+    destination = tmp_path / "destination"
+    snapshot.materialize_regular_files(destination, verify_bytes=False)
+
+    assert (destination / "nested/result.txt").read_bytes() == b"captured\n"
+
+
 def test_outer_managed_marker_ignores_unrelated_files_below_it(
     tmp_path: Path,
 ) -> None:
@@ -2370,6 +2487,24 @@ def test_permalink_pins_the_commit(tmp_path: Path) -> None:
         "https://github.com/owner/repo/blob/deadbeef/Project/Basic.lean#L6"
     )
     assert linker.url("Outer.missing") is None
+
+
+def test_permalink_encodes_ref_and_source_path_segments(tmp_path: Path) -> None:
+    index = _index(
+        tmp_path,
+        "theorem target : True := by trivial\n",
+        name="Project/Hash#File.lean",
+    )
+    linker = SourceLinker(
+        index=index,
+        repository_url="https://github.com/owner/repo",
+        ref="feature/topic",
+    )
+
+    assert linker.url("target") == (
+        "https://github.com/owner/repo/blob/feature%2Ftopic/"
+        "Project/Hash%23File.lean#L1"
+    )
 
 
 def test_permalink_percent_encodes_source_path_components(tmp_path: Path) -> None:

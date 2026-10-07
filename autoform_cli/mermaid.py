@@ -11,6 +11,7 @@ from __future__ import annotations
 import html
 import os
 from pathlib import Path
+from urllib.parse import quote
 from typing import TYPE_CHECKING
 
 from .status import STATES, is_definition
@@ -29,7 +30,7 @@ def node_link(node: Node, output: Path, link_extension: str) -> str:
 def relative_link(target: Path, output: Path, link_extension: str) -> str:
     """Relative link from the page at *output* to *target*, with its suffix swapped."""
     relative = os.path.relpath(target.resolve(), output.resolve().parent)
-    return Path(relative).with_suffix(link_extension).as_posix()
+    return quote(Path(relative).with_suffix(link_extension).as_posix(), safe="/")
 
 
 def source_links(graph: Graph, output: Path, link_extension: str) -> dict[str, str]:
@@ -79,7 +80,12 @@ def render_diagram(
         label = _escape(node.title)
         # Rectangles introduce data, rounded boxes assert something.
         shape = f'["{label}"]' if is_definition(node) else f'("{label}")'
-        lines.append(f"  {handle}{shape}:::{statuses[node.id].key}")
+        state_key = (
+            "planned"
+            if node.catalog == "module" and statuses[node.id].fully_proved
+            else statuses[node.id].key
+        )
+        lines.append(f"  {handle}{shape}:::{state_key}")
 
     for node in ordered:
         for dependency in node.statement_dependencies:
@@ -90,7 +96,12 @@ def render_diagram(
                 lines.append(f"  {handles[dependency]} -.-> {handles[node.id]}")
 
     for node in ordered:
-        tooltip = _escape(f"{node.title} — {statuses[node.id].label}")
+        state_label = (
+            "inventory checked"
+            if node.catalog == "module" and statuses[node.id].fully_proved
+            else statuses[node.id].label
+        )
+        tooltip = _escape(f"{node.title} — {state_label}")
         lines.append(f'  click {handles[node.id]} "{links[node.id]}" "{tooltip}"')
 
     if include_classdefs:
@@ -273,7 +284,10 @@ _MEANINGS = {
     "planned": "Described in the blueprint only.",
 }
 
-_STATE_LABELS = {state.key: state.label for state in STATES}
+_STATE_LABELS = {
+    **{state.key: state.label for state in STATES},
+    "inventory_checked": "inventory checked",
+}
 
 
 def render_page(
@@ -296,7 +310,15 @@ def render_page(
         links=links,
         include_classdefs=include_classdefs,
     )
-    legend = render_legend(statuses)
+    containers = frozenset(
+        node.parent for node in graph.nodes.values() if node.parent is not None
+    )
+    target_statuses = {
+        node_id: statuses[node_id]
+        for node_id, node in graph.nodes.items()
+        if node_id not in containers and node.formalizable
+    }
+    legend = render_legend(target_statuses)
     sections = [
         "---",
         "kind: graph",

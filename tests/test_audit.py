@@ -107,7 +107,13 @@ def test_clean_audit_has_stable_machine_readable_representation(tmp_path: Path) 
     assert first.findings == ()
     assert first.clean
     assert first.coverage is not None
-    assert first.coverage.counts == {"MAPPED": 0, "DECOMPOSED": 0, "DEFERRED": 0, "OUT": 1}
+    assert first.coverage.counts == {
+        "MAPPED": 0,
+        "DECOMPOSED": 0,
+        "INVENTORIED": 0,
+        "DEFERRED": 0,
+        "OUT": 1,
+    }
     assert first.as_dict()["findings"] == []
     assert second.to_json() == first.to_json()
     assert str(tmp_path) not in first.to_json()
@@ -152,6 +158,102 @@ def test_audit_requires_mathlib_declaration_and_declaration_intent_on_evidenced_
     assert upstream_codes == {"mathlib-without-declaration", "missing-declaration-intent"}
     assert local_codes == {"missing-declaration-intent"}
     assert "roadmap/exposition.md" not in findings
+
+
+def test_audit_accepts_an_explicit_non_dispatchable_module_catalog(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Existing module | INVENTORIED | "
+        "[Catalog](../roadmap/existing-module.md) |",
+    )
+    ledger = blueprint / "sources" / "existing-module.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Existing module declarations\n", encoding="utf-8")
+    _article(
+        blueprint,
+        "existing-module.md",
+        catalog="module",
+        lean="Existing.alpha",
+        statement="formalized",
+        proof="formalized",
+        sources=("../sources/existing-module.md",),
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Existing.lean").write_text(
+        "namespace Existing\ntheorem alpha : True := by trivial\nend Existing\n",
+        encoding="utf-8",
+    )
+
+    result = audit_blueprint(blueprint, lean_root=lean_root)
+
+    assert result.clean
+    payload = json.loads(result.to_json())
+    assert payload["coverage"]["schema"] == "autoform-coverage/v2"
+    assert payload["coverage"]["counts"]["INVENTORIED"] == 1
+    assert payload["coverage"]["entries"][0]["disposition"] == "INVENTORIED"
+
+
+def test_audit_requires_module_catalog_lean_targets_to_resolve(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Existing module | INVENTORIED | "
+        "[Catalog](../roadmap/existing-module.md) |",
+    )
+    ledger = blueprint / "sources" / "existing-module.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Existing module declarations\n", encoding="utf-8")
+    _article(
+        blueprint,
+        "existing-module.md",
+        catalog="module",
+        lean="Missing.noSuchDeclaration",
+        statement="formalized",
+        proof="formalized",
+        sources=("../sources/existing-module.md",),
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Other.lean").write_text(
+        "theorem Existing.other : True := by trivial\n",
+        encoding="utf-8",
+    )
+
+    findings = _finding_map(blueprint, lean_root=lean_root)
+
+    assert findings["roadmap/existing-module.md"] == [
+        (
+            "lean-target-not-found",
+            "Lean declaration target was not found: Missing.noSuchDeclaration",
+        )
+    ]
+
+
+def test_audit_surfaces_invalid_module_catalog_evidence(
+    tmp_path: Path,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(
+        blueprint,
+        "existing-module.md",
+        catalog="module",
+        statement="formalized",
+        proof="formalized",
+    )
+
+    findings = _finding_map(blueprint)["roadmap/existing-module.md"]
+
+    assert {code for code, _reason in findings} == {"invalid-graph"}
+    reasons = {reason for _code, reason in findings}
+    assert any("must list exact compiled names" in reason for reason in reasons)
+    assert any("must link a declaration ledger" in reason for reason in reasons)
 
 
 def test_audit_validates_local_source_links_without_network_access(tmp_path: Path, monkeypatch) -> None:
@@ -330,8 +432,8 @@ def test_audit_reads_deprecation_from_the_captured_source_generation(
     )
     real_snapshot_project_sources = audit_module.snapshot_project_sources
 
-    def snapshot_then_rewrite(root: Path):
-        snapshot = real_snapshot_project_sources(root)
+    def snapshot_then_rewrite(root: Path, **kwargs):
+        snapshot = real_snapshot_project_sources(root, **kwargs)
         source.write_text("theorem Project.result : True := trivial\n", encoding="utf-8")
         return snapshot
 
@@ -500,10 +602,11 @@ def test_audit_reports_a_container_holding_too_many_articles(tmp_path: Path) -> 
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     _article(blueprint, "README.md", depends=False)
+    _article(blueprint, "chapter/README.md", depends=False)
     for index in range(25):
-        _article(blueprint, f"unit-{index:02d}.md", declaration="theorem")
+        _article(blueprint, f"chapter/unit-{index:02d}.md", declaration="theorem")
 
-    findings = _finding_map(blueprint)["roadmap/README.md"]
+    findings = _finding_map(blueprint)["roadmap/chapter/README.md"]
 
     assert findings == [
         (
@@ -514,6 +617,32 @@ def test_audit_reports_a_container_holding_too_many_articles(tmp_path: Path) -> 
     ]
 
 
+def test_audit_allows_a_wide_repository_subject_index(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    for index in range(33):
+        _article(blueprint, f"subject-{index:02d}/README.md", depends=False)
+
+    assert audit_blueprint(blueprint).clean
+
+
+def test_audit_keeps_the_normal_limit_for_flat_root_articles(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    for index in range(25):
+        _article(blueprint, f"chapter/unit-{index:02d}.md", declaration="theorem")
+
+    findings = _finding_map(blueprint)["roadmap/chapter/README.md"]
+
+    assert findings == [
+        (
+            "overfull-container",
+            "article directly contains 25 articles, more than the 24-article limit; "
+            "group them into chapters",
+        )
+    ]
 def test_audit_reports_nodes_that_are_large_outliers_for_their_project(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
@@ -564,8 +693,8 @@ def test_audit_measures_source_spans_from_the_captured_index(
     lean_root = _lean_project(tmp_path, spans)
     real_snapshot_project_sources = audit_module.snapshot_project_sources
 
-    def snapshot_then_mutate(root: Path):
-        snapshot = real_snapshot_project_sources(root)
+    def snapshot_then_mutate(root: Path, **kwargs):
+        snapshot = real_snapshot_project_sources(root, **kwargs)
         (root / "big.lean").write_text(
             "theorem Project.big : True := trivial\n", encoding="utf-8"
         )
@@ -603,7 +732,7 @@ def test_audit_reports_source_index_io_failure_without_host_details(
     lean_root = tmp_path / "lean"
     lean_root.mkdir()
 
-    def fail_snapshot(root: Path):
+    def fail_snapshot(root: Path, **_kwargs):
         if reason is not None:
             raise LeanSourceError(reason)
         raise OSError(f"private host detail: {root}")

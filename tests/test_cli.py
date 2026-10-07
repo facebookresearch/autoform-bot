@@ -34,7 +34,7 @@ def test_doctor_cli_reports_deterministic_human_and_json_output(tmp_path: Path, 
     assert main(["doctor", str(blueprint)]) == 0
     assert capsys.readouterr().out.splitlines() == [
         "PASS: blueprint: resolved blueprint",
-        "PASS: runtime: autoform-runtime/v3; markdown-articles; revision "
+        "PASS: runtime: autoform-runtime/v4; markdown-articles; revision "
         + load_runtime_graph(blueprint).source_revision,
         "PASS: graph: 1 articles; 0 dependencies; 1 formalizable; 1 dispatchable; depth 0",
         "PASS: references: all parents, typed dependencies, and dispatchable leaves are consistent",
@@ -75,7 +75,7 @@ def test_audit_cli_reports_clean_human_output(tmp_path: Path, capsys) -> None:
     assert main(["audit", str(blueprint)]) == 0
     assert capsys.readouterr().out == (
         "OK: roadmap audit passed\n"
-        "    coverage: 0 mapped · 0 decomposed · 0 deferred · 1 out\n"
+        "    coverage: 0 mapped · 0 decomposed · 0 inventoried · 0 deferred · 1 out\n"
     )
 
 
@@ -91,7 +91,10 @@ def test_audit_cli_prints_coverage_summary_with_findings(tmp_path: Path, capsys)
 
     assert main(["audit", str(blueprint)]) == 1
     output = capsys.readouterr().out
-    assert "coverage: 1 mapped · 0 decomposed · 0 deferred · 0 out" in output
+    assert (
+        "coverage: 1 mapped · 0 decomposed · 0 inventoried · 0 deferred · 0 out"
+        in output
+    )
     assert "declared-coverage-gap" in output
 
 
