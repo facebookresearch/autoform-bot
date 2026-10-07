@@ -509,8 +509,10 @@ def _run_audit_step(
         "STUB_PROBE_EXIT": str(probe_exit),
     }
 
+    # The step sets no `shell:`, so GitHub runs it with `bash -e {0}` and only
+    # the step's own `set -euo pipefail` turns pipefail on.
     result = subprocess.run(
-        ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
+        ["bash", "-e", str(script)],
         cwd=project,
         env=env,
         capture_output=True,
