@@ -14,10 +14,9 @@ auditor was shown, in a Lean block, followed by the testimony under a
 its rendering side by side without the site. They are testimony, not derived
 state, so they are committed with the book, and each one records the skeleton
 hash it testifies about and the evidence hash of the packet text it was
-written from. When the skeleton's meaning moves, the read-back is stale; when
-only the packet text changes, it is revised; the audit says so either way,
-and the renderer still shows it, marked as testimony about an earlier
-skeleton, rather than silently presenting stale evidence as current.
+written from. When either no longer matches the prepared declaration, the
+review check reports the card invalid and the renderer shows it marked
+invalid, rather than silently presenting it as current.
 """
 
 from __future__ import annotations
@@ -72,7 +71,6 @@ from .markdown import (
 from .mathjax import TEX_MACROS, attribute_commands, option_commands, stateful_commands
 from .skeleton import (
     DeclarationSkeleton,
-    SkeletonReport,
     declaration_filename,
     evidence_hash_of,
 )
@@ -320,17 +318,6 @@ class Readback:
             if self.packet_hash != expected.evidence_hash:
                 errors.append(f"packet hash is {self.packet_hash!r}, expected {expected.evidence_hash}")
         return tuple(dict.fromkeys(errors))
-
-    def status(self, skeleton: DeclarationSkeleton) -> str:
-        """``current``, ``revised`` (same meaning, packet text changed), or ``stale``."""
-
-        if not self.valid:
-            return "invalid"
-        if self.skeleton_hash != skeleton.hash:
-            return "stale"
-        if self.packet_hash != skeleton.evidence_hash:
-            return "revised"
-        return "current"
 
 
 def readback_path(blueprint: Path, article_id: str, declaration: str) -> Path:
@@ -829,102 +816,6 @@ def publish_readback(prepared: PreparedReadback) -> Path:
         finally:
             _release_card_directory(directory)
     raise ValueError(f"read-back directory {path.parent} kept being replaced while it was locked; retry later")
-
-
-@dataclass(frozen=True, slots=True)
-class ReadbackFinding:
-    """A read-back that is missing or no longer testifies about the current skeleton."""
-
-    node_id: str
-    declaration: str
-    code: str
-    reason: str
-
-
-def readback_findings(
-    report: SkeletonReport,
-    readbacks: dict[tuple[str, str], Readback],
-    *,
-    article_ids: Mapping[str, str] | None = None,
-) -> list[ReadbackFinding]:
-    """Compare every skeleton with testimony keyed by durable article id.
-
-    ``article_ids`` maps each report node id to the corresponding graph
-    ``article_id``. It is required when those identities differ.
-    """
-
-    findings: list[ReadbackFinding] = []
-    identities = article_ids or {}
-    for node in report.nodes:
-        article_id = identities.get(node.node_id, node.node_id)
-        for declaration in node.declarations:
-            readback = readback_for(readbacks, article_id, declaration.name)
-            if readback is None:
-                findings.append(
-                    ReadbackFinding(
-                        node.node_id,
-                        declaration.name,
-                        "readback-missing",
-                        f"no read-back filed for {declaration.name}; write one from its blind packet",
-                    )
-                )
-            elif validation_errors := readback.validate():
-                code = "readback-altered" if validation_errors == (_ALTERED_PACKET,) else "readback-invalid"
-                detail = "; ".join(validation_errors)
-                if code == "readback-altered":
-                    detail += f" (records {readback.packet_hash}, shows {readback.shown_hash})"
-                findings.append(
-                    ReadbackFinding(
-                        node.node_id,
-                        declaration.name,
-                        code,
-                        f"read-back for {declaration.name} is not valid: {detail}",
-                    )
-                )
-            elif readback.status(declaration) == "stale":
-                findings.append(
-                    ReadbackFinding(
-                        node.node_id,
-                        declaration.name,
-                        "readback-stale",
-                        (
-                            f"read-back for {declaration.name} testifies about skeleton "
-                            f"{readback.skeleton_hash}; the current skeleton is {declaration.hash}"
-                            if readback.skeleton_hash
-                            else f"read-back for {declaration.name} records no valid skeleton hash; "
-                            f"the current skeleton is {declaration.hash}"
-                        ),
-                    )
-                )
-            elif readback.status(declaration) == "revised":
-                findings.append(
-                    ReadbackFinding(
-                        node.node_id,
-                        declaration.name,
-                        "readback-revised",
-                        f"read-back for {declaration.name} was written from packet "
-                        f"{readback.packet_hash}; the packet text is now {declaration.evidence_hash}",
-                    )
-                )
-    # Testimony about a declaration the blueprint no longer names is evidence
-    # for nothing, and would otherwise sit in the vault unmentioned forever.
-    named = {
-        key
-        for node in report.nodes
-        for declaration in node.declarations
-        for key in readback_keys(identities.get(node.node_id, node.node_id), declaration.name)
-    }
-    for article_id, name in sorted(set(readbacks) - named):
-        findings.append(
-            ReadbackFinding(
-                article_id,
-                name,
-                "readback-orphaned",
-                f"read-back filed for {name} under article_id {article_id}, which names no such declaration; "
-                "the statement was renamed or removed, so delete the card or restore the name",
-            )
-        )
-    return findings
 
 
 def _hash_or_none(value: str | None) -> str | None:
@@ -4033,14 +3924,12 @@ __all__ = [
     "READBACK_SCHEMA",
     "PreparedReadback",
     "Readback",
-    "ReadbackFinding",
     "load_readbacks",
     "planned_readback",
     "prepare_readback",
     "publish_readback",
     "publishable_article",
     "readback_conflicts",
-    "readback_findings",
     "readback_for",
     "readback_keys",
     "readback_path",

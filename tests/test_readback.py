@@ -16,21 +16,24 @@ from types import SimpleNamespace
 
 import pytest
 
+from autoform_cli.graph import load_graph
 from autoform_cli.readback import (
     SKELETON_HEADING,
+    Readback,
     load_readbacks,
     prepare_readback,
     publish_readback,
     readback_conflicts,
-    readback_findings,
     readback_path,
 )
+from autoform_cli.review import ReviewFinding, build_review_bundle, review_findings
 from autoform_cli.skeleton import (
     PACKET_MANIFEST,
     DeclarationSkeleton,
     NodeSkeleton,
     SkeletonReport,
     TrustedDeclaration,
+    blueprint_hash,
     load_skeleton_report,
     write_packets,
 )
@@ -141,9 +144,27 @@ def _blueprint(root: Path) -> Path:
     return blueprint
 
 
-def _findings(blueprint: Path, report: SkeletonReport | None = None):
-    articles = {"basics/sup-unique": _ARTICLE_ID}
-    return readback_findings(_report() if report is None else report, load_readbacks(blueprint), article_ids=articles)
+def _remap(blueprint: Path, name: str) -> None:
+    """Map the article to the Lean declaration ``name`` instead."""
+
+    article = blueprint / "roadmap" / "basics" / "sup-unique.md"
+    text = article.read_text(encoding="utf-8")
+    article.write_text(text.replace("lean: Skel.sup_unique\n", f"lean: {name}\n"), encoding="utf-8")
+
+
+def _findings(
+    blueprint: Path,
+    report: SkeletonReport | None = None,
+    readbacks: dict[tuple[str, str], Readback] | None = None,
+) -> list[ReviewFinding]:
+    """The read-back findings ``review check`` reports for ``blueprint`` against ``report``."""
+
+    graph = load_graph(blueprint)
+    current = replace(_report() if report is None else report, blueprint_hash=blueprint_hash(graph))
+    findings = review_findings(graph, build_review_bundle(graph, current), current, readbacks)
+    # Evidence findings would hide the read-back ones, so the fixture must not raise any.
+    assert {finding.code for finding in findings if not finding.code.startswith("readback-")} <= {"review-unapproved"}
+    return [finding for finding in findings if finding.code.startswith("readback-")]
 
 
 # --------------------------------------------------------------------------- #
@@ -220,7 +241,7 @@ def test_the_source_and_hashes_round_trip_through_the_report(tmp_path: Path) -> 
 # --------------------------------------------------------------------------- #
 
 
-def test_readbacks_are_filed_per_declaration_and_report_their_status(tmp_path: Path) -> None:
+def test_readbacks_are_filed_per_declaration_and_pass_the_review_check(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     declaration = _declaration()
 
@@ -238,38 +259,24 @@ def test_readbacks_are_filed_per_declaration_and_report_their_status(tmp_path: P
     assert readback.article_id == _ARTICLE_ID and readback.valid
     assert (readback.model, readback.text) == ("test-model", "Let $E$ …")
     assert (readback.skeleton_hash, readback.packet_hash) == (declaration.hash, declaration.evidence_hash)
-    assert readback.status(declaration) == "current"
-    # same meaning, different packet text: revised; different meaning: stale
-    assert readback.status(_declaration("def IsSup (E : Set S) (b : S) : Prop :=\n  ∀ x ∈ E, x ≤ b")) == "revised"
-    assert (
-        readback.status(_declaration("def IsSup (E : Set S) (b : S) : Prop := True", semantic=_OTHER_BODY)) == "stale"
-    )
-    assert readback_findings(
-        _report(declaration),
-        readbacks,
-        article_ids={"basics/sup-unique": _ARTICLE_ID},
-    ) == []
+    assert _findings(blueprint, _report(declaration), readbacks) == []
 
 
-def test_missing_stale_and_revised_readbacks_are_reported(tmp_path: Path) -> None:
+def test_a_card_filed_for_an_earlier_declaration_is_invalid(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path)
     old = _declaration("def IsSup (E : Set S) (b : S) : Prop := True", semantic=_OTHER_BODY)
     _file_card(blueprint, "Anything.", declaration=old)
 
     (stale,) = _findings(blueprint)
-    assert (stale.code, stale.declaration) == ("readback-stale", "Skel.sup_unique")
-    assert old.hash in stale.reason and _declaration().hash in stale.reason
+    assert stale.code == "readback-invalid" and "skeleton hash does not match the prepared declaration" in stale.reason
 
+    # Same meaning, different packet text: only the packet hash moved.
     respaced = _declaration("def IsSup (E : Set S) (b : S) : Prop :=\n  ∀ x ∈ E, x ≤ b")
-    old_path = readback_path(blueprint, _ARTICLE_ID, old.name)
-    expected = load_readbacks(blueprint)[(_ARTICLE_ID, old.name)].file_hash
+    expected = load_readbacks(blueprint)[(_ARTICLE_ID, respaced.name)].file_hash
     _file_card(blueprint, "Anything.", declaration=respaced, expected_card_hash=expected)
-    assert old_path.is_file()
     (revised,) = _findings(blueprint)
-    assert revised.code == "readback-revised" and _declaration().evidence_hash in revised.reason
-
-    (missing,) = readback_findings(_report(), {})
-    assert missing.code == "readback-missing"
+    assert revised.code == "readback-invalid" and "skeleton hash" not in revised.reason
+    assert "packet hash does not match the prepared declaration" in revised.reason
 
 
 # --------------------------------------------------------------------------- #
@@ -304,9 +311,10 @@ def test_a_card_that_shows_lean_it_does_not_record_is_reported(tmp_path: Path) -
     readback = load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")]
     assert readback.shown_hash != readback.packet_hash
     # the hashes still match the skeleton; only the displayed packet moved
-    assert readback.status(_declaration()) == "invalid"
+    assert not readback.valid
     (altered,) = _findings(blueprint)
-    assert altered.code == "readback-altered" and readback.packet_hash in altered.reason
+    assert altered.code == "readback-invalid"
+    assert "the displayed skeleton does not match the recorded packet hash" in altered.reason
 
 
 def test_testimony_for_a_declaration_the_blueprint_dropped_is_reported(tmp_path: Path) -> None:
@@ -315,12 +323,13 @@ def test_testimony_for_a_declaration_the_blueprint_dropped_is_reported(tmp_path:
     blueprint = _blueprint(tmp_path)
     _file_card(blueprint, "Fine.")
     renamed = replace(_declaration(), name="Skel.sup_unique'")
+    _remap(blueprint, renamed.name)
 
     findings = _findings(blueprint, _report(renamed))
 
     assert sorted(finding.code for finding in findings) == ["readback-missing", "readback-orphaned"]
     orphan = next(finding for finding in findings if finding.code == "readback-orphaned")
-    assert orphan.declaration == "Skel.sup_unique" and "renamed or removed" in orphan.reason
+    assert f"read-back filed for Skel.sup_unique under article_id {_ARTICLE_ID}" in orphan.reason
 
 
 def test_malformed_hashes_and_symlinked_cards_are_not_testimony(tmp_path: Path) -> None:
@@ -329,7 +338,7 @@ def test_malformed_hashes_and_symlinked_cards_are_not_testimony(tmp_path: Path) 
     path.write_text(path.read_text(encoding="utf-8").replace(_declaration().hash, "approved"), encoding="utf-8")
 
     readback = load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")]
-    assert readback.skeleton_hash is None and readback.status(_declaration()) == "invalid"
+    assert readback.skeleton_hash is None and not readback.valid
     (invalid,) = _findings(blueprint)
     assert invalid.code == "readback-invalid" and "malformed skeleton hash" in invalid.reason
 
@@ -403,7 +412,6 @@ def test_incomplete_or_misidentified_cards_are_explicitly_invalid(
 
     readback = load_readbacks(blueprint)[(_ARTICLE_ID, declaration.name)]
     assert not readback.valid
-    assert readback.status(declaration) == "invalid"
     (finding,) = _findings(blueprint)
     assert finding.code == "readback-invalid"
     assert expected_reason in finding.reason
@@ -420,10 +428,12 @@ def test_a_long_named_card_recording_another_declaration_is_invalid_for_the_one_
     assert path.name.startswith("declaration--")
     card = path.read_text(encoding="utf-8")
     path.write_text(card.replace(f'declaration: "{declaration.name}"', f'declaration: "{recorded}"'), encoding="utf-8")
+    _remap(blueprint, declaration.name)
 
     findings = _findings(blueprint, _report(declaration))
     # As for a short name: invalid for the declaration the writer would find it under, not missing.
-    assert [(finding.declaration, finding.code) for finding in findings] == [(declaration.name, "readback-invalid")]
+    assert [finding.code for finding in findings] == ["readback-invalid"]
+    assert findings[0].reason.startswith(f"read-back for {declaration.name} is invalid: ")
     assert f"frontmatter declaration {recorded!r} does not match the card path" in findings[0].reason
 
 
@@ -435,8 +445,9 @@ def test_a_card_copied_to_a_long_named_card_path_leaves_the_card_it_copies_valid
 
     loaded = load_readbacks(blueprint)
     assert loaded[(_ARTICLE_ID, "Skel.sup_unique")].valid
-    (orphan,) = readback_findings(_report(), loaded, article_ids={"basics/sup-unique": _ARTICLE_ID})
-    assert (orphan.code, orphan.declaration) == ("readback-orphaned", stray.stem)
+    (orphan,) = _findings(blueprint, readbacks=loaded)
+    assert orphan.code == "readback-orphaned"
+    assert f"read-back filed for {stray.stem} under article_id {_ARTICLE_ID}" in orphan.reason
 
 
 def test_a_card_whose_suffix_differs_only_in_case_is_reported_for_the_declaration_its_path_names(

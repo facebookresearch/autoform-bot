@@ -25,11 +25,20 @@ from autoform_cli.readback import (
     planned_readback,
     publish_readback,
     readback_conflicts,
-    readback_findings,
     readback_path,
 )
 from autoform_cli.skeleton import evidence_hash_of
-from tests.test_readback import _ARTICLE_ID, _blueprint, _declaration, _file_card, _prepared, _report, _staged_names
+from tests.test_readback import (
+    _ARTICLE_ID,
+    _blueprint,
+    _declaration,
+    _file_card,
+    _findings,
+    _prepared,
+    _remap,
+    _report,
+    _staged_names,
+)
 
 _DECLARATION = "Skel.sup_unique"
 _CARD_LIMIT = 4 * 1024 * 1024
@@ -475,7 +484,7 @@ def test_a_card_that_is_not_utf8_is_reported_and_replaced_by_the_hash_of_its_byt
     assert not loaded.valid and loaded.path == path
     assert "card is not UTF-8 text" in loaded.validate()
     assert loaded.file_hash == _byte_hash(garbled)
-    (finding,) = readback_findings(_report(), load_readbacks(blueprint), article_ids={"basics/sup-unique": _ARTICLE_ID})
+    (finding,) = _findings(blueprint)
     assert finding.code == "readback-invalid" and "card is not UTF-8 text" in finding.reason
 
     # A write names it by that hash, like any card, and replaces it.
@@ -606,7 +615,7 @@ def test_a_card_whose_open_fails_is_reported_unless_nothing_or_a_link_is_there(
     _patch_os(monkeypatch, open=failing)
 
     loaded = load_readbacks(blueprint)
-    findings = readback_findings(_report(), loaded, article_ids={"basics/sup-unique": _ARTICLE_ID})
+    findings = _findings(blueprint, readbacks=loaded)
     if reported:
         assert f"card cannot be read: {os.strerror(error)}" in loaded[(_ARTICLE_ID, _DECLARATION)].validate()
         assert [finding.code for finding in findings] == ["readback-invalid"]
@@ -641,7 +650,7 @@ def test_a_fifo_or_directory_at_a_card_path_is_reported_without_blocking_the_loa
 
     # Reported as an invalid card, as the writer refuses it, rather than as a missing one.
     assert "card path is not a regular file" in loaded[0][(_ARTICLE_ID, _DECLARATION)].validate()
-    (finding,) = readback_findings(_report(), loaded[0], article_ids={"basics/sup-unique": _ARTICLE_ID})
+    (finding,) = _findings(blueprint, readbacks=loaded[0])
     assert finding.code == "readback-invalid" and "card path is not a regular file" in finding.reason
     with pytest.raises(ValueError, match="read-back destination is not a regular file"):
         publish_readback(_prepared(blueprint, "First."))
@@ -682,11 +691,11 @@ def test_a_long_named_card_that_cannot_be_read_is_reported_once_for_its_declarat
         _fail(monkeypatch, "read")
         reason = "card cannot be read: injected input/output error"
 
-    findings = readback_findings(
-        _report(declaration), load_readbacks(blueprint), article_ids={"basics/sup-unique": _ARTICLE_ID}
-    )
-    assert [(finding.declaration, finding.code) for finding in findings] == [(declaration.name, "readback-invalid")]
-    assert findings[0].reason == f"read-back for {declaration.name} is not valid: {reason}"
+    _remap(blueprint, declaration.name)
+
+    findings = _findings(blueprint, _report(declaration))
+    assert [finding.code for finding in findings] == ["readback-invalid"]
+    assert findings[0].reason == f"read-back for {declaration.name} is invalid: {reason}"
 
 
 # --------------------------------------------------------------------------- #
