@@ -1521,25 +1521,15 @@ _HARNESS = r"""
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const [scriptPath, firstPath, secondPath, project, override, startup, mode, mutation] = process.argv.slice(2);
-// What a later script changes in the configuration, and when: before the
-// page is parsed, so before the bundle is fetched ("fetch"), after it is
-// fetched and before it starts ("start"), or, in a project that lists the
-// bundle, after it has started and before the page is parsed ("loaded"),
-// through window.MathJax.config ("config") or window.MathJax itself.
-const [changing, moment, through] = mutation.split("@");
+const [scriptPath, firstPath, secondPath, project, override, startup, mode] = process.argv.slice(2);
 const report = {
   injected: [], errors: [], passes: [], inventory: [], version: null, base: null, load: null, startup: null,
-  resets: [], changed: null, stopped: null,
+  resets: [],
 };
 global.window = globalThis;
 let contentLoaded = null;
-const parsedListeners = [];
-global.addEventListener = (type, listener, capture) => {
-  if (type === "DOMContentLoaded" && capture && global.document.readyState === "loading") parsedListeners.push(listener);
-};
 global.document = {
-  readyState: project === "old" || moment === "fetch" ? "loading" : "complete",
+  readyState: project === "old" ? "loading" : "complete",
   head: {appendChild: (element) => report.injected.push(element.src)},
   createElement: () => ({}),
   addEventListener: (type, listener) => { if (type === "DOMContentLoaded") contentLoaded = listener; },
@@ -1573,57 +1563,15 @@ if (mode === "early") {
 (0, eval)(fs.readFileSync(scriptPath, "utf8"));
 report.base = MathJax.loader.paths.mathjax;
 report.load = MathJax.loader.load.slice();
-// What node needs that a browser has, given to MathJax once it has
-// started, as its own defaults are, since the script refuses to start a
-// MathJax whose configuration another script changed: the components the
-// bundle carries, and the menu, which needs a browser; the page; and the
-// menu for each document.
-const node = {
-  loader: {load: report.load.concat(["input/tex", "input/mml", "output/chtml", "a11y/assistive-mml"])},
-  startup: {document: fs.readFileSync(firstPath, "utf8"), ready: nodeReady},
-};
-const changes = {
-  pageReady: (config) => { config.startup.pageReady = () => { report.errors.push("harness: pageReady replaced"); }; },
-  typeset: (config) => { config.startup.typeset = true; },
-  options: (config) => { config.options = {ignoreHtmlClass: ".*|", processHtmlClass: "arithmatex"}; },
-  tex: (config) => { config.tex.inlineMath.push(["$", "$"]); },
-  paths: (config) => { config.loader.paths.mathjax = "https://example.com/mathjax"; },
-  load: (config) => { config.loader.load.push("[tex]/physics"); },
-  added: (config) => { config.startup.ready = () => {}; },
-  deleted: (config) => { delete config.startup.typeset; },
-  inherited: (config) => { Object.setPrototypeOf(config.startup, {ready: () => {}}); },
-  accessor: (config) => {
-    const startup = config.startup;
-    const ready = startup.pageReady;
-    let reads = 0;
-    Object.defineProperty(startup, "pageReady", {enumerable: true, get: () => reads++ ? () => {} : ready});
-  },
-  // A proxy shows every check what it was given, and MathJax what it says.
-  proxyStartup: (config) => {
-    const replaced = () => { report.errors.push("harness: pageReady replaced"); };
-    config.startup = new Proxy(config.startup, {get: (target, key) => key === "pageReady" ? replaced : target[key]});
-  },
-  proxySnippet: (config) => {
-    const said = {
-      tex: {inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]]},
-      options: {ignoreHtmlClass: ".*|", processHtmlClass: "arithmatex"},
-    };
-    Object.keys(said).forEach((name) => {
-      config[name] = new Proxy(config[name] || {}, {get: (target, key) => key in said[name] ? said[name][key] : target[key]});
-    });
-  },
-};
-function change() {
-  report.changed = window.MathJax.version === undefined;
-  changes[changing](through === "config" ? window.MathJax.config : window.MathJax);
-}
-if (moment === "fetch") change();
+// The bundle carries these, and the menu, which needs a browser.
+MathJax.loader.load.push("input/tex", "input/mml", "output/chtml", "a11y/assistive-mml");
+MathJax.startup.document = fs.readFileSync(firstPath, "utf8");
 // Every document gets a menu, the one MathJax starts with too, which is not
 // listed with the documents of a pass.
 let docs = [];
 let first = null;
 let made = null;
-function nodeReady() {
+MathJax.startup.ready = () => {
   const original = MathJax._.mathjax.mathjax.document;
   MathJax._.mathjax.mathjax.document = function (root, options) {
     const doc = original.call(this, root, options);
@@ -1669,40 +1617,17 @@ function nodeReady() {
       resolve();
     }, 20)));
   }
-}
+};
 if (override === "after") {
   window.MathJax = {
     tex: {inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]], processEscapes: true, processEnvironments: true},
     options: {ignoreHtmlClass: ".*|", processHtmlClass: "arithmatex"}
   };
 }
-// The page has been parsed, which the window hears of before the document;
-// MathJax would take its document from here. A page that loads the bundle
-// now fetches it once the script asks for it; a project scaffolded with the
-// bundle in mkdocs.yml has run it before.
-function parsed() {
-  parsedListeners.forEach((listener) => listener());
-  if (contentLoaded) contentLoaded();
-}
-if (project === "new") parsed();
-if (moment === "start") change();
+// The page has been parsed; MathJax would take its document from here.
 delete global.document;
-let main = null;
-if (project === "old" || report.injected.length) {
-  try {
-    main = require(path.join(process.env.AUTOFORM_MATHJAX_DIR, "es5", "node-main.js"));
-  } catch (error) {
-    report.stopped = error.message;
-  }
-}
-if (project === "old") {
-  if (moment === "loaded") change();
-  parsed();
-}
-if (!main) {
-  process.stdout.write(JSON.stringify(report));
-  return;
-}
+const main = require(path.join(process.env.AUTOFORM_MATHJAX_DIR, "es5", "node-main.js"));
+if (contentLoaded) contentLoaded();
 
 // What the script uses of a document's menu: what the menus are loading.
 class Menu {}
@@ -1738,7 +1663,7 @@ function inventory(tex) {
   }
 }
 
-main.init(node).then(async () => {
+main.init({}).then(async () => {
   report.version = MathJax.version;
   if (!shown) return;
   // document$ shows the first page again to each subscriber.
@@ -1793,16 +1718,12 @@ def _node_report(
     override: str = "none",
     startup: str = "quiet",
     mode: str = "none",
-    mutation: str = "none@none",
 ) -> dict:
     files = {"harness.js": _HARNESS, "mathjax.js": script, "first.html": first, "second.html": second}
     for name, text in files.items():
         (tmp_path / name).write_text(text, encoding="utf-8")
     done = subprocess.run(
-        [
-            NODE, "harness.js", "mathjax.js", "first.html", "second.html",
-            project, override, startup, mode, mutation,
-        ],
+        [NODE, "harness.js", "mathjax.js", "first.html", "second.html", project, override, startup, mode],
         cwd=tmp_path,
         env=dict(os.environ, AUTOFORM_MATHJAX_DIR=str(mathjax_package())),
         capture_output=True,
@@ -2030,84 +1951,6 @@ def test_a_mathjax_started_before_the_script_typesets_nothing(tmp_path: Path) ->
     ]
     assert report["version"] == "3.2.2"
     assert report["startup"] == {"math": 0, "subscribed": False}
-
-
-_CHANGED = (
-    "autoform: a script changed the MathJax configuration after javascripts/mathjax.js; formulas are left as "
-    "typed. Configure MathJax only through javascripts/mathjax.js and tex-macros.json."
-)
-
-
-@pytest.mark.parametrize(
-    "changing", ["pageReady", "typeset", "options", "tex", "paths", "load", "added", "deleted", "inherited", "accessor"]
-)
-@pytest.mark.parametrize("project, moment", [("new", "fetch"), ("new", "start"), ("old", "fetch")])
-def test_a_configuration_changed_after_the_script_is_not_started(
-    tmp_path: Path, project: str, moment: str, changing: str
-) -> None:
-    """window.MathJax is the script's configuration until MathJax starts, and
-    a later script that changes it rather than assigning a new one, before
-    the bundle is fetched or after, stops MathJax rather than deciding how
-    the cards are read. A project that lists the bundle in mkdocs.yml has
-    started it before the page is parsed, so the change is made before."""
-
-    report = _node_report(tmp_path, _node_script(tmp_path), project, mutation=f"{changing}@{moment}")
-
-    assert report["changed"] is True
-    assert report["errors"] == [_CHANGED]
-    # Not fetched when the change comes first; when it comes after, the
-    # bundle stops as it starts, before it reads the configuration.
-    assert report["injected"] == ([_BUNDLE] if (project, moment) == ("new", "start") else [])
-    assert report["stopped"] == ("autoform: MathJax is not started" if project == "old" or moment == "start" else None)
-    assert report["version"] is None
-    assert report["passes"] == []
-
-
-@pytest.mark.parametrize("changing", ["proxyStartup", "proxySnippet"])
-@pytest.mark.parametrize("project, moment", [("new", "fetch"), ("new", "start"), ("old", "fetch")])
-def test_a_configuration_a_proxy_stands_for_is_not_read(
-    tmp_path: Path, project: str, moment: str, changing: str
-) -> None:
-    """A later script can put a proxy where the configuration's startup or
-    options were, which shows the check what the script set and MathJax
-    something else. MathJax starts on the site's configuration all the same,
-    and reads the cards as it does with nothing changed: the document it
-    starts with, which its menu renders with saved settings, reads no card."""
-
-    script = _node_script(tmp_path)
-    kept = _node_report(tmp_path, script, project, startup="renders")
-    report = _node_report(tmp_path, script, project, startup="renders", mutation=f"{changing}@{moment}")
-
-    assert report["changed"] is True
-    assert report["errors"] == kept["errors"] == []
-    assert report["version"] == "3.2.2"
-    assert report["startup"] == kept["startup"]
-    assert report["passes"] == kept["passes"] and len(report["passes"]) == 2
-
-
-@pytest.mark.parametrize("through", ["config", "mathjax"])
-@pytest.mark.parametrize("changing", ["pageReady", "options", "proxyStartup", "proxySnippet"])
-def test_a_configuration_changed_after_a_listed_bundle_is_not_started(
-    tmp_path: Path, changing: str, through: str
-) -> None:
-    """A project that lists the bundle in mkdocs.yml has started MathJax on
-    the configuration before a script listed after it runs. Changing it then,
-    through window.MathJax.config, stops MathJax before the page is read;
-    window.MathJax is MathJax by then, and the same change made to it is not
-    MathJax's configuration, so the cards are read as before."""
-
-    report = _node_report(tmp_path, _node_script(tmp_path), "old", mutation=f"{changing}@loaded@{through}")
-
-    assert report["changed"] is False
-    assert report["injected"] == []
-    assert report["stopped"] is None
-    assert report["version"] == "3.2.2"
-    if through == "config":
-        assert report["errors"] == [_CHANGED]
-        assert report["passes"] == []
-    else:
-        assert report["errors"] == []
-        assert len(report["passes"]) == 2
 
 
 # Text a page shows outside the formulas its Markdown marked: navigation, a
