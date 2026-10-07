@@ -458,7 +458,6 @@ class LeanRuntimeClient:
             raise LeanRuntimeProtocolError("Lean runtime request exceeds the message limit")
 
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        dispatched = False
         try:
             connection.settimeout(self.connect_timeout)
             try:
@@ -477,21 +476,19 @@ class LeanRuntimeClient:
             connection.settimeout(response_timeout or self.response_timeout)
             # From this point onward, any failure is ambiguous: the daemon may
             # have received the request. Never auto-replay Lean execution.
-            dispatched = True
-            connection.sendall(payload)
-            raw = self._read_line(connection)
-        except socket.timeout as error:
-            phase = "response" if dispatched else "connection"
-            raise LeanRuntimeError(f"timed out waiting for Lean runtime {phase}") from error
-        except LeanRuntimeError:
-            raise
-        except OSError as error:
-            if not dispatched:
-                raise LeanRuntimeUnavailable(
-                    f"Lean runtime is not listening at {self.paths.socket}"
+            try:
+                connection.sendall(payload)
+                raw = self._read_line(connection)
+            except socket.timeout as error:
+                raise LeanRuntimeError("timed out waiting for Lean runtime response") from error
+            except OSError as error:
+                raise LeanRuntimeError(
+                    "connection to Lean runtime closed after request dispatch; the request was not retried"
                 ) from error
-            raise LeanRuntimeError(
-                "connection to Lean runtime closed after request dispatch; the request was not retried"
+        except OSError as error:
+            # Only settimeout() reaches here; nothing has been sent yet.
+            raise LeanRuntimeUnavailable(
+                f"Lean runtime is not listening at {self.paths.socket}"
             ) from error
         finally:
             connection.close()
