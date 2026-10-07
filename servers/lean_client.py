@@ -490,7 +490,7 @@ class LeanRuntimeClient:
             connection.close()
 
         try:
-            response = json.loads(raw)
+            response = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise LeanRuntimeProtocolError("Lean runtime returned invalid JSON") from error
         if not isinstance(response, dict):
@@ -511,7 +511,7 @@ class LeanRuntimeClient:
         raise LeanRuntimeRemoteError(f"{error_type}: {message}")
 
     @staticmethod
-    def _read_line(connection: socket.socket) -> str:
+    def _read_line(connection: socket.socket) -> bytes:
         data = bytearray()
         while len(data) <= MAX_MESSAGE_BYTES:
             chunk = connection.recv(min(65536, MAX_MESSAGE_BYTES + 1 - len(data)))
@@ -522,5 +522,5 @@ class LeanRuntimeClient:
             if newline >= 0:
                 if data[newline + 1 :]:
                     raise LeanRuntimeProtocolError("Lean runtime returned trailing response data")
-                return bytes(data[:newline]).decode("utf-8")
+                return bytes(data[:newline])
         raise LeanRuntimeProtocolError("Lean runtime response exceeds the message limit")
