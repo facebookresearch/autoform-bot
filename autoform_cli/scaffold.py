@@ -56,13 +56,14 @@ _TEMPLATE_PLACEHOLDER = re.compile(r"\{\{(?P<name>[A-Z][A-Z0-9_]*)\}\}")
 _REQUIRED_TEMPLATE_PATHS = frozenset(
     {
         "README.md",
+        "blueprint/.autoform-review",
         "blueprint/README.md",
         "blueprint/coverage/README.md",
         "blueprint/gitignore",
-        "blueprint/javascripts/mathjax.js",
         "blueprint/roadmap/README.md",
         "blueprint/sources/README.md",
         "github/autoform_audit.py",
+        "github/workflows/autoform-review-gate.yml",
         "github/workflows/autoform-verify.yml",
         "github/workflows/blueprint-pages.yml",
         "gitignore",

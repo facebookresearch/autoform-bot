@@ -6,8 +6,9 @@ nothing is a validation error rather than a broken link -- the job
 ``leanblueprint checkdecls`` does for LaTeX blueprints.
 
 The scanner is a lexical pass, not an elaborator. It tracks ``namespace`` and
-comment nesting, which is enough for declarations written in the ordinary way,
-and deliberately reports nothing it cannot see rather than guessing.
+comment nesting and stops at ``#exit``, which is enough for declarations
+written in the ordinary way, and deliberately reports nothing it cannot see
+rather than guessing.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from ._tree_snapshot import (
 _NAMESPACE = re.compile(r"^\s*namespace\s+(.+)$")
 _SECTION = re.compile(r"^\s*section\b\s*(\S*)")
 _END = re.compile(r"^\s*end\b\s*(\S*)")
+_EXIT = re.compile(r"^\s*#exit\b")
 _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
     r"(?:(?:private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
@@ -58,6 +60,9 @@ _IGNORED_DIRECTORIES = frozenset(
 )
 # ``Build`` can be a Lean namespace directory, so only this spelling is ignored.
 _EXACT_IGNORED_DIRECTORIES = frozenset({"build"})
+#: A packet tree still being staged beside its destination, which has no
+#: manifest until it is complete, or ever if its writer was killed.
+_OUTPUT_STAGE = re.compile(r"\A\..+\.autoform-stage-[0-9a-f]{16}\Z")
 _MANAGED_OUTPUT_MANIFEST = "manifest.json"
 _MANAGED_OUTPUT_MANIFEST_BYTE_LIMIT = 16 * 1024 * 1024
 # Skeleton manifests grow with the declaration set, and their sorted schema key
@@ -67,6 +72,7 @@ _SNAPSHOT_RETRY_DELAY_SECONDS = 0.05
 #: Known schemas of the skeleton command's packet and passage manifests.
 PACKET_SCHEMA = "autoform-skeleton-packets/v2"
 PASSAGE_SCHEMA = "autoform-skeleton-passages/v2"
+REVIEW_PACKET_SCHEMA = "autoform-review-packets/v1"
 MANAGED_OUTPUT_SCHEMAS = frozenset(
     {
         ("packets", "autoform-skeleton-packets/v1"),
@@ -75,6 +81,9 @@ MANAGED_OUTPUT_SCHEMAS = frozenset(
         ("passages", PASSAGE_SCHEMA),
     }
 )
+_IGNORED_OUTPUT_SCHEMAS = MANAGED_OUTPUT_SCHEMAS | {
+    ("packets", REVIEW_PACKET_SCHEMA),
+}
 
 @dataclass(frozen=True, slots=True)
 class Declaration:
@@ -94,6 +103,9 @@ class SourceIndex:
     declarations: dict[str, Declaration]
     source_digest: str
     line_counts: dict[Path, int] = field(default_factory=dict)
+    #: For a name more than one file declares, the files after the one
+    #: ``find`` returns.
+    elsewhere: dict[str, tuple[Path, ...]] = field(default_factory=dict)
 
     def find(self, name: str) -> Declaration | None:
         return self.declarations.get(name)
@@ -494,6 +506,7 @@ def _lean_path_is_excluded(
     return (
         bool(_IGNORED_DIRECTORIES.intersection(folded_parts))
         or bool(_EXACT_IGNORED_DIRECTORIES.intersection(relative.parts))
+        or any(_OUTPUT_STAGE.match(part) for part in relative.parts)
         or any(
             len(folded_parts) >= len(prefix_parts)
             and folded_parts[: len(prefix_parts)] == prefix_parts
@@ -578,6 +591,7 @@ def _indexed_source_snapshot(
         raise LeanSourceError(f"unsafe Lean source {relative}: {reason}")
 
     declarations: dict[str, Declaration] = {}
+    elsewhere: dict[str, tuple[Path, ...]] = {}
     line_counts: dict[Path, int] = {}
     source_files: list[tuple[Path, bytes]] = []
     digest = hashlib.sha256(b"autoform-lean-source-index/v1\0")
@@ -599,7 +613,9 @@ def _indexed_source_snapshot(
             continue
         line_counts[relative_path] = len(text.splitlines())
         for declaration in _scan(text, relative_path):
-            declarations.setdefault(declaration.name, declaration)
+            first = declarations.setdefault(declaration.name, declaration)
+            if first.path != relative_path and relative_path not in elsewhere.get(declaration.name, ()):
+                elsewhere[declaration.name] = (*elsewhere.get(declaration.name, ()), relative_path)
     source_digest = digest.hexdigest()
     return IndexedSourceSnapshot(
         SourceIndex(
@@ -607,6 +623,7 @@ def _indexed_source_snapshot(
             declarations=declarations,
             source_digest=source_digest,
             line_counts=line_counts,
+            elsewhere=elsewhere,
         ),
         source_digest,
         _lean_generation_revision(snapshot, ignored_roots, tolerated_links),
@@ -683,7 +700,7 @@ def _is_managed_output_manifest_bytes(data: bytes) -> bool:
     return (
         isinstance(kind, str)
         and isinstance(schema, str)
-        and (kind, schema) in MANAGED_OUTPUT_SCHEMAS
+        and (kind, schema) in _IGNORED_OUTPUT_SCHEMAS
         and isinstance(value.get(kind), list)
     )
 
@@ -715,6 +732,9 @@ def _scan(text: str, relative: Path) -> list[Declaration]:
     for number, line in enumerate(_without_lean_comments(text).splitlines(), start=1):
         if not line.strip():
             continue
+        if _EXIT.match(line):
+            # Lean reads nothing after `#exit`.
+            break
 
         namespace_match = _NAMESPACE.match(line)
         if namespace_match:
@@ -1166,6 +1186,7 @@ __all__ = [
     "MANAGED_OUTPUT_SCHEMAS",
     "PACKET_SCHEMA",
     "PASSAGE_SCHEMA",
+    "REVIEW_PACKET_SCHEMA",
     "SourceIndex",
     "SourceLinker",
     "bind_project_source_snapshot",

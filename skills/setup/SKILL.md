@@ -84,13 +84,18 @@ prefix only for the Autoform vault/site repair overlay.
 
 `autoform init` is the whole vault: `blueprint/` with its landing page,
 `roadmap/README.md`, `coverage/`, and `sources/`, plus `mkdocs.yml`, the theme
-override, both workflows, and ignore rules. Do not hand-build any of it and do
+override, the workflows, and ignore rules. Do not hand-build any of it and do
 not copy the bundled example: the layout is fixed, and a chapter written as a
 sibling file instead of `<chapter>/README.md` still validates while publishing
 a book with no chapters. `init` preserves existing files, appending only missing
 Autoform rules through a retained bounded regular root `.gitignore` file, so it
 is also the repair path; it reports what it left alone. See the
 [CLI reference](../../autoform_cli/README.md#commands) for its flags.
+
+The site's MathJax configuration is not part of the vault: `autoform render`
+writes `javascripts/mathjax.js` on every build. Put the project's notation in
+`blueprint/tex-macros.json`, an object from macro names to MathJax `tex.macros`
+definitions; `autoform check` refuses notation defined in an article.
 
 `init` pins the generated workflows to the Autoform commit that ran it, using a
 safe remote only when a cached remote-tracking ref contains that commit. It
@@ -111,11 +116,21 @@ Never invent a ref. It must be a full 40-character commit sha: `init` refuses a
 branch, a tag, or an abbreviated sha, because CI would silently reinstall a
 different Autoform later and break a project that was passing.
 
-The two workflows it writes are `autoform-verify.yml`, which validates the
+The three workflows it writes are `autoform-verify.yml`, which validates the
 Markdown DAG, builds Lean, rejects unfinished or unsafe proofs, and audits
-theorem axioms on pull requests, and `blueprint-pages.yml`, which validates the
-DAG and its `lean:` declarations, renders the blueprint, builds MkDocs, and
-deploys GitHub Pages. Pass `--autoform-ref` to pin them at an immutable commit.
+theorem axioms on pull requests; `autoform-review-gate.yml`, which tells a pull
+request early whether a code owner has authenticated the statement approvals
+it adds; and `blueprint-pages.yml`, which validates the DAG and its `lean:`
+declarations, renders the blueprint, builds MkDocs, and deploys GitHub Pages.
+Pass `--autoform-ref` to pin them at an immutable commit.
+
+Approvals read "approved by" only when the default branch has rulesets, none
+the workflow token can bypass, requiring code owner review, dismissing stale
+approvals on push, and requiring approval of the most recent push, and
+`CODEOWNERS` gives every path an owner; the
+[CLI reference](../../autoform_cli/README.md#commands) states the full rule.
+Classic branch protection does not count. Tell the user this when statement
+review is on; adding the ruleset and `CODEOWNERS` is their decision.
 
 After it runs, fill in what only a human or a source can supply: the project
 description in `blueprint/README.md`, the coverage contract, and a verified

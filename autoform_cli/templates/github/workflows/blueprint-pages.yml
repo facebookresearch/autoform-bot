@@ -1,14 +1,11 @@
 name: Blueprint Pages
 
 on:
+  # A trigger cannot name the default branch, so every branch triggers and the
+  # decide job skips the others. Any push to the default branch builds, so a
+  # change to CODEOWNERS relabels the site.
   push:
-    branches: [main]
-    paths:
-      - "blueprint/**"
-      - "**.lean"
-      - "mkdocs.yml"
-      - "theme/**"
-      - ".github/workflows/blueprint-pages.yml"
+    branches: ["**"]
   pull_request:
     paths:
       - "blueprint/**"
@@ -17,6 +14,10 @@ on:
       - "theme/**"
       - ".github/workflows/blueprint-pages.yml"
   workflow_dispatch:
+  # Some events, such as a dismissed review, start no run, so every hour the
+  # decide job builds the default branch's head if it lacks a complete build.
+  schedule:
+    - cron: "23 * * * *"
 
 permissions:
   contents: read
@@ -25,13 +26,159 @@ env:
   AUTOFORM_SOURCE: {{AUTOFORM_SOURCE_YAML}}
   AUTOFORM_REF: {{AUTOFORM_REF_YAML}}
 
+# Runs of the default branch build one at a time; every other ref has its own
+# group. queue: max keeps every pending run, since by default a newly queued
+# run cancels the pending one, which may be the only build of the current head.
 concurrency:
-  group: blueprint-pages
+  group: blueprint-pages-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
-  build:
+  # A push to another branch starts no job, and every other event but the
+  # schedule builds. Only a build of the default branch outside a pull request
+  # publishes. A scheduled run asks GitHub whether the head needs a build.
+  decide:
+    if: github.event_name != 'push' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      publish: ${{ steps.decide.outputs.publish }}
+    steps:
+      - name: Decide whether to build
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # GitHub runs the schedule only on the default branch; other events
+          # name it in their payload.
+          publish=false
+          if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
+            publish=true
+          elif [[ "$GITHUB_EVENT_NAME" != pull_request ]]; then
+            default="$(jq -r '.repository.default_branch // ""' "$GITHUB_EVENT_PATH")"
+            if [[ -n "$default" && "$GITHUB_REF" == "refs/heads/$default" ]]; then
+              publish=true
+            fi
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" != schedule ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          skip() {
+            echo "::notice::$1, so this run builds nothing"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          # A read that fails or makes no sense ends the run green with a
+          # warning, so this run's own failure is never counted as a failed
+          # run of the head; the next scheduled run asks again.
+          unread() {
+            echo "::warning::GitHub did not say $1, so this run builds nothing; the next scheduled run asks again"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          # Free, and the limit is shared by every run in the repository. Asked
+          # first, so a spent hour makes no request fail.
+          hour="$(gh api rate_limit --jq '.resources.core | "\(.limit) \(.remaining)"')" \
+            || unread "how many API requests are left this hour"
+          read -r limit remaining <<< "$hour"
+          [[ "$limit $remaining" =~ ^[0-9]+\ [0-9]+$ ]] || unread "how many API requests are left this hour"
+          # A build may make the hour's limit less 200, and only while it
+          # keeps 50 of what is left for the rest of its run, so it has all
+          # of that while at most 150 are spent when it begins. Starting one
+          # only while at most 100 are spent leaves 50 for this run's own (9
+          # at most) and the other runs of the hour during the Lean build.
+          if (( remaining < limit - 100 )); then
+            skip "Only $remaining of the hour's $limit GitHub API requests are left, and a build starts only while at most 100 are spent"
+          fi
+          api="repos/$GITHUB_REPOSITORY"
+          branch="${GITHUB_REF#refs/heads/}"
+          head="$(gh api "$api/git/ref/heads/$branch" --jq .object.sha)" || unread "which commit $branch is at"
+          if [[ "$head" != "$GITHUB_SHA" ]]; then
+            skip "$branch moved past $GITHUB_SHA after this run was scheduled; the next one checks its new head"
+          fi
+          # The head's newest deployments to the site, newest first. How the
+          # newest one ended says whether the site has a complete build of
+          # the head; the newest that succeeded is when it last had one. A
+          # deploy job that fails, even after deploying, leaves a failed
+          # deployment, so the search goes back past those, up to 6; past
+          # that every failed run of the head counts, which after so many
+          # failures changes the wait little.
+          deployments="$(gh api "$api/deployments?environment=github-pages&sha=$head&per_page=6" --jq '[.[].id | tostring] | join(",")')" \
+            || unread "which deployments of $head are the newest"
+          [[ "$deployments" =~ ^([0-9]+(,[0-9]+)*)?$ ]] || unread "the ids of the newest deployments of $head"
+          state=none
+          deployed_at=0
+          since=0
+          newest=true
+          for deployment in ${deployments//,/ }; do
+            status="$(gh api "$api/deployments/$deployment/statuses?per_page=1" \
+              --jq '.[0] // {} | "\(.state // "none") \(.created_at // "1970-01-01T00:00:00Z" | fromdateiso8601)"')" \
+              || unread "how a deployment of $head ended"
+            read -r ended at <<< "$status"
+            [[ "$at" =~ ^[0-9]+$ ]] || unread "when a deployment of $head ended"
+            if [[ "$newest" == true ]]; then
+              state="$ended"
+              deployed_at="$at"
+              newest=false
+            fi
+            if [[ "$ended" == success ]]; then
+              since="$at"
+              break
+            fi
+          done
+          # How many runs of this workflow on the head failed, and when the last
+          # one ended. Only the runs that failed after the newest successful
+          # deployment count, so failures the site has recovered from never
+          # lengthen the wait.
+          # This file, whatever it is called: owner/repo/.github/workflows/NAME@ref.
+          workflow="${GITHUB_WORKFLOW_REF%%@*}"
+          workflow="${workflow##*/}"
+          failed="$(gh api "$api/actions/workflows/$workflow/runs?branch=$branch&head_sha=$head&status=completed&per_page=100" \
+            --jq '[.workflow_runs[] | select(.event != "pull_request")
+              | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "startup_failure")
+              | .updated_at | fromdateiso8601 | select(. >= '"$since"')] | "\(length) \(max // 0)"')" \
+            || unread "which runs of $head failed"
+          read -r failures failed_at <<< "$failed"
+          [[ "$failures $failed_at" =~ ^[0-9]+\ [0-9]+$ ]] || unread "which runs of $head failed"
+          now="$(date +%s)"
+          if [[ "$state" == success ]] && (( failures == 0 )); then
+            if (( now - deployed_at < 86400 )); then
+              skip "The site was deployed from $head less than a day ago, and no run of it has failed since"
+            fi
+            why="the site was deployed from $head a day ago or more"
+          elif (( failures > 0 )); then
+            delay=$(( 3600 << (failures > 5 ? 5 : failures - 1) ))
+            if (( delay > 86400 )); then
+              delay=86400
+            fi
+            if (( now - failed_at < delay )); then
+              skip "$failures runs of $head have failed, and a retry waits $(( delay / 3600 ))h after the last one"
+            fi
+            why="$failures runs of $head have failed, the last one $(( delay / 3600 ))h or more ago"
+          else
+            why="the site has no complete build of $head"
+          fi
+          echo "::notice::Building, since $why"
+          echo "build=true" >> "$GITHUB_OUTPUT"
+
+  # Builds the Lean project, which runs the project's own build code, and
+  # extracts the statement skeletons from it. The build job takes nothing from
+  # here but the skeleton report, and only after checking that the report
+  # names its own checkout's blueprint.
+  lean:
+    needs: decide
+    if: needs.decide.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Check out project
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,52 +187,255 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.12.1"
+          # The build runs project code, which could poison a cache the build job restores.
+          enable-cache: false
 
-      # Rejects cycles and dangling links, and fails when a node names a Lean
-      # declaration that is not in the sources.
+      - name: Detect statement review
+        run: |
+          set -euo pipefail
+          marker="blueprint/.autoform-review"
+          has_review_artifacts=false
+          if [[ -d blueprint/readbacks ]] || \
+            git grep -q '^[[:space:]]*review_approved[[:space:]]*:' -- blueprint/roadmap; then
+            has_review_artifacts=true
+          fi
+          if [[ -e "$marker" || -L "$marker" ]]; then
+            if [[ ! -f "$marker" || -L "$marker" ]] || \
+              ! echo "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620  $marker" \
+                | sha256sum --check --strict; then
+              echo "invalid Autoform review policy marker: $marker" >&2
+              exit 1
+            fi
+            echo "AUTOFORM_REVIEW_ENABLED=true" >> "$GITHUB_ENV"
+          elif [[ "$has_review_artifacts" == true ]]; then
+            echo "review cards or approvals exist without $marker" >&2
+            exit 1
+          fi
+
+      - name: Install elan for statement review
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            https://github.com/leanprover/elan/releases/download/v4.2.3/elan-x86_64-unknown-linux-gnu.tar.gz \
+            -o elan.tar.gz
+          echo "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2  elan.tar.gz" \
+            | sha256sum --check --strict
+          tar xzf elan.tar.gz
+          ./elan-init -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Build Lean for statement review
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        run: |
+          lake exe cache get || echo "no cache available; building from source"
+          lake build
+
+      # Exit status 1 means some declaration did not resolve; the report says
+      # which, and the build job's review check fails on it.
+      - name: Extract statement skeletons
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/autoform-skeleton"
+          status=0
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            autoform skeleton blueprint --lean-root . \
+            --output "$RUNNER_TEMP/autoform-skeleton/skeleton-report.json" || status=$?
+          if (( status > 1 )); then
+            exit "$status"
+          fi
+
+      - name: Upload the skeleton report
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: autoform-skeleton-report
+          path: ${{ runner.temp }}/autoform-skeleton/skeleton-report.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # Checks reviews, labels approvals, and builds the site from a fresh
+  # checkout, without building or running the Lean project. MkDocs still runs
+  # mkdocs.yml and theme/, which CODEOWNERS must give a code owner.
+  build:
+    needs: [decide, lean]
+    runs-on: ubuntu-latest
+    outputs:
+      unchecked: ${{ steps.render.outputs.unchecked }}
+      # The deploy job deploys only in the attempt that rendered the site.
+      attempt: ${{ github.run_attempt }}
+    permissions:
+      contents: read
+      pull-requests: read
+      # Authenticating an approval asks for the verify run on the approved commit.
+      actions: read
+      # ... and whether its pull request ever changed its base branch.
+      issues: read
+    steps:
+      - name: Check out project
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Authenticating approvals finds the commit that recorded each hash.
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          # Never restore what the lean job could have written.
+          enable-cache: false
+
+      # Rejects cycles, dangling links, and raw HTML in articles, and fails
+      # when a node names a Lean declaration that is not in the sources.
       - name: Validate the theorem DAG and its declarations
         run: >-
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           autoform check blueprint --lean-root .
 
-      # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
-      # and permalinks into the Lean code at this exact commit.
-      - name: Render the blueprint
+      # Decided again from this checkout, not taken from the lean job.
+      - name: Detect statement review
+        run: |
+          set -euo pipefail
+          marker="blueprint/.autoform-review"
+          has_review_artifacts=false
+          if [[ -d blueprint/readbacks ]] || \
+            git grep -q '^[[:space:]]*review_approved[[:space:]]*:' -- blueprint/roadmap; then
+            has_review_artifacts=true
+          fi
+          if [[ -e "$marker" || -L "$marker" ]]; then
+            if [[ ! -f "$marker" || -L "$marker" ]] || \
+              ! echo "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620  $marker" \
+                | sha256sum --check --strict; then
+              echo "invalid Autoform review policy marker: $marker" >&2
+              exit 1
+            fi
+            echo "AUTOFORM_REVIEW_ENABLED=true" >> "$GITHUB_ENV"
+          elif [[ "$has_review_artifacts" == true ]]; then
+            echo "review cards or approvals exist without $marker" >&2
+            exit 1
+          fi
+
+      - name: Download the skeleton report
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: autoform-skeleton-report
+          path: ${{ runner.temp }}/autoform-skeleton
+
+      # Without --bundle the check derives the bundle from the report, which it
+      # refuses unless the report names this checkout's blueprint hash.
+      - name: Verify statement reviews
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
         run: >-
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          autoform render blueprint
-          --output site-src
-          --lean-root .
-          --require-declarations
+          autoform review check blueprint
+          --skeleton-report "$RUNNER_TEMP/autoform-skeleton/skeleton-report.json"
 
+      # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
+      # and permalinks into the Lean code at this exact commit.
+      # Only a build that publishes authenticates approvals, giving the
+      # authoritative label (the rule is in autoform_cli/README.md). Approvals
+      # a failed request or spent budget left unchecked are counted here for
+      # the deploy job.
+      - name: Render the blueprint
+        id: render
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PUBLISH: ${{ needs.decide.outputs.publish }}
+        run: |
+          set -euo pipefail
+          review_args=()
+          if [[ "${AUTOFORM_REVIEW_ENABLED:-}" == true ]]; then
+            review_args=(--review --skeleton-report "$RUNNER_TEMP/autoform-skeleton/skeleton-report.json")
+            if [[ "$PUBLISH" == true ]]; then
+              review_args+=(--authenticate github)
+            fi
+          fi
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            autoform render blueprint \
+            --output site-src \
+            --lean-root . \
+            --require-declarations \
+            "${review_args[@]}"
+          unchecked="$(jq '.unchecked_approvals // {} | length' site-src/publication.json)"
+          echo "unchecked=$unchecked" >> "$GITHUB_OUTPUT"
+
+      # mkdocs.yml reads formulas with autoform's Markdown extension, the
+      # one check reads articles with, so autoform is installed here too, from
+      # the ref that rendered the site.
       - name: Build the Markdown site
         run: >-
           uvx --from mkdocs==1.6.1
-          --with mkdocs-material==9.6.21
+          --with mkdocs-material==9.7.7
           --with mkdocs-literate-nav==0.6.2
-          --with pymdown-extensions==10.21.3
+          --with markdown==3.10.3
+          --with pymdown-extensions==11.0.1
+          --with "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           mkdocs build --strict
 
+      # Named for this attempt: deploy-pages takes the one artifact of the
+      # run with the name it is given, and a re-run's list still holds the
+      # artifacts of earlier attempts.
       - name: Upload Pages artifact
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: needs.decide.outputs.publish == 'true'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
+          name: github-pages-${{ github.run_attempt }}
           path: site
 
   deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: build
+    if: needs.decide.outputs.publish == 'true'
+    needs: [decide, build]
     runs-on: ubuntu-latest
     permissions:
+      # The head check reads the repository and its default branch.
+      contents: read
       pages: write
       id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # Only a site this attempt rendered, of the current head of the default
+      # branch, replaces the site; a re-run of this job alone fails here.
+      - name: Check that this attempt built the default branch's head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILT_IN_ATTEMPT: ${{ needs.build.outputs.attempt }}
+        run: |
+          set -euo pipefail
+          if [[ "$BUILT_IN_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]]; then
+            echo "::error::This is attempt $GITHUB_RUN_ATTEMPT, but the site was rendered in attempt ${BUILT_IN_ATTEMPT:-none}, so it does not replace the site; re-run all jobs to render it again"
+            exit 1
+          fi
+          branch="$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
+          head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --jq .object.sha)"
+          if [[ ! "$head" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::GitHub did not name the head of the default branch, so nothing is deployed"
+            exit 1
+          fi
+          if [[ "$head" != "$GITHUB_SHA" ]]; then
+            echo "::error::This build is of $GITHUB_SHA, but the default branch is at $head, so it does not replace the site"
+            exit 1
+          fi
+
       - name: Configure GitHub Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
+
+      # The site just deployed understates these approvals, and says so in
+      # publication.json. The run fails so that is seen, not passed over as
+      # green, and a later run checks them again.
+      - name: Fail when approvals could not be checked
+        if: needs.build.outputs.unchecked != '0'
+        env:
+          UNCHECKED: ${{ needs.build.outputs.unchecked }}
+        run: |
+          echo "::error::The site is deployed, but $UNCHECKED approvals could not be checked, so they read self-approved; publication.json lists each with the reason, and a later run checks them again"
+          exit 1

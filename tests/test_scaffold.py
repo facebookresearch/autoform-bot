@@ -13,11 +13,13 @@ import re
 import shutil
 import stat
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from autoform_cli import approvals
 from autoform_cli import scaffold as scaffold_module
 from autoform_cli.coverage import load_coverage
 from autoform_cli.graph import load_graph
@@ -25,14 +27,15 @@ from autoform_cli.scaffold import ScaffoldError, scaffold_project
 
 _EXPECTED = {
     ".github/autoform_audit.py",
+    ".github/workflows/autoform-review-gate.yml",
     ".github/workflows/autoform-verify.yml",
     ".github/workflows/blueprint-pages.yml",
     ".gitignore",
     "README.md",
     "blueprint/.gitignore",
+    "blueprint/.autoform-review",
     "blueprint/README.md",
     "blueprint/coverage/README.md",
-    "blueprint/javascripts/mathjax.js",
     "blueprint/roadmap/README.md",
     "blueprint/sources/README.md",
     "mkdocs.yml",
@@ -323,7 +326,7 @@ def test_force_overwrites(tmp_path: Path) -> None:
     ("relative", "expected"),
     [
         ("mkdocs.yml", b'site_name: "Finite Flat"'),
-        ("blueprint/javascripts/mathjax.js", b"window.MathJax"),
+        ("theme/main.html", b'{% extends "base.html" %}'),
     ],
 )
 def test_force_atomically_breaks_hard_links_for_rendered_and_static_files(
@@ -653,6 +656,8 @@ def test_scaffolded_blueprint_tracks_authored_structure(tmp_path: Path) -> None:
 
     assert "dependencies.md" in ignored
     assert "structure.md" not in ignored
+    # A read-back write killed by SIGTERM or SIGKILL leaves its staging file.
+    assert ".autoform-readback-*.tmp" in ignored
 
 
 def test_scaffolded_theme_defers_navigation_to_the_book(tmp_path: Path) -> None:
@@ -709,6 +714,786 @@ def test_generated_ci_pins_the_checkout_that_scaffolded_it(
     assert ref == head
     assert "@main" not in verify
 
+
+def test_generated_ci_rebuilds_opted_in_statement_review_evidence(tmp_path: Path) -> None:
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    workflows = tmp_path / ".github/workflows"
+    verify = (workflows / "autoform-verify.yml").read_text(encoding="utf-8")
+    pages = (workflows / "blueprint-pages.yml").read_text(encoding="utf-8")
+
+    for workflow in (verify, pages):
+        assert 'marker="blueprint/.autoform-review"' in workflow
+        assert "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620" in workflow
+        assert "review cards or approvals exist without $marker" in workflow
+        assert "review_approved[[:space:]]*:' -- blueprint/roadmap" in workflow
+        assert "AUTOFORM_REVIEW_ENABLED=true" in workflow
+        assert "review prepare" not in workflow and "autoform-review.json" not in workflow
+    # One extraction per command: the check derives its own bundle.
+    assert "autoform review check blueprint --lean-root .\n" in verify
+    # Pages extracts once, in the job that builds Lean, and checks the report.
+    report = '"$RUNNER_TEMP/autoform-skeleton/skeleton-report.json"'
+    assert f"autoform review check blueprint\n          --skeleton-report {report}\n" in pages
+    assert f"review_args=(--review --skeleton-report {report})" in pages
+    assert "--review-bundle" not in pages
+    assert "Build Lean for statement review" in pages
+    assert (tmp_path / "blueprint/.autoform-review").read_text(encoding="utf-8") == (
+        "autoform-review-policy/v1\n"
+    )
+
+
+# What a statement-review step mentions: a review or skeleton command, a
+# --review flag, the skeleton report's directory or artifact, or Lean set up
+# for the review.
+_REVIEW_MARKERS = ("autoform review", "autoform skeleton", "--review", "autoform-skeleton", "for statement review")
+# The same opt-in, tested inside a script that must run either way. Only the
+# branch taken when it holds is exempt; an else or elif branch is read too.
+_REVIEW_BRANCH = re.compile(
+    r'^if \[\[ "\$\{AUTOFORM_REVIEW_ENABLED:-\}" == true \]\]; then\n.*?^(?=else$|elif |fi$)', re.MULTILINE | re.DOTALL
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "gated"),
+    [
+        ("autoform-verify.yml", "Verify statement reviews"),
+        ("blueprint-pages.yml", "Verify statement reviews"),
+        ("autoform-review-gate.yml", "Authenticate changed approvals"),
+    ],
+)
+def test_statement_review_steps_run_only_in_projects_that_opted_in(tmp_path: Path, name: str, gated: str) -> None:
+    """A project without the review marker never extracts a skeleton report,
+    and its Lean-mapped articles need no durable article_id, so a review step
+    that ran there would fail its CI. Steps are found by what they mention, not
+    by name, so a step added later is held to the gate too. Rendering the site
+    must run either way, so its script sets its review arguments only in the
+    branch that runs when the same test holds."""
+
+    yaml = pytest.importorskip("yaml")
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    jobs = yaml.safe_load((tmp_path / ".github/workflows" / name).read_text(encoding="utf-8"))["jobs"]
+    review = [
+        step
+        for job in jobs.values()
+        for step in job.get("steps", [])
+        if any(marker in json.dumps(step) for marker in _REVIEW_MARKERS)
+    ]
+
+    assert gated in [step.get("name") for step in review]
+    for step in review:
+        if step.get("if") == "env.AUTOFORM_REVIEW_ENABLED == 'true'":
+            continue
+        rest = json.dumps(dict(step, run=_REVIEW_BRANCH.sub("", step.get("run", ""))))
+        assert not any(marker in rest for marker in _REVIEW_MARKERS), f"{step.get('name')} runs without the opt-in"
+
+
+def test_the_approval_gate_runs_apart_from_the_lean_build(tmp_path: Path) -> None:
+    """A review event reruns only the gate, and the gate asks about its own
+    pull request; the Lean build keeps one run per ref, so a review arriving
+    cannot cancel it."""
+
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    workflows = tmp_path / ".github/workflows"
+    verify = (workflows / "autoform-verify.yml").read_text(encoding="utf-8")
+    gate = (workflows / "autoform-review-gate.yml").read_text(encoding="utf-8")
+    pages = (workflows / "blueprint-pages.yml").read_text(encoding="utf-8")
+
+    assert "pull_request_review" not in verify
+    assert "review authenticate" not in verify
+    assert "group: autoform-verify-${{ github.ref }}\n" in verify
+    assert "github.event_name" not in verify
+    assert "pull_request_review:\n    types: [submitted, dismissed]" in gate
+    assert "group: autoform-review-gate-${{ github.event.pull_request.number }}" in gate
+    assert "base.sha }}" not in gate and "BASE_SHA" not in gate
+    assert "PR_NUMBER: ${{ github.event.pull_request.number }}" in gate
+    assert "pull-requests: read" in gate
+    # Pages reads the verify run and builds every push to the default branch, so a change to CODEOWNERS
+    # relabels the site. A trigger cannot name the default branch, so every branch triggers.
+    assert "actions: read" in pages
+    assert '  push:\n    branches: ["**"]\n  pull_request:\n' in pages
+    # A pull request's runs never cancel a pending main build, and neither does a newer run of main, such as
+    # a re-run of an old one: the pending run may be the only build of the current head.
+    assert "  group: blueprint-pages-${{ github.ref }}\n  cancel-in-progress: false\n  queue: max\n" in pages
+
+
+def test_pages_authenticates_approvals_in_a_job_that_never_builds_the_project(
+    tmp_path: Path,
+) -> None:
+    """Building Lean runs the project's own build code, so the job that reads
+    the token, labels approvals, and uploads the site takes only the skeleton
+    report from the Lean job, and restores no cache that job could write."""
+
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    pages = (tmp_path / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8")
+    jobs = pages.split("\njobs:\n")[1]
+    lean = jobs.split("\n  lean:\n")[1].split("\n  build:\n")[0]
+    build = jobs.split("\n  build:\n")[1].split("\n  deploy:\n")[0]
+
+    assert "lake build" in lean and "autoform skeleton blueprint --lean-root ." in lean
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in lean
+    assert "GITHUB_TOKEN" not in lean and "--authenticate" not in lean
+    assert "    needs: [decide, lean]\n" in build
+    assert "lake" not in build and "elan" not in build
+    assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in build
+    assert "--authenticate github" in build and "fetch-depth: 0" in build
+    for permission in ("pull-requests: read", "actions: read", "issues: read"):
+        assert permission in build and permission not in lean
+    assert pages.count("enable-cache: false") == 2
+
+
+# Answers ``gh api PATH [--jq FILTER]`` from $GH_STUB/<PATH up to any query,
+# with every other character than a letter or digit made _>.json, and records
+# each PATH in $GH_STUB/calls. A path with no answer fails, as a failed request.
+_GH_STUB = r"""#!/bin/bash
+set -u
+[ "$1" = api ] || { echo "unexpected: gh $*" >&2; exit 99; }
+path=$2
+shift 2
+filter=.
+while [ $# -gt 0 ]; do
+  case $1 in
+    --jq) filter=$2; shift 2 ;;
+    *) echo "unexpected gh argument: $1" >&2; exit 99 ;;
+  esac
+done
+printf '%s\n' "$path" >> "$GH_STUB/calls"
+answer="$GH_STUB/$(printf '%s' "${path%%\?*}" | tr -c 'A-Za-z0-9' '_').json"
+[ -f "$answer" ] || { echo "gh: HTTP 502 for $path" >&2; exit 1; }
+exec jq -r "$filter" "$answer"
+"""
+
+
+def _step(workflow: Path, job: str, name: str) -> str:
+    """The script of the step called ``name`` in ``job`` of ``workflow``."""
+
+    yaml = pytest.importorskip("yaml")
+    steps = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"][job]["steps"]
+    scripts = [step["run"] for step in steps if step.get("name") == name]
+    assert len(scripts) == 1, f"{job} has {len(scripts)} steps called {name!r}"
+    return scripts[0]
+
+
+def _run_step(
+    tmp_path: Path,
+    script: str,
+    answers: dict[str, object],
+    *,
+    tools: dict[str, str] | None = None,
+    cwd: Path | None = None,
+    **env: str,
+) -> tuple[subprocess.CompletedProcess[str], list[str], dict[str, str]]:
+    """Run a step's script with ``gh api`` answering from ``answers``.
+
+    ``tools`` maps other commands the step runs to stand-in bash scripts.
+    Returns the finished process, the paths it asked GitHub for, and what it
+    wrote to $GITHUB_OUTPUT.
+    """
+
+    if shutil.which("jq") is None:
+        pytest.skip("the workflow steps filter GitHub's answers with jq")
+    stub = tmp_path / "gh-stub"
+    stub.mkdir()
+    gh = stub / "gh"
+    gh.write_text(_GH_STUB, encoding="utf-8")
+    gh.chmod(0o755)
+    for path, answer in answers.items():
+        (stub / (re.sub(r"[^A-Za-z0-9]", "_", path) + ".json")).write_text(
+            json.dumps(answer, default=_HoursAgo.timestamp), encoding="utf-8"
+        )
+    for name, body in (tools or {}).items():
+        (stub / name).write_text(f"#!/bin/bash\n{body}\n", encoding="utf-8")
+        (stub / name).chmod(0o755)
+    output = tmp_path / "github-output"
+    output.touch()
+    done = subprocess.run(
+        ["bash", "-c", script],
+        cwd=cwd,
+        env={
+            "PATH": f"{stub}{os.pathsep}{os.path.dirname(shutil.which('jq') or '')}{os.pathsep}/usr/bin:/bin",
+            "GH_STUB": str(stub),
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_REPOSITORY": "owner/project",
+            **env,
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    calls_file = stub / "calls"
+    calls = calls_file.read_text(encoding="utf-8").splitlines() if calls_file.exists() else []
+    outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+    return done, calls, outputs
+
+
+_REPOSITORY = "repos/owner/project"
+_MAIN = f"{_REPOSITORY}/git/ref/heads/main"
+
+
+_HEAD_CHECK = "Check that this attempt built the default branch's head"
+
+
+@pytest.mark.parametrize(
+    ("answers", "deploys"),
+    [
+        ({_REPOSITORY: {"default_branch": "main"}, _MAIN: {"object": {"sha": "a" * 40}}}, True),
+        # main has moved on, as when an old run is re-run.
+        ({_REPOSITORY: {"default_branch": "main"}, _MAIN: {"object": {"sha": "b" * 40}}}, False),
+        # The default branch is not the branch this run built.
+        (
+            {
+                _REPOSITORY: {"default_branch": "trunk"},
+                f"{_REPOSITORY}/git/ref/heads/trunk": {"object": {"sha": "b" * 40}},
+            },
+            False,
+        ),
+        # A default branch with another name deploys its own head.
+        (
+            {
+                _REPOSITORY: {"default_branch": "trunk"},
+                f"{_REPOSITORY}/git/ref/heads/trunk": {"object": {"sha": "a" * 40}},
+            },
+            True,
+        ),
+        # A failed lookup, or an answer that names no commit, deploys nothing.
+        ({_MAIN: {"object": {"sha": "a" * 40}}}, False),
+        ({_REPOSITORY: {"default_branch": "main"}}, False),
+        ({_REPOSITORY: {"default_branch": "main"}, _MAIN: {"object": {}}}, False),
+    ],
+)
+def test_pages_deploys_only_a_build_of_the_default_branch_head(
+    tmp_path: Path, answers: dict[str, object], deploys: bool
+) -> None:
+    """The check runs before the deploy, whatever the review settings, so
+    nothing but a build of the current head replaces the site."""
+
+    scaffold_project(tmp_path / "project", title="Finite Flat", autoform_ref="1" * 40)
+    workflow = tmp_path / "project/.github/workflows/blueprint-pages.yml"
+    pages = workflow.read_text(encoding="utf-8")
+    deploy = pages.split("\n  deploy:\n")[1]
+    assert deploy.index(f"- name: {_HEAD_CHECK}\n") < deploy.index("uses: actions/deploy-pages@")
+    assert "      contents: read\n" in deploy.split("    steps:\n")[0]
+    # Nothing skips the check or lets the deploy go on after it fails, and the deploy depends on nothing else.
+    yaml = pytest.importorskip("yaml")
+    job = yaml.safe_load(pages)["jobs"]["deploy"]
+    assert job["if"] == "needs.decide.outputs.publish == 'true'"
+    steps = {step["name"]: step for step in job["steps"]}
+    assert set(steps[_HEAD_CHECK]) == {"name", "env", "run"}
+    assert set(steps["Configure GitHub Pages"]) == {"name", "uses"}
+    assert set(steps["Deploy"]) == {"name", "id", "uses", "with"}
+
+    done, _, _ = _run_step(
+        tmp_path,
+        _step(workflow, "deploy", _HEAD_CHECK),
+        answers,
+        GITHUB_SHA="a" * 40,
+        GITHUB_RUN_ATTEMPT="1",
+        BUILT_IN_ATTEMPT="1",
+    )
+
+    assert (done.returncode == 0) is deploys, done.stderr
+    if not deploys:
+        assert "::error::" in done.stdout or "HTTP 502" in done.stderr
+
+
+@pytest.mark.parametrize("built_in", ["1", ""], ids=["earlier-attempt", "no-build-output"])
+def test_pages_deploys_only_the_site_its_own_attempt_rendered(tmp_path: Path, built_in: str) -> None:
+    """A re-run of the deploy job alone, or of failed jobs after a green build, keeps the earlier
+    attempt's build; its artifact holds an older render of the head, which may show a withdrawn
+    approval, so it never replaces the site, even while its commit is still the head."""
+
+    yaml = pytest.importorskip("yaml")
+    scaffold_project(tmp_path / "project", title="Finite Flat", autoform_ref="1" * 40)
+    workflow = tmp_path / "project/.github/workflows/blueprint-pages.yml"
+    jobs = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]
+    assert jobs["build"]["outputs"]["attempt"] == "${{ github.run_attempt }}"
+    head_check = next(step for step in jobs["deploy"]["steps"] if step.get("name") == _HEAD_CHECK)
+    assert head_check["env"]["BUILT_IN_ATTEMPT"] == "${{ needs.build.outputs.attempt }}"
+    # Each attempt uploads and deploys only an artifact named for itself, so it never finds an earlier one.
+    upload = next(step for step in jobs["build"]["steps"] if step.get("name") == "Upload Pages artifact")
+    deploy = next(step for step in jobs["deploy"]["steps"] if step.get("name") == "Deploy")
+    assert upload["with"]["name"] == deploy["with"]["artifact_name"] == "github-pages-${{ github.run_attempt }}"
+
+    answers = {_REPOSITORY: {"default_branch": "main"}, _MAIN: {"object": {"sha": "a" * 40}}}
+    done, calls, _ = _run_step(
+        tmp_path,
+        _step(workflow, "deploy", _HEAD_CHECK),
+        answers,
+        GITHUB_SHA="a" * 40,
+        GITHUB_RUN_ATTEMPT="2",
+        BUILT_IN_ATTEMPT=built_in,
+    )
+
+    assert done.returncode == 1
+    assert done.stdout.startswith(f"::error::This is attempt 2, but the site was rendered in attempt {built_in or 'none'}")
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("manifest", "unchecked"),
+    [
+        ({"unchecked_approvals": {"a/b": "HTTP 502", "a/c": "HTTP 502"}}, "2"),
+        ({"unchecked_approvals": {}}, "0"),
+        # A render without --authenticate checks nothing, so it leaves nothing unchecked.
+        ({}, "0"),
+    ],
+)
+def test_pages_fails_after_deploying_a_site_whose_approvals_could_not_be_checked(
+    tmp_path: Path, manifest: dict[str, object], unchecked: str
+) -> None:
+    """The site still deploys, and says which approvals it understates, but the run is not green."""
+
+    yaml = pytest.importorskip("yaml")
+    scaffold_project(tmp_path / "project", title="Finite Flat", autoform_ref="1" * 40)
+    workflow = tmp_path / "project/.github/workflows/blueprint-pages.yml"
+    jobs = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]
+    assert [step["id"] for step in jobs["build"]["steps"] if step.get("name") == "Render the blueprint"] == ["render"]
+    assert jobs["build"]["outputs"]["unchecked"] == "${{ steps.render.outputs.unchecked }}"
+    name = "Fail when approvals could not be checked"
+    names = [step.get("name") for step in jobs["deploy"]["steps"]]
+    assert names.index(name) == len(names) - 1 and names[-2] == "Deploy"
+    assert jobs["deploy"]["steps"][-1]["if"] == "needs.build.outputs.unchecked != '0'"
+
+    site = tmp_path / "checkout"
+    site.mkdir()
+    uvx = 'mkdir -p site-src && printf \'%s\' "$MANIFEST" > site-src/publication.json'
+    done, _, outputs = _run_step(
+        tmp_path,
+        _step(workflow, "build", "Render the blueprint"),
+        {},
+        tools={"uvx": uvx},
+        cwd=site,
+        MANIFEST=json.dumps(manifest),
+        AUTOFORM_SOURCE="https://example.com/autoform.git",
+        AUTOFORM_REF="main",
+        AUTOFORM_REVIEW_ENABLED="true",
+        PUBLISH="true",
+        RUNNER_TEMP=str(tmp_path),
+    )
+    assert done.returncode == 0, done.stderr
+    assert outputs == {"unchecked": unchecked}
+
+    failed = subprocess.run(
+        ["bash", "-c", _step(workflow, "deploy", name)],
+        env={"PATH": "/usr/bin:/bin", "UNCHECKED": "2"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert failed.returncode == 1
+    assert failed.stdout.startswith("::error::The site is deployed, but 2 approvals could not be checked")
+
+
+_RUNS = f"{_REPOSITORY}/actions/workflows/blueprint-pages.yml/runs"
+_DEPLOYMENTS = f"{_REPOSITORY}/deployments"
+
+
+class _HoursAgo:
+    """``hours`` before the step that reads it runs. Timestamps taken at
+    collection aged as a slow suite ran: by the time it reached these tests,
+    a failure meant to sit half an hour inside its backoff window had left it."""
+
+    def __init__(self, hours: float) -> None:
+        self.hours = hours
+
+    def __repr__(self) -> str:
+        return f"_HoursAgo({self.hours})"
+
+    def timestamp(self) -> str:
+        return (datetime.now(timezone.utc) - timedelta(hours=self.hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _github_after(
+    *,
+    failed: tuple[tuple[str, float] | tuple[str, float, str], ...] = (),
+    deployed: tuple[str, float] | None = None,
+    earlier: tuple[tuple[str, float], ...] = (),
+    remaining: int = 1000,
+    limit: int = 1000,
+    head: str = "a" * 40,
+) -> dict[str, object]:
+    """GitHub's answers when runs of the head failed ``failed`` = ((event, hours ago), ...)
+    and its newest deployment ended ``deployed`` = (state, hours ago), the ones
+    before it ``earlier``, newest first. A run may name another conclusion
+    than failure as a third item."""
+
+    runs = [
+        {"event": run[0], "conclusion": run[2] if len(run) > 2 else "failure", "updated_at": _HoursAgo(run[1])}
+        for run in failed
+    ]
+    runs.append({"event": "push", "conclusion": "success", "updated_at": _HoursAgo(0.1)})
+    answers: dict[str, object] = {
+        _MAIN: {"object": {"sha": head}},
+        _RUNS: {"workflow_runs": runs},
+        "rate_limit": {"resources": {"core": {"limit": limit, "remaining": remaining}}},
+    }
+    deployments = ((deployed,) + earlier) if deployed is not None else ()
+    answers[_DEPLOYMENTS] = [{"id": 7 - index} for index in range(len(deployments))]
+    for index, (state, hours) in enumerate(deployments):
+        answers[f"{_DEPLOYMENTS}/{7 - index}/statuses"] = [{"state": state, "created_at": _HoursAgo(hours)}]
+    return answers
+
+
+def _decide(
+    tmp_path: Path,
+    answers: dict[str, object],
+    event: str = "schedule",
+    *,
+    ref: str = "refs/heads/main",
+    default_branch: str = "main",
+    workflow: str = "blueprint-pages.yml",
+):
+    scaffold_project(tmp_path / "project", title="Finite Flat", autoform_ref="1" * 40)
+    script = _step(tmp_path / "project/.github/workflows/blueprint-pages.yml", "decide", "Decide whether to build")
+    # A scheduled run's payload names no repository.
+    payload = tmp_path / "event.json"
+    payload.write_text(
+        json.dumps({} if event == "schedule" else {"repository": {"default_branch": default_branch}}),
+        encoding="utf-8",
+    )
+    return _run_step(
+        tmp_path,
+        script,
+        answers,
+        GITHUB_EVENT_NAME=event,
+        GITHUB_EVENT_PATH=str(payload),
+        GITHUB_REF=ref,
+        GITHUB_SHA="a" * 40,
+        GITHUB_WORKFLOW_REF=f"owner/project/.github/workflows/{workflow}@{ref}",
+    )
+
+
+def test_pages_runs_every_hour_and_builds_only_what_decide_asks_for(tmp_path: Path) -> None:
+    yaml = pytest.importorskip("yaml")
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    pages = yaml.safe_load((tmp_path / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8"))
+    # YAML 1.1 reads the key "on" as true.
+    assert pages[True]["schedule"] == [{"cron": "23 * * * *"}]
+    decide = pages["jobs"]["decide"]
+    assert decide["permissions"] == {"contents": "read", "actions": "read", "deployments": "read"}
+    assert decide["outputs"] == {
+        "build": "${{ steps.decide.outputs.build }}",
+        "publish": "${{ steps.decide.outputs.publish }}",
+    }
+    assert pages["jobs"]["lean"]["needs"] == "decide"
+    assert pages["jobs"]["lean"]["if"] == "needs.decide.outputs.build == 'true'"
+    # The build and deploy jobs need the lean job, so they skip with it.
+    assert pages["jobs"]["build"]["needs"] == ["decide", "lean"]
+    assert pages["jobs"]["deploy"]["needs"] == ["decide", "build"]
+
+
+def test_pages_publishes_only_builds_of_the_default_branch_whatever_its_name(tmp_path: Path) -> None:
+    """A repository whose default branch is not main once built every hour and never deployed:
+    the schedule runs on the default branch, but uploading and deploying asked for main."""
+
+    yaml = pytest.importorskip("yaml")
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    text = (tmp_path / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8")
+    assert "refs/heads/main" not in text and "[main]" not in text
+    jobs = yaml.safe_load(text)["jobs"]
+    # A push to any other branch starts no runner: GitHub evaluates the condition before queuing the job.
+    assert jobs["decide"]["if"] == (
+        "github.event_name != 'push' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+    )
+    upload = next(step for step in jobs["build"]["steps"] if step.get("name") == "Upload Pages artifact")
+    assert upload["if"] == jobs["deploy"]["if"] == "needs.decide.outputs.publish == 'true'"
+    render = next(step for step in jobs["build"]["steps"] if step.get("name") == "Render the blueprint")
+    assert render["env"]["PUBLISH"] == "${{ needs.decide.outputs.publish }}"
+
+
+@pytest.mark.parametrize(
+    ("event", "ref", "publish"),
+    [
+        ("push", "refs/heads/trunk", "true"),
+        ("workflow_dispatch", "refs/heads/trunk", "true"),
+        ("workflow_dispatch", "refs/heads/feature", "false"),
+        ("workflow_dispatch", "refs/heads/main", "false"),
+        ("pull_request", "refs/heads/trunk", "false"),
+    ],
+)
+def test_decide_publishes_a_build_only_of_the_default_branch(
+    tmp_path: Path, event: str, ref: str, publish: str
+) -> None:
+    done, calls, outputs = _decide(tmp_path, {}, event, ref=ref, default_branch="trunk")
+
+    assert done.returncode == 0, done.stderr
+    assert (outputs, calls) == ({"publish": publish, "build": "true"}, [])
+
+
+def test_a_scheduled_run_publishes_on_a_default_branch_not_called_main(tmp_path: Path) -> None:
+    answers = {path.replace("heads/main", "heads/trunk"): answer for path, answer in _github_after().items()}
+
+    done, calls, outputs = _decide(tmp_path, answers, ref="refs/heads/trunk")
+
+    assert done.returncode == 0, done.stderr
+    assert outputs == {"publish": "true", "build": "true"}
+    assert calls[1] == f"{_REPOSITORY}/git/ref/heads/trunk"
+    assert calls[-1].startswith(f"{_RUNS}?branch=trunk&")
+
+
+def test_a_scheduled_run_asks_for_the_runs_of_its_own_workflow_file(tmp_path: Path) -> None:
+    """A copy of the workflow under another name would ask for runs of a file
+    that does not exist, and never build."""
+
+    answers = {path.replace("blueprint-pages.yml", "pages.yml"): answer for path, answer in _github_after().items()}
+
+    done, calls, outputs = _decide(tmp_path, answers, workflow="pages.yml")
+
+    assert done.returncode == 0, done.stderr
+    assert outputs == {"publish": "true", "build": "true"}
+    assert calls[-1].startswith(f"{_REPOSITORY}/actions/workflows/pages.yml/runs?branch=main&")
+
+
+@pytest.mark.parametrize(
+    ("answers", "build"),
+    [
+        pytest.param(_github_after(), True, id="never-built"),
+        pytest.param(_github_after(deployed=("success", 1)), False, id="complete"),
+        pytest.param(_github_after(deployed=("success", 25)), True, id="a-day-old"),
+        pytest.param(_github_after(deployed=("success", 25), remaining=899), False, id="a-day-old-short-of-requests"),
+        pytest.param(_github_after(deployed=("failure", 1)), True, id="deploy-failed"),
+        pytest.param(_github_after(deployed=("success", 3), failed=(("push", 2),)), True, id="failed-after-deploying"),
+        pytest.param(
+            _github_after(deployed=("success", 3), failed=(("push", 2),), remaining=10),
+            False,
+            id="failed-after-deploying-short-of-requests",
+        ),
+        pytest.param(_github_after(deployed=("success", 1), failed=(("push", 2),)), False, id="failed-before"),
+        pytest.param(_github_after(deployed=("success", 3), failed=(("pull_request", 2),)), False, id="pull-request"),
+        # Three failures wait 4h after the last.
+        pytest.param(_github_after(failed=(("push", 5), ("schedule", 4), ("schedule", 3))), False, id="backing-off"),
+        pytest.param(_github_after(failed=(("push", 7), ("schedule", 6), ("schedule", 5))), True, id="backed-off"),
+        # However many failures, a day at most.
+        pytest.param(_github_after(failed=(("schedule", 23),) * 10), False, id="backing-off-a-day"),
+        pytest.param(_github_after(failed=(("schedule", 25),) * 10), True, id="backed-off-a-day"),
+        # Failures the site recovered from before its last deployment never lengthen the wait.
+        pytest.param(
+            _github_after(deployed=("success", 25), failed=(("push", 30),) * 5 + (("schedule", 2),)),
+            True,
+            id="recovered-failures-uncounted",
+        ),
+        pytest.param(
+            _github_after(deployed=("success", 25), failed=(("push", 30),) * 5 + (("schedule", 0.5),)),
+            False,
+            id="backing-off-after-recovering",
+        ),
+        # A deploy job that deploys and then fails, say on unchecked approvals, leaves a failed deployment:
+        # the failures before the last successful one still never count, and each red deploy since does.
+        *(
+            pytest.param(
+                _github_after(
+                    deployed=("failure", hours),
+                    earlier=(("success", 25),),
+                    failed=(("push", 30),) * 5 + (("schedule", hours),),
+                ),
+                True,
+                id=f"red-deploy-after-recovering-{hours}h",
+            )
+            for hours in (1.1, 2, 12, 23)
+        ),
+        pytest.param(
+            _github_after(
+                deployed=("failure", 1.5),
+                earlier=(("failure", 3.5), ("success", 25)),
+                failed=(("push", 30),) * 5 + (("schedule", 3.5), ("schedule", 1.5)),
+            ),
+            False,
+            id="red-deploys-backing-off",
+        ),
+        pytest.param(
+            _github_after(
+                deployed=("failure", 2.5),
+                earlier=(("failure", 4.5), ("success", 25)),
+                failed=(("push", 30),) * 5 + (("schedule", 4.5), ("schedule", 2.5)),
+            ),
+            True,
+            id="red-deploys-backed-off",
+        ),
+        # Six failed deployments and no successful one among them: every failure counts.
+        pytest.param(
+            _github_after(deployed=("failure", 23), earlier=(("failure", 24),) * 5, failed=(("schedule", 23),) * 6),
+            False,
+            id="six-red-deploys",
+        ),
+        # A build starts only while at most 100 of the hour's requests are spent.
+        pytest.param(_github_after(remaining=900), True, id="full-allowance"),
+        pytest.param(_github_after(remaining=899), False, id="spent-hour"),
+        pytest.param(_github_after(remaining=14900, limit=15000), True, id="enterprise-full-allowance"),
+        pytest.param(_github_after(remaining=14899, limit=15000), False, id="enterprise-spent-hour"),
+        pytest.param(_github_after(failed=(("schedule", 0.5, "timed_out"),)), False, id="timed-out"),
+        pytest.param(_github_after(failed=(("push", 0.5, "startup_failure"),)), False, id="startup-failure"),
+        pytest.param(_github_after(failed=(("push", 0.5, "cancelled"),)), True, id="cancelled"),
+        pytest.param(_github_after(deployed=("error", 1)), True, id="deploy-error"),
+        pytest.param(_github_after(deployed=("in_progress", 1)), True, id="deploy-in-progress"),
+        pytest.param(_github_after(deployed=("inactive", 1)), True, id="deploy-inactive"),
+        # 3600 << 52 is negative in bash, and 3600 << 63 is 0: the shift is capped, so the wait stays a day.
+        pytest.param(_github_after(failed=(("schedule", 23),) * 53), False, id="backing-off-a-day-53"),
+        pytest.param(_github_after(failed=(("schedule", 23),) * 64), False, id="backing-off-a-day-64"),
+    ],
+)
+def test_a_scheduled_run_builds_the_head_until_it_has_a_complete_build(
+    tmp_path: Path, answers: dict[str, object], build: bool
+) -> None:
+    """Without it, nothing builds the head again after a failed run, and a
+    dismissed review, which starts no run, never reaches the site."""
+
+    done, calls, outputs = _decide(tmp_path, answers)
+
+    assert done.returncode == 0, done.stderr
+    assert outputs == {"publish": "true", "build": "true" if build else "false"}
+    head = "a" * 40
+    # GET /rate_limit costs nothing, and is asked first, so a spent hour makes no request fail.
+    assert calls[0] == "rate_limit"
+    hour = answers["rate_limit"]["resources"]["core"]
+    if hour["remaining"] < hour["limit"] - 100:
+        assert calls == ["rate_limit"]
+        assert done.stdout.startswith(f"::notice::Only {hour['remaining']} of the hour's {hour['limit']} GitHub API")
+        return
+    # Each deployment's newest status, newest first, up to the first that succeeded.
+    statuses = []
+    for deployment in answers[_DEPLOYMENTS]:  # type: ignore[attr-defined]
+        statuses.append(f"{_DEPLOYMENTS}/{deployment['id']}/statuses?per_page=1")
+        if answers[f"{_DEPLOYMENTS}/{deployment['id']}/statuses"][0]["state"] == "success":  # type: ignore[index]
+            break
+    assert calls[1:] == [
+        _MAIN,
+        f"{_DEPLOYMENTS}?environment=github-pages&sha={head}&per_page=6",
+        *statuses,
+        f"{_RUNS}?branch=main&head_sha={head}&status=completed&per_page=100",
+    ]
+    assert ("::notice::Building" in done.stdout) is build
+
+
+def test_the_docs_state_how_few_spent_requests_hold_the_schedule_back(tmp_path: Path, repo_root: Path) -> None:
+    """A reviewer reads in the skill and the README when a withdrawal can wait past a day.
+
+    The verifier has its whole ceiling while at most _RESERVED_REQUESTS - _LEFT_AFTER are spent when it
+    begins. Decide starts a build only with 50 of those to spare, for its own requests and the other runs
+    of the hour during the Lean build, so a request or two elsewhere never turns a run past the ceiling red.
+    """
+
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    script = _step(tmp_path / ".github/workflows/blueprint-pages.yml", "decide", "Decide whether to build")
+    spent = re.search(r"if \(\( remaining < limit - (\d+) \)\); then", script)
+    assert spent is not None
+    assert approvals._RESERVED_REQUESTS - approvals._LEFT_AFTER - int(spent[1]) == 50
+    readme, skill = (
+        " ".join((repo_root / path).read_text(encoding="utf-8").split())
+        for path in ("autoform_cli/README.md", "skills/human-review/SKILL.md")
+    )
+
+    assert f"other runs keep more than {spent[1]} of each hour's API requests spent" in readme
+    assert f"builds only while at most {spent[1]} of the hour's API requests are spent" in skill
+
+
+def test_a_scheduled_run_of_a_head_main_has_moved_past_builds_nothing(tmp_path: Path) -> None:
+    done, calls, outputs = _decide(tmp_path, _github_after(head="b" * 40))
+
+    assert done.returncode == 0, done.stderr
+    assert (outputs, calls) == ({"publish": "true", "build": "false"}, ["rate_limit", _MAIN])
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"rate_limit": None},
+        {"rate_limit": {"resources": {"core": {}}}},
+        {_MAIN: None},
+        {_DEPLOYMENTS: None},
+        # Never put into a path: the stub answers it, as GitHub might.
+        {_DEPLOYMENTS: [{"id": "7 8"}], f"{_DEPLOYMENTS}/7 8/statuses": [{"state": "success"}]},
+        {f"{_DEPLOYMENTS}/7/statuses": None},
+        {_RUNS: None},
+        {_RUNS: {"workflow_runs": [{"event": "push", "conclusion": "failure", "updated_at": "soon"}]}},
+    ],
+    ids=[
+        "failed-rate-limit",
+        "no-remaining-count",
+        "failed-head",
+        "failed-deployments",
+        "malformed-deployment",
+        "failed-statuses",
+        "failed-runs",
+        "malformed-runs",
+    ],
+)
+def test_a_scheduled_run_that_cannot_decide_builds_nothing_and_warns(tmp_path: Path, broken: dict[str, object]) -> None:
+    """A red run would count as a failed run of the head, and lengthen the wait
+    for its next build, or end a complete build's day early."""
+
+    answers = {**_github_after(deployed=("success", 1)), **broken}
+    answers = {path: answer for path, answer in answers.items() if answer is not None}
+
+    done, calls, outputs = _decide(tmp_path, answers)
+
+    assert done.returncode == 0, done.stderr
+    assert outputs == {"publish": "true", "build": "false"}
+    assert done.stdout.startswith("::warning::GitHub did not say ")
+    assert done.stdout.endswith(", so this run builds nothing; the next scheduled run asks again\n")
+    assert not any("/7 8/" in call for call in calls)
+
+
+@pytest.mark.parametrize("merged", [True, False], ids=["merge-commit", "linear"])
+def test_the_gate_takes_its_base_only_from_the_merge_commit_of_the_pull_request(tmp_path: Path, merged: bool) -> None:
+    """In any other checkout HEAD^1 is just the commit before, which would make the gate trust the wrong base."""
+
+    scaffold_project(tmp_path / "project", title="Finite Flat", autoform_ref="1" * 40)
+    script = _step(
+        tmp_path / "project/.github/workflows/autoform-review-gate.yml", "authenticate", "Authenticate changed approvals"
+    )
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    identity = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com"}
+    identity |= {"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+
+    def git(*args: str) -> str:
+        done = subprocess.run(
+            ["git", *args], cwd=checkout, env={**os.environ, **identity}, capture_output=True, text=True, check=True
+        )
+        return done.stdout.strip()
+
+    git("init", "--quiet", "--initial-branch=main")
+    git("commit", "--quiet", "--allow-empty", "-m", "Start")
+    git("checkout", "--quiet", "-b", "topic")
+    git("commit", "--quiet", "--allow-empty", "-m", "Change")
+    if merged:
+        git("checkout", "--quiet", "main")
+        git("commit", "--quiet", "--allow-empty", "-m", "Move main")
+        git("merge", "--quiet", "--no-ff", "--no-edit", "topic")
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "uvx").write_text('#!/bin/bash\nprintf \'%s\\n\' "$@" > "$UVX_ARGS"\n', encoding="utf-8")
+    (stub / "uvx").chmod(0o755)
+    called = tmp_path / "uvx-args"
+
+    done = subprocess.run(
+        ["bash", "-c", script],
+        cwd=checkout,
+        env={
+            "PATH": f"{stub}{os.pathsep}{os.environ['PATH']}",
+            "HOME": str(tmp_path),
+            "PR_NUMBER": "7",
+            "AUTOFORM_SOURCE": "https://example.com/autoform.git",
+            "AUTOFORM_REF": "0" * 40,
+            "UVX_ARGS": str(called),
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    if merged:
+        base = git("rev-parse", "HEAD^1")
+        assert done.returncode == 0, done.stderr
+        assert called.read_text(encoding="utf-8").splitlines() == [
+            "--from", f"git+https://example.com/autoform.git@{'0' * 40}", "autoform", "review", "authenticate",
+            "blueprint", "--github", "--pr", "7", "--since", base, "--trusted-ref", base,
+        ]
+    else:
+        assert done.returncode == 2
+        assert "error: the checkout is not the merge commit of #7, so its base is unknown" in done.stderr
+        assert not called.exists()
 
 def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:
     scaffold_project(

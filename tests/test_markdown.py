@@ -19,6 +19,11 @@ from autoform_cli.markdown import (
     rendered_visible_text,
 )
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
+
 #: Heading forms whose published anchors are easy to get subtly wrong, paired
 #: with what the configured MkDocs renderer actually publishes for them. Several
 #: of these depend on block context or on a specific extension setting rather
@@ -83,7 +88,7 @@ def test_the_extension_config_matches_the_scaffolded_mkdocs_yml() -> None:
     block = template[template.index("markdown_extensions:") :]
     block = block[: block.index("\nextra_css:")]
 
-    declared = set(re.findall(r"^  - ([\w.]+):?(?:\s+#.*)?$", block, re.MULTILINE))
+    declared = set(re.findall(r"^  - ([\w.]+(?::\w+)?):?(?:\s+#.*)?$", block, re.MULTILINE))
 
     assert declared == set(SITE_EXTENSIONS)
     # Settings that change heading IDs have to agree too, not just the names.
@@ -91,6 +96,74 @@ def test_the_extension_config_matches_the_scaffolded_mkdocs_yml() -> None:
     assert SITE_EXTENSION_CONFIGS["toc"] == {"toc_depth": "2-3"}
     assert "generic: true" in block
     assert SITE_EXTENSION_CONFIGS["pymdownx.arithmatex"] == {"generic": True}
+    # So do the fences, which the protected formula form is one of.
+    fences = re.findall(r"- name: (\w+)\n +class: (\w+)\n +format: !!python/name:([\w.]+)\.(\w+)\n", block)
+    assert [
+        (fence["name"], fence["class"], fence["format"].__module__, fence["format"].__name__)
+        for fence in SITE_EXTENSION_CONFIGS["pymdownx.superfences"]["custom_fences"]  # type: ignore[index]
+    ] == fences
+
+
+#: Pins the Pages build may keep below uv.lock. mkdocs-literate-nav 0.6.2
+#: requires only mkdocs>=1.4.1, so it resolves beside the pinned mkdocs; the
+#: lock's 0.6.3 would also install properdocs.
+PAGES_PINS_BELOW_THE_LOCK = {"mkdocs-literate-nav": "0.6.2"}
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        "autoform_cli/templates/github/workflows/blueprint-pages.yml",
+        "skills/setup/assets/cabannes-thesis-project/.github/workflows/blueprint-pages.yml",
+    ],
+)
+def test_the_pages_build_pins_the_renderer_and_the_locked_versions(workflow: str) -> None:
+    """The checks run the renderer the CLI installs; the site runs the one its
+    workflow installs. Both must be the same exact versions, or testimony and
+    anchors are judged by a parser that does not build the published page.
+
+    The site build installs its own pinned set, and a set with no solution
+    fails every project's Pages run: mkdocs-material 9.6.21 requires
+    pymdown-extensions<11, and the build pinned 11.0.1 beside it. uv.lock is a
+    set uv resolved, so each package the build pins that the lock holds must
+    carry the lock's version."""
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    locked: dict[str, set[str]] = {}
+    with (root / "uv.lock").open("rb") as handle:
+        for package in tomllib.load(handle)["package"]:
+            locked.setdefault(package["name"], set()).add(package["version"])
+    pages = (root / workflow).read_text(encoding="utf-8")
+    build = pages[pages.index("- name: Build the Markdown site") :]
+    build = build[: build.index("\n\n")]
+    for package in ("markdown", "pymdown-extensions"):
+        pins = re.findall(rf'^    "{re.escape(package)}==([^"]+)",$', pyproject, re.MULTILINE)
+        assert len(pins) >= 1 and len(set(pins)) == 1, (package, pins)
+        assert re.findall(rf"--with {re.escape(package)}==(\S+)", pages) == pins[:1], package
+    # The site's Markdown reads formulas with autoform's own extension.
+    assert '--with "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in build
+    pinned = dict(re.findall(r"--(?:from|with) ([\w.-]+)==(\S+)", build))
+
+    assert "mkdocs-material" in pinned
+    drifted = {
+        name: (version, sorted(locked[name]))
+        for name, version in pinned.items()
+        if name in locked and locked[name] != {version} and PAGES_PINS_BELOW_THE_LOCK.get(name) != version
+    }
+    assert drifted == {}, "Pages pins that differ from uv.lock"
+
+
+def test_the_documented_site_build_installs_autoform() -> None:
+    """The README's build command, like the workflow's, installs autoform,
+    whose Markdown extension mkdocs.yml loads."""
+
+    readme = (Path(__file__).resolve().parents[1] / "autoform_cli/README.md").read_text(encoding="utf-8")
+    builds = re.findall(r"^uv run --with mkdocs .*?mkdocs build --strict$", readme, re.MULTILINE | re.DOTALL)
+
+    assert builds
+    for command in builds:
+        assert '--with "<AUTOFORM_PLUGIN_ROOT>"' in command, command
 
 
 def test_frontmatter_cannot_contribute_anchors(tmp_path: Path) -> None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import errno
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -247,6 +249,159 @@ def test_rejects_noncanonical_readme_case_with_actionable_error(tmp_path: Path, 
     message = str(caught.value)
     assert relative in message
     assert "must be named exactly README.md" in message
+
+
+@pytest.mark.parametrize("relative", ["README.md", "chapter/README.md"])
+def test_rejects_a_readme_linked_to_a_file_with_another_name(tmp_path: Path, relative: str) -> None:
+    """Containment follows the linked file, so this README contained itself.
+
+    Loading then never ended, so the check runs in a subprocess with a timeout.
+    """
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    _roadmap_page(blueprint, "chapter/README.md", "# Chapter\n")
+    page = blueprint / "roadmap" / relative
+    page.rename(page.with_name("intro.txt"))
+    page.symlink_to("intro.txt")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "autoform_cli", "check", str(blueprint)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    target = Path(relative).with_name("intro.txt").as_posix()
+    assert result.returncode == 1
+    assert f"error: {relative}: links to {target}; replace the link with the page itself" in result.stdout
+
+
+@pytest.mark.parametrize("target", ["b", "B"], ids=["same-case", "case-alias"])
+def test_rejects_a_readme_linked_to_another_chapters_readme(tmp_path: Path, target: str) -> None:
+    """Only a link to another name was refused.
+
+    Under a case alias, on a case-insensitive filesystem, the link also passed
+    the duplicate check, and the chapter's pages attached to the root.
+    """
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    _roadmap_page(blueprint, "b/README.md", "# B\n")
+    _roadmap_page(blueprint, "a/leaf.md", "# Leaf\n")
+    link = blueprint / "roadmap" / "a" / "README.md"
+    link.symlink_to(f"../{target}/README.md")
+    if not link.exists():
+        pytest.skip("the filesystem is case-sensitive")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues == (f"a/README.md: links to {target}/README.md; replace the link with the page itself",)
+
+
+@pytest.mark.parametrize(
+    ("link", "target"),
+    [
+        ("blueprint/README.md", "roadmap/README.md"),
+        ("blueprint/README.md", "roadmap/chapter/README.md"),
+        ("README.md", "blueprint/roadmap/README.md"),
+    ],
+)
+def test_a_readme_link_above_the_roadmap_contains_nothing(tmp_path: Path, link: str, target: str) -> None:
+    """The search for a container climbed past the roadmap and followed this link back into it.
+
+    A page then contained itself, or its own container, and loading never ended,
+    so the load runs in a subprocess with a timeout.
+    """
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    _node(blueprint, "chapter/result.md", "# Result\n")
+    (tmp_path / link).symlink_to(target)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys\n"
+            "from autoform_cli.graph import load_graph\n"
+            "print(sorted((node.id, node.parent) for node in load_graph(sys.argv[1]).nodes.values()))",
+            str(blueprint),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.stdout == f"{[('chapter', 'roadmap'), ('chapter/result', 'chapter'), ('roadmap', None)]}\n"
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
+@pytest.mark.parametrize("relative", ["", "chapter"], ids=["roadmap", "chapter"])
+def test_a_roadmap_directory_that_cannot_be_listed_is_refused(tmp_path: Path, relative: str) -> None:
+    """A glob skipped it, and its articles were missing from the graph without a word."""
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    _node(blueprint, "chapter/result.md", "# Result\n")
+    directory = (blueprint / "roadmap" / relative).resolve()
+    directory.chmod(0)
+    try:
+        with pytest.raises(GraphValidationError) as caught:
+            load_graph(blueprint)
+    finally:
+        directory.chmod(0o755)
+
+    assert f"cannot list roadmap directory {directory}: Permission denied" in caught.value.issues
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
+def test_a_chapter_link_that_cannot_be_entered_does_not_crash_the_load(tmp_path: Path) -> None:
+    """The walk does not follow the link, but the chapter check did, and raised PermissionError.
+
+    The linked pages are not loaded, as before; check refuses the link when it publishes.
+    """
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    target = tmp_path / "chapter"
+    target.mkdir()
+    (target / "README.md").write_text("# Chapter\n", encoding="utf-8")
+    (blueprint / "roadmap" / "chapter").symlink_to(target)
+    target.chmod(0o644)
+    try:
+        graph = load_graph(blueprint)
+    finally:
+        target.chmod(0o755)
+
+    assert list(graph.nodes) == ["roadmap"]
+
+
+def test_a_readme_that_links_to_itself_is_refused_rather_than_called_missing(tmp_path: Path) -> None:
+    """It was skipped, and the chapter was then told to add the README.md it has."""
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    _node(blueprint, "chapter/result.md", "# Result\n")
+    page = (blueprint / "roadmap" / "chapter").resolve() / "README.md"
+    page.unlink()
+    page.symlink_to("README.md")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    loop = OSError(errno.ELOOP, os.strerror(errno.ELOOP), str(page))
+    assert caught.value.issues == (f"chapter/README.md: cannot read roadmap page: {loop}",)
+
+
+def test_a_page_that_cannot_be_decoded_does_not_hide_a_chapter_without_a_readme(tmp_path: Path) -> None:
+    """Any discovery error held the chapter check back, though only a page that cannot be checked needs to."""
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    _node(blueprint, "chapter/result.md", "# Result\n").write_bytes(b"# Result \xff\n")
+    _roadmap_page(blueprint, "orphan/leaf.md", "# Leaf\n")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert [issue.split(":", 1)[0] for issue in caught.value.issues] == ["chapter/result.md", "orphan"]
 
 
 def test_splits_statement_and_proof_dependencies(tmp_path: Path) -> None:

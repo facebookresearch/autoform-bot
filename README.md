@@ -7,7 +7,8 @@ progress from your coding assistant.
 ## Installation
 
 Requires Python 3.10+, [`uv`](https://docs.astral.sh/uv/), Git, and Lean 4
-v4.27.0 or newer with Lake.
+v4.27.0 or newer with Lake. On an Intel Mac, also install the Xcode Command
+Line Tools, to compile `cmarkgfm`.
 
 **Claude Code**
 

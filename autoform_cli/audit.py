@@ -8,11 +8,13 @@ contacts a network service or writes generated state back into the blueprint.
 from __future__ import annotations
 
 import json
+import os
 import re
 import statistics
 from bisect import bisect_right
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Mapping
 
 from . import status
 from .coverage import CoverageSummary, load_coverage
@@ -26,12 +28,14 @@ from .lean import (
     index_failure_message,
     snapshot_project_sources,
 )
-from .markdown import FENCE as _FENCE
+from .markdown import content_lines as _content_lines
 from .markdown import frontmatter_end as _frontmatter_end
 from .markdown import HEADING as _HEADING
-from .markdown import HTML_COMMENT as _HTML_COMMENT
 from .markdown import local_target_issue as _local_target_issue
 from .markdown import markdown_links as _markdown_links
+from .readback import Readback
+from .review import ReviewBundle, review_findings
+from .skeleton import SkeletonReport
 
 #: More siblings than this at one level is a table of contents, not a chapter.
 _MAX_DIRECT_CHILDREN = 24
@@ -49,10 +53,11 @@ _DECLARATION_KEYWORDS = {
     "axiom": frozenset({"axiom"}),
     "class": frozenset({"class"}),
     "corollary": frozenset({"lemma", "theorem"}),
-    "def": frozenset({"def"}),
-    "definition": frozenset({"def"}),
+    "def": frozenset({"def", "irreducible_def"}),
+    "definition": frozenset({"def", "irreducible_def"}),
     "inductive": frozenset({"inductive"}),
     "instance": frozenset({"instance"}),
+    "irreducible_def": frozenset({"irreducible_def"}),
     "lemma": frozenset({"lemma", "theorem"}),
     "opaque": frozenset({"opaque"}),
     "proposition": frozenset({"lemma", "theorem"}),
@@ -113,11 +118,18 @@ def audit_blueprint(
     blueprint_dir: str | Path,
     *,
     lean_root: str | Path | None = None,
+    skeleton: SkeletonReport | None = None,
+    review_bundle: ReviewBundle | None = None,
+    readbacks: Mapping[tuple[str, str], Readback] | None = None,
 ) -> AuditResult:
     """Audit *blueprint_dir* using only local, committed-style source files.
 
     Graph syntax errors are returned as structured findings rather than raised.
     Semantic checks run only after :func:`load_graph` has produced a valid graph.
+
+    ``readbacks`` are the cards a caller validated ``review_bundle`` with. When
+    given, review approvals are judged against them instead of the vault read
+    again, so the audit describes the state that was checked.
     """
 
     blueprint = Path(blueprint_dir).expanduser().resolve()
@@ -142,6 +154,9 @@ def audit_blueprint(
         lean_root=lean_root,
         coverage=coverage,
         coverage_findings=coverage_findings,
+        skeleton=skeleton,
+        review_bundle=review_bundle,
+        readbacks=readbacks,
     )
 
 
@@ -151,6 +166,9 @@ def audit_graph(
     lean_root: str | Path | None = None,
     coverage: CoverageSummary | None = None,
     coverage_findings: list[AuditFinding] | None = None,
+    skeleton: SkeletonReport | None = None,
+    review_bundle: ReviewBundle | None = None,
+    readbacks: Mapping[tuple[str, str], Readback] | None = None,
 ) -> AuditResult:
     """Audit an already loaded graph without modifying it or its source files."""
 
@@ -165,7 +183,9 @@ def audit_graph(
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
         children = contained.get(node_id, ())
-        article = _read_article(node.path)
+        # The text the graph parsed, so it is never judged beside metadata
+        # parsed from other bytes.
+        article = _read_article(graph.article_text(node))
 
         if node.formalizable:
             if children:
@@ -245,7 +265,55 @@ def audit_graph(
     findings.extend(coverage_findings)
     if lean_root is not None:
         findings.extend(_lean_findings(graph, lean_root))
+    findings.extend(_review_findings(graph, review_bundle, skeleton, readbacks))
     return _result(findings, coverage=coverage)
+
+
+def _review_findings(
+    graph: Graph,
+    bundle: ReviewBundle | None,
+    current_skeleton: SkeletonReport | None,
+    readbacks: Mapping[tuple[str, str], Readback] | None = None,
+) -> list[AuditFinding]:
+    """Fail closed when recorded approval lacks fully current review evidence."""
+
+    approved = [node for node in graph.nodes.values() if node.review_approved is not None]
+    if bundle is None:
+        # The run lacks the evidence, not any one article, so this is reported once.
+        return [
+            AuditFinding(
+                ".",
+                "review-bundle-missing",
+                "review_approved is present but no review evidence was supplied; pass --review to derive it "
+                "in this run, or --review-bundle with a prepared bundle, each with --lean-root",
+            )
+        ] if approved else []
+    if current_skeleton is None:
+        target_ids = {
+            *(node.id for node in approved),
+            *(node.id for node in graph.nodes.values() if node.lean),
+            *(article.node_id for article in bundle.articles),
+        }
+        if not target_ids:
+            target_ids.add("")
+        findings = []
+        for node_id in sorted(target_ids):
+            node = graph.nodes.get(node_id)
+            article_path = _relative_path(node.path, graph.blueprint_dir) if node is not None else node_id
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "review-bundle-unverified",
+                    "a review bundle was supplied without a freshly extracted current skeleton",
+                )
+            )
+        return findings
+    findings: list[AuditFinding] = []
+    for finding in review_findings(graph, bundle, current_skeleton, readbacks=readbacks):
+        node = graph.nodes.get(finding.node_id)
+        article_path = _relative_path(node.path, graph.blueprint_dir) if node else finding.node_id
+        findings.append(AuditFinding(article_path, finding.code, finding.reason))
+    return findings
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,33 +322,15 @@ class _ArticleShape:
     has_depends_section: bool
 
 
-def _read_article(path: Path) -> _ArticleShape:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return _ArticleShape(False, False)
-
+def _read_article(text: str) -> _ArticleShape:
     lines = text.splitlines()
     start = _frontmatter_end(lines)
-    body = _HTML_COMMENT.sub("", "\n".join(lines[start:]))
+    body = "\n".join(lines[start:])
     seen_h1 = False
     before_first_h2 = True
     statement_text = False
     has_depends_section = False
-    fence: tuple[str, int] | None = None
-
-    for line in body.splitlines():
-        fence_match = _FENCE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if fence is None:
-                fence = (marker[0], len(marker))
-            elif marker[0] == fence[0] and len(marker) >= fence[1]:
-                fence = None
-            continue
-        if fence is not None:
-            continue
-
+    for line in _content_lines(body):
         heading = _HEADING.match(line)
         if heading:
             level = len(heading.group(1))
@@ -539,8 +589,11 @@ def _validation_article_path(blueprint: Path, issue: str) -> str:
         candidate = roadmap / "README.md"
     else:
         readme = roadmap / node_id / "README.md"
-        candidate = readme if readme.exists() else roadmap / f"{node_id}.md"
-    if candidate.exists() or roadmap.exists():
+        # os.path.exists is False for a path it cannot stat; Path.exists raises before 3.14.
+        candidate = readme if os.path.exists(readme) else roadmap / f"{node_id}.md"
+        if node_id.casefold().endswith(".md") and not os.path.exists(candidate):
+            candidate = roadmap / node_id  # discovery names a page it could not load by its file
+    if roadmap.exists():
         return _relative_path(candidate, blueprint)
     return "."
 

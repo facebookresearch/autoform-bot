@@ -835,7 +835,7 @@ def test_rendered_probe_imports_modules_and_names_exact_local_modules() -> None:
     assert source.startswith("import Demo\nimport Demo.B\n-- Autoform impact probe.")
     assert (
         'let projectModules : Std.HashSet Name := Std.HashSet.ofList '
-        '[Name.str (Name.anonymous) "Demo", Name.str (Name.anonymous) "Internal"]'
+        '[Lean.Name.str (Lean.Name.anonymous) "Demo", Lean.Name.str (Lean.Name.anonymous) "Internal"]'
     ) in source
     assert ".isPrefixOf" not in source
     assert f'"{skeleton.PROBE_OUTPUT_ENV}"' in source

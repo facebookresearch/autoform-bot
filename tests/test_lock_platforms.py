@@ -4,6 +4,12 @@
 Intel Mac without source builds failed and the MCP servers could not start there. The Linux CI
 matrix cannot observe that, so these tests resolve the committed lock for each platform, and
 check that pyproject.toml alone keeps every other platform on 49 or later.
+
+One package does build from source there. cmarkgfm, the binding to GitHub's cmark-gfm that
+read-back testimony is checked with, stopped publishing x86_64 macOS wheels after 2024.1.14, and
+that release has none for Python 3.13 or later. It is self-contained C compiled through cffi,
+whose build requirements all ship x86_64 macOS wheels, so the clang of the Xcode Command Line
+Tools, which also provide macOS's git, builds it. Nothing else may need a compiler.
 """
 
 from __future__ import annotations
@@ -24,6 +30,8 @@ except ModuleNotFoundError:  # Python 3.10
 
 ROOT = Path(__file__).resolve().parents[1]
 UV = shutil.which("uv")
+#: The packages an Intel Mac builds from source, each for the reason in the module docstring.
+BUILT_ON_INTEL_MACOS = frozenset({"cmarkgfm"})
 
 pytestmark = pytest.mark.skipif(UV is None, reason="uv is not available")
 
@@ -43,19 +51,33 @@ def _locked_cryptography(platform: str) -> tuple[int, ...]:
     return tuple(int(part) for part in versions.pop().split("."))
 
 
-def test_intel_macos_resolves_without_source_builds() -> None:
-    result = _uv(
+def _intel_macos_dry_run(built: frozenset[str]) -> subprocess.CompletedProcess[str]:
+    """Resolve the committed lock for an Intel Mac, building from source only the ``built`` packages."""
+    with (ROOT / "uv.lock").open("rb") as handle:
+        locked = {package["name"] for package in tomllib.load(handle)["package"]}
+    return _uv(
         "sync",
         "--locked",
         "--dry-run",
-        "--no-build",
         "--no-cache",
         "--offline",
         "--no-install-project",
         "--python-platform",
         "x86_64-apple-darwin",
+        *(f"--no-build-package={name}" for name in sorted(locked - built)),
     )
+
+
+def test_intel_macos_resolves_without_other_source_builds() -> None:
+    result = _intel_macos_dry_run(BUILT_ON_INTEL_MACOS)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("package", sorted(BUILT_ON_INTEL_MACOS))
+def test_intel_macos_source_builds_are_still_needed(package: str) -> None:
+    # A package that publishes an Intel-macOS wheel again must leave the exemptions.
+    result = _intel_macos_dry_run(BUILT_ON_INTEL_MACOS - {package})
+    assert result.returncode != 0 and f"`{package}==" in result.stderr, result.stderr
 
 
 def test_intel_macos_keeps_cryptography_with_wheels() -> None:
