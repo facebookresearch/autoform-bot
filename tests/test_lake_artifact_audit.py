@@ -248,6 +248,7 @@ def _run_probe(project: Path, probe: Path, **env: str) -> subprocess.CompletedPr
     )
     assert lean_path.returncode == 0, lean_path.stdout + lean_path.stderr
     clean["AUTOFORM_AUDIT_LEAN_PATH"] = lean_path.stdout.rstrip("\n")
+    clean["LEAN_ABORT_ON_PANIC"] = "1"
     return subprocess.run(
         ["lean", str(probe)], cwd=project, env={**clean, **env}, capture_output=True, text=True, timeout=180
     )
@@ -448,7 +449,7 @@ def _audit_step(workflow: Path) -> str:
 
 # Stubs for the step's commands: uvx answers as an AUTOFORM_REF with or without
 # `work assumptions`, or as a failed fetch; python3 stands in for the audit, and
-# lean for the probe, which prints STUB_PROBE_OUTPUT.
+# lean for the probe, which prints STUB_PROBE_OUTPUT and exits STUB_PROBE_EXIT.
 _STUB_UVX = """#!/bin/sh
 case "$STUB_REF" in
   old)
@@ -475,14 +476,15 @@ printf '%s\\n' "$@" > "$STUB_LOG/audit"
 case "$1" in --*) cp "$2" "$STUB_LOG/contract" ;; esac
 """
 _STUB_LEAN = """#!/bin/sh
-printf '%s\\n' "${LEAN_PATH-unset}" "$AUTOFORM_AUDIT_LEAN_PATH" "$@" > "$STUB_LOG/lean"
+printf '%s\\n' "${LEAN_PATH-unset}" "${LEAN_ABORT_ON_PANIC-unset}" "$AUTOFORM_AUDIT_LEAN_PATH" "$@" > "$STUB_LOG/lean"
 printf '%s' "$STUB_PROBE_OUTPUT"
+exit "${STUB_PROBE_EXIT:-0}"
 """
 _CLEAN = "kernel trust clean (1 root-package declaration(s) audited)\n"
 
 
 def _run_audit_step(
-    repo_root: Path, tmp_path: Path, ref: str, policy: str, probe_output: str = _CLEAN
+    repo_root: Path, tmp_path: Path, ref: str, policy: str, probe_output: str = _CLEAN, probe_exit: int = 0
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     workflow = repo_root / "skills/setup/assets/cabannes-thesis-project/.github/workflows/autoform-verify.yml"
     script = tmp_path / "step.sh"
@@ -504,6 +506,7 @@ def _run_audit_step(
         "STUB_POLICY": policy,
         "STUB_LOG": str(log),
         "STUB_PROBE_OUTPUT": probe_output,
+        "STUB_PROBE_EXIT": str(probe_exit),
     }
 
     result = subprocess.run(
@@ -549,9 +552,10 @@ def test_audit_step_falls_back_only_for_a_ref_without_work_assumptions(
     assert (log / "contract").exists() == (ref == "new")
     if ref == "new":
         assert json.loads((log / "contract").read_text(encoding="utf-8")) == {"articles": []}
-    # Lake only reports the search path; plain lean runs the probe with it.
+    # Lake only reports the search path; plain lean runs the probe with it, and
+    # a panic aborts the probe.
     assert (log / "lake").read_text(encoding="utf-8").splitlines() == ["env", "printenv", "LEAN_PATH"]
-    assert (log / "lean").read_text(encoding="utf-8").splitlines() == ["unset", "/stub/lean/path", recorded[-1]]
+    assert (log / "lean").read_text(encoding="utf-8").splitlines() == ["unset", "1", "/stub/lean/path", recorded[-1]]
     assert result.stdout.endswith(_CLEAN)
 
 
@@ -568,6 +572,19 @@ def test_audit_step_fails_when_the_probe_exits_0_without_its_success_line(
     assert result.returncode == 1, result.stdout + result.stderr
     assert "the audit probe did not end with its success line" in result.stderr
     assert (log / "lean").exists()
+    assert list(runner_temp.iterdir()) == []
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
+def test_audit_step_fails_when_the_probe_exits_nonzero_after_its_success_line(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    # 134 is the status of a probe that LEAN_ABORT_ON_PANIC aborted.
+    result, runner_temp, _ = _run_audit_step(repo_root, tmp_path, "new", "forbidden", probe_exit=134)
+
+    assert result.returncode == 134, result.stdout + result.stderr
+    assert result.stdout.endswith(_CLEAN)
+    assert "the audit probe did not end with its success line" not in result.stderr
     assert list(runner_temp.iterdir()) == []
 
 

@@ -438,9 +438,9 @@ def autoformAuditAxioms (env : Environment) (declName : Name) :
 _IMPORT_BUILD = """  -- `lake env` puts the project's libraries ahead of the toolchain's, so a
   -- root module under `Lean` or `Init` could have replaced this header.
   if (← IO.getEnv "LEAN_PATH").isSome then
-    throwError "LEAN_PATH is set, so this probe's imports may come from the project; run it with plain lean, not lake env: AUTOFORM_AUDIT_LEAN_PATH=\\"$(lake env printenv LEAN_PATH)\\" lean PROBE"
+    throwError "LEAN_PATH is set, so this probe's imports may come from the project; run it with plain lean, not lake env: AUTOFORM_AUDIT_LEAN_PATH=\\"$(lake env printenv LEAN_PATH)\\" LEAN_ABORT_ON_PANIC=1 lean PROBE"
   let some projectPath ← IO.getEnv "AUTOFORM_AUDIT_LEAN_PATH"
-    | throwError "AUTOFORM_AUDIT_LEAN_PATH is not set; run the probe as AUTOFORM_AUDIT_LEAN_PATH=\\"$(lake env printenv LEAN_PATH)\\" lean PROBE"
+    | throwError "AUTOFORM_AUDIT_LEAN_PATH is not set; run the probe as AUTOFORM_AUDIT_LEAN_PATH=\\"$(lake env printenv LEAN_PATH)\\" LEAN_ABORT_ON_PANIC=1 lean PROBE"
   -- The toolchain's library comes first, so `propext` and every other core
   -- name mean the toolchain's constants. A root module under one of its
   -- entries would load the toolchain's file instead and go unaudited.

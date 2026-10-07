@@ -129,7 +129,8 @@ jobs:
           # Plain lean, so the probe's own imports are the toolchain's. The probe
           # loads the build itself, from the search path Lake reports.
           lean_path="$(lake env printenv LEAN_PATH)"
-          AUTOFORM_AUDIT_LEAN_PATH="$lean_path" lean "$probe" | tee "$output"
+          # A panic in the probe aborts it instead of continuing with a default value.
+          AUTOFORM_AUDIT_LEAN_PATH="$lean_path" LEAN_ABORT_ON_PANIC=1 lean "$probe" | tee "$output"
           # Exit status 0 alone does not show that every check ran.
           if ! tail -n 1 "$output" | grep -Eq '^kernel trust clean( except declared open statements)? \('; then
             echo "the audit probe did not end with its success line" >&2

@@ -964,9 +964,10 @@ holds its first component, and Lake lists dependency libraries before the root
 package's, so a dependency library that also provides a root module's first
 component could stand in for the root package's files. The audit refuses that
 with `root module M shares its first component R with another library on the
-search path; rename the module so the audit can run`. The workflow requires the
-probe's success line as its last line, so a probe that stops early fails the
-step even when it exits 0.
+search path; rename the module so the audit can run`. The workflow runs the
+probe with `LEAN_ABORT_ON_PANIC=1`, so a panic stops it instead of letting it
+continue with a default value. It also requires the probe's success line as its
+last line, so a probe that stops early fails the step even when it exits 0.
 
 The audit does not cover build-time IO. `lake build` runs root and dependency
 code, and the Lake configuration, on the same runner before the audit, so that
@@ -1023,7 +1024,8 @@ lake pack /tmp/autoform-root.tgz
 autoform work assumptions blueprint --json > /tmp/autoform-assumptions.json
 python3 .github/autoform_audit.py --open-statements /tmp/autoform-assumptions.json \
   ROOT_PACKAGE /tmp/autoform-root.tgz /tmp/autoform-probe.lean
-AUTOFORM_AUDIT_LEAN_PATH="$(lake env printenv LEAN_PATH)" lean /tmp/autoform-probe.lean
+AUTOFORM_AUDIT_LEAN_PATH="$(lake env printenv LEAN_PATH)" LEAN_ABORT_ON_PANIC=1 \
+  lean /tmp/autoform-probe.lean
 ```
 
 ## Claim contract
