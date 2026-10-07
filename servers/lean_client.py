@@ -30,18 +30,20 @@ PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_PATH_ID = hashlib.sha256(os.fsencode(PACKAGE_ROOT)).hexdigest()[:10]
 
 
+# Code whose changes require replacing a live runtime daemon.
+_RUNTIME_SOURCES = (
+    Path(__file__).resolve(),
+    PACKAGE_ROOT / "servers" / "lean_runtime.py",
+    PACKAGE_ROOT / "servers" / "lsp" / "server.py",
+    PACKAGE_ROOT / "servers" / "repl" / "core.py",
+    PACKAGE_ROOT / "servers" / "repl" / "pool.py",
+)
+
+
 def _build_id() -> str:
     """Fingerprint code that can change persistent runtime behavior."""
     digest = hashlib.sha256()
-    runtime_files = (
-        PACKAGE_ROOT / "servers" / "__init__.py",
-        Path(__file__).resolve(),
-        PACKAGE_ROOT / "servers" / "lean_runtime.py",
-        PACKAGE_ROOT / "servers" / "lsp" / "server.py",
-        PACKAGE_ROOT / "servers" / "repl" / "core.py",
-        PACKAGE_ROOT / "servers" / "repl" / "pool.py",
-    )
-    for path in runtime_files:
+    for path in (PACKAGE_ROOT / "servers" / "__init__.py", *_RUNTIME_SOURCES):
         try:
             digest.update(path.read_bytes())
         except OSError:
@@ -51,15 +53,8 @@ def _build_id() -> str:
 
 def _build_generation() -> int:
     """Order in-place builds so an older live wrapper cannot replace a newer one."""
-    candidates = (
-        Path(__file__).resolve(),
-        PACKAGE_ROOT / "servers" / "lean_runtime.py",
-        PACKAGE_ROOT / "servers" / "lsp" / "server.py",
-        PACKAGE_ROOT / "servers" / "repl" / "core.py",
-        PACKAGE_ROOT / "servers" / "repl" / "pool.py",
-    )
     mtimes: list[int] = []
-    for path in candidates:
+    for path in _RUNTIME_SOURCES:
         try:
             mtimes.append(path.stat().st_mtime_ns)
         except OSError:
