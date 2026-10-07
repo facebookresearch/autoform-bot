@@ -1286,7 +1286,12 @@ def capture_directory_descriptor(
         special=tuple(sorted(special)),
         placeholders=tuple(sorted(placeholders)),
         omitted=tuple(sorted(omitted)),
-        identities=_included_identities(directories, entries),
+        identities=tuple(
+            sorted(
+                [(record.relative, record.identity) for record in directories]
+                + [(record.relative, record.identity) for record in entries if not record.ignored]
+            )
+        ),
         opaque_directories=tuple(sorted(opaque_directories)),
     )
 
@@ -1929,21 +1934,3 @@ def _update_digest(digest, kind: bytes, relative: str, data: bytes) -> None:
     for field in (kind, path, data):
         digest.update(len(field).to_bytes(8, "big"))
         digest.update(field)
-
-
-def _included_identities(
-    directories: list[_DirectoryRecord],
-    entries: list[_EntryRecord],
-) -> tuple[tuple[str, tuple[int, ...]], ...]:
-    return tuple(
-        sorted(
-            [
-                *((record.relative, record.identity) for record in directories),
-                *(
-                    (record.relative, record.identity)
-                    for record in entries
-                    if not record.ignored
-                ),
-            ]
-        )
-    )
