@@ -1214,6 +1214,7 @@ class LeanLibrary:
     src_dir: Path
     roots: tuple[str, ...]
     globs: tuple[str, ...] = ()
+    artifact_dir: Path | None = None
 
 
 def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
@@ -1243,6 +1244,12 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
             [f"cannot safely parse the Lake configuration of {root}: it exceeds the parser's limits"]
         ) from exc
 
+    build_dir = config.get("buildDir", ".lake/build")
+    lean_lib_dir = config.get("leanLibDir", "lib/lean")
+    if not isinstance(build_dir, str) or not isinstance(lean_lib_dir, str):
+        raise SkeletonError([f"cannot read the buildDir/leanLibDir of {root}"])
+    artifact_dir = (root / build_dir / lean_lib_dir).resolve()
+
     libraries: list[LeanLibrary] = []
     for entry in config.get("lean_lib", []) or []:
         if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
@@ -1259,11 +1266,21 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
             globs = [globs]
         if not isinstance(globs, list) or not all(isinstance(item, str) for item in globs):
             globs = []
-        libraries.append(LeanLibrary(name=name, src_dir=src_dir.resolve(), roots=tuple(roots), globs=tuple(globs)))
+        libraries.append(
+            LeanLibrary(
+                name=name,
+                src_dir=src_dir.resolve(),
+                roots=tuple(roots),
+                globs=tuple(globs),
+                artifact_dir=artifact_dir,
+            )
+        )
     if not libraries:
         package = config.get("name")
         if isinstance(package, str) and package:
-            libraries.append(LeanLibrary(name=package, src_dir=root, roots=(package,)))
+            libraries.append(
+                LeanLibrary(name=package, src_dir=root, roots=(package,), artifact_dir=artifact_dir)
+            )
     if not libraries:
         raise SkeletonError([f"the Lake configuration of {root} declares no library"])
     return tuple(libraries)

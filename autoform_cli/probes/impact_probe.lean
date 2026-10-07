@@ -15,8 +15,9 @@ def probeOutputLimit : Nat := {output_limit}
 
 /-- Write one complete record without letting the scratch file grow past the
 CLI's output limit. The Python reader checks the limit again after exit. -/
-def emitRecord (out : IO.FS.Handle) (written : IO.Ref Nat) (record : Json) : IO Unit := do
-  let line := s!"{marker}{{record.compress}}\n"
+def emitRecord (out : IO.FS.Handle) (written : IO.Ref Nat) (marker : String)
+    (record : Json) : IO Unit := do
+  let line := s!"{{marker}}{{record.compress}}\n"
   let total := (← written.get) + line.utf8ByteSize
   if total > probeOutputLimit then
     throw <| IO.userError s!"lake env lean exceeded the {{probeOutputLimit}}-byte output limit"
@@ -124,9 +125,33 @@ run_cmd do
   let out ← IO.FS.Handle.mk path .write
   let written ← IO.mkRef 0
   try
+    -- Module ownership and direct imports come from the loaded environment,
+    -- not source syntax.  Emit even modules with no declarations so the
+    -- evidence is a closed graph over every loaded project module.
+    if {emit_module_evidence} then
+      let sourceSearchPath ← getSrcSearchPath
+      for module in moduleNames do
+        if isLocalModule module then
+          let some moduleIdx := env.getModuleIdx? module | continue
+          let some sourcePath ← sourceSearchPath.findWithExt "lean" module |
+            throwError m!"project module {{module}} has no source path"
+          let sourcePath ← IO.FS.realPath sourcePath
+          let oleanPath ← IO.FS.realPath (← findOLean module)
+          let directImports := env.header.moduleData[moduleIdx.toNat]!.imports.foldl
+            (fun imports imported =>
+              if isLocalModule imported.module && !imports.contains imported.module then
+                imports.push imported.module
+              else imports)
+            #[]
+          AutoformImpact.emitRecord out written "{module_marker}" <| Json.mkObj [
+            ("module", AutoformImpact.nameJson module),
+            ("source_path", Json.str sourcePath.toString),
+            ("olean_path", Json.str oleanPath.toString),
+            ("direct_local_imports", AutoformImpact.namesJson directImports)]
     for (c, info) in env.constants do
       let some module := moduleOf c | continue
       if isLocalModule module then
-        AutoformImpact.emitRecord out written (AutoformImpact.record env isLocal c info module)
+        AutoformImpact.emitRecord out written "{marker}"
+          (AutoformImpact.record env isLocal c info module)
   finally
     out.flush

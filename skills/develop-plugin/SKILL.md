@@ -5,14 +5,17 @@ description: Maintain AutoformBot's code, skills, tests, examples, and installat
 
 # Develop Autoform
 
-Treat Autoform as an example-based plugin for an independent formalization
-repository. State a consumer scenario and invariant. Treat user nudges as
-product evidence; preserve insight, not the transcript, in a focused test so
+Treat Autoform as an example-based plugin for an independent formalization.
+State a consumer scenario and invariant. Treat user nudges as product evidence;
+preserve insight, not the transcript, in a focused test so
 future agents need less steering.
 
-Keep Cabannes-specific facts in examples. Keep plugin and formalization roots
+Keep Cabannes-specific facts in examples and plugin and formalization roots
 distinct. Agents can infer routine details; keep shared agent entrypoints concise
-and link details as on-demand references.
+and link on-demand references.
+
+Keep imports permissive: consumer Lean uses Formalize's
+`autoform work import-impact`; plugin changes preserve it.
 
 For each Lean/Mathlib release, regenerate `production_module_roots` from Lake
 package configs. Update the private creation bundle, catalog identity, and
@@ -24,8 +27,8 @@ descriptors because repeated pathname reads are not a generation boundary.
 Read bounded outputs before descendants, keep each marker schema in its owning
 feature, and require links to match the blob at the stable detected commit.
 
-For claim coordination, local publication views, generated mirrors, and pin or
-release policy, read [repository contracts](references/repository-contracts.md).
+For claims/views/mirrors/pins, read
+[repository contracts](references/repository-contracts.md).
 
 Normally run:
 
