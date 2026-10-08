@@ -89,6 +89,17 @@ target, `bridged` for a result introduced between source targets, and
 Frontmatter is optional. A container article that only supplies prose and
 placement needs none at all; only checked facts are recorded.
 
+Versioned implementation notes live outside the mathematical roadmap at
+`blueprint/.implementation-notes/<article_id>.md`, one file per article. The
+durable ID survives article moves, and article claims keep independent workers
+from editing the same note. Every command that loads the graph, including
+`autoform check`, rejects malformed, empty, symlinked, or orphaned notes; assign
+the article ID before creating its note. Delete the file once its article is
+proved; for a container, delete it once every formalizable descendant is proved.
+The directory is hidden, so current and older renderers omit it from the site
+and publication hash without requiring an `AUTOFORM_REF` migration; `autoform
+audit` reports a note left behind after that point.
+
 ## Assertions and derived status
 
 An article asserts only facts a human or agent verified:
@@ -1212,9 +1223,9 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
      proof that cannot be repaired becomes exactly `sorry` under the open
      policy; otherwise delete the declaration and remove its article's
      `lean:`, `statement`, and `proof`, which works only when nothing else
-     uses it. When neither applies, the
-     revision is blocked: release the claims and report it. Record what
-     happened under `## Execution notes` of each touched article.
+     uses it. When neither applies, the revision is blocked: release the claims
+     and report it. Record what happened in the revision commit and report. Use
+     an article's implementation note only while that article remains unproved.
 
    An unused statement dependency, which rules out the contained route, is
    re-reviewed under the revised meaning, X' on the expand route and X's new
@@ -1308,10 +1319,11 @@ from runtime snapshots and publication.
 
 `autoform render` publishes the book, derived progress, and dependency maps at
 project, chapter, nested-scope, local, and full-graph scales. It never reads a
-`graph.json` or an operational queue. Hidden files are omitted, while symlinks,
-credentials, logs, provider state, and agent/task state inside the blueprint
-cause the render to fail rather than silently leak them. Source and output
-directories must be disjoint.
+`graph.json` or an operational queue. Hidden files, including
+`.implementation-notes`, are omitted, while symlinks, credentials, logs,
+provider state, and agent/task state inside the blueprint cause the render to
+fail rather than silently leak them. Source and output directories must be
+disjoint.
 
 Every render writes `publication.json` with the source-content hash, Git ref,
 article and dependency counts, and available views. It contains no timestamp or

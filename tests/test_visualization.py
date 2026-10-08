@@ -315,6 +315,27 @@ def test_the_vault_gets_a_structure_page_obsidian_can_read(tmp_path: Path) -> No
     assert "dependencies.md)" not in page
 
 
+def test_the_vault_structure_page_leaves_implementation_notes_out(tmp_path: Path) -> None:
+    """The page is the shape of the book, and notes are not part of the book."""
+    blueprint = tmp_path / "blueprint"
+    _write_node(blueprint / "roadmap" / "README.md", "Roadmap")
+    article_id = "af_0123456789abcdef01234567"
+    _write_node(
+        blueprint / "roadmap" / "base.md",
+        "Base",
+        declaration="def",
+        article_id=article_id,
+    )
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    (notes / f"{article_id}.md").write_text("Mathlib gap.\n", encoding="utf-8")
+
+    page = export_structure(blueprint).read_text(encoding="utf-8")
+
+    assert "[Base](roadmap/base.md)" in page
+    assert ".implementation-notes" not in page
+
+
 def test_generated_structure_can_be_refreshed(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _write_node(blueprint / "roadmap" / "first.md", "First")

@@ -50,6 +50,7 @@ _FALSE = frozenset({"false", "no"})
 _STATEMENT_SECTION = "depends on"
 _PROOF_SECTION = "proof depends on"
 _SOURCES_SECTION = "sources"
+IMPLEMENTATION_NOTES_DIR = ".implementation-notes"
 
 
 class GraphValidationError(ValueError):
@@ -196,6 +197,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     open_statements = policy == "allowed"
             parsed.append(node)
 
+    if not issues:
+        issues.extend(_implementation_note_issues(blueprint, article_ids))
     if issues:
         raise GraphValidationError(issues)
 
@@ -341,6 +344,83 @@ def _chapter_issues(roadmap_root: Path) -> list[str]:
             f"README.md, so they attach to the roadmap root instead of a chapter; "
             f"add {chapter.name}/README.md with the chapter's H1 title"
         )
+    return issues
+
+
+def _implementation_note_issues(
+    blueprint: Path, article_ids: dict[str, str]
+) -> list[str]:
+    """Validate hidden, per-article implementation notes.
+
+    Notes are keyed by durable ``article_id`` rather than roadmap paths, so an
+    article move does not orphan its handoff and independent articles never
+    share a file. The hidden directory is already omitted by old and current
+    renderers, keeping the format backward-compatible with pinned projects.
+    """
+    issues: list[str] = []
+    try:
+        aliases = [
+            path.name
+            for path in blueprint.iterdir()
+            if path.name.casefold() == IMPLEMENTATION_NOTES_DIR.casefold()
+            and path.name != IMPLEMENTATION_NOTES_DIR
+        ]
+    except OSError as error:
+        return [f"cannot inspect implementation notes: {error}"]
+    for alias in sorted(aliases):
+        issues.append(
+            f"{alias}: noncanonical implementation notes directory; "
+            f"use exactly {IMPLEMENTATION_NOTES_DIR}"
+        )
+
+    root = blueprint / IMPLEMENTATION_NOTES_DIR
+    if root.is_symlink():
+        issues.append(
+            f"{IMPLEMENTATION_NOTES_DIR}: implementation notes directory must not be a symlink"
+        )
+        return issues
+    if not root.exists():
+        return issues
+    if not root.is_dir():
+        issues.append(
+            f"{IMPLEMENTATION_NOTES_DIR}: implementation notes path must be a directory"
+        )
+        return issues
+
+    try:
+        entries = sorted(root.iterdir())
+    except OSError as error:
+        issues.append(f"{IMPLEMENTATION_NOTES_DIR}: cannot read directory: {error}")
+        return issues
+    for path in entries:
+        relative = f"{IMPLEMENTATION_NOTES_DIR}/{path.name}"
+        if path.is_symlink():
+            issues.append(f"{relative}: implementation note must be a regular file")
+            continue
+        if path.name.startswith("."):
+            continue
+        if not path.is_file():
+            issues.append(f"{relative}: implementation note must be a regular file")
+            continue
+        if path.suffix != ".md" or not ARTICLE_ID_PATTERN.fullmatch(path.stem):
+            issues.append(
+                f"{relative}: implementation note must be named <article_id>.md"
+            )
+            continue
+        if path.stem not in article_ids:
+            issues.append(
+                f"{relative}: implementation note names no roadmap article"
+            )
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            issues.append(f"{relative}: cannot read implementation note: {error}")
+            continue
+        if not text.replace("\ufeff", "").replace("\u200b", "").strip():
+            issues.append(
+                f"{relative}: empty implementation note; delete it instead"
+            )
     return issues
 
 

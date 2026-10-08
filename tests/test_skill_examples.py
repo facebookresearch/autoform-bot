@@ -69,7 +69,7 @@ def test_formalize_replaces_custom_orchestration_with_the_markdown_frontier(
         "claim_target",
         "separate Git worktrees",
         "shared Lean LSP and REPL",
-        "## Execution notes",
+        "`blueprint/.implementation-notes/<article_id>.md`",
         "returns to Roadmap",
     ):
         assert required in skill
@@ -87,6 +87,43 @@ def test_formalize_replaces_custom_orchestration_with_the_markdown_frontier(
     assert "$formalize" in metadata
     assert "Formalize the ready Markdown roadmap frontier" in codex
     assert '"id": "formalize"' in muse
+
+
+def test_implementation_notes_are_hidden_and_keyed_by_article_id(repo_root: Path) -> None:
+    """Notes written into articles crept into published books as Lean commentary.
+
+    One hidden file per durable article keeps implementation work out of the
+    mathematical wiki without creating a shared merge hotspot.
+    """
+
+    def read(relative: str) -> str:
+        return " ".join((repo_root / relative).read_text(encoding="utf-8").split())
+
+    formalize = read("skills/formalize/SKILL.md")
+    roadmap = read("skills/roadmap/SKILL.md")
+    reference = read("autoform_cli/README.md")
+    guidance = read("AGENTS.md")
+
+    assert "Read the complete article, its `blueprint/.implementation-notes/<article_id>.md`" in formalize
+    assert "The article keeps only frontmatter and mathematics." in formalize
+    assert "Write notes only in the claimed article's `blueprint/.implementation-notes/<article_id>.md`" in formalize
+    assert "one file per claimed article avoids cross-worker merge hotspots" in formalize
+    assert "Delete the file once the article is proved" in formalize
+    assert "never a secret or machine-local path" in formalize
+    assert "Never link the hidden note from an article" in formalize
+    assert "Articles hold only frontmatter and informal mathematics" in roadmap
+    assert "`blueprint/.implementation-notes/<article_id>.md`" in roadmap
+    assert "Delete it when the article is proved or marked `mathlib: true`" in roadmap
+    assert "delete a container's note when every formalizable descendant is proved" in roadmap
+    assert "an orphaned note blocks every command that loads the graph" in roadmap
+    assert "Versioned implementation notes live outside the mathematical roadmap" in reference
+    assert "Record what happened in the revision commit and report" in reference
+    assert "Use an article's implementation note only while that article remains unproved" in reference
+    assert "Markdown under `blueprint/roadmap/` is the authored roadmap" in guidance
+    assert "files under `blueprint/.implementation-notes/`" in guidance
+    for text in (formalize, roadmap, reference):
+        assert "Execution notes" not in text
+        assert "`agents.md`" not in text
 
 
 def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path) -> None:

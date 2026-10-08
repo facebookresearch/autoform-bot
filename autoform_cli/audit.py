@@ -16,7 +16,13 @@ from pathlib import Path
 
 from . import status
 from .coverage import CoverageSummary, load_coverage
-from .graph import Graph, GraphValidationError, Node, load_graph
+from .graph import (
+    IMPLEMENTATION_NOTES_DIR,
+    Graph,
+    GraphValidationError,
+    Node,
+    load_graph,
+)
 from .lean import (
     _DECLARATION,
     Declaration,
@@ -72,6 +78,16 @@ _DECLARATION_HEADER = re.compile(
 )
 _STRING_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"')
 _DEPRECATED_ATTRIBUTE = re.compile(r"(?:\[|,)\s*(?:(?:scoped|local)\s+)?deprecated\b")
+_IMPLEMENTATION_NOTE_ISSUE_MARKERS = (
+    ": noncanonical implementation notes directory",
+    ": implementation notes directory",
+    ": implementation notes path",
+    ": cannot read directory",
+    ": implementation note must",
+    ": implementation note names",
+    ": cannot read implementation note",
+    ": empty implementation note",
+)
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -163,11 +179,45 @@ def audit_graph(
         if node.parent is not None:
             contained.setdefault(node.parent, []).append(node.id)
 
+    scope_has_formalizable: dict[str, bool] = {}
+    scope_fully_implemented: dict[str, bool] = {}
+    for node_id in sorted(
+        graph.nodes, key=lambda candidate: graph.nodes[candidate].depth, reverse=True
+    ):
+        has_formalizable = False
+        fully_implemented = True
+        for child_id in contained.get(node_id, ()):
+            child = graph.nodes[child_id]
+            if child.formalizable:
+                has_formalizable = True
+                fully_implemented = fully_implemented and derived[child_id].proved
+            if scope_has_formalizable[child_id]:
+                has_formalizable = True
+                fully_implemented = (
+                    fully_implemented and scope_fully_implemented[child_id]
+                )
+        scope_has_formalizable[node_id] = has_formalizable
+        scope_fully_implemented[node_id] = fully_implemented
+
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
         children = contained.get(node_id, ())
         article = _read_article(node.path)
+
+        implementation_done = derived[node_id].proved or (
+            scope_has_formalizable[node_id] and scope_fully_implemented[node_id]
+        )
+        if node.article_id is not None and implementation_done:
+            note = graph.blueprint_dir / IMPLEMENTATION_NOTES_DIR / f"{node.article_id}.md"
+            if note.is_file():
+                findings.append(
+                    AuditFinding(
+                        article_path,
+                        "stale-implementation-note",
+                        "completed implementation scope still has a note; delete the note",
+                    )
+                )
 
         if node.formalizable:
             if children:
@@ -517,6 +567,14 @@ def _stable_validation_reason(blueprint: Path, issue: str) -> str:
 
 
 def _validation_article_path(blueprint: Path, issue: str) -> str:
+    issue_root = issue.split("/", 1)[0].split(":", 1)[0]
+    if issue_root.casefold() == IMPLEMENTATION_NOTES_DIR.casefold():
+        for marker in _IMPLEMENTATION_NOTE_ISSUE_MARKERS:
+            boundary = issue.rfind(marker)
+            if boundary >= 0:
+                return issue[:boundary]
+        return IMPLEMENTATION_NOTES_DIR
+
     node_id = issue.split(":", 1)[0]
     if not node_id or " " in node_id or node_id in {"dependency cycle", "rolled-up dependency cycle"}:
         return "."
