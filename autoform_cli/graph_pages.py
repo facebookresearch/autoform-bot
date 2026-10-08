@@ -17,6 +17,7 @@ from .graph import Graph
 from .graph_views import (
     GraphView,
     chapter_view,
+    container_nodes,
     focus_views,
     full_view,
     group_nodes,
@@ -44,7 +45,8 @@ def write_graph_pages(
     """
     destination = Path(destination).resolve()
     groups = group_nodes(graph)
-    local_views = focus_views(graph, statuses)
+    container_boxes = container_nodes(graph, statuses)
+    local_views = focus_views(graph, statuses, containers=container_boxes)
     project_page = destination / "dependencies.md"
     full_page = destination / "dependencies/full.md"
     chapter_pages = {group: destination / "dependencies/chapters" / f"{group or 'roadmap'}.md" for group in groups}
@@ -164,7 +166,7 @@ def write_graph_pages(
                 ),
             )
         )
-    complete = full_view(graph, statuses)
+    complete = full_view(graph, statuses, containers=container_boxes)
     written.append(
         _write_page(
             full_page,

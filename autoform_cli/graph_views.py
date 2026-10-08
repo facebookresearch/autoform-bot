@@ -23,6 +23,9 @@ NodeKind = Literal["scope", "boundary", "node"]
 # scope, or ``None`` when that endpoint lies outside it.
 _ScopedRelation = tuple[str, str, bool, str | None, str | None]
 
+# A scope is complete when every target under it closes its dependency chain.
+_DONE_STATES = frozenset({"fully_proved", "mathlib"})
+
 _H1 = re.compile(r"^ {0,3}#[ \t]+(.+?)[ \t]*#*[ \t]*$")
 
 
@@ -38,10 +41,11 @@ class ViewNode:
     declaration: str | None = None
     status_key: str | None = None
     focus: bool = False
+    complete: bool = False
 
     @property
     def item_count(self) -> int:
-        return len(self.members)
+        return sum(count for _, count in self.status_counts)
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,13 +128,7 @@ def project_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
     required_scopes = {endpoint.removeprefix("scope:") for edge in edges for endpoint in (edge.source, edge.target)}
     scopes = [*grouped, *(scope for scope in sorted(required_scopes) if scope not in grouped)]
     nodes = tuple(
-        ViewNode(
-            id=_scope_node_id(group),
-            title=group_title(graph, group),
-            kind="scope",
-            members=grouped.get(group, ()),
-            status_counts=_status_counts(grouped.get(group, ()), statuses),
-        )
+        _scope_node(graph, statuses, _scope_node_id(group), group_title(graph, group), grouped.get(group, ()))
         for group in scopes
     )
     return GraphView(kind="project", title="Project dependency map", nodes=nodes, edges=edges)
@@ -287,15 +285,7 @@ def _scope_view(
     for child in direct:
         article = graph.nodes[child]
         if child in children:
-            nodes.append(
-                ViewNode(
-                    id=_scope_node_id(child),
-                    title=article.title,
-                    kind="scope",
-                    members=members[child],
-                    status_counts=_status_counts(members[child], statuses),
-                )
-            )
+            nodes.append(_scope_node(graph, statuses, _scope_node_id(child), article.title, members[child]))
         else:
             nodes.append(_theorem_node(article, statuses[child]))
 
@@ -361,6 +351,7 @@ def focus_view(
         radius=radius,
         adjacency=_adjacency(graph),
         order_index={candidate: index for index, candidate in enumerate(topological_order(graph))},
+        containers=container_nodes(graph, statuses),
     )
 
 
@@ -369,6 +360,7 @@ def focus_views(
     statuses: dict[str, NodeStatus],
     *,
     radius: int = 1,
+    containers: dict[str, ViewNode] | None = None,
 ) -> dict[str, GraphView]:
     """Build every local view while sharing the graph-wide indexes.
 
@@ -381,6 +373,8 @@ def focus_views(
         raise ValueError("focus radius must be non-negative")
     adjacency = _adjacency(graph)
     order_index = {candidate: index for index, candidate in enumerate(topological_order(graph))}
+    if containers is None:
+        containers = container_nodes(graph, statuses)
     return {
         node_id: _focus_view(
             graph,
@@ -389,6 +383,7 @@ def focus_views(
             radius=radius,
             adjacency=adjacency,
             order_index=order_index,
+            containers=containers,
         )
         for node_id in graph.nodes
     }
@@ -402,6 +397,7 @@ def _focus_view(
     radius: int,
     adjacency: dict[str, set[str]],
     order_index: dict[str, int],
+    containers: dict[str, ViewNode],
 ) -> GraphView:
     if node_id not in graph.nodes:
         raise KeyError(f"unknown blueprint node: {node_id}")
@@ -421,6 +417,7 @@ def _focus_view(
         statuses,
         sorted(selected, key=order_index.__getitem__),
         ordered=True,
+        containers=containers,
     )
     nodes = tuple(
         ViewNode(
@@ -432,6 +429,7 @@ def _focus_view(
             declaration=node.declaration,
             status_key=node.status_key,
             focus=node.id == node_id,
+            complete=node.complete,
         )
         for node in view.nodes
     )
@@ -445,9 +443,16 @@ def _focus_view(
     )
 
 
-def full_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
+def full_view(
+    graph: Graph,
+    statuses: dict[str, NodeStatus],
+    *,
+    containers: dict[str, ViewNode] | None = None,
+) -> GraphView:
     """Present the complete fine-grained theorem DAG through the view API."""
-    view = _node_view(graph, statuses, graph.nodes)
+    if containers is None:
+        containers = container_nodes(graph, statuses)
+    view = _node_view(graph, statuses, graph.nodes, containers=containers)
     return GraphView(kind="full", title="Full theorem dependency graph", nodes=view.nodes, edges=view.edges)
 
 
@@ -457,13 +462,19 @@ def _node_view(
     selected: Iterable[str],
     *,
     ordered: bool = False,
+    containers: dict[str, ViewNode],
 ) -> GraphView:
     ordered_ids = list(dict.fromkeys(node_id for node_id in selected if node_id in graph.nodes))
     selected_ids = frozenset(ordered_ids)
     if not ordered:
         order_index = {node_id: index for index, node_id in enumerate(topological_order(graph))}
         ordered_ids.sort(key=order_index.__getitem__)
-    nodes = tuple(_theorem_node(graph.nodes[node_id], statuses[node_id]) for node_id in ordered_ids)
+    # A container is a chapter or section page, not a result: drawing it as a
+    # theorem gave it the "ready to state" status of an empty statement.
+    nodes = tuple(
+        containers[node_id] if node_id in containers else _theorem_node(graph.nodes[node_id], statuses[node_id])
+        for node_id in ordered_ids
+    )
     edge_counts: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
     for target in ordered_ids:
         node = graph.nodes[target]
@@ -525,6 +536,55 @@ def _theorem_node(node: Node, node_status: NodeStatus) -> ViewNode:
         declaration=node.declaration,
         status_key=node_status.key,
     )
+
+
+def _scope_node(
+    graph: Graph,
+    statuses: dict[str, NodeStatus],
+    view_id: str,
+    title: str,
+    leaves: Iterable[str],
+    *,
+    members: tuple[str, ...] | None = None,
+) -> ViewNode:
+    """Summarize a container by the formalization targets beneath it.
+
+    Only leaves that declare something count, as in the landing-page figures,
+    so a note or sentinel article cannot hold a finished chapter open. In a
+    node-level view the box stands for the container itself, so *members* is
+    the container, while its counts still describe what lies beneath it.
+    """
+    targets = tuple(node_id for node_id in leaves if graph.nodes[node_id].formalizable)
+    return ViewNode(
+        id=view_id,
+        title=title,
+        kind="scope",
+        members=targets if members is None else members,
+        status_counts=_status_counts(targets, statuses),
+        complete=bool(targets) and all(statuses[node_id].key in _DONE_STATES for node_id in targets),
+    )
+
+
+def container_nodes(graph: Graph, statuses: dict[str, NodeStatus]) -> dict[str, ViewNode]:
+    """Every container as it appears in a node-level view.
+
+    Bulk publication builds this once and passes it to ``focus_views`` and
+    ``full_view``, so the containment index is not rebuilt per page.
+    """
+    children = _containment_children(graph)
+    return {
+        node_id: _scope_node(
+            graph, statuses, node_id, graph.nodes[node_id].title, _leaf_descendants(children, node_id),
+            members=(node_id,),
+        )
+        for node_id in children
+        if node_id in graph.nodes
+    }
+
+
+def container_completion(graph: Graph, statuses: dict[str, NodeStatus]) -> dict[str, bool]:
+    """Map every container to whether all the targets beneath it are complete."""
+    return {node_id: node.complete for node_id, node in container_nodes(graph, statuses).items()}
 
 
 def _status_counts(
@@ -621,6 +681,8 @@ __all__ = [
     "ViewEdge",
     "ViewNode",
     "chapter_view",
+    "container_completion",
+    "container_nodes",
     "focus_view",
     "focus_views",
     "full_view",
