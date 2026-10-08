@@ -483,6 +483,16 @@ def plugin_pin(
     return source, ref
 
 
+def _checkout_pin(templates: tuple[tuple[str, bytes, int], ...]) -> tuple[str, str]:
+    """`plugin_pin` reduced to a safe source and lowercase commit, else the default source and no commit."""
+
+    pinned_source, pinned_ref = plugin_pin(templates)
+    safe_source = _normalize_autoform_source(pinned_source, allow_github_scp=True)
+    if safe_source is None or not _FULL_SHA.fullmatch(pinned_ref.lower()):
+        return DEFAULT_AUTOFORM_SOURCE, ""
+    return safe_source, pinned_ref.lower()
+
+
 class ScaffoldError(ValueError):
     """The project could not be scaffolded safely."""
 
@@ -1048,18 +1058,12 @@ def scaffold_project(
     # from the commit named by the workflows.
     templates = _read_templates(_TEMPLATES)
     _require_complete_templates(templates)
-    pinned_source, pinned_ref = ("", "") if given_source else plugin_pin(templates)
-    safe_pinned_source = _normalize_autoform_source(pinned_source, allow_github_scp=True)
-    if safe_pinned_source is None or not _FULL_SHA.fullmatch(pinned_ref.lower()):
-        pinned_source, pinned_ref = "", ""
-    else:
-        pinned_source, pinned_ref = safe_pinned_source, pinned_ref.lower()
-    source = given_source or pinned_source or DEFAULT_AUTOFORM_SOURCE
+    source, pinned_ref = (given_source, "") if given_source else _checkout_pin(templates)
     # A ref identifies a commit in one repository. Naming a different source
     # while inheriting this checkout's HEAD produces `git+other.git@our-sha`,
     # which does not resolve there, so an explicit source carries its own ref
     # or none at all.
-    ref = given_ref or ("" if given_source else pinned_ref)
+    ref = given_ref or pinned_ref
     # CI installs Autoform from a Git ref. Where Autoform lives is a fixed fact
     # worth defaulting; which commit is not, and a guessed one publishes a
     # project whose first CI step fails for a reason no file in it explains. So
