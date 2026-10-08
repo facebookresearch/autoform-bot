@@ -15,8 +15,7 @@ from .catalog import canonical_git_url
 
 _TARGET_KINDS = ("lean_lib", "lean_exe", "input_file", "input_dir")  # the kinds lakefile.toml declares
 _MATHLIB_NAME = (("str", "mathlib"),)
-_LAKE_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[^ \t\r\n]+)?")  # Lake's StdVer
-_MANIFEST_VERSION = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)(?:-[^ \t\r\n]+)?")
+_LAKE_VERSION = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)(?:-[^ \t\r\n]+)?")  # Lake's StdVer
 _URL_CREDENTIALS = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@")
 _LEAN_ID_BEGIN_ESCAPE = "«"
 _LEAN_ID_END_ESCAPE = "»"
@@ -274,7 +273,7 @@ def _validate_manifest_root(payload: dict[str, object]) -> None:
         raise ValueError("name")
     _json_default(payload, "lakeDir", ".lake", str)
     _json_default(payload, "fixedToolchain", False, bool)
-    _json_optional(payload, "packagesDir", str)
+    _json_default(payload, "packagesDir", None, str)
 
 
 def _decode_package_entry(entry: object, source: str) -> tuple[tuple[tuple[str, str], ...], MathlibLock]:
@@ -303,9 +302,9 @@ def _decode_package_entry(entry: object, source: str) -> tuple[tuple[tuple[str, 
     return name, MathlibLock(
         "git",
         url=_redact(_json_required(entry, "url", str)),
-        input_rev=_json_optional(entry, "inputRev", str),
+        input_rev=_json_default(entry, "inputRev", None, str),
         rev=_json_required(entry, "rev", str),
-        sub_dir=_json_optional(entry, "subDir", str),
+        sub_dir=_json_default(entry, "subDir", None, str),
         **common,
     )
 
@@ -325,15 +324,6 @@ def _json_default(mapping: dict[str, object], key: str, default, expected: type)
     return value
 
 
-def _json_optional(mapping: dict[str, object], key: str, expected: type):
-    value = mapping.get(key)
-    if value is None:
-        return None
-    if type(value) is not expected:
-        raise ValueError(key)
-    return value
-
-
 def _manifest_layout(version: object) -> str | None:
     """Lake reads versions from 0.5.0 through any 1.x; versions before 0.7 are legacy."""
 
@@ -342,7 +332,7 @@ def _manifest_layout(version: object) -> str | None:
         if numeric_version is None or _decimal_less_than(numeric_version, "5"):
             return None
         return "legacy" if _decimal_less_than(numeric_version, "7") else "current"
-    if type(version) is not str or (match := _MANIFEST_VERSION.fullmatch(version)) is None:
+    if type(version) is not str or (match := _LAKE_VERSION.fullmatch(version)) is None:
         return None
     major, minor, _patch = (_normalize_decimal(part) for part in match.groups())
     if major == "1":
@@ -428,22 +418,17 @@ def _canonical_manifest_name(value: str) -> tuple[tuple[str, str], ...] | None:
 
     if value == "[anonymous]":
         return ()
-    parts = _split_lean_name(value)
-    if parts is None:
-        return None
-    return tuple((kind, _normalize_decimal(text) if kind == "num" else text) for kind, text in parts)
+    return _split_lean_name(value)
 
 
 def _canonical_toml_name(value: str) -> tuple[tuple[str, str], ...]:
     """Return Lake's Name, including TOML's simple-name fallback."""
 
     parts = _split_lean_name(value)
-    if parts is None:
-        return (("str", value),)
-    return tuple((kind, _normalize_decimal(text) if kind == "num" else text) for kind, text in parts)
+    return (("str", value),) if parts is None else parts
 
 
-def _split_lean_name(value: str) -> list[tuple[str, str]] | None:
+def _split_lean_name(value: str) -> tuple[tuple[str, str], ...] | None:
     parts: list[tuple[str, str]] = []
     index = 0
     while index < len(value):
@@ -464,11 +449,11 @@ def _split_lean_name(value: str) -> list[tuple[str, str]] | None:
             start = index
             while index < len(value) and "0" <= value[index] <= "9":
                 index += 1
-            parts.append(("num", value[start:index]))
+            parts.append(("num", _normalize_decimal(value[start:index])))
         else:
             return None
         if index == len(value):
-            return parts
+            return tuple(parts)
         if value[index] != ".":
             return None
         index += 1

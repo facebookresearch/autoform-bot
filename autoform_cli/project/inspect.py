@@ -49,7 +49,7 @@ _SNAPSHOT_ATTEMPTS = 3
 # Rust's ``char::is_whitespace`` set, which ``str::trim`` uses in elan.
 # Python additionally treats U+001C..U+001F as whitespace; accepting those
 # would disagree with elan because they remain control characters there.
-_ELAN_WHITESPACE = frozenset(
+_ELAN_WHITESPACE = (
     "\u0009\u000a\u000b\u000c\u000d\u0020\u0085\u00a0\u1680"
     "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
     "\u2028\u2029\u202f\u205f\u3000"
@@ -125,14 +125,7 @@ def inspect_project(target: str | Path, *, catalog: ReleaseCatalog | None = None
         project_root = "/".join([".."] * (len(start.parts) - len(root.parts))) or "."
         autoform_paths = _inspect_autoform_paths(root)
         snapshot = _snapshot._capture_decision_snapshot(root)
-        attempt_diagnostics: list[ProjectDiagnostic] = []
-        result = _inspect_snapshot(
-            catalog,
-            snapshot,
-            attempt_diagnostics,
-            project_root=project_root,
-            autoform_paths=autoform_paths,
-        )
+        result = _inspect_snapshot(catalog, snapshot, project_root=project_root, autoform_paths=autoform_paths)
         verified = _snapshot._capture_decision_snapshot(root)
         if (
             snapshot.stable
@@ -176,11 +169,11 @@ def _inspect_autoform_paths(root: Path) -> tuple[str, ...]:
 def _inspect_snapshot(
     catalog: ReleaseCatalog,
     snapshot: _DecisionSnapshot,
-    diagnostics: list[ProjectDiagnostic],
     *,
     project_root: str,
     autoform_paths: tuple[str, ...],
 ) -> ProjectInspection:
+    diagnostics: list[ProjectDiagnostic] = []
     lake, requirements = _inspect_lake(snapshot, diagnostics)
     requirement = requirements.mathlib if requirements is not None else None
     toolchain = _inspect_toolchain(snapshot, diagnostics)
@@ -414,18 +407,6 @@ def _unused_mathlib(requirements: _Requirements) -> str | None:
     )
 
 
-def _trim_elan_whitespace(value: str) -> str:
-    """Mirror Rust's Unicode whitespace trim without Python's extra C0 separators."""
-
-    start = 0
-    while start < len(value) and value[start] in _ELAN_WHITESPACE:
-        start += 1
-    end = len(value)
-    while end > start and value[end - 1] in _ELAN_WHITESPACE:
-        end -= 1
-    return value[start:end]
-
-
 def _inspect_toolchain(snapshot: _DecisionSnapshot, diagnostics: list[ProjectDiagnostic]) -> str | None:
     if snapshot.file("lean-toolchain").state == "missing":
         diagnostics.append(ProjectDiagnostic("error", "missing-lean-toolchain", "The project has no lean-toolchain."))
@@ -435,7 +416,7 @@ def _inspect_toolchain(snapshot: _DecisionSnapshot, diagnostics: list[ProjectDia
         return None
     # elan reads only the trimmed first line and rejects an existing file when
     # that line is empty or malformed.
-    toolchain = _trim_elan_whitespace(text.split("\n", 1)[0])
+    toolchain = text.split("\n", 1)[0].strip(_ELAN_WHITESPACE)
     if not toolchain or not toolchain.isprintable() or any(character.isspace() for character in toolchain):
         diagnostics.append(
             ProjectDiagnostic(
@@ -467,23 +448,16 @@ def _locked_mathlib(
         layout = _manifest_layout(version)
         if layout is None:
             raise ValueError(relative)
-    except (AttributeError, RecursionError, ValueError):
-        kind = "Lake manifest" if relative == _MANIFEST else "Lake package-overrides file"
-        diagnostics.append(
-            ProjectDiagnostic("error", "invalid-lake-manifest", f"{relative} is not a {kind} Autoform reads.", relative)
-        )
-        return False, None
-    if layout == "legacy":
-        if relative == _MANIFEST:
-            message = (
-                f"Lake still reads the legacy layout of {relative}, but Autoform does not; "
-                "`lake update` rewrites it."
-            )
-        else:
-            message = f"Lake still reads the legacy layout of {relative}, but Autoform does not decode it."
-        diagnostics.append(ProjectDiagnostic("warning", "unsupported-lake-manifest", message, relative))
-        return False, None
-    try:
+        if layout == "legacy":
+            if relative == _MANIFEST:
+                message = (
+                    f"Lake still reads the legacy layout of {relative}, but Autoform does not; "
+                    "`lake update` rewrites it."
+                )
+            else:
+                message = f"Lake still reads the legacy layout of {relative}, but Autoform does not decode it."
+            diagnostics.append(ProjectDiagnostic("warning", "unsupported-lake-manifest", message, relative))
+            return False, None
         if relative == _MANIFEST:
             _validate_manifest_root(payload)
         packages = payload.get("packages")
