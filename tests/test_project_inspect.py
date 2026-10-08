@@ -82,6 +82,10 @@ def _codes(result) -> set[str]:
     return {diagnostic.code for diagnostic in result.diagnostics}
 
 
+def _unreadable(result) -> list[str]:
+    return [diagnostic.path for diagnostic in result.diagnostics if diagnostic.code == "unreadable-file"]
+
+
 def test_catalog_pair_from_lakes_math_template_is_supported(tmp_path: Path) -> None:
     result = inspect_project(_project(tmp_path))
 
@@ -104,15 +108,6 @@ def test_catalog_pair_from_lakes_math_template_is_supported(tmp_path: Path) -> N
 )
 def test_elan_release_aliases_match_the_catalog(tmp_path: Path, toolchain: str) -> None:
     result = inspect_project(_project(tmp_path, toolchain=toolchain))
-
-    assert result.compatibility.status == "supported"
-    assert result.compatibility.release == "lean-v4.32.2-mathlib-v4.32.2"
-
-
-def test_git_url_scheme_and_host_case_do_not_change_the_repository(tmp_path: Path) -> None:
-    result = inspect_project(
-        _project(tmp_path, manifest=(_mathlib(url="HTTPS://GITHUB.COM/leanprover-community/mathlib4"),))
-    )
 
     assert result.compatibility.status == "supported"
     assert result.compatibility.release == "lean-v4.32.2-mathlib-v4.32.2"
@@ -141,11 +136,22 @@ def test_json_report_has_a_stable_shape(tmp_path: Path) -> None:
     }
 
 
-@pytest.mark.parametrize("url", [MATHLIB_URL + ".git", MATHLIB_URL + "/"])
-def test_equivalent_mathlib_url_spellings_match(tmp_path: Path, url: str) -> None:
-    result = inspect_project(_project(tmp_path, manifest=(_mathlib(url=url),)))
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"url": "HTTPS://GITHUB.COM/leanprover-community/mathlib4"},
+        {"url": MATHLIB_URL + ".git"},
+        {"url": MATHLIB_URL + "/"},
+        {"subDir": "./"},
+        {"rev": COMMIT.upper()},
+    ],
+    ids=["url-scheme-host-case", "url-dot-git", "url-trailing-slash", "subdir-current-directory", "uppercase-commit"],
+)
+def test_equivalent_lock_spellings_match_the_catalog(tmp_path: Path, fields: dict) -> None:
+    result = inspect_project(_project(tmp_path, manifest=(_mathlib(**fields),)))
 
     assert result.compatibility.status == "supported"
+    assert result.compatibility.release == "lean-v4.32.2-mathlib-v4.32.2"
 
 
 def test_fork_with_the_catalog_commit_is_unlisted(tmp_path: Path) -> None:
@@ -220,13 +226,19 @@ LOOM_LAKEFILE = 'name = "Example"\n\n[[require]]\nname = "loom"\ngit = "https://
 LOOM = _mathlib(name="loom", url="https://example.com/loom", rev=OTHER_COMMIT, input_rev=None)
 
 
-def test_inherited_mathlib_under_other_requirements_is_not_proof_of_use(tmp_path: Path) -> None:
-    inherited = {**_mathlib(), "inherited": True}
-    result = inspect_project(_project(tmp_path, lakefile=LOOM_LAKEFILE, manifest=(LOOM, inherited)))
+def _assert_mathlib_unused(result) -> None:
+    """A locked Mathlib that no requirement pulls in decides no release pair."""
 
     assert result.mathlib is None
     assert result.compatibility.status == "indeterminate"
     assert "mathlib-manifest-unused" in _codes(result)
+
+
+def test_inherited_mathlib_under_other_requirements_is_not_proof_of_use(tmp_path: Path) -> None:
+    inherited = {**_mathlib(), "inherited": True}
+    result = inspect_project(_project(tmp_path, lakefile=LOOM_LAKEFILE, manifest=(LOOM, inherited)))
+
+    _assert_mathlib_unused(result)
 
 
 @pytest.mark.skipif(shutil.which("lake") is None, reason="needs Lake 4.32.2")
@@ -282,17 +294,13 @@ def test_stale_inherited_mathlib_is_ignored_by_real_lake(tmp_path: Path) -> None
     assert not (tmp_path / "mathlib").exists()
     assert (root / "lake-manifest.json").read_bytes() == manifest_before
     inspection = inspect_project(root)
-    assert inspection.mathlib is None
-    assert inspection.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(inspection)
+    _assert_mathlib_unused(inspection)
 
 
 def test_direct_lock_without_a_requirement_is_unused(tmp_path: Path) -> None:
     result = inspect_project(_project(tmp_path, lakefile=LOOM_LAKEFILE, manifest=(LOOM, _mathlib())))
 
-    assert result.mathlib is None
-    assert result.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(result)
+    _assert_mathlib_unused(result)
     (unused,) = [d for d in result.diagnostics if d.code == "mathlib-manifest-unused"]
     assert "does not build" not in unused.message and "dependency" in unused.message
 
@@ -302,9 +310,7 @@ def test_lock_without_any_requirement_is_unused(tmp_path: Path, inherited: bool)
     manifest = ({**_mathlib(), "inherited": inherited},)
     result = inspect_project(_project(tmp_path, lakefile='name = "Example"\n', manifest=manifest))
 
-    assert result.mathlib is None
-    assert result.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(result)
+    _assert_mathlib_unused(result)
 
 
 def test_root_named_mathlib_also_satisfies_transitive_requirements(tmp_path: Path) -> None:
@@ -312,9 +318,7 @@ def test_root_named_mathlib_also_satisfies_transitive_requirements(tmp_path: Pat
     lakefile = LOOM_LAKEFILE.replace('"Example"', '"mathlib"')
     result = inspect_project(_project(tmp_path, lakefile=lakefile, manifest=(LOOM, inherited)))
 
-    assert result.mathlib is None
-    assert result.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(result)
+    _assert_mathlib_unused(result)
 
 
 def test_self_requirement_alone_pulls_in_no_mathlib(tmp_path: Path) -> None:
@@ -322,9 +326,7 @@ def test_self_requirement_alone_pulls_in_no_mathlib(tmp_path: Path) -> None:
     lakefile = 'name = "selfy"\n\n[[require]]\nname = "selfy"\npath = "."\n'
     result = inspect_project(_project(tmp_path, lakefile=lakefile, manifest=(LOOM, inherited)))
 
-    assert result.mathlib is None
-    assert result.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(result)
+    _assert_mathlib_unused(result)
 
 
 def test_inherited_override_does_not_make_an_unrecorded_mathlib_used(tmp_path: Path) -> None:
@@ -333,9 +335,7 @@ def test_inherited_override_does_not_make_an_unrecorded_mathlib_used(tmp_path: P
 
     result = inspect_project(root)
 
-    assert result.mathlib is None
-    assert result.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(result)
+    _assert_mathlib_unused(result)
 
 
 @pytest.mark.parametrize("override_inherited", [False, True])
@@ -345,15 +345,13 @@ def test_override_of_an_inherited_lock_does_not_prove_use(tmp_path: Path, overri
 
     result = inspect_project(root)
 
-    assert result.mathlib is None
-    assert result.compatibility.status == "indeterminate"
-    assert "mathlib-manifest-unused" in _codes(result)
+    _assert_mathlib_unused(result)
 
 
-def _write_overrides(root: Path, *packages: dict) -> None:
+def _write_overrides(root: Path, *packages: dict, schema_version: object = "1.1.0") -> None:
     (root / ".lake").mkdir()
     (root / ".lake/package-overrides.json").write_text(
-        json.dumps({"schemaVersion": "1.1.0", "packages": list(packages)}), encoding="utf-8"
+        json.dumps({"schemaVersion": schema_version, "packages": list(packages)}), encoding="utf-8"
     )
 
 
@@ -415,19 +413,6 @@ def test_lakes_default_extensionless_config_resolves_to_mathlibs_lakefile_lean(
 
     assert result.ok
     assert result.mathlib.config_file == "lakefile"
-    assert result.compatibility.status == "supported"
-
-
-def test_lakes_explicit_current_directory_subdir_is_the_repository_root(tmp_path: Path) -> None:
-    result = inspect_project(_project(tmp_path, manifest=(_mathlib(subDir="./"),)))
-
-    assert result.compatibility.status == "supported"
-    assert result.compatibility.release == "lean-v4.32.2-mathlib-v4.32.2"
-
-
-def test_uppercase_commit_is_the_same_commit(tmp_path: Path) -> None:
-    result = inspect_project(_project(tmp_path, manifest=(_mathlib(rev=COMMIT.upper()),)))
-
     assert result.compatibility.status == "supported"
 
 
@@ -635,15 +620,8 @@ def test_null_or_absent_packages_mean_no_packages(tmp_path: Path, packages: str)
     assert result.compatibility.status == "indeterminate"
 
 
-def test_integer_manifest_versions_are_read(tmp_path: Path) -> None:
-    root = _project(tmp_path)
-    _write_manifest(root, _mathlib(), version=7)
-
-    assert inspect_project(root).compatibility.status == "supported"
-
-
-@pytest.mark.parametrize("version", ["1.3.0", "1.9.0"])
-def test_newer_1x_manifest_versions_are_read(tmp_path: Path, version: str) -> None:
+@pytest.mark.parametrize("version", [7, "1.3.0", "1.9.0"])
+def test_integer_and_newer_1x_manifest_versions_are_read(tmp_path: Path, version: object) -> None:
     root = _project(tmp_path)
     _write_manifest(root, _mathlib(), version=version)
 
@@ -670,16 +648,7 @@ def test_arbitrary_precision_manifest_versions_are_compared_lexically(tmp_path: 
 
 def test_package_override_replaces_the_locked_mathlib(tmp_path: Path) -> None:
     root = _project(tmp_path)
-    (root / ".lake").mkdir()
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps(
-            {
-                "schemaVersion": "1.1.0",
-                "packages": [{"name": "mathlib", "type": "path", "dir": "../mathlib4", "inherited": False}],
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_overrides(root, {"name": "mathlib", "type": "path", "dir": "../mathlib4", "inherited": False})
 
     result = inspect_project(root)
 
@@ -703,10 +672,7 @@ def test_override_does_not_suppress_root_manifest_freshness_warning(tmp_path: Pa
 
 def test_override_needs_a_manifest_to_replace(tmp_path: Path) -> None:
     root = _project(tmp_path, manifest=None)
-    (root / ".lake").mkdir()
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps({"schemaVersion": "1.1.0", "packages": [_mathlib()]}), encoding="utf-8"
-    )
+    _write_overrides(root, _mathlib())
 
     assert inspect_project(root).compatibility.status == "indeterminate"
 
@@ -725,10 +691,7 @@ def test_override_is_not_parsed_on_lakes_no_manifest_update_path(tmp_path: Path)
 
 def test_override_without_mathlib_leaves_the_manifest_in_charge(tmp_path: Path) -> None:
     root = _project(tmp_path)
-    (root / ".lake").mkdir()
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps({"schemaVersion": "1.1.0", "packages": []}), encoding="utf-8"
-    )
+    _write_overrides(root)
 
     assert inspect_project(root).compatibility.status == "supported"
 
@@ -769,11 +732,7 @@ def test_windows_style_missing_child_of_nondirectory_lake_is_unreadable(
 
     assert not result.ok
     assert result.compatibility.status == "indeterminate"
-    assert any(
-        diagnostic.code == "unreadable-file"
-        and diagnostic.path == ".lake/package-overrides.json"
-        for diagnostic in result.diagnostics
-    )
+    assert ".lake/package-overrides.json" in _unreadable(result)
 
 
 def test_lakefile_lean_cannot_confirm_an_inherited_mathlib(tmp_path: Path) -> None:
@@ -802,12 +761,8 @@ def test_legacy_override_of_mathlib_is_not_reported_as_the_lock(tmp_path: Path, 
     # Lake 4.32.2 applies a legacy override (Manifest.getPackages decodes it as
     # PackageEntryV6), so its Mathlib replaces the manifest's; Autoform does not decode it.
     root = _project(tmp_path)
-    (root / ".lake").mkdir()
     legacy = {"name": "mathlib", "opts": {}, "inherited": False, "url": MATHLIB_URL, "rev": OTHER_COMMIT}
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps({"schemaVersion": version, "packages": [{"git": {**legacy, "inputRev?": "master"}}]}),
-        encoding="utf-8",
-    )
+    _write_overrides(root, {"git": {**legacy, "inputRev?": "master"}}, schema_version=version)
 
     result = inspect_project(root)
 
@@ -820,11 +775,8 @@ def test_requirement_recorded_only_by_a_legacy_override_is_not_an_error(tmp_path
     # so it records the requirement even though Autoform does not decode the file.
     lakefile = LAKEFILE + '\n[[require]]\nname = "batteries"\nscope = "leanprover-community"\n'
     root = _project(tmp_path, lakefile=lakefile)
-    (root / ".lake").mkdir()
     legacy = {"name": "batteries", "opts": {}, "inherited": False, "url": "https://example.com/b", "rev": OTHER_COMMIT}
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps({"schemaVersion": 6, "packages": [{"git": legacy}]}), encoding="utf-8"
-    )
+    _write_overrides(root, {"git": legacy}, schema_version=6)
 
     result = inspect_project(root)
 
@@ -835,10 +787,7 @@ def test_requirement_recorded_only_by_a_legacy_override_is_not_an_error(tmp_path
 
 def test_legacy_override_file_cannot_fall_through_to_supported_manifest(tmp_path: Path) -> None:
     root = _project(tmp_path)
-    (root / ".lake").mkdir()
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps({"schemaVersion": 6, "packages": []}), encoding="utf-8"
-    )
+    _write_overrides(root, schema_version=6)
 
     result = inspect_project(root)
 
@@ -975,15 +924,6 @@ def test_empty_toml_names_use_lakes_simple_name_fallback(tmp_path: Path) -> None
     assert result.lake.targets[0].name == ""
 
 
-def test_duplicate_target_names_are_compared_as_lean_names(tmp_path: Path) -> None:
-    lakefile = 'name = "E"\n[[lean_lib]]\nname = "A"\n[[lean_exe]]\nname = "«A»"\n'
-
-    result = inspect_project(_project(tmp_path, lakefile=lakefile))
-
-    assert not result.ok
-    assert "invalid-lakefile-toml" in _codes(result)
-
-
 @pytest.mark.parametrize(
     "targets",
     [
@@ -1031,10 +971,10 @@ def test_arbitrary_precision_numeric_names_are_compared_without_python_ints(tmp_
     assert "invalid-lakefile-toml" in _codes(result)
 
 
-@pytest.mark.parametrize(("plain", "escaped"), [("", "«»"), ("a b", "«a b»"), ("[anonymous]", "«[anonymous]»")])
-def test_toml_simple_name_fallback_matches_the_equivalent_escape(
-    tmp_path: Path, plain: str, escaped: str
-) -> None:
+@pytest.mark.parametrize(
+    ("plain", "escaped"), [("A", "«A»"), ("", "«»"), ("a b", "«a b»"), ("[anonymous]", "«[anonymous]»")]
+)
+def test_duplicate_target_names_are_compared_as_lean_names(tmp_path: Path, plain: str, escaped: str) -> None:
     lakefile = f'name = "E"\n[[lean_lib]]\nname = "{plain}"\n[[lean_exe]]\nname = "{escaped}"\n'
 
     result = inspect_project(_project(tmp_path, lakefile=lakefile))
@@ -1193,10 +1133,7 @@ def test_oversized_and_non_utf8_files_are_errors(tmp_path: Path) -> None:
 
     result = inspect_project(root)
 
-    assert [diagnostic.path for diagnostic in result.diagnostics if diagnostic.code == "unreadable-file"] == [
-        "lake-manifest.json",
-        "lean-toolchain",
-    ]
+    assert _unreadable(result) == ["lake-manifest.json", "lean-toolchain"]
 
 
 @pytest.mark.parametrize(
@@ -1236,10 +1173,7 @@ def test_stably_unreadable_decision_file_is_not_misreported_as_changing(
 ) -> None:
     root = _project(tmp_path)
     if denied == ".lake/package-overrides.json":
-        (root / ".lake").mkdir()
-        (root / denied).write_text(
-            json.dumps({"schemaVersion": "1.1.0", "packages": []}), encoding="utf-8"
-        )
+        _write_overrides(root)
     original = project_snapshot._open_resolved
 
     def deny_one(path: Path, *args):
@@ -1278,7 +1212,7 @@ def test_chmod_unreadable_decision_file_keeps_its_specific_diagnostic(tmp_path: 
         path.chmod(0o600)
 
     assert not result.ok
-    assert any(diagnostic.code == "unreadable-file" and diagnostic.path == denied for diagnostic in result.diagnostics)
+    assert denied in _unreadable(result)
     assert "project-changed-during-inspection" not in _codes(result)
 
 
@@ -1634,10 +1568,7 @@ def test_nested_symlink_expansion_matches_the_native_kernel(
     if native_state == "unreadable":
         assert not result.ok
         assert result.compatibility.status == "indeterminate"
-        assert any(
-            diagnostic.code == "unreadable-file" and diagnostic.path == "lakefile.toml"
-            for diagnostic in result.diagnostics
-        )
+        assert "lakefile.toml" in _unreadable(result)
     else:
         assert result.ok, result.diagnostics
         assert result.compatibility.status == "supported"
@@ -1722,16 +1653,7 @@ def test_symlinked_lake_directory_is_followed_like_lake(tmp_path: Path, with_ove
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
 def test_symlinked_package_overrides_file_is_followed_like_lake(tmp_path: Path) -> None:
     root = _project(tmp_path)
-    (root / ".lake").mkdir()
-    (root / ".lake/package-overrides.json").write_text(
-        json.dumps(
-            {
-                "schemaVersion": "1.1.0",
-                "packages": [{"name": "mathlib", "type": "path", "dir": "../mathlib4", "inherited": False}],
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_overrides(root, {"name": "mathlib", "type": "path", "dir": "../mathlib4", "inherited": False})
     _move_behind_symlink(root, ".lake/package-overrides.json")
 
     result = inspect_project(root)
@@ -1765,10 +1687,7 @@ def test_dangling_symlinked_decision_file_is_present_but_unreadable(tmp_path: Pa
     result = inspect_project(root)
 
     assert not result.ok
-    assert any(
-        diagnostic.code == "unreadable-file" and diagnostic.path == "lean-toolchain"
-        for diagnostic in result.diagnostics
-    )
+    assert "lean-toolchain" in _unreadable(result)
     assert "missing-lean-toolchain" not in _codes(result)
     assert "project-changed-during-inspection" not in _codes(result)
 
@@ -1885,7 +1804,7 @@ def test_unusable_symlink_is_identified_by_the_link_not_its_target(
     result = inspect_project(root)
 
     assert touches >= 2
-    assert [diagnostic.path for diagnostic in result.diagnostics if diagnostic.code == "unreadable-file"] == [relative]
+    assert _unreadable(result) == [relative]
     assert "project-changed-during-inspection" not in _codes(result)
 
 
@@ -1996,10 +1915,7 @@ def test_parent_swapped_for_a_link_before_the_open_never_opens_a_device(
     assert swapped
     assert stat.S_IFCHR not in opened
     assert not result.ok
-    assert any(
-        diagnostic.code == "unreadable-file" and diagnostic.path == "lakefile.toml"
-        for diagnostic in result.diagnostics
-    )
+    assert "lakefile.toml" in _unreadable(result)
 
 
 @pytest.mark.skipif(
@@ -2038,9 +1954,7 @@ def test_link_target_that_must_be_a_directory_never_reads_a_file(tmp_path: Path,
 
     result = inspect_project(root)
 
-    assert [diagnostic.path for diagnostic in result.diagnostics if diagnostic.code == "unreadable-file"] == [
-        "lean-toolchain"
-    ]
+    assert _unreadable(result) == ["lean-toolchain"]
     assert "project-changed-during-inspection" not in _codes(result)
 
 
@@ -2084,9 +1998,7 @@ def test_link_through_a_link_with_an_empty_target_is_unreadable(tmp_path: Path) 
 
     result = inspect_project(root)
 
-    assert [diagnostic.path for diagnostic in result.diagnostics if diagnostic.code == "unreadable-file"] == [
-        "lean-toolchain"
-    ]
+    assert _unreadable(result) == ["lean-toolchain"]
     assert "project-changed-during-inspection" not in _codes(result)
 
 
@@ -2114,8 +2026,7 @@ def test_link_chains_are_followed_as_far_as_the_kernel_follows_them(tmp_path: Pa
 
     result = inspect_project(root)
 
-    unreadable = [diagnostic.path for diagnostic in result.diagnostics if diagnostic.code == "unreadable-file"]
-    assert unreadable == (["lean-toolchain"] if extra else [])
+    assert _unreadable(result) == (["lean-toolchain"] if extra else [])
     assert "project-changed-during-inspection" not in _codes(result)
 
 
