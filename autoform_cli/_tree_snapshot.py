@@ -504,6 +504,10 @@ def _cleanup_materialization(
             pass
 
 
+def _invalid_limit(value: object) -> bool:
+    return isinstance(value, bool) or not isinstance(value, int) or value < 0
+
+
 @dataclass(frozen=True, slots=True)
 class TreeCaptureLimits:
     """Optional bounds on observed entries and captured regular-file bytes.
@@ -525,9 +529,7 @@ class TreeCaptureLimits:
             "max_total_bytes",
         ):
             value = getattr(self, name)
-            if value is not None and (
-                isinstance(value, bool) or not isinstance(value, int) or value < 0
-            ):
+            if value is not None and _invalid_limit(value):
                 raise ValueError(f"{name} must be a non-negative integer or None")
 
 
@@ -565,11 +567,7 @@ class OpaqueDirectoryMarker:
             raise ValueError("opaque marker name must be one portable path component")
         if not isinstance(self.presence_only, bool):
             raise ValueError("opaque marker presence_only must be a boolean")
-        if (
-            isinstance(self.max_bytes, bool)
-            or not isinstance(self.max_bytes, int)
-            or self.max_bytes < 0
-        ):
+        if _invalid_limit(self.max_bytes):
             raise ValueError("opaque marker max_bytes must be a non-negative integer")
 
 
@@ -725,11 +723,7 @@ class _CaptureBudget:
             raise TreeCaptureLimitError("max_entries", self.limits.max_entries)
 
     def file_read_limit(self, size: int, selected_limit: int | None) -> int | None:
-        if selected_limit is not None and (
-            isinstance(selected_limit, bool)
-            or not isinstance(selected_limit, int)
-            or selected_limit < 0
-        ):
+        if selected_limit is not None and _invalid_limit(selected_limit):
             raise TreeSnapshotError(
                 "tree selection byte limit must be a non-negative integer or None"
             )
@@ -941,20 +935,14 @@ class BoundDirectoryTree:
     ) -> None:
         if not self.expected_children:
             return
+
+        def capture_names() -> tuple[str, ...]:
+            if descriptor is None:
+                return _capture_path_names(self.root, budget=_CaptureBudget(limits), depth=1)
+            return _capture_directory_names(descriptor, budget=_CaptureBudget(limits), depth=1)
+
         try:
-            names = (
-                _capture_directory_names(
-                    descriptor,
-                    budget=_CaptureBudget(limits),
-                    depth=1,
-                )
-                if descriptor is not None
-                else _capture_path_names(
-                    self.root,
-                    budget=_CaptureBudget(limits),
-                    depth=1,
-                )
-            )
+            names = capture_names()
             folded_names: set[str] = set()
             for name, expected in self.expected_children.items():
                 if not _valid_name(name):
@@ -977,20 +965,7 @@ class BoundDirectoryTree:
                     metadata.st_ino,
                 ) != expected:
                     raise TreeChangedError("directory tree changed before it was captured")
-            final_names = (
-                _capture_directory_names(
-                    descriptor,
-                    budget=_CaptureBudget(limits),
-                    depth=1,
-                )
-                if descriptor is not None
-                else _capture_path_names(
-                    self.root,
-                    budget=_CaptureBudget(limits),
-                    depth=1,
-                )
-            )
-            if final_names != names:
+            if capture_names() != names:
                 raise TreeChangedError("directory tree changed before it was captured")
         except (OSError, _TreeChanged) as error:
             raise TreeChangedError("directory tree changed before it was captured") from error
@@ -1137,23 +1112,137 @@ def capture_directory_descriptor(
     omitted: list[tuple[str, str]] = []
     opaque_directories: list[str] = []
     budget = _CaptureBudget(selection.limits)
+
+    def scan(descriptor: int, relative: str, depth: int, identity: tuple[int, ...]) -> None:
+        # The root is the directory the caller explicitly asked to inspect.  A
+        # marker name in that directory must not turn the entire requested input
+        # into generated output.
+        if relative and selection.opaque_markers:
+            marker, marker_data, names = _opaque_marker(
+                descriptor,
+                relative,
+                selection,
+                budget=budget,
+                depth=depth,
+            )
+        else:
+            marker = None
+            marker_data = None
+            names = _capture_directory_names(
+                descriptor,
+                budget=budget,
+                depth=depth + 1,
+            )
+        if marker is not None:
+            directories.append(_DirectoryRecord(relative, identity, (), marker))
+            marker_relative = f"{relative}/{marker.name}"
+            entries.append(
+                _EntryRecord(
+                    marker_relative,
+                    marker.identity,
+                    ignored=marker_data is None,
+                )
+            )
+            if marker_data is not None:
+                files.append((marker_relative, marker_data))
+            opaque_directories.append(relative)
+            return
+        directories.append(_DirectoryRecord(relative, identity, names))
+        _tree_snapshot_checkpoint("after-directory-list", relative)
+        for name in names:
+            child_relative = f"{relative}/{name}" if relative else name
+            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            child_identity = _stat_signature(metadata)
+            relative_path = PurePosixPath(child_relative)
+            if stat.S_ISDIR(metadata.st_mode):
+                if not selection.descend(relative_path):
+                    entries.append(_EntryRecord(child_relative, child_identity, ignored=True))
+                    if selection.record_omitted:
+                        omitted.append((child_relative, "directory"))
+                    continue
+                child_descriptor: int | None = None
+                try:
+                    try:
+                        child_descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=descriptor)
+                    except PermissionError as error:
+                        raise _PermissionDenied(child_relative) from error
+                    opened = os.fstat(child_descriptor)
+                    opened_identity = _stat_signature(opened)
+                    if _stable_entry_identity(opened_identity) != _stable_entry_identity(
+                        child_identity
+                    ):
+                        raise _TreeChanged
+                    scan(child_descriptor, child_relative, depth + 1, opened_identity)
+                    final_identity = _stat_signature(
+                        os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                    )
+                    if _stable_entry_identity(final_identity) != _stable_entry_identity(
+                        opened_identity
+                    ):
+                        raise _TreeChanged
+                finally:
+                    if child_descriptor is not None:
+                        _close_descriptor(child_descriptor)
+                continue
+            if not selection.include(relative_path, metadata.st_mode):
+                if stat.S_ISREG(metadata.st_mode) and selection.placeholder(
+                    relative_path,
+                    metadata.st_mode,
+                ):
+                    entries.append(_EntryRecord(child_relative, child_identity))
+                    placeholders.append(child_relative)
+                    continue
+                entries.append(_EntryRecord(child_relative, child_identity, ignored=True))
+                kind = (
+                    "file"
+                    if stat.S_ISREG(metadata.st_mode)
+                    else "symlink"
+                    if stat.S_ISLNK(metadata.st_mode)
+                    else "special"
+                )
+                if selection.record_omitted:
+                    omitted.append((child_relative, kind))
+                continue
+            entries.append(_EntryRecord(child_relative, child_identity))
+            if stat.S_ISREG(metadata.st_mode):
+                max_bytes = budget.file_read_limit(
+                    metadata.st_size,
+                    selection.byte_limit(relative_path),
+                )
+                try:
+                    data = _read_file(
+                        descriptor,
+                        name,
+                        child_identity,
+                        max_bytes=max_bytes,
+                    )
+                except PermissionError as error:
+                    raise _PermissionDenied(child_relative) from error
+                budget.add_file_bytes(len(data))
+                files.append((child_relative, data))
+            elif stat.S_ISLNK(metadata.st_mode):
+                target = os.readlink(name, dir_fd=descriptor)
+                if _stat_signature(
+                    os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                ) != child_identity:
+                    raise _TreeChanged
+                symlinks.append((child_relative, target))
+            else:
+                special.append((child_relative, stat.S_IFMT(metadata.st_mode)))
+        if (
+            _stable_entry_identity(
+                _stat_signature(os.fstat(descriptor))
+            ) != _stable_entry_identity(identity)
+            or not _directory_names_match(
+                descriptor,
+                names,
+                limits=budget.limits,
+            )
+        ):
+            raise _TreeChanged
+
     try:
-        _scan_directory(
-            descriptor,
-            relative="",
-            depth=0,
-            identity=_stat_signature(root),
-            directories=directories,
-            entries=entries,
-            files=files,
-            symlinks=symlinks,
-            special=special,
-            placeholders=placeholders,
-            omitted=omitted,
-            opaque_directories=opaque_directories,
-            selection=selection,
-            budget=budget,
-        )
+        scan(descriptor, "", 0, _stat_signature(root))
         _verify_captured_children(directories, entries, expected_children or {})
         _tree_snapshot_checkpoint("before-final-verification", "")
         _verify_snapshot(
@@ -1172,7 +1261,12 @@ def capture_directory_descriptor(
         special=tuple(sorted(special)),
         placeholders=tuple(sorted(placeholders)),
         omitted=tuple(sorted(omitted)),
-        identities=_included_identities(directories, entries),
+        identities=tuple(
+            sorted(
+                [(record.relative, record.identity) for record in directories]
+                + [(record.relative, record.identity) for record in entries if not record.ignored]
+            )
+        ),
         opaque_directories=tuple(sorted(opaque_directories)),
     )
 
@@ -1345,167 +1439,6 @@ def _opaque_marker(
                 names,
             )
     return None, None, names
-
-
-def _scan_directory(
-    descriptor: int,
-    *,
-    relative: str,
-    depth: int,
-    identity: tuple[int, ...],
-    directories: list[_DirectoryRecord],
-    entries: list[_EntryRecord],
-    files: list[tuple[str, bytes]],
-    symlinks: list[tuple[str, str]],
-    special: list[tuple[str, int]],
-    placeholders: list[str],
-    omitted: list[tuple[str, str]],
-    opaque_directories: list[str],
-    selection: TreeSelection,
-    budget: _CaptureBudget,
-) -> bool:
-    # The root is the directory the caller explicitly asked to inspect.  A
-    # marker name in that directory must not turn the entire requested input
-    # into generated output.
-    if relative and selection.opaque_markers:
-        marker, marker_data, names = _opaque_marker(
-            descriptor,
-            relative,
-            selection,
-            budget=budget,
-            depth=depth,
-        )
-    else:
-        marker = None
-        marker_data = None
-        names = _capture_directory_names(
-            descriptor,
-            budget=budget,
-            depth=depth + 1,
-        )
-    if marker is not None:
-        directories.append(_DirectoryRecord(relative, identity, (), marker))
-        marker_relative = f"{relative}/{marker.name}"
-        entries.append(
-            _EntryRecord(
-                marker_relative,
-                marker.identity,
-                ignored=marker_data is None,
-            )
-        )
-        if marker_data is not None:
-            files.append((marker_relative, marker_data))
-        opaque_directories.append(relative)
-        return True
-    directories.append(_DirectoryRecord(relative, identity, names))
-    _tree_snapshot_checkpoint("after-directory-list", relative)
-    for name in names:
-        child_relative = f"{relative}/{name}" if relative else name
-        metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-        child_identity = _stat_signature(metadata)
-        relative_path = PurePosixPath(child_relative)
-        if stat.S_ISDIR(metadata.st_mode):
-            if not selection.descend(relative_path):
-                entries.append(_EntryRecord(child_relative, child_identity, ignored=True))
-                if selection.record_omitted:
-                    omitted.append((child_relative, "directory"))
-                continue
-            child_descriptor: int | None = None
-            try:
-                try:
-                    child_descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=descriptor)
-                except PermissionError as error:
-                    raise _PermissionDenied(child_relative) from error
-                opened = os.fstat(child_descriptor)
-                opened_identity = _stat_signature(opened)
-                if _stable_entry_identity(opened_identity) != _stable_entry_identity(
-                    child_identity
-                ):
-                    raise _TreeChanged
-                _scan_directory(
-                    child_descriptor,
-                    relative=child_relative,
-                    depth=depth + 1,
-                    identity=opened_identity,
-                    directories=directories,
-                    entries=entries,
-                    files=files,
-                    symlinks=symlinks,
-                    special=special,
-                    placeholders=placeholders,
-                    omitted=omitted,
-                    opaque_directories=opaque_directories,
-                    selection=selection,
-                    budget=budget,
-                )
-                final_identity = _stat_signature(
-                    os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-                )
-                if _stable_entry_identity(final_identity) != _stable_entry_identity(
-                    opened_identity
-                ):
-                    raise _TreeChanged
-            finally:
-                if child_descriptor is not None:
-                    _close_descriptor(child_descriptor)
-            continue
-        if not selection.include(relative_path, metadata.st_mode):
-            if stat.S_ISREG(metadata.st_mode) and selection.placeholder(
-                relative_path,
-                metadata.st_mode,
-            ):
-                entries.append(_EntryRecord(child_relative, child_identity))
-                placeholders.append(child_relative)
-                continue
-            entries.append(_EntryRecord(child_relative, child_identity, ignored=True))
-            kind = (
-                "file"
-                if stat.S_ISREG(metadata.st_mode)
-                else "symlink"
-                if stat.S_ISLNK(metadata.st_mode)
-                else "special"
-            )
-            if selection.record_omitted:
-                omitted.append((child_relative, kind))
-            continue
-        entries.append(_EntryRecord(child_relative, child_identity))
-        if stat.S_ISREG(metadata.st_mode):
-            max_bytes = budget.file_read_limit(
-                metadata.st_size,
-                selection.byte_limit(relative_path),
-            )
-            try:
-                data = _read_file(
-                    descriptor,
-                    name,
-                    child_identity,
-                    max_bytes=max_bytes,
-                )
-            except PermissionError as error:
-                raise _PermissionDenied(child_relative) from error
-            budget.add_file_bytes(len(data))
-            files.append((child_relative, data))
-        elif stat.S_ISLNK(metadata.st_mode):
-            target = os.readlink(name, dir_fd=descriptor)
-            if _stat_signature(
-                os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-            ) != child_identity:
-                raise _TreeChanged
-            symlinks.append((child_relative, target))
-        else:
-            special.append((child_relative, stat.S_IFMT(metadata.st_mode)))
-    if (
-        _stable_entry_identity(
-            _stat_signature(os.fstat(descriptor))
-        ) != _stable_entry_identity(identity)
-        or not _directory_names_match(
-            descriptor,
-            names,
-            limits=budget.limits,
-        )
-    ):
-        raise _TreeChanged
-    return False
 
 
 def _read_file(
@@ -1976,21 +1909,3 @@ def _update_digest(digest, kind: bytes, relative: str, data: bytes) -> None:
     for field in (kind, path, data):
         digest.update(len(field).to_bytes(8, "big"))
         digest.update(field)
-
-
-def _included_identities(
-    directories: list[_DirectoryRecord],
-    entries: list[_EntryRecord],
-) -> tuple[tuple[str, tuple[int, ...]], ...]:
-    return tuple(
-        sorted(
-            [
-                *((record.relative, record.identity) for record in directories),
-                *(
-                    (record.relative, record.identity)
-                    for record in entries
-                    if not record.ignored
-                ),
-            ]
-        )
-    )
