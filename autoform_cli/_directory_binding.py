@@ -152,10 +152,6 @@ def _open_failure(path: Path, error: OSError) -> OSError:
         return OSError("directory root must not be a symbolic link")
     if isinstance(error, PermissionError):
         return OSError("permission denied while opening the directory root")
-    if isinstance(error, FileNotFoundError):
-        return OSError("directory root does not exist")
-    if isinstance(error, NotADirectoryError):
-        return OSError("directory root is not a directory")
     return OSError("directory root cannot be opened")
 
 
