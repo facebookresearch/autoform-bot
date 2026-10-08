@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -709,29 +709,22 @@ def _owners(
 ) -> tuple[str, ...]:
     """Every article naming the nearest ``parent`` ancestor of ``record``."""
 
-    seen: set[str] = set()
-    parent = record.parent
-    while parent is not None and parent not in seen:
+    for parent in _ancestors(record, records):
         if parent in named:
             return tuple(sorted(set(named[parent])))
-        seen.add(parent)
-        ancestor = records.get(parent)
-        parent = ancestor.parent if ancestor is not None else None
     return ()
 
 
-def _descends_from(record: ConstantRecord, ancestor: str, records: Mapping[str, ConstantRecord]) -> bool:
-    """Whether ``ancestor`` is on the ``parent`` chain of ``record``."""
+def _ancestors(record: ConstantRecord, records: Mapping[str, ConstantRecord]) -> Iterator[str]:
+    """The ``parent`` chain of ``record``, nearest first, stopping where it repeats."""
 
     seen: set[str] = set()
     parent = record.parent
     while parent is not None and parent not in seen:
-        if parent == ancestor:
-            return True
+        yield parent
         seen.add(parent)
         ancestor_record = records.get(parent)
         parent = ancestor_record.parent if ancestor_record is not None else None
-    return False
 
 
 def _reaches(
@@ -776,7 +769,7 @@ def _users_through_internal(
             continue
         seen.add(user)
         further = users.get(user, set()) - {user}
-        if records[user].internal and (further or _descends_from(records[user], name, records)):
+        if records[user].internal and (further or name in _ancestors(records[user], records)):
             work.extend(sorted(further))
         else:
             found.add(user)
