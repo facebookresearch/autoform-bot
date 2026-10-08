@@ -103,10 +103,7 @@ def diagnose_project(
         reason = _sanitize_issues(error.issues, paths)
         checks.append(DoctorCheck("runtime", False, "canonical graph is invalid"))
         checks.append(DoctorCheck("graph", False, reason))
-        checks.append(DoctorCheck("references", False, "not checked because graph validation failed"))
-        checks.append(DoctorCheck("audit", False, "not checked because graph validation failed"))
-        checks.append(_blocked_lean_check("graph validation failed", lean_root))
-        return _result(checks)
+        return _blocked_result(checks, "graph validation failed", lean_root=lean_root)
 
     resolved_lean_root, lean_root_valid = _resolve_lean_root(lean_root)
     try:
@@ -128,10 +125,7 @@ def diagnose_project(
 
     if runtime is None:
         checks.append(DoctorCheck("graph", False, "not summarized because runtime projection failed"))
-        checks.append(DoctorCheck("references", False, "not checked because runtime projection failed"))
-        checks.append(DoctorCheck("audit", False, "not checked because runtime projection failed"))
-        checks.append(_blocked_lean_check("runtime projection failed", lean_root))
-        return _result(checks)
+        return _blocked_result(checks, "runtime projection failed", lean_root=lean_root)
 
     checks.append(
         DoctorCheck(

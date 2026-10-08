@@ -575,6 +575,20 @@ def _is_link(metadata: os.stat_result) -> bool:
     return stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse)
 
 
+def _read_at_most(descriptor: int, size: int) -> bytes:
+    """Read from *descriptor* until end of file or *size* bytes, whichever is first."""
+
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        chunk = os.read(descriptor, min(64 * 1024, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
 def _read_bounded_regular_file(
     path: Path,
     *,
@@ -609,15 +623,7 @@ def _read_bounded_regular_file(
         ):
             raise ScaffoldError([f"the {label} changed while it was being read"])
 
-        chunks: list[bytes] = []
-        remaining = limit + 1
-        while remaining:
-            chunk = os.read(descriptor, min(64 * 1024, remaining))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        content = b"".join(chunks)
+        content = _read_at_most(descriptor, limit + 1)
         after_identity = _node_identity(os.fstat(descriptor))
         named_identity = _node_identity(os.stat(path, follow_symlinks=False))
         if (
@@ -818,18 +824,11 @@ def _read_gitignore_descriptor(
             [f"refusing to merge .gitignore larger than {_MAX_GITIGNORE_BYTES} bytes"]
         )
     os.lseek(descriptor, 0, os.SEEK_SET)
-    chunks: list[bytes] = []
-    total = 0
-    while True:
-        chunk = os.read(descriptor, min(64 * 1024, _MAX_GITIGNORE_BYTES - total + 1))
-        if not chunk:
-            break
-        chunks.append(chunk)
-        total += len(chunk)
-        if total > _MAX_GITIGNORE_BYTES:
-            raise ScaffoldError(
-                [f"refusing to merge .gitignore larger than {_MAX_GITIGNORE_BYTES} bytes"]
-            )
+    content = _read_at_most(descriptor, _MAX_GITIGNORE_BYTES + 1)
+    if len(content) > _MAX_GITIGNORE_BYTES:
+        raise ScaffoldError(
+            [f"refusing to merge .gitignore larger than {_MAX_GITIGNORE_BYTES} bytes"]
+        )
     after = os.fstat(descriptor)
     named = os.stat(path, follow_symlinks=False)
     opened_identity = _node_identity(opened)
@@ -844,7 +843,7 @@ def _read_gitignore_descriptor(
         != _cross_interface_identity(opened_identity)
     ):
         raise ScaffoldError([f".gitignore changed while it was being inspected: {path}"])
-    return b"".join(chunks), named_identity
+    return content, named_identity
 
 
 def _gitignore_suffix(existing: bytes, required: bytes) -> bytes | None:
