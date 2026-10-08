@@ -886,6 +886,32 @@ def test_connected_send_failure_is_never_retried(runtime_dir, monkeypatch):
         client.request("repl.run", {"project_dir": "/lean", "code": "#check Nat"})
 
 
+def test_non_utf8_response_is_a_protocol_error(runtime_dir, monkeypatch):
+    from servers import lean_client
+
+    class NonUtf8Socket:
+        def settimeout(self, timeout):
+            pass
+
+        def connect(self, path):
+            pass
+
+        def sendall(self, payload):
+            pass
+
+        def recv(self, size):
+            return b"\xff\n"
+
+        def close(self):
+            pass
+
+    client = LeanRuntimeClient(socket_path=runtime_dir / "fake.sock")
+    monkeypatch.setattr(lean_client.socket, "socket", lambda *args: NonUtf8Socket())
+
+    with pytest.raises(lean_client.LeanRuntimeProtocolError, match="invalid JSON"):
+        client.request("repl.run", {"project_dir": "/lean", "code": "#check Nat"})
+
+
 @pytest.mark.parametrize(
     ("name", "value", "match"),
     [
