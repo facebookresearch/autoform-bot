@@ -149,22 +149,17 @@ def chapter_view(graph: Graph, statuses: dict[str, NodeStatus], group: str) -> G
     inside = frozenset(grouped[group])
     boundaries: dict[str, set[str]] = defaultdict(set)
     edge_counts: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
+
+    def endpoint(node_id: str) -> str:
+        if node_id in inside:
+            return node_id
+        external = _top_scope(graph, node_id, children)
+        boundaries[external].add(node_id)
+        return _boundary_node_id(external)
+
     for source, target, proof_only in _relations(graph):
-        source_inside = source in inside
-        target_inside = target in inside
-        if not source_inside and not target_inside:
-            continue
-        if source_inside and target_inside:
-            projected_source, projected_target = source, target
-        elif target_inside:
-            external = _top_scope(graph, source, children)
-            boundaries[external].add(source)
-            projected_source, projected_target = _boundary_node_id(external), target
-        else:
-            external = _top_scope(graph, target, children)
-            boundaries[external].add(target)
-            projected_source, projected_target = source, _boundary_node_id(external)
-        edge_counts[(projected_source, projected_target)][1 if proof_only else 0] += 1
+        if source in inside or target in inside:
+            edge_counts[(endpoint(source), endpoint(target))][1 if proof_only else 0] += 1
 
     nodes = [_theorem_node(graph.nodes[node_id], statuses[node_id]) for node_id in grouped[group]]
     nodes.extend(
@@ -301,27 +296,20 @@ def _scope_view(
 
     edge_counts: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
     boundaries: dict[str, set[str]] = defaultdict(set)
+
+    def endpoint(node_id: str, child: str | None) -> str:
+        if child is None:
+            external = top_scope(node_id)
+            boundaries[external].add(node_id)
+            return _boundary_node_id(external)
+        return _scope_node_id(child) if child in children else child
+
     for source, target, proof_only, source_child, target_child in relations:
-        if source_child is None and target_child is None:
+        if source_child == target_child:  # both outside the scope, or both under one child
             continue
-        if source_child is not None and target_child is not None:
-            if source_child == target_child:
-                continue
-            projected_source = _scope_node_id(source_child) if source_child in children else source_child
-            projected_target = _scope_node_id(target_child) if target_child in children else target_child
-        elif not include_external:
+        if (source_child is None or target_child is None) and not include_external:
             continue
-        elif target_child is not None:
-            external = top_scope(source)
-            boundaries[external].add(source)
-            projected_source = _boundary_node_id(external)
-            projected_target = _scope_node_id(target_child) if target_child in children else target_child
-        else:
-            external = top_scope(target)
-            boundaries[external].add(target)
-            projected_source = _scope_node_id(source_child) if source_child in children else source_child
-            projected_target = _boundary_node_id(external)
-        edge_counts[(projected_source, projected_target)][1 if proof_only else 0] += 1
+        edge_counts[(endpoint(source, source_child), endpoint(target, target_child))][1 if proof_only else 0] += 1
 
     for external, external_members in sorted(boundaries.items()):
         nodes.append(
@@ -403,11 +391,6 @@ def _focus_view(
     adjacency: dict[str, set[str]],
     order_index: dict[str, int],
 ) -> GraphView:
-    if node_id not in graph.nodes:
-        raise KeyError(f"unknown blueprint node: {node_id}")
-    if radius < 0:
-        raise ValueError("focus radius must be non-negative")
-
     selected = {node_id}
     frontier = {node_id}
     for _ in range(radius):
@@ -458,7 +441,7 @@ def _node_view(
     *,
     ordered: bool = False,
 ) -> GraphView:
-    ordered_ids = list(dict.fromkeys(node_id for node_id in selected if node_id in graph.nodes))
+    ordered_ids = list(selected)
     selected_ids = frozenset(ordered_ids)
     if not ordered:
         order_index = {node_id: index for index, node_id in enumerate(topological_order(graph))}
