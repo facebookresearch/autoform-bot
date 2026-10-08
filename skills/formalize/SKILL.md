@@ -127,6 +127,16 @@ superseded declaration that an expand, migrate, contract revision keeps in the
 revised article's `lean:` until it is deleted; report unrelated pre-existing
 findings instead of fixing them.
 
+Once the proof is complete, also run `autoform probe <PROJECT>/blueprint
+--lean-root <PROJECT> --node <ID>`. A `hypothesis-unused` finding means the
+proof never needs that hypothesis. If the statement assumes something the
+source derives, such as a supremum the source obtains from boundedness, restate
+it to conclude what the source concludes. If the source states the hypothesis
+and Lean does not need it, such as `y n ≠ 0` where `x / 0 = 0`, keep it and
+report it. If the theorem genuinely holds without it, such as a limsup result
+that holds in the extended reals, keep the source's statement for the article
+and prove the general one as a separate lemma that it follows from.
+
 Commit the verified result in its worktree, renew the claim, and rebase onto or
 merge the current shared branch. On the result, run the default `lake build`,
 confirm that dependency readiness is unchanged, and confirm that the claimed

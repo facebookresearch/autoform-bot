@@ -33,7 +33,10 @@ chapter graph, and node-neighborhood links.
 
 Guide the review from coarse to fine: declared scope and exclusions, milestone
 book, landing-page progress summary, cross-chapter graph, chapter graph, then
-individual node and Lean-source links. Record each human decision as `approve`, `revise`, or
+individual node and Lean-source links. For proved articles, run `autoform probe
+<PROJECT>/blueprint --lean-root <PROJECT>` and show each `hypothesis-unused`
+finding beside its article: a hypothesis the proof never uses often marks a
+statement that assumes what its source derives. Record each human decision as `approve`, `revise`, or
 `block`, with the exact page or node and rationale. Separate validator output
 from the person's judgment. Do not silently apply requested revisions: hand
 mathematical-plan changes and Lean implementation changes to Roadmap, which

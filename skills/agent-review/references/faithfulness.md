@@ -11,6 +11,9 @@ quality here.
 3. Compare quantifiers, hypotheses, domains, locality, conclusions, and edge cases side by side.
 4. Check that source-specific objects have substantive definitions. Reusing a standard Mathlib
    concept or typeclass is correct when it genuinely matches the source concept.
+5. When the Lean is proved, run `autoform probe` on its article. A hypothesis the proof never uses
+   is either a source hypothesis Lean does not need or a sign that the statement assumes what the
+   source derives.
 
 If the source is unavailable, report insufficient evidence instead of inventing a score. The human
 trust surface includes every new or changed definition, public statement, axiom, instance, notation,
