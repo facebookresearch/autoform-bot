@@ -895,8 +895,12 @@ def build_linker(
     A supplied source snapshot never inherits a live Git ref; callers must bind
     that ref explicitly if they want permalinks.
     """
-    requested_root = directory_binding.lexical_absolute_path(lean_root)
-    resolved_root = requested_root.resolve()
+    try:
+        requested_root = directory_binding.lexical_absolute_path(lean_root)
+        resolved_root = requested_root.resolve()
+    except RuntimeError as error:
+        # An unknown ~user, or before Python 3.13 a symbolic link loop.
+        raise LeanSourceError("Lean root cannot be resolved") from error
     remapped_exclusions = tuple(
         _remap_resolved_root_exclusion(requested_root, resolved_root, value)
         for value in exclude_roots

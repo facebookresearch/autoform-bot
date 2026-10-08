@@ -354,8 +354,12 @@ def _coverage_findings(
 
 
 def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
-    root = Path(lean_root).expanduser().resolve()
-    if not root.is_dir():
+    try:
+        root = Path(lean_root).expanduser().resolve()
+        valid = root.is_dir()
+    except (OSError, RuntimeError, ValueError):
+        valid = False
+    if not valid:
         return [
             AuditFinding(
                 ".",
