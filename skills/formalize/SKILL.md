@@ -157,6 +157,9 @@ the claim under its own ID and repeats the reload gate before integrating.
 Release the claim once the result is visible that way, or when abandoning the
 leaf without a candidate.
 
+When `AUTOFORM_DEBRIEF=1`, the agent that worked an attempt then follows the
+[debrief skill](../debrief/SKILL.md) before reporting.
+
 Re-read the work frontier from the updated shared branch and repeat while
 independent ready leaves and authorized capacity remain. Stop when the frontier
 is empty or every remaining attempt has a concrete mathematical or ownership

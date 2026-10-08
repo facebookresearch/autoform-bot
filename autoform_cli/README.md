@@ -764,6 +764,36 @@ board. A failed acquire or renew means the caller cannot prove ownership and
 must stop before committing or pushing protected work. Claims do not prove
 mathematical correctness and do not replace branch-level Git CAS.
 
+Ask the agent that just finished an attempt what infrastructure would have made
+it cheaper, and keep its answer:
+
+```bash
+autoform debrief form af_5b0e4d3c2a1f09e8d7c6b5a4 . --lean-root . --phase proof
+autoform debrief record af_5b0e4d3c2a1f09e8d7c6b5a4 . --lean-root . --phase proof \
+  --worker-id agent-name --answer answer.json
+autoform debrief render . --out debrief-views
+```
+
+Debriefs are opt-in: `form` prints the form only when `AUTOFORM_DEBRIEF=1`, and
+otherwise says the step is disabled. It fills in the attempt's outcome from the
+runtime: the phase succeeded when the article's statement (for `statement`) or
+proof (for `proof`) is now recorded as formalized. Pass `--note` with the reason
+when it did not. `record` reads one JSON object answering the form from
+`--answer` or standard input, refuses anything else, re-reads the outcome from
+the runtime rather than trusting the caller, and stores a new versioned record;
+it never edits the project. Like the claim commands, it requires `--worker-id`
+or `AUTOFORM_WORKER_ID`. Records are bounded, normalised, and created
+exclusively without following symbolic links, so a record is complete or absent
+and never overwritten; platforms that cannot retain directory descriptors, such
+as Windows, refuse to read or write them. They live under `autoform/debriefs/records/` in the
+repository's Git common directory, which every worktree shares and Git does not
+track; outside Git they fall back to `$XDG_STATE_HOME/autoform/debriefs/`. Set
+`AUTOFORM_DEBRIEF_DIR` to an absolute path outside the working tree to choose
+another store, and `AUTOFORM_DEBRIEF_QUESTION_FILE` to replace the form (its
+`{node_id}` and `{outcome}` are substituted). `render` rebuilds Markdown views
+from the validated records, escaping all agent text; the records stay the source
+of truth.
+
 Write the Mermaid dependency graph into the vault, where Obsidian renders it:
 
 ```bash

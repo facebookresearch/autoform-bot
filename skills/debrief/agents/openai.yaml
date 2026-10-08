@@ -1,0 +1,4 @@
+interface:
+  display_name: "Debrief"
+  short_description: "Record what made an attempt costly"
+  default_prompt: "Use $debrief to record what infrastructure would have made the attempt you just finished cheaper."
