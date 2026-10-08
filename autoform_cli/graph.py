@@ -201,6 +201,9 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         raise GraphValidationError(issues)
 
     parents = _article_parents(parsed)
+    issues.extend(_containment_cycles(parents))
+    if issues:
+        raise GraphValidationError(issues)
     nodes: dict[str, Node] = {}
     for parsed_node in parsed:
 
@@ -263,6 +266,14 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
     if not roadmap_root.is_dir():
         return [], [f"roadmap directory does not exist: {roadmap_root}"]
 
+    symlinks = roadmap_symlinks(blueprint)
+    if symlinks:
+        # Containment and ids are read from paths, so one symbolic link can make two
+        # pages each other's parent; refuse the layout before anything is read.
+        return [], [
+            f"roadmap contains a symbolic link: {path.relative_to(blueprint).as_posix()}" for path in symlinks
+        ]
+
     issues: list[str] = []
     sources: list[_NodeSource] = []
     roadmap_root = roadmap_root.resolve()
@@ -296,6 +307,19 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
 
     issues.extend(_chapter_issues(roadmap_root))
     return sources, issues
+
+
+def roadmap_symlinks(blueprint: Path) -> list[Path]:
+    """Return the symbolic links among ``roadmap/`` and every path beneath it.
+
+    Graph loading and runtime projection share this policy, so ``autoform check``
+    accepts exactly the roadmaps the runtime does.
+    """
+
+    roadmap = blueprint / "roadmap"
+    if roadmap.is_symlink():
+        return [roadmap]
+    return [path for path in sorted(roadmap.rglob("*")) if path.is_symlink()]
 
 
 def _chapter_issues(roadmap_root: Path) -> list[str]:
@@ -370,6 +394,22 @@ def _article_parents(parsed: list[_ParsedNode]) -> dict[str, str | None]:
             candidate = candidate.parent
         parents[node.id] = parent
     return parents
+
+
+def _containment_cycles(parents: dict[str, str | None]) -> list[str]:
+    """Report each cycle of containing READMEs once, before depths are computed."""
+    issues: list[str] = []
+    for node_id in sorted(parents):
+        chain = [node_id]
+        seen = {node_id}
+        parent = parents[node_id]
+        while parent is not None and parent not in seen:
+            chain.append(parent)
+            seen.add(parent)
+            parent = parents[parent]
+        if parent == node_id and node_id == min(chain):
+            issues.append(f"{node_id}: containment cycle: {' -> '.join([*chain, node_id])}")
+    return issues
 
 
 def _article_depth(node_id: str, parents: dict[str, str | None]) -> int:

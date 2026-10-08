@@ -9,8 +9,10 @@ import pytest
 from autoform_cli.__main__ import main
 from autoform_cli.graph import (
     GraphValidationError,
+    _containment_cycles,
     load_graph,
 )
+from autoform_cli.runtime import RuntimeProjectionError, load_runtime_graph
 
 
 def _node_text(body: str, **metadata: str) -> str:
@@ -420,6 +422,53 @@ def test_check_cli_reports_validation_errors(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "error: bad: missing H1 title" in result.stdout
+
+
+def test_check_refuses_a_symlinked_readme_instead_of_hanging(tmp_path: Path) -> None:
+    """Issue #58: this README made `a` and `a/b` each other's parent, and check never returned."""
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Root\n")
+    _roadmap_page(blueprint, "a/b/README.md", "# B\n")
+    _roadmap_page(blueprint, "a/b/notes.txt", "# A\n")
+    try:
+        (blueprint / "roadmap" / "a" / "README.md").symlink_to("b/notes.txt")
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "autoform_cli", "check", str(blueprint)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 1
+    assert "error: roadmap contains a symbolic link: roadmap/a/README.md" in result.stdout
+    assert str(tmp_path) not in result.stdout
+
+
+def test_check_and_runtime_refuse_the_same_roadmap_symlinks(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    outside = tmp_path / "figure.png"
+    outside.write_bytes(b"png")
+    try:
+        (blueprint / "roadmap" / "figure.png").symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    with pytest.raises(GraphValidationError, match="roadmap contains a symbolic link: roadmap/figure.png"):
+        load_graph(blueprint)
+    with pytest.raises(RuntimeProjectionError, match="roadmap contains a symbolic link: roadmap/figure.png"):
+        load_runtime_graph(blueprint)
+
+
+def test_containment_cycles_are_reported_once_per_cycle() -> None:
+    parents: dict[str, str | None] = {"a": "a/b", "a/b": "a", "c": "a", "roadmap": None}
+
+    assert _containment_cycles(parents) == ["a: containment cycle: a -> a/b -> a"]
+    assert _containment_cycles({"a": "roadmap", "roadmap": None}) == []
 
 
 def test_check_cli_reports_source_index_io_failure_before_success(
