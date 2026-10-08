@@ -134,6 +134,64 @@ class TestReplServer:
         projects.shutdown()
         assert all(pool.closed for pool in created)
 
+    def test_project_router_retains_a_pool_whose_shutdown_failed(self, tmp_path):
+        from servers.repl.projects import LeanReplProjects
+
+        class FakePool:
+            def __init__(self):
+                self.close_calls = 0
+
+            def shutdown(self):
+                self.close_calls += 1
+                if self.close_calls == 1:
+                    raise RuntimeError("injected close failure")
+
+        project = make_lake_project(tmp_path, "failed-shutdown")
+        pool = FakePool()
+        projects = LeanReplProjects(lambda root: pool)
+        assert projects.get(str(project)) is pool
+
+        with pytest.raises(RuntimeError, match="pools remain owned"):
+            projects.shutdown()
+        projects.shutdown()
+
+        assert pool.close_calls == 2
+
+    def test_project_router_never_returns_a_partial_startup_pool(self, tmp_path):
+        from servers.repl.pool import LeanReplPoolStartupError
+        from servers.repl.projects import LeanReplProjects
+
+        class PartialPool:
+            def __init__(self):
+                self.close_calls = 0
+
+            def shutdown(self):
+                self.close_calls += 1
+                if self.close_calls == 1:
+                    raise RuntimeError("injected cleanup failure")
+
+        project = make_lake_project(tmp_path, "failed-startup")
+        partial = PartialPool()
+        calls = 0
+
+        def factory(root):
+            nonlocal calls
+            calls += 1
+            raise LeanReplPoolStartupError(partial, RuntimeError("startup failed"))
+
+        projects = LeanReplProjects(factory)
+        with pytest.raises(LeanReplPoolStartupError, match="startup failed"):
+            projects.get(str(project))
+        with pytest.raises(RuntimeError, match="cleanup is pending"):
+            projects.get(str(project))
+        assert calls == 1
+
+        with pytest.raises(RuntimeError, match="pools remain owned"):
+            projects.shutdown()
+        projects.shutdown()
+
+        assert partial.close_calls == 2
+
 
 # ---------------------------------------------------------------------------
 # LSP backend
@@ -189,3 +247,32 @@ class TestLspServer:
 
         projects.close()
         assert all(session.closed for session in created)
+
+    def test_project_router_never_returns_a_partial_lsp_session(self, tmp_path):
+        from servers.lsp.server import LeanLspProjects, LeanLspStartupError
+
+        class PartialSession:
+            def __init__(self):
+                self.close_calls = 0
+
+            def close(self):
+                self.close_calls += 1
+
+        project = make_lake_project(tmp_path, "failed-lsp-startup")
+        partial = PartialSession()
+        calls = 0
+
+        def factory(root):
+            nonlocal calls
+            calls += 1
+            raise LeanLspStartupError(partial, RuntimeError("startup failed"))
+
+        projects = LeanLspProjects(factory)
+        with pytest.raises(LeanLspStartupError, match="startup failed"):
+            projects.get(str(project))
+        with pytest.raises(RuntimeError, match="cleanup is pending"):
+            projects.get(str(project))
+        assert calls == 1
+
+        projects.close()
+        assert partial.close_calls == 1

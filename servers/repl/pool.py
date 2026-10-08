@@ -35,6 +35,15 @@ class LeanReplPoolConfig(LeanReplConfig):
                 self.num_repls = 1
 
 
+class LeanReplPoolStartupError(RuntimeError):
+    """Pool construction failed while this object still owns workers."""
+
+    def __init__(self, pool: LeanReplPool, cause: BaseException) -> None:
+        super().__init__(str(cause))
+        self.pool = pool
+        self.cause = cause
+
+
 class LeanReplPool:
     """Pool of Lean REPL instances with queue-based load balancing.
 
@@ -50,57 +59,63 @@ class LeanReplPool:
         self._workers: list[LeanRepl] = []
         self._idle: queue.Queue[LeanRepl] = queue.Queue()
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
+        self._active = 0
 
         try:
             for i in range(self.capacity):
                 if i > 0:
-                    import time
-
                     time.sleep(config.startup_stagger)
                 repl = LeanRepl(config)
-                try:
-                    repl.start()
-                except BaseException:
-                    # LeanRepl.start() currently cleans up its own process, but
-                    # keep the pool transaction safe for alternate/test workers
-                    # and future implementations too.
-                    try:
-                        repl.close()
-                    except Exception:
-                        logger.exception("failed to close REPL after startup error")
-                    raise
                 self._workers.append(repl)
+                repl.start()
                 self._idle.put(repl)
-        except BaseException:
-            self._close_workers()
+        except BaseException as error:
+            self._shutdown = True
+            try:
+                self._close_workers()
+            except BaseException as cleanup_error:
+                raise LeanReplPoolStartupError(self, error) from cleanup_error
             raise
 
     def _close_workers(self) -> None:
         """Close every constructed worker, preserving cleanup after one failure."""
+        survivors: list[LeanRepl] = []
+        first_error: BaseException | None = None
         for worker in reversed(self._workers):
             try:
                 worker.close()
-            except Exception:
+            except BaseException as error:
                 logger.exception("failed to close REPL worker")
-        self._workers.clear()
+                survivors.append(worker)
+                if first_error is None:
+                    first_error = error
+        self._workers = list(reversed(survivors))
         while True:
             try:
                 self._idle.get_nowait()
             except queue.Empty:
                 break
+        if first_error is not None:
+            raise RuntimeError("one or more Lean REPL workers remain owned") from first_error
 
     def run(self, code: str, **kwargs: Any) -> dict[str, Any]:
         """Run code on an idle REPL within one queue-and-execution timeout."""
         timeout = kwargs.pop("timeout", None)
         deadline = time.monotonic() + timeout if timeout is not None else None
+        with self._condition:
+            if self._shutdown:
+                raise RuntimeError("Lean REPL pool is shut down")
+            self._active += 1
+        repl: LeanRepl | None = None
         try:
-            repl = self._idle.get(timeout=timeout)
-        except queue.Empty as error:
-            raise TimeoutError(
-                f"timed out after {timeout:g}s waiting for an idle Lean REPL"
-            ) from error
+            try:
+                repl = self._idle.get(timeout=timeout)
+            except queue.Empty as error:
+                raise TimeoutError(
+                    f"timed out after {timeout:g}s waiting for an idle Lean REPL"
+                ) from error
 
-        def run_once() -> dict[str, Any]:
             call_kwargs = dict(kwargs)
             if deadline is not None:
                 remaining = deadline - time.monotonic()
@@ -110,17 +125,23 @@ class LeanReplPool:
                     )
                 call_kwargs["timeout"] = remaining
             return repl.run(code, **call_kwargs)
-
-        try:
-            return run_once()
         finally:
-            self._idle.put(repl)
+            with self._condition:
+                if repl is not None:
+                    self._idle.put(repl)
+                self._active -= 1
+                self._condition.notify_all()
 
     def get_memory_usage(self) -> float:
         """Total memory usage across all REPL instances in GB."""
-        return sum(w.get_memory_usage() for w in self._workers)
+        with self._lock:
+            workers = tuple(self._workers)
+        return sum(worker.get_memory_usage() for worker in workers)
 
     def shutdown(self) -> None:
         """Shut down all REPL instances."""
-        self._shutdown = True
-        self._close_workers()
+        with self._condition:
+            self._shutdown = True
+            while self._active:
+                self._condition.wait(timeout=0.5)
+            self._close_workers()

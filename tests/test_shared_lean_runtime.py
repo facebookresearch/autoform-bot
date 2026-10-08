@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import socket
 import subprocess
 import sys
@@ -81,6 +82,9 @@ class FakeLsp:
         self.closed = True
 
     def abort(self):
+        self.closed = True
+
+    def retire(self):
         self.closed = True
 
     def is_alive(self):
@@ -178,6 +182,7 @@ def test_cache_observation_ignores_staleness_invalidity_and_validation(tmp_path,
         resident = cache.stats()["resident"]
         assert resident[0]["active"] == 1
         assert resident[0]["valid"] is False
+        assert closed == []
 
     assert created == [resource]
     assert closed == []
@@ -190,9 +195,15 @@ def test_cache_observation_does_not_refresh_ttl_and_pins_idle_eviction(tmp_path)
     project = make_lake_project(tmp_path, "observed-ttl")
     clock = {"now": 0.0}
     closed = []
+    closed_event = threading.Event()
+
+    def close_resource(resource):
+        closed.append(resource)
+        closed_event.set()
+
     cache = ProjectResourceCache(
         lambda root: root,
-        closed.append,
+        close_resource,
         max_entries=1,
         idle_seconds=5,
         start_sweeper=False,
@@ -214,6 +225,7 @@ def test_cache_observation_does_not_refresh_ttl_and_pins_idle_eviction(tmp_path)
     assert resident["active"] == 0
     assert resident["idle_seconds"] == 10.0
     assert cache.evict_idle() == 1
+    assert closed_event.wait(timeout=1)
     assert closed == [project.resolve()]
     cache.close()
 
@@ -304,6 +316,46 @@ def test_invalid_pool_replacement_waits_for_active_observation(tmp_path):
     assert not thread.is_alive()
     assert errors == []
     assert events[:3] == ["create:1", "close:1", "create:2"]
+    cache.close()
+
+
+def test_invalidation_retires_after_a_concurrent_observer_releases(tmp_path):
+    project = make_lake_project(tmp_path, "observed-deferred-retirement")
+    observer_started = threading.Event()
+    release_observer = threading.Event()
+    retired = threading.Event()
+    errors = []
+    cache = ProjectResourceCache(
+        lambda root: object(),
+        lambda resource: retired.set(),
+        max_entries=1,
+        idle_seconds=1800,
+        start_sweeper=False,
+    )
+
+    def observe():
+        try:
+            with cache.observe(str(project)) as (resource, state):
+                assert resource is first
+                assert state == "warm"
+                observer_started.set()
+                assert release_observer.wait(timeout=2)
+        except BaseException as error:
+            errors.append(error)
+
+    with cache.lease(str(project)) as first:
+        thread = threading.Thread(target=observe)
+        thread.start()
+        assert observer_started.wait(timeout=1)
+        cache.invalidate_resolved(project.resolve(), first)
+
+    assert not retired.wait(timeout=0.1)
+    release_observer.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert retired.wait(timeout=1)
     cache.close()
 
 
@@ -409,6 +461,96 @@ def test_repl_status_reports_a_stale_shutdown_pool_without_replacing_it(tmp_path
         services.close()
 
     assert pools[0].shutdown_calls == 1
+
+
+def test_repl_status_reports_retirement_as_shutdown_in_progress(tmp_path):
+    project = make_lake_project(tmp_path, "retiring-status")
+    clock = {"now": 0.0}
+    close_started = threading.Event()
+    release_close = threading.Event()
+
+    class BlockingPool(FakePool):
+        def shutdown(self):
+            self._shutdown = True
+            close_started.set()
+            assert release_close.wait(timeout=2)
+
+    services = LeanRuntimeServices(
+        runtime_config(idle_seconds=1),
+        repl_factory=BlockingPool,
+        lsp_factory=FakeLsp,
+        start_sweepers=False,
+    )
+    services.repl_projects._clock = lambda: clock["now"]
+    try:
+        services.dispatch(
+            "repl.run",
+            {"project_dir": str(project), "code": "#check Nat", "timeout": None},
+        )
+        clock["now"] = 2.0
+        assert services.repl_projects.evict_idle() == 1
+        assert close_started.wait(timeout=1)
+
+        status = services.dispatch("repl.status", {"project_dir": str(project)})
+
+        assert status["state"] == "retiring"
+        assert status["shutdown"] is True
+        assert status["memory_usage_gb"] == 0.0
+    finally:
+        release_close.set()
+        services.close()
+
+
+def test_service_close_starts_lsp_retirement_before_blocked_repl_cleanup_finishes(
+    tmp_path,
+):
+    project = make_lake_project(tmp_path, "parallel-service-close")
+    source = project / "Main.lean"
+    source.write_text("#check Nat\n")
+    repl_close_started = threading.Event()
+    release_repl_close = threading.Event()
+    lsp_closed = threading.Event()
+    services_closed = threading.Event()
+
+    class BlockingPool(FakePool):
+        def shutdown(self):
+            self._shutdown = True
+            repl_close_started.set()
+            assert release_repl_close.wait(timeout=2)
+
+    class ClosingLsp(FakeLsp):
+        def get_diagnostics(self, file_path):
+            return []
+
+        def close(self):
+            super().close()
+            lsp_closed.set()
+
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=BlockingPool,
+        lsp_factory=ClosingLsp,
+        start_sweepers=False,
+    )
+    services.dispatch(
+        "repl.run",
+        {"project_dir": str(project), "code": "#check Nat", "timeout": None},
+    )
+    services.dispatch(
+        "lsp.diagnostics",
+        {"project_dir": str(project), "file_path": "Main.lean"},
+    )
+
+    thread = threading.Thread(target=lambda: (services.close(), services_closed.set()))
+    thread.start()
+    assert repl_close_started.wait(timeout=1)
+    assert lsp_closed.wait(timeout=1)
+    assert not services_closed.is_set()
+
+    release_repl_close.set()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert services_closed.is_set()
 
 
 def test_repl_status_field_cancellation_releases_pin_without_refreshing_ttl(tmp_path):
@@ -549,6 +691,11 @@ def test_project_startup_that_misses_its_budget_is_discarded(tmp_path):
     project = make_lake_project(tmp_path, "slow-startup")
     clock = {"now": 0.0}
     closed = []
+    closed_event = threading.Event()
+
+    def close_resource(resource):
+        closed.append(resource)
+        closed_event.set()
 
     def slow_factory(root):
         clock["now"] = 11.0
@@ -556,7 +703,7 @@ def test_project_startup_that_misses_its_budget_is_discarded(tmp_path):
 
     cache = ProjectResourceCache(
         slow_factory,
-        closed.append,
+        close_resource,
         max_entries=1,
         idle_seconds=1800,
         start_sweeper=False,
@@ -571,6 +718,7 @@ def test_project_startup_that_misses_its_budget_is_discarded(tmp_path):
         ):
             pytest.fail("late project startup must never execute a tool request")
 
+    assert closed_event.wait(timeout=1)
     assert closed == [project.resolve()]
     with cache.observe(str(project)) as (resource, state):
         assert resource is None and state == "cold"
@@ -581,9 +729,15 @@ def test_idle_ttl_never_closes_an_active_resource(tmp_path):
     project = make_lake_project(tmp_path, "idle")
     clock = {"now": 0.0}
     closed = []
+    closed_event = threading.Event()
+
+    def close_resource(resource):
+        closed.append(resource)
+        closed_event.set()
+
     cache = ProjectResourceCache(
         lambda root: root,
-        closed.append,
+        close_resource,
         max_entries=1,
         idle_seconds=10,
         start_sweeper=False,
@@ -597,8 +751,570 @@ def test_idle_ttl_never_closes_an_active_resource(tmp_path):
 
     clock["now"] = 31
     assert cache.evict_idle() == 1
+    assert closed_event.wait(timeout=1)
     assert closed == [project.resolve()]
     cache.close()
+
+
+def test_idle_retirement_reserves_the_root_until_cleanup_finishes(tmp_path):
+    project = make_lake_project(tmp_path, "retiring-root")
+    created = []
+    close_started = threading.Event()
+    release_close = threading.Event()
+
+    def factory(root):
+        resource = object()
+        created.append(resource)
+        return resource
+
+    def close_resource(resource):
+        close_started.set()
+        assert release_close.wait(timeout=2)
+
+    cache = ProjectResourceCache(
+        factory,
+        close_resource,
+        max_entries=1,
+        idle_seconds=0.01,
+        start_sweeper=False,
+    )
+    with cache.lease(str(project)) as first:
+        pass
+    time.sleep(0.02)
+
+    assert cache.evict_idle() == 1
+    assert close_started.wait(timeout=1)
+    assert cache.stats()["retiring"] == [str(project.resolve())]
+    with cache.observe(str(project)) as (resource, state):
+        assert resource is None and state == "retiring"
+    with pytest.raises(ProjectResourceBusyError, match="shared Lean project slot"):
+        with cache.lease(str(project), acquisition_timeout=0.05):
+            pytest.fail("a replacement overlapped its retiring predecessor")
+    assert created == [first]
+
+    release_close.set()
+    with cache.lease(str(project), acquisition_timeout=1.0) as second:
+        assert second is not first
+    assert created == [first, second]
+    cache.close()
+
+
+def test_retiring_resource_counts_against_capacity_for_other_roots(tmp_path):
+    first = make_lake_project(tmp_path, "retiring-capacity-first")
+    second = make_lake_project(tmp_path, "retiring-capacity-second")
+    created = []
+    close_started = threading.Event()
+    release_close = threading.Event()
+
+    def factory(root):
+        created.append(root)
+        return root
+
+    def close_resource(resource):
+        if resource == first.resolve():
+            close_started.set()
+            assert release_close.wait(timeout=2)
+
+    cache = ProjectResourceCache(
+        factory,
+        close_resource,
+        max_entries=1,
+        idle_seconds=0.01,
+        start_sweeper=False,
+    )
+    with cache.lease(str(first)):
+        pass
+    time.sleep(0.02)
+    assert cache.evict_idle() == 1
+    assert close_started.wait(timeout=1)
+
+    with pytest.raises(ProjectResourceBusyError, match="shared Lean project slot"):
+        with cache.lease(str(second), acquisition_timeout=0.05):
+            pytest.fail("a retiring slot was treated as free capacity")
+    assert created == [first.resolve()]
+
+    release_close.set()
+    with cache.lease(str(second), acquisition_timeout=1.0):
+        pass
+    assert created == [first.resolve(), second.resolve()]
+    cache.close()
+
+
+def test_lru_retirement_never_blocks_the_request_thread_past_its_deadline(tmp_path):
+    first = make_lake_project(tmp_path, "lru-retirement-first")
+    second = make_lake_project(tmp_path, "lru-retirement-second")
+    created = []
+    close_started = threading.Event()
+    release_close = threading.Event()
+
+    def factory(root):
+        created.append(root)
+        return root
+
+    def close_resource(resource):
+        if resource == first.resolve():
+            close_started.set()
+            assert release_close.wait(timeout=2)
+
+    cache = ProjectResourceCache(
+        factory,
+        close_resource,
+        max_entries=1,
+        idle_seconds=1800,
+        start_sweeper=False,
+    )
+    with cache.lease(str(first)):
+        pass
+
+    started = time.monotonic()
+    with pytest.raises(ProjectResourceBusyError, match="shared Lean project slot"):
+        with cache.lease(str(second), acquisition_timeout=0.05):
+            pytest.fail("LRU cleanup ran synchronously or freed capacity early")
+    assert time.monotonic() - started < 0.5
+    assert close_started.is_set()
+    assert created == [first.resolve()]
+
+    release_close.set()
+    with cache.lease(str(second), acquisition_timeout=1.0):
+        pass
+    assert created == [first.resolve(), second.resolve()]
+    cache.close()
+
+
+def test_invalid_last_release_transfers_ownership_to_the_reaper(tmp_path):
+    project = make_lake_project(tmp_path, "invalid-retirement")
+    close_started = threading.Event()
+    release_close = threading.Event()
+
+    def close_resource(resource):
+        close_started.set()
+        assert release_close.wait(timeout=2)
+
+    cache = ProjectResourceCache(
+        lambda root: object(),
+        close_resource,
+        max_entries=1,
+        idle_seconds=1800,
+        start_sweeper=False,
+    )
+    root = project.resolve()
+
+    with cache.lease_resolved(root) as resource:
+        cache.invalidate_resolved(root, resource)
+
+    assert close_started.wait(timeout=1)
+    assert cache.stats()["resident"] == []
+    assert cache.stats()["retiring"] == [str(root)]
+    with cache.observe(str(project)) as (observed, state):
+        assert observed is None and state == "retiring"
+
+    release_close.set()
+    cache.close()
+
+
+def test_failed_retirement_retries_without_parallel_reapers(tmp_path):
+    project = make_lake_project(tmp_path, "retirement-retry")
+    attempts = 0
+    active = 0
+    maximum_active = 0
+    lock = threading.Lock()
+    retired = threading.Event()
+    clock = {"now": 0.0}
+
+    def close_resource(resource):
+        nonlocal attempts, active, maximum_active
+        with lock:
+            attempts += 1
+            active += 1
+            maximum_active = max(maximum_active, active)
+            attempt = attempts
+        try:
+            if attempt < 3:
+                raise RuntimeError("injected cleanup failure")
+            retired.set()
+        finally:
+            with lock:
+                active -= 1
+
+    cache = ProjectResourceCache(
+        lambda root: root,
+        close_resource,
+        max_entries=1,
+        idle_seconds=1,
+        start_sweeper=False,
+        clock=lambda: clock["now"],
+    )
+    with cache.lease(str(project)):
+        pass
+    clock["now"] = 2.0
+    assert cache.evict_idle() == 1
+    assert retired.wait(timeout=2)
+    cache.close()
+
+    assert attempts == 3
+    assert maximum_active == 1
+
+
+def test_retirement_pool_can_drain_every_occupied_slot_in_parallel(tmp_path):
+    projects = [
+        make_lake_project(tmp_path, "parallel-retirement-first"),
+        make_lake_project(tmp_path, "parallel-retirement-second"),
+    ]
+    clock = {"now": 0.0}
+    started = 0
+    both_started = threading.Event()
+    release_close = threading.Event()
+    lock = threading.Lock()
+
+    def close_resource(resource):
+        nonlocal started
+        with lock:
+            started += 1
+            if started == 2:
+                both_started.set()
+        assert release_close.wait(timeout=2)
+
+    cache = ProjectResourceCache(
+        lambda root: root,
+        close_resource,
+        max_entries=2,
+        idle_seconds=1,
+        start_sweeper=False,
+        clock=lambda: clock["now"],
+    )
+    for project in projects:
+        with cache.lease(str(project)):
+            pass
+    clock["now"] = 2.0
+
+    assert cache.evict_idle() == 2
+    assert both_started.wait(timeout=1)
+    assert len(cache.stats()["retiring"]) == 2
+    release_close.set()
+    cache.close()
+
+
+def test_late_startup_moves_directly_to_retirement(tmp_path):
+    project = make_lake_project(tmp_path, "late-retirement")
+    close_started = threading.Event()
+    release_close = threading.Event()
+    created = []
+
+    def factory(root):
+        time.sleep(0.03)
+        resource = object()
+        created.append(resource)
+        return resource
+
+    def close_resource(resource):
+        close_started.set()
+        assert release_close.wait(timeout=2)
+
+    cache = ProjectResourceCache(
+        factory,
+        close_resource,
+        max_entries=1,
+        idle_seconds=1800,
+        start_sweeper=False,
+    )
+    with pytest.raises(ProjectResourceBusyError, match="startup exceeded"):
+        with cache.lease(str(project), acquisition_timeout=0.01):
+            pytest.fail("late startup entered a request")
+    assert close_started.wait(timeout=1)
+    assert cache.stats()["retiring"] == [str(project.resolve())]
+    with cache.observe(str(project)) as (resource, state):
+        assert resource is None and state == "retiring"
+    with pytest.raises(ProjectResourceBusyError):
+        with cache.lease(str(project), acquisition_timeout=0.05):
+            pytest.fail("late-start cleanup overlapped a replacement")
+    assert len(created) == 1
+
+    release_close.set()
+    cache.close()
+
+
+def test_partial_repl_startup_transfers_cleanup_without_masking_the_error(
+    tmp_path, monkeypatch
+):
+    from servers.repl import pool as repl_pool_module
+
+    project = make_lake_project(tmp_path, "partial-repl-startup")
+    startup_error = ValueError("injected REPL startup failure")
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+    workers = []
+
+    class FakeRepl:
+        def __init__(self, config):
+            self.close_calls = 0
+            workers.append(self)
+
+        def start(self):
+            raise startup_error
+
+        def close(self):
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise RuntimeError("injected first cleanup failure")
+            cleanup_started.set()
+            if not release_cleanup.wait(timeout=5):
+                raise RuntimeError("test did not release cleanup")
+
+    monkeypatch.setattr(repl_pool_module, "LeanRepl", FakeRepl)
+    services = LeanRuntimeServices(
+        runtime_config(),
+        lsp_factory=FakeLsp,
+        start_sweepers=False,
+    )
+    try:
+        started = time.monotonic()
+        with pytest.raises(ValueError, match="injected REPL startup failure") as raised:
+            services.dispatch(
+                "repl.run",
+                {"project_dir": str(project), "code": "#check Nat", "timeout": None},
+            )
+        assert raised.value is startup_error
+        assert time.monotonic() - started < 0.5
+        assert cleanup_started.wait(timeout=1)
+        assert services.repl_projects.stats()["retiring"] == [str(project.resolve())]
+
+        with pytest.raises(ProjectResourceBusyError):
+            with services.repl_projects.lease(str(project), acquisition_timeout=0.05):
+                pytest.fail("partial cleanup released project capacity early")
+        assert len(workers) == 1
+    finally:
+        release_cleanup.set()
+        services.close()
+
+    assert workers[0].close_calls == 2
+
+
+def test_partial_lsp_startup_transfers_cleanup_without_masking_the_error(
+    tmp_path, monkeypatch
+):
+    from servers.lsp import server as lsp_module
+
+    project = make_lake_project(tmp_path, "partial-lsp-startup")
+    (project / "Main.lean").write_text("#check Nat\n")
+    startup_error = ValueError("injected LSP startup failure")
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+    terminate_calls = 0
+
+    class Stream:
+        def close(self):
+            pass
+
+    class Process:
+        pid = 43210
+        returncode = None
+        stdin = Stream()
+        stdout = Stream()
+
+    process = Process()
+
+    def terminate(process_group_id):
+        nonlocal terminate_calls
+        terminate_calls += 1
+        if terminate_calls == 1:
+            raise RuntimeError("injected first cleanup failure")
+        cleanup_started.set()
+        if not release_cleanup.wait(timeout=5):
+            raise RuntimeError("test did not release cleanup")
+
+    def reap(owned):
+        owned.returncode = 0
+
+    monkeypatch.setattr(lsp_module.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(lsp_module, "_terminate_process_group", terminate)
+    monkeypatch.setattr(lsp_module, "_reap_process", reap)
+    monkeypatch.setattr(
+        lsp_module.LeanLspSession,
+        "_send_request",
+        lambda self, method, params, **kwargs: (_ for _ in ()).throw(startup_error),
+    )
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=FakePool,
+        start_sweepers=False,
+    )
+    try:
+        started = time.monotonic()
+        with pytest.raises(ValueError, match="injected LSP startup failure") as raised:
+            services.dispatch(
+                "lsp.diagnostics",
+                {"project_dir": str(project), "file_path": "Main.lean"},
+            )
+        assert raised.value is startup_error
+        assert time.monotonic() - started < 0.5
+        assert cleanup_started.wait(timeout=1)
+        assert services.lsp_projects.stats()["retiring"] == [str(project.resolve())]
+
+        with pytest.raises(ProjectResourceBusyError):
+            with services.lsp_projects.lease(str(project), acquisition_timeout=0.05):
+                pytest.fail("partial LSP cleanup released project capacity early")
+    finally:
+        release_cleanup.set()
+        services.close()
+
+    assert terminate_calls == 2
+    assert process.returncode == 0
+
+
+def test_cache_close_waits_for_retirement_before_returning(tmp_path):
+    project = make_lake_project(tmp_path, "retiring-shutdown")
+    close_started = threading.Event()
+    release_close = threading.Event()
+    close_finished = threading.Event()
+    def close_resource(resource):
+        close_started.set()
+        assert release_close.wait(timeout=2)
+
+    cache = ProjectResourceCache(
+        lambda root: root,
+        close_resource,
+        max_entries=1,
+        idle_seconds=1800,
+        start_sweeper=False,
+    )
+    with cache.lease(str(project)):
+        pass
+
+    thread = threading.Thread(target=lambda: (cache.close(), close_finished.set()))
+    thread.start()
+    assert close_started.wait(timeout=1)
+    assert not close_finished.wait(timeout=0.1)
+    release_close.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert close_finished.is_set()
+
+
+def test_resolved_invalidation_survives_project_deletion(tmp_path):
+    project = make_lake_project(tmp_path, "deleted-before-invalidation")
+    root = project.resolve()
+    retired = threading.Event()
+    cache = ProjectResourceCache(
+        lambda resolved: object(),
+        lambda resource: retired.set(),
+        max_entries=1,
+        idle_seconds=1800,
+        start_sweeper=False,
+    )
+
+    with cache.lease_resolved(root) as resource:
+        shutil.rmtree(root)
+        cache.invalidate_resolved(root, resource)
+
+    assert retired.wait(timeout=1)
+    cache.close()
+
+
+def test_resolved_lease_rejects_noncanonical_aliases(tmp_path):
+    project = make_lake_project(tmp_path, "canonical-lease")
+    cache = ProjectResourceCache(
+        lambda root: root,
+        lambda resource: None,
+        max_entries=1,
+        idle_seconds=1800,
+        start_sweeper=False,
+    )
+    lexical_alias = project / ".." / project.name
+
+    with pytest.raises(ValueError, match="canonical spelling"):
+        with cache.lease_resolved(lexical_alias):
+            pytest.fail("a second spelling created a duplicate project generation")
+
+    cache.close()
+
+
+@pytest.mark.parametrize("failure_point", ["before", "after"])
+def test_cache_constructor_drains_started_reapers_on_start_failure(
+    monkeypatch, failure_point
+):
+    real_start = threading.Thread.start
+    started = []
+
+    def fail_second_reaper(worker):
+        if worker.name == "autoform-project-retirement-2":
+            if failure_point == "after":
+                result = real_start(worker)
+                started.append(worker)
+                raise RuntimeError("injected post-start interruption")
+            raise RuntimeError("injected thread-start failure")
+        result = real_start(worker)
+        started.append(worker)
+        return result
+
+    monkeypatch.setattr(threading.Thread, "start", fail_second_reaper)
+    with pytest.raises(RuntimeError, match="injected"):
+        ProjectResourceCache(
+            lambda root: root,
+            lambda resource: None,
+            max_entries=2,
+            idle_seconds=1800,
+            start_sweeper=False,
+        )
+
+    assert started
+    assert all(not worker.is_alive() for worker in started)
+
+
+def test_cache_constructor_drains_reapers_when_sweeper_start_is_interrupted(monkeypatch):
+    real_start = threading.Thread.start
+    started = []
+
+    def interrupt_sweeper(worker):
+        result = real_start(worker)
+        started.append(worker)
+        if worker.name == "autoform-project-eviction":
+            raise RuntimeError("injected sweeper-start interruption")
+        return result
+
+    monkeypatch.setattr(threading.Thread, "start", interrupt_sweeper)
+    with pytest.raises(RuntimeError, match="sweeper-start"):
+        ProjectResourceCache(
+            lambda root: root,
+            lambda resource: None,
+            max_entries=2,
+            idle_seconds=1,
+            start_sweeper=True,
+        )
+
+    assert len(started) == 3
+    assert all(not worker.is_alive() for worker in started)
+
+
+def test_service_constructor_closes_first_cache_when_second_cache_start_fails(
+    monkeypatch,
+):
+    real_start = threading.Thread.start
+    retirement_starts = 0
+    started = []
+
+    def fail_in_second_cache(worker):
+        nonlocal retirement_starts
+        if worker.name.startswith("autoform-project-retirement-"):
+            retirement_starts += 1
+            if retirement_starts == 3:
+                raise RuntimeError("injected second-cache start failure")
+        result = real_start(worker)
+        started.append(worker)
+        return result
+
+    monkeypatch.setattr(threading.Thread, "start", fail_in_second_cache)
+    with pytest.raises(RuntimeError, match="second-cache start"):
+        LeanRuntimeServices(
+            runtime_config(max_projects=2, repl_project_limit=2),
+            repl_factory=FakePool,
+            lsp_factory=FakeLsp,
+            start_sweepers=False,
+        )
+
+    assert retirement_starts == 3
+    assert started
+    assert all(not worker.is_alive() for worker in started)
 
 
 def test_stdio_mcp_adapters_delegate_without_owning_lean_state():
@@ -977,3 +1693,188 @@ def test_failed_lsp_session_is_replaced_on_the_next_call(tmp_path):
         assert sessions[0].closed is True
     finally:
         services.close()
+
+
+def test_failed_lsp_request_returns_while_verified_cleanup_runs(tmp_path):
+    from servers.lsp.server import LspProtocolError
+
+    project = make_lake_project(tmp_path, "lsp-background-retirement")
+    (project / "Main.lean").write_text("#check Nat\n")
+    close_started = threading.Event()
+    release_close = threading.Event()
+
+    class Session(FakeLsp):
+        def __init__(self, root):
+            super().__init__(root)
+            self.retiring = False
+
+        def get_diagnostics(self, file_path):
+            self.retiring = True
+            raise LspProtocolError("broken shared stream")
+
+        def retire(self):
+            self.retiring = True
+
+        def is_alive(self):
+            return not self.retiring and not self.closed
+
+        def close(self):
+            close_started.set()
+            assert release_close.wait(timeout=2)
+            self.closed = True
+
+    services = LeanRuntimeServices(
+        runtime_config(max_projects=1),
+        repl_factory=FakePool,
+        lsp_factory=Session,
+        start_sweepers=False,
+    )
+    try:
+        started = time.monotonic()
+        with pytest.raises(LspProtocolError, match="broken shared stream"):
+            services.dispatch(
+                "lsp.diagnostics",
+                {"project_dir": str(project), "file_path": "Main.lean"},
+            )
+        assert time.monotonic() - started < 0.5
+        assert close_started.wait(timeout=1)
+        assert services.lsp_projects.stats()["retiring"] == [str(project.resolve())]
+
+        with pytest.raises(ProjectResourceBusyError):
+            with services.lsp_projects.lease(str(project), acquisition_timeout=0.05):
+                pytest.fail("replacement overlapped LSP cleanup")
+    finally:
+        release_close.set()
+        services.close()
+
+
+def test_hover_input_os_error_does_not_retire_healthy_session(tmp_path):
+    project = make_lake_project(tmp_path, "lsp-input-error")
+    (project / "Main.lean").write_text("#check Nat\n")
+    sessions = []
+
+    class Session(FakeLsp):
+        def __init__(self, root):
+            super().__init__(root)
+            self.retire_calls = 0
+            sessions.append(self)
+
+        def hover(self, file_path, line, character):
+            raise PermissionError("input cannot be read")
+
+        def retire(self):
+            self.retire_calls += 1
+
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=FakePool,
+        lsp_factory=Session,
+        start_sweepers=False,
+    )
+    try:
+        with pytest.raises(PermissionError, match="input cannot be read"):
+            services.dispatch(
+                "lsp.hover",
+                {
+                    "project_dir": str(project),
+                    "file_path": "Main.lean",
+                    "line": 0,
+                    "character": 0,
+                },
+            )
+
+        assert sessions[0].retire_calls == 0
+        resident = services.lsp_projects.stats()["resident"]
+        assert len(resident) == 1 and resident[0]["valid"] is True
+    finally:
+        services.close()
+
+
+def test_successful_lsp_result_retires_a_session_poisoned_by_did_close(tmp_path):
+    project = make_lake_project(tmp_path, "lsp-successful-retirement")
+    (project / "Main.lean").write_text("#check Nat\n")
+    close_started = threading.Event()
+    release_close = threading.Event()
+
+    class Session(FakeLsp):
+        def __init__(self, root):
+            super().__init__(root)
+            self.retiring = False
+
+        def get_diagnostics(self, file_path):
+            self.retiring = True
+            return []
+
+        def is_alive(self):
+            return not self.retiring and not self.closed
+
+        def close(self):
+            close_started.set()
+            assert release_close.wait(timeout=2)
+            self.closed = True
+
+    services = LeanRuntimeServices(
+        runtime_config(max_projects=1),
+        repl_factory=FakePool,
+        lsp_factory=Session,
+        start_sweepers=False,
+    )
+    try:
+        result = services.dispatch(
+            "lsp.diagnostics",
+            {"project_dir": str(project), "file_path": "Main.lean"},
+        )
+
+        assert result.startswith("No diagnostics")
+        assert close_started.wait(timeout=1)
+        assert services.lsp_projects.stats()["retiring"] == [str(project.resolve())]
+    finally:
+        release_close.set()
+        services.close()
+
+
+@pytest.mark.parametrize("method", ["lsp.diagnostics", "lsp.hover"])
+def test_failed_lsp_invalidation_survives_project_deletion(tmp_path, method):
+    from servers.lsp.server import LspProtocolError
+
+    project = make_lake_project(tmp_path, "lsp-deleted-root")
+    source = project / "Main.lean"
+    source.write_text("#check Nat\n")
+    sessions = []
+
+    class Session(FakeLsp):
+        def __init__(self, root):
+            super().__init__(root)
+            self.alive = True
+            sessions.append(self)
+
+        def is_alive(self):
+            return self.alive and not self.closed
+
+        def fail(self):
+            self.alive = False
+            shutil.rmtree(self.root)
+            raise LspProtocolError("original protocol failure")
+
+        def get_diagnostics(self, file_path):
+            return self.fail()
+
+        def hover(self, file_path, line, character):
+            return self.fail()
+
+    services = LeanRuntimeServices(
+        runtime_config(),
+        repl_factory=FakePool,
+        lsp_factory=Session,
+        start_sweepers=False,
+    )
+    try:
+        with pytest.raises(LspProtocolError, match="original protocol failure"):
+            params = {"project_dir": str(project), "file_path": "Main.lean"}
+            if method == "lsp.hover":
+                params.update({"line": 0, "character": 0})
+            services.dispatch(method, params)
+    finally:
+        services.close()
+
+    assert sessions[0].closed is True

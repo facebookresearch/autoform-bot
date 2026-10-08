@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,11 +15,26 @@ import pytest
 from servers.lsp import server as lsp
 
 
+class _FakeStream:
+    def __init__(self, *, failures: int = 0) -> None:
+        self.failures = failures
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self.failures:
+            self.failures -= 1
+            raise OSError("cannot close pipe")
+
+
 class _FakeProcess:
     def __init__(self) -> None:
+        self.pid = 43210
         self.returncode: int | None = None
         self.killed = False
         self.waited = False
+        self.stdin = _FakeStream()
+        self.stdout = _FakeStream()
 
     def poll(self):
         return self.returncode
@@ -27,7 +45,15 @@ class _FakeProcess:
 
     def wait(self, timeout=None):
         self.waited = True
+        self.returncode = 0 if self.returncode is None else self.returncode
         return self.returncode
+
+
+def _owned_session(process: _FakeProcess) -> lsp.LeanLspSession:
+    session = lsp.LeanLspSession(lsp.LspConfig())
+    session.process = process
+    session._process_group_id = process.pid
+    return session
 
 
 def test_json_rpc_error_response_raises_protocol_error(monkeypatch):
@@ -48,7 +74,19 @@ def test_json_rpc_error_response_raises_protocol_error(monkeypatch):
 
 def test_start_aborts_process_when_initialize_fails(monkeypatch):
     process = _FakeProcess()
-    monkeypatch.setattr(lsp.subprocess, "Popen", lambda *args, **kwargs: process)
+    popen_kwargs = {}
+
+    def popen(*args, **kwargs):
+        popen_kwargs.update(kwargs)
+        return process
+
+    monkeypatch.setattr(lsp.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        lsp,
+        "_terminate_process_group",
+        lambda process_group_id: setattr(process, "killed", True),
+    )
+    monkeypatch.setattr(lsp, "_reap_process", lambda owned: owned.wait())
 
     session = lsp.LeanLspSession(lsp.LspConfig())
 
@@ -60,9 +98,376 @@ def test_start_aborts_process_when_initialize_fails(monkeypatch):
     with pytest.raises(lsp.LspProtocolError, match="initialize rejected"):
         session.start()
 
+    assert popen_kwargs["start_new_session"] is True
+    assert process.killed is True
+    assert process.waited is True
+    assert process.stdin.close_calls == process.stdout.close_calls == 1
+    assert session.process is None
+    assert session._process_group_id is None
+
+
+def test_start_rejects_an_unsupported_platform_before_spawning(monkeypatch):
+    monkeypatch.setattr(lsp.os, "name", "nt")
+    monkeypatch.setattr(
+        lsp.subprocess,
+        "Popen",
+        lambda *args, **kwargs: pytest.fail("unsupported LSP start spawned a process"),
+    )
+
+    with pytest.raises(RuntimeError, match="POSIX"):
+        lsp.LeanLspSession(lsp.LspConfig()).start()
+
+
+def test_startup_transfers_failed_cleanup_without_losing_initialization_error(
+    monkeypatch,
+):
+    process = _FakeProcess()
+    attempts = 0
+    monkeypatch.setattr(lsp.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(lsp.time, "sleep", lambda delay: None)
+
+    def terminate(process_group_id):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("stubborn process group")
+        process.killed = True
+
+    monkeypatch.setattr(lsp, "_terminate_process_group", terminate)
+    monkeypatch.setattr(lsp, "_reap_process", lambda owned: owned.wait())
+    session = lsp.LeanLspSession(lsp.LspConfig())
+    monkeypatch.setattr(
+        session,
+        "_send_request",
+        lambda method, params: (_ for _ in ()).throw(
+            lsp.LspProtocolError("initialize rejected")
+        ),
+    )
+
+    with pytest.raises(lsp.LeanLspStartupError) as raised:
+        session.start()
+
+    assert isinstance(raised.value.cause, lsp.LspProtocolError)
+    assert str(raised.value.cause) == "initialize rejected"
+    assert raised.value.session is session
+    assert attempts == 1
+    assert session.process is process
+    assert session.is_alive() is False
+
+    session.abort()
+
+    assert attempts == 2
+    assert session.process is None
+
+
+def test_start_retires_process_if_group_publication_is_interrupted(monkeypatch):
+    process = _FakeProcess()
+    monkeypatch.setattr(lsp.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(
+        lsp,
+        "_terminate_process_group",
+        lambda process_group_id: setattr(process, "killed", True),
+    )
+    monkeypatch.setattr(lsp, "_reap_process", lambda owned: owned.wait())
+
+    class InterruptedSession(lsp.LeanLspSession):
+        interrupted = False
+
+        def __setattr__(self, name, value):
+            if name == "_process_group_id" and value == process.pid and not self.interrupted:
+                self.interrupted = True
+                raise RuntimeError("group publication interrupted")
+            super().__setattr__(name, value)
+
+    session = InterruptedSession(lsp.LspConfig())
+
+    with pytest.raises(RuntimeError, match="group publication interrupted"):
+        session.start()
+
     assert process.killed is True
     assert process.waited is True
     assert session.process is None
+
+
+def test_cleanup_retry_never_resignals_a_retired_group(monkeypatch):
+    process = _FakeProcess()
+    process.stdin = _FakeStream(failures=1)
+    session = _owned_session(process)
+    terminations = []
+    reaps = []
+
+    monkeypatch.setattr(
+        lsp,
+        "_terminate_process_group",
+        lambda process_group_id: terminations.append(process_group_id),
+    )
+
+    def reap(owned):
+        reaps.append(owned)
+        owned.wait()
+
+    monkeypatch.setattr(lsp, "_reap_process", reap)
+    monkeypatch.setattr(lsp.time, "sleep", lambda delay: None)
+
+    session.abort()
+
+    assert terminations == [process.pid]
+    assert len(reaps) == 2
+    assert process.stdin.close_calls == 2
+    assert session.process is None
+
+
+def test_reap_retry_never_resignals_a_retired_group(monkeypatch):
+    process = _FakeProcess()
+    session = _owned_session(process)
+    terminations = []
+    reap_calls = 0
+
+    monkeypatch.setattr(
+        lsp,
+        "_terminate_process_group",
+        lambda process_group_id: terminations.append(process_group_id),
+    )
+
+    def reap(owned):
+        nonlocal reap_calls
+        reap_calls += 1
+        if reap_calls == 1:
+            raise RuntimeError("injected reap failure")
+        owned.wait()
+
+    monkeypatch.setattr(lsp, "_reap_process", reap)
+    monkeypatch.setattr(lsp.time, "sleep", lambda delay: None)
+
+    session.abort()
+
+    assert terminations == [process.pid]
+    assert reap_calls == 2
+    assert session.process is None
+
+
+def test_is_alive_does_not_reap_the_group_leader(monkeypatch):
+    process = _FakeProcess()
+    session = _owned_session(process)
+    monkeypatch.setattr(
+        process,
+        "poll",
+        lambda: pytest.fail("is_alive reaped the process-group leader"),
+    )
+
+    assert session.is_alive() is True
+    assert process.returncode is None
+
+
+@pytest.mark.parametrize("operation", ["diagnostics", "hover"])
+def test_retirement_stops_a_queued_operation_before_dispatch(
+    tmp_path, monkeypatch, operation
+):
+    session = lsp.LeanLspSession(lsp.LspConfig())
+    source = tmp_path / "Queued.lean"
+    source.write_text("#check Nat\n")
+    calls = []
+    errors = []
+    started = threading.Event()
+    session._operation_lock.acquire()
+    monkeypatch.setattr(
+        session,
+        "_get_diagnostics",
+        lambda *args, **kwargs: calls.append("diagnostics") or [],
+    )
+    monkeypatch.setattr(
+        session,
+        "_hover",
+        lambda *args, **kwargs: calls.append("hover") or None,
+    )
+
+    def run():
+        started.set()
+        try:
+            if operation == "diagnostics":
+                session.get_diagnostics(str(source))
+            else:
+                session.hover(str(source), 0, 0)
+        except BaseException as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    assert started.wait(timeout=1)
+    time.sleep(0.05)
+    assert thread.is_alive()
+    session.retire()
+    session._operation_lock.release()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert calls == []
+    assert len(errors) == 1
+    assert isinstance(errors[0], lsp.LspProtocolError)
+    assert "retiring" in str(errors[0])
+
+
+@pytest.mark.parametrize("operation", ["diagnostics", "hover"])
+def test_did_close_failure_keeps_result_but_retires_session(
+    tmp_path, monkeypatch, operation
+):
+    source = tmp_path / "Test.lean"
+    source.write_text("#check Nat\n")
+    session = _owned_session(_FakeProcess())
+
+    def notify(method, params, **kwargs):
+        if method == "textDocument/didClose":
+            raise TimeoutError("didClose write timed out")
+
+    monkeypatch.setattr(session, "_send_notification", notify)
+    monkeypatch.setattr(session, "_collect_diagnostics", lambda uri, timeout: [])
+    monkeypatch.setattr(
+        session,
+        "_send_request",
+        lambda method, params, timeout=30: {"contents": "Nat : Type"},
+    )
+
+    if operation == "diagnostics":
+        assert session.get_diagnostics(str(source)) == []
+    else:
+        assert session.hover(str(source), 0, 0) == "Nat : Type"
+
+    assert session.is_alive() is False
+    with pytest.raises(lsp.LspProtocolError, match="retiring"):
+        if operation == "diagnostics":
+            session.get_diagnostics(str(source))
+        else:
+            session.hover(str(source), 0, 0)
+
+
+def test_hover_input_decode_failure_keeps_healthy_session(tmp_path):
+    source = tmp_path / "Invalid.lean"
+    source.write_bytes(b"\xff")
+    session = _owned_session(_FakeProcess())
+
+    with pytest.raises(UnicodeDecodeError):
+        session.hover(str(source), 0, 0)
+
+    assert session.is_alive() is True
+    assert session._retire_pending is False
+
+
+def test_abort_refuses_to_signal_a_pre_reaped_leader_with_live_group(monkeypatch):
+    process = _FakeProcess()
+    process.returncode = 0
+    session = _owned_session(process)
+
+    class StopRetry(BaseException):
+        pass
+
+    monkeypatch.setattr(
+        lsp,
+        "_process_group_has_live_members",
+        lambda process_group_id: True,
+    )
+    monkeypatch.setattr(
+        lsp,
+        "_terminate_process_group",
+        lambda process_group_id: pytest.fail("a reused process group was signalled"),
+    )
+    monkeypatch.setattr(
+        lsp.time,
+        "sleep",
+        lambda delay: (_ for _ in ()).throw(StopRetry()),
+    )
+
+    with pytest.raises(StopRetry):
+        session.abort()
+
+    assert session.process is process
+    assert session._process_group_id == process.pid
+    assert session._group_retired is False
+
+
+def test_concurrent_abort_and_close_serialize_owned_cleanup(monkeypatch):
+    process = _FakeProcess()
+    session = _owned_session(process)
+    entered = threading.Event()
+    release = threading.Event()
+    active = 0
+    maximum_active = 0
+    errors: list[BaseException] = []
+    state_lock = threading.Lock()
+
+    def terminate(process_group_id):
+        nonlocal active, maximum_active
+        with state_lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        entered.set()
+        assert release.wait(timeout=2)
+        with state_lock:
+            active -= 1
+
+    monkeypatch.setattr(lsp, "_terminate_process_group", terminate)
+    monkeypatch.setattr(lsp, "_reap_process", lambda owned: owned.wait())
+
+    def call(operation) -> None:
+        try:
+            operation()
+        except BaseException as error:
+            errors.append(error)
+
+    aborter = threading.Thread(target=call, args=(session.abort,))
+    closer = threading.Thread(target=call, args=(session.close,))
+    aborter.start()
+    assert entered.wait(timeout=1)
+    closer.start()
+    closer.join(timeout=0.1)
+    assert closer.is_alive()
+    release.set()
+    aborter.join(timeout=2)
+    closer.join(timeout=2)
+
+    assert errors == []
+    assert maximum_active == 1
+    assert session.process is None
+
+
+@pytest.mark.skipif(os.name != "posix", reason="native LSP backend requires POSIX groups")
+def test_close_retires_a_descendant_without_pre_reaping_its_wrapper():
+    script = (
+        "import subprocess, sys\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "print(child.pid, flush=True)\n"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    assert process.stdout is not None
+    child_pid = int(process.stdout.readline())
+    session = _owned_session(process)
+    try:
+        import psutil
+
+        deadline = time.monotonic() + 5
+        while psutil.Process(process.pid).status() != psutil.STATUS_ZOMBIE:
+            if time.monotonic() >= deadline:
+                pytest.fail("LSP wrapper did not become a zombie")
+            time.sleep(0.01)
+        assert process.returncode is None
+        assert session.is_alive() is False
+
+        session.close()
+
+        assert session.process is None
+        assert process.returncode == 0
+        try:
+            assert psutil.Process(child_pid).status() == psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            pass
+    finally:
+        if process.returncode is None:
+            session.abort()
 
 
 def test_diagnostics_wait_through_initial_quiet_period(monkeypatch):
