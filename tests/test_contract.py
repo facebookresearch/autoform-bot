@@ -28,7 +28,7 @@ from autoform_cli.runtime import load_runtime_graph
 from autoform_cli.status import STATES, derive
 from autoform_cli.work import WorkError, assumption_contract, list_ready_work
 from tests.test_impact import _lean_toolchain_available
-from tests.test_lake_artifact_audit import _TEMPLATE, _load_helper, _run, _write
+from tests.test_lake_artifact_audit import _TEMPLATE, _load_helper, _run, _run_probe, _write
 
 
 _SEEDS = range(30)
@@ -435,7 +435,7 @@ def test_the_site_never_claims_more_than_the_audit_of_a_real_build(repo_root: Pa
     assert packed.returncode == 0, packed.stdout + packed.stderr
 
     # The verify workflow's steps: read the policy, write the contract, prepare
-    # the open-statement probe, and run it in the project's Lean environment.
+    # the open-statement probe, and run it as the audit step does.
     helper = [sys.executable, str(repo_root / _TEMPLATE)]
     policy = subprocess.run([*helper, "--policy", "blueprint"], cwd=project, capture_output=True, text=True)
     assert (policy.returncode, policy.stdout) == (0, "allowed\n"), policy.stderr
@@ -449,7 +449,7 @@ def test_the_site_never_claims_more_than_the_audit_of_a_real_build(repo_root: Pa
         text=True,
     )
     assert prepared.returncode == 0, prepared.stderr
-    audited = _run(project, "lake", "env", "lean", str(probe))
+    audited = _run_probe(project, probe)
     output = audited.stdout + audited.stderr
     assert audited.returncode == 0, output
     assert "kernel trust clean except declared open statements (" in output

@@ -1043,7 +1043,8 @@ article, which assumes nothing, may reach none), a `lean:` name missing from the
 build, and an open statement that its article records as proved. Each article
 declaration gets at most one of these status lines, with `NAME` the declaration
 and `ID` the article's node ID. A declaration with an error, or one that
-reaches a failed declaration, gets none of them:
+reaches a failed declaration, gets none of them, and no declaration gets one
+when the kernel replay fails:
 
 ```text
 open statement (proof is sorry): NAME [ID]
@@ -1066,18 +1067,58 @@ outside the root package and is unsafe or partial` or `NAME [ID] is outside the
 root package and depends on unexpected axiom AX`. The open-statement audit
 reports `sorryAx` there as `NAME [ID] is outside the root package and depends
 on sorry`. And both replay every root-package declaration through the kernel
-on top of a fresh import of the modules outside the root package, because
-`collectAxioms` trusts whatever the environment holds and a root `run_cmd` can
-add a declaration with kernel checking off. A declaration the kernel rejects
-fails with `kernel replay of the root package failed: ...`, which names the
-first one; the workflow's scan for the kernel-check bypass option is only
-lexical.
+on top of a fresh import of the modules outside the root package, because the
+build's `.olean` files can hold anything and a root `run_cmd` can add a
+declaration with kernel checking off. The replay runs only once every other
+check has passed: replaying a declaration that reaches `Lean.reduceBool` or
+`Lean.reduceNat` runs compiled project code, and the axiom check rejects every
+such declaration, since both depend on `Lean.trustCompiler`. Until then the
+audit logs `kernel replay of the root package skipped: it runs once every other
+check passes`. A declaration the kernel rejects fails with `kernel replay of the
+root package failed: ...`, which names the first one; the workflow's scan for
+the kernel-check bypass option is only lexical.
 
-The replay does not cover build-time IO. A root module's initializer or
-`run_cmd` runs during `lake build`, and its initializers run again when the
-probe imports it, so it can rewrite the audit script, the workflow's inputs, or
-the blueprint before the audit reads them. Closing that needs a separate audit
-job that runs no project code; the generated workflow does not have one.
+The probe runs no project code. Its header imports only the toolchain's Lean,
+and the workflow runs it with plain `lean`, not `lake env lean`, passing the
+project's search path in `AUTOFORM_AUDIT_LEAN_PATH`. The probe refuses to run
+when that variable is unset or when `LEAN_PATH` is set. It loads the
+root-package modules as data, with the toolchain's library first on the search
+path and no environment extensions, so no `initialize` block runs and no
+project instance, macro, or elaborator applies to the probe's own code. It
+finds each declaration's axioms by walking types and values itself, not from
+the axiom tables the `.olean` files store, and counts a name that no module
+declares as an axiom, which fails with `NAME depends on X, which no module of
+the build declares`, or for a `lean:` name outside the root package with `NAME
+[ID] is outside the root package and depends on X, which no module of the build
+declares`. The walk takes a mutual inductive block as one node, so each type
+and constructor of the block gets the axioms of the whole block. It imports the
+toolchain's `Init` along with the build, so a build that declares a core name
+of its own, such as `propext`, fails to load with `environment already contains
+'propext'` instead of passing the axiom allowlist, which compares names. A root
+module whose first component names an entry of the toolchain's library, such as
+`Lean.Hack`, would load the toolchain's file in its place, so the audit refuses
+it with `root module M shares its first component R with the toolchain's
+library; rename the module so the audit can run`. Lean loads a module from the
+first search-path entry that holds its first component, and Lake lists
+dependency libraries before the root package's, so a dependency library that
+also provides a root module's first component could stand in for the root
+package's files. The audit refuses that with `root module M shares its first
+component R with another library on the search path; rename the module so the
+audit can run`. The workflow runs the probe with `LEAN_ABORT_ON_PANIC=1`, so a
+panic stops it instead of letting it continue with a default value. It also
+requires the probe's success line as its last line, so a probe that stops early
+fails the step even when it exits 0.
+
+The audit does not cover build-time IO. `lake build` runs root and dependency
+code, and the Lake configuration, on the same runner before the audit, so that
+code can rewrite the audit script, the toolchain, the workflow's inputs, or the
+blueprint before the audit reads them. The audit also does not defend against a
+malicious dependency at build time, edits to the workflow, or crafted `.olean`
+bytes. Closing those needs a separate audit job that runs no project code; the
+generated workflow does not have one. The project's `lean-toolchain` chooses
+the Lean that builds the project and runs the probe: the workflow installs elan
+with `--default-toolchain none`, and elan installs any toolchain the file names,
+including a fork on GitHub, so the audit trusts that toolchain too.
 
 `autoform init` writes `.github/CODEOWNERS.autoform.example`. GitHub ignores
 that filename, so the example cannot mask or replace a repository's active
@@ -1112,7 +1153,9 @@ audit without the `lean:` name check, as earlier workflows did. Any other
 failure there, such as a failed fetch, fails the step. An older workflow runs
 the strict audit, which rejects every `sorry`. A newer
 `.github/autoform_audit.py` keeps the older workflow's three-argument form,
-which runs the strict audit without the `lean:` name check.
+which runs the strict audit without the `lean:` name check. Its probe refuses
+to run under an older workflow's `lake env lean`, so replace the two files
+together.
 
 To reproduce the CI audit locally after a build, with `ROOT_PACKAGE` the Lake
 package name the workflow reads from `lake translate-config toml`, and
@@ -1124,7 +1167,8 @@ lake pack /tmp/autoform-root.tgz
 autoform work assumptions blueprint --json > /tmp/autoform-assumptions.json
 python3 .github/autoform_audit.py --open-statements /tmp/autoform-assumptions.json \
   ROOT_PACKAGE /tmp/autoform-root.tgz /tmp/autoform-probe.lean
-lake env lean /tmp/autoform-probe.lean
+AUTOFORM_AUDIT_LEAN_PATH="$(lake env printenv LEAN_PATH)" LEAN_ABORT_ON_PANIC=1 \
+  lean /tmp/autoform-probe.lean
 ```
 
 ## Claim contract
