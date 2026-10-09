@@ -863,9 +863,23 @@ def test_audit_reports_one_statement_finding_at_a_time(tmp_path: Path) -> None:
     assert _statement_codes(tmp_path, "<!-- TODO -->") == {"missing-statement-text"}
 
 
-def test_a_statement_the_site_publishes_from_a_fence_that_never_closes_is_not_missing(tmp_path: Path) -> None:
-    assert _statement_codes(tmp_path, "```\nFor all n, P(n) holds.") == set()
-    assert _statement_codes(tmp_path, "```\nTODO") == {"placeholder-statement-text"}
+def test_a_statement_from_a_fence_that_never_closes_keeps_its_statement_finding(tmp_path: Path) -> None:
+    assert _statement_codes(tmp_path, "```\nFor all n, P(n) holds.") == {"unclosed-code-fence"}
+    assert _statement_codes(tmp_path, "```\nTODO") == {
+        "placeholder-statement-text",
+        "unclosed-code-fence",
+    }
+
+
+def test_audit_reports_an_unclosed_code_fence(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    path = _article(blueprint, "chapter/result.md", declaration="theorem")
+    path.write_text(path.read_text(encoding="utf-8") + "\n```lean\n#check result\n", encoding="utf-8")
+
+    assert _finding_map(blueprint)["roadmap/chapter/result.md"] == [
+        ("unclosed-code-fence", "code fence opened on line 13 never closes")
+    ]
 
 
 def test_statement_findings_say_what_is_wrong(tmp_path: Path) -> None:
@@ -900,9 +914,14 @@ def test_audit_leaves_a_placeholder_alone_outside_formalizable_articles(tmp_path
     assert "roadmap/chapter/README.md" not in _finding_map(blueprint)
 
 
-def test_bundled_example_has_no_statement_text_finding(repo_root: Path) -> None:
+def test_bundled_example_has_no_statement_or_unclosed_fence_finding(repo_root: Path) -> None:
     blueprint = repo_root / "skills" / "setup" / "assets" / "cabannes-thesis-project" / "blueprint"
 
     codes = {finding.code for finding in audit_blueprint(blueprint).findings}
 
-    assert not codes & {"missing-statement-text", "empty-statement-text", "placeholder-statement-text"}
+    assert not codes & {
+        "missing-statement-text",
+        "empty-statement-text",
+        "placeholder-statement-text",
+        "unclosed-code-fence",
+    }

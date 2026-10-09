@@ -33,6 +33,7 @@ from .markdown import HEADING as _HEADING
 from .markdown import is_placeholder as _is_placeholder
 from .markdown import local_target_issue as _local_target_issue
 from .markdown import markdown_links as _markdown_links
+from .markdown import unclosed_fence_lines as _unclosed_fence_lines
 from .markdown import visible_prose as _visible_prose
 
 #: More siblings than this at one level is a table of contents, not a chapter.
@@ -168,6 +169,17 @@ def audit_graph(
         article_path = _relative_path(node.path, graph.blueprint_dir)
         children = contained.get(node_id, ())
         article = _read_article(node.path)
+
+        unclosed_fences = _unclosed_fence_lines(node.path.read_text(encoding="utf-8").splitlines())
+        if unclosed_fences:
+            lines = ", ".join(str(line) for line in unclosed_fences)
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "unclosed-code-fence",
+                    f"code fence opened on line {lines} never closes",
+                )
+            )
 
         if node.formalizable:
             if children:

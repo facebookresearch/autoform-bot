@@ -665,8 +665,25 @@ def mask_fences_and_comments(lines: list[str]) -> list[str]:
     return _mask_fences_and_comments(lines, set(), unclosed_fence_is_text=True)
 
 
+def unclosed_fence_lines(lines: list[str]) -> tuple[int, ...]:
+    """Return the one-based source lines of fences that never close."""
+
+    unclosed: set[int] = set()
+    _mask_fences_and_comments(
+        lines,
+        set(),
+        unclosed_fence_is_text=True,
+        unclosed_fence_lines=unclosed,
+    )
+    return tuple(line + 1 for line in sorted(unclosed))
+
+
 def _mask_fences_and_comments(
-    lines: list[str], hidden: set[int], *, unclosed_fence_is_text: bool = False
+    lines: list[str],
+    hidden: set[int],
+    *,
+    unclosed_fence_is_text: bool = False,
+    unclosed_fence_lines: set[int] | None = None,
 ) -> list[str]:
     masked: list[str] = []
     fence: tuple[str, int] | None = None
@@ -682,6 +699,8 @@ def _mask_fences_and_comments(
         if index == len(lines):
             # Read on from the fence's first line as text.
             unclosed[fence[0]] = fence[1]
+            if unclosed_fence_lines is not None:
+                unclosed_fence_lines.add(opened[0])
             index, in_comment = opened
             del masked[index:]
             hidden.difference_update(range(index, len(lines)))
@@ -809,5 +828,6 @@ __all__ = [
     "rendered_visible_text",
     "site_converter",
     "strip_line_comments",
+    "unclosed_fence_lines",
     "visible_prose",
 ]
