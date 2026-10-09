@@ -711,6 +711,8 @@ a Lean helper:
 autoform search . "separating hyperplane" --lean-root .
 autoform search . "non-ambiguous" --lean-root . --json --limit 20
 autoform search blueprint "interlacing" --state proved --state fully_proved
+autoform search . "separating hyperplane" --lean-root . --library atlas
+autoform library list .
 ```
 
 `search` takes the project or blueprint directory, then one quoted query; both
@@ -892,7 +894,7 @@ held to the same placeholder rule.
 ## Search contract
 
 `autoform search` is a read-only projection of Markdown: it writes nothing,
-keeps no index, and starts no process. The query splits on whitespace into
+builds no index, and starts no process. The query splits on whitespace into
 terms. Words that carry no meaning (`a`, `an`, `and`, `are`, `as`, `at`, `be`,
 `by`, `can`, `do`, `does`, `for`, `from`, `has`, `have`, `if`, `in`, `is`,
 `it`, `its`, `let`, `of`, `on`, `or`, `such`, `that`, `the`, `then`, `there`,
@@ -972,6 +974,65 @@ Search rereads each article it matches against and refuses, with exit 2, bytes
 other than those the graph was built from, as it refuses a symlinked roadmap
 entry. Each call reads every such article and renders its statement, so its
 cost grows with the blueprint.
+
+### Searching a library the project depends on
+
+`--library NAME` (repeatable) also searches the index a locked Lake package
+publishes, and needs `--lean-root`, which names the Lake project.
+`autoform library list ROOT` reports each package in `lake-manifest.json`
+with its type, locked revision, and whether search would accept it, and for a
+package it would not, why. Text shows one row per package: name, type, the
+first 12 characters of the revision, and `usable` or `not usable: REASON`.
+`--json` emits `autoform-library-list/v1`, `schema` and `packages`, each with
+`name`, `type`, `revision`, `index` (whether the checkout holds an index
+file), `usable`, and `reason` (`null` when usable).
+Neither command starts a process or writes a file.
+
+The index is the file `autoform-library-index.jsonl` at the package root, or
+the file given as `--library NAME=PATH`. Its format,
+`autoform-library-index/v0`, is provisional: no generator ships yet and the
+format may change without notice.
+
+Before an index is used, search checks by reading files that the checkout is
+at the locked revision, that the index's toolchain and direct dependencies are
+the ones the checkout pins, that the Lean files under the indexed directories
+are exactly the indexed modules with the recorded digests, and that the index
+as a whole is one generation. A package that is not locked, not checked out, a
+path dependency, replaced by `.lake/package-overrides.json`, without an index,
+or failing a check is refused, as is any library of a project whose `.lake` or
+packages directory is a symbolic link, with exit 2 and a message that begins
+`library NAME:`. One refused library refuses the whole call, blueprint hits
+included, since a partial answer would read as "this result is new". A
+package replaced with `lake --packages=` is not detected. Neither is an edit
+to the index file that leaves each module's `name`, `source_file`, and `sha256`
+and the header's toolchain, dependencies, and source directories alone: a
+declaration record, a module's `module_doc` or `module_system`, or the
+header's `generator`, `probe`, or `package`.
+
+A declaration matches when every term occurs in its last name component
+(`lean`), docstring, module header (`module_doc`), full name or module
+(`qualified_names`), the constants in its type (`mentions`), or its keyword
+(`kind`), ranked in that order. Hits sort by best field, then the words as
+typed before a stem, then worst field, then `complete` before `wanted`, then
+name. `--state` and `--declaration` apply to articles only; `--limit` applies
+to each list.
+
+With `--library` the JSON schema is `autoform-search/v2`: every
+`autoform-search/v1` key keeps its meaning, and `libraries` lists, in the
+order given, `name`, `revision`, `index_schema`, `generator`, `probe`,
+`differences`, `total_matches`, and `hits`. A hit carries the declaration's
+`name`, `kind`, `status`, `module`, `source_file`, `line`, `signature`,
+`statement`, `docstring`, `mentions`, `auto_named`, `module_system`,
+`matched_fields`, `module_doc` (the module header when it matched, otherwise
+`null`), and `import`, the line that makes a `complete` declaration available
+(`null` for a `wanted` one, which carries no proof). `module_system: false`
+marks a file a Lean module file cannot import. `differences` lists the
+library's toolchain and each direct dependency whose locked revision is not
+the project's, as objects with `what` (`lean_toolchain` or `dependency`),
+`name` (`null` for the toolchain), `library`, and `project` (`null` when the
+project locks no such dependency or either side is a path dependency); it does
+not say the library fails to build. Without
+`--library` the output stays `autoform-search/v1`, byte for byte.
 
 ## Open statements
 

@@ -23,6 +23,9 @@ from .dashboard import publication_bound_live_state, serve_dashboard
 from .graph import GraphValidationError, load_graph
 from .impact import ImpactError, format_impact, revision_impact
 from .lean import build_linker, declaration_names, index_failure_message
+from .library.listing import list_libraries
+from .library.locate import LibraryError, WorkspaceError
+from .library.search import LibraryResult, library_argument, search_with_libraries
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
 from .render import PublicationError, render_site
 from .runtime import RuntimeProjectionError, load_runtime_graph, resolve_runtime_paths
@@ -236,7 +239,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     search.add_argument(
         "--limit", type=int, default=20, metavar="N", help="show at most N articles (default 20)"
     )
+    search.add_argument(
+        "--library",
+        action="append",
+        default=[],
+        dest="libraries",
+        type=_library_argument,
+        metavar="NAME[=INDEX]",
+        help="also search the index a locked Lake package publishes (repeatable); needs --lean-root. "
+        "INDEX reads the index from a file instead of the package's checkout",
+    )
     search.add_argument("--json", action="store_true", help="write stable machine-readable output")
+
+    library = subparsers.add_parser("library", help="inspect the shared Lean libraries a project depends on")
+    library_subparsers = library.add_subparsers(dest="library_command", required=True)
+    library_list = library_subparsers.add_parser(
+        "list", help="list the locked Lake packages and whether each publishes an index search can use"
+    )
+    library_list.add_argument("target", type=Path, help="Lean project root, where lake-manifest.json is")
+    library_list.add_argument("--json", action="store_true", help="write stable machine-readable output")
 
     claim = subparsers.add_parser("claim", help="coordinate temporary node ownership through Git refs")
     claim_subparsers = claim.add_subparsers(dest="claim_command", required=True)
@@ -342,6 +363,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _work(args)
     if args.command == "search":
         return _search(args)
+    if args.command == "library":
+        return _library_list(args)
     if args.command == "claim":
         return _claim(args)
     if args.command == "migrate":
@@ -697,22 +720,30 @@ def _work(args: argparse.Namespace) -> int:
 
 
 def _search(args: argparse.Namespace) -> int:
-    # Only reading the blueprint can fail on the project's paths; printing the
-    # result stays outside, so an output error is not reported as one.
+    # Only reading the blueprint and the libraries can fail on the project's
+    # paths; printing the result stays outside, so an output error is not
+    # reported as one.
+    options = {
+        "lean_root": args.lean_root,
+        "states": args.states,
+        "declarations": args.declarations,
+        "limit": args.limit,
+    }
+    libraries: tuple[LibraryResult, ...] = ()
     try:
-        result = search_blueprint(
-            args.target,
-            args.query,
-            lean_root=args.lean_root,
-            states=args.states,
-            declarations=args.declarations,
-            limit=args.limit,
-        )
+        if args.libraries:
+            # A library that cannot be verified refuses the whole call: the
+            # blueprint hits alone would read as "this result is new".
+            combined = search_with_libraries(args.target, args.query, libraries=args.libraries, **options)
+            result, libraries = combined.blueprint, combined.libraries
+        else:
+            combined = None
+            result = search_blueprint(args.target, args.query, **options)
     except (GraphValidationError, RuntimeProjectionError) as error:
         for issue in error.issues:
             print(f"error: {_human_text(issue)}", file=sys.stderr)
         return 2
-    except SearchError as error:
+    except (SearchError, LibraryError, WorkspaceError) as error:
         print(f"error: {_human_text(error)}", file=sys.stderr)
         return 2
     except (OSError, RuntimeError, ValueError):
@@ -720,11 +751,10 @@ def _search(args: argparse.Namespace) -> int:
         return 2
 
     if args.json:
-        print(result.to_json())
+        print(result.to_json() if combined is None else combined.to_json())
         return 0
     if not result.hits:
         print("No matching articles.")
-        return 0
     for hit in result.hits:
         durable = f" [{hit.article_id}]" if hit.article_id else ""
         print(_human_text(f"{hit.title} ({hit.node_id}){durable}"))
@@ -745,7 +775,60 @@ def _search(args: argparse.Namespace) -> int:
         if preview:
             print(_human_text(f"  Statement: {preview}"))
         print("  Matched: " + ", ".join(hit.matched_fields))
-    print(f"{len(result.hits)} of {result.total_matches} matching article(s) shown.")
+    if result.hits:
+        print(f"{len(result.hits)} of {result.total_matches} matching article(s) shown.")
+    for library in libraries:
+        _print_library(library)
+    return 0
+
+
+def _print_library(library: LibraryResult) -> None:
+    print(_human_text(f"Library {library.name} @ {library.revision[:12]}"))
+    for difference in library.differences:
+        what = difference.what if difference.name is None else difference.name
+        print(_human_text(f"  differs: {what} {difference.library} (project: {difference.project})"))
+    if not library.hits:
+        print("No matching declarations.")
+        return
+    for hit in library.hits:
+        declaration = hit.declaration
+        print(_human_text(f"{declaration.name} ({declaration.kind}, {declaration.status})"))
+        print(_human_text(f"  {hit.source_file}:{declaration.line}"))
+        if hit.import_line is not None:
+            print(_human_text(f"  {hit.import_line}"))
+        print(_human_text(f"  Signature: {_one_line(declaration.signature)}"))
+        if declaration.docstring:
+            print(_human_text(f"  Docstring: {_one_line(declaration.docstring)}"))
+        print("  Matched: " + ", ".join(hit.matched_fields))
+    print(f"{len(library.hits)} of {library.total_matches} matching declaration(s) shown.")
+
+
+def _one_line(text: str) -> str:
+    """Cut library text to what fits one report line; the JSON output carries it whole."""
+
+    return text if len(text) <= 200 else text[:197].rstrip() + "..."
+
+
+def _library_list(args: argparse.Namespace) -> int:
+    try:
+        listing = list_libraries(args.target)
+    except WorkspaceError as error:
+        print(f"error: {_human_text(error)}", file=sys.stderr)
+        return 2
+    except (OSError, RuntimeError, ValueError):
+        print("error: Lean root path cannot be read", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(listing.to_json())
+        return 0
+    if not listing.packages:
+        print("No locked packages.")
+        return 0
+    for package in listing.packages:
+        where = package.type if package.revision is None else f"{package.type} {package.revision[:12]}"
+        verdict = "usable" if package.usable else f"not usable: {package.reason}"
+        print(_human_text(f"{package.name}  {where}  {verdict}"))
     return 0
 
 
@@ -836,6 +919,13 @@ def _print_project_inspection(result) -> None:
     for diagnostic in result.diagnostics:
         location = f" {diagnostic.path}" if diagnostic.path else ""
         print(f"{diagnostic.severity}[{diagnostic.code}]{location}: {diagnostic.message}", file=sys.stderr)
+
+
+def _library_argument(value: str):
+    try:
+        return library_argument(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
 
 
 def _human_text(value: object) -> str:

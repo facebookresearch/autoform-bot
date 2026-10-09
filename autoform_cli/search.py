@@ -273,16 +273,16 @@ def _normalize(text: str) -> str:
     return " ".join(plain.casefold().split())
 
 
-def _ranks(terms: tuple[str, ...], fields: dict[str, str]) -> list[int] | None:
-    """Return each term's best field, or ``None`` when a term occurs in none."""
+def _ranks(terms: tuple[str, ...], fields: dict[str, str], order: tuple[str, ...] = _FIELDS) -> list[int] | None:
+    """Return each term's best field in ``order``, or ``None`` when a term occurs in none."""
 
     ranks: list[int] = []
     for term in terms:
-        rank = next((rank for rank, name in enumerate(_FIELDS) if term in fields[name]), None)
+        rank = next((rank for rank, name in enumerate(order) if term in fields[name]), None)
         # A declaration's whole name, or its last components, names the
         # declaration as its last component does. A namespace alone does not.
         if f".{_lean_name(term)} " in fields["lean_names"]:
-            rank = min(_FIELDS.index("lean"), len(_FIELDS) if rank is None else rank)
+            rank = min(order.index("lean"), len(order) if rank is None else rank)
         if rank is None:
             return None
         ranks.append(rank)
