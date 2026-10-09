@@ -84,9 +84,9 @@ Write milestone pages under `blueprint/roadmap/` by mathematical significance,
 then one fine article per coherent unit with one unique main result. Ground each
 statement and proof sketch in the source. Put genuine statement prerequisites
 under `## Depends on` and proof-only prerequisites under `## Proof depends on`.
-Assign durable `article_id` metadata to new articles; use
-`autoform migrate article-ids blueprint --json` to obtain deterministic IDs
-after creating the pages.
+Assign durable `article_id` metadata to new articles; run
+`autoform migrate article-ids blueprint --write` after creating the pages to
+add deterministic IDs.
 Assert formalization or `mathlib: true` only after exact verification. Before
 revising a formalizable leaf, acquire the `claim_target` that `autoform work
 context` reports for it, passing your own `--worker-id`; renew it while editing

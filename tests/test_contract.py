@@ -256,7 +256,7 @@ def _check_roadmap(
     ]
     if missing:
         seen.add("work:missing-article-id")
-        with pytest.raises(WorkError, match=re.escape(", ".join(sorted(missing)) + " (plan IDs")):
+        with pytest.raises(WorkError, match=re.escape(", ".join(sorted(missing)) + " (add them with")):
             list_ready_work(project)
     else:
         frontier = list_ready_work(project)

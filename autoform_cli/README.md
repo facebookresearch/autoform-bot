@@ -621,8 +621,8 @@ worktree or a submodule. Blockers are unmet dependency IDs or one of
 `roadmap:not-a-formalizable-leaf`, `roadmap:missing-article-id`,
 `roadmap:missing-article-revision`, and `roadmap:not-ready`. The claim target
 prefers durable `article_id` metadata. `work list` fails explicitly if an
-unfinished formalizable leaf lacks one; plan the missing IDs with `autoform
-migrate article-ids` and add them to the frontmatter. `work context` may still
+unfinished formalizable leaf lacks one; add the missing IDs with `autoform
+migrate article-ids --write`. `work context` may still
 select that article by its path ID to
 report the migration blocker. An item whose article records `statement:
 retracted` is a revision: it carries `revision` true in JSON, and the text of
@@ -717,18 +717,24 @@ autoform search blueprint "interlacing" --state proved --state fully_proved
 are required. A query that starts with `-` goes last, after `--`. It exits 0
 with or without hits. See the [search contract](#search-contract).
 
-Plan durable article identity metadata without changing the blueprint:
+Plan durable article identity metadata, and add it:
 
 ```bash
 autoform migrate article-ids blueprint --json
 autoform migrate article-ids blueprint --check
+autoform migrate article-ids blueprint --write
 ```
 
 `article_id` accepts opaque values in the form `af_` plus 24 lowercase hex
 digits. The planner validates uniqueness, proposes deterministic IDs for
-missing articles, includes exact source hashes, and is strictly read-only.
-Runtime v3 and `autoform work` expose assigned IDs immediately; applying plans
-and preserving publication routes across path moves remain follow-up changes.
+missing articles, and includes exact source hashes; without `--write` it is
+strictly read-only. `--write` adds each planned ID as the first frontmatter
+line of the article that lacks one, or as a frontmatter block of its own, and
+changes nothing else. It writes an article only while its bytes still have
+the planned hash, checks every article before writing the first, and refuses
+symlinks; after a refusal, running it again completes the plan. Runtime v3 and
+`autoform work` expose assigned IDs immediately; preserving publication routes
+across path moves remains a follow-up change.
 
 Coordinate temporary cross-machine ownership without modifying the book:
 

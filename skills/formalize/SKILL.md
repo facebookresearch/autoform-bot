@@ -17,9 +17,9 @@ subagent, that is its own worktree. Start by running `autoform work list
 `autoform work context <NODE> <PROJECT> --lean-root <PROJECT> --json`. The
 returned phase is derived from typed dependencies and verified assertions; never
 author ready, running, retrying, failed, or blocked scheduler states. If `work
-list` refuses because unfinished leaves lack `article_id`, add the IDs planned
-by `autoform migrate article-ids <PROJECT>/blueprint --json` to those articles'
-frontmatter, validate, and commit that change before claiming anything.
+list` refuses because unfinished leaves lack `article_id`, run `autoform
+migrate article-ids <PROJECT>/blueprint --write`, validate, and commit that
+change before claiming anything.
 
 For a direct formalization request, use a compatible native persistent Goal
 when available and complete one useful frontier pass. Native subagents may work
