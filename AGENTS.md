@@ -5,6 +5,20 @@ for contribution, style, and validation practices. Use the
 [development skill](skills/develop-plugin/SKILL.md) for product-development
 workflow and cross-file maintenance.
 
+## Product judgment
+
+- Before fixing, restacking, or merging an existing proposal, identify the
+  concrete user outcome or maintenance burden it improves. A request to resolve
+  review blockers does not prove that the proposal belongs in the repository.
+- Optimize for repository quality and a good, simple product—not merged line
+  count, PR count, or green checks. Documentation and tests that merely validate
+  their own planning state are not a substitute for useful behavior.
+- Treat declining, closing, deleting, or replacing a proposal as a successful
+  engineering outcome when it removes duplication, obsolete machinery, or
+  needless repository state. Preserve genuinely reusable insight in the owning
+  skill or a focused issue. Remove the inferior artifact only when authorized;
+  otherwise recommend its closure or removal.
+
 ## Repository invariants
 
 - Treat current `main` as the product baseline unless an explicitly documented

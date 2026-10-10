@@ -62,6 +62,7 @@ _REQUIRED_TEMPLATE_PATHS = frozenset(
         "blueprint/gitignore",
         "blueprint/roadmap/README.md",
         "blueprint/sources/README.md",
+        "github/CODEOWNERS.autoform.example",
         "github/autoform_audit.py",
         "github/workflows/autoform-review-gate.yml",
         "github/workflows/autoform-verify.yml",
@@ -71,7 +72,6 @@ _REQUIRED_TEMPLATE_PATHS = frozenset(
         "theme/main.html",
     }
 )
-
 #: Where `claude plugin install` records the marketplace each plugin came from.
 _PLUGIN_REGISTRY = Path.home() / ".claude" / "plugins" / "known_marketplaces.json"
 
@@ -93,7 +93,7 @@ def _git(*args: str, root: Path | None = None) -> str | None:
             timeout=10,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, UnicodeError):
         return None
     value = done.stdout.strip()
     return value if done.returncode == 0 and value else None
@@ -356,9 +356,7 @@ def _committed_scaffold_entries(
 
 
 def _git_blob_id(content: bytes, length: int) -> str | None:
-    algorithm = {40: "sha1", 64: "sha256"}.get(length)
-    if algorithm is None:
-        return None
+    algorithm = {40: "sha1", 64: "sha256"}[length]
     try:
         digest = hashlib.new(algorithm, usedforsecurity=False)
     except ValueError:
@@ -774,7 +772,11 @@ def _scaffold_plan(
     skipped: list[str] = []
     for relative, template_content, template_mode in templates:
         destination = _destination(relative)
-        if not autoform_ref and relative.startswith("github/"):
+        if (
+            not autoform_ref
+            and relative.startswith("github/")
+            and relative != "github/CODEOWNERS.autoform.example"
+        ):
             skipped.append(destination)
             continue
         if Path(relative).suffix in {".js", ".html"} or relative.endswith("gitignore"):

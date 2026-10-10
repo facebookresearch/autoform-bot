@@ -262,45 +262,131 @@ def _module_parts(module: str, display_path: str) -> tuple[str, ...]:
     return tuple(parts)
 
 
-def render_probe(modules: tuple[str, ...]) -> str:
-    """Render the Lean program that audits exactly *modules*."""
+def render_probe(
+    modules: tuple[str, ...], targets: tuple[ArticleDeclaration, ...] = ()
+) -> str:
+    """Render the Lean program that audits exactly *modules*.
+
+    Each of *targets*, the ``lean:`` names of the strict policy's assumption
+    contract, must be a declaration of the build. The root scan covers those in
+    the root package; any other gets the same safety and axiom checks.
+    """
 
     if not modules:
         raise AuditInputError("refusing to render an empty kernel-trust audit")
     imports = "\n".join(f"import {module}" for module in modules)
     target_modules = ", ".join(_lean_name(module) for module in modules)
+    # The open probe's technique: one string literal, not a Lean term.
+    table = json.dumps(
+        [[_json_declaration_name(entry.name), entry.article] for entry in targets],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    target_table = json.dumps(table, ensure_ascii=False)
     return f"""{imports}
 import Lean.Util.CollectAxioms
 import Lean.Elab.Command
+import Lean.Data.Json
+import Lean.Replay
 
 open Lean Elab Command
 
+-- No namespace: inside one, a root constant under that namespace would take
+-- precedence over a helper or the parser. At the top level a root constant with a
+-- helper's name makes the helper's definition fail as already declared, and the
+-- audit below then refuses to run. The parser is fully qualified.
+
+/-- A name spelled as its components: strings, and numbers for numeric ones. -/
+def autoformAuditNameOf (json : Json) : Except String Name := do
+  let mut name := Name.anonymous
+  for part in (← json.getArr?) do
+    match part with
+    | .str text => name := Name.str name text
+    | _ => name := Name.num name (← part.getNat?)
+  return name
+
+/-- Per `lean:` target: its name and its article. -/
+def autoformAuditReadTargets (text : String) : Except String (Array (Name × String)) := do
+  (← (← _root_.Lean.Json.parse text).getArr?).mapM fun entry => do
+    let declName ← autoformAuditNameOf (← entry.getArrVal? 0)
+    let article ← (← entry.getArrVal? 1).getStr?
+    return (declName, article)
+
+-- `Lean.Environment.replay` is deprecated from v4.34 in favor of the kernel
+-- environment's; it keeps one spelling for every supported toolchain.
+set_option linter.deprecated false in
 run_cmd do
+  -- A helper whose definition failed as already declared would resolve to the
+  -- imported constant of that name instead.
+  for helper in [``autoformAuditNameOf, ``autoformAuditReadTargets] do
+    if ((← getEnv).getModuleIdxFor? helper).isSome then
+      throwError "{{helper}} is declared by an imported module instead of this probe; rename that declaration so the audit can run"
   let targetModules : List Name := [{target_modules}]
   let allowed : List Name := [``propext, ``Classical.choice, ``Quot.sound]
+  let targets ← match autoformAuditReadTargets {target_table} with
+    | .ok targets => pure targets
+    | .error message => throwError "cannot read the target table: {{message}}"
   let env ← getEnv
-  let mut checked : Nat := 0
+  let isRoot (declName : Name) : Bool :=
+    match env.getModuleIdxFor? declName with
+    | some moduleIdx => targetModules.contains env.header.moduleNames[moduleIdx.toNat]!
+    | none => false
+  let mut errors : Array MessageData := #[]
+{_KERNEL_REPLAY}  let mut checked : Nat := 0
   let mut badSafety : Array Name := #[]
   let mut badAxioms : Array (Name × Name) := #[]
   for (declName, info) in env.constants do
-    if let some moduleIdx := env.getModuleIdxFor? declName then
-      let moduleName := env.header.moduleNames[moduleIdx.toNat]!
-      if targetModules.contains moduleName then
-        checked := checked + 1
+    if isRoot declName then
+      checked := checked + 1
+      if info.isUnsafe || info.isPartial then
+        badSafety := badSafety.push declName
+      for usedAxiom in (← Lean.collectAxioms declName) do
+        unless allowed.contains usedAxiom do
+          badAxioms := badAxioms.push (declName, usedAxiom)
+  for (declName, article) in targets do
+    -- Every imported constant has a module index. One without was declared by
+    -- this probe, as its helpers and their auxiliaries are, not by the build.
+    let declared := if (env.getModuleIdxFor? declName).isSome then env.find? declName else none
+    match declared with
+    | none =>
+      errors := errors.push m!"{{declName}} [{{article}}] is not a declaration of the Lean build; fix the article's lean: name or build the module that declares it"
+    | some info =>
+      unless isRoot declName do
         if info.isUnsafe || info.isPartial then
-          badSafety := badSafety.push declName
+          errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and is unsafe or partial"
         for usedAxiom in (← Lean.collectAxioms declName) do
           unless allowed.contains usedAxiom do
-            badAxioms := badAxioms.push (declName, usedAxiom)
+            errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and depends on unexpected axiom {{usedAxiom}}"
   for declName in badSafety do
     logError m!"unsafe or partial declaration: {{declName}}"
   for (declName, usedAxiom) in badAxioms do
     logError m!"{{declName}} depends on unexpected axiom {{usedAxiom}}"
+  for error in errors do
+    logError error
   if checked == 0 then
     throwError "kernel-trust audit found no root-package declarations"
-  unless badSafety.isEmpty && badAxioms.isEmpty do
+  unless badSafety.isEmpty && badAxioms.isEmpty && errors.isEmpty do
     throwError "root-package declarations failed the kernel-trust audit"
   logInfo m!"kernel trust clean ({{checked}} root-package declaration(s) audited)"
+"""
+
+
+# Both probes splice this in where `env`, `targetModules`, `isRoot` and a
+# mutable `errors` are in scope.
+_KERNEL_REPLAY = """  -- `collectAxioms` trusts whatever the environment holds, and a root `run_cmd`
+  -- can add a declaration with kernel checking off. Send every root constant
+  -- through the kernel again, on top of a fresh import of the other modules.
+  let baseImports := env.header.moduleNames.filterMap fun moduleName =>
+    if targetModules.contains moduleName then none else some ({ module := moduleName } : Import)
+  let mut rootConstants : Std.HashMap Name ConstantInfo := {}
+  for (declName, info) in env.constants do
+    if isRoot declName then
+      rootConstants := rootConstants.insert declName info
+  let replayed ← (do
+      let base ← importModules baseImports {}
+      discard <| Lean.Environment.replay rootConstants base : IO Unit).toBaseIO
+  if let .error error := replayed then
+    errors := errors.push m!"kernel replay of the root package failed: {error}"
 """
 
 
@@ -322,6 +408,23 @@ def load_assumption_contract(path: Path) -> tuple[ArticleDeclaration, ...]:
     dependencies reach.
     """
 
+    return _read_assumption_contract(path, open_statements=True)
+
+
+def load_target_contract(path: Path) -> tuple[ArticleDeclaration, ...]:
+    """Read the strict policy's ``autoform work assumptions --json`` output.
+
+    The strict audit uses it only for the ``lean:`` targets, each of which must
+    be a declaration of the build. A contract that allows open statements,
+    marks an article open, or lets one rest on an open statement is refused:
+    the strict audit accepts no ``sorry`` and must not read such a contract
+    as if it did.
+    """
+
+    return _read_assumption_contract(path, open_statements=False)
+
+
+def _read_assumption_contract(path: Path, *, open_statements: bool) -> tuple[ArticleDeclaration, ...]:
     try:
         contract = json.loads(
             path.read_bytes().decode("utf-8"),
@@ -332,10 +435,15 @@ def load_assumption_contract(path: Path) -> tuple[ArticleDeclaration, ...]:
         raise AuditInputError(f"cannot read the assumption contract: {exc}") from exc
     if not isinstance(contract, dict) or contract.get("schema") != _ASSUMPTIONS_SCHEMA:
         raise AuditInputError(f"the assumption contract is not an {_ASSUMPTIONS_SCHEMA} object")
-    if contract.get("open_statements") is not True:
+    if open_statements and contract.get("open_statements") is not True:
         raise AuditInputError(
             "the assumption contract says roadmap/README.md does not allow open statements; "
             "refusing to accept any sorry"
+        )
+    if not open_statements and contract.get("open_statements") is not False:
+        raise AuditInputError(
+            "the assumption contract says roadmap/README.md allows open statements; "
+            "the strict audit accepts only a contract under the strict policy"
         )
     articles = contract.get("articles")
     if not isinstance(articles, list):
@@ -368,6 +476,11 @@ def load_assumption_contract(path: Path) -> tuple[ArticleDeclaration, ...]:
             or not isinstance(article.get("article_id"), (str, type(None)))
         ):
             raise AuditInputError(f"the assumption contract has a malformed entry for {article_id}")
+        if not open_statements and (is_open or allowed or assumes):
+            raise AuditInputError(
+                f"the assumption contract records {article_id} as open or resting on open statements, "
+                "which the strict policy does not allow"
+            )
         for name in (*declarations, *allowed):
             _declaration_name_parts(name, article_id)
         owners = open_owners if is_open else proved_owners
@@ -456,6 +569,7 @@ def render_open_probe(
 import Lean.Util.CollectAxioms
 import Lean.Elab.Command
 import Lean.Data.Json
+import Lean.Replay
 
 open Lean Elab Command
 
@@ -564,6 +678,9 @@ partial def autoformOpenAuditReachesFailed (env : Environment) (isRoot : Name �
 def autoformOpenAuditNameList (names : Array Name) : MessageData :=
   MessageData.joinSep (names.toList.map MessageData.ofName) ", "
 
+-- `Lean.Environment.replay` is deprecated from v4.34 in favor of the kernel
+-- environment's; it keeps one spelling for every supported toolchain.
+set_option linter.deprecated false in
 run_cmd do
   -- A helper whose definition failed as already declared would resolve to the
   -- imported constant of that name instead.
@@ -582,6 +699,10 @@ run_cmd do
     match env.getModuleIdxFor? declName with
     | some moduleIdx => targetModules.contains env.header.moduleNames[moduleIdx.toNat]!
     | none => false
+  let mut errors : Array MessageData := #[]
+{_KERNEL_REPLAY}  -- The replay names only the first declaration it rejects, so after a failure
+  -- no article gets a line that reads as a clean result.
+  let replayFailed := replayed matches .error _
   let mut openSet : Std.HashSet Name := {{}}
   for (declName, _, isOpen, _) in articles do
     if isOpen && isRoot declName then
@@ -592,7 +713,6 @@ run_cmd do
     if isRoot declName then
       roots := roots.push declName
   roots := roots.qsort Name.lt
-  let mut errors : Array MessageData := #[]
   let mut hitCache : Std.HashMap Name (Array Name) := {{}}
   let mut externalSorry : Std.HashMap Name Bool := {{}}
   -- Declarations with an error, and those resting on one, get no info line that
@@ -644,14 +764,22 @@ run_cmd do
   let mut conditionalCount : Nat := 0
   for (declName, article, isOpen, allowedOpen) in articles do
     let reported := errors.size
-    match env.find? declName with
+    -- Every imported constant has a module index. One without was declared by
+    -- this probe, as its helpers and their auxiliaries are, not by the build.
+    let declared := if (env.getModuleIdxFor? declName).isSome then env.find? declName else none
+    match declared with
     | none =>
       errors := errors.push m!"{{declName}} [{{article}}] is not a declaration of the Lean build; fix the article's lean: name or build the module that declares it"
     | some info =>
       if !isRoot declName then
-        if (← Lean.collectAxioms declName).contains ``sorryAx then
-          errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and depends on sorry"
-        else
+        if info.isUnsafe || info.isPartial then
+          errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and is unsafe or partial"
+        for usedAxiom in (← Lean.collectAxioms declName) do
+          if usedAxiom == ``sorryAx then
+            errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and depends on sorry"
+          else unless allowed.contains usedAxiom do
+            errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and depends on unexpected axiom {{usedAxiom}}"
+        if errors.size == reported then
           logInfo m!"sorry-free: {{declName}} [{{article}}]"
       else
         let block := autoformOpenAuditBlockOf env declName
@@ -660,7 +788,7 @@ run_cmd do
         let (reachesFailed, cache) := Id.run
           ((autoformOpenAuditReachesFailed env isRoot openSet failed block).run brokenCache)
         brokenCache := cache
-        let broken := failed.contains declName || reachesFailed
+        let broken := replayFailed || failed.contains declName || reachesFailed
         let undeclared := hits.filter (fun hit => !allowedOpen.contains hit)
         unless undeclared.isEmpty do
           errors := errors.push m!"{{declName}} [{{article}}] rests on open statement(s) {{autoformOpenAuditNameList undeclared}}, which its article's Markdown dependencies do not reach; add the dependency to the article or stop using them"
@@ -722,33 +850,45 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
     contract: Path | None = None
-    if len(arguments) == 5 and arguments[0] == "--open-statements":
+    form: str | None = None
+    if len(arguments) == 5 and arguments[0] in {"--open-statements", "--targets"}:
+        form = arguments[0]
         contract = Path(arguments[1])
         arguments = arguments[2:]
-    if len(arguments) != 3 or arguments[0] in {"--policy", "--open-statements"}:
+    if len(arguments) != 3 or arguments[0] in {"--policy", "--open-statements", "--targets"}:
         print(
             "usage: autoform_audit.py --root-package EVALUATED_CONFIG\n"
             "   or: autoform_audit.py --policy BLUEPRINT_DIR\n"
             "   or: autoform_audit.py ROOT_PACKAGE ROOT_BUILD_ARCHIVE OUTPUT_PROBE\n"
+            "   or: autoform_audit.py --targets CONTRACT ROOT_PACKAGE ROOT_BUILD_ARCHIVE OUTPUT_PROBE\n"
             "   or: autoform_audit.py --open-statements CONTRACT ROOT_PACKAGE ROOT_BUILD_ARCHIVE OUTPUT_PROBE",
             file=sys.stderr,
         )
         return 2
     root_package = arguments[0]
     archive, output = map(Path, arguments[1:])
+    declarations: tuple[ArticleDeclaration, ...] = ()
     try:
         modules = modules_from_archive(archive, root_package)
-        if contract is None:
-            probe = render_probe(modules)
-        else:
+        if form == "--open-statements":
             declarations = load_assumption_contract(contract)
             probe = render_open_probe(modules, declarations)
+        else:
+            if form == "--targets":
+                declarations = load_target_contract(contract)
+            probe = render_probe(modules, declarations)
         output.write_text(probe, encoding="utf-8")
     except (AuditInputError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    if contract is None:
+    if form is None:
         print(f"prepared kernel-trust audit for {len(modules)} root-package module(s)")
+    elif form == "--targets":
+        targets = len({entry.name for entry in declarations})
+        print(
+            f"prepared kernel-trust audit for {len(modules)} root-package module(s) "
+            f"and {targets} lean: target(s)"
+        )
     else:
         candidates = len({entry.name for entry in declarations if entry.is_open})
         print(

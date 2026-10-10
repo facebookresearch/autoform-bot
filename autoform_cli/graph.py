@@ -18,8 +18,8 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .lean import declaration_names
-from .markdown import content_lines
 from .snapshot import BlueprintSnapshot, SnapshotError, read_regular_file
+from .markdown import mask_fences_and_comments
 
 _LINE_LOCATOR = re.compile(r"\AL(\d+)(?:-L(\d+))?\Z")
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
@@ -557,9 +557,10 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         _SOURCES_SECTION: [],
     }
     section: str | None = None
-    body = "\n".join(lines[body_start:])
 
-    for line in content_lines(body):
+    # Fences and comments are read as the page and the audit read them, so a
+    # section a reader sees never loses its links here.
+    for line in mask_fences_and_comments(lines[body_start:]):
         heading = _HEADING.match(line)
         if heading:
             level = len(heading.group(1))

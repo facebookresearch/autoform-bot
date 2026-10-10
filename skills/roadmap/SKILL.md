@@ -54,6 +54,25 @@ replacement. External research is read-only, and contacting people requires
 permission. Read [Setup's Zulip workflow](../setup/references/zulip.md) only for
 requested Zulip work.
 
+Before adding a formalizable article, run `autoform search` over the blueprint
+for its result, by a few distinctive words of the statement and by a Lean name
+when one is known; the
+[search contract](../../autoform_cli/README.md#search-contract) says what is
+matched. Read each hit's statement, and narrow a query whose listing the limit
+cut short. Matching is literal, so the result is new only when retries with
+fewer words, and under other usual names for its objects, also show no article
+stating it. A refusal (exit 2) is not an empty result: resolve what it reports
+without adding the article, and search again. A dependency link to a page not
+yet written causes one, so search for a batch of articles before writing the
+first.
+When another formalizable article already states the result, link to it from
+each article that needs it, under `## Depends on` or `## Proof depends on`, and
+from the coverage row, instead of adding a node. A hit that is more general, a
+special case, or only similar does not replace the result: add the article,
+depending on the hit where it is used. Search reads only the checkout it is
+given, so the owner of global consistency repeats it for what parallel agents
+added.
+
 Enumerate the entire adopted boundary in `blueprint/coverage/README.md`.
 `MAPPED` is unfinished, `DECOMPOSED` links to roadmap nodes, `DEFERRED` records
 an explicit user decision or concrete external blocker, and `OUT` explains an

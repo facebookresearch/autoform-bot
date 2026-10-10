@@ -209,6 +209,63 @@ def test_ignores_links_in_code_fences_and_other_sections(tmp_path: Path) -> None
     assert load_graph(blueprint).nodes["only"].dependencies == ()
 
 
+def test_a_comment_opener_inside_a_code_fence_hides_no_dependency(tmp_path: Path) -> None:
+    # The page shows the section below the fence, so the graph must keep its edge.
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(
+        blueprint,
+        "only.md",
+        """# Only
+
+```html
+<!-- an example of markup
+```
+
+## Depends on
+- [Base](base.md)
+
+````markdown
+```python
+[Inside the outer fence](missing.md)
+```
+````
+""",
+    )
+
+    assert load_graph(blueprint).nodes["only"].dependencies == ("base",)
+
+
+@pytest.mark.parametrize(
+    "fence",
+    [
+        "```lean\nexample : True := trivial\n``` -- end\n",
+        "```lean\nexample : True := trivial\n",
+        "~~~\n[Shown as text](base.md)\n",
+    ],
+)
+def test_a_fence_that_never_closes_hides_no_dependency(tmp_path: Path, fence: str) -> None:
+    # The page draws a fence without a closing line as plain text, so the links
+    # below it are on the page and stay in the graph.
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "only.md", f"# Only\n\n## Depends on\n\n{fence}\n- [Base](base.md)\n")
+
+    assert set(load_graph(blueprint).nodes["only"].dependencies) == {"base"}
+
+
+def test_a_fence_closes_only_on_a_bare_fence_line(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(
+        blueprint,
+        "only.md",
+        "# Only\n\n## Depends on\n\n```lean\n``` -- not the end\n[Hidden](missing.md)\n```\n\n- [Base](base.md)\n",
+    )
+
+    assert load_graph(blueprint).nodes["only"].dependencies == ("base",)
+
+
 def test_requires_blueprint_and_roadmap_directories(tmp_path: Path) -> None:
     with pytest.raises(GraphValidationError, match="blueprint directory does not exist"):
         load_graph(tmp_path / "absent")

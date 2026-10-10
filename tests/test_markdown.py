@@ -8,15 +8,21 @@ import pytest
 from autoform_cli.markdown import (
     SITE_EXTENSION_CONFIGS,
     SITE_EXTENSIONS,
+    ArticleSection,
+    article_parts,
     content,
     content_lines,
+    has_substance,
+    is_placeholder,
     link_targets,
     local_target_issue,
     markdown_anchors,
     markdown_links,
+    mask_fences_and_comments,
     PublishedTable,
     published_tables,
     rendered_visible_text,
+    visible_prose,
 )
 
 try:
@@ -433,3 +439,245 @@ def test_local_targets_are_resolved_against_the_boundary(tmp_path: Path) -> None
     assert issue("../../outside.md") == "coverage-escapes-blueprint"
     assert issue("mailto:someone@example.invalid") == "unsupported-coverage-link"
     assert issue("//example.invalid/page") == "unsupported-coverage-link"
+
+
+def test_a_statement_runs_from_the_title_to_the_first_h2() -> None:
+    parts = article_parts(
+        "---\ndeclaration: theorem\n---\n\n# Title\n\nThe statement.\n\n"
+        "## Depends on\n\n- [Base](base.md)\n\n## Sources\n\n- [Paper](paper.md)\n"
+    )
+
+    assert parts.statement == "The statement."
+    assert parts.sections == (
+        ArticleSection("Depends on", "## Depends on", "- [Base](base.md)"),
+        ArticleSection("Sources", "## Sources", "- [Paper](paper.md)"),
+    )
+
+
+def test_a_deeper_heading_does_not_end_the_statement() -> None:
+    parts = article_parts("# Title\n\nFirst part.\n\n### Remark\n\nSecond part.\n\n## Sources\n")
+
+    assert parts.statement == "First part.\n\n### Remark\n\nSecond part."
+    assert [section.title for section in parts.sections] == ["Sources"]
+
+
+def test_prose_before_the_title_belongs_to_the_statement() -> None:
+    assert article_parts("Lead-in.\n\n# Title\n\nBody.\n").statement.split() == ["Lead-in.", "Body."]
+
+
+@pytest.mark.parametrize(
+    "hidden",
+    [
+        "```\n## Not a section\n```",
+        "~~~~\n## Not a section\n~~~~",
+        "<!--\n## Not a section\n-->",
+        "    ## Not a section",
+    ],
+)
+def test_a_heading_that_is_not_published_ends_nothing(hidden: str) -> None:
+    parts = article_parts(f"# Title\n\nBefore.\n\n{hidden}\n\nAfter.\n\n## Sources\n")
+
+    assert parts.statement == f"Before.\n\n{hidden}\n\nAfter."
+    assert [section.title for section in parts.sections] == ["Sources"]
+
+
+def test_an_article_without_sections_is_all_statement() -> None:
+    parts = article_parts("# Title\n\nOnly a statement.\n")
+
+    assert (parts.statement, parts.sections) == ("Only a statement.", ())
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "# Title\n", "---\ndeclaration: theorem\n---\n", "---\nnever closed\n# Title\n\nBody.\n"],
+)
+def test_an_article_with_no_body_has_an_empty_statement(text: str) -> None:
+    parts = article_parts(text)
+
+    assert (parts.statement, parts.sections) == ("", ())
+
+
+def test_a_section_title_is_read_as_published() -> None:
+    parts = article_parts("# Title\r\n\r\nBody.\r\n\r\n## Depends on <!-- edges --> ##\r\n\r\nNone.\r\n")
+
+    assert parts.statement == "Body."
+    assert parts.sections == (ArticleSection("Depends on", "## Depends on <!-- edges --> ##", "None."),)
+
+
+def test_only_atx_headings_end_a_statement() -> None:
+    # The graph loader reads only ATX headings, so a setext underline is prose
+    # here too; one rule for where a section starts, whatever reads the article.
+    parts = article_parts("# Title\n\nBody.\n\nProof\n-----\n\nSteps.\n")
+
+    assert parts.statement == "Body.\n\nProof\n-----\n\nSteps."
+    assert parts.sections == ()
+
+
+def test_a_horizontal_rule_after_the_frontmatter_is_statement_text() -> None:
+    assert article_parts("---\nlean: A.b\n---\n\n# Title\n\nAbove.\n\n---\n\nBelow.\n").statement == (
+        "Above.\n\n---\n\nBelow."
+    )
+
+
+def test_a_statement_keeps_the_indentation_that_makes_it_code() -> None:
+    parts = article_parts("# Title\n\n    theorem draft : True := trivial\n\n## Sources\n\n    cited\n")
+
+    assert parts.statement == "    theorem draft : True := trivial"
+    assert parts.sections == (ArticleSection("Sources", "## Sources", "    cited"),)
+
+
+def test_a_fence_that_never_closes_hides_no_heading() -> None:
+    # The page draws a fence without a closing line as plain text and shows
+    # the section after it, so the section is read as one.
+    parts = article_parts("# Title\n\nBefore.\n\n```\ncode\n\n## Depends on\n\n- [Base](base.md)\n")
+
+    assert parts.statement == "Before.\n\n```\ncode"
+    assert parts.sections == (ArticleSection("Depends on", "## Depends on", "- [Base](base.md)"),)
+
+
+def test_a_fence_that_never_closes_is_text_only_from_its_own_first_line() -> None:
+    lines = ["```", "hidden <!--", "```", "shown", "~~~py", "<!-- a comment", "## Hidden by the comment"]
+
+    # The closed fence stays hidden, and the comment inside the open one counts
+    # again once that fence is read as text.
+    assert mask_fences_and_comments(lines) == ["", "", "", "shown", "~~~py", "", ""]
+    assert mask_fences_and_comments([*lines[:5], "## Shown"])[4:] == ["~~~py", "## Shown"]
+    # The checks that read tables keep the fence: a table in its paragraph is not published.
+    assert [line for line in content("```\nfenced\n``` trailing\nstill fenced\n").lines if line.strip()] == []
+
+
+def test_a_closed_fence_after_one_that_never_closes_is_still_hidden() -> None:
+    lines = ["````py", "## Shown", "```", "hidden", "```", "after"]
+
+    assert mask_fences_and_comments(lines) == ["````py", "## Shown", "", "", "", "after"]
+
+
+def test_a_fence_that_never_closes_is_reread_with_the_comment_state_it_opened_in() -> None:
+    lines = ["<!-- a comment", "ends --> ```", "## Shown"]
+
+    assert mask_fences_and_comments(lines) == ["", " ```", "## Shown"]
+
+
+def test_a_later_longer_fence_line_closes_a_fence_whose_own_closing_line_is_not_bare() -> None:
+    # A known limit: the page needs a closing line of the opener's own length,
+    # so it draws this fence as text and shows the heading.
+    lines = ["```lean", "x", "``` -- end", "## Depends on", "````", "code", "````"]
+
+    assert mask_fences_and_comments(lines) == ["", "", "", "", "", "code", "````"]
+
+
+def test_many_fences_that_never_close_do_not_each_reread_the_article() -> None:
+    lines = [line for index in range(20000) for line in (f"```{'`' * (index % 3)}info{index}", "## Heading")]
+
+    assert mask_fences_and_comments(lines) == lines
+
+
+def test_an_unclosed_comment_hides_every_heading_after_it() -> None:
+    parts = article_parts("# Title\n\nBody.\n\n<!-- todo\n\n## Depends on\n\n- [Base](base.md)\n")
+
+    assert parts.sections == ()
+
+
+def test_a_comment_opened_on_the_title_line_still_hides_what_it_covers() -> None:
+    parts = article_parts("# Title <!-- TODO:\nwrite the statement -->\n\n## Depends on\n\nNone.\n")
+
+    assert parts.statement == "<!-- TODO:\nwrite the statement -->"
+    assert content_lines(parts.statement) == ["", ""]
+
+
+def test_a_title_below_a_section_ends_that_section() -> None:
+    parts = article_parts("Intro.\n\n## Depends on\n\n- [Base](base.md)\n\n# Title\n\nStatement.\n\n## Sources\n")
+
+    assert parts.statement.split() == ["Intro.", "Statement."]
+    assert parts.sections == (
+        ArticleSection("Depends on", "## Depends on", "- [Base](base.md)"),
+        ArticleSection("Sources", "## Sources", ""),
+    )
+
+
+@pytest.mark.parametrize(
+    "visible",
+    [
+        "TODO",
+        "tbd.",
+        "**TODO.**",
+        "todo tbd",
+        "TODO: state it",
+        "TBD - pick one",
+        "Pending \u2013 later",
+        "TODO -",
+        "TODO\u2014later",
+        "TODO -- later",
+        "TODO--later",
+    ],
+)
+def test_is_placeholder_accepts_bare_and_marker_placeholders(visible: str) -> None:
+    assert is_placeholder(visible)
+
+
+@pytest.mark.parametrize(
+    "visible",
+    [
+        "",
+        "Pending Mathlib PR 1234",
+        "TODO state it",
+        "Let x be a todo list.",
+        "TODO-lists form a monoid.",
+        "Unknown-variance case: the sample mean is normal.",
+    ],
+)
+def test_is_placeholder_leaves_sentences_alone(visible: str) -> None:
+    assert not is_placeholder(visible)
+
+
+def test_a_dash_joining_two_words_does_not_mark_a_placeholder() -> None:
+    assert not is_placeholder("Unknown\u2013known duality holds for every pair.")
+    assert not is_placeholder("Unknown-variance case.")
+    for marker in ("TODO \u2013 later", "TODO\u2013 later", "TBD\u2014write this", "Unknown: x", "TODO - x"):
+        assert is_placeholder(marker), marker
+
+
+@pytest.mark.parametrize(("visible", "expected"), [("", False), ("...", False), ("**_~", False), ("x", True)])
+def test_has_substance_needs_a_word_character(visible: str, expected: bool) -> None:
+    assert has_substance(visible) is expected
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "### Setting\n\nLet x.",
+        "Setting\n=======\n\nLet x.",
+        "> ### Quoted\n> Let x.",
+        "```lean\ntheorem t : True\n```\n\nLet x.",
+        "```mermaid\ngraph TD\n```\n\nLet x.",
+        "    indented code\n\nLet x.",
+        "<!-- note -->Let x.",
+    ],
+)
+def test_visible_prose_leaves_out_headings_code_blocks_and_diagrams(source: str) -> None:
+    assert visible_prose(source) == "Let x."
+
+
+def test_visible_prose_keeps_inline_code_and_drops_hidden_text() -> None:
+    assert visible_prose("Use `Nat.add_zero`.") == "Use Nat.add_zero."
+    assert visible_prose("<span hidden>secret</span> shown") == "shown"
+
+
+def test_visible_text_survives_markup_nested_thousands_deep() -> None:
+    source = "<span>" * 3000 + "x"
+
+    assert rendered_visible_text(source) == "x"
+    assert visible_prose(source) == "x"
+
+
+def test_a_statement_the_renderer_gives_up_on_does_not_spoil_the_next_one() -> None:
+    import autoform_cli.markdown as markdown_module
+
+    # A list nested this deep exhausts the renderer. The failure must stay
+    # with that text and not leave the shared converter half-finished.
+    with pytest.raises(RecursionError):
+        markdown_module.render_html("- " * 500 + "x")
+    assert visible_prose("- " * 500 + "x") == ""
+
+    assert visible_prose("[ ](missing.md)") == ""
+    assert visible_prose("**Let** x.") == "Let x."

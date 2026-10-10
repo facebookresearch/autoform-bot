@@ -1,0 +1,19 @@
+# Autoform CODEOWNERS example. GitHub does not read this filename.
+#
+# Copy these rules into the first CODEOWNERS file GitHub reads:
+#   .github/CODEOWNERS, CODEOWNERS, or docs/CODEOWNERS
+# If none exists, use .github/CODEOWNERS. Replace @OWNER with GitHub users or
+# visible teams that have write access, then uncomment the rules.
+#
+# The roadmap rule protects open_statements, which decides whether a theorem
+# may merge with a sorry proof. The .github rule protects Autoform's workflows
+# and audit script. Consider rules for lakefile.toml or lakefile.lean,
+# lean-toolchain, and lake-manifest.json too; they decide what CI compiles.
+#
+# GitHub reads CODEOWNERS from a pull request's base branch. New rules cannot
+# protect their own activation unless equivalent coverage already exists
+# there, so review that change explicitly. Then require pull requests and
+# code-owner review, dismiss stale approvals, and audit every bypass.
+
+# /blueprint/roadmap/README.md @OWNER
+# /.github/ @OWNER

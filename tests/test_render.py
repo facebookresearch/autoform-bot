@@ -577,6 +577,40 @@ def test_a_hoisted_body_keeps_its_other_links_working(tmp_path: Path) -> None:
     assert "[Paper](../../sources.md)" in chapter
 
 
+def test_a_link_to_the_chapters_own_directory_is_published(tmp_path: Path) -> None:
+    """``./`` on a chapter page is the page's own directory, which is ``.`` once published."""
+    project = _project(tmp_path)
+    readme = project / "blueprint/roadmap/README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8").replace(
+            "This chapter develops",
+            "See [this folder](./) and [its results](./#results). This chapter develops",
+        ),
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert "[this folder](.)" in chapter
+    assert "[its results](.#results)" in chapter
+
+
+def test_a_hoisted_body_can_link_to_the_chapter_it_lands_on(tmp_path: Path) -> None:
+    """``../`` from a leaf one level below its chapter names the page its body is published on."""
+    project = _project(tmp_path)
+    leaf = project / "blueprint/roadmap/chapter/definitions/deep.md"
+    leaf.parent.mkdir(parents=True)
+    (project / "blueprint/roadmap/chapter/README.md").write_text("# Chapter\n", encoding="utf-8")
+    leaf.write_text(
+        "---\ndeclaration: def\n---\n\n# Deep\n\nSee [the chapter](../).\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    chapter = (tmp_path / "out/roadmap/chapter/README.md").read_text(encoding="utf-8")
+    assert "[the chapter](.)" in chapter
+
+
 def test_unresolved_declarations_are_reported_not_linked(tmp_path: Path) -> None:
     project = _project(tmp_path)
     (project / "blueprint/roadmap/top.md").write_text(
@@ -1551,3 +1585,86 @@ def test_next_up_explains_readiness_without_naming_a_policy(tmp_path: Path, drop
 
     assert '<div class="bp-next-target" data-autoform-node-id="top">' in landing
     assert f'<div class="bp-next-why">{why}</div>' in landing
+
+
+def _statement_box(page: str, node_id: str) -> str:
+    start = page.index('<div class="bp-thmcontent"', page.index(f'data-autoform-node-id="{node_id}"'))
+    return page[start : page.index("</div>", start)]
+
+
+def test_a_statement_keeps_its_subheadings_inside_the_theorem(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/top.md").write_text(
+        "---\ndeclaration: theorem\nlean: Project.top\n---\n\n"
+        "# Top\n\nThe main result.\n\n### Setting\n\nThe hypotheses.\n\n"
+        "## Sources\n\nA citation.\n\n## Depends on\n\n- [Base](base.md)\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    box = _statement_box(page, "top")
+
+    assert "The main result." in box and "The hypotheses." in box
+    # Demoted like every other heading a node brings onto the chapter page.
+    assert "###### Setting" in box
+    assert "\n### Setting" not in page
+    assert "A citation." not in box
+    assert page.index("###### Setting") < page.index("###### Sources")
+    assert "## Depends on" not in page
+
+
+def test_a_hidden_heading_does_not_cut_a_statement_short(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/top.md").write_text(
+        "---\ndeclaration: theorem\nlean: Project.top\n---\n\n"
+        "# Top\n\nThe main result.\n\n<!--\n## Draft\n-->\n\nIts second sentence.\n\n"
+        "## Depends on\n\n- [Base](base.md)\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    box = _statement_box((tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8"), "top")
+
+    assert "The main result." in box and "Its second sentence." in box
+
+
+def test_neither_dependency_section_is_republished(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/top.md").write_text(
+        "---\ndeclaration: theorem\nlean: Project.top\n---\n\n# Top\n\nThe main result.\n\n"
+        "## Depends on\n\nStatement prerequisites.\n\n## Proof depends on\n\n- [Base](base.md)\n\n"
+        "## Sources\nA citation.\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    assert "Statement prerequisites." not in page
+    assert "Proof depends on" not in page
+    assert "###### Sources" in page and "A citation." in page
+
+
+def test_prose_above_the_title_is_published_in_the_theorem(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/top.md").write_text(
+        "---\ndeclaration: theorem\nlean: Project.top\n---\n\n"
+        "A lead-in sentence.\n\n# Top\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    box = _statement_box((tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8"), "top")
+
+    assert "A lead-in sentence." in box and "The main result." in box
+
+
+def test_a_statement_written_below_a_section_is_still_published(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/top.md").write_text(
+        "---\ndeclaration: theorem\nlean: Project.top\n---\n\n"
+        "## Depends on\n\n- [Base](base.md)\n\n# Top\n\nThe main result.\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    assert "The main result." in _statement_box(page, "top")
+    assert "## Depends on" not in page

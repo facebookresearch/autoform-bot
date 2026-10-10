@@ -27,6 +27,8 @@ from .markdown import (
     rendered_visible_text,
 )
 from .snapshot import BlueprintSnapshot
+from .markdown import has_substance as _has_substance
+from .markdown import is_placeholder as _is_placeholder
 
 COVERAGE_SCHEMA = "autoform-coverage/v1"
 COVERAGE_DISPOSITIONS = ("MAPPED", "DECOMPOSED", "DEFERRED", "OUT")
@@ -38,10 +40,6 @@ _SEPARATOR = re.compile(r"^:?-{3,}:?$")
 #: neither the source nor the rendered page can produce it, so provenance never
 #: rests on a coincidence.
 _ROW_MARKER = "autoformcoveragerowmarker"
-#: Words that name the absence of a decision.
-_PLACEHOLDER_EVIDENCE = frozenset({"pending", "placeholder", "todo", "tbd", "unknown"})
-#: Punctuation that turns a leading placeholder into a marker, as in ``TODO:``.
-_MARKER_PUNCTUATION = re.compile(r"^[\s]*[:\-\u2013\u2014]")
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -530,42 +528,6 @@ def _visible_markdown(value: str) -> str:
     """
 
     return rendered_visible_text(INLINE_CODE.sub("", value))
-
-
-def _has_substance(visible: str) -> bool:
-    """Whether anything a reader could act on survives emphasis and punctuation."""
-
-    return bool(re.search(r"\w", re.sub(r"[*_~\\]", "", visible)))
-
-
-def _is_placeholder(visible: str) -> bool:
-    """Whether the evidence only announces that a decision is still outstanding.
-
-    Two shapes are rejected. A cell whose every word is a placeholder, however
-    decorated -- ``TBD``, ``**TODO.**`` -- and a cell that opens with one used as
-    a marker, where punctuation separates it from the rest: ``TODO: choose a
-    milestone``.
-
-    A status word that merely begins a sentence is left alone, because it is
-    usually carrying real information: "Pending Mathlib PR 1234" and "Unknown
-    provenance, excluded by agreement" both name something a reader can check.
-    Rejecting those pushed authors toward vaguer wording to satisfy the checker.
-
-    The gap this leaves is a marker written without punctuation, as in "TODO
-    choose a milestone". That reads as prose to any rule cheap enough to trust,
-    so it is left to human review rather than guessed at.
-    """
-
-    stripped = re.sub(r"[*_~\\]", "", visible)
-    words = re.findall(r"\w+", stripped.casefold())
-    if not words:
-        return False
-    if all(word in _PLACEHOLDER_EVIDENCE for word in words):
-        return True
-    if words[0] not in _PLACEHOLDER_EVIDENCE:
-        return False
-    _, _, remainder = stripped.casefold().partition(words[0])
-    return _MARKER_PUNCTUATION.match(remainder) is not None
 
 
 def _is_roadmap_article(target: str, *, coverage_path: Path, roadmap: Path) -> bool:

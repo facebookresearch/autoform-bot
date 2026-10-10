@@ -68,9 +68,11 @@ def _generate(rng: random.Random) -> list[_Spec]:
         lean = None
         if rng.random() < 0.6:
             lean = f"Gen.{name}" if rng.random() < 0.8 else f"Gen.{name}, Gen.{name}_aux"
-        # The loader requires lean: for a formalized statement or proof.
-        statements = [None] + (["formalized"] if lean else []) + (["retracted"] if lean and not mathlib else [])
+        statements = [None, "formalized"] + (["retracted"] if lean and not mathlib else [])
         statement = rng.choices(statements, weights=[35, 45, 20][: len(statements)])[0]
+        # The loader requires lean: for a formalized statement or proof.
+        if statement == "formalized" and lean is None:
+            lean = f"Gen.{name}"
         statement_dependencies: list[str] = []
         proof_dependencies: list[str] = []
         for earlier in names[:index]:
@@ -165,7 +167,10 @@ _LOAD_FAULTS = {
         {"statement": "formalized", "lean": None},
         "{name}: statement: formalized needs the lean: declaration that formalizes it",
     ),
-    "proof without statement": ({"statement": None, "proof": True}, "{name}: proof: formalized needs statement: formalized"),
+    "proof without statement": (
+        {"statement": None, "proof": True},
+        "{name}: proof: formalized needs statement: formalized",
+    ),
 }
 
 
@@ -287,6 +292,8 @@ def _check_roadmap(
         status = statuses[name]
         assert article.declarations == tuple(declaration_names(spec.lean or ""))
         assert (article.state, article.assumes) == (status.key, status.assumes)
+        if len(article.assumes) >= 2:
+            seen.add("contract:assumes-several")
         assert set(article.allowed_open_declarations) <= open_declarations, name
         allowed = {
             declaration
@@ -344,7 +351,7 @@ def test_random_roadmaps_keep_the_wiki_and_lean_contract(repo_root: Path, tmp_pa
     expected = {f"forbidden:{state.key}" for state in STATES if state.key != "conditional"}
     expected |= {f"allowed:{state.key}" for state in STATES}
     expected |= {"work:statement", "work:proof", "work:missing-article-id"}
-    expected |= {"contract:open", "contract:retracted-open", "contract:mathlib"}
+    expected |= {"contract:open", "contract:retracted-open", "contract:mathlib", "contract:assumes-several"}
     expected |= {f"invalid:{fault}" for fault in _LOAD_FAULTS}
     assert expected <= seen, sorted(expected - seen)
 

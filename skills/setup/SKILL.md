@@ -123,6 +123,12 @@ request early whether a code owner has authenticated the statement approvals
 it adds; and `blueprint-pages.yml`, which validates the DAG and its `lean:`
 declarations, renders the blueprint, builds MkDocs, and deploys GitHub Pages.
 Pass `--autoform-ref` to pin them at an immutable commit.
+It also writes `.github/CODEOWNERS.autoform.example`. GitHub does not read it,
+so it cannot mask active owners. Do not guess owners or activate it silently.
+With names the user gives, merge its rules into the first CODEOWNERS file
+GitHub reads, then require code-owner review, dismiss stale approvals, and
+audit bypasses. Report that new rules cannot protect their own activation
+unless equivalent coverage already exists on the pull request's base branch.
 
 Approvals read "approved by" only when the default branch has rulesets, none
 the workflow token can bypass, requiring code owner review, dismissing stale

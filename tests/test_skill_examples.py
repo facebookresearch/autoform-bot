@@ -142,6 +142,18 @@ def test_root_agent_guidance_routes_to_owning_documents(repo_root: Path) -> None
         assert f"]({relative})" in guidance
         assert (repo_root / relative).is_file()
 
+    normalized_guidance = " ".join(guidance.split()).lower()
+    assert "identify the concrete user outcome or maintenance burden" in normalized_guidance
+    assert "review blockers does not prove that the proposal belongs" in normalized_guidance
+    assert "validate their own planning state" in normalized_guidance
+    assert "only when authorized" in normalized_guidance
+    assert "repository quality" in normalized_guidance
+    assert "line count" in normalized_guidance
+    assert "pr count" in normalized_guidance
+    assert all(word in normalized_guidance for word in ("closing", "deleting", "replacing"))
+    assert "otherwise recommend" in normalized_guidance
+    assert "success" in normalized_guidance
+
 
 def test_agent_review_treats_skeleton_hashes_as_advisory(repo_root: Path) -> None:
     review = (repo_root / "skills" / "agent-review" / "SKILL.md").read_text(
@@ -790,7 +802,7 @@ def test_cli_reference_documents_only_commands_that_exist(repo_root: Path) -> No
 
     reference = (repo_root / "autoform_cli/README.md").read_text(encoding="utf-8")
     documented = _documented_invocations(reference)
-    assert {("check",), ("audit",), ("render",), ("claim", "acquire")} <= documented
+    assert {("check",), ("audit",), ("render",), ("search",), ("claim", "acquire")} <= documented
 
     for invocation in sorted(documented):
         with pytest.raises(SystemExit) as exit_info:
@@ -818,6 +830,78 @@ def test_skills_delegate_the_command_line_to_the_reference(repo_root: Path) -> N
         if "autoform_cli/README.md" in text:
             citing += 1
     assert citing >= 3
+
+
+def test_skill_links_into_the_cli_reference_land_on_a_section(repo_root: Path) -> None:
+    """A skill that cites a reference section must not point at a renamed one.
+
+    Skills hold no command line of their own, so a link whose fragment no
+    longer matches a heading leaves the agent at the top of a long file with no
+    contract to read.
+    """
+    reference_path = repo_root / "autoform_cli/README.md"
+    sections: set[str] = set()
+    fenced = False
+    for line in reference_path.read_text(encoding="utf-8").splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        elif not fenced and (heading := re.fullmatch(r"#{1,6} +(.+?) *", line)):
+            sections.add(re.sub(r"[^\w -]", "", heading[1].lower()).replace(" ", "-"))
+
+    cited = 0
+    for page in sorted((repo_root / "skills").rglob("*.md")):
+        where = page.relative_to(repo_root)
+        links = re.findall(r"\(([^)\s]*autoform_cli/README\.md)(?:#([^)\s]+))?\)", page.read_text(encoding="utf-8"))
+        for target, fragment in links:
+            assert (page.parent / target).resolve() == reference_path, f"{where} links past the reference: {target}"
+            if fragment:
+                assert fragment in sections, f"{where} links to a missing section: #{fragment}"
+                cited += 1
+    assert cited
+
+
+def test_skills_search_the_blueprint_before_adding_a_result(repo_root: Path) -> None:
+    """`autoform search` prevents a duplicate only if an agent runs it first.
+
+    Matching is literal, so the rule that matters most is that an empty result
+    is not yet an answer: without it an agent searches once with a full
+    sentence, finds nothing, and adds the result a second time.
+    """
+
+    def read(relative: str) -> str:
+        return " ".join((repo_root / relative).read_text(encoding="utf-8").split())
+
+    def rule(relative: str) -> str:
+        """The paragraph or list item that names the command."""
+
+        blocks = (repo_root / relative).read_text(encoding="utf-8").split("\n\n")
+        named = [" ".join(block.split()) for block in blocks if "`autoform search`" in block]
+        assert len(named) == 1, f"{relative}: the search rule is spread over {len(named)} paragraphs"
+        return named[0]
+
+    def sentence(text: str, phrase: str) -> str:
+        """The sentence of ``text`` that holds ``phrase``."""
+
+        found = [part for part in re.split(r"(?<=[.:]) ", text) if phrase in part]
+        assert len(found) <= 1, f"{phrase!r} is in {len(found)} sentences of the search rule"
+        return found[0] if found else ""
+
+    roadmap = rule("skills/roadmap/SKILL.md")
+    formalize = rule("skills/formalize/SKILL.md")
+    rubric = rule("skills/agent-review/references/roadmap-quality.md")
+
+    for text in (roadmap, formalize, rubric):
+        assert "README.md#search-contract)" in text
+        # One query that finds nothing does not show the result is new.
+        assert "fewer words" in text
+    for skill in (roadmap, formalize):
+        assert "refusal (exit 2) is not an empty result" in skill
+    # What to do with a hit, which is the point of searching: these check that
+    # each instruction is present, in one sentence, not how it is worded.
+    assert "instead of adding" in sentence(roadmap, "## Depends on")
+    assert "dependencies reach" in sentence(formalize, "Use the declaration")
+    assert "never restate" in sentence(formalize, "missing prerequisite")
+    assert "duplicate" in rubric and "not proof" in rubric
 
 
 def test_roadmap_reconciles_the_pages_setup_wrote(repo_root: Path) -> None:
@@ -861,6 +945,11 @@ def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None
     assert (
         repo_root / "autoform_cli/templates/github/autoform_audit.py"
     ).read_bytes() == (repo_root / _EXAMPLE / ".github/autoform_audit.py").read_bytes()
+    assert (
+        repo_root / "autoform_cli/templates/github/CODEOWNERS.autoform.example"
+    ).read_bytes() == (
+        repo_root / _EXAMPLE / ".github/CODEOWNERS.autoform.example"
+    ).read_bytes()
 
     for name in ("autoform-review-gate.yml", "autoform-verify.yml", "blueprint-pages.yml"):
         expected = (template_dir / name).read_text(encoding="utf-8")

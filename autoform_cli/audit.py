@@ -28,11 +28,14 @@ from .lean import (
     index_failure_message,
     snapshot_project_sources,
 )
+from .markdown import article_parts as _article_parts
 from .markdown import content_lines as _content_lines
-from .markdown import frontmatter_end as _frontmatter_end
+from .markdown import has_substance as _has_substance
 from .markdown import HEADING as _HEADING
+from .markdown import is_placeholder as _is_placeholder
 from .markdown import local_target_issue as _local_target_issue
 from .markdown import markdown_links as _markdown_links
+from .markdown import visible_prose as _visible_prose
 from .readback import Readback
 from .review import ReviewBundle, review_findings
 from .skeleton import SkeletonReport
@@ -196,14 +199,9 @@ def audit_graph(
                         "formalizable article has contained articles; declaration-sized articles must be leaves",
                     )
                 )
-            if not article.statement_text:
-                findings.append(
-                    AuditFinding(
-                        article_path,
-                        "missing-statement-text",
-                        "formalizable article has no statement text between its H1 and first H2 section",
-                    )
-                )
+            statement_finding = _statement_finding(article.statement)
+            if statement_finding is not None:
+                findings.append(AuditFinding(article_path, *statement_finding))
             if not article.has_depends_section:
                 findings.append(
                     AuditFinding(
@@ -318,34 +316,37 @@ def _review_findings(
 
 @dataclass(frozen=True, slots=True)
 class _ArticleShape:
-    statement_text: bool
+    statement: str
     has_depends_section: bool
 
 
 def _read_article(text: str) -> _ArticleShape:
-    lines = text.splitlines()
-    start = _frontmatter_end(lines)
-    body = "\n".join(lines[start:])
-    seen_h1 = False
-    before_first_h2 = True
-    statement_text = False
-    has_depends_section = False
-    for line in _content_lines(body):
-        heading = _HEADING.match(line)
-        if heading:
-            level = len(heading.group(1))
-            title = heading.group(2).strip().casefold()
-            if level == 1:
-                seen_h1 = True
-            elif level == 2:
-                before_first_h2 = False
-                if title == "depends on":
-                    has_depends_section = True
-            continue
-        if seen_h1 and before_first_h2 and line.strip():
-            statement_text = True
+    parts = _article_parts(text)
+    return _ArticleShape(
+        statement=parts.statement,
+        has_depends_section=any(section.title.casefold() == "depends on" for section in parts.sections),
+    )
 
-    return _ArticleShape(statement_text, has_depends_section)
+
+def _statement_finding(statement: str) -> tuple[str, str] | None:
+    """Return the code and reason for what is wrong with a statement's text, if anything.
+
+    The text is judged as the site publishes it, so a hidden element, an image
+    or a bare rule states nothing however much source it takes.
+    """
+
+    prose = _visible_prose(statement)
+    if not _has_substance(prose):
+        # A subheading names what follows; alone it states nothing.
+        if not any(line.strip() and not _HEADING.match(line) for line in _content_lines(statement)):
+            return "missing-statement-text", "formalizable article has no statement text before its first H2 section"
+        return "empty-statement-text", "formalizable article's statement has no prose with a letter or digit"
+    if _is_placeholder(prose):
+        return (
+            "placeholder-statement-text",
+            "formalizable article's statement is a placeholder, or opens with one used as a marker",
+        )
+    return None
 
 
 def _source_findings(graph: Graph, node: Node, article_path: str) -> list[AuditFinding]:

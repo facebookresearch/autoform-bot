@@ -211,6 +211,7 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
         } <= names
         assert "autoform_cli/lake.py" not in names
         assert "autoform_cli/templates/github/autoform_audit.py" in names
+        assert "autoform_cli/templates/github/CODEOWNERS.autoform.example" in names
         assert "autoform_cli/assets/blueprint-live.js" in names
         assert not any(
             name.startswith(("scripts/", "autoform/", "visualization/", "servers/lean/", "servers/search/"))
