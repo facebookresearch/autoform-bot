@@ -866,6 +866,16 @@ def mask_fences_and_comments(lines: list[str]) -> list[str]:
     return _mask_fences_and_comments(lines, set(), unclosed_fence_is_text=True)
 
 
+def mask_code_and_comments(lines: list[str]) -> list[str]:
+    """Return ``lines`` with fenced and indented code blocks and HTML comments
+    blanked, reading fences as :func:`mask_fences_and_comments` does.
+
+    The page shows an indented block as code, so a link in one is no link.
+    """
+
+    return _mask_indented_code(mask_fences_and_comments(lines), set())
+
+
 def _mask_fences_and_comments(
     lines: list[str], hidden: set[int], *, unclosed_fence_is_text: bool = False
 ) -> list[str]:
@@ -1014,6 +1024,7 @@ __all__ = [
     "page_markdown",
     "published_lines",
     "published_markdown",
+    "mask_code_and_comments",
     "mask_fences_and_comments",
     "published_tables",
     "render_html",

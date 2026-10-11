@@ -19,7 +19,7 @@ from urllib.parse import unquote, urlsplit
 
 from .lean import declaration_names
 from .snapshot import BlueprintSnapshot, SnapshotError, read_regular_file
-from .markdown import mask_fences_and_comments
+from .markdown import mask_code_and_comments
 
 _LINE_LOCATOR = re.compile(r"\AL(\d+)(?:-L(\d+))?\Z")
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
@@ -558,9 +558,10 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
     }
     section: str | None = None
 
-    # Fences and comments are read as the page and the audit read them, so a
-    # section a reader sees never loses its links here.
-    for line in mask_fences_and_comments(lines[body_start:]):
+    # Fences, comments and indented code are read as the page and the audit
+    # read them, so a section a reader sees never loses its links here, and a
+    # link the page shows as code is not read as one.
+    for line in mask_code_and_comments(lines[body_start:]):
         heading = _HEADING.match(line)
         if heading:
             level = len(heading.group(1))

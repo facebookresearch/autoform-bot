@@ -586,6 +586,28 @@ def test_rejects_formalized_work_the_lean_does_not_show(
     assert raised.value.issues == issues
 
 
+def test_a_link_shown_as_indented_code_is_neither_edge_nor_source(tmp_path: Path) -> None:
+    # The page shows an indented block as code, so its links are not on the
+    # page. A list item's indented continuation is still part of the list.
+    blueprint = tmp_path / "blueprint"
+    source = blueprint / "sources" / "paper.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("# Paper\n", encoding="utf-8")
+    for name in ("base", "other", "third"):
+        _node(blueprint, f"chapter/{name}.md", f"# {name.title()}\n")
+    _node(
+        blueprint,
+        "chapter/result.md",
+        "# Result\n\n## Depends on\n\nThe syntax:\n\n    [Base](base.md)\n\n- [Other](other.md)\n\n"
+        "    [Third](third.md)\n\n## Sources\n\nFor example:\n\n    [Paper](../../sources/paper.md#result)\n",
+        origin="cited",
+    )
+
+    node = load_graph(blueprint).nodes["chapter/result"]
+    assert set(node.dependencies) == {"chapter/other", "chapter/third"}
+    assert node.sources == ()
+
+
 def test_records_origin_and_source_links_without_treating_them_as_edges(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     source = blueprint / "sources" / "paper.md"
