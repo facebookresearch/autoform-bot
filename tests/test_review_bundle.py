@@ -10,7 +10,8 @@ import pytest
 import autoform_cli.render as render_module
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.graph import Graph, load_graph
-from autoform_cli.readback import Readback, load_readbacks
+from autoform_cli.markdown import statement_and_notes
+from autoform_cli.readback import Readback, load_readbacks, publishable_article
 from autoform_cli.render import (
     PUBLICATION_MANIFEST,
     PublicationError,
@@ -189,6 +190,31 @@ def test_canonical_statement_preserves_visible_comments_inside_fences(tmp_path: 
     statement = canonical_statement(graph, graph.nodes["basics/result"])
     assert "hidden note" not in statement
     assert "<!-- visible code -->" in statement
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "statement"),
+    [
+        # Prose above the title is statement text to the audit and the site.
+        ("# Result\n\nA supremum is **unique**.\n", "A supremum is **unique**.\n\n# Result\n", "A supremum is **unique**."),
+        # A fence that never closes is text on the page and hides no section.
+        ("A supremum is **unique**.", "A supremum is **unique**.\n\n```\ncode", "A supremum is **unique**.\n\n```\ncode"),
+        # A comment closed on the title line leaves nothing open below it.
+        ("# Result\n", "<!-- drafting note\n--> # Result\n", "A supremum is **unique**."),
+    ],
+)
+def test_canonical_statement_is_the_span_the_audit_and_the_box_read(
+    tmp_path: Path, old: str, new: str, statement: str
+) -> None:
+    blueprint = _blueprint(tmp_path)
+    _edit(blueprint / "roadmap" / "basics" / "result.md", old, new)
+
+    graph = load_graph(blueprint)
+    node = graph.nodes["basics/result"]
+    codes = {finding.code for finding in audit_blueprint(blueprint).findings}
+    assert canonical_statement(graph, node) == statement
+    assert statement_and_notes(publishable_article(graph.article_text(node))[0])[0] == statement
+    assert not codes & {"missing-statement-text", "empty-statement-text", "placeholder-statement-text"}
 
 
 def test_fenced_fake_source_section_cannot_replace_review_evidence(tmp_path: Path) -> None:

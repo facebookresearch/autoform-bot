@@ -60,7 +60,8 @@ State the intended result and proof sketch here.
 An article's statement is its body from the end of the frontmatter to the first
 `##` heading, without the H1 line. A deeper heading does not end it, and neither
 does a `##` line inside a fenced code block or an HTML comment. `autoform audit`
-and the published theorem box both read that span. A fence closes only on a
+and the published theorem box both read that span, and `review_approved` binds
+it without the HTML comments outside its fences. A fence closes only on a
 bare fence line; one that never closes is plain text on the page and hides no
 heading and no dependency link. A later bare fence line of the same character
 and at least the opener's length closes it here, though the page asks for the

@@ -20,7 +20,7 @@ from typing import Mapping
 
 from .graph import ARTICLE_ID_PATTERN, Graph, Node, source_passage
 from .lean import REVIEW_PACKET_SCHEMA, declaration_names
-from .markdown import FENCE, FENCE_CLOSE, HEADING, frontmatter_end, strip_line_comments
+from .markdown import FENCE, FENCE_CLOSE, article_parts, frontmatter_end, strip_line_comments
 from .readback import Readback, load_readbacks, readback_for, readback_keys
 from .scaffold import _atomic_write
 from .skeleton import (
@@ -206,21 +206,27 @@ class ReviewBundle:
 
 
 def canonical_statement(graph: Graph, node: Node) -> str:
-    """Return visible Markdown after the H1 and before the first H2.
+    """Return the article's statement as :func:`~autoform_cli.markdown.article_parts`
+    reads it once the HTML comments outside code fences are gone.
 
-    Frontmatter and the title identify the article and are bound separately.
-    Outer blank lines are formatting, while all Markdown inside the statement
-    is preserved exactly after newline normalization. The text is the one
-    ``graph`` parsed ``node`` from: a statement written since would be judged
-    against that parse's approval, a pairing that never existed on disk.
+    That is the span the audit checks and the site's statement box shows; the
+    site, too, drops comments before it splits an article, so a comment that
+    closes on the title line leaves nothing open in the statement. Frontmatter
+    and the title identify the article and are bound separately. Lines that
+    are blank at either end are formatting, while all other Markdown inside
+    the statement is preserved exactly after newline normalization. A fence
+    that never closes runs to the end of the article here, so comments after
+    it stay; check refuses such a fence. The text is the one ``graph`` parsed
+    ``node`` from: a statement written since would be judged against that
+    parse's approval, a pairing that never existed on disk.
     """
 
     lines = graph.article_text(node).splitlines()
-    statement: list[str] = []
-    seen_h1 = False
+    start = frontmatter_end(lines)
+    body: list[str] = []
     fence: tuple[str, int] | None = None
     in_comment = False
-    for raw_line in lines[frontmatter_end(lines) :]:
+    for raw_line in lines[start:]:
         if fence is None and not in_comment and FENCE.match(raw_line):
             line = raw_line
         elif fence is None:
@@ -234,21 +240,8 @@ def canonical_statement(graph: Graph, node: Node) -> str:
                 fence = (marker[0], len(marker))
             elif marker[0] == fence[0] and len(marker) >= fence[1]:
                 fence = None
-            if seen_h1:
-                statement.append(line)
-            continue
-        heading = None if fence is not None else HEADING.match(line)
-        if heading:
-            level = len(heading.group(1))
-            if not seen_h1:
-                if level == 1:
-                    seen_h1 = True
-                continue
-            if level == 2:
-                break
-        if seen_h1:
-            statement.append(line)
-    return "\n".join(statement).strip("\n")
+        body.append(line)
+    return article_parts("\n".join([*lines[:start], *body])).statement
 
 
 def build_review_bundle(graph: Graph, skeleton: SkeletonReport) -> ReviewBundle:
@@ -285,7 +278,7 @@ def build_review_bundle(graph: Graph, skeleton: SkeletonReport) -> ReviewBundle:
                     ReviewFinding(
                         node_id,
                         "review-statement-missing",
-                        "article has no mathematical statement between its H1 and first H2",
+                        "article has no mathematical statement before its first H2",
                     )
                 ]
             )
@@ -490,7 +483,7 @@ def validate_review_article(
             ReviewFinding(
                 node.id,
                 "review-statement-missing",
-                "article has no mathematical statement between its H1 and first H2",
+                "article has no mathematical statement before its first H2",
             ),
         )
     current = ReviewArticle(
