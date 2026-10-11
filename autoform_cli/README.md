@@ -1971,8 +1971,10 @@ job that runs no project code; the generated workflow does not have one.
 
 `autoform init` writes `.github/CODEOWNERS.autoform.example`. GitHub ignores
 that filename, so the example cannot mask or replace a repository's active
-owners. Its two suggested rules cover Autoform's control paths: the roadmap's
-`open_statements` policy and `.github/` CI. To activate them, find the first
+owners. Two of its suggested rules cover Autoform's control paths: the roadmap's
+`open_statements` policy and `.github/` CI. Its `*` rule gives every path an
+owner, as statement approvals require (see Coverage above). To activate them,
+find the first
 existing CODEOWNERS file in GitHub's order (`.github/CODEOWNERS`, `CODEOWNERS`,
 then `docs/CODEOWNERS`), or choose `.github/CODEOWNERS` when none exists; copy
 the rules there, replace `@OWNER`, and uncomment them. Consider rules for the

@@ -10,10 +10,16 @@
 # and audit script. Consider rules for lakefile.toml or lakefile.lean,
 # lean-toolchain, and lake-manifest.json too; they decide what CI compiles.
 #
+# With statement review on (blueprint/.autoform-review), an approval reads
+# "approved by" only when every path has an owner, so uncomment the * rule
+# too and make it the file's first rule: the last matching rule decides, so
+# rules after it narrow it and a rule before it would decide nothing.
+#
 # GitHub reads CODEOWNERS from a pull request's base branch. New rules cannot
 # protect their own activation unless equivalent coverage already exists
 # there, so review that change explicitly. Then require pull requests and
 # code-owner review, dismiss stale approvals, and audit every bypass.
 
+# * @OWNER
 # /blueprint/roadmap/README.md @OWNER
 # /.github/ @OWNER
