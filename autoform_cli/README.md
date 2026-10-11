@@ -1659,8 +1659,8 @@ the site gives one of its own elements on that page, such as a statement's
 anchor. The braces of a code fence
 may only name its language, as in ```` ```{.lean} ````, and options such as
 `title` or `linenums`; a class, an id, or another attribute there lands on the
-code block and is refused the same way. A Mermaid diagram, such as a
-```` ```mermaid ```` fence, is refused with its line too: the site draws only
+code block and is refused the same way. A Mermaid diagram, such as a fence
+opened with ```` ```mermaid ````, is refused with its line too: the site draws only
 the dependency graphs `render` writes, with the loose security their links
 need, which would also run a click's `call` as script. Show a diagram's source
 in a ```` ```text ```` fence instead. `check` reads each article as the site publishes it: every line break
