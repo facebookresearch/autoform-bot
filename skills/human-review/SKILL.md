@@ -55,3 +55,58 @@ recorded Lean proof, is not complete either: it is never fully proved, so it
 counts toward the percentage's total but not its completed share, as does
 every target that depends on it. Present it as conditional, naming the open
 statements in its `Assumes` row, never as proved or sorry-free.
+
+## Review formalized statements through blind read-backs
+
+A compiled proof says nothing about whether the statement means what the book
+says. The person reviews the current article statement and cited passage, the
+elaborated Lean signature, and the project definitions it rests on. Beside
+that evidence they read an independent *read-back*, a blind rendering in
+mathematical English of what one exact Lean packet literally asserts. The
+kernel covers everything below this surface.
+
+Use the `review` commands documented in the
+[CLI reference](../../autoform_cli/README.md#commands). `review check` derives
+its evidence from a fresh extraction of the current blueprint and built Lean
+tree; it is the one judge of whether cards and approvals are current.
+
+1. Confirm that the repository has opted into enforcement with the versioned
+   `blueprint/.autoform-review` policy marker. Require durable `article_id`
+   metadata for every Lean-mapped article, using the article-ID migration check
+   in the CLI reference. Every Lean-mapped article must also be a
+   declaration-sized leaf, naming a `declaration:` kind and containing no other
+   articles; review commands refuse any other with `review-article-shape`.
+   Every `origin: cited` Lean article must identify an exact line range in a
+   local, non-Markdown source snapshot. Build the Lean project, then prepare
+   the blind packets. Keep their manifest with the coordinator. A packet is the
+   only input that crosses the blind-review boundary; its opaque filename must
+   not reveal the article or declaration.
+2. Obtain a read-back for every packet that has none or whose card
+   `review check` reports invalid. Never write one yourself: you know what the
+   code is meant to say. Launch an independent sub-agent in a fresh workspace
+   containing only that packet and
+   [the read-back reference](references/readback.md). Do not give it the
+   repository, article, source passage, packet manifest, or a revealing task
+   description. Ask for testimony only.
+3. Back in the coordinator's workspace, record the testimony through the CLI
+   with the packet directory, the article ID, and the declaration. Never
+   hand-author or repair a card's path, hashes, or frontmatter.
+4. Run `review check`. It fails on a missing or stale card, an incomplete
+   extraction, and any approval that does not match; prepare again and repeat
+   steps 2 and 3 for each stale card.
+5. Walk the person through each statement: source and book text first, then the
+   read-back, then the exact packet. Ask whether the read-back says what the
+   book says, whether any hypothesis is missing or added, and whether the
+   definitions mean what the book's do. When they approve, copy the review hash
+   `review check` prints for the article into `review_approved`. That hash
+   binds the article title and statement, cited passage, exact packets, and
+   current read-backs. This edit is the person's assertion, not the agent's,
+   but the hash only shows that nothing changed since it was written, and
+   anyone can copy it. Commit the approval in a pull request into the default
+   branch and ask a code owner of the article to approve it; a later push needs
+   a new approval. When the person does not approve, record `revise` with their
+   reason and hand the change to Roadmap.
+6. Run `review check` again before reporting, and treat each finding as a
+   failure. An edit to any reviewed input must invalidate the approval it
+   changed. Do not report a statement as approved by a person while its label
+   says self-approved.

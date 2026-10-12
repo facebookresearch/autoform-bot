@@ -173,6 +173,14 @@ proof completed or that an earlier commit left behind, even though it belongs
 to another article; the audit fails until they are all gone. Report other
 pre-existing findings instead of fixing them.
 
+If `<PROJECT>/blueprint/.autoform-review` exists, project CI also runs the
+statement-review gate: `autoform review check` fails on a formalized statement
+until it has current read-backs and `review_approved` holds its current review
+hash. Human Review files the read-backs and copies that hash only when a person
+approves; never write either yourself. Hand each newly formalized statement to
+Human Review; until that review lands, the gate stays red wherever the result
+is integrated.
+
 Commit the verified result in its worktree, renew the claim, and rebase onto or
 merge the current shared branch. On the result, run the default `lake build`
 and `autoform audit`, delete every note the audit now reports as stale in a
@@ -180,7 +188,10 @@ follow-up commit, confirm that dependency readiness is unchanged, and confirm
 that the claimed
 article differs from its starting `article_revision` only by this worker's
 edits; if integration changed the candidate, repeat the review, check, and
-audit. For a revision, also re-run `autoform work impact` on the rebuilt result;
+audit. With the review marker, then run `autoform review check` with
+`--lean-root`, which needs that build because it extracts every Lean-mapped
+article, and report its findings on the claimed article.
+For a revision, also re-run `autoform work impact` on the rebuilt result;
 if the route's claim set grew, acquire the whole larger set in one command under
 the no-hold-and-wait rule and repair the new targets before landing. Keep the
 article claim until every checkout on the claim board can see

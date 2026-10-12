@@ -20,6 +20,7 @@ from autoform_cli import graph_pages, graph_views, render
 from autoform_cli.audit import audit_graph
 from autoform_cli.graph_views import chapter_view, group_nodes, project_view, scope_view
 from autoform_cli.render import _book_page_order, render_site
+from autoform_cli.review import ReviewError, ReviewFinding, build_review_bundle
 from autoform_cli.runtime import (
     _validate_depths,
     _validate_runtime,
@@ -27,6 +28,8 @@ from autoform_cli.runtime import (
     load_runtime_graph,
 )
 from autoform_cli.status import derive, topological_order
+from tests.test_review_bundle import _extracted
+from tests.test_review_bundle import _blueprint as _review_blueprint
 
 
 class _CountingDict(dict):
@@ -621,6 +624,31 @@ def test_audit_does_not_scan_for_children_per_node(tmp_path: Path, monkeypatch: 
     _forbid_child_scans(monkeypatch)
 
     assert audit_graph(graph) == expected
+
+
+def _review_refusal(graph: Graph) -> tuple[ReviewFinding, ...]:
+    with pytest.raises(ReviewError) as error:
+        build_review_bundle(graph, _extracted(graph))
+    return tuple(error.value.findings)
+
+
+def test_review_evidence_does_not_scan_for_children_per_article(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = _review_blueprint(tmp_path)
+    graph = load_graph(blueprint)
+    report = _extracted(graph)
+    bundle = build_review_bundle(graph, report)
+    (blueprint / "roadmap" / "basics" / "README.md").write_text(
+        f"---\narticle_id: af_{'c' * 24}\ndeclaration: theorem\nlean: Skel.chapter\n---\n# Basics\n", encoding="utf-8"
+    )
+    container = load_graph(blueprint)
+    refusal = _review_refusal(container)
+    assert ("basics", "review-article-shape") in {(finding.node_id, finding.code) for finding in refusal}
+    _forbid_child_scans(monkeypatch)
+
+    assert build_review_bundle(graph, report) == bundle
+    assert _review_refusal(container) == refusal
 
 
 def test_runtime_projection_indexes_children_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
