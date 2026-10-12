@@ -2134,6 +2134,14 @@ def test_probe_comment_ranges_must_cover_comments(tmp_path: Path, ranges: object
         ("../../sources/missing.tex#L1-L1", "names a missing file"),
         ("../../sources/binary.tex#L1-L1", "not readable UTF-8 text"),
         ("../../../outside.tex#L1-L1", "points outside the blueprint"),
+        ("../../sources/chapter#L1-L1", "names something other than a regular file"),
+        ("../../sources/%00book.tex#L1-L1", "contains an invalid path"),
+        (
+            "../../sources/loop.txt#L1-L1",
+            "names a path that cannot be resolved"
+            if sys.version_info < (3, 13)
+            else "names something other than a regular file",
+        ),
     ],
 )
 def test_extraction_reports_a_locator_that_names_no_passage(tmp_path: Path, link: str, why: str) -> None:
@@ -2141,9 +2149,12 @@ def test_extraction_reports_a_locator_that_names_no_passage(tmp_path: Path, link
     blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
     sources = blueprint / "sources"
     sources.mkdir()
+    (sources / "chapter").mkdir()
+    (sources / "loop.txt").symlink_to("loop.txt")
     (sources / "book.tex").write_text("one\ntwo\nthree\n", encoding="utf-8")
     (sources / "empty.tex").write_text("", encoding="utf-8")
     (sources / "binary.tex").write_bytes(b"\xff\xfe\n")
+    (sources / "NOTES.MD").write_text("# Notes\n", encoding="utf-8")
     (tmp_path / "outside.tex").write_text("outside\n", encoding="utf-8")
     article = blueprint / "roadmap" / "basics" / "determined.md"
     _replace_source(article, "## Depends on", f"## Sources\n\n- [book]({link})\n\n## Depends on")
@@ -2155,10 +2166,16 @@ def test_extraction_reports_a_locator_that_names_no_passage(tmp_path: Path, link
     assert unresolved.declaration == "Skel.observation_determined"
     assert unresolved.reason.startswith("source locator ") and why in unresolved.reason
 
-    _replace_source(article, link, "../../sources/book.tex#L2-L3")
+    # Links that are not line locators are skipped: an unclosed IPv6 host, a line number
+    # longer than any file, and a Markdown note whatever the case of its suffix (audit
+    # reads `NOTES.MD` as Markdown, so its fragment names a heading).
+    skipped = "http://[oops/x.txt#L1)\n- [long](../../sources/book.tex#L" + "1" * 5000
+    _replace_source(
+        article, link, skipped + ")\n- [notes](../../sources/NOTES.MD#L1-L1)\n- [book](../../sources/book.tex#L2-L3"
+    )
     report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
     assert report.clean
-    assert report.nodes[0].passage == "two\nthree"
+    assert (report.nodes[0].passage, report.nodes[0].passage_locator) == ("two\nthree", "sources/book.tex#L2-L3")
 
 
 def test_node_selection_rejects_unknown_articles(tmp_path: Path) -> None:
