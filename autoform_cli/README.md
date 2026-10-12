@@ -659,6 +659,66 @@ does not survive a change of meaning that leaves the packet text unchanged. All
 three are advisory provenance checksums when candidate code controls the
 checkout.
 
+A read-back is an independent agent's mathematical-English account of one
+declaration packet. The coordinator gives that agent only an opaque packet and
+the read-back instructions, then records the returned testimony.
+Cards live at `blueprint/readbacks/<article_id>/<encoded-declaration>.md`;
+the durable `article_id` keeps testimony attached when an article moves, while
+the encoded filename avoids platform-specific Lean-name collisions. Each
+versioned card contains the exact packet in a Lean block, both hashes, a model
+label, and the testimony in a text block. The loader rejects missing or unknown
+fields, altered packets, identity mismatches, cards not in canonical form, and
+malformed or empty testimony. `model:` remains a label supplied by the
+coordinator, not authenticated provenance.
+
+Testimony is plain text with TeX formulas between dollar signs, and every
+reader shows the text as typed: GitHub and a Markdown viewer of the vault in
+the card's text block, the site escaped. The site typesets only the formulas
+`readback.split_testimony` finds, the same reading the validator checks, so
+`\$` is a dollar sign that opens nothing. The rules are in the read-back guide
+`skills/human-review/references/readback.md`, and `readback.py` applies them.
+Testimony must show a reader everything it says, so invisible and reordering
+characters, code points the checking Python's Unicode data leaves unassigned,
+combining marks stacked over the lines around or with nothing to sit on, and
+TeX outside a flat allowlist are refused by name. The allowlist is the
+notation statements need, out of MathJax 3.2.2's base and ams packages, with
+no spacing, phantom, colour, box, size, or macro command. Testimony must show
+at least one letter or digit, and fit in 32 KiB and 500 lines, so every check
+is a linear scan of a bounded text.
+
+Cards are read without following links, so a linked card or directory is
+skipped. A card file holds at most 4 MiB, and no file is read more than one
+byte past that. A file at a card path that is larger, is not UTF-8, or cannot
+be read, and a directory or FIFO there, is reported as an invalid card, not
+skipped, even when the declaration's name is too long for the filename to
+spell. A card is attributed to the declaration its path names, so one that
+records another declaration, or whose `.md` is in another case, is reported as
+that declaration's invalid card. A directory under `readbacks/` that cannot be
+listed stops loading with an error naming it. Writes name a card by the hash
+of its bytes, so a card that is not UTF-8 is replaced like any other; one over
+the limit must be removed by hand.
+
+A write refuses a link on the way to the card directory and takes the
+directory's `flock`, so Autoform's writes to one directory happen one at a
+time; a write that cannot get the lock within ten seconds gives up, and a
+writer that dies releases it. An optional expected-card hash makes updates
+compare-and-swap: different content replaces a card only when it names that
+card's hash, and a card that names a hash conflicts with a missing card.
+Filing content identical to the current card writes nothing, so it succeeds
+even in a read-only directory. Otherwise the write stages the card in a
+`.autoform-readback-*.tmp` file beside it, flushes it, and renames it over the
+card in one step, so the card's name holds either the old complete card
+(nothing, for a first card) or the new one. A failure or interrupt before the
+rename removes the staging file; a crash, SIGTERM, or SIGKILL can leave it.
+The loader never reads it as a card, and the blueprint `.gitignore` that
+`autoform init` writes ignores it. The card committed to Git is the durable
+copy: a crash just after a write can lose it, and filing it again restores it.
+The contract covers Autoform's writers only: an editor's save, or a directory
+moved, during a write is not detected, so edit cards while no write is
+running. Writing needs `flock`, which Linux and macOS provide; elsewhere,
+including Windows, a write is refused before anything is created, and cards
+can still be loaded.
+
 `--packets DIR` writes one comment-stripped packet per skeleton, with a
 manifest mapping packets to articles and hashes. The destination must be empty
 or carry Autoform's packet manifest; each run replaces the complete managed
