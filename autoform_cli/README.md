@@ -450,10 +450,14 @@ helper module and makes one fully qualified call, with no `open` or
 `set_option`, and runs it with `lake env lean` against the built project. The
 helpers are compiled with the project's toolchain and no project module in
 scope into a module named `autoform-skeleton-helper`; a project, dependency,
-or `LEAN_PATH` module or directory of that name stops the extraction.
+or `LEAN_PATH` module or directory of that name stops the extraction. The
+compiled helper is cached under `$XDG_CACHE_HOME/autoform/probe-helper` (by
+default `~/.cache/autoform/probe-helper`) per toolchain and helper source; an
+entry that does not match its stored SHA-256 and the toolchain's Git hash is
+compiled again, nothing prunes the cache, and deleting it is always safe.
 The helper's constants are all in the reserved `AutoformSkeleton` namespace: a
-module that declares one of them there cannot import the helper, and the
-extraction stops with an error that names the constant. A declaration's
+module that declares one of them there cannot import the helper, and its
+targets are unresolved with a reason that names the constant. A declaration's
 packet reads as it does to a file that imports its module, whichever other
 articles are extracted with it.
 That environment has the module's global notation, instances, and
@@ -496,7 +500,19 @@ is unresolved too. A name that several indexed files declare, even when all
 but one of them declare it `private`, is unresolved without a probe, because
 the index cannot tell which one Lean binds, and every reason given for it
 names each of those files in sorted order.
-A declaration that resolves has the same hash under any selection.
+A probe that fails on its own (a nonzero exit, a timeout, or malformed or
+ambiguous records) likewise leaves only its module's targets unresolved, with
+the reason, and an error the probe meets while reading one declaration leaves
+only that declaration unresolved. A reason quotes at most 2,000 characters of
+Lean's output, shows the probe's temporary directory as `<scratch>` and
+project paths relative to the project, and so reads the same on every run.
+The output and material limits apply to a whole probe, so a module whose
+selected declarations together pass one fails as a whole: a declaration that
+resolves when selected alone can be unresolved beside its module's other
+targets. A declaration that resolves has the same hash under any selection.
+A missing `lake`, a failed freshness check or helper build, a dependency that
+hides a toolchain library, or a blueprint or source tree that changes during
+extraction still stops the whole command.
 `--output` records the `autoform-skeleton/v5` report, which contains no
 timestamp or absolute path, for a later render or review to consume. The
 report identifies the exact blueprint, by a hash of every article's bytes and
@@ -526,12 +542,26 @@ material's full text.
 Run skeleton extraction only in a trusted checkout or an operating-system
 sandbox. Lake evaluates `lakefile.lean`, and the generated probe imports project
 code whose initializers, macros, and metaprograms may perform arbitrary IO and
-can forge probe output. The timeout and output cap bound the direct batch
+can forge probe output. Each probe runs the helper's code, which later
+extractions take from the cache, so a process that can write the cache can
+run code in later extractions in any project, including trusted ones outside
+a sandbox. A sandbox for an untrusted project must therefore deny writes to
+the cache directory that extractions outside the sandbox use; setting
+`XDG_CACHE_HOME` inside the sandbox moves only Autoform's own cache, not what
+the project's code can write.
+The timeout and output cap bound the direct batch
 command; on POSIX, Autoform also terminates its process group, for every
 probe, on every failure and on interruption. The Lake freshness check, the
-helper's build, and each probe have their own 600-second budget;
+helper's lookup and build, and each probe have their own 600-second budget;
 `--timeout SECONDS` sets the helper's and each probe's, which a large
-project may need. The parsed records, at most 512 Mi characters of semantic
+project may need. Probe budgets are not one shared deadline, so a module's
+result matches extracting it alone, and an extraction can run for one probe
+budget per round of parallel probes. Probes run in parallel, one per CPU
+available to the process, at most eight; on a Mathlib project each took about
+10 CPU-seconds and 140 MB of private memory, with the `.olean` files mapped
+and shared. The worker that ran a probe parses its records as soon as it ends
+and drops the raw output, so at most eight probes' raw output, 64 MiB each, is
+held at once. The parsed records, at most 512 Mi characters of semantic
 material per probed module, stay in memory until the report is built. These
 limits are resource controls, not a security or authenticity boundary.
 
