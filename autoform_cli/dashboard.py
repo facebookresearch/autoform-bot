@@ -139,6 +139,7 @@ def live_state_loader(
                 ClaimTransportError,
                 GraphValidationError,
                 OSError,
+                RecursionError,
                 RuntimeProjectionError,
                 ValueError,
             ) as error:

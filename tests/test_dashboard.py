@@ -22,6 +22,7 @@ from autoform_cli.dashboard import (
     serve_dashboard,
 )
 from autoform_cli.render import publication_source_revision
+from tests.undecodable_json import _too_deep_to_decode
 
 
 def _runtime():
@@ -195,6 +196,23 @@ def test_live_overlay_projects_claims_onto_the_bytes_it_compared(
     # The revision matched before the edit, and the title comes from the same capture.
     assert state["source_revision"] == revision
     assert [(item["node_id"], item["title"]) for item in state["claims"]] == [("roadmap", "Roadmap")]
+
+
+def test_live_overlay_reports_a_publication_manifest_nested_too_deep_to_decode(tmp_path: Path) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    # Deeper than the decoder goes up to 3.13; a 3.14 stack that holds it skips.
+    nested = '{"schema": ' + "[" * 32_000 + "]" * 32_000 + "}"
+    if not _too_deep_to_decode(nested):
+        pytest.skip("this stack holds thirty-two thousand nested arrays")
+    (site / "publication.json").write_text(nested, encoding="utf-8")
+
+    state = publication_bound_live_state(
+        SimpleNamespace(list=lambda: []), blueprint_dir=tmp_path, site_dir=site
+    )()
+
+    assert state["claims"] == []
+    assert str(state["error"]).endswith(" while decoding a JSON array from a unicode string")
 
 
 def test_dashboard_handler_serves_static_site_and_no_store_overlay(tmp_path: Path) -> None:

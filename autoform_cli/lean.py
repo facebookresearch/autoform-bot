@@ -6,8 +6,9 @@ nothing is a validation error rather than a broken link -- the job
 ``leanblueprint checkdecls`` does for LaTeX blueprints.
 
 The scanner is a lexical pass, not an elaborator. It tracks ``namespace`` and
-comment nesting, which is enough for declarations written in the ordinary way,
-and deliberately reports nothing it cannot see rather than guessing.
+comment nesting and stops at ``#exit``, which is enough for declarations
+written in the ordinary way, and deliberately reports nothing it cannot see
+rather than guessing.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from ._tree_snapshot import (
 _NAMESPACE = re.compile(r"^\s*namespace\s+(.+)$")
 _SECTION = re.compile(r"^\s*section\b\s*(\S*)")
 _END = re.compile(r"^\s*end\b\s*(\S*)")
+_EXIT = re.compile(r"^\s*#exit\b")
 _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
     r"(?:(?:private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
@@ -94,6 +96,9 @@ class SourceIndex:
     declarations: dict[str, Declaration]
     source_digest: str
     line_counts: dict[Path, int] = field(default_factory=dict)
+    #: For a name more than one file declares, the files after the one
+    #: ``find`` returns.
+    elsewhere: dict[str, tuple[Path, ...]] = field(default_factory=dict)
 
     def find(self, name: str) -> Declaration | None:
         return self.declarations.get(name)
@@ -612,6 +617,7 @@ def _indexed_source_snapshot(
         raise LeanSourceError(f"unsafe Lean source {relative}: {reason}")
 
     declarations: dict[str, Declaration] = {}
+    elsewhere: dict[str, tuple[Path, ...]] = {}
     line_counts: dict[Path, int] = {}
     source_files: list[tuple[Path, bytes]] = []
     digest = hashlib.sha256(b"autoform-lean-source-index/v1\0")
@@ -633,7 +639,9 @@ def _indexed_source_snapshot(
             continue
         line_counts[relative_path] = len(text.splitlines())
         for declaration in _scan(text, relative_path):
-            declarations.setdefault(declaration.name, declaration)
+            first = declarations.setdefault(declaration.name, declaration)
+            if first.path != relative_path and relative_path not in elsewhere.get(declaration.name, ()):
+                elsewhere[declaration.name] = (*elsewhere.get(declaration.name, ()), relative_path)
     source_digest = digest.hexdigest()
     return IndexedSourceSnapshot(
         SourceIndex(
@@ -641,6 +649,7 @@ def _indexed_source_snapshot(
             declarations=declarations,
             source_digest=source_digest,
             line_counts=line_counts,
+            elsewhere=elsewhere,
         ),
         source_digest,
         _lean_generation_revision(snapshot, ignored_roots),
@@ -744,6 +753,9 @@ def _scan(text: str, relative: Path) -> list[Declaration]:
     for number, line in enumerate(_without_lean_comments(text).splitlines(), start=1):
         if not line.strip():
             continue
+        if _EXIT.match(line):
+            # Lean reads nothing after `#exit`.
+            break
 
         namespace_match = _NAMESPACE.match(line)
         if namespace_match:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -308,6 +309,37 @@ def test_rejects_noncanonical_readme_case_with_actionable_error(tmp_path: Path, 
     assert "must be named exactly README.md" in message
 
 
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
+@pytest.mark.parametrize("relative", ["", "chapter"], ids=["roadmap", "chapter"])
+def test_a_roadmap_directory_that_cannot_be_listed_is_refused(tmp_path: Path, relative: str) -> None:
+    """A glob skipped it, and its articles were missing from the graph without a word."""
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    _node(blueprint, "chapter/result.md", "# Result\n")
+    directory = (blueprint / "roadmap" / relative).resolve()
+    directory.chmod(0)
+    try:
+        with pytest.raises(GraphValidationError) as caught:
+            load_graph(blueprint)
+    finally:
+        directory.chmod(0o755)
+
+    assert f"cannot list roadmap directory {directory}: Permission denied" in caught.value.issues
+
+
+def test_a_page_that_cannot_be_decoded_does_not_hide_a_chapter_without_a_readme(tmp_path: Path) -> None:
+    """Any discovery error held the chapter check back, though only a page that cannot be checked needs to."""
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n")
+    _node(blueprint, "chapter/result.md", "# Result\n").write_bytes(b"# Result \xff\n")
+    _roadmap_page(blueprint, "orphan/leaf.md", "# Leaf\n")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert [issue.split(":", 1)[0] for issue in caught.value.issues] == ["chapter/result.md", "orphan"]
+
+
 def test_splits_statement_and_proof_dependencies(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "objects.md", "# Objects\n")
@@ -431,6 +463,28 @@ def test_rejects_formalized_work_the_lean_does_not_show(
         load_graph(blueprint)
 
     assert raised.value.issues == issues
+
+
+def test_a_link_shown_as_indented_code_is_neither_edge_nor_source(tmp_path: Path) -> None:
+    # The page shows an indented block as code, so its links are not on the
+    # page. A list item's indented continuation is still part of the list.
+    blueprint = tmp_path / "blueprint"
+    source = blueprint / "sources" / "paper.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("# Paper\n", encoding="utf-8")
+    for name in ("base", "other", "third"):
+        _node(blueprint, f"chapter/{name}.md", f"# {name.title()}\n")
+    _node(
+        blueprint,
+        "chapter/result.md",
+        "# Result\n\n## Depends on\n\nThe syntax:\n\n    [Base](base.md)\n\n- [Other](other.md)\n\n"
+        "    [Third](third.md)\n\n## Sources\n\nFor example:\n\n    [Paper](../../sources/paper.md#result)\n",
+        origin="cited",
+    )
+
+    node = load_graph(blueprint).nodes["chapter/result"]
+    assert set(node.dependencies) == {"chapter/other", "chapter/third"}
+    assert node.sources == ()
 
 
 def test_records_origin_and_source_links_without_treating_them_as_edges(tmp_path: Path) -> None:

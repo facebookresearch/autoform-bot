@@ -57,6 +57,7 @@ from autoform_cli.skeleton import (
     _project_control_snapshot,
     _without_comments,
     _probe_record_issue,
+    _read_probe_records,
     extract_graph_skeletons,
     extract_skeletons,
     format_report,
@@ -71,6 +72,7 @@ from autoform_cli.skeleton import (
     write_packets,
     write_skeleton_report,
 )
+from tests.undecodable_json import _undecodable_json
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "skeleton-project"
 
@@ -676,6 +678,17 @@ def test_bounded_command_termination_signal_kills_the_process_group(
     assert not survivors
 
 
+def test_unreadable_probe_records_are_refused(tmp_path: Path) -> None:
+    records = tmp_path / "records.out"
+    records.write_bytes(PROBE_MARKER.encode() + b"\xff\n")
+    with pytest.raises(SkeletonError, match="^the skeleton probe's records are not valid UTF-8$"):
+        _read_probe_records(records, "skeleton probe")
+    records.unlink()
+    records.mkdir()
+    with pytest.raises(SkeletonError, match="^the unused-hypotheses probe's records could not be read: "):
+        _read_probe_records(records, "unused-hypotheses probe")
+
+
 def _pid_is_live(pid: int) -> bool:
     try:
         process = psutil.Process(pid)
@@ -922,6 +935,10 @@ def _ambiguous_companion(record: dict[str, object]) -> None:
     [
         (lambda record: record.update(semantic_schema="unknown"), "unsupported semantic schema"),
         (lambda record: record.update(semantic="not JSON"), "invalid elaborated semantic material"),
+        (
+            lambda record: record.update(semantic=_undecodable_json("a-number-too-long")),
+            "invalid elaborated semantic material",
+        ),
         (_unknown_safety, "invalid elaborated semantic material"),
         (_ambiguous_companion, "invalid elaborated semantic material"),
         (lambda record: record["trusted"][0].update(depends=[False]), "invalid depends"),
@@ -1772,6 +1789,29 @@ def test_report_distinguishes_full_and_filtered_blueprint_scope(tmp_path: Path) 
     assert full.to_json() != filtered.to_json()
 
 
+def test_a_root_several_files_declare_fails_closed_naming_every_file(tmp_path: Path) -> None:
+    # Lean accepts a private declaration beside a public one of the same name
+    # in another module, and two unrelated modules may each declare it; the
+    # lexical index cannot tell which one a probe would bind.
+    project = _project(tmp_path)
+    for module, prefix, value in (("Cdup", "", "2 = 2"), ("Adup", "private ", "True"), ("Bdup", "", "1 = 1")):
+        (project / "Skel" / f"{module}.lean").write_text(
+            f"namespace Skel\n{prefix}theorem dup : {value} := sorry\nend Skel\n", encoding="utf-8"
+        )
+    blueprint = _blueprint(tmp_path, lean={"dup": "Skel.dup"})
+    probes: list[str] = []
+
+    def runner(probe: str, root: Path) -> str:
+        probes.append(probe)
+        return _probe_lines({**_fake_found_record(), "root": "Skel.dup", "module": "Skel.Adup"})
+
+    report = extract_skeletons(blueprint, lean_root=project, runner=runner)
+
+    assert probes == [] and report.nodes[0].declarations == ()
+    (issue,) = report.unresolved
+    assert issue.reason == "several source files declare it: Skel/Adup.lean, Skel/Bdup.lean, Skel/Cdup.lean"
+
+
 def test_report_is_identical_across_checkout_roots(tmp_path: Path) -> None:
     first, second = (_fake_report(tmp_path / name) for name in ("first", "second"))
 
@@ -1853,6 +1893,35 @@ def test_report_states_shared_material_once(tmp_path: Path) -> None:
     payload = json.loads(first)
     payload["trusted"]["Skel.Eligible"]["name"] = "Skel.NonAmbiguous"
     _assert_load_rejects(path, payload, "mismatched shared trusted declaration")
+
+
+@pytest.mark.parametrize("damage", ["nested", "a-number-too-long"])
+def test_a_report_or_packet_manifest_that_cannot_be_decoded_is_refused(tmp_path: Path, damage: str) -> None:
+    text = _undecodable_json(damage)
+    path = tmp_path / "skeleton.json"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(SkeletonError, match=f"^cannot read skeleton report {re.escape(str(path))}: "):
+        load_skeleton_report(path)
+
+    packets = tmp_path / "packets"
+    packets.mkdir()
+    (packets / PACKET_MANIFEST).write_text(text, encoding="utf-8")
+    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform packet output"):
+        write_packets(_fake_report(tmp_path), packets)
+    assert (packets / PACKET_MANIFEST).read_text(encoding="utf-8") == text
+
+
+def test_report_loader_refuses_a_lone_surrogate_as_unreadable(tmp_path: Path) -> None:
+    text = _fake_report(tmp_path).to_json()
+    assert '"lean_version":"' in text
+    path = tmp_path / "skeleton.json"
+    path.write_text(text.replace('"lean_version":"', '"lean_version":"\\ud800', 1), encoding="utf-8")
+
+    with pytest.raises(SkeletonError) as refused:
+        load_skeleton_report(path)
+
+    reason = "it escapes a lone surrogate, '\\ud800', which UTF-8 cannot encode"
+    assert refused.value.issues == (f"cannot read skeleton report {path}: {reason}",)
 
 
 def test_report_loader_rejects_scope_tampering(tmp_path: Path) -> None:
@@ -2474,6 +2543,31 @@ def test_project_notation_cannot_disguise_the_statement(tmp_path: Path) -> None:
     assert "a + b" in (trusted.source or "")
     assert '"HMul"' in trusted.semantic and '"hMul"' in trusted.semantic
     assert f"-- canonical kernel material: {trusted.semantic}" in uses_disguised.blind_text()
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_dead_copy_after_exit_does_not_move_a_declaration(tmp_path: Path) -> None:
+    # PktDead sorts first and, after `#exit`, repeats PktLive's theorem, which
+    # Lean never reads.
+    project = _project(tmp_path)
+    (project / "Skel" / "PktLive.lean").write_text(
+        "namespace Skel.PktLive\ntheorem rX : 5 = 5 := rfl\nend Skel.PktLive\n", encoding="utf-8"
+    )
+    (project / "Skel" / "PktDead.lean").write_text(
+        "import Skel.PktLive\n"
+        "namespace Skel.PktDead\ntheorem real : True := trivial\nend Skel.PktDead\n"
+        "#exit\n"
+        "namespace Skel.PktLive\ntheorem rX : 5 = 5 := rfl\nend Skel.PktLive\n",
+        encoding="utf-8",
+    )
+    _build(project, "Skel.PktDead")
+    blueprint = _blueprint(tmp_path, lean={"live": "Skel.PktLive.rX"})
+
+    report = extract_skeletons(blueprint, lean_root=project)
+
+    assert report.clean
+    (declaration,) = report.nodes[0].declarations
+    assert (declaration.module, declaration.path) == ("Skel.PktLive", "Skel/PktLive.lean")
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")

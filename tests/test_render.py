@@ -28,12 +28,15 @@ from autoform_cli.render import (
     PublicationError,
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
+    _document_body,
+    _first_h1,
     load_publication_source,
     publication_source_revision,
     render_site,
 )
 from autoform_cli.status import STATES, derive
 from tests.test_lean_sources import _git_commit
+from tests.undecodable_json import _undecodable_json
 
 
 def _project(tmp_path: Path) -> Path:
@@ -1064,6 +1067,20 @@ def test_render_refuses_to_overwrite_an_unowned_directory(tmp_path: Path) -> Non
         render_site(project / "blueprint", output, lean_root=project)
 
     assert sentinel.read_text(encoding="utf-8") == "user data\n"
+
+
+@pytest.mark.parametrize("damage", ["nested", "a-number-too-long"])
+def test_render_refuses_a_directory_whose_manifest_cannot_be_decoded(tmp_path: Path, damage: str) -> None:
+    text = _undecodable_json(damage)
+    project = _project(tmp_path)
+    output = tmp_path / "out"
+    output.mkdir()
+    (output / PUBLICATION_MANIFEST).write_text(text, encoding="utf-8")
+
+    with pytest.raises(PublicationError, match="non-Autoform output directory"):
+        render_site(project / "blueprint", output, lean_root=project)
+
+    assert (output / PUBLICATION_MANIFEST).read_text(encoding="utf-8") == text
 
 
 def test_render_refuses_an_output_symlink(tmp_path: Path) -> None:
@@ -2363,3 +2380,10 @@ def test_an_edit_during_a_render_publishes_the_captured_generation(
 
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert "The main result." in chapter and "Edited mid-render." not in chapter
+
+
+def test_a_heading_shown_as_code_is_not_a_page_title() -> None:
+    text = "```markdown\n# Not the title\n```\n\n# Title\n\nBody.\n"
+
+    assert _first_h1(text) == "Title"
+    assert _document_body(text).startswith("```markdown\n# Not the title\n```")
