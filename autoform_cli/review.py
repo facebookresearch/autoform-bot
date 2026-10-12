@@ -246,7 +246,7 @@ def build_review_bundle(graph: Graph, skeleton: SkeletonReport) -> ReviewBundle:
     compared with them.
 
     The bundle must also be one ``write_review_bundle`` would write, so a
-    check or audit that derives it instead of reading a prepared one refuses
+    check or render that derives it instead of reading a prepared one refuses
     what ``review prepare`` refuses, such as a blank source passage.
     """
 

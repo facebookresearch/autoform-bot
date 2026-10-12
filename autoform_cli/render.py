@@ -37,7 +37,9 @@ from .markdown import NOTES_BOX, PAGE_SUFFIXES, STATEMENT_BOX, boxed, statement_
 from .markdown import outside_fences as _outside_fences
 from .mathjax import MATHJAX_SCRIPT, TEX_MACROS, in_the_way, mathjax_script
 from .publishable import publishable_article
-from .readback import READBACKS_DIR
+from .readback import READBACKS_DIR, Readback, load_readbacks, readback_for, render_testimony
+from .review import ReviewBundle, ReviewError, ReviewDeclaration, validate_review_bundle
+from .skeleton import DeclarationSkeleton, SkeletonReport
 from .snapshot import BlueprintSnapshot, SnapshotError, read_regular_file
 from .status import is_definition
 
@@ -401,7 +403,7 @@ def _publication(
     statements: dict[str, tuple[str, str]] = {}
     for node_id, node in graph.nodes.items():
         # The text the graph parsed, so a page shows the article its status
-        # describes.
+        # and any review disclosure describe.
         leaf = node.formalizable and node_id not in containers
         text, found = published(
             graph.article_text(node), node.path, targets[node_id][0], taken[node_id], whole=not leaf
@@ -549,6 +551,9 @@ def render_site(
     repository_url: str | None = None,
     ref: str | None = None,
     clean: bool = True,
+    skeleton: SkeletonReport | None = None,
+    review_bundle: ReviewBundle | None = None,
+    readbacks: dict[tuple[str, str], Readback] | None = None,
 ) -> RenderReport:
     """Write deterministic, read-only projections of the Markdown blueprint.
 
@@ -556,6 +561,11 @@ def render_site(
     reader surfaces over it: a book, derived progress, and multiscale dependency
     maps. Publication excludes hidden and operational files, rejects symlinks,
     and never embeds timestamps or machine-specific paths.
+
+    ``readbacks``, when given, are the cards a caller validated
+    ``review_bundle`` with, shown instead of reading the vault again. The
+    review is refused unless the articles, loaded after that check, and the
+    sources they cite are the blueprint ``skeleton`` was extracted from.
 
     Every input is read once: pages, copied files, page order, and the
     revision hash all come from one capture, so a file written during the
@@ -572,6 +582,18 @@ def render_site(
         )
     graph = load_graph(blueprint)
     snapshot = _capture_publication(blueprint, graph)
+    if review_bundle is not None:
+        if skeleton is None:
+            raise PublicationError(["a review bundle requires a freshly extracted skeleton report"])
+        review_issues = validate_review_bundle(graph, review_bundle, skeleton)
+        if review_issues:
+            raise PublicationError(
+                [f"{issue.node_id}: {issue.code}: {issue.reason}" for issue in review_issues]
+            )
+    elif skeleton is not None:
+        raise PublicationError(
+            ["a skeleton report alone is not review evidence; pass a validated review bundle"]
+        )
     coverage, coverage_issues = load_coverage(blueprint, snapshot=snapshot)
     if coverage_issues:
         raise PublicationError(
@@ -599,6 +621,10 @@ def render_site(
     statuses = status.derive(graph)
     numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
+    if review_bundle is None:
+        readbacks = {}
+    elif readbacks is None:
+        readbacks = load_readbacks(blueprint)
 
     _prepare_destination(destination, clean=clean)
     _write_publication_manifest(
@@ -663,6 +689,9 @@ def render_site(
             node_sources=node_sources,
             containers=containers,
             statements=site.statements,
+            skeleton=skeleton,
+            review_bundle=review_bundle,
+            readbacks=readbacks,
         )
         page.write_text(chapter, encoding="utf-8")
         if narrative is None:  # a milestone with no narrative page of its own
@@ -1823,6 +1852,9 @@ def _render_chapter(
     node_sources: dict[Path, str],
     containers: frozenset[str],
     statements: dict[str, tuple[str, str]],
+    skeleton: SkeletonReport | None,
+    review_bundle: ReviewBundle | None,
+    readbacks: dict[tuple[str, str], Readback],
 ) -> tuple[str, int, list[str]]:
     """Render one narrative article with statements at its authored link slots."""
     links = _anchored_links(targets, page)
@@ -1843,6 +1875,9 @@ def _render_chapter(
             repo_root=repo_root,
             destination=destination,
             statements=statements,
+            skeleton=skeleton,
+            review_bundle=review_bundle,
+            readbacks=readbacks,
         )
         environments[node_id] = environment
         linked += node_linked
@@ -1973,6 +2008,9 @@ def _render_environment(
     repo_root: Path,
     destination: Path,
     statements: dict[str, tuple[str, str]],
+    skeleton: SkeletonReport | None,
+    review_bundle: ReviewBundle | None,
+    readbacks: dict[tuple[str, str], Readback],
 ) -> tuple[str, int, list[str]]:
     node_status = statuses[node.id]
     caption, _, number = numbers[node.id].rpartition(" ")
@@ -2031,8 +2069,140 @@ def _render_environment(
         lines.append(meta)
     if dependencies:
         lines.append(dependencies)
+    if skeleton is not None and review_bundle is not None:
+        review = _review_disclosure(node, skeleton, review_bundle, readbacks)
+        if review:
+            lines.extend(["", review, ""])
     lines.append("</div>")
     return "\n".join(lines), linked, unresolved
+
+
+def _review_disclosure(
+    node: Node,
+    skeleton: SkeletonReport,
+    bundle: ReviewBundle,
+    readbacks: dict[tuple[str, str], Readback],
+) -> str:
+    """Show what a reviewer must trust, and what a blind auditor says it means.
+
+    The approval hash covers the prepared bundle and the read-backs; a match
+    says only that nothing changed, so it is shown as self-approved.
+    """
+
+    record = skeleton.node(node.id)
+    article = bundle.article(node.article_id) if node.article_id is not None else None
+    if record is None or article is None or not record.declarations:
+        return ""
+    count = len(record.declarations)
+    lines_to_read = sum(item.skeleton_lines for item in record.declarations)
+    try:
+        expected_approval = bundle.review_hash(article.article_id, readbacks)
+    except ReviewError:
+        expected_approval = None
+    if node.review_approved is None:
+        ready = "not yet approved" if expected_approval is None else f"ready to approve · {expected_approval}"
+        approval = ("bp-review-open", ready)
+    elif expected_approval is None:
+        approval = ("bp-review-drift", "approval cannot be verified because testimony is incomplete or invalid")
+    elif node.review_approved == expected_approval:
+        approval = ("bp-review-self-approved", f"self-approved · {expected_approval}")
+    else:
+        approval = (
+            "bp-review-drift",
+            f"approval {node.review_approved} does not match the current complete review {expected_approval}",
+        )
+    summary = (
+        f"Review · {count} skeleton{'s' if count != 1 else ''}, {lines_to_read} lines to trust · "
+        f'<span class="{approval[0]}">{html.escape(approval[1])}</span>'
+    )
+    parts = ['<details class="bp-review" markdown="1">', f"<summary>{summary}</summary>", ""]
+    parts.extend(
+        [
+            '<div class="bp-skeleton-meta">',
+            _render_rows(
+                [("Prepared evidence", f"<code>{html.escape(article.evidence_hash)}</code>")],
+                css_class="bp-skeleton-meta",
+            ),
+            "</div>",
+            "",
+        ]
+    )
+    if article.passage is not None:
+        locator = article.passage_locator or "cited source"
+        parts.extend(
+            [
+                '<div class="bp-skeleton">',
+                f'<div class="bp-skeleton-title">Source passage · {html.escape(locator)}</div>',
+                f'<pre><code>{html.escape(article.passage)}</code></pre>',
+                "</div>",
+                "",
+            ]
+        )
+    for declaration in record.declarations:
+        prepared = article.declaration(declaration.name)
+        assert prepared is not None
+        parts.extend(_skeleton_block(declaration, prepared))
+        readback = readback_for(readbacks, article.article_id, declaration.name)
+        parts.extend(_readback_block(declaration, readback))
+    parts.append("</details>")
+    return "\n".join(parts)
+
+
+def _skeleton_block(
+    declaration: DeclarationSkeleton,
+    prepared: ReviewDeclaration | None = None,
+) -> list[str]:
+    # This is the evidence whose hash the card records. Reconstructing a
+    # friendlier view here can show comments or source text that were never in
+    # the blind packet, while still labelling it with the packet's hash.
+    packet_text = declaration.blind_text() if prepared is None else prepared.packet
+    packet_hash = declaration.evidence_hash if prepared is None else prepared.packet_hash
+    packet = html.escape(packet_text.rstrip("\n"))
+    rows = [
+        ("Skeleton", f"<code>{html.escape(declaration.hash)}</code> · {declaration.skeleton_lines} lines"),
+        ("Packet", f"<code>{html.escape(packet_hash)}</code>"),
+        ("Assumes", ", ".join(f"<code>{html.escape(name)}</code>" for name in declaration.assumed) or "nothing beyond Lean core"),
+        ("Axioms", ", ".join(f"<code>{html.escape(name)}</code>" for name in declaration.axioms) or "none"),
+    ]
+    return [
+        '<div class="bp-skeleton">',
+        f'<div class="bp-skeleton-title">{html.escape(declaration.kind)} <code>{html.escape(declaration.name)}</code></div>',
+        f'<pre class="bp-lean"><code>{packet}</code></pre>',
+        _render_rows(rows, css_class="bp-skeleton-meta"),
+        "</div>",
+        "",
+    ]
+
+
+def _readback_block(declaration: DeclarationSkeleton, readback: Readback | None) -> list[str]:
+    if readback is None:
+        return [
+            '<div class="bp-readback bp-readback-missing">No read-back filed for this skeleton yet.</div>',
+            "",
+        ]
+    validation_errors = readback.validate(declaration)
+    model = f" · {html.escape(readback.model)}" if readback.model else ""
+    if validation_errors:
+        label = "invalid · " + "; ".join(validation_errors)
+        return [
+            '<div class="bp-readback bp-readback-invalid">',
+            f'<div class="bp-readback-title">Read-back{model} · '
+            f'<span class="bp-readback-status">{html.escape(label)}</span></div>',
+            f"<pre><code>{html.escape(readback.text)}</code></pre>",
+            "</div>",
+            "",
+        ]
+    # Shown as render_testimony made it, which is what the card was validated
+    # on. The card's <div> has no markdown attribute, so the page's parser
+    # leaves it alone; the body starts on the title's line and puts no
+    # block-level tag at a line start, which that parser would take as a block.
+    return [
+        '<div class="bp-readback bp-readback-current">',
+        f'<div class="bp-readback-title">Read-back{model} · <span class="bp-readback-status">current</span></div>'
+        + render_testimony(readback.text),
+        "</div>",
+        "",
+    ]
 
 
 def _lean_presentation(
@@ -2245,6 +2415,8 @@ def _stylesheet() -> str:
   --bp-rule: #CED0D4;
   --bp-surface: #FFFFFF;
   --bp-sunken: #F0F2F5;
+  --bp-page: #FFFFFF;
+  --bp-scroll-shade: rgba(5, 5, 5, 0.22);
   --bp-link: #0064E0;
   --bp-link-hover: #0082FB;
   --bp-blue: #0064E0;
@@ -2259,6 +2431,8 @@ def _stylesheet() -> str:
   --bp-rule: #3E4042;
   --bp-surface: #242526;
   --bp-sunken: #1C1D1F;
+  --bp-page: #18191A;
+  --bp-scroll-shade: rgba(228, 230, 235, 0.3);
   --bp-link: #2D88FF;
   --bp-link-hover: #7FB8FF;
   --bp-blue: #2D88FF;
@@ -2769,6 +2943,58 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-dependencies summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
 .bp-dependency-body {{ margin-top: 0.35rem; color: var(--bp-fg); }}
+.bp-review {{
+  margin: 0.65rem 0 0 2rem;
+  font-family: {sans};
+  font-size: 0.82rem;
+  color: var(--bp-muted);
+}}
+.bp-review summary {{
+  width: fit-content;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  color: var(--bp-link);
+  user-select: none;
+}}
+.bp-review summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+.bp-review-self-approved {{ color: var(--bp-muted); font-style: italic; }}
+.bp-review-open {{ color: var(--bp-muted); }}
+.bp-review-drift {{ color: #B77900; font-weight: 600; }}
+.bp-skeleton {{ margin-top: 0.6rem; color: var(--bp-fg); }}
+.bp-skeleton-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
+.bp-lean {{
+  margin: 0 0 0.4rem;
+  padding: 0.6rem 0.8rem;
+  font-family: {mono};
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  border-left: 3px solid var(--bp-rule);
+}}
+.bp-skeleton-meta {{ margin-bottom: 0.5rem; }}
+.bp-readback {{
+  margin: 0.4rem 0 1rem;
+  padding: 0.6rem 0.8rem;
+  color: var(--bp-fg);
+  border-left: 3px solid #0064E0;
+  overflow-x: auto;
+}}
+/* A card, or a formula in it, too wide for the page scrolls, with a shade at
+   each edge it can scroll toward: covers in the review panel's color scroll
+   with the content and hide the shade at the end it has reached. */
+.bp-readback, .bp-readback div.arithmatex {{
+  background:
+    linear-gradient(to right, var(--md-admonition-bg-color, var(--bp-page)) 40%, transparent) left / 1.5rem 100% no-repeat local,
+    linear-gradient(to left, var(--md-admonition-bg-color, var(--bp-page)) 40%, transparent) right / 1.5rem 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, var(--bp-scroll-shade), transparent) left / 0.6rem 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--bp-scroll-shade), transparent) right / 0.6rem 100% no-repeat scroll;
+  background-color: var(--md-admonition-bg-color, var(--bp-page));
+}}
+.bp-readback-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
+.bp-readback-status {{ font-weight: 400; color: var(--bp-muted); }}
+.bp-readback-invalid {{ border-left-color: #B42318; }}
+.bp-readback-missing {{ border-left-color: var(--bp-rule); font-style: italic; }}
 /* A formula paints only within its own band, its box plus the slack its
    glyphs need, which a negative margin gives back. Across, it paints as TeX
    sets it, laps included, but only inside the block that holds it, and a

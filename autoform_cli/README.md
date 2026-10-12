@@ -103,7 +103,7 @@ An article asserts only facts a human or agent verified:
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
 | `lean: Ns.decl` | Declaration name(s) that discharge the article. |
 | `discussion: 42` | Issue number or URL where the article is being discussed. |
-| `article_id: af_...` | Durable identity, `af_` plus 24 lowercase hex digits; `autoform work` requires it on unfinished formalizable leaves, `review record` on the articles it records, and `review prepare`, `review check` and the review flags of `audit` on every Lean-mapped article. |
+| `article_id: af_...` | Durable identity, `af_` plus 24 lowercase hex digits; `autoform work` requires it on unfinished formalizable leaves, `review record` on the articles it records, and `review prepare`, `review check` and the review flags of `audit` and `render` on every Lean-mapped article. |
 | `review_approved: sha256:<64 hex>` | The hash of the complete review surface someone approved for this article. It shows that surface is unchanged, not who approved it. |
 | `open_statements: allowed` | Project policy, valid only in `roadmap/README.md`: a theorem's statement may land with a `sorry` proof (see [Open statements](#open-statements)). Absent or `forbidden` keeps the strict policy. |
 
@@ -621,7 +621,8 @@ digits), code points the checking Python's Unicode data leaves unassigned,
 named with that data's version, more than four combining marks on one
 character or more than two above or below it, a combining mark with no
 character before it, TeX comments, and raw HTML are rejected. Testimony is
-rendered once, by a Markdown renderer that reads no HTML.
+rendered once, by a Markdown renderer that reads no HTML, and the site shows
+that rendering byte for byte, so what was validated is what a reviewer sees.
 Code is shown as typed. Outside code, formulas included, HTML tags, comments,
 declarations, autolinks, and character references are refused by name, since a
 Markdown viewer of the vault would read them. Links, link definitions, images,
@@ -806,15 +807,18 @@ autoform review record blueprint --lean-root . --bundle review.json \
   --testimony read-back.md --model muse-spark-1.1
 autoform review check blueprint --lean-root . --bundle review.json
 autoform audit blueprint --lean-root . --review-bundle review.json
+autoform render blueprint --lean-root . --review-bundle review.json
 autoform review check blueprint --lean-root .
 autoform audit blueprint --lean-root . --review
+autoform render blueprint --lean-root . --review
 ```
 
 `review prepare` extracts Lean evidence from the current built tree and writes
 a strict, versioned bundle plus opaque packets. The bundle contains the exact
 article titles and statements, cited passages, declaration mapping, and packet bytes, but
 not the later testimony. Every Lean-mapped review article must be a
-declaration-sized leaf. An article marked `origin: cited` must link
+declaration-sized leaf so its evidence appears in the rendered site. An article
+marked `origin: cited` must link
 to an in-vault, non-Markdown source snapshot with an exact
 `#L<start>-L<end>` range; preparation refuses a citation it cannot put before
 the reviewer. `review record` rechecks the selected current article
@@ -846,7 +850,7 @@ there is none. When the article was deleted meanwhile, or replaced by something
 other than a regular file, such as a directory or FIFO, it must be restored,
 and one made unreadable must be readable again.
 
-`review check` and `audit` re-extract the
+`review check`, `audit`, and `render` re-extract the
 current Lean evidence and reject unresolved, partial, foreign, or stale
 bundles. `review check` also requires complete current cards and matching human
 approvals, and judges them as one state of the blueprint: it reads the
@@ -857,16 +861,20 @@ unchanged when it ends. An edit that breaks any of these comparisons fails the
 check with `review-snapshot-changed` rather than mixing old and new evidence;
 run it again once the blueprint is idle. These are comparisons, not a lock: a
 change restored between two of them goes unseen, and an edit after the last
-does not affect a verdict already reached. `audit --review` and
-`audit --review-bundle` make the same check, then judge the cards it validated
-rather than reading them again. They load the articles again to audit them, and
-an edit to any article or cited source since the check fails them with
-`review-snapshot-changed` too; what they audit is the bytes that second load
-read. Without `--bundle`, `review check` derives the bundle from its own
-extraction, and `audit --review` does the same: each extracts the tree once
-instead of once to prepare and again to check. Each review command that
-extracts Lean, plus review-enabled `audit`, accepts the same
-`--timeout SECONDS` probe override as `skeleton`.
+does not affect a verdict already reached. `audit --review`,
+`audit --review-bundle`, `render --review`, and `render --review-bundle` make
+the same check, then judge or show the cards it validated rather than reading
+them again. They load the articles again to audit or render them, and an edit
+to any article or cited source since the check fails them with
+`review-snapshot-changed` too; what they audit or render is the bytes that
+second load read. The rendered review disclosure uses the same packet bytes
+that were hashed, never a reconstructed or comment-bearing approximation.
+Read-back cards are absorbed into their article and are not published as
+standalone pages. Without `--bundle`, `review check` derives the bundle from
+its own extraction, and `render --review` and `audit --review` do the same:
+each extracts the tree once instead of once to prepare and again to check.
+Each review command that extracts Lean, plus review-enabled `audit` and
+`render`, accepts the same `--timeout SECONDS` probe override as `skeleton`.
 
 Newly scaffolded projects commit the versioned `.autoform-review` policy marker,
 so generated CI enforces this gate from the first formalized statement. Older
@@ -1101,8 +1109,10 @@ example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 `render` also writes `javascripts/mathjax.js`, the site's MathJax
 configuration, on every build; list it in `mkdocs.yml` and nothing else for
 MathJax. It loads MathJax 3.2.2, the release the read-back checks were written
-for, and refuses to typeset with any other. The articles on a page share one
-TeX input, with the
+for, and refuses to typeset with any other. Another script in `mkdocs.yml`
+cannot replace that configuration: an assignment to `window.MathJax`, such as
+the snippet Material's documentation gives, is ignored with an error in the
+browser console. The articles on a page share one TeX input, with the
 packages base, ams, noundefined, boldsymbol, cancel, and
 mathtools, and the project's macros from `blueprint/tex-macros.json`, written
 as MathJax's `tex.macros` is: a name maps to a body, `[body, arguments]`, or
@@ -1110,8 +1120,10 @@ as MathJax's `tex.macros` is: a name maps to a body, `[body, arguments]`, or
 backslash, which MathJax would join to the text after it into one command.
 `check` and `render` judge and build the script from the copy of
 `tex-macros.json` that `render` reads once and publishes beside it, so an edit
-made during a render reaches neither. That input, and `check`, read only the
-formulas the site's Markdown marks, such as
+made during a render reaches neither. Each read-back card is typeset with a
+TeX input of its own that knows only base, ams, and noundefined, so nothing an
+article, another card, or the project's macros define reaches it. These
+inputs, and `check`, read only the formulas the site's Markdown marks, such as
 `$...$` or `$$...$$` in an article, or `` $`...`$ `` and a ```` ```math ````
 fence, the forms GitHub also shows as formulas. Other text, such as a
 statement's title in its heading, a `discussion:` value, the lead on the home
@@ -1119,7 +1131,8 @@ page, the navigation, and a table of contents, is shown as typed, TeX and all.
 Every formula paints only within its own line and the block that holds it,
 with either renderer and any theme, so no article formula can cover a card, a
 mark, or the text beside it. An inline formula wider than its paragraph is cut
-at the paragraph's edge, so write one that wide as a display, which scrolls.
+at the paragraph's edge, so write one that wide as a display, which scrolls,
+as does a card too wide for the page.
 
 A project scaffolded before `render` wrote that file keeps a
 `blueprint/javascripts/mathjax.js` and lists the MathJax bundle in `mkdocs.yml`

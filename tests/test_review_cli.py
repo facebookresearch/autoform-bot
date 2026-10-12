@@ -13,8 +13,10 @@ import pytest
 
 from autoform_cli.__main__ import _current_review, main
 from autoform_cli.graph import Graph, load_graph
-from autoform_cli.readback import load_readbacks
-from autoform_cli.review import REVIEW_PACKET_SCHEMA, load_review_bundle
+from autoform_cli.markdown import site_converter
+from autoform_cli.readback import load_readbacks, render_testimony
+from autoform_cli.render import PublicationError, render_site
+from autoform_cli.review import REVIEW_PACKET_SCHEMA, load_review_bundle, validate_review_bundle
 from autoform_cli.skeleton import (
     NodeSkeleton,
     SkeletonError,
@@ -175,7 +177,7 @@ def test_review_cli_prepares_records_and_checks_exact_evidence(
     assert [call.get("timeout") for call in calls] == [1800.0] * 4
 
 
-def test_check_derives_the_bundle_from_its_own_extraction(
+def test_check_and_render_derive_the_bundle_from_their_own_extraction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -201,9 +203,16 @@ def test_check_derives_the_bundle_from_its_own_extraction(
     assert "OK: statement reviews match" in capsys.readouterr().out
     assert [call.get("node_ids") for call in calls] == [None, None]
 
+    site = tmp_path / "site"
+    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 0
+    assert [call.get("node_ids") for call in calls] == [None, None, None]
+    pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
+    assert "For the unique proposition, the proposition is true." in pages
+    assert "bp-readback-current" in pages
+
 
 @pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "whitespace"])
-def test_check_refuses_the_blank_passage_prepare_refuses(
+def test_check_and_render_refuse_the_blank_passage_prepare_refuses(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -211,8 +220,9 @@ def test_check_refuses_the_blank_passage_prepare_refuses(
 ) -> None:
     """A bundle derived without prepare is held to the rules prepare writes by.
     An article not marked cited may cite only blank lines, empty or spaces;
-    prepare refuses that passage, so check refuses it too, even with a current
-    card and the approval an unchecked derived bundle would offer."""
+    prepare refuses that passage, so check and render refuse it too, even with
+    a current card and the approval an unchecked derived bundle would offer,
+    rather than publish an empty passage."""
 
     blueprint = _blueprint(tmp_path)
     article = blueprint / "roadmap/basics/result.md"
@@ -251,6 +261,110 @@ def test_check_refuses_the_blank_passage_prepare_refuses(
     assert captured.err == refused
     assert "OK:" not in captured.out
 
+    site = tmp_path / "site"
+    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 1
+    assert capsys.readouterr().out == refused
+    assert not site.exists()
+
+
+def _published_card(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    testimony: str,
+    *,
+    article_extra: str = "",
+) -> tuple[str, str]:
+    """File ``testimony`` through the CLI, render the review site, and convert
+    the chapter page as the published site does. Return the page's HTML and
+    the card's testimony within it."""
+
+    blueprint = _blueprint(tmp_path)
+    if article_extra:
+        article = blueprint / "roadmap/basics/result.md"
+        article.write_text(
+            article.read_text(encoding="utf-8").replace("itself.\n", f"itself.\n\n{article_extra}\n"),
+            encoding="utf-8",
+        )
+    _extract_as(monkeypatch)
+    code, _, _ = _prepare_and_record(tmp_path, blueprint, testimony=testimony)
+    assert code == 0, capsys.readouterr().err
+    site = tmp_path / "site"
+    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 0
+    capsys.readouterr()
+    page = (site / "roadmap/basics/README.md").read_text(encoding="utf-8")
+    published = site_converter().convert(page)
+    title = '<span class="bp-readback-status">current</span></div>'
+    start = published.index(title) + len(title)
+    return published, published[start : published.index("\n</div>\n</details>", start)]
+
+
+@pytest.mark.parametrize(
+    ("testimony", "shown"),
+    [
+        # A block quote around indented code: code, so never typeset.
+        (
+            "The statement says $P$ holds.\n\n>     $\\phantom{not}$ x\n",
+            '<blockquote><pre class="highlight"><code>$\\phantom{not}$ x</code></pre>',
+        ),
+        # Code and prose escaped once, not twice.
+        (
+            "Here `a < b && c` holds, and AT&T.\n\n```lean\ntheorem t : 1 < 2 := by decide\n```\n",
+            '<p>Here <code>a &lt; b &amp;&amp; c</code> holds, and AT&amp;T.</p>'
+            '<pre class="highlight"><code class="language-lean">theorem t : 1 &lt; 2 := by decide</code></pre>',
+        ),
+        (
+            "- For $a<b$, `c`\n- and\n\n    1. nested\n\n| a | b |\n|:--|--:|\n| $x$ | y |\n\n"
+            "$$\nx \\le y\n$$\n\nIt costs \\$5.\n",
+            '<span class="arithmatex">\\(a&lt;b\\)</span>',
+        ),
+    ],
+)
+def test_the_site_shows_the_testimony_exactly_as_it_was_validated(
+    testimony: str,
+    shown: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The card validates what render_testimony makes of the testimony, so
+    the published page must show those bytes and nothing the page's own
+    Markdown makes of them."""
+
+    _, card = _published_card(tmp_path, monkeypatch, capsys, testimony)
+
+    assert card == render_testimony(testimony)
+    assert shown in card
+
+
+def test_testimony_cannot_link_through_the_page_s_link_definitions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    published, card = _published_card(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        "I checked [the Lean statement][src] and [src] against the text.\n",
+        article_extra="See the source.\n\n[src]: https://example.test/elsewhere",
+    )
+
+    assert "https://example.test/elsewhere" not in published
+    assert card == "<p>I checked [the Lean statement][src] and [src] against the text.</p>"
+
+
+def test_render_takes_one_source_of_review_evidence(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    blueprint = _blueprint(tmp_path)
+
+    with pytest.raises(SystemExit) as refused:
+        main(["render", str(blueprint), "--review", "--review-bundle", str(tmp_path / "review.json")])
+    assert refused.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
+
+    assert main(["render", str(blueprint), "--review", "--output", str(tmp_path / "site")]) == 2
+    assert "--review requires --lean-root" in capsys.readouterr().err
+
 
 def test_audit_takes_one_source_of_review_evidence(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     blueprint = _blueprint(tmp_path)
@@ -282,6 +396,7 @@ def test_record_needs_every_record_flag(tmp_path: Path, capsys: pytest.CaptureFi
     [
         (["audit", "blueprint", "--lean-root", ".", "--review-bundle", "review.json"], 2),
         (["audit", "blueprint", "--lean-root", ".", "--review"], 2),
+        (["render", "blueprint", "--lean-root", ".", "--review"], 1),
     ],
 )
 def test_review_consumers_forward_probe_timeout(
@@ -1128,6 +1243,66 @@ def test_check_judges_the_graph_and_cards_it_compared(
     assert "OK:" in capsys.readouterr().out
 
 
+def test_render_review_shows_the_readbacks_its_check_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The cards rendered are the snapshot the review was validated against, not a later read."""
+
+    blueprint = _approved_articles(tmp_path, monkeypatch, _Extraction())
+
+    def read_again(*args: object, **kwargs: object) -> object:
+        raise AssertionError("render read the read-backs again after validating the review")
+
+    monkeypatch.setattr("autoform_cli.render.load_readbacks", read_again)
+    site = tmp_path / "site"
+    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 0
+    pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
+    assert "The statement Review.result asserts True." in pages
+    assert '<span class="bp-review-self-approved">self-approved · sha256:' in pages
+
+
+def test_render_refuses_articles_edited_after_the_review_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """render_site loads the articles itself, after the check: they must be the ones
+    the checked extraction saw, or the cards it was handed describe another state."""
+
+    blueprint = _approved_articles(tmp_path, monkeypatch, _Extraction())
+    _, skeleton, bundle, cards = _current_review(blueprint, lean_root=tmp_path, bundle_path=None)
+    article = blueprint / "roadmap" / "basics" / "result.md"
+    _approve(article, "sha256:" + "f" * 64)
+    site = tmp_path / "site"
+
+    with pytest.raises(PublicationError, match="the blueprint changed after its review evidence was extracted"):
+        render_site(blueprint, site, lean_root=tmp_path, skeleton=skeleton, review_bundle=bundle, readbacks=cards)
+    assert not site.exists()
+
+
+def test_render_shows_the_statement_its_review_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A statement written after render validated the review must not appear in
+    that review's box as the approved statement; the render publishes the
+    statement it validated."""
+
+    blueprint = _approved_articles(tmp_path, monkeypatch, _Extraction())
+    article = blueprint / "roadmap" / "basics" / "result.md"
+
+    def validate_then_rewrite(*args: object, **kwargs: object) -> object:
+        findings = validate_review_bundle(*args, **kwargs)
+        _write_statement(article, "Every object is different from itself.")
+        return findings
+
+    monkeypatch.setattr("autoform_cli.render.validate_review_bundle", validate_then_rewrite)
+    site = tmp_path / "site"
+    capsys.readouterr()
+
+    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 0
+    pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
+    assert "different from itself" not in pages
+    assert "Every object is equal to itself." in pages
+
+
 def _audit(blueprint: Path, root: Path, *, evidence: tuple[str, ...] | None = None) -> int:
     """Audit over Lean sources that declare both targets, so that only review
     evidence can fail it. That evidence is the bundle `_prepared_records` wrote,
@@ -1276,7 +1451,7 @@ def test_a_pasted_current_hash_is_only_self_approved(
     pass. Matching the hash proves the review is current, not who approved it."""
 
     def no_network(*args: object, **kwargs: object) -> object:
-        raise AssertionError("an unauthenticated check used the network")
+        raise AssertionError("an unauthenticated check or render used the network")
 
     monkeypatch.setattr("urllib.request.urlopen", no_network)
     # _approved_articles pastes exactly the hash the tooling computes.
@@ -1286,6 +1461,12 @@ def test_a_pasted_current_hash_is_only_self_approved(
     output = capsys.readouterr().out
     assert "basics/result: self-approved · sha256:" in output
     assert "approved by" not in output
+
+    site = tmp_path / "site"
+    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 0
+    pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
+    assert pages.count('<span class="bp-review-self-approved">self-approved · sha256:') == 2
+    assert re.search(r"(?<!self-)approved ·", pages) is None
 
 
 def test_a_card_directory_that_cannot_be_listed_is_an_error_not_missing_cards(

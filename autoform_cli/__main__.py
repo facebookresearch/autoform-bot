@@ -397,6 +397,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="fail when a 'lean:' declaration is not found in the Lean sources",
     )
+    render_review = render.add_mutually_exclusive_group()
+    render_review.add_argument(
+        "--review-bundle",
+        type=Path,
+        help="prepared current-tree review evidence; adds validated review disclosures",
+    )
+    render_review.add_argument(
+        "--review",
+        action="store_true",
+        help="add review disclosures from evidence derived in this run, without a prepared bundle",
+    )
+    _add_probe_timeout_argument(render)
 
     args = parser.parse_args(argv)
 
@@ -1466,11 +1478,12 @@ def _current_review(
     here, which covers the time before it took its own snapshot. Cards are not
     articles, so they are read again afterwards and must be unchanged. Callers
     judge the cards returned here rather than reading the vault again. Article
-    text and source passages used later, such as a statement compared, are
-    the bytes the graph captured. A caller that loads the articles again, as
-    audit does, is held to the same state by ``build_review_bundle``, which
-    refuses a skeleton report paired with a blueprint, cited sources included,
-    other than the one it was extracted from.
+    text and source passages used later, such as a statement compared or
+    rendered, are the bytes the graph captured. A caller that loads the
+    articles again, as render and audit do, is held to the same state by
+    ``build_review_bundle``, which refuses a skeleton report paired with a
+    blueprint, cited sources included, other than the one it was extracted
+    from.
     """
 
     graph = load_graph(blueprint_dir)
@@ -1548,14 +1561,29 @@ def _default_claim_scratch(repo: str, worker_id: str) -> Path:
 
 def _render(args: argparse.Namespace) -> int:
     try:
+        skeleton = bundle = cards = None
+        if args.review_bundle is not None or args.review:
+            if args.lean_root is None:
+                flag = "--review" if args.review else "--review-bundle"
+                print(f"error: {flag} requires --lean-root", file=sys.stderr)
+                return 2
+            _, skeleton, bundle, cards = _current_review(
+                args.blueprint_dir,
+                lean_root=args.lean_root,
+                bundle_path=args.review_bundle,
+                timeout=args.timeout,
+            )
         report = render_site(
             args.blueprint_dir,
             args.output,
             lean_root=args.lean_root,
             repository_url=args.repository_url,
             ref=args.ref,
+            skeleton=skeleton,
+            review_bundle=bundle,
+            readbacks=cards,
         )
-    except (GraphValidationError, PublicationError) as exc:
+    except (GraphValidationError, PublicationError, ReviewError, SkeletonError) as exc:
         for issue in exc.issues:
             print(f"error: {issue}")
         return 1

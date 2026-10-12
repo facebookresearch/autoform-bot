@@ -26,6 +26,7 @@ _EXAMPLE = _ROOT / "skills/setup/assets/cabannes-thesis-project"
 _BASE = "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5"
 _BUNDLE = f"{_BASE}/tex-mml-chtml.js"
 _PAGE_PACKAGES = ["base", "ams", "noundefined", "boldsymbol", "cancel", "mathtools", "configmacros"]
+_CARD_PACKAGES = ["base", "ams", "noundefined"]
 _MACROS = {"RR": "\\mathbb{R}", "norm": ["\\left\\lVert #1 \\right\\rVert", 1]}
 
 #: The javascripts/mathjax.js ``autoform init`` wrote before render wrote its own.
@@ -88,6 +89,8 @@ def test_render_writes_the_site_mathjax_configuration(tmp_path: Path) -> None:
     assert settings["bundle"] == _BUNDLE
     assert {"ui/safe", "[tex]/boldsymbol", "[tex]/cancel", "[tex]/mathtools"} <= set(settings["load"])
     assert settings["page"]["packages"] == _PAGE_PACKAGES
+    assert settings["card"]["packages"] == _CARD_PACKAGES
+    assert "macros" not in settings["card"]
     assert settings["safe"] == {"allow": {"URLs": "none", "classes": "none", "cssIDs": "none", "styles": "none"}}
 
 
@@ -116,7 +119,7 @@ def test_a_configuration_init_wrote_is_replaced_without_a_word(tmp_path: Path, n
 
     assert main(["check", str(blueprint)]) == 0
     script = (_render(blueprint) / "javascripts/mathjax.js").read_text(encoding="utf-8")
-    assert _settings(script)["page"]["packages"] == _PAGE_PACKAGES
+    assert _settings(script)["card"]["packages"] == _CARD_PACKAGES
 
 
 def test_an_edited_configuration_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -135,6 +138,7 @@ def test_project_macros_reach_article_formulas_only(tmp_path: Path) -> None:
     assert main(["check", str(blueprint)]) == 0
     settings = _settings((_render(blueprint) / "javascripts/mathjax.js").read_text(encoding="utf-8"))
     assert settings["page"]["macros"] == _MACROS
+    assert "macros" not in settings["card"]
 
 
 def _changed_after_capture(monkeypatch: pytest.MonkeyPatch, change: Callable[[], object]) -> None:
@@ -1337,8 +1341,8 @@ def test_a_heading_id_is_published(tmp_path: Path) -> None:
 def test_every_formula_paints_inside_its_own_band(tmp_path: Path) -> None:
     """No formula can cover a card, a mark, a label, another line, or a side
     column, with either renderer and any theme; a lap keeps the ink beside its
-    box inside the block that holds it; and a wide display scrolls rather than
-    being cut off."""
+    box inside the block that holds it; and a wide display or card scrolls,
+    with a shade at the edge, rather than being cut off."""
 
     css = (_render(_vault(tmp_path)) / "stylesheets/blueprint.css").read_text(encoding="utf-8")
     rules = {
@@ -1366,3 +1370,10 @@ def test_every_formula_paints_inside_its_own_band(tmp_path: Path) -> None:
     # card's blocks are left to scroll with it.
     block = rules[":is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *)"]
     assert "overflow-x: clip" in block and "overflow-y" not in block
+    assert "overflow-x: auto" in rules[".bp-readback"]
+    shade = rules[".bp-readback, .bp-readback div.arithmatex"]
+    assert shade.count(" local") == 2 and shade.count(" scroll") == 2
+    # The covers, and the card under them, are the color of the review panel a
+    # card sits in, which in Material's dark scheme is not the page's.
+    assert shade.count("var(--md-admonition-bg-color, var(--bp-page))") == 3
+    assert "overflow-wrap: anywhere" in rules[".bp-review summary"]

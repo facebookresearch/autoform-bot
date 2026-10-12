@@ -67,7 +67,7 @@ packet literally asserts. The kernel covers everything below this surface.
 
 Use the `review` commands and review-bundle flags documented in the
 [CLI reference](../../autoform_cli/README.md#commands). Do not substitute a
-saved skeleton report: preparation, recording, and auditing each
+saved skeleton report: preparation, recording, auditing, and rendering each
 check that the evidence still describes the current blueprint and built Lean
 tree.
 
@@ -76,7 +76,7 @@ tree.
    metadata for every Lean-mapped article, using the article-ID migration check
    in the CLI reference. Every Lean-mapped article must also be a
    declaration-sized leaf, naming a `declaration:` kind and containing no other
-   articles; review commands refuse
+   articles, so its evidence appears in its rendered box; review commands refuse
    any other with `review-article-shape`. Every `origin: cited` Lean article must identify an
    exact line range in a local, non-Markdown source snapshot. Build the Lean project, then prepare a versioned review
    bundle and its blind packets. Keep the bundle and its identity manifest with
@@ -96,8 +96,12 @@ tree.
    extraction aborts the record with nothing filed, and running it again
    completes it. Never hand-author or repair a card's path, hashes, or
    frontmatter.
-4. Audit from that same bundle. The audit re-extracts current evidence and
-   fails closed if the bundle is stale, incomplete, or inconsistent.
+4. Audit and render from that same bundle, then strict-build the site. Both
+   commands re-extract current evidence and fail closed if the bundle is stale,
+   incomplete, or inconsistent. Every formalized statement gains a *Review*
+   disclosure showing the exact hashed packet, its read-back, the article and
+   source evidence it is bound to, and the approval state. A current approval
+   reads self-approved.
 5. Walk the person through each statement: source and book text first, then the
    read-back, then the exact packet. Ask whether the read-back says what the
    book says, whether any hypothesis is missing or added, and whether the

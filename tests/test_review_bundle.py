@@ -6,11 +6,17 @@ from pathlib import Path
 
 import pytest
 
+import autoform_cli.render as render_module
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.graph import Graph, load_graph
 from autoform_cli.markdown import statement_and_notes
 from autoform_cli.publishable import publishable_article
 from autoform_cli.readback import Readback, load_readbacks
+from autoform_cli.render import (
+    PUBLICATION_MANIFEST,
+    _review_disclosure,
+    render_site,
+)
 from autoform_cli.review import (
     ReviewError,
     build_review_bundle,
@@ -416,6 +422,10 @@ def test_a_long_named_card_that_is_not_utf8_is_one_invalid_card_not_a_missing_ca
     findings = [item for item in review_findings(graph, bundle, report) if item.code.startswith("readback-")]
     assert [(item.node_id, item.code) for item in findings] == [("basics/result", "readback-invalid")]
     assert findings[0].reason == f"read-back for {name} is invalid: card is not UTF-8 text"
+    disclosure = _review_disclosure(graph.nodes["basics/result"], report, bundle, load_readbacks(blueprint))
+    assert "bp-readback-invalid" in disclosure
+    assert '<span class="bp-readback-status">invalid · card is not UTF-8 text</span>' in disclosure
+    assert "No read-back filed" not in disclosure
 
 
 def test_approval_rejects_a_hand_constructed_card_with_invented_hashes(tmp_path: Path) -> None:
@@ -641,3 +651,51 @@ def test_review_evidence_cuts_the_passage_from_the_source_its_graph_captured(tmp
     bundle = build_review_bundle(graph, _extracted(graph))
     assert bundle.articles[0].passage == "Source theorem."
     assert validate_review_bundle(graph, bundle, _extracted(graph)) == ()
+
+
+def _ordered_blueprint(root: Path) -> Path:
+    """The review blueprint, with an Intro chapter its roadmap lists first."""
+
+    blueprint = _blueprint(root)
+    (blueprint / "roadmap" / "intro").mkdir()
+    (blueprint / "roadmap" / "intro" / "README.md").write_text("# Intro\n\nNarrative.\n", encoding="utf-8")
+    (blueprint / "roadmap" / "README.md").write_text(
+        "# Roadmap\n\n- [Intro](intro/README.md)\n- [Basics](basics/README.md)\n", encoding="utf-8"
+    )
+    (blueprint / "README.md").write_text("# Landing\n\n[Roadmap](roadmap/README.md)\n", encoding="utf-8")
+    return blueprint
+
+
+def _manifest(site: Path) -> dict[str, object]:
+    return json.loads((site / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+
+
+def test_render_publishes_the_cited_source_it_validated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cited source rewritten after the review is validated is not copied in
+    place of the passage the review showed, and the revision hash describes the
+    bytes published."""
+
+    blueprint = _ordered_blueprint(tmp_path)
+    graph = load_graph(blueprint)
+    report = _extracted(graph)
+    bundle = build_review_bundle(graph, report)
+    idle = tmp_path / "idle"
+    render_site(blueprint, idle, skeleton=report, review_bundle=bundle)
+
+    source = blueprint / "roadmap" / "basics" / "sources" / "book.txt"
+    validate = validate_review_bundle
+
+    def validate_then_rewrite(*args: object, **kwargs: object) -> object:
+        findings = validate(*args, **kwargs)
+        source.write_text("Heading\nPLANTED: every supremum is two.\n", encoding="utf-8")
+        return findings
+
+    monkeypatch.setattr(render_module, "validate_review_bundle", validate_then_rewrite)
+    site = tmp_path / "site"
+    render_site(blueprint, site, skeleton=report, review_bundle=bundle)
+
+    assert (site / "roadmap" / "basics" / "sources" / "book.txt").read_text(encoding="utf-8") == (
+        "Heading\nSource theorem.\n"
+    )
+    assert not [path for path in site.rglob("*") if path.is_file() and b"PLANTED" in path.read_bytes()]
+    assert _manifest(site)["source_revision"] == _manifest(idle)["source_revision"]
