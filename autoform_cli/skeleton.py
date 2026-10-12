@@ -464,9 +464,18 @@ def _share(table: dict[str, object], name: str, value: object, *, table_name: st
 def load_skeleton_report(path: str | Path) -> SkeletonReport:
     """Read a report written by :meth:`SkeletonReport.to_json` back into memory."""
 
+    # ValueError covers malformed JSON, bytes that are not UTF-8, and a number
+    # too long to convert; RecursionError, arrays or objects nested deeper than
+    # the decoder recurses.
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        # An escape such as "\ud800" decodes to half of a
+        # surrogate pair, which the report's hashes cannot encode as UTF-8.
+        json.dumps(data, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        reason = f"it escapes a lone surrogate, {exc.object[exc.start]!r}, which UTF-8 cannot encode"
+        raise SkeletonError([f"cannot read skeleton report {path}: {reason}"]) from exc
+    except (OSError, RecursionError, ValueError) as exc:
         raise SkeletonError([f"cannot read skeleton report {path}: {exc}"]) from exc
     if (
         not isinstance(data, dict)
@@ -1498,7 +1507,7 @@ def run_probe(
                     "rerun with --timeout <seconds> for large projects"
                 ]
             ) from exc
-        output = _read_probe_records(records) if result.returncode == 0 else ""
+        output = _read_probe_records(records, label) if result.returncode == 0 else ""
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
         shadowed = _SHADOWED_CORE_MODULE.search(detail)
@@ -1515,7 +1524,7 @@ def run_probe(
     return output or result.stdout
 
 
-def _read_probe_records(records: Path) -> str:
+def _read_probe_records(records: Path, label: str) -> str:
     """Read the probe's records file under the same byte limit as its captured output."""
 
     try:
@@ -1523,9 +1532,14 @@ def _read_probe_records(records: Path) -> str:
             data = handle.read(DEFAULT_PROBE_OUTPUT_LIMIT + 1)
     except FileNotFoundError:
         return ""
+    except OSError as exc:
+        raise SkeletonError([f"the {label}'s records could not be read: {exc.strerror or exc}"]) from exc
     if len(data) > DEFAULT_PROBE_OUTPUT_LIMIT:
         raise SkeletonError([f"lake env lean exceeded the {DEFAULT_PROBE_OUTPUT_LIMIT}-byte output limit"])
-    return data.decode("utf-8")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SkeletonError([f"the {label}'s records are not valid UTF-8"]) from exc
 
 
 _FOUND_RECORD_FIELDS = frozenset(
@@ -1924,7 +1938,7 @@ def _validate_semantic_material(semantic: str, *, context: str, kind: str | None
     shapes = _SEMANTIC_SHAPES if kind is None else (_KIND_SEMANTIC_SHAPE.get(kind, _SEMANTIC_SHAPES[0]),)
     try:
         payload = json.loads(semantic)
-    except (json.JSONDecodeError, RecursionError):
+    except (RecursionError, ValueError):
         payload = None
     generated = payload.get("generated") if isinstance(payload, dict) else None
     entries = generated if isinstance(generated, list) else []
@@ -2199,6 +2213,12 @@ def locate_declaration(
     location = index.find(name)
     if location is None:
         return None, "declaration not found in the Lean sources"
+    if name in index.elsewhere:
+        # The lexical index cannot tell which of several declarations Lean binds
+        # a name to (one may be private, or in a file no target builds), so the
+        # name fails closed.
+        files = sorted(path.as_posix() for path in (location.path, *index.elsewhere[name]))
+        return None, f"several source files declare it: {', '.join(files)}"
     module = module_of(lean_root / location.path, libraries)
     if module is None:
         return None, f"source {location.path.as_posix()} is not built by any library target"
@@ -2625,7 +2645,7 @@ def _validate_managed_output(path: Path, *, kind: str) -> tuple[int, int, str] |
     manifest = path / PACKET_MANIFEST
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8")) if manifest.is_file() else None
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except (OSError, RecursionError, ValueError):
         payload = None
     if not (
         isinstance(payload, dict)

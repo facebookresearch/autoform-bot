@@ -497,7 +497,12 @@ anywhere in a declaration's trusted closure is refused, as recorded by the Lean
 environment rather than by the source text: its kernel face is an opaque
 constant, so the body a reader would see is not what Lean checks. The command
 exits nonzero when a `lean:` name is absent from the sources or from the built
-environment, or reaches a refused declaration; that name is unresolved for its article only, other articles still extract, and it writes nothing into the vault;
+environment, or reaches a refused declaration; that name is unresolved for its article only, other articles still extract, and it writes nothing into the vault.
+The lexical index reads each file only up to `#exit`, and a name that several
+indexed files declare, even when all but one of them declare it `private`, is
+unresolved without a probe, because the index cannot tell which one Lean binds;
+the reason names each of those files in sorted order. `unused-hypotheses` looks
+names up the same way.
 `--output` records the `autoform-skeleton/v4` report, which contains no
 timestamp or absolute path, for a later render or review to consume. The
 report identifies the exact blueprint, its complete target set, and whether
