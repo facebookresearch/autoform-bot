@@ -74,9 +74,9 @@ class CodeFormula(BacktickInlineProcessor):
 class FormulaExtension(Extension):
     """The formulas GitHub reads with their TeX as written, ``$`...`$`` in a
     line, as :class:`CodeFormula` reads it; a ```` ```math ```` fence is the
-    displayed one, which :func:`formula_fence` writes. The site's Markdown
-    and check's reading of it register them from here, so both take the same
-    spans for formulas."""
+    displayed one, which :func:`formula_fence` writes. The site's Markdown,
+    the cards', and check's reading of both register them from here, so all
+    three take the same spans for formulas."""
 
     def extendMarkdown(self, md: pymarkdown.Markdown) -> None:
         md.inlinePatterns.register(CodeFormula(BACKTICK_RE), "backtick", 190)

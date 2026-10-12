@@ -16,8 +16,8 @@ from pathlib import Path
 
 from .markdown import FORMULA_CLASS
 
-#: The MathJax release the site loads. The page's TeX refusals were checked
-#: against it, so changing it means checking them again.
+#: The MathJax release the site loads. The testimony validator's commands were
+#: checked against it, so changing it means checking them again.
 MATHJAX_VERSION = "3.2.2"
 #: Where that release is loaded from, and the component bundle the site uses.
 MATHJAX_BASE = f"https://cdn.jsdelivr.net/npm/mathjax@{MATHJAX_VERSION}/es5"

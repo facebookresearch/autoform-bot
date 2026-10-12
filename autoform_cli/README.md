@@ -597,6 +597,84 @@ does not survive a change of meaning that leaves the packet text unchanged. All
 three are advisory provenance checksums when candidate code controls the
 checkout.
 
+A read-back is an independent agent's mathematical-English account of one
+declaration packet. The coordinator gives that agent only an opaque packet and
+the read-back instructions, then records the returned testimony.
+Cards live at `blueprint/readbacks/<article_id>/<encoded-declaration>.md`;
+the durable `article_id` keeps testimony attached when an article moves, while
+the encoded filename avoids platform-specific Lean-name collisions. Each
+versioned card contains the exact packet, both hashes, a model label, and
+nonempty testimony. The loader rejects missing or unknown fields, altered
+packets, identity mismatches, and malformed or empty testimony. Testimony must
+show a reader everything it says: invisible and reordering characters
+(zero-width spaces, bidirectional overrides, Unicode's default-ignorable
+characters, spaces other than the ASCII space, right-to-left letters and
+digits), code points the checking Python's Unicode data leaves unassigned,
+named with that data's version, more than four combining marks on one
+character or more than two above or below it, a combining mark with no
+character before it, TeX comments, and raw HTML are rejected. Testimony is
+rendered once, by a Markdown renderer that reads no HTML.
+Code is shown as typed. Outside code, formulas included, HTML tags, comments,
+declarations, autolinks, and character references are refused by name, since a
+Markdown viewer of the vault would read them. Links, link definitions, images,
+headings, footnotes, GitHub alerts, Mermaid blocks, code fences naming
+anything but `lean`, `lean4`, or `text`, and table rows with more or fewer
+cells than the header are refused; attribute lists are shown as typed. GitHub
+shows the vault's cards, so testimony is read a second time as GitHub reads
+it, by cmark-gfm with formulas found where GitHub's Markdown API was seen to
+find them. It is refused where that reading shows anything otherwise than the
+site does, naming the line where the two part, and where it holds a formula
+GitHub was not seen to read that way. The
+read-back guide `skills/human-review/references/readback.md` says how to write
+formulas and Markdown that both read alike. MathJax reads no text of a card
+outside the formulas the renderer marked, so other TeX in text shows as typed.
+TeX may use only an allowlist of the notation statements need, laid out as
+MathJax lays it out; `readback.py` keeps it against the site's pinned MathJax
+3.2.2, with every layout rule and size limit. Any other command or
+environment, such as `\phantom`, `\color`, or a macro definition, is refused
+by name, and a formula may hold at most 8 em of space and a testimony 64 em.
+Text between two dollar signs that the site, MathJax, or GitHub could pair is
+held to the same rules, as in `$ P \color{white}{Q} $`, which the site shows
+as typed but a card on GitHub might show as a formula, so dollar signs meant
+as typed go in code. Testimony must also show at least one letter or digit.
+Before any card is parsed its testimony must fit limits well above what real
+read-backs use: 32 KiB, 500 lines, 64 opening brackets, and the others in
+`readback.py`, since the Markdown parser is superlinear in each and every card
+in a pull request is read before its validity is known. Its rendering must
+also fit in 256 KiB of HTML before that HTML is parsed. Cards are read through
+no-follow descriptors, so a card or directory swapped for a link is skipped. A
+card file holds at most 4 MiB, and no file is read more than one byte past
+that. A file at a card path that is larger, is not UTF-8, or cannot be read,
+and a directory or FIFO there, is reported as an invalid card, not skipped,
+even when the declaration's name is too long for the filename to spell. A card
+is attributed to the declaration its path names, so one that records another
+declaration, or whose `.md` is in another case, is reported as that
+declaration's invalid card. A directory under `readbacks/` that cannot be
+listed stops loading with an error naming it. Writes name a card by the hash
+of its bytes, so a card that is not UTF-8 is replaced like any other; one over
+the limit must be removed by hand.
+
+A write takes the card directory's lock, reached without following links, so
+Autoform's writes to one directory happen one at a time; a write that cannot
+get the lock within ten seconds gives up. An optional expected-card hash makes
+updates compare-and-swap: different content replaces a card only when it names
+that card's hash, and a card that names a hash conflicts with a missing card.
+Filing content identical to the current card writes nothing, so it succeeds
+even in a read-only directory. Otherwise the write stages the card in a
+`.autoform-readback-*.tmp` file beside it and renames it over the card in one
+step, so the card's name holds either the old complete card (nothing, for a
+first card) or the new one. A failure or interrupt before the rename removes
+the staging file if it can; a crash, SIGTERM, or SIGKILL can leave it. The
+loader never reads it as a card, and the blueprint `.gitignore` that
+`autoform init` writes ignores it. The contract covers Autoform's writers
+only: an editor's save that lands during a write can be replaced without a
+conflict, so edit cards while no write is running. Publishing needs
+descriptor-relative `open`, `mkdir`, `rename`, and `unlink`, `O_DIRECTORY`,
+`O_NOFOLLOW`, `fchmod`, and `flock`, which Linux and macOS provide; elsewhere,
+including Windows, a write is refused before anything is created or read, and
+cards can still be loaded. `model:` remains a
+label supplied by the coordinator, not authenticated provenance.
+
 `--packets DIR` writes one comment-stripped packet per skeleton, with a
 manifest mapping packets to articles and hashes. The destination must be empty
 or carry Autoform's packet manifest; each run replaces the complete managed
@@ -920,7 +998,7 @@ example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 
 `render` also writes `javascripts/mathjax.js`, the site's MathJax
 configuration, on every build; list it in `mkdocs.yml` and nothing else for
-MathJax. It loads MathJax 3.2.2, the release check's TeX rules were written
+MathJax. It loads MathJax 3.2.2, the release the read-back checks were written
 for, and refuses to typeset with any other. The articles on a page share one
 TeX input, with the
 packages base, ams, noundefined, boldsymbol, cancel, and

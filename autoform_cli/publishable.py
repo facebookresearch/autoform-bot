@@ -53,8 +53,12 @@ def _raw_html_errors(text: str, code: Iterable[str] = ()) -> tuple[str, ...]:
     included; a space after "<" keeps a formula clear.
 
     Each is found in the source and excused only by as many occurrences of it
-    in code. A reference a browser shows as typed, such as ``&D;``, which
-    names no character, is no HTML."""
+    in code, as :func:`_vault_markup_errors` does. A reference a browser shows
+    as typed, such as ``&D;``, which names no character, is no HTML.
+
+    This is the check for Markdown the site's own converter renders, which
+    reads HTML. Testimony is checked by :func:`_testimony_errors` instead,
+    since its renderer reads none."""
 
     pieces = list(code)
     errors: list[str] = []
@@ -134,10 +138,10 @@ def publishable_article(
 ) -> tuple[str, tuple[str, ...]]:
     """The text of an article a site may publish, and what refuses it.
 
-    Articles are Markdown and TeX. Raw HTML in one would reach the published
-    page as markup that can restyle it, show an approval nobody gave, or run
-    script, and the reviewers who approve articles do not own the site's
-    templates. Complete HTML comments are a common way to leave
+    Articles are Markdown and TeX, as read-backs are. Raw HTML in one would
+    reach the published page as markup that can restyle it, show an approval
+    nobody gave, or run script, and the reviewers who approve articles do not
+    own the site's templates. Complete HTML comments are a common way to leave
     a note, so they are dropped rather than refused; the text returned is the
     article without them, with its lines written as the site writes them, so
     a comment a browser would end sooner than the pattern does exposes

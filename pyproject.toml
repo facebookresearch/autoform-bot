@@ -25,6 +25,9 @@ dependencies = [
     # construction, not tokenising: browsers repair malformed markup rather than
     # reject it, and the repair decides what stays hidden.
     "html5lib>=1.1,<2",
+    # GitHub reads the vault's cards with cmark-gfm, so testimony is checked that
+    # way too. An Intel Mac compiles it; see tests/test_lock_platforms.py.
+    "cmarkgfm==2025.10.22",
 ]
 
 [project.scripts]

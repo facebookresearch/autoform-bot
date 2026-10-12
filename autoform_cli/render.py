@@ -37,6 +37,7 @@ from .markdown import NOTES_BOX, PAGE_SUFFIXES, STATEMENT_BOX, boxed, statement_
 from .markdown import outside_fences as _outside_fences
 from .mathjax import MATHJAX_SCRIPT, TEX_MACROS, in_the_way, mathjax_script
 from .publishable import publishable_article
+from .readback import READBACKS_DIR
 from .snapshot import BlueprintSnapshot, SnapshotError, read_regular_file
 from .status import is_definition
 
@@ -421,6 +422,10 @@ def _publication(
         # Source notes leave the site entirely once readers can reach them in
         # the repository, so the book has one reference surface rather than two.
         if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
+            continue
+        # Read-backs are testimony about a statement, shown inside its box,
+        # never pages of their own.
+        if relative.parts[:1] == (READBACKS_DIR,):
             continue
         if source.resolve() in node_sources:
             if source.resolve() in articles:
