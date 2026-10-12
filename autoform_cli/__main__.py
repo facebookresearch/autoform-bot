@@ -56,6 +56,7 @@ from .search import SearchError, search_blueprint, statement_preview
 from .skeleton import (
     DEFAULT_PROBE_TIMEOUT,
     SkeletonError,
+    SkeletonReport,
     extract_skeletons,
     format_report,
     write_packets,
@@ -481,6 +482,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="fail when a 'lean:' declaration is not found in the Lean sources "
         "or cannot be looked up because the sources cannot be read",
     )
+    render.add_argument(
+        "--review",
+        action="store_true",
+        help="add each statement's review, judged as review check judges it (needs --lean-root)",
+    )
+    _add_probe_timeout_argument(render)
 
     args = parser.parse_args(argv)
 
@@ -1451,15 +1458,16 @@ def _review(args: argparse.Namespace) -> int:
     return 2
 
 
-def _print_refusal(exc: GraphValidationError | ReviewError | SkeletonError) -> None:
+def _print_refusal(exc: GraphValidationError | PublicationError | ReviewError | SkeletonError, *, stream=None) -> None:
     """Print why review evidence was refused, naming the article each finding is about."""
 
+    stream = stream or sys.stderr
     if isinstance(exc, ReviewError):
         for finding in exc.findings:
-            print(f"error: {finding.node_id}: {finding.code}: {finding.reason}", file=sys.stderr)
+            print(f"error: {finding.node_id}: {finding.code}: {finding.reason}", file=stream)
         return
     for issue in exc.issues:
-        print(f"error: {issue}", file=sys.stderr)
+        print(f"error: {issue}", file=stream)
 
 
 def _review_prepare(args: argparse.Namespace) -> int:
@@ -1522,7 +1530,7 @@ def _review_record(args: argparse.Namespace) -> int:
 
 def _review_check(args: argparse.Namespace) -> int:
     try:
-        graph, bundle, cards = _current_review(args.blueprint_dir, lean_root=args.lean_root, timeout=args.timeout)
+        graph, _, bundle, cards = _current_review(args.blueprint_dir, lean_root=args.lean_root, timeout=args.timeout)
     except (GraphValidationError, ReviewError, SkeletonError) as exc:
         _print_refusal(exc)
         return 2
@@ -1566,8 +1574,8 @@ def _current_review(
     *,
     lean_root: Path,
     timeout: float | None = None,
-) -> tuple[Graph, ReviewBundle, dict[tuple[str, str], Readback]]:
-    """The graph, review evidence derived from one extraction of it, and the cards.
+) -> tuple[Graph, SkeletonReport, ReviewBundle, dict[tuple[str, str], Readback]]:
+    """The graph, one extraction of it, the review evidence derived from both, and the cards.
 
     Everything returned describes one state of the blueprint. The graph and the
     read-back cards are read before Lean runs. The extraction refuses a
@@ -1586,7 +1594,7 @@ def _current_review(
     if _review_cards(graph.blueprint_dir) != cards:
         reason = "a read-back changed while the review evidence was being extracted; rerun once the blueprint is idle"
         raise ReviewError([ReviewFinding("review", "review-snapshot-changed", reason)])
-    return graph, build_review_bundle(graph, skeleton), cards
+    return graph, skeleton, build_review_bundle(graph, skeleton), cards
 
 
 def _review_cards(blueprint_dir: Path) -> dict[tuple[str, str], Readback]:
@@ -1640,16 +1648,23 @@ def _default_claim_scratch(repo: str, worker_id: str) -> Path:
 
 def _render(args: argparse.Namespace) -> int:
     try:
+        skeleton = cards = None
+        if args.review:
+            if args.lean_root is None:
+                print("error: --review requires --lean-root", file=sys.stderr)
+                return 2
+            _, skeleton, _, cards = _current_review(args.blueprint_dir, lean_root=args.lean_root, timeout=args.timeout)
         report = render_site(
             args.blueprint_dir,
             args.output,
             lean_root=args.lean_root,
             repository_url=args.repository_url,
             ref=args.ref,
+            skeleton=skeleton,
+            readbacks=cards,
         )
-    except (GraphValidationError, PublicationError) as exc:
-        for issue in exc.issues:
-            print(f"error: {issue}")
+    except (GraphValidationError, PublicationError, ReviewError, SkeletonError) as exc:
+        _print_refusal(exc, stream=sys.stdout)
         return 1
 
     print(f"{report.output_dir}: {report.pages} pages, {report.nodes} nodes, {report.linked} code links")

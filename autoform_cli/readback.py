@@ -16,7 +16,8 @@ testimony, not derived state, so they are committed with the book, and each one
 records the statement hash of the skeleton it testifies about, which a proof
 edit leaves unchanged, and the evidence hash of the packet text it was written
 from. When either no longer matches the prepared declaration, validation
-reports the card invalid, rather than silently presenting it as current.
+reports the card invalid and the site shows it marked invalid, rather than
+silently presenting it as current.
 
 Testimony is plain text with TeX formulas between dollar signs. Every reader
 shows the text as typed: GitHub and a Markdown viewer of the vault inside the

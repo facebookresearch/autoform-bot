@@ -40,6 +40,7 @@ from ._tree_snapshot import (
     bind_directory_tree,
     descriptor_capture_supported,
 )
+from .approvals import approval_statuses
 from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage
 from .graph import Graph, GraphValidationError, Node, _implementation_note_issues, load_graph
 from .lean import (
@@ -59,9 +60,11 @@ from .markdown import content_lines as _content_lines
 from .markdown import mask_fences_and_comments
 from .markdown import NOTES_BOX, PAGE_HEADER, PAGE_SUFFIXES, STATEMENT_BOX, boxed, statement_and_notes
 from .markdown import outside_fences as _outside_fences
-from .mathjax import MATHJAX_SCRIPT, TEX_MACROS, mathjax_script
+from .mathjax import CARD_FORMULA_CLASS, MATHJAX_SCRIPT, TEX_MACROS, mathjax_script
 from .publishable import publishable_article
-from .readback import READBACKS_DIR
+from .readback import READBACKS_DIR, Readback, readback_for, split_testimony
+from .review import ReviewArticle, ReviewState, build_review_bundle, readback_errors, review_states
+from .skeleton import NodeSkeleton, SkeletonReport
 from .snapshot import BlueprintSnapshot
 from .status import is_definition
 
@@ -466,7 +469,7 @@ def _publication(
     statements: dict[str, tuple[str, str]] = {}
     for node_id, node in graph.nodes.items():
         # The text the graph parsed, so a page shows the article its status
-        # describes.
+        # and any review disclosure describe.
         leaf = node.formalizable and node_id not in containers
         text, found = published(graph.article_text(node), node.path, targets[node_id][0], whole=not leaf)
         issues.extend(f"{node_id}: {issue}" for issue in found)
@@ -580,6 +583,8 @@ def render_site(
     lean_root: str | Path | None = None,
     repository_url: str | None = None,
     ref: str | None = None,
+    skeleton: SkeletonReport | None = None,
+    readbacks: Mapping[tuple[str, str], Readback] | None = None,
 ) -> RenderReport:
     """Write deterministic, read-only projections of the Markdown blueprint.
 
@@ -589,6 +594,12 @@ def render_site(
     and never embeds timestamps or machine-specific paths. The blueprint and the
     Lean sources are each read once, and every page, link and hash comes from
     those bytes. The site is built beside the output and swapped in whole.
+
+    With ``skeleton``, every Lean-mapped statement shows its review, judged
+    with ``readbacks``, the cards the caller read with that extraction, as
+    ``review check`` judges it. The review is refused unless the articles
+    loaded here, and the sources they cite, are the blueprint ``skeleton`` was
+    extracted from.
     """
     blueprint = Path(blueprint_dir).expanduser().resolve()
     requested_destination = Path(output_dir).expanduser()
@@ -620,6 +631,7 @@ def render_site(
     relative = blueprint.relative_to(repo_root) if _is_within(blueprint, repo_root) else Path("blueprint")
     with _private_copy(snapshot, relative) as (copy_root, copy):
         graph = _load_graph(copy, blueprint)
+        reviews = {} if skeleton is None else _review_disclosures(graph, skeleton, readbacks or {})
         coverage, coverage_issues = load_coverage(copy)
         if coverage_issues:
             raise PublicationError(
@@ -704,6 +716,7 @@ def render_site(
                 source_revision=source_revision,
                 lean_source_revision=lean.revision,
                 files=_captured_files(snapshot, copy),
+                reviews=reviews,
             ),
         )
     report.warnings[:0] = recovered
@@ -732,6 +745,7 @@ def _render_pages(
     source_revision: str,
     lean_source_revision: str,
     files: BlueprintSnapshot,
+    reviews: dict[str, str],
 ) -> RenderReport:
     """Write the site into *destination* from the private copy at *blueprint*."""
     statuses = status.derive(graph)
@@ -815,6 +829,7 @@ def _render_pages(
             node_sources=node_sources,
             containers=containers,
             statements=site.statements,
+            reviews=reviews,
         )
         page.write_text(chapter, encoding="utf-8")
         if narrative is None:  # a milestone with no narrative page of its own
@@ -2409,6 +2424,7 @@ def _render_chapter(
     node_sources: dict[Path, str],
     containers: frozenset[str],
     statements: dict[str, tuple[str, str]],
+    reviews: dict[str, str],
 ) -> tuple[str, int, list[str]]:
     """Render one narrative article with statements at its authored link slots."""
     links = _anchored_links(targets, page)
@@ -2429,6 +2445,7 @@ def _render_chapter(
             repo_root=repo_root,
             destination=destination,
             statements=statements,
+            reviews=reviews,
         )
         environments[node_id] = environment
         linked += node_linked
@@ -2559,6 +2576,7 @@ def _render_environment(
     repo_root: Path,
     destination: Path,
     statements: dict[str, tuple[str, str]],
+    reviews: dict[str, str],
 ) -> tuple[str, int, list[str]]:
     node_status = statuses[node.id]
     caption, _, number = numbers[node.id].rpartition(" ")
@@ -2617,8 +2635,136 @@ def _render_environment(
         lines.append(meta)
     if dependencies:
         lines.append(dependencies)
+    if node.id in reviews:
+        lines.extend(["", reviews[node.id], ""])
     lines.append("</div>")
     return "\n".join(lines), linked, unresolved
+
+
+def _review_disclosures(
+    graph: Graph, skeleton: SkeletonReport, readbacks: Mapping[tuple[str, str], Readback]
+) -> dict[str, str]:
+    """Each Lean-mapped statement's review, by node id: what a reviewer must
+    trust, what a blind auditor says it means, and where its approval stands.
+
+    The evidence is derived from ``graph``, which refuses a ``skeleton``
+    extracted from another blueprint, and the approval is judged by
+    :func:`~autoform_cli.review.review_states`, as ``review check`` judges it.
+    """
+
+    bundle = build_review_bundle(graph, skeleton)
+    states = review_states(graph, bundle, readbacks)
+    labels = approval_statuses(states)
+    return {
+        article.node_id: _review_disclosure(
+            article,
+            skeleton.node(article.node_id),
+            states[article.node_id],
+            labels[article.node_id].label if article.node_id in labels else None,
+            readbacks,
+        )
+        for article in bundle.articles
+    }
+
+
+def _review_disclosure(
+    article: ReviewArticle,
+    record: NodeSkeleton,
+    state: ReviewState,
+    label: str | None,
+    readbacks: Mapping[tuple[str, str], Readback],
+) -> str:
+    count = len(record.declarations)
+    lines_to_trust = sum(item.skeleton_lines for item in record.declarations)
+    approval = {
+        "incomplete": ("open", "not yet approved"),
+        "unapproved": ("open", f"ready to approve · {state.review_hash}"),
+        "unverifiable": ("drift", "approval cannot be verified because testimony is incomplete or invalid"),
+        "drift": ("drift", f"approval {state.approved} does not match the current complete review {state.review_hash}"),
+        "approved": (label, f"{label} · {state.review_hash}"),
+    }
+    kind, shown = approval[state.status]
+    parts = [
+        '<details class="bp-review" markdown="1">',
+        f"<summary>Review · {count} skeleton{'s' if count != 1 else ''}, {lines_to_trust} lines to trust · "
+        f'<span class="bp-review-{kind}">{html.escape(shown)}</span></summary>',
+        "",
+        _render_rows(
+            [("Prepared evidence", f"<code>{html.escape(article.evidence_hash)}</code>")], css_class="bp-skeleton-meta"
+        ),
+        "",
+    ]
+    if article.passage is not None:
+        locator = article.passage_locator or "cited source"
+        parts.extend(
+            [
+                '<div class="bp-skeleton">',
+                f'<div class="bp-skeleton-title">Source passage · {html.escape(locator)}</div>',
+                f"<pre><code>{html.escape(article.passage)}</code></pre>",
+                "</div>",
+                "",
+            ]
+        )
+    for declaration, prepared in zip(record.declarations, article.declarations):
+        # The packet shown is the one whose hash the card records, never a
+        # friendlier reconstruction that could hold text the auditor never saw.
+        rows = [
+            ("Skeleton", f"<code>{html.escape(declaration.statement_hash)}</code> · {declaration.skeleton_lines} lines"),
+            ("Packet", f"<code>{html.escape(prepared.packet_hash)}</code>"),
+            ("Assumes", ", ".join(f"<code>{html.escape(name)}</code>" for name in declaration.assumed) or "nothing beyond Lean core"),
+            ("Axioms", ", ".join(f"<code>{html.escape(name)}</code>" for name in declaration.axioms) or "none"),
+        ]
+        packet = html.escape(prepared.packet.rstrip("\n"))
+        card = readback_for(readbacks, article.article_id, declaration.name)
+        errors = () if card is None else readback_errors(article.article_id, prepared, card)
+        parts.extend(
+            [
+                '<div class="bp-skeleton">',
+                f'<div class="bp-skeleton-title">{html.escape(declaration.kind)} <code>{html.escape(declaration.name)}</code></div>',
+                f'<pre class="bp-lean"><code>{packet}</code></pre>',
+                _render_rows(rows, css_class="bp-skeleton-meta"),
+                "</div>",
+                "",
+                _readback_block(card, errors),
+                "",
+            ]
+        )
+    parts.append("</details>")
+    return "\n".join(parts)
+
+
+#: How render marks a card's formulas for the card's TeX input.
+_CARD_DELIMITERS = {"inline": ("\\(", "\\)"), "display": ("\\[", "\\]")}
+
+
+def _readback_block(card: Readback | None, errors: tuple[str, ...]) -> str:
+    """A card as one line of HTML, which the page's Markdown leaves alone.
+
+    The testimony is shown as typed, with line ends kept as character
+    references. A current card's formulas are the pieces
+    :func:`~autoform_cli.readback.split_testimony` finds, the ones its
+    validator checked, each marked for the card's own TeX input; an invalid
+    card's are left as typed.
+    """
+
+    if card is None:
+        return '<div class="bp-readback bp-readback-missing">No read-back filed for this skeleton yet.</div>'
+    pieces = [("text", card.text)] if errors else split_testimony(card.text)
+    shown = []
+    for kind, piece in pieces:
+        if kind == "text":
+            shown.append(html.escape(piece))
+        else:
+            opening, closing = _CARD_DELIMITERS[kind]
+            shown.append(f'<span class="{CARD_FORMULA_CLASS}">{opening}{html.escape(piece)}{closing}</span>')
+    body = "".join(shown).replace("\n", "&#10;")
+    model = f" · {html.escape(card.model)}" if card.model else ""
+    status = "invalid · " + "; ".join(errors) if errors else "current"
+    return (
+        f'<div class="bp-readback bp-readback-{"invalid" if errors else "current"}">'
+        f'<div class="bp-readback-title">Read-back{model} · <span class="bp-readback-status">{html.escape(status)}</span></div>'
+        f'<div class="bp-readback-body">{body}</div></div>'
+    )
 
 
 def _lean_presentation(
@@ -2835,6 +2981,8 @@ def _stylesheet() -> str:
   --bp-rule: #CED0D4;
   --bp-surface: #FFFFFF;
   --bp-sunken: #F0F2F5;
+  --bp-page: #FFFFFF;
+  --bp-scroll-shade: rgba(5, 5, 5, 0.22);
   --bp-link: #0064E0;
   --bp-link-hover: #0082FB;
   --bp-blue: #0064E0;
@@ -2849,6 +2997,8 @@ def _stylesheet() -> str:
   --bp-rule: #3E4042;
   --bp-surface: #242526;
   --bp-sunken: #1C1D1F;
+  --bp-page: #18191A;
+  --bp-scroll-shade: rgba(228, 230, 235, 0.3);
   --bp-link: #2D88FF;
   --bp-link-hover: #7FB8FF;
   --bp-blue: #2D88FF;
@@ -3359,6 +3509,57 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-dependencies summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
 .bp-dependency-body {{ margin-top: 0.35rem; color: var(--bp-fg); }}
+.bp-review {{
+  margin: 0.65rem 0 0 2rem;
+  font-family: {sans};
+  font-size: 0.82rem;
+  color: var(--bp-muted);
+}}
+.bp-review summary {{
+  width: fit-content;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  color: var(--bp-link);
+  user-select: none;
+}}
+.bp-review summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+.bp-review-self-approved {{ color: var(--bp-muted); font-style: italic; }}
+.bp-review-open {{ color: var(--bp-muted); }}
+.bp-review-drift {{ color: #B77900; font-weight: 600; }}
+.bp-skeleton {{ margin-top: 0.6rem; color: var(--bp-fg); }}
+.bp-skeleton-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
+.bp-lean {{
+  margin: 0 0 0.4rem;
+  padding: 0.6rem 0.8rem;
+  font-family: {mono};
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  border-left: 3px solid var(--bp-rule);
+}}
+.bp-skeleton-meta {{ margin-bottom: 0.5rem; }}
+/* A card too wide for the page scrolls, with a shade at each edge it can
+   scroll toward: covers in the review panel's color scroll with the content
+   and hide the shade at the end it has reached. */
+.bp-readback {{
+  margin: 0.4rem 0 1rem;
+  padding: 0.6rem 0.8rem;
+  color: var(--bp-fg);
+  border-left: 3px solid #0064E0;
+  overflow-x: auto;
+  background:
+    linear-gradient(to right, var(--md-admonition-bg-color, var(--bp-page)) 40%, transparent) left / 1.5rem 100% no-repeat local,
+    linear-gradient(to left, var(--md-admonition-bg-color, var(--bp-page)) 40%, transparent) right / 1.5rem 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, var(--bp-scroll-shade), transparent) left / 0.6rem 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--bp-scroll-shade), transparent) right / 0.6rem 100% no-repeat scroll;
+  background-color: var(--md-admonition-bg-color, var(--bp-page));
+}}
+.bp-readback-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
+.bp-readback-body {{ white-space: pre-wrap; }}
+.bp-readback-status {{ font-weight: 400; color: var(--bp-muted); }}
+.bp-readback-invalid {{ border-left-color: #B42318; }}
+.bp-readback-missing {{ border-left-color: var(--bp-rule); font-style: italic; }}
 /* A formula paints only within its own band, its box plus the slack its
    glyphs need, which a negative margin gives back. Across, it paints as TeX
    sets it, laps included, but only inside the block that holds it, and a
