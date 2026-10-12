@@ -116,6 +116,9 @@ _IGNORED_DIRECTORIES = frozenset(
 )
 # ``Build`` can be a Lean namespace directory, so only this spelling is ignored.
 _EXACT_IGNORED_DIRECTORIES = frozenset({"build"})
+#: A packet tree still being staged beside its destination, skipped by name,
+#: so a stage an older writer left without its manifest is not project source.
+_OUTPUT_STAGE = re.compile(r"\A\..+\.autoform-stage-[0-9a-f]{16}\Z")
 _MANAGED_OUTPUT_MANIFEST = "manifest.json"
 _MANAGED_OUTPUT_MANIFEST_BYTE_LIMIT = 16 * 1024 * 1024
 # Skeleton manifests grow with the declaration set, and their sorted schema key
@@ -125,6 +128,7 @@ _SNAPSHOT_RETRY_DELAY_SECONDS = 0.05
 #: Known schemas of the skeleton command's packet and passage manifests.
 PACKET_SCHEMA = "autoform-skeleton-packets/v2"
 PASSAGE_SCHEMA = "autoform-skeleton-passages/v2"
+REVIEW_PACKET_SCHEMA = "autoform-review-packets/v1"
 MANAGED_OUTPUT_SCHEMAS = frozenset(
     {
         ("packets", "autoform-skeleton-packets/v1"),
@@ -139,6 +143,7 @@ PUBLICATION_MANIFEST = "publication.json"
 PUBLICATION_SCHEMA = "autoform-publication/v2"
 #: Render never writes a larger manifest, so the next render can always read it.
 PUBLICATION_MANIFEST_MAX_BYTES = 8 * 1024 * 1024
+_IGNORED_OUTPUT_SCHEMAS = MANAGED_OUTPUT_SCHEMAS | {("packets", REVIEW_PACKET_SCHEMA)}
 
 @dataclass(frozen=True, slots=True)
 class Alias:
@@ -662,6 +667,7 @@ def _lean_path_is_excluded(
     return (
         bool(_IGNORED_DIRECTORIES.intersection(folded_parts))
         or bool(_EXACT_IGNORED_DIRECTORIES.intersection(relative.parts))
+        or any(_OUTPUT_STAGE.match(part) for part in relative.parts)
         or any(
             len(folded_parts) >= len(prefix_parts)
             and folded_parts[: len(prefix_parts)] == prefix_parts
@@ -730,7 +736,7 @@ def _is_managed_output_manifest_bytes(data: bytes) -> bool:
     return (
         isinstance(kind, str)
         and isinstance(schema, str)
-        and (kind, schema) in MANAGED_OUTPUT_SCHEMAS
+        and (kind, schema) in _IGNORED_OUTPUT_SCHEMAS
         and isinstance(value.get(kind), list)
     )
 
@@ -1491,6 +1497,7 @@ __all__ = [
     "PUBLICATION_MANIFEST",
     "PUBLICATION_MANIFEST_MAX_BYTES",
     "PUBLICATION_SCHEMA",
+    "REVIEW_PACKET_SCHEMA",
     "SourceIndex",
     "SourceLinker",
     "bind_project_source_snapshot",

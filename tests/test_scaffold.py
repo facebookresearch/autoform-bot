@@ -31,6 +31,7 @@ _EXPECTED = {
     ".gitignore",
     "README.md",
     "blueprint/.gitignore",
+    "blueprint/.autoform-review",
     "blueprint/README.md",
     "blueprint/coverage/README.md",
     "blueprint/roadmap/README.md",
@@ -694,6 +695,53 @@ def test_generated_ci_pins_the_checkout_that_scaffolded_it(
     assert re.fullmatch(r"[0-9a-f]{40}", ref), "the pin must be an immutable commit"
     assert ref == head
     assert "@main" not in verify
+
+
+def test_generated_ci_rebuilds_opted_in_statement_review_evidence(tmp_path: Path) -> None:
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
+
+    assert 'marker="blueprint/.autoform-review"' in verify
+    assert "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620" in verify
+    assert "review cards or approvals exist without $marker" in verify
+    assert "review_approved[[:space:]]*:' -- blueprint/roadmap" in verify
+    assert "AUTOFORM_REVIEW_ENABLED=true" in verify
+    # The check derives its own evidence, so CI extracts once.
+    assert "autoform review check blueprint --lean-root .\n" in verify
+    assert (tmp_path / "blueprint/.autoform-review").read_text(encoding="utf-8") == "autoform-review-policy/v1\n"
+
+
+# What a statement-review step mentions: a review or skeleton command, a
+# --review flag, the skeleton report's directory or artifact, or Lean set up
+# for the review.
+_REVIEW_MARKERS = ("autoform review", "autoform skeleton", "--review", "autoform-skeleton", "for statement review")
+
+
+@pytest.mark.parametrize(
+    ("name", "gated"),
+    [
+        ("autoform-verify.yml", "Verify statement reviews"),
+    ],
+)
+def test_statement_review_steps_run_only_in_projects_that_opted_in(tmp_path: Path, name: str, gated: str) -> None:
+    """A project without the review marker never extracts a skeleton report,
+    and its Lean-mapped articles need no durable article_id, so a review step
+    that ran there would fail its CI. Steps are found by what they mention, not
+    by name, so a step added later is held to the gate too."""
+
+    yaml = pytest.importorskip("yaml")
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    jobs = yaml.safe_load((tmp_path / ".github/workflows" / name).read_text(encoding="utf-8"))["jobs"]
+    review = [
+        step
+        for job in jobs.values()
+        for step in job.get("steps", [])
+        if any(marker in json.dumps(step) for marker in _REVIEW_MARKERS)
+    ]
+
+    assert gated in [step.get("name") for step in review]
+    for step in review:
+        assert step.get("if") == "env.AUTOFORM_REVIEW_ENABLED == 'true'", f"{step.get('name')} runs without the opt-in"
 
 
 def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:

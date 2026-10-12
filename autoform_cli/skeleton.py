@@ -1019,13 +1019,24 @@ def _graph_snapshot(graph: Graph) -> tuple[tuple[str, str, str], ...]:
     )
 
 
-def _blueprint_hash(graph: Graph) -> str:
-    """Identify the exact, path-independent blueprint snapshot behind a report."""
+def _blueprint_hash(graph: Graph, passages: dict[str, tuple[str | None, str | None, str]]) -> str:
+    """Identify the exact, path-independent blueprint snapshot behind a report:
+    every article, and the passage each cites or why it has none."""
 
     material = json.dumps(
-        _graph_snapshot(graph), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        [(*row, *passages[row[0]]) for row in _graph_snapshot(graph)],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
     )
     return _sha256_id(material.encode("utf-8"))
+
+
+def blueprint_hash(graph: Graph) -> str:
+    """The blueprint hash of ``graph`` as it is now: its articles, and each
+    article's cited passage, read once for this call."""
+
+    return _blueprint_hash(graph, _source_passages(graph))
 
 
 def _remember_descendants(
@@ -2609,16 +2620,9 @@ def extract_skeletons(
     report = extract_graph_skeletons(
         graph, lean_root=root, libraries=libraries, index=index, runner=runner, node_ids=node_ids, probing=probing
     )
-    current_graph = check_inputs_unchanged(graph, root, index, inputs, activity=activity)
-    for node in report.nodes:
-        current = current_graph.nodes.get(node.node_id)
-        if current is None or source_passage(current, current_graph.blueprint_dir) != (
-            node.passage,
-            node.passage_locator,
-        ):
-            raise SkeletonError(
-                [f"{node.node_id}: source passage changed while skeletons were being extracted; retry after the project is idle"]
-            )
+    current = check_inputs_unchanged(graph, root, index, inputs, activity=activity)
+    if _blueprint_hash(current, _source_passages(current)) != report.blueprint_hash:
+        raise SkeletonError([f"source passage changed while {activity}; retry after the project is idle"])
     return report
 
 
@@ -2746,15 +2750,11 @@ def extract_graph_skeletons(
     """
 
     targets, selected, selection = select_lean_targets(graph, node_ids)
-    passages: dict[str, tuple[str | None, str | None]] = {}
+    # Every article's passage, so the blueprint hash does not depend on the selection.
+    passages = _source_passages(graph)
     # An article whose cited passage cannot be found cannot be judged for
     # faithfulness, so its declarations are unresolved rather than shown alone.
-    broken_passages: dict[str, str] = {}
-    for node, _ in selected:
-        passage_issues: list[str] = []
-        passages[node.id] = source_passage(node, graph.blueprint_dir, issues=passage_issues)
-        if passage_issues:
-            broken_passages[node.id] = "; ".join(passage_issues)
+    broken_passages = {node.id: passages[node.id][2] for node, _ in selected if passages[node.id][2]}
 
     # Lean prints signatures, and parses sources, with the notation, tokens,
     # and attributes its imports bring into scope, so each root module gets its
@@ -2856,7 +2856,7 @@ def extract_graph_skeletons(
                     snapshot_started_ns=snapshot_started_ns,
                 )
             )
-        passage, locator = passages[node.id]
+        passage, locator, _ = passages[node.id]
         nodes.append(
             NodeSkeleton(
                 node_id=node.id,
@@ -2868,7 +2868,7 @@ def extract_graph_skeletons(
             )
         )
     return SkeletonReport(
-        blueprint_hash=_blueprint_hash(graph),
+        blueprint_hash=_blueprint_hash(graph, passages),
         targets=tuple((node.id, names) for node, names in targets),
         selection=selection,
         selected_nodes=tuple(node.id for node, _ in selected),
@@ -2894,7 +2894,9 @@ def _statement(value: object) -> str | None:
     return _TRAILING_VALUE.sub("", value).rstrip()
 
 
-def source_passage(node: Node, blueprint: Path, *, issues: list[str] | None = None) -> tuple[str | None, str | None]:
+def source_passage(
+    node: Node, blueprint: Path, *, issues: list[str] | None = None, files: dict[Path, bytes | str] | None = None
+) -> tuple[str | None, str | None]:
     """Return the passage an article cites through a line locator, and the locator.
 
     A ``## Sources`` link to a non-Markdown file inside the blueprint with a
@@ -2903,7 +2905,9 @@ def source_passage(node: Node, blueprint: Path, *, issues: list[str] | None = No
     passages, and are ignored here, but a link that names no regular file in
     the blueprint is reported whatever its suffix, as check reports it. When
     the first locator names no text there is no passage, and the reason is
-    appended to ``issues`` if given.
+    appended to ``issues`` if given. ``files`` keeps each file read, or why it
+    could not be, so passages cut with one ``files`` come from one read of each
+    file.
     """
 
     def broken(target: str, why: str) -> tuple[None, None]:
@@ -2911,6 +2915,7 @@ def source_passage(node: Node, blueprint: Path, *, issues: list[str] | None = No
             issues.append(f"source locator {target} {why}")
         return None, None
 
+    files = {} if files is None else files
     for target in node.sources:
         try:
             parsed = urlsplit(target)
@@ -2955,19 +2960,21 @@ def source_passage(node: Node, blueprint: Path, *, issues: list[str] | None = No
             os.close(os.open(candidate, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)))
         except OSError:
             return broken(target, "names a file that cannot be read")
+        if candidate not in files:
+            files[candidate] = _read_cited_source(candidate)
+        content = files[candidate]
+        if isinstance(content, str):
+            return broken(target, content)
         try:
-            captured = _read_snapshot_file(candidate)
-            if captured is None:
-                return broken(target, "names a missing file")
             # Lines are what an editor or `sed` counts: newline-separated. Python's
             # `splitlines` also breaks on form feeds, which `pdftotext` writes
             # between pages, and every locator into such a file would then drift
             # by one line per page.
-            lines = captured[0].decode("utf-8").split("\n")
-            if lines and lines[-1] == "":
-                lines.pop()
-        except (ValueError, UnicodeError):
+            lines = content.decode("utf-8").split("\n")
+        except UnicodeError:
             return broken(target, "names a file that is not readable UTF-8 text")
+        if lines and lines[-1] == "":
+            lines.pop()
         try:
             start = int(match.group(1))
             end = int(match.group(2) or start)
@@ -2979,6 +2986,31 @@ def source_passage(node: Node, blueprint: Path, *, issues: list[str] | None = No
         relative = candidate.relative_to(blueprint.resolve()).as_posix()
         return "\n".join(lines[start - 1 : end]), f"{relative}#L{start}-L{end}"
     return None, None
+
+
+def _read_cited_source(path: Path) -> bytes | str:
+    """The bytes of a cited source, or why it has none, in words without its path."""
+
+    if os.path.lexists(path) and not os.path.isfile(path):
+        return "names something other than a regular file"
+    try:
+        captured = _read_snapshot_file(path)
+    except SkeletonError:
+        return "names a file that cannot be read"
+    return "names a missing file" if captured is None else captured[0]
+
+
+def _source_passages(graph: Graph) -> dict[str, tuple[str | None, str | None, str]]:
+    """Every article's cited passage, its locator, and why it has none ("" when nothing is wrong),
+    all cut from one read of each cited file."""
+
+    files: dict[Path, bytes | str] = {}
+    passages: dict[str, tuple[str | None, str | None, str]] = {}
+    for node in graph.nodes.values():
+        issues: list[str] = []
+        passage, locator = source_passage(node, graph.blueprint_dir, issues=issues, files=files)
+        passages[node.id] = (passage, locator, "; ".join(issues))
+    return passages
 
 
 def _article_path(node: Node, graph: Graph) -> str:
@@ -3218,7 +3250,9 @@ def _output_identity(path: Path) -> tuple[int, int, str] | None:
     return metadata.st_dev, metadata.st_ino, digest.hexdigest()
 
 
-def _validate_managed_output(path: Path, *, kind: str) -> tuple[int, int, str] | None:
+def _validate_managed_output(path: Path, *, kind: str, schema: str | None = None) -> tuple[int, int, str] | None:
+    """Validate an output tree against its exact producer schema."""
+
     identity = _output_identity(path)
     if identity is None:
         return identity
@@ -3231,18 +3265,22 @@ def _validate_managed_output(path: Path, *, kind: str) -> tuple[int, int, str] |
         raise SkeletonError([f"cannot inspect skeleton output {path}: {exc}"]) from exc
     manifest = path / PACKET_MANIFEST
     try:
-        payload = json.loads(manifest.read_text(encoding="utf-8")) if manifest.is_file() else None
+        readable = manifest.is_file() and not manifest.is_symlink()
+        payload = json.loads(manifest.read_text(encoding="utf-8")) if readable else None
     except (OSError, RecursionError, ValueError):
         payload = None
     if not (
         isinstance(payload, dict)
         and payload.get("kind") == kind
         and isinstance(payload.get("schema"), str)
-        and (kind, payload.get("schema")) in MANAGED_OUTPUT_SCHEMAS
+        and (kind, payload.get("schema")) in (MANAGED_OUTPUT_SCHEMAS if schema is None else ((kind, schema),))
         and isinstance(payload.get(kind), list)
     ):
         raise SkeletonError([f"refusing to overwrite non-Autoform packet output: {path}"])
     return identity
+
+
+validate_managed_output = _validate_managed_output
 
 
 def _safe_node_path(node_id: str) -> Path:
@@ -3271,24 +3309,44 @@ def declaration_filename(name: str, *, suffix: str = ".lean") -> str:
     return f"{encoded}--{digest}{suffix}"
 
 
-def _stage_output(destination: Path, content: str | None = None) -> Path:
-    """Create a same-directory stage, a directory or a file of ``content``, with the old mode."""
+def _stage_output(destination: Path, content: str | None = None, *, stages: list[Path] | None = None) -> Path:
+    """Create a same-directory stage, a directory or a file of ``content``, with the old mode.
+
+    With ``stages``, the stage is registered there before it is created, so
+    whoever owns ``stages`` removes it however this call or a later step ends.
+    Without, a stage this call cannot finish is removed before the error leaves.
+    """
 
     destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing = not destination.is_symlink() and (
+            destination.is_dir() if content is None else destination.is_file()
+        )
+        mode = stat.S_IMODE(destination.stat().st_mode) if existing else None
+    except OSError as exc:
+        raise SkeletonError([f"cannot inspect skeleton output {destination}: {exc}"]) from exc
     stage = destination.with_name(f".{destination.name}.autoform-stage-{secrets.token_hex(8)}")
-    # Created exclusively before the cleanup below owns it, so a name collision never removes a foreign path.
-    stream = stage.mkdir() if content is None else stage.open("x", encoding="utf-8")
+    if stages is not None:
+        stages.append(stage)
+    try:
+        stream = stage.mkdir() if content is None else stage.open("x", encoding="utf-8")
+    except FileExistsError:
+        # Never created here, so the owner of ``stages`` must not remove a foreign path.
+        if stages is not None:
+            stages.remove(stage)
+        raise
     try:
         if stream is not None:
             with stream:
                 stream.write(content)
                 stream.flush()
                 os.fsync(stream.fileno())
-        if not destination.is_symlink() and (destination.is_dir() if content is None else destination.is_file()):
-            stage.chmod(stat.S_IMODE(destination.stat().st_mode))
+        if mode is not None:
+            stage.chmod(mode)
     except BaseException:
-        with contextlib.suppress(OSError):
-            _remove_output(stage)
+        if stages is None:
+            with contextlib.suppress(OSError):
+                _remove_output(stage)
         raise
     return stage
 
@@ -3300,6 +3358,51 @@ def _stage_report_output(report: SkeletonReport, destination: Path) -> tuple[Pat
     if identity is not None and not destination.is_file():
         raise SkeletonError([f"report output exists and is not a regular file: {destination}"])
     return _stage_output(destination, report.to_json() + "\n"), identity
+
+
+class OutputTransaction:
+    """Own every stage of one managed-output publication.
+
+    Use it as a context manager. :meth:`directory` creates stages beside their
+    destinations, and :meth:`commit` publishes them all with
+    :func:`_replace_outputs`. Each stage is registered before it is created, so
+    leaving the block for any reason, Ctrl-C included, removes every stage that
+    exists unless the commit succeeded.
+    """
+
+    def __init__(self) -> None:
+        self._stages: list[Path] = []
+        self._outputs: list[tuple[Path, Path, tuple[int, int, str] | None]] = []
+        self._committed = False
+
+    def __enter__(self) -> OutputTransaction:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        if self._committed:
+            return
+        for stage in reversed(self._stages):
+            with contextlib.suppress(OSError):
+                _remove_output(stage)
+
+    def directory(self, destination: Path, identity: tuple[int, int, str] | None) -> Path:
+        """Stage a replacement for the managed directory ``destination``.
+
+        ``identity`` is what :func:`validate_managed_output` returned for it;
+        the commit refuses if the directory changed since.
+        """
+
+        stage = _stage_output(destination, stages=self._stages)
+        self._outputs.append((destination, stage, identity))
+        return stage
+
+    def commit(self) -> None:
+        """Publish every stage, in the order it was created, or none of them."""
+
+        if self._committed:
+            raise SkeletonError(["an output transaction can commit only once"])
+        _replace_outputs(list(self._outputs))
+        self._committed = True
 
 
 def _remove_output(path: Path) -> None:
@@ -3686,11 +3789,13 @@ __all__ = [
     "InputsSnapshot",
     "LeanLibrary",
     "NodeSkeleton",
+    "OutputTransaction",
     "PACKET_MANIFEST",
     "ProbeRunner",
     "SkeletonError",
     "SkeletonReport",
     "TrustedDeclaration",
+    "blueprint_hash",
     "check_configuration_unchanged",
     "check_inputs_unchanged",
     "declaration_filename",
@@ -3710,6 +3815,7 @@ __all__ = [
     "snapshot_inputs",
     "source_excerpt",
     "source_passage",
+    "validate_managed_output",
     "write_packets",
     "write_skeleton_report",
 ]

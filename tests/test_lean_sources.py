@@ -2858,6 +2858,7 @@ def test_replaced_source_changes_only_the_generation_revision(tmp_path: Path) ->
         ("packets", "autoform-skeleton-packets/v2"),
         ("passages", "autoform-skeleton-passages/v1"),
         ("passages", "autoform-skeleton-passages/v2"),
+        ("packets", "autoform-review-packets/v1"),
     ],
 )
 def test_managed_skeleton_output_is_not_indexed_as_project_source(
@@ -3252,6 +3253,18 @@ def test_only_a_complete_publication_manifest_hides_its_folder(
         "unfinished/Copy/Proofs.lean",
         "web/Copy/Proofs.lean",
     ]
+
+
+def test_unfinished_packet_stage_is_not_indexed_as_project_source(tmp_path: Path) -> None:
+    # A stage an older writer left without its manifest sorts before the
+    # project's sources and would shadow the real declaration.
+    packet = tmp_path / ".review-packets.autoform-stage-0123456789abcdef" / "blind" / "0123.lean"
+    packet.parent.mkdir(parents=True)
+    packet.write_text("def target : Nat := 2\n", encoding="utf-8")
+
+    index = _index(tmp_path, "def target : Nat := 1\n", name="Actual.lean")
+
+    assert index.find("target").path == Path("Actual.lean")
 
 
 def test_irreducible_definitions_are_indexed(tmp_path: Path) -> None:

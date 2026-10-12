@@ -44,10 +44,12 @@ _FRONTMATTER_KEYS = frozenset(
         "not_ready",
         "origin",
         "discussion",
+        "review_approved",
         "open_statements",
         "published",
     }
 )
+_SKELETON_HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _FORMALIZED = "formalized"
 _RETRACTED = "retracted"
 _TRUE = frozenset({"true", "yes"})
@@ -106,6 +108,9 @@ class Node:
     depth: int = 0
     article_id: str | None = None
     source_sha256: str | None = None
+    #: Hash of the complete review surface a person approved. Unlike the
+    #: skeleton alone, this binds the article, source, and read-backs.
+    review_approved: str | None = None
 
     @property
     def formalizable(self) -> bool:
@@ -274,6 +279,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             depth=_article_depth(parsed_node.id, parents),
             article_id=metadata.get("article_id"),
             source_sha256=source_hashes[parsed_node.id],
+            review_approved=metadata.get("review_approved"),
         )
 
     if not issues:
@@ -731,6 +737,10 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
     if key == "origin":
         if folded not in {"cited", "bridged", "background"}:
             return value, f"{location}: 'origin' accepts cited, bridged, or background"
+        return folded, None
+    if key == "review_approved":
+        if not _SKELETON_HASH.fullmatch(folded):
+            return value, f"{location}: '{key}' must be a `sha256:<64 hex>` hash from `autoform review`"
         return folded, None
     if key == "open_statements":
         if folded not in {"allowed", "forbidden"}:
