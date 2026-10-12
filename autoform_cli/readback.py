@@ -21,7 +21,6 @@ invalid, rather than silently presenting it as current.
 
 from __future__ import annotations
 
-import contextlib
 import errno
 import hashlib
 import html
@@ -32,6 +31,7 @@ import secrets
 import stat
 import time
 import unicodedata
+import warnings
 import xml.etree.ElementTree as etree
 from collections import Counter
 from dataclasses import dataclass, replace
@@ -2166,7 +2166,8 @@ def _github_errors(text: str, document: object, html: str, *, compare: bool) -> 
     formula GitHub may read otherwise than emulated, or, compared by
     :func:`_shown`, shows anything else otherwise than the site does. The
     reading is compared only if ``compare``, when nothing more specific has
-    been found, and the refusal names the line where the two first part.
+    been found, and the refusal names the line where the two first part and a
+    way to write the testimony that both read alike.
     """
 
     github = html5lib.parseFragment(html, namespaceHTMLElements=False)
@@ -2217,9 +2218,173 @@ def _github_errors(text: str, document: object, html: str, *, compare: bool) -> 
 
     errors.append(
         f'testimony GitHub shows differently from the site is not allowed: on line {line} the site shows '
-        f'"{around(site)}" where GitHub shows "{around(shown)}"; write the line so that GitHub shows what the site shows'
+        f'"{around(site)}" where GitHub shows "{around(shown)}"; {_github_hint(site, shown, at)}'
     )
     return errors
+
+
+def _github_hint(site: list[tuple[str, str, int]], github: list[tuple[str, str, int]], at: int) -> str:
+    """How to write what the site and GitHub first show apart, at token
+    ``at`` of each of :func:`_shown`, so that both show it alike."""
+
+    one, other = (tokens[at][:2] if at < len(tokens) else ("", "") for tokens in (site, github))
+    values = {one[1], other[1]}
+
+    def opened(tokens: list[tuple[str, str, int]], tag: str) -> bool:
+        before = [value for kind, value, _ in tokens[:at] if kind == "block"]
+        return sum(value.startswith(f"<{tag}") for value in before) > before.count(f"</{tag}>")
+
+    def next_block(tokens: list[tuple[str, str, int]]) -> str:
+        """The block that opens at token ``at``, or after it before anything
+        more is shown: the block where the two part, not one further on."""
+        for index, (kind, value, _) in enumerate(tokens[at:], at):
+            if kind == "block" and value[:2] != "</":
+                return value
+            if index > at and kind not in {"block", "break", "mark"}:
+                break
+        return ""
+
+    def quotes(tokens: list[tuple[str, str, int]]) -> list[str]:
+        """The block quotes opened and closed before the next thing shown,
+        text or a code block."""
+        ends = []
+        for kind, value, _ in tokens[at:]:
+            if kind not in {"block", "break"} or value.startswith("<pre"):
+                break
+            if value.startswith(("<blockquote", "</blockquote")):
+                ends.append(value)
+        return ends
+
+    def shown_next(tokens: list[tuple[str, str, int]]) -> tuple[str, str]:
+        """The first thing shown at token ``at`` or after it, past the ends
+        of blocks, which a list item's paragraph adds on one side only."""
+        return next((token[:2] for token in tokens[at:] if token[0] not in {"block", "break", "mark"}), ("", ""))
+
+    in_table = opened(site, "table") or opened(github, "table")
+    in_item = opened(site, "li") or opened(github, "li")
+    in_quote = opened(site, "blockquote") or opened(github, "blockquote")
+    fence_in_item = "under a line of text in the item, indented four spaces more than the item's marker"
+    if site[:1] == [("block", "<pre></pre>", 1)] and github[:1] != site[:1]:
+        return "the site reads a first line of four spaces or a tab as an empty code block; drop the blank first line"
+    if "\t" in other[1] and "\t" not in one[1]:
+        return "the site reads a tab in a formula or in code as spaces, and GitHub keeps it; write spaces for tabs"
+    if shown_next(site)[0] == "math" and shown_next(github) in {("text", "("), ("text", "[")}:
+        if in_quote:
+            return (
+                "GitHub reads \\( and \\[ as ( and [, not as the start of a formula; write a formula as $`...`$, "
+                "displayed ones too: a block quote takes no ```math fence"
+            )
+        return (
+            "GitHub reads \\( and \\[ as ( and [, not as the start of a formula; write a formula in a line of "
+            "text as $`...`$, and a displayed one in a ```math fence"
+            + (f", which in a list item goes {fence_in_item}" if in_item else "")
+        )
+    if "math" in {one[0], other[0]}:
+        if one[0] == "math" and "\n" in one[1]:
+            return (
+                "GitHub ends a formula at a line break, and may read the next line as a list; keep each "
+                "formula in a line of text on one line"
+            )
+        if one[0] == other[0] and one[1][:2] == other[1][:2]:
+            if in_table:
+                return "in a table GitHub reads \\| as | even in a formula; write \\vert for | and \\Vert for \\| there"
+            if one[1].startswith("\\["):
+                return (
+                    "GitHub reads Markdown escapes such as \\{ in $$...$$ first; write displayed math in a ```math "
+                    "fence, whose TeX GitHub takes as written"
+                )
+            return (
+                "GitHub reads Markdown escapes such as \\{ and \\_ in $...$ first; write the formula as $`...`$, "
+                "whose TeX GitHub takes as written"
+            )
+        if one[:2] == ("text", "$") and other[0] == "math":
+            return (
+                "GitHub reads \\$ as a dollar sign before it looks for formulas, and pairs it with the next one; "
+                "write dollar signs meant as typed in code, as `$x$`"
+            )
+        return (
+            "GitHub reads $...$ as a formula only when the first $ starts a line or follows a space or (, no "
+            "letter, digit, or _ follows the last, and it is not in emphasis; elsewhere write $`...`$, as in "
+            "$`n`$th, with no letter, digit, _, or \\ just before it"
+        )
+    if values & {"<del>", "</del>"}:
+        return (
+            "GitHub strikes through text between tildes; write a space for a ~ that keeps words together, \\sim "
+            "in a formula, or ~ in code"
+        )
+    if "<input>" in values:
+        return "GitHub shows [ ], [x], or [X] that starts a list item as a checkbox; write \\[x] there"
+    if "<br>" in values or one == ("text", "\\") and at + 1 < len(site) and site[at + 1][2] > site[at][2]:
+        return "GitHub reads a backslash at the end of a line as a line break; drop it"
+    if next_block(github).startswith("<table") and one[0] == "text":
+        return "GitHub reads a table right after a line of text; put a blank line before a table"
+    if next_block(site).startswith("<table") and not next_block(github).startswith("<table"):
+        return (
+            "GitHub reads a table only when each cell of its delimiter row holds a -, with as many cells as the "
+            "header; write the row as |---|---|"
+        )
+    if next_block(github).startswith("<table") and not next_block(site).startswith("<table"):
+        return (
+            "GitHub reads a table wherever a line is followed by a row of -, :, and | with as many cells, "
+            "whether or not either row starts or ends with |; write | at both ends of each row of a table, and "
+            "\\| for a | that is text"
+        )
+    if "<hr>" in values | {next_block(site), next_block(github)}:
+        return (
+            "GitHub reads a line of three or more *, -, or _, spaced or not, as a rule, in a list item too; write a "
+            "rule as *** after a blank line, and \\ before the first character of a line of text that is one"
+        )
+    if quotes(site) != quotes(github) or (
+        in_quote and one[0] == other[0] == "text" and (">" in one[1]) != (">" in other[1])
+    ):
+        return (
+            "GitHub ends a block quote at a blank line, and at a line that does not start with > unless it carries "
+            "on a line of text in the quote; start each line of a block quote, blank ones too, with > where the "
+            "quote's first > is, and put a line of text between two block quotes"
+        )
+    if in_table:
+        return (
+            "GitHub splits a table row at every | not written \\|, in code and formulas too, and drops the "
+            "backslash of \\| there; keep code that holds a | out of tables, and write \\vert in a formula"
+        )
+    lists = ("<ul>", "<ol ")
+    if one[1] == "<li>" and other[1] in {"</ul>", "</ol>"} and github[at + 1 : at + 2] and github[at + 1][1].startswith(lists):
+        return (
+            "GitHub starts a new list where a bulleted list turns numbered or the other way; put a line of "
+            "text between the two lists"
+        )
+    if one[1].startswith("<ol ") and other[1].startswith("<ol "):
+        return "GitHub numbers a list from its first number and the site from 1; number each list from 1"
+    if next_block(github).startswith(lists) and one[0] == "text":
+        return (
+            "GitHub reads a list right after a line of text, and a line that starts with -, +, *, or a number "
+            "and . or ) as one; put a blank line before a list, and write \\-, \\+, \\*, or 1\\. where a line "
+            "of text starts with one"
+        )
+    if any(value.startswith(("<ul", "<ol", "<li", "</ul", "</ol", "</li")) for value in values) or "break" in {
+        one[0],
+        other[0],
+    }:
+        return (
+            "GitHub nests a list or paragraph under an item when it is indented as far as the item's text, and "
+            "the site at four spaces; indent nested lists and an item's further paragraphs four spaces"
+        )
+    if in_item and one[0] == "code" and (other[1].startswith("<pre>") or shown_next(github)[0] == "math"):
+        return f"the site reads a fence on a list item's own line as code in a line of text; put the code block {fence_in_item}"
+    if any(value.startswith("<pre>") for value in values | {next_block(site), next_block(github)}) or "code" in {
+        one[0],
+        other[0],
+    }:
+        return (
+            "GitHub ends a code block at any fence at least as long as the one that opens it, or else at the end "
+            "of the testimony, and the site only at a fence like the opening one; close each code block with the "
+            "fence it opens with, starting where that one does, and nothing after it"
+        )
+    if one[1] == "\\" and at + 1 < len(site) and site[at + 1][:2] == other:
+        return f"GitHub hides a backslash before any punctuation, and the site only before some; drop the one before {other[1]}"
+    if values & {"<em>", "</em>", "<strong>", "</strong>"} or one[0] == other[0] == "text" and values & {"*", "_"}:
+        return "GitHub and the site read * and _ apart here; write \\* or \\_ for the character itself"
+    return "no rewrite is known for this difference; write the line so that GitHub shows what the site shows"
 
 
 def _github_html(text: str) -> str:
@@ -2795,9 +2960,9 @@ def _require_publication_support() -> None:
 def _open_card_directory(blueprint: Path, article_id: str, *, create: bool) -> int | None:
     """Open the card directory through held, no-follow directory descriptors.
 
-    With ``create``, missing directories on the way are made. Without it,
-    nothing is created, and a missing directory means there is no card yet:
-    ``None``.
+    With ``create``, missing directories on the way are made, and each new
+    directory's name is flushed into its parent. Without it, nothing is
+    created, and a missing directory means there is no card yet: ``None``.
     """
 
     if not ARTICLE_ID_PATTERN.fullmatch(article_id):
@@ -2822,6 +2987,8 @@ def _open_card_directory(blueprint: Path, article_id: str, *, create: bool) -> i
                     pass
                 except OSError as exc:
                     raise ValueError(f"cannot create read-back directory component: {reached}: {exc.strerror}") from exc
+                else:
+                    _flush_new_directory(current, reached)
                 try:
                     following = os.open(part, flags, dir_fd=current)
                 except OSError as exc:
@@ -2845,6 +3012,21 @@ def _unsafe_component(reached: Path, exc: OSError) -> ValueError:
     if exc.errno in (errno.ELOOP, errno.ENOTDIR):
         return ValueError(f"refusing a symlink or unsafe component in the read-back path: {reached}: {exc.strerror}")
     return ValueError(f"cannot open read-back directory component: {reached}: {exc.strerror}")
+
+
+def _flush_new_directory(parent: int, made: Path) -> None:
+    """Flush a directory just made into ``parent``, so its name survives a crash with the card in it."""
+
+    try:
+        _flush(parent)
+    except OSError as exc:
+        # As with the card's own directory, the directory is in place; only
+        # its surviving a crash of the whole system is in doubt.
+        warnings.warn(
+            f"read-back directory {made} was made, but its parent directory could not be flushed to disk: {exc}",
+            RuntimeWarning,
+            stacklevel=4,
+        )
 
 
 def _existing_card_hash(blueprint: Path, article_id: str, path: Path) -> str | None:
@@ -2973,10 +3155,13 @@ def _publish_card(directory: int, path: Path, content: str, *, expected_card_has
     between the compare and the replacement. Content identical to the card's
     is not written again. Otherwise the new card is staged beside the old
     one, flushed to disk, and renamed over it in one step, so the card's name
-    holds the old complete card until it holds the new one. A failure or
-    interruption before the rename removes the staging file if it can; a
-    crash, SIGTERM, or SIGKILL can leave it, and the loader never reads it as
-    a card.
+    holds the old complete card until it holds the new one. Each flush uses
+    ``F_FULLFSYNC`` where the platform has it (macOS), whose plain ``fsync``
+    can leave the data in the drive's cache. A failure or interruption before
+    the rename removes the staging file. If removing it also fails, the file
+    is left and named, by the error or, after an interruption, a warning. A
+    second interruption while it is removed, a crash, SIGTERM, or SIGKILL
+    can leave it unnamed; the loader never reads it as a card.
     """
 
     data = content.encode("utf-8")
@@ -2988,32 +3173,83 @@ def _publish_card(directory: int, path: Path, content: str, *, expected_card_has
     # Named before it exists, so the cleanup below sees the staging file from
     # the moment it is created. The name is too random to be anyone else's.
     staged_name: str | None = f"{_WORK_PREFIX}{secrets.token_hex(12)}.tmp"
+    left: str | None = None
     try:
         try:
-            descriptor = os.open(
-                staged_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory
-            )
-        except OSError:
-            # A failed exclusive create makes no file, and a name already
-            # taken is not this write's file, so there is nothing to remove.
+            try:
+                descriptor = os.open(
+                    staged_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory
+                )
+            except OSError:
+                # A failed exclusive create makes no file, and a name already
+                # taken is not this write's file, so there is nothing to remove.
+                staged_name = None
+                raise
+            try:
+                written = 0
+                while written < len(data):
+                    written += os.write(descriptor, data[written:])
+                os.fchmod(descriptor, 0o644)
+                _flush(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(staged_name, path.name, src_dir_fd=directory, dst_dir_fd=directory)
             staged_name = None
-            raise
-        try:
-            written = 0
-            while written < len(data):
-                written += os.write(descriptor, data[written:])
-            os.fchmod(descriptor, 0o644)
-            os.fsync(descriptor)
         finally:
-            os.close(descriptor)
-        os.replace(staged_name, path.name, src_dir_fd=directory, dst_dir_fd=directory)
-        staged_name = None
+            if staged_name is not None and not _unlink_quietly(directory, staged_name):
+                left = staged_name
     except OSError as exc:
-        raise ValueError(f"cannot publish read-back: {path}: {exc}") from exc
-    finally:
-        if staged_name is not None:
-            with contextlib.suppress(OSError):
-                os.unlink(staged_name, dir_fd=directory)
+        leftover = "" if left is None else f"; its temporary file {path.with_name(left)} could not be removed"
+        raise ValueError(f"cannot publish read-back: {path}: {exc}{leftover}") from exc
+    except BaseException:
+        # An interruption carries no message to add the file to.
+        if left is not None:
+            warnings.warn(
+                f"read-back {path} was not published, and its temporary file {path.with_name(left)} "
+                "could not be removed",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+        raise
+    try:
+        _flush(directory)
+    except OSError as exc:
+        # The card is in place and readable; only its surviving a crash of the
+        # whole system is in doubt, so this is no reason to report a failure.
+        warnings.warn(
+            f"read-back {path} was published, but its directory could not be flushed to disk: {exc}",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+
+def _unlink_quietly(directory: int, filename: str) -> bool:
+    """Remove ``filename`` from ``directory``; whether it is gone."""
+
+    try:
+        os.unlink(filename, dir_fd=directory)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _flush(descriptor: int) -> None:
+    """Flush a file or directory to stable storage: ``F_FULLFSYNC`` where the platform has it, else ``fsync``."""
+
+    full_fsync = getattr(fcntl, "F_FULLFSYNC", None)
+    if full_fsync is not None:
+        try:
+            fcntl.fcntl(descriptor, full_fsync)
+            return
+        except OSError as exc:
+            # Not every file system takes it; a plain fsync is the next best.
+            # Any other failure, such as an I/O error, is the flush's, and a
+            # plain fsync that only reaches the drive's cache would hide it.
+            if exc.errno not in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL):
+                raise
+    os.fsync(descriptor)
 
 
 def _longest_backtick_run(text: str) -> int:

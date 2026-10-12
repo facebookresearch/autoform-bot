@@ -28,9 +28,11 @@ from .impact import ImpactError, format_impact, revision_impact
 from .lean import build_linker, declaration_names, index_failure_message
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
 from .readback import (
+    TESTIMONY_MAX_BYTES,
     PreparedReadback,
     Readback,
     load_readbacks,
+    planned_readback,
     prepare_readback,
     publish_readback,
     readback_conflicts,
@@ -38,6 +40,7 @@ from .readback import (
 from .render import PublicationError, publication_issues, render_site
 from .review import (
     ReviewBundle,
+    ReviewDeclaration,
     ReviewError,
     ReviewFinding,
     build_review_bundle,
@@ -1191,10 +1194,19 @@ def _review_record(args: argparse.Namespace) -> int:
         # The inputs are read, and checked against the prepared bundle, before
         # any Lean work: a missing file or a changed packet stops the record
         # without an extraction.
-        packet, testimony = _record_input(bundle, args)
+        prepared, packet, testimony = _record_input(bundle, args)
+        # So is a platform that cannot publish, ahead of advice that only helps
+        # where cards can be filed.
+        readback_conflicts([])
+        # So is an article_id the blueprint no longer has, ahead of the card
+        # check: the hash that check asks for cannot help it.
         graph = load_graph(args.blueprint_dir)
         before = _record_snapshot(graph, args)
         node_id, _, digest = before
+        # And so is a card that would replace different content without
+        # naming it, or whose existing card cannot be safely read, rather than
+        # after an extraction.
+        _refuse_conflict(_build_card(args, lambda: _planned_card(args, prepared, packet, testimony)))
         # The article is read again before the card is written, by its name
         # rather than the file it resolves to, so that a link pointed at
         # another file is seen.
@@ -1241,11 +1253,11 @@ def _review_record(args: argparse.Namespace) -> int:
     return 0
 
 
-def _record_input(bundle: ReviewBundle, args: argparse.Namespace) -> tuple[str, str]:
+def _record_input(bundle: ReviewBundle, args: argparse.Namespace) -> tuple[ReviewDeclaration, str, str]:
     """Read the packet and testimony, and check the packet against the bundle.
 
-    Return the packet the auditor read, which is the prepared declaration's,
-    and what the auditor wrote.
+    Return the declaration as ``review prepare`` recorded it, the packet the
+    auditor read, which is that declaration's, and what the auditor wrote.
     """
 
     prepared = bundle.declaration(args.article_id, args.declaration)
@@ -1259,10 +1271,20 @@ def _record_input(bundle: ReviewBundle, args: argparse.Namespace) -> tuple[str, 
     if packet_bytes != prepared.packet.encode("utf-8"):
         reason = f"packet bytes do not match the prepared declaration {args.declaration}"
         raise ReviewError([ReviewFinding(args.article_id, "review-packet-mismatch", reason)])
+    # The limit applies after "\r\n" is read as "\n", which at most halves
+    # a testimony. So at most one byte past twice the limit is read, which
+    # marks a testimony over it, and a huge file costs no more than two
+    # testimonies do.
     try:
-        raw = _read_regular_file(args.testimony)
+        raw = _read_regular_file(args.testimony, 2 * TESTIMONY_MAX_BYTES + 1)
     except OSError as exc:
         raise ReviewError([_unreadable_input(args, "testimony", args.testimony, exc)]) from exc
+    if len(raw) - raw.count(b"\r\n") > TESTIMONY_MAX_BYTES:
+        reason = (
+            f"{args.declaration}: unsafe read-back testimony: {args.testimony} is over the "
+            f"{TESTIMONY_MAX_BYTES}-byte limit"
+        )
+        raise ReviewError([ReviewFinding(args.article_id, "review-record-invalid", reason)])
     try:
         # Decoded as a text file is read: "\r\n" and a lone "\r" end a
         # line as "\n" does.
@@ -1270,11 +1292,11 @@ def _record_input(bundle: ReviewBundle, args: argparse.Namespace) -> tuple[str, 
     except UnicodeError as exc:
         raise ReviewError([_unreadable_input(args, "testimony", args.testimony, exc)]) from exc
     # Equal to the bundle's text, so already valid UTF-8.
-    return packet_bytes.decode("utf-8"), testimony
+    return prepared, packet_bytes.decode("utf-8"), testimony
 
 
-def _read_regular_file(path: Path) -> bytes:
-    """The bytes of the regular file at ``path``."""
+def _read_regular_file(path: Path, size: int = -1) -> bytes:
+    """Up to ``size`` bytes of the regular file at ``path``, all of it by default."""
 
     # Opened without waiting for a writer, so a FIFO is refused unread
     # instead of holding the record.
@@ -1282,7 +1304,7 @@ def _read_regular_file(path: Path) -> bytes:
     with open(path, "rb", opener=lambda name, flags: os.open(name, flags | nonblocking)) as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
             raise OSError("not a regular file")
-        return handle.read()
+        return handle.read(size)
 
 
 def _unreadable_input(args: argparse.Namespace, role: str, path: Path, exc: Exception) -> ReviewFinding:
@@ -1302,6 +1324,24 @@ def _build_card(args: argparse.Namespace, build: Callable[[], PreparedReadback])
         raise ReviewError(
             [ReviewFinding(args.article_id, "review-record-invalid", f"{args.declaration}: {exc}")]
         ) from exc
+
+
+def _planned_card(
+    args: argparse.Namespace, prepared: ReviewDeclaration, packet: str, testimony: str
+) -> PreparedReadback:
+    """The card the record would file if the prepared evidence is current."""
+
+    return planned_readback(
+        args.blueprint_dir,
+        article_id=args.article_id,
+        declaration=args.declaration,
+        skeleton_hash=prepared.skeleton_hash,
+        packet_hash=prepared.packet_hash,
+        model=args.model,
+        text=testimony,
+        packet_text=packet,
+        expected_card_hash=args.expected_card_hash,
+    )
 
 
 def _refuse_conflict(card: PreparedReadback) -> None:
@@ -1324,8 +1364,7 @@ def _record_snapshot(graph: Graph, args: argparse.Namespace) -> tuple[str, str, 
 
     matches = [node for node in graph.nodes.values() if node.article_id == args.article_id]
     if len(matches) != 1:
-        reason = f"current graph has no unique article with article_id {args.article_id}"
-        raise ReviewError([ReviewFinding(args.article_id, "review-article-missing", reason)])
+        raise ReviewError([_record_selection_finding(args)])
     node = matches[0]
     return node.id, str(node.path), node.source_sha256 or ""
 
@@ -1517,6 +1556,23 @@ def _review_cards(blueprint_dir: Path) -> dict[tuple[str, str], Readback]:
         return load_readbacks(blueprint_dir)
     except ValueError as exc:
         raise ReviewError([ReviewFinding("review", "readback-unlistable", str(exc))]) from exc
+
+
+def _record_selection_finding(args: argparse.Namespace) -> ReviewFinding:
+    """The bundle has this declaration, but the current blueprint no longer has its article_id."""
+
+    # A card's path is keyed by its article_id: the card a re-review names
+    # stays under the old one, so a record taking the new one must not name it.
+    # A packet is named by its content, so a different one is text the
+    # testimony was not written from. Only --packets writes a packet manifest.
+    drop_hash = " and drop --expected-card-hash" if args.expected_card_hash is not None else ""
+    return ReviewFinding(
+        args.article_id,
+        "review-selection-missing",
+        f"{args.declaration}: article_id {args.article_id} is no longer in the blueprint; to record it, rerun review "
+        f"prepare with --packets and take --article-id from the new packet manifest{drop_hash}; if that manifest "
+        "names a different packet for it, pass that --packet and a --testimony written from it",
+    )
 
 
 def _claim_board(args: argparse.Namespace) -> ClaimBoard:

@@ -115,6 +115,29 @@ def _fcntl(monkeypatch, **calls) -> None:
     monkeypatch.setattr("autoform_cli.readback.fcntl", types.SimpleNamespace(**{**locking, **calls}))
 
 
+def _without_full_fsync(monkeypatch) -> None:
+    """Flush with plain ``os.fsync``, as on Linux, so a test can watch or fail each flush."""
+
+    _fcntl(monkeypatch)
+
+
+def _with_full_fsync(monkeypatch, full_fsync) -> None:
+    """Give publication an ``fcntl`` with ``F_FULLFSYNC``, as on macOS, that runs ``full_fsync(descriptor)``."""
+
+    fcntl = pytest.importorskip("fcntl")
+    command = getattr(fcntl, "F_FULLFSYNC", 51)
+
+    def call(descriptor: int, requested: int, *args) -> int:
+        assert requested == command
+        return full_fsync(descriptor)
+
+    _fcntl(monkeypatch, F_FULLFSYNC=command, fcntl=call)
+
+
+def _kind(descriptor: int) -> str:
+    return "directory" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "card"
+
+
 # --------------------------------------------------------------------------- #
 # The lock and the rename
 # --------------------------------------------------------------------------- #
@@ -745,6 +768,8 @@ def test_a_call_that_fails_before_the_rename_leaves_the_card_and_no_staging_file
 ) -> None:
     blueprint, path, expected = _filed(tmp_path)
     original = path.read_bytes()
+    if call == "fsync":
+        _without_full_fsync(monkeypatch)
     failed = _fail(monkeypatch, call, when)
 
     with pytest.raises(ValueError) as refused:
@@ -754,6 +779,104 @@ def test_a_call_that_fails_before_the_rename_leaves_the_card_and_no_staging_file
     assert path.read_bytes() == original
     assert _staged_names(path.parent) == []
     assert _unlocked(path.parent)
+
+
+def test_a_staging_file_that_cannot_be_removed_is_left_once_the_rename_fails(tmp_path: Path, monkeypatch) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    replace_file, unlink = os.replace, os.unlink
+    removals: list[str] = []
+
+    def fail_replace(*args, **kwargs) -> None:
+        raise OSError(errno.EIO, "injected input/output error")
+
+    def fail_unlink(name: str, *, dir_fd: int | None = None) -> None:
+        removals.append(name)
+        raise OSError(errno.EIO, "injected input/output error")
+
+    _patch_os(monkeypatch, replace=fail_replace, unlink=fail_unlink)
+
+    # The error is the rename's, and names the file the one failed removal left.
+    with pytest.raises(ValueError) as refused:
+        _file_card(blueprint, "Replacement.", expected_card_hash=expected)
+    assert len(removals) == 1 and _staged_names(path.parent) == removals
+    assert str(refused.value) == (
+        f"cannot publish read-back: {path}: [Errno {errno.EIO}] injected input/output error; "
+        f"its temporary file {path.with_name(removals[0])} could not be removed"
+    )
+    assert path.read_bytes() == original
+    assert load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)].text == "First."
+    assert replace_file is os.replace and unlink is os.unlink
+
+
+def test_a_staging_file_that_could_not_be_created_is_not_named_as_left_behind(tmp_path: Path, monkeypatch) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    open_ = os.open
+    removals: list[str] = []
+
+    # On a read-only mount Linux refuses both the create and the removal of a
+    # name that is not there with EROFS.
+    def read_only_open(name, flags, *args, **kwargs):
+        if flags & os.O_CREAT:
+            raise OSError(errno.EROFS, os.strerror(errno.EROFS))
+        return open_(name, flags, *args, **kwargs)
+
+    def read_only_unlink(name: str, *, dir_fd: int | None = None) -> None:
+        removals.append(name)
+        raise OSError(errno.EROFS, os.strerror(errno.EROFS))
+
+    _patch_os(monkeypatch, open=read_only_open, unlink=read_only_unlink)
+
+    with pytest.raises(ValueError) as refused:
+        _file_card(blueprint, "Replacement.", expected_card_hash=expected)
+    assert str(refused.value) == f"cannot publish read-back: {path}: [Errno {errno.EROFS}] {os.strerror(errno.EROFS)}"
+    assert removals == []
+    assert path.read_bytes() == original and _staged_names(path.parent) == []
+
+
+def test_a_directory_that_cannot_be_flushed_after_the_rename_is_a_warning(tmp_path: Path, monkeypatch) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    _without_full_fsync(monkeypatch)
+    _fail(monkeypatch, "fsync", lambda descriptor: stat.S_ISDIR(os.fstat(descriptor).st_mode))
+
+    with pytest.warns(RuntimeWarning, match=f"read-back {path} was published, but its directory could not be flushed"):
+        assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
+    assert load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)].text == "Replacement."
+    assert _staged_names(path.parent) == []
+
+
+def test_the_card_is_flushed_once_written_and_its_mode_set_and_its_directory_once_it_is_renamed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    _without_full_fsync(monkeypatch)
+    steps: list[str] = []
+    patched = _Os()
+
+    def record(call: str, step):
+        real = getattr(os, call)
+
+        def recorded(*args, **kwargs):
+            result = real(*args, **kwargs)
+            if (name := step(*args, **kwargs)) and steps[-1:] != [name]:
+                steps.append(name)
+            return result
+
+        setattr(patched, call, recorded)
+        return recorded
+
+    patched.supports_dir_fd = os.supports_dir_fd | {
+        record("open", lambda name, flags, *args, **kwargs: "stage" if flags & os.O_CREAT else None)
+    }
+    record("write", lambda *args: "write")
+    record("fchmod", lambda *args: "fchmod")
+    record("fsync", lambda descriptor: f"flush {_kind(descriptor)}")
+    record("replace", lambda *args, **kwargs: "rename")
+    monkeypatch.setattr(readback, "os", patched)
+
+    assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
+    assert steps == ["stage", "write", "fchmod", "flush card", "rename", "flush directory"]
 
 
 def test_every_card_is_left_readable_by_all_and_writable_by_its_owner_whatever_the_umask(tmp_path: Path) -> None:
@@ -767,6 +890,105 @@ def test_every_card_is_left_readable_by_all_and_writable_by_its_owner_whatever_t
     finally:
         os.umask(previous)
     assert first == stat.S_IMODE(path.stat().st_mode) == 0o644
+
+
+@pytest.mark.parametrize("full_fsync", ["works", "ENOTSUP", "EOPNOTSUPP", "ENOTTY", "EINVAL"])
+def test_each_flush_uses_full_fsync_where_the_platform_has_it_and_fsync_where_it_is_not_supported(
+    tmp_path: Path, monkeypatch, full_fsync: str
+) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    fsync = os.fsync
+    flushed: list[tuple[str, str]] = []
+
+    def full(descriptor: int) -> int:
+        if full_fsync != "works":
+            refusal = getattr(errno, full_fsync)
+            raise OSError(refusal, os.strerror(refusal))
+        flushed.append(("F_FULLFSYNC", _kind(descriptor)))
+        return 0
+
+    def plain(descriptor: int) -> None:
+        flushed.append(("fsync", _kind(descriptor)))
+        fsync(descriptor)
+
+    _with_full_fsync(monkeypatch, full)
+    _patch_os(monkeypatch, fsync=plain)
+
+    # On macOS a plain fsync can leave the data in the drive's cache, so it is only the fallback.
+    assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
+    call = "F_FULLFSYNC" if full_fsync == "works" else "fsync"
+    assert flushed == [(call, "card"), (call, "directory")]
+
+
+def test_an_io_error_from_full_fsync_fails_the_flush_rather_than_falling_back_to_fsync(
+    tmp_path: Path, monkeypatch
+) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    fsyncs: list[str] = []
+
+    def full(descriptor: int) -> int:
+        raise OSError(errno.EIO, os.strerror(errno.EIO))
+
+    def plain(descriptor: int) -> None:
+        fsyncs.append(_kind(descriptor))
+
+    _with_full_fsync(monkeypatch, full)
+    _patch_os(monkeypatch, fsync=plain)
+
+    # A plain fsync would succeed into the drive's cache and hide the error.
+    with pytest.raises(ValueError) as refused:
+        _file_card(blueprint, "Replacement.", expected_card_hash=expected)
+    assert str(refused.value) == f"cannot publish read-back: {path}: [Errno {errno.EIO}] {os.strerror(errno.EIO)}"
+    assert fsyncs == []
+    assert path.read_bytes() == original and _staged_names(path.parent) == []
+
+
+def test_a_first_card_flushes_each_directory_it_makes_into_its_parent(tmp_path: Path, monkeypatch) -> None:
+    blueprint = _blueprint(tmp_path)
+    _without_full_fsync(monkeypatch)
+    fsync, mkdir = os.fsync, os.mkdir
+    steps: list[tuple[str, object]] = []
+
+    def flushed(descriptor: int) -> None:
+        fsync(descriptor)
+        found = os.fstat(descriptor)
+        steps.append(("flush", (found.st_dev, found.st_ino)))
+
+    def made(name: str, mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+        mkdir(name, mode, dir_fd=dir_fd)
+        steps.append(("mkdir", name))
+
+    _patch_os(monkeypatch, fsync=flushed, mkdir=made)
+
+    path = _file_card(blueprint, "First.")
+    parent, readbacks, card, directory = (
+        (found.st_dev, found.st_ino) for found in map(os.stat, (blueprint, path.parent.parent, path, path.parent))
+    )
+    # Each new directory's name is flushed into its parent once it is made;
+    # then the card, then the card's name.
+    assert steps == [
+        ("mkdir", "readbacks"),
+        ("flush", parent),
+        ("mkdir", _ARTICLE_ID),
+        ("flush", readbacks),
+        ("flush", card),
+        ("flush", directory),
+    ]
+
+
+def test_a_directory_made_for_a_first_card_that_cannot_be_flushed_into_its_parent_is_a_warning(
+    tmp_path: Path, monkeypatch
+) -> None:
+    blueprint = _blueprint(tmp_path)
+    _without_full_fsync(monkeypatch)
+    parent = os.stat(blueprint).st_ino
+    _fail(monkeypatch, "fsync", lambda descriptor: os.fstat(descriptor).st_ino == parent)
+
+    with pytest.warns(RuntimeWarning, match="read-back directory .*/readbacks was made, but its parent directory"):
+        path = _file_card(blueprint, "First.")
+    assert load_readbacks(blueprint)[(_ARTICLE_ID, _DECLARATION)].text == "First."
+    assert _staged_names(path.parent) == []
 
 
 def test_short_writes_still_stage_the_whole_card(tmp_path: Path, monkeypatch) -> None:
@@ -798,6 +1020,150 @@ def test_a_staging_name_already_taken_is_neither_used_nor_removed(tmp_path: Path
         _file_card(blueprint, "Replacement.", expected_card_hash=expected)
     assert taken.read_bytes() == b"Someone else's file.\n"
     assert path.read_bytes() == original
+
+
+# --------------------------------------------------------------------------- #
+# Interruptions
+# --------------------------------------------------------------------------- #
+
+
+def test_an_interruption_between_directories_of_the_walk_closes_each_once(tmp_path: Path, monkeypatch) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    card = _prepared(blueprint, "Replacement.", expected)
+    close = os.close
+    interrupted = False
+
+    # The interrupt lands just after the walk closes a directory it has left.
+    def close_then_interrupt(descriptor: int) -> None:
+        nonlocal interrupted
+        leaving = stat.S_ISDIR(os.fstat(descriptor).st_mode)
+        close(descriptor)
+        if leaving and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("autoform_cli.readback.os.close", close_then_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        publish_readback(card)
+    assert interrupted
+
+
+def test_an_interruption_while_a_card_is_read_closes_its_descriptor_once(tmp_path: Path, monkeypatch) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    card = _prepared(blueprint, "Replacement.", expected)
+    fdopen, read = os.fdopen, os.read
+    interrupted = False
+
+    # The interrupt lands as the card is read: inside a file object made on
+    # its descriptor, which closes the descriptor as it is dropped, or just
+    # after a read from the descriptor itself.
+    def fdopen_then_interrupt(descriptor: int, *args, **kwargs):
+        nonlocal interrupted
+        interrupted = True
+        fdopen(descriptor, *args, **kwargs).close()
+        raise KeyboardInterrupt
+
+    def read_then_interrupt(descriptor: int, size: int) -> bytes:
+        nonlocal interrupted
+        block = read(descriptor, size)
+        if interrupted:
+            return block
+        interrupted = True
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("autoform_cli.readback.os.fdopen", fdopen_then_interrupt)
+    monkeypatch.setattr("autoform_cli.readback.os.read", read_then_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        readback_conflicts([card])
+    assert interrupted
+
+
+def test_an_interruption_as_the_staging_file_is_created_leaves_no_file(tmp_path: Path, monkeypatch) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    card = _prepared(blueprint, "Replacement.", expected)
+    open_ = os.open
+
+    # The interrupt lands just after the staging file is created, before its
+    # descriptor is kept.
+    def open_then_interrupt(name, flags, *args, **kwargs):
+        descriptor = open_(name, flags, *args, **kwargs)
+        if flags & os.O_CREAT:
+            os.close(descriptor)
+            raise KeyboardInterrupt
+        return descriptor
+
+    monkeypatch.setattr("autoform_cli.readback.os.open", open_then_interrupt)
+    monkeypatch.setattr(os, "supports_dir_fd", os.supports_dir_fd | {open_then_interrupt})
+
+    with pytest.raises(KeyboardInterrupt):
+        publish_readback(card)
+    assert _staged_names(path.parent) == []
+    assert path.read_bytes() == original
+
+
+def test_a_staging_file_an_interruption_leaves_behind_is_named_in_a_warning(tmp_path: Path, monkeypatch) -> None:
+    blueprint, path, expected = _filed(tmp_path)
+    original = path.read_bytes()
+    card = _prepared(blueprint, "Replacement.", expected)
+
+    def interrupt(*args) -> int:
+        raise KeyboardInterrupt
+
+    def fail_unlink(name: str, *, dir_fd: int | None = None) -> None:
+        raise OSError(errno.EIO, "injected input/output error")
+
+    _patch_os(monkeypatch, write=interrupt, unlink=fail_unlink)
+
+    # The interrupt has no message to name the file in, so a warning does.
+    with pytest.warns(RuntimeWarning) as warned, pytest.raises(KeyboardInterrupt):
+        publish_readback(card)
+    (left,) = _staged_names(path.parent)
+    assert [str(warning.message) for warning in warned] == [
+        f"read-back {path} was not published, and its temporary file {path.with_name(left)} could not be removed"
+    ]
+    assert path.read_bytes() == original
+
+
+def test_an_interruption_as_any_step_of_a_write_returns_leaves_no_lock_or_staging_file(tmp_path: Path) -> None:
+    pytest.importorskip("fcntl")
+    module = readback.__file__
+    step = returns = 0
+
+    # Python 3.10 can deliver an interrupt as any function returns, before its
+    # caller keeps the result. Raising from a trace function on the n-th
+    # return in the module lands one there, for each n in turn.
+    def interrupt_on_the_nth_return(frame, event, arg):
+        nonlocal returns
+        if frame.f_code.co_filename != module:
+            return None
+        if event == "return":
+            returns += 1
+            if returns == step:
+                raise KeyboardInterrupt
+        return interrupt_on_the_nth_return
+
+    while True:
+        step += 1
+        returns = 0
+        blueprint, path, expected = _filed(tmp_path / str(step))
+        original = path.read_bytes()
+        card = _prepared(blueprint, "Replacement.", expected)
+        sys.settrace(interrupt_on_the_nth_return)
+        try:
+            publish_readback(card)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            sys.settrace(None)
+        if returns < step:
+            break
+        assert path.read_bytes() in (original, card.content.encode("utf-8")), step
+        assert _staged_names(path.parent) == [], step
+        assert _unlocked(path.parent), step
+    assert step > 10
 
 
 # --------------------------------------------------------------------------- #

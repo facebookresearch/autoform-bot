@@ -632,8 +632,8 @@ cells than the header are refused; attribute lists are shown as typed. GitHub
 shows the vault's cards, so testimony is read a second time as GitHub reads
 it, by cmark-gfm with formulas found where GitHub's Markdown API was seen to
 find them. It is refused where that reading shows anything otherwise than the
-site does, naming the line where the two part, and where it holds a formula
-GitHub was not seen to read that way. The
+site does, naming the line where the two part and a rewrite both read alike,
+and where it holds a formula GitHub was not seen to read that way. The
 read-back guide `skills/human-review/references/readback.md` says how to write
 formulas and Markdown that both read alike. MathJax reads no text of a card
 outside the formulas the renderer marked, so other TeX in text shows as typed.
@@ -668,20 +668,24 @@ Autoform's writes to one directory happen one at a time; a write that cannot
 get the lock within ten seconds gives up. An optional expected-card hash makes
 updates compare-and-swap: different content replaces a card only when it names
 that card's hash, and a card that names a hash conflicts with a missing card.
-Filing content identical to the current card writes nothing, so it succeeds
-even in a read-only directory. Otherwise the write stages the card in a
-`.autoform-readback-*.tmp` file beside it and renames it over the card in one
-step, so the card's name holds either the old complete card (nothing, for a
-first card) or the new one. A failure or interrupt before the rename removes
-the staging file if it can; a crash, SIGTERM, or SIGKILL can leave it. The
-loader never reads it as a card, and the blueprint `.gitignore` that
-`autoform init` writes ignores it. The contract covers Autoform's writers
+The conflict check a record runs first applies the same rule. Filing content
+identical to the current card writes nothing, so it succeeds even in a
+read-only directory. Otherwise the write stages the card in a
+`.autoform-readback-*.tmp` file beside it, flushes it to disk, and renames it
+over the card in one step, so the card's name holds either the old complete
+card (nothing, for a first card) or the new one; then it flushes the directory.
+A failure or interrupt before the rename removes the staging file; if that
+fails, the error names it, or after an interrupt a warning does. A second
+interrupt during removal, a crash, SIGTERM, or SIGKILL can leave it unnamed.
+The loader never reads it as a card, and the blueprint `.gitignore` that
+`autoform init` writes ignores it. If only the directory flush fails, the card
+is still published and the write warns. The contract covers Autoform's writers
 only: an editor's save that lands during a write can be replaced without a
 conflict, so edit cards while no write is running. Publishing needs
 descriptor-relative `open`, `mkdir`, `rename`, and `unlink`, `O_DIRECTORY`,
 `O_NOFOLLOW`, `fchmod`, and `flock`, which Linux and macOS provide; elsewhere,
-including Windows, a write is refused before anything is created or read, and
-cards can still be loaded. `model:` remains a
+including Windows, a write and a record's conflict check are refused before
+anything is created or read, and cards can still be loaded. `model:` remains a
 label supplied by the coordinator, not authenticated provenance.
 
 `--packets DIR` writes one comment-stripped packet per skeleton, with a
@@ -826,20 +830,23 @@ and the exact packet bytes before filing a card. Validation is per article, so
 an unrelated article that changed since `review prepare` does not block the
 record. Any blueprint change during the extraction itself does, even in an
 article the record does not touch. Nothing is then filed, and running the
-record again once the blueprint is idle completes it, unless the change
-altered or removed the evidence of an article it records, which the rerun then
-refuses.
+record again once the blueprint is idle completes it, unless the change took
+away an `article_id` the record names, which the rerun then names, or changed
+or removed the evidence of an article it records, which the rerun then refuses.
 Another article's empty or duplicated `lean:` list stops every extraction, so
 nothing is filed until that list is fixed. A record probes only the
 modules of the article it files, so only those modules need to be built and
 fresh, and its packets match the ones `review prepare` wrote from a full
 extraction.
 
-The packet and testimony are read (either is refused unread if it is not a
-regular file, such as a FIFO), and the packet checked against the bundle,
-before Lean starts; the testimony is validated when the card is built. The
-blueprint is reloaded after the extraction, and nothing is filed if the
-selected article
+The packet is read and checked against the bundle, and the testimony read and
+validated (either is refused unread if it is not a regular file, such as a
+FIFO), before Lean starts. So is the card the record would write over: a
+re-review lands on the path of the card it supersedes, which it may replace
+only by naming that card's hash with `--expected-card-hash`, and the record
+names that hash before extracting, or refuses a card path it cannot safely
+read (a link, directory, FIFO, or file over the card limit). The blueprint is
+reloaded after the extraction, and nothing is filed if the selected article
 changed while Lean ran or the reloaded blueprint is not the one the extraction
 saw. The card is written under its compare-and-swap, and the article is read
 again just before; only the article's own file is read again, through the link
@@ -848,7 +855,15 @@ goes unseen. When another writer filed, replaced, or removed the card
 meanwhile, the record must name the hash of the card now there, or no hash if
 there is none. When the article was deleted meanwhile, or replaced by something
 other than a regular file, such as a directory or FIFO, it must be restored,
-and one made unreadable must be readable again.
+and one made unreadable must be readable again. A record whose `article_id` is
+no longer in the blueprint files nothing and names no card conflict; it must
+take `--article-id` from the packet manifest a new `review prepare --packets`
+writes and drop any `--expected-card-hash`, which names a card filed under the
+old `article_id`. If that manifest names a different packet for it, the record
+needs that packet and a new testimony written from it: packets are named by
+their content, so the old testimony read other text. Any card filed under the
+old `article_id` stays there, and `review check` names its file, which must be
+deleted.
 
 `review check`, `audit`, and `render` re-extract the
 current Lean evidence and reject unresolved, partial, foreign, or stale

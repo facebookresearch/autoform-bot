@@ -21,6 +21,7 @@ from autoform_cli.readback import (
     TESTIMONY_MAX_RENDERED_BYTES,
     Readback,
     _github_formulas,
+    _github_hint,
     _github_html,
     _shown,
     _testimony_errors,
@@ -1208,6 +1209,7 @@ def test_github_s_reading_leaves_html_out() -> None:
     assert "<ul" not in _github_html("<ul>" * 3)
     (error,) = _testimony_errors("```lean\n  ```\n" + "<ul>" * 7000 + "\n```")
     assert error.startswith(_VIEWER)
+    assert error.endswith(_FENCE)
 
 
 @pytest.mark.parametrize(
@@ -1585,8 +1587,164 @@ def test_markdown_both_readings_show_alike_is_accepted(testimony: str) -> None:
 def test_a_commonmark_reading_that_differs_names_where() -> None:
     assert _testimony_errors("3. W0\n4. W1\n") == (
         f'{_VIEWER}: on line 1 the site shows "<ol start=1><li>W0</li><li>W1" where GitHub shows '
-        '"<ol start=3><li>W0</li><li>W1"; write the line so that GitHub shows what the site shows',
+        '"<ol start=3><li>W0</li><li>W1"; GitHub numbers a list from its first number and the site from 1; number '
+        "each list from 1",
     )
+
+
+_TABLE_SPLIT = "keep code that holds a | out of tables, and write \\vert in a formula"
+_NESTING = "indent nested lists and an item's further paragraphs four spaces"
+_ONE_LINE = "keep each formula in a line of text on one line"
+_PLACE = "with no letter, digit, _, or \\ just before it"
+_FENCE = "close each code block with the fence it opens with, starting where that one does, and nothing after it"
+_RULE = "write a rule as *** after a blank line, and \\ before the first character of a line of text that is one"
+_QUOTE = "start each line of a block quote, blank ones too, with > where the quote's first > is, and put a line of text between two block quotes"
+_LIST = "write \\-, \\+, \\*, or 1\\. where a line of text starts with one"
+_TILDE = "write a space for a ~ that keeps words together, \\sim in a formula, or ~ in code"
+_IN_ITEM = "under a line of text in the item, indented four spaces more than the item's marker"
+_DISPLAY_IN_ITEM = "and a displayed one in a ```math fence, which in a list item goes " + _IN_ITEM
+_FENCE_IN_ITEM = "put the code block " + _IN_ITEM
+_DISPLAY_IN_QUOTE = "write a formula as $`...`$, displayed ones too: a block quote takes no ```math fence"
+
+
+@pytest.mark.parametrize(
+    ("testimony", "hint", "rewritten"),
+    [
+        (
+            "| $x$ | $\\|x\\|$ |\n|---|---|\n| $(3,4)$ | $5$ |\n\nThe table lists Euclidean norms.",
+            "write \\vert for | and \\Vert for \\| there",
+            "| $x$ | $\\Vert x\\Vert$ |\n|---|---|\n| $(3,4)$ | $5$ |\n\nThe table lists Euclidean norms.",
+        ),
+        ("The value is $f(x) =\n- 1$ at zero.", _ONE_LINE, "The value is $f(x) = - 1$ at zero."),
+        ("We have $x\n+ y = z$ for all reals.", _ONE_LINE, "We have $x + y = z$ for all reals."),
+        ("> The bound is $C\n- 1$ for every n.", _ONE_LINE, "> The bound is $C - 1$ for every n."),
+        ("The product $a\n* b$ is zero.", _ONE_LINE, "The product $a * b$ is zero."),
+        ("The bound holds and\n- 1 is the least value.", _LIST, "The bound holds and\n\\- 1 is the least value."),
+        ("Steps:\n1. W0\n2. W1", _LIST, "Steps:\n\n1. W0\n2. W1"),
+        ("| a | b |\n|---|---|\n| `x | is <!-- not --> open` | |", _TABLE_SPLIT, "| a | b |\n|---|---|\n| x | open |"),
+        (
+            "| Lean | meaning |\n|---|---|\n| `fun x => \\|x\\|` | absolute value |",
+            _TABLE_SPLIT,
+            "| Lean | meaning |\n|---|---|\n| `abs` | absolute value |\n\nHere `abs` is `fun x => |x|`.",
+        ),
+        # Raw HTML nested as deep as it goes, which GitHub reads in the cell.
+        ("| a |\n|---|\n| `x | " + "<b>" * 3000 + "` |", _TABLE_SPLIT, "| a |\n|---|\n| x |"),
+        (
+            "- [x] is the class of $x$ in the quotient.",
+            "write \\[x] there",
+            "- \\[x] is the class of $x$ in the quotient.",
+        ),
+        (
+            "- For every $x > 0$:\n  - $f(x) > 0$\n- $f(0) = 0$",
+            _NESTING,
+            "- For every $x > 0$:\n    - $f(x) > 0$\n- $f(0) = 0$",
+        ),
+        ("- item one\n\n  continued paragraph", _NESTING, "- item one\n\n    continued paragraph"),
+        ("The map is ~~not~~ surjective onto $Y$.", _TILDE, "The map is not surjective onto $Y$."),
+        ("By Theorem~3 and Lemma~4 the map is open.", _TILDE, "By Theorem 3 and Lemma 4 the map is open."),
+        ("We have $2*3*4 = 24$.", _PLACE, "We have $`2*3*4 = 24`$."),
+        ("the $n$th term", _PLACE, "the $`n`$th term"),
+        (
+            "Summary:\n| a | b |\n|---|---|\n| 1 | 2 |",
+            "put a blank line before a table",
+            "Summary:\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+        ),
+        ("| a | b |\n|:|:|\n| 1 | 2 |", "write the row as |---|---|", "| a | b |\n|---|---|\n| 1 | 2 |"),
+        ("Hence $a$\\\nand $b$.", "drop it", "Hence $a$\nand $b$."),
+        ("- a\n- b\n\n1. c\n2. d", "put a line of text between the two lists", "- a\n- b\n\nThen:\n\n1. c\n2. d"),
+        (
+            "$a\\\tb$",
+            "the site reads a tab in a formula or in code as spaces, and GitHub keeps it; write spaces for tabs",
+            "$a\\ b$",
+        ),
+        (
+            "For \\(x > 0\\) the bound holds.",
+            "and a displayed one in a ```math fence",
+            "For $`x > 0`$ the bound holds.",
+        ),
+        (
+            "The set $\\{x\\}$ is closed.",
+            "write the formula as $`...`$, whose TeX GitHub takes as written",
+            "The set $`\\{x\\}`$ is closed.",
+        ),
+        (
+            "W0\n\n$$\\{x\\}$$",
+            "write displayed math in a ```math fence, whose TeX GitHub takes as written",
+            "W0\n\n```math\n\\{x\\}\n```",
+        ),
+        ("```lean\ntheorem x : True", _FENCE, "```lean\ntheorem x : True\n```"),
+        ("W0\n\n```lean\ntheorem x : True\n  ```", _FENCE, "W0\n\n```lean\ntheorem x : True\n```"),
+        ("W0 **a **b** c** W1", "write \\* or \\_ for the character itself", "W0 **a \\*\\*b\\*\\* c** W1"),
+        ("A 50\\% share.", "drop the one before %", "A 50% share."),
+        (
+            "W0 **a **b** c** W1\n\n```lean\nx\n```",
+            "write \\* or \\_ for the character itself",
+            "W0 **a \\*\\*b\\*\\* c** W1\n\n```lean\nx\n```",
+        ),
+        ("A 50\\% share.\n\n```lean\nx\n```", "drop the one before %", "A 50% share.\n\n```lean\nx\n```"),
+        (
+            "W0 **a **b** c** W1\n\n***\n\nW2",
+            "write \\* or \\_ for the character itself",
+            "W0 **a \\*\\*b\\*\\* c** W1\n\n***\n\nW2",
+        ),
+        ("A 50\\% share.\n\n***\n\nW2", "drop the one before %", "A 50% share.\n\n***\n\nW2"),
+        ("- \\[x^2\\]", _DISPLAY_IN_ITEM, "- The bound:\n\n    ```math\n    x^2\n    ```"),
+        ("1. \\[x^2\\]", _DISPLAY_IN_ITEM, "1. The bound:\n    ```math\n    x^2\n    ```"),
+        ("- W0 \\(x\\) W1", _DISPLAY_IN_ITEM, "- W0 $`x`$ W1"),
+        ("> - \\[a\\]", _DISPLAY_IN_QUOTE, "> - $`a`$"),
+        ("> \\[a\\]", _DISPLAY_IN_QUOTE, "> $`a`$"),
+        ("- ```lean\n  a\n  ```", _FENCE_IN_ITEM, "- The bound:\n\n    ```lean\n    a\n    ```"),
+        ("- ```math\n  a\n  ```", _FENCE_IN_ITEM, "- The bound:\n    ```math\n    a\n    ```"),
+        ("1. ```lean\n   a\n   ```", _FENCE_IN_ITEM, "1. The bound:\n    ```lean\n    a\n    ```"),
+        (
+            "- W0\n    - ```lean\n      a\n      ```",
+            _FENCE_IN_ITEM,
+            "- W0\n    - The bound:\n        ```lean\n        a\n        ```",
+        ),
+        ("> - ```lean\n>   a\n>   ```", _FENCE_IN_ITEM, "> - The bound:\n>     ```lean\n>     a\n>     ```"),
+        ("Its value \\$x$ is typed.", "write dollar signs meant as typed in code, as `$x$`", "Its value `$x$` is typed."),
+        ("\t\nThe map is open.", "drop the blank first line", "The map is open."),
+        ("    \nThe map is open.", "drop the blank first line", "The map is open."),
+        ("a | b\n|---|---|", "write | at both ends of each row of a table, and \\| for a | that is text", "| a | b |\n|---|---|"),
+        ("x\n---|", "write | at both ends of each row of a table, and \\| for a | that is text", "x\n---\\|"),
+        ("- The map\n    ***", _RULE, "- The map\n\n    ***"),
+        ("- The map\n    ***", _RULE, "- The map\n    \\***"),
+        ("The map is open.\n---   -", _RULE, "The map is open.\n\n***"),
+        ("The map is open.\n---   -", _RULE, "The map is open.\n\\---   -"),
+        ("> The map\t\n\t\\\nis open.", "drop it", "> The map\t\n\t\nis open."),
+        ("The claim:\n```\nx", _FENCE, "The claim:\n```\nx\n```"),
+        (">\nThe map is open.", _QUOTE, ">\n> The map is open."),
+        ("> The map is open.\n\n> It is closed.", _QUOTE, "> The map is open.\n>\n> It is closed."),
+        ("- > The map is open.\n> It is closed.", _QUOTE, "- > The map is open.\n  > It is closed."),
+        ("- > The map is open.\n    > It is closed.", _QUOTE, "- > The map is open.\n  > It is closed."),
+        ("> The map\n```lean\nx\n```", _QUOTE, "> The map\n> ```lean\n> x\n> ```"),
+        (
+            "1. > The map is open.\n> It is closed.\n> > So is its image.",
+            _QUOTE,
+            "1. > The map is open.\n   > It is closed.\n   > > So is its image.",
+        ),
+    ],
+)
+def test_a_github_reading_that_differs_is_refused_with_a_hint_that_fixes_it(
+    testimony: str, hint: str, rewritten: str
+) -> None:
+    """GitHub reads some Markdown otherwise than the site: lists, tables,
+    code, emphasis, escapes, and formulas. Each refusal names a way to write
+    the testimony that both read alike, and the testimony written that way is
+    accepted."""
+
+    assert any(error.startswith(_VIEWER) and error.endswith(hint) for error in _testimony_errors(testimony))
+    assert _testimony_errors(rewritten) == ()
+
+
+def test_a_github_reading_no_hint_covers_says_no_rewrite_is_known() -> None:
+    """A difference no hint above names gets no advice that may be wrong,
+    only the two readings and the goal. Inputs searched at random reached no
+    such difference, so the readings here are made up."""
+
+    hint = _github_hint([("text", "a", 1)], [("text", "b", 1)], 0)
+
+    assert hint == "no rewrite is known for this difference; write the line so that GitHub shows what the site shows"
 
 
 def _github_reading(testimony: str) -> tuple[str, list[str]]:

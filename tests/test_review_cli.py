@@ -14,7 +14,7 @@ import pytest
 from autoform_cli.__main__ import _current_review, main
 from autoform_cli.graph import Graph, load_graph
 from autoform_cli.markdown import site_converter
-from autoform_cli.readback import load_readbacks, render_testimony
+from autoform_cli.readback import TESTIMONY_MAX_BYTES, load_readbacks, readback_path, render_testimony
 from autoform_cli.render import PublicationError, render_site
 from autoform_cli.review import REVIEW_PACKET_SCHEMA, load_review_bundle, validate_review_bundle
 from autoform_cli.skeleton import (
@@ -26,6 +26,7 @@ from autoform_cli.skeleton import (
 )
 from tests.skeleton_fixtures import BLUEPRINT_HASH as _BLUEPRINT_HASH
 from tests.skeleton_fixtures import declaration as fixture_declaration
+from tests.undecodable_json import _undecodable_json
 
 
 def _blueprint(root: Path) -> Path:
@@ -574,6 +575,22 @@ def test_a_record_extracts_only_its_own_article(
     assert load_readbacks(blueprint) == cards
 
 
+def test_a_blank_testimony_is_refused_before_any_lean_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    extraction = _Extraction()
+    blueprint, bundle, records = _prepared_records(tmp_path, monkeypatch, extraction)
+    Path(records["Review.result"]["testimony"]).write_text("   \n", encoding="utf-8")
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, records["Review.result"], tmp_path) == 2
+
+    assert load_readbacks(blueprint) == {}
+    assert extraction.scopes == [None]  # only `review prepare` extracted
+    err = capsys.readouterr().err
+    assert "Review.result: a read-back requires nonempty testimony" in err
+
+
 def test_a_record_is_checked_against_its_prepared_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -613,6 +630,59 @@ def test_an_article_changed_during_extraction_files_nothing(
     assert "changed during extraction; nothing was filed" in capsys.readouterr().err
 
 
+def _delete_other(blueprint: Path) -> None:
+    chapter = blueprint / "roadmap" / "basics"
+    (chapter / "other.md").unlink()
+    readme = chapter / "README.md"
+    readme.write_text(readme.read_text(encoding="utf-8").replace("- [Other](other.md)\n", ""), encoding="utf-8")
+
+
+def _renumber_other(blueprint: Path) -> None:
+    other = blueprint / "roadmap" / "basics" / "other.md"
+    other.write_text(other.read_text(encoding="utf-8").replace(_OTHER_ID, "af_" + "1" * 24), encoding="utf-8")
+
+
+@pytest.mark.parametrize("edit", [_delete_other, _renumber_other], ids=["deleted", "renumbered"])
+@pytest.mark.parametrize("during_the_record", [False, True], ids=["after-prepare", "during-extraction"])
+def test_an_article_gone_since_prepare_is_named_rather_than_the_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    edit: Callable[[Path], None],
+    during_the_record: bool,
+) -> None:
+    """The bundle still has the declaration; the blueprint no longer has its article_id.
+
+    The fake extraction makes no check of its own, so an edit during it reaches
+    the reload after it, as one made after the real extraction's check would.
+    The real extraction reports an edit during it first, as any blueprint change
+    (test_an_article_gone_during_a_record_extraction_is_named_when_the_record_runs_again).
+    """
+
+    calls: list[int] = []
+
+    def edit_during_the_record() -> None:
+        calls.append(1)
+        if during_the_record and len(calls) == 2:  # the first extraction is `review prepare`
+            edit(tmp_path / "blueprint")
+
+    blueprint, bundle, records = _prepared_records(tmp_path, monkeypatch, _Extraction(edit_during_the_record))
+    if not during_the_record:
+        edit(blueprint)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, records["Review.other"], tmp_path) == 2
+
+    err = capsys.readouterr().err
+    assert load_readbacks(blueprint) == {}
+    assert err == (
+        f"error: Review.other: article_id {_OTHER_ID} is no longer in the blueprint; to record it, rerun review "
+        "prepare with --packets and take --article-id from the new packet manifest; if that manifest names a "
+        "different packet for it, pass that --packet and a --testimony written from it\n"
+    )
+    assert len(calls) == (2 if during_the_record else 1)
+
+
 def test_a_chapter_that_cannot_be_listed_is_named_rather_than_its_articles_called_gone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -635,9 +705,111 @@ def test_a_chapter_that_cannot_be_listed_is_named_rather_than_its_articles_calle
 
     for err in (recorded, checked):
         assert f"error: cannot list roadmap directory {chapter}: Permission denied\n" in err
-        assert "no unique article" not in err
+        assert "no longer in the blueprint" not in err
     assert extraction.scopes == [None]  # only `review prepare` extracted
     assert load_readbacks(blueprint) == {}
+
+
+def test_a_gone_record_whose_packet_changed_files_only_once_it_names_the_new_packet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Packets are named by their content, so when the statement changes with the
+    article_id, the new packet manifest names another packet. The record that
+    takes only the new article_id still names the packet its testimony was
+    written from, which the new review prepare removed, and nothing is filed
+    until it names the new packet. That its testimony is then written from the
+    new packet is advice the record cannot check."""
+
+    blueprint, bundle, records = _prepared_records(tmp_path, monkeypatch, _Extraction())
+    record = records["Review.other"]
+    unchanged = _node
+
+    def restated(node_id: str, name: str) -> NodeSkeleton:
+        node = unchanged(node_id, name)
+        if name != "Review.other":
+            return node
+        (declaration,) = node.declarations
+        changed = replace(declaration, signature=f"{name} : False", raw_signature=f"{name} : False")
+        return replace(node, declarations=(changed,))
+
+    monkeypatch.setitem(globals(), "_node", restated)
+    _renumber_other(blueprint)
+    packets = _packets(tmp_path)
+    prepare = ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle)]
+    assert main([*prepare, "--packets", str(packets)]) == 0
+    entries = json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"]
+    (entry,) = [entry for entry in entries if entry["declaration"] == "Review.other"]
+    assert record["packet"] != str(packets / entry["packet"])
+    record["article_id"] = entry["article_id"]
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, record, tmp_path) == 2
+    assert "error: Review.other: cannot read the packet " in capsys.readouterr().err
+    assert load_readbacks(blueprint) == {}
+
+    record["packet"] = str(packets / entry["packet"])
+    Path(record["testimony"]).write_text("The statement Review.other asserts False.\n", encoding="utf-8")
+    assert _record(blueprint, bundle, record, tmp_path) == 0
+    card = load_readbacks(blueprint)[(entry["article_id"], "Review.other")]
+    assert card.packet_hash == entry["packet_hash"]
+    assert "asserts False" in card.text
+
+
+def test_a_re_review_whose_article_id_is_gone_is_named_before_its_card_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A card's path is keyed by its article_id, so the card a re-review would
+    replace stays under the old one: the record is named as gone rather than
+    asked for that card's hash, and files under the new article_id without it.
+    review check then names the old card's file to delete, and stops naming it
+    once it is gone."""
+
+    blueprint, bundle, records = _prepared_records(tmp_path, monkeypatch, _Extraction())
+    for record in records.values():
+        assert _record(blueprint, bundle, record, tmp_path) == 0
+    filed = load_readbacks(blueprint)
+    record = records["Review.other"]
+    testimony = Path(record["testimony"])
+    testimony.write_text(testimony.read_text(encoding="utf-8") + "Revised.\n", encoding="utf-8")
+    _renumber_other(blueprint)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, record, tmp_path) == 2
+    err = capsys.readouterr().err
+    assert f"error: Review.other: article_id {_OTHER_ID} is no longer in the blueprint" in err
+    assert "already exists with different content" not in err
+
+    old_card = filed[(_OTHER_ID, "Review.other")].file_hash
+    assert _record(blueprint, bundle, dict(record, expected_card_hash=old_card), tmp_path) == 2
+    assert (
+        "rerun review prepare with --packets and take --article-id from the new packet manifest and drop "
+        "--expected-card-hash; if that manifest names a different packet"
+    ) in capsys.readouterr().err
+
+    packets = _packets(tmp_path)
+    prepare = ["review", "prepare", str(blueprint), "--lean-root", str(tmp_path), "--output", str(bundle)]
+    assert main([*prepare, "--packets", str(packets)]) == 0
+    entries = json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"]
+    (entry,) = [entry for entry in entries if entry["declaration"] == "Review.other"]
+    assert record["packet"] == str(packets / entry["packet"])
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, dict(record, article_id=entry["article_id"]), tmp_path) == 0
+    cards = load_readbacks(blueprint)
+    assert set(cards) == set(filed) | {(entry["article_id"], "Review.other")}
+    assert cards[(_OTHER_ID, "Review.other")] == filed[(_OTHER_ID, "Review.other")]
+
+    old = filed[(_OTHER_ID, "Review.other")].path
+    capsys.readouterr()
+    assert _check(blueprint, tmp_path) == 1
+    orphaned = [line for line in capsys.readouterr().out.splitlines() if "readback-orphaned" in line]
+    assert orphaned == [
+        f"error: {_OTHER_ID}: readback-orphaned: read-back filed for Review.other under article_id {_OTHER_ID} is "
+        f"not named by the prepared review bundle; delete {old}, or restore the article_id and declaration it names"
+    ]
+    old.unlink()
+    _check(blueprint, tmp_path)
+    assert "readback-orphaned" not in capsys.readouterr().out
 
 
 def test_any_blueprint_edit_during_a_record_extraction_files_nothing(
@@ -672,6 +844,41 @@ def test_any_blueprint_edit_during_a_record_extraction_files_nothing(
     assert set(load_readbacks(blueprint)) == {(_RESULT_ID, "Review.result")}
 
 
+@pytest.mark.parametrize("edit", [_delete_other, _renumber_other], ids=["deleted", "renumbered"])
+def test_an_article_gone_during_a_record_extraction_is_named_when_the_record_runs_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], edit: Callable[[Path], None]
+) -> None:
+    """The extraction reports this edit as it does any other, so running the record
+    again, rather than filing, names the article_id it took away."""
+
+    blueprint, bundle, records = _prepared_records(tmp_path, monkeypatch, _Extraction())
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "lakefile.toml").write_text('name = "Review"\n', encoding="utf-8")
+    probes: list[int] = []
+
+    def probe_while_other_goes(graph: Graph, *, node_ids: tuple[str, ...] | None, **_: object) -> SkeletonReport:
+        probes.append(1)
+        if len(probes) == 1:
+            edit(blueprint)
+        return replace(_Extraction()(graph.blueprint_dir, node_ids=node_ids), blueprint_hash=blueprint_hash(graph))
+
+    # The real extraction, with only the Lean probe replaced.
+    monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", extract_skeletons)
+    monkeypatch.setattr("autoform_cli.skeleton.extract_graph_skeletons", probe_while_other_goes)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, records["Review.other"], project) == 2
+    assert capsys.readouterr().err == (
+        "error: the blueprint changed while skeletons were being extracted; retry after the project is idle\n"
+    )
+
+    assert _record(blueprint, bundle, records["Review.other"], project) == 2
+    assert f"error: Review.other: article_id {_OTHER_ID} is no longer in the blueprint" in capsys.readouterr().err
+    assert len(probes) == 1  # the rerun stopped before extracting
+    assert load_readbacks(blueprint) == {}
+
+
 def test_a_record_files_nothing_if_any_page_changes_after_its_extraction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -701,6 +908,119 @@ def _file_alone(blueprint: Path, bundle: Path, root: Path, record: dict[str, str
     testimony = Path(record["testimony"]).with_name(f"elsewhere-{record['declaration']}.md")
     testimony.write_text(text, encoding="utf-8")
     assert _record(blueprint, bundle, dict(record, testimony=str(testimony)), root) == 0
+
+
+def test_a_card_that_would_replace_another_is_refused_before_lean_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A re-review lands on the path of the card it supersedes. The record names
+    that card, with the hash to pass, before it pays for an extraction."""
+
+    extraction = _Extraction()
+    blueprint, bundle, records = _prepared_records(tmp_path, monkeypatch, extraction)
+    record = records["Review.result"]
+    key = (_RESULT_ID, "Review.result")
+    _file_alone(blueprint, bundle, tmp_path, record, "An older reading of Review.result.\n")
+    before = load_readbacks(blueprint)
+    extractions = len(extraction.scopes)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, record, tmp_path) == 2
+
+    assert len(extraction.scopes) == extractions
+    assert load_readbacks(blueprint) == before
+    err = capsys.readouterr().err
+    assert "error: Review.result: read-back already exists with different content" in err
+    assert f"expected_card_hash={before[key].file_hash!r}" in err
+
+    # Naming the card it replaces lets the same record run.
+    record["expected_card_hash"] = before[key].file_hash
+    assert _record(blueprint, bundle, record, tmp_path) == 0
+    assert load_readbacks(blueprint)[key].file_hash != before[key].file_hash
+
+
+def test_a_stale_expected_hash_is_refused_before_lean_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    extraction = _Extraction()
+    blueprint, bundle, records = _prepared_records(tmp_path, monkeypatch, extraction)
+    record = records["Review.result"]
+    _file_alone(blueprint, bundle, tmp_path, record, "An older reading.\n")
+    stale = "sha256:" + "0" * 64
+    record["expected_card_hash"] = stale
+    extractions = len(extraction.scopes)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, record, tmp_path) == 2
+
+    assert len(extraction.scopes) == extractions
+    assert f"read-back changed before replacement: expected {stale!r}" in capsys.readouterr().err
+
+
+def _symlink_at(path: Path) -> None:
+    path.symlink_to(path.with_name("elsewhere.md"))
+
+
+def _fifo_at(path: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("needs FIFOs")
+    os.mkfifo(path)
+
+
+def _oversized_at(path: Path) -> None:
+    path.write_bytes(b"x" * (4 * 1024 * 1024 + 1))
+
+
+@pytest.mark.parametrize(
+    ("unsafe", "reason"),
+    [
+        (_symlink_at, "cannot safely inspect existing read-back"),
+        (Path.mkdir, "read-back destination is not a regular file"),
+        (_fifo_at, "read-back destination is not a regular file"),
+        (_oversized_at, "existing read-back is over the 4194304-byte limit for a card file"),
+    ],
+    ids=["symlink", "directory", "fifo", "oversized"],
+)
+def test_an_unsafe_card_is_refused_before_lean_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    unsafe: Callable[[Path], None],
+    reason: str,
+) -> None:
+    extraction = _Extraction()
+    blueprint, bundle, records = _prepared_records(tmp_path, monkeypatch, extraction)
+    path = readback_path(blueprint.resolve(), _RESULT_ID, "Review.result")
+    path.parent.mkdir(parents=True)
+    unsafe(path)
+    extractions = len(extraction.scopes)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, records["Review.result"], tmp_path) == 2
+
+    assert len(extraction.scopes) == extractions
+    err = capsys.readouterr().err
+    assert f"error: Review.result: {reason}" in err and str(path) in err
+
+
+@pytest.mark.parametrize("gone", [False, True], ids=["article-present", "article-gone"])
+def test_a_platform_that_cannot_publish_is_refused_before_lean_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], gone: bool
+) -> None:
+    extraction = _Extraction()
+    blueprint, bundle, records = _prepared_records(tmp_path, monkeypatch, extraction)
+    extractions = len(extraction.scopes)
+    if gone:
+        # Refused ahead of a gone record's advice, which only helps where cards can be filed.
+        _renumber_other(blueprint)
+    # As on Windows: no fcntl.
+    monkeypatch.setattr("autoform_cli.readback.fcntl", None)
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, records["Review.other"], tmp_path) == 2
+
+    assert len(extraction.scopes) == extractions
+    assert capsys.readouterr().err == "error: this platform cannot safely publish read-back cards\n"
 
 
 def test_a_card_filed_while_lean_runs_stops_the_record_before_it_writes(
@@ -1018,6 +1338,84 @@ def test_an_article_that_is_a_link_is_read_again_through_the_link(
     assert set(load_readbacks(blueprint)) == {(_OTHER_ID, "Review.other")}
 
 
+def test_a_bundle_nested_too_deep_to_decode_is_refused_before_any_lean_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Decoded, a hundred thousand nested arrays are deeper than the JSON decoder
+    goes: about 1,000 levels on Python 3.10 and 3.11, and 10,000 on 3.12 and 3.13.
+    From 3.14 it goes as deep as the stack allows, about 37,000 levels in 8 MiB,
+    and a stack that holds all of them skips the test."""
+
+    # Decoded here, nearer the stack's base than the command decodes it.
+    nested = _undecodable_json("nested")
+    extraction = _Extraction()
+    blueprint, bundle, records = _prepared_records(tmp_path, monkeypatch, extraction)
+    bundle.write_text(nested, encoding="utf-8")
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, records["Review.result"], tmp_path) == 2
+
+    err = capsys.readouterr().err
+    # The cause reads "maximum recursion depth exceeded" up to 3.13 and
+    # "Stack overflow (used N kB)" on 3.14; the words after it are the same.
+    assert err.startswith(f"error: cannot read review bundle {bundle}: ")
+    assert err.endswith(" while decoding a JSON array from a unicode string\n")
+    assert extraction.scopes == [None]  # only `review prepare` extracted
+    assert load_readbacks(blueprint) == {}
+
+
+def _damage_bundle(bundle: Path, damage: str) -> None:
+    if damage == "a-number-too-long":
+        bundle.write_text(_undecodable_json("a-number-too-long"), encoding="utf-8")
+    else:
+        text = bundle.read_text(encoding="utf-8")
+        assert '"title":"' in text
+        bundle.write_text(text.replace('"title":"', '"title":"\\ud800', 1), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("command", "refused"), [("review check", 2), ("audit", 2), ("render", 1), ("review record", 2)]
+)
+@pytest.mark.parametrize("damage", ["a-number-too-long", "a-lone-surrogate"])
+def test_a_bundle_with_a_number_too_long_or_a_lone_surrogate_is_refused_as_unreadable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    damage: str,
+    command: str,
+    refused: int,
+) -> None:
+    """json.loads raises a plain ValueError, not a JSONDecodeError, for an integer
+    of more digits than sys.get_int_max_str_digits(), 4300 by default, and decodes
+    "\\ud800" to half of a surrogate pair, which the evidence hash cannot encode as
+    UTF-8. An interpreter with no such limit (before 3.10.7, or with it set to 0)
+    converts an integer of any length, and skips the long-number cases."""
+
+    blueprint, bundle, records = _prepared_records(tmp_path, monkeypatch, _Extraction())
+    _damage_bundle(bundle, damage)
+    capsys.readouterr()
+
+    if command == "review check":
+        code = main(["review", "check", str(blueprint), "--lean-root", str(tmp_path), "--bundle", str(bundle)])
+    elif command == "audit":
+        code = _audit(blueprint, tmp_path)
+    elif command == "render":
+        site = tmp_path / "site"
+        render = ["render", str(blueprint), "--lean-root", str(tmp_path), "--review-bundle", str(bundle)]
+        code = main([*render, "--output", str(site)])
+    else:
+        code = _record(blueprint, bundle, records["Review.result"], tmp_path)
+
+    captured = capsys.readouterr()
+    # render prints its errors on stdout.
+    reported = captured.out if command == "render" else captured.err
+    assert code == refused
+    assert reported.startswith(f"error: cannot read review bundle {bundle}: ")
+    if damage == "a-lone-surrogate":
+        reason = "it escapes a lone surrogate, '\\ud800', which UTF-8 cannot encode"
+        assert reported == f"error: cannot read review bundle {bundle}: {reason}\n"
+
+
 @pytest.mark.parametrize("fifo", [False, pytest.param(True, marks=_NEEDS_FIFO)], ids=["missing", "fifo"])
 @pytest.mark.parametrize("role", ["packet", "testimony"])
 def test_an_unreadable_packet_or_testimony_is_named_before_any_lean_work(
@@ -1042,6 +1440,97 @@ def test_an_unreadable_packet_or_testimony_is_named_before_any_lean_work(
     assert err == unreadable + "not a regular file\n" if fifo else err.startswith(unreadable)
     assert extraction.scopes == [None]  # only `review prepare` extracted
     assert load_readbacks(blueprint) == {}
+
+
+@pytest.mark.parametrize("over", [False, True], ids=["at-the-limit", "past-the-limit"])
+def test_a_testimony_is_read_no_further_than_one_byte_past_twice_its_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], over: bool
+) -> None:
+    """A testimony is measured with its line endings read as text, which at
+    most halves it, so it is read no further than the first byte past twice
+    the limit. Here the file runs on to 64 MiB, which reading it whole would
+    hold in memory."""
+
+    import io
+    import tracemalloc
+
+    extraction = _Extraction()
+    blueprint, bundle, records = _prepared_records(tmp_path, monkeypatch, extraction)
+    testimony = Path(records["Review.result"]["testimony"])
+    testimony.write_bytes(b"a" * (2 * TESTIMONY_MAX_BYTES + 1 if over else TESTIMONY_MAX_BYTES))
+    if over:
+        os.truncate(testimony, 64 * 1024 * 1024)  # sparse: no disk, only memory if read
+    positions: list[int] = []
+
+    class Unbuffered(io.FileIO):
+        """The testimony, read as asked; where it stands when closed is how far it was read."""
+
+        def close(self) -> None:
+            if not self.closed:
+                positions.append(self.tell())
+            super().close()
+
+    monkeypatch.setattr(
+        "autoform_cli.__main__.open",
+        lambda path, *args, opener=None, **kwargs: (
+            Unbuffered(path, opener=opener) if path == testimony else open(path, *args, opener=opener, **kwargs)
+        ),
+        raising=False,
+    )
+    capsys.readouterr()
+
+    tracemalloc.start()
+    try:
+        assert _record(blueprint, bundle, records["Review.result"], tmp_path) == (2 if over else 0)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    err = capsys.readouterr().err
+    if over:
+        assert err == (
+            f"error: Review.result: unsafe read-back testimony: {testimony} is over the "
+            f"{TESTIMONY_MAX_BYTES}-byte limit\n"
+        )
+        assert positions == [2 * TESTIMONY_MAX_BYTES + 1]
+        assert peak < 2 * 1024 * 1024
+        assert extraction.scopes == [None]  # only `review prepare` extracted
+        assert load_readbacks(blueprint) == {}
+    else:
+        assert positions == [TESTIMONY_MAX_BYTES]
+        assert err == ""
+        assert (_RESULT_ID, "Review.result") in load_readbacks(blueprint)
+
+
+@pytest.mark.parametrize("over", [False, True], ids=["at-the-limit", "past-the-limit"])
+def test_a_testimony_is_measured_with_crlf_read_as_lf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], over: bool
+) -> None:
+    """Saved with CRLF line endings, a testimony within the limit once read as
+    text is filed, though the file is over it."""
+
+    extraction = _Extraction()
+    blueprint, bundle, records = _prepared_records(tmp_path, monkeypatch, extraction)
+    testimony = Path(records["Review.result"]["testimony"])
+    lines = ["a" * 127] * (TESTIMONY_MAX_BYTES // 128)
+    lines[0] += "a" if over else ""
+    testimony.write_bytes("".join(line + "\r\n" for line in lines).encode())
+    assert testimony.stat().st_size > TESTIMONY_MAX_BYTES
+    capsys.readouterr()
+
+    assert _record(blueprint, bundle, records["Review.result"], tmp_path) == (2 if over else 0)
+
+    err = capsys.readouterr().err
+    if over:
+        assert err == (
+            f"error: Review.result: unsafe read-back testimony: {testimony} is over the "
+            f"{TESTIMONY_MAX_BYTES}-byte limit\n"
+        )
+        assert extraction.scopes == [None]  # only `review prepare` extracted
+        assert load_readbacks(blueprint) == {}
+    else:
+        assert err == ""
+        assert load_readbacks(blueprint)[(_RESULT_ID, "Review.result")].text == "\n".join(lines)
 
 
 def test_a_testimony_ends_a_line_at_crlf_or_cr_as_at_lf(

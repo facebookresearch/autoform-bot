@@ -8,7 +8,6 @@ import stat
 import subprocess
 import sys
 import threading
-import warnings
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -591,27 +590,6 @@ def test_publishers_of_the_same_card_both_succeed(tmp_path: Path, monkeypatch) -
     second.join()
     assert results == ["filed"]
     assert load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].text == "Replacement."
-    assert _staged_names(path.parent) == []
-
-
-def test_an_interruption_before_the_rename_leaves_the_card_and_no_staging_file(tmp_path: Path, monkeypatch) -> None:
-    blueprint = _blueprint(tmp_path)
-    path = _file_card(blueprint, "First.")
-    original = path.read_bytes()
-    expected = load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].file_hash
-
-    def interrupt(*args, **kwargs) -> None:
-        raise KeyboardInterrupt
-
-    # The interrupt lands as the new card is about to be renamed into place.
-    monkeypatch.setattr(os, "replace", interrupt)
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        with pytest.raises(KeyboardInterrupt):
-            _file_card(blueprint, "Replacement.", expected_card_hash=expected)
-    assert [str(warning.message) for warning in caught] == []
-    assert path.read_bytes() == original
     assert _staged_names(path.parent) == []
 
 

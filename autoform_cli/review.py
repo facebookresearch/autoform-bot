@@ -431,9 +431,22 @@ def review_findings(
 def load_review_bundle(path: str | Path) -> ReviewBundle:
     """Load a bundle and reject unknown fields, malformed values, or bad hashes."""
 
+    # ValueError covers malformed JSON, bytes that are not UTF-8, and a number
+    # too long to convert; RecursionError, arrays or objects nested deeper than
+    # the decoder recurses.
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+        # An escape such as "\ud800" decodes to half of a surrogate pair, which
+        # the evidence hash cannot encode as UTF-8.
+        json.dumps(data, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        # Named rather than placed: its position is in the text just encoded,
+        # not in the file.
+        reason = f"it escapes a lone surrogate, {exc.object[exc.start]!r}, which UTF-8 cannot encode"
+        raise ReviewError(
+            [ReviewFinding("", "review-bundle-invalid", f"cannot read review bundle {path}: {reason}")]
+        ) from exc
+    except (OSError, RecursionError, ValueError) as exc:
         raise ReviewError(
             [ReviewFinding("", "review-bundle-invalid", f"cannot read review bundle {path}: {exc}")]
         ) from exc

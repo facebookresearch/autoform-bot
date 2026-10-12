@@ -67,7 +67,7 @@ leave it bare.
 
 The testimony must also read the same on GitHub, which shows the vault's
 cards with a different Markdown reader; where the two readings differ it is
-refused, with the line. Put a blank line before every
+refused, with the line and a way to fix it. Put a blank line before every
 list, table, and code block, and a line of text between a bulleted and a
 numbered list. Indent a nested list four spaces, and number every list from 1.
 Give every table row as many cells as the header and every cell of the
