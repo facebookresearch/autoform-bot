@@ -835,7 +835,7 @@ def test_rendered_probe_imports_modules_and_names_exact_local_modules() -> None:
     assert source.startswith("import Demo\nimport Demo.B\n-- Autoform impact probe.")
     assert (
         'let projectModules : Std.HashSet Name := Std.HashSet.ofList '
-        '[Name.str (Name.anonymous) "Demo", Name.str (Name.anonymous) "Internal"]'
+        '[Lean.Name.str (Lean.Name.anonymous) "Demo", Lean.Name.str (Lean.Name.anonymous) "Internal"]'
     ) in source
     assert ".isPrefixOf" not in source
     assert f'"{skeleton.PROBE_OUTPUT_ENV}"' in source
@@ -1455,8 +1455,8 @@ def test_unselected_source_with_a_quoted_module_name_stays_local(tmp_path: Path,
     # local, and the module's constants are located by its source file.
     (call,) = calls
     assert str(call["probe"]).startswith("import Demo\n-- Autoform impact probe.")
-    assert 'Name.str (Name.str (Name.anonymous) "Demo") "Basic copy"' in str(call["probe"])
-    assert 'Name.str (Name.str (Name.anonymous) "Demo") "."' in str(call["probe"])
+    assert 'Lean.Name.str (Lean.Name.str (Lean.Name.anonymous) "Demo") "Basic copy"' in str(call["probe"])
+    assert 'Lean.Name.str (Lean.Name.str (Lean.Name.anonymous) "Demo") "."' in str(call["probe"])
     assert "x»y" not in str(call["probe"])
     helpers = {helper["name"]: helper["path"] for helper in json.loads(output.out)["helpers"]}
     assert helpers["Demo.copied"] == "Demo/Basic copy.lean"

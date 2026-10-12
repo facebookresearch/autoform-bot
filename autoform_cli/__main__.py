@@ -33,7 +33,6 @@ from .skeleton import (
     SkeletonError,
     extract_skeletons,
     format_report,
-    run_probe,
     write_packets,
     write_skeleton_report,
 )
@@ -312,13 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="DIR",
         help="with --packets: also write each article's cited source passage, for a faithfulness judge",
     )
-    skeleton.add_argument(
-        "--timeout",
-        type=_positive_seconds,
-        metavar="SECONDS",
-        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g}); "
-        "the Lake freshness check before it has its own budget",
-    )
+    _add_probe_timeout_argument(skeleton)
 
     unused = subparsers.add_parser(
         "unused-hypotheses",
@@ -402,6 +395,18 @@ def _add_claim_board_arguments(parser: argparse.ArgumentParser) -> None:
         help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
     )
     parser.add_argument("--scratch", type=Path, help="local bare Git object cache")
+
+
+def _add_probe_timeout_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--timeout",
+        type=_positive_seconds,
+        metavar="SECONDS",
+        help="seconds the probe helper's build, and each Lean probe, may each run "
+        f"(default {DEFAULT_PROBE_TIMEOUT:g}); "
+        "one probe runs per root module, and the budget is per probe, not a deadline "
+        "for the whole extraction; the Lake freshness check before them has its own budget",
+    )
 
 
 def _init(args: argparse.Namespace) -> int:
@@ -1037,9 +1042,7 @@ def _skeleton(args: argparse.Namespace) -> int:
         report = extract_skeletons(
             args.blueprint_dir,
             lean_root=args.lean_root,
-            runner=None
-            if args.timeout is None
-            else lambda probe, root: run_probe(probe, root, timeout=args.timeout),
+            timeout=args.timeout,
             node_ids=tuple(args.nodes) if args.nodes else None,
         )
         if args.packets is not None and not report.clean:
