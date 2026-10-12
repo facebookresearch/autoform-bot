@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -347,6 +348,26 @@ def test_audit_reads_deprecation_from_the_captured_source_generation(
     ]
 
 
+def test_audit_checks_irreducible_def_kinds(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    kinds = (("def", "sealed"), ("definition", "sealed"), ("irreducible_def", "sealed"), ("irreducible_def", "plain"))
+    for declaration, target in kinds:
+        lean = f"Project.{target}"
+        _article(blueprint, f"{declaration}-{target}.md", declaration=declaration, statement="formalized", lean=lean)
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Value.lean").write_text(
+        "irreducible_def Project.sealed : Nat := 1\ndef Project.plain : Nat := 1\n", encoding="utf-8"
+    )
+
+    assert _finding_map(blueprint, lean_root=lean_root) == {
+        "roadmap/irreducible_def-plain.md": [
+            ("lean-target-kind-mismatch", "Lean target kind def does not match declaration intent irreducible_def")
+        ]
+    }
+
+
 def test_audit_reports_invalid_lean_root_once(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
@@ -494,6 +515,44 @@ def test_audit_returns_graph_validation_errors_with_article_paths(tmp_path: Path
     assert result.findings[0].code == "invalid-graph"
     assert result.findings[0].reason == "bad: missing H1 title"
     assert json.loads(result.to_json()) == result.as_dict()
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
+def test_audit_reports_a_chapter_it_can_list_but_not_enter(tmp_path: Path) -> None:
+    """Checking each page raised a traceback, in load_graph and again in audit's search for its article path."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "chapter/result.md", declaration="theorem")
+    chapter = blueprint / "roadmap" / "chapter"
+    chapter.chmod(0o644)
+    try:
+        result = audit_blueprint(blueprint)
+    finally:
+        chapter.chmod(0o755)
+
+    assert [(finding.article_path, finding.code, finding.reason) for finding in result.findings] == [
+        (
+            f"roadmap/chapter/{name}",
+            "invalid-graph",
+            f"chapter/{name}: cannot read roadmap page: [Errno 13] Permission denied: './roadmap/chapter/{name}'",
+        )
+        for name in ("README.md", "result.md")
+    ]
+
+
+def test_audit_points_a_noncanonical_readme_at_the_page_itself(tmp_path: Path) -> None:
+    """Only a key ending in a lowercase .md fell back to the page, so this pointed at README.MD.md."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "chapter/result.md", declaration="theorem")
+    chapter = blueprint / "roadmap" / "chapter"
+    (chapter / "README.md").rename(chapter / "README.MD")
+
+    result = audit_blueprint(blueprint)
+
+    assert [finding.article_path for finding in result.findings if finding.reason.startswith("chapter/README.MD:")] == [
+        "roadmap/chapter/README.MD"
+    ]
 
 
 def test_audit_reports_a_container_holding_too_many_articles(tmp_path: Path) -> None:

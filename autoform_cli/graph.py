@@ -10,13 +10,15 @@ a second graph file that could drift from the book.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .lean import declaration_names
-from .markdown import mask_fences_and_comments
+from .markdown import mask_code_and_comments
 
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
@@ -265,18 +267,38 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
     issues: list[str] = []
     sources: list[_NodeSource] = []
     roadmap_root = roadmap_root.resolve()
-    entries = sorted(roadmap_root.rglob("*"))
+
+    def unlistable(exc: OSError) -> None:
+        issues.append(f"cannot list roadmap directory {exc.filename}: {exc.strerror}")
+
+    # Unlike a glob, a walk reports each directory it cannot list.
+    entries = sorted(
+        Path(directory, name) for directory, _, files in os.walk(roadmap_root, onerror=unlistable) for name in files
+    )
+    pages: list[Path] = []
+    unchecked = False
     for path in entries:
-        if path.is_file() and path.name.casefold() == "readme.md" and path.name != "README.md":
-            relative = path.relative_to(roadmap_root).as_posix()
+        if path.suffix != ".md" and path.name.casefold() != "readme.md":
+            continue
+        relative = path.relative_to(roadmap_root).as_posix()
+        try:
+            if not stat.S_ISREG(path.stat().st_mode):
+                continue
+        except FileNotFoundError:
+            continue  # a dangling link, like an editor's lock file, or a page removed since the walk
+        except OSError as exc:
+            issues.append(f"{relative}: cannot read roadmap page: {exc}")
+            unchecked = True
+            continue
+        if path.name.casefold() == "readme.md" and path.name != "README.md":
             issues.append(
                 f"{relative}: noncanonical README filename; container pages must be named exactly README.md "
                 "for portable behavior on case-sensitive filesystems"
             )
+        if path.suffix == ".md":
+            pages.append(path)
 
-    for path in entries:
-        if not path.is_file() or path.suffix != ".md":
-            continue
+    for path in pages:
         try:
             content = path.read_bytes()
             text = content.decode("utf-8")
@@ -289,11 +311,22 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
         if not _is_within(canonical, roadmap_root):
             issues.append(f"{node_id}: node file escapes the roadmap directory")
             continue
+        if path.name == "README.md" and canonical != path:
+            # Containment is looked up by the path each README.md resolves to,
+            # so a linked one would contain nothing, and the pages beside it
+            # would attach to the root. The walk follows no directory link, so
+            # only a link resolves elsewhere.
+            relative = path.relative_to(roadmap_root).as_posix()
+            target = canonical.relative_to(roadmap_root).as_posix()
+            issues.append(f"{relative}: links to {target}; replace the link with the page itself")
+            continue
         sources.append(
             _NodeSource(node_id, canonical, text, hashlib.sha256(content).hexdigest())
         )
 
-    issues.extend(_chapter_issues(roadmap_root))
+    if not unchecked:
+        # A chapter page that could not be checked is named above; calling it missing would mislead.
+        issues.extend(_chapter_issues(roadmap_root))
     return sources, issues
 
 
@@ -325,7 +358,9 @@ def _chapter_issues(roadmap_root: Path) -> list[str]:
     """
 
     try:
-        chapters = sorted(path for path in roadmap_root.iterdir() if path.is_dir())
+        # Like the walk, follow no chapter link: its pages are not loaded, and one
+        # that cannot be entered would raise.
+        chapters = sorted(path for path in roadmap_root.iterdir() if path.is_dir() and not path.is_symlink())
     except OSError:
         return []
     issues = []
@@ -362,7 +397,8 @@ def _article_parents(parsed: list[_ParsedNode]) -> dict[str, str | None]:
             candidate = candidate.parent
         parent: str | None = None
         while candidate != candidate.parent:
-            readme = (candidate / "README.md").resolve()
+            # Not resolved: node paths are canonical, so a README.md link, as above the roadmap, contains nothing.
+            readme = candidate / "README.md"
             if readme in by_path:
                 parent = by_path[readme]
                 break
@@ -392,9 +428,10 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
     }
     section: str | None = None
 
-    # Fences and comments are read as the page and the audit read them, so a
-    # section a reader sees never loses its links here.
-    for line in mask_fences_and_comments(lines[body_start:]):
+    # Fences, comments and indented code are read as the page and the audit
+    # read them, so a section a reader sees never loses its links here, and a
+    # link the page shows as code is not read as one.
+    for line in mask_code_and_comments(lines[body_start:]):
         heading = _HEADING.match(line)
         if heading:
             level = len(heading.group(1))

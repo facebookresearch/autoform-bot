@@ -8,6 +8,7 @@ contacts a network service or writes generated state back into the blueprint.
 from __future__ import annotations
 
 import json
+import os
 import re
 import statistics
 from bisect import bisect_right
@@ -51,10 +52,11 @@ _DECLARATION_KEYWORDS = {
     "axiom": frozenset({"axiom"}),
     "class": frozenset({"class"}),
     "corollary": frozenset({"lemma", "theorem"}),
-    "def": frozenset({"def"}),
-    "definition": frozenset({"def"}),
+    "def": frozenset({"def", "irreducible_def"}),
+    "definition": frozenset({"def", "irreducible_def"}),
     "inductive": frozenset({"inductive"}),
     "instance": frozenset({"instance"}),
+    "irreducible_def": frozenset({"irreducible_def"}),
     "lemma": frozenset({"lemma", "theorem"}),
     "opaque": frozenset({"opaque"}),
     "proposition": frozenset({"lemma", "theorem"}),
@@ -530,8 +532,11 @@ def _validation_article_path(blueprint: Path, issue: str) -> str:
         candidate = roadmap / "README.md"
     else:
         readme = roadmap / node_id / "README.md"
-        candidate = readme if readme.exists() else roadmap / f"{node_id}.md"
-    if candidate.exists() or roadmap.exists():
+        # os.path.exists is False for a path it cannot stat; Path.exists raises before 3.14.
+        candidate = readme if os.path.exists(readme) else roadmap / f"{node_id}.md"
+        if node_id.casefold().endswith(".md") and not os.path.exists(candidate):
+            candidate = roadmap / node_id  # discovery names a page it could not load by its file
+    if roadmap.exists():
         return _relative_path(candidate, blueprint)
     return "."
 

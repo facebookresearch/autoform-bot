@@ -25,6 +25,11 @@ from autoform_cli.markdown import (
     visible_prose,
 )
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
+
 #: Heading forms whose published anchors are easy to get subtly wrong, paired
 #: with what the configured MkDocs renderer actually publishes for them. Several
 #: of these depend on block context or on a specific extension setting rather
@@ -97,6 +102,50 @@ def test_the_extension_config_matches_the_scaffolded_mkdocs_yml() -> None:
     assert SITE_EXTENSION_CONFIGS["toc"] == {"toc_depth": "2-3"}
     assert "generic: true" in block
     assert SITE_EXTENSION_CONFIGS["pymdownx.arithmatex"] == {"generic": True}
+
+
+#: Pins the Pages build may keep below uv.lock. mkdocs-literate-nav 0.6.2
+#: requires only mkdocs>=1.4.1, so it resolves beside the pinned mkdocs; the
+#: lock's 0.6.3 would also install properdocs.
+PAGES_PINS_BELOW_THE_LOCK = {"mkdocs-literate-nav": "0.6.2"}
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        "autoform_cli/templates/github/workflows/blueprint-pages.yml",
+        "skills/setup/assets/cabannes-thesis-project/.github/workflows/blueprint-pages.yml",
+    ],
+)
+def test_the_pages_build_pins_the_renderer_and_the_locked_versions(workflow: str) -> None:
+    """The checks run the renderer the CLI installs and the site the one its
+    workflow installs, so both pin the same exact versions, or pages and
+    anchors are judged by a parser that does not build the published page.
+    The build's other pins carry uv.lock's versions, a set uv resolved, since
+    a set with no solution fails every project's Pages run."""
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    locked: dict[str, set[str]] = {}
+    with (root / "uv.lock").open("rb") as handle:
+        for package in tomllib.load(handle)["package"]:
+            locked.setdefault(package["name"], set()).add(package["version"])
+    pages = (root / workflow).read_text(encoding="utf-8")
+    build = pages[pages.index("- name: Build the Markdown site") :]
+    build = build[: build.index("\n\n")]
+    for package in ("markdown", "pymdown-extensions"):
+        pins = re.findall(rf'^    "{re.escape(package)}==([^"]+)",$', pyproject, re.MULTILINE)
+        assert len(pins) >= 1 and len(set(pins)) == 1, (package, pins)
+        assert re.findall(rf"--with {re.escape(package)}==(\S+)", pages) == pins[:1], package
+    pinned = dict(re.findall(r"--(?:from|with) ([\w.-]+)==(\S+)", build))
+
+    assert "mkdocs-material" in pinned
+    drifted = {
+        name: (version, sorted(locked[name]))
+        for name, version in pinned.items()
+        if name in locked and locked[name] != {version} and PAGES_PINS_BELOW_THE_LOCK.get(name) != version
+    }
+    assert drifted == {}, "Pages pins that differ from uv.lock"
 
 
 def test_frontmatter_cannot_contribute_anchors(tmp_path: Path) -> None:

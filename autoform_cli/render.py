@@ -24,6 +24,7 @@ from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage
 from .graph import Graph, Node, load_graph
 from .lean import SourceLinker, build_linker, declaration_names, index_failure_message
 from .markdown import article_parts
+from .markdown import content_lines as _content_lines
 from .status import is_definition
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
@@ -478,7 +479,7 @@ def _prepare_destination(destination: Path, *, clean: bool) -> None:
     if not manifest.is_symlink() and manifest.is_file():
         try:
             publication = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
+        except (OSError, RecursionError, ValueError):
             pass
     if (
         manifest.is_symlink()
@@ -1313,7 +1314,7 @@ def _render_overview_summary(
 
 
 def _first_h1(text: str) -> str | None:
-    for line in text.splitlines():
+    for line in _content_lines(text):
         heading = _HEADING.match(line)
         if heading is not None and len(heading.group(1)) == 1:
             return heading.group(2).strip()
@@ -1332,8 +1333,11 @@ def _document_body(text: str) -> str:
 
     kept: list[str] = []
     dropped_title = False
-    for line in lines[start:]:
-        heading = _HEADING.match(line)
+    source_lines = lines[start:]
+    # One "\n" after every line, so blank lines at the end stay lines.
+    visible_lines = _content_lines("".join(f"{line}\n" for line in source_lines))
+    for line, visible in zip(source_lines, visible_lines, strict=True):
+        heading = _HEADING.match(visible)
         if heading is not None and len(heading.group(1)) == 1 and not dropped_title:
             dropped_title = True
             continue

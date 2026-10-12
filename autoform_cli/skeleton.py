@@ -464,9 +464,18 @@ def _share(table: dict[str, object], name: str, value: object, *, table_name: st
 def load_skeleton_report(path: str | Path) -> SkeletonReport:
     """Read a report written by :meth:`SkeletonReport.to_json` back into memory."""
 
+    # ValueError covers malformed JSON, bytes that are not UTF-8, and a number
+    # too long to convert; RecursionError, arrays or objects nested deeper than
+    # the decoder recurses.
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        # An escape such as "\ud800" decodes to half of a
+        # surrogate pair, which the report's hashes cannot encode as UTF-8.
+        json.dumps(data, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        reason = f"it escapes a lone surrogate, {exc.object[exc.start]!r}, which UTF-8 cannot encode"
+        raise SkeletonError([f"cannot read skeleton report {path}: {reason}"]) from exc
+    except (OSError, RecursionError, ValueError) as exc:
         raise SkeletonError([f"cannot read skeleton report {path}: {exc}"]) from exc
     if (
         not isinstance(data, dict)
@@ -1501,9 +1510,14 @@ def _read_probe_records(records: Path) -> str:
             data = handle.read(DEFAULT_PROBE_OUTPUT_LIMIT + 1)
     except FileNotFoundError:
         return ""
+    except OSError as exc:
+        raise SkeletonError([f"the skeleton probe's records could not be read: {exc.strerror or exc}"]) from exc
     if len(data) > DEFAULT_PROBE_OUTPUT_LIMIT:
         raise SkeletonError([f"lake env lean exceeded the {DEFAULT_PROBE_OUTPUT_LIMIT}-byte output limit"])
-    return data.decode("utf-8")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SkeletonError(["the skeleton probe's records are not valid UTF-8"]) from exc
 
 
 _FOUND_RECORD_FIELDS = frozenset(
@@ -1902,7 +1916,7 @@ def _validate_semantic_material(semantic: str, *, context: str, kind: str | None
     shapes = _SEMANTIC_SHAPES if kind is None else (_KIND_SEMANTIC_SHAPE.get(kind, _SEMANTIC_SHAPES[0]),)
     try:
         payload = json.loads(semantic)
-    except (json.JSONDecodeError, RecursionError):
+    except (RecursionError, ValueError):
         payload = None
     generated = payload.get("generated") if isinstance(payload, dict) else None
     entries = generated if isinstance(generated, list) else []
@@ -2157,10 +2171,24 @@ def extract_graph_skeletons(
     root_modules: dict[str, str] = {}
     for node, names in selected:
         for name in names:
-            if node.id in broken_passages:
-                unresolved.append(UnresolvedTarget(node.id, name, broken_passages[node.id]))
-                continue
             location = index.find(name)
+            # The lexical index cannot tell which of several declarations Lean
+            # binds a name to (one may be private, or in a file no target
+            # builds), so a name more than one file declares fails closed and
+            # every reason given for it names all of them.
+            several = (
+                None
+                if location is None or name not in index.elsewhere
+                else "several source files declare it: "
+                + ", ".join(sorted(path.as_posix() for path in (location.path, *index.elsewhere[name])))
+            )
+            if node.id in broken_passages:
+                reason = broken_passages[node.id]
+                unresolved.append(UnresolvedTarget(node.id, name, reason if several is None else f"{reason}; {several}"))
+                continue
+            if several is not None:
+                unresolved.append(UnresolvedTarget(node.id, name, several))
+                continue
             module = None if location is None else module_of(lean_root / location.path, libraries)
             if location is None:
                 unresolved.append(
@@ -2561,7 +2589,7 @@ def _validate_managed_output(path: Path, *, kind: str) -> tuple[int, int, str] |
     manifest = path / PACKET_MANIFEST
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8")) if manifest.is_file() else None
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except (OSError, RecursionError, ValueError):
         payload = None
     if not (
         isinstance(payload, dict)

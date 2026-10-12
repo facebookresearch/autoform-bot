@@ -33,6 +33,7 @@ from autoform_cli.lean import (
     snapshot_project_sources,
     strip_lean_comments,
 )
+from tests.undecodable_json import _undecodable_json
 
 _SOURCE = """import Mathlib
 
@@ -157,6 +158,13 @@ def test_commented_out_code_is_not_indexed(tmp_path: Path) -> None:
     index = _index(tmp_path)
 
     assert index.find("Ghost.commented_out") is None
+
+
+def test_nothing_after_exit_is_indexed(tmp_path: Path) -> None:
+    index = _index(tmp_path, "def real : Nat := 1\n#exit\ndef dead : Nat := 2\n")
+
+    assert index.find("real") is not None
+    assert index.find("dead") is None
 
 
 def test_line_comments_are_ignored(tmp_path: Path) -> None:
@@ -2149,6 +2157,14 @@ def test_oversized_managed_manifest_leaves_its_directory_indexed_at_its_read_bou
 
     assert observed_lengths == [65]
     assert index.find("oversizedPacket") is not None
+
+
+@pytest.mark.parametrize("damage", ["nested", "a-number-too-long"])
+def test_a_manifest_that_cannot_be_decoded_marks_no_packet_output(tmp_path: Path, damage: str) -> None:
+    (tmp_path / "Project").mkdir()
+    (tmp_path / "Project" / "manifest.json").write_text(_undecodable_json(damage), encoding="utf-8")
+
+    assert _index(tmp_path).find("Outer.alpha") is not None
 
 
 def test_irreducible_definitions_are_indexed(tmp_path: Path) -> None:
