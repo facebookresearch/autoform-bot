@@ -64,6 +64,7 @@ _REQUIRED_TEMPLATE_PATHS = frozenset(
         "blueprint/sources/README.md",
         "github/CODEOWNERS.autoform.example",
         "github/autoform_audit.py",
+        "github/workflows/autoform-review-gate.yml",
         "github/workflows/autoform-verify.yml",
         "github/workflows/blueprint-pages.yml",
         "gitignore",

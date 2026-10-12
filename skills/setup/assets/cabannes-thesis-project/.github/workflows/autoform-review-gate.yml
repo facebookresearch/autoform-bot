@@ -1,0 +1,71 @@
+# Early feedback on who approved the statement reviews a pull request adds or
+# changes. It needs no Lean, so it reruns cheaply whenever a review arrives.
+# It runs the pull request's own copy of this file, so a pull request can
+# disable it; the authoritative label is the one blueprint-pages.yml computes
+# on main. The approval rule is in autoform_cli/README.md of autoform-bot.
+
+name: autoform review gate
+
+on:
+  pull_request:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  AUTOFORM_SOURCE: "https://github.com/facebookresearch/autoform-bot.git"
+  AUTOFORM_REF: "c994d83f9fab1f40d69b2f279d4c62ca937a0186"
+
+concurrency:
+  group: autoform-review-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  authenticate:
+    name: authenticate approvals
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out project
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # autoform-verify.yml validates the marker itself; this only asks whether
+      # the project opted in.
+      - name: Detect statement review
+        run: |
+          set -euo pipefail
+          marker="blueprint/.autoform-review"
+          if [[ -f "$marker" && ! -L "$marker" ]]; then
+            echo "AUTOFORM_REVIEW_ENABLED=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install uv
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+
+      # The checkout is refs/pull/N/merge, the pull request merged onto the
+      # default branch as GitHub last computed it, so its first parent is the
+      # base. The event's base.sha can lag behind it, and approvals other pull
+      # requests landed since would then count as added here.
+      - name: Authenticate changed approvals
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify --quiet 'HEAD^2' > /dev/null; then
+            echo "error: the checkout is not the merge commit of #$PR_NUMBER, so its base is unknown" >&2
+            exit 2
+          fi
+          base="$(git rev-parse 'HEAD^1')"
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            autoform review authenticate blueprint --github --pr "$PR_NUMBER" \
+            --since "$base" --trusted-ref "$base"

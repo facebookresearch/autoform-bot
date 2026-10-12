@@ -84,7 +84,7 @@ prefix only for the Autoform vault/site repair overlay.
 
 `autoform init` is the whole vault: `blueprint/` with its landing page,
 `roadmap/README.md`, `coverage/`, and `sources/`, plus `mkdocs.yml`, the theme
-override, both workflows, and ignore rules. Do not hand-build any of it and do
+override, the workflows, and ignore rules. Do not hand-build any of it and do
 not copy the bundled example: the layout is fixed, and a chapter written as a
 sibling file instead of `<chapter>/README.md` still validates while publishing
 a book with no chapters. `init` preserves existing files, appending only missing
@@ -116,17 +116,25 @@ Never invent a ref. It must be a full 40-character commit sha: `init` refuses a
 branch, a tag, or an abbreviated sha, because CI would silently reinstall a
 different Autoform later and break a project that was passing.
 
-The two workflows it writes are `autoform-verify.yml`, which validates the
+The three workflows it writes are `autoform-verify.yml`, which validates the
 Markdown DAG, builds Lean, rejects unfinished or unsafe proofs, and audits
-theorem axioms on pull requests, and `blueprint-pages.yml`, which validates the
-DAG and its `lean:` declarations, renders the blueprint, builds MkDocs, and
-deploys GitHub Pages. Pass `--autoform-ref` to pin them at an immutable commit.
+theorem axioms on pull requests; `autoform-review-gate.yml`, which tells a pull
+request early whether a code owner has authenticated the statement approvals
+it adds; and `blueprint-pages.yml`, which validates the DAG and its `lean:`
+declarations, renders the blueprint, builds MkDocs, and deploys GitHub Pages.
+Pass `--autoform-ref` to pin them at an immutable commit.
 It also writes `.github/CODEOWNERS.autoform.example`. GitHub does not read it,
 so it cannot mask active owners. Do not guess owners or activate it silently.
 With names the user gives, merge its rules into the first CODEOWNERS file
 GitHub reads, then require code-owner review, dismiss stale approvals, and
 audit bypasses. Report that new rules cannot protect their own activation
 unless equivalent coverage already exists on the pull request's base branch.
+
+When statement review is on, tell the user that approvals read "approved by"
+only under default-branch rulesets (not classic branch protection) and a
+`CODEOWNERS` that owns every path, as the
+[CLI reference](../../autoform_cli/README.md#commands) states; adding them is
+their decision.
 
 After it runs, fill in what only a human or a source can supply: the project
 description in `blueprint/README.md`, the coverage contract, and a verified

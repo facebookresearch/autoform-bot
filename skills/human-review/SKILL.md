@@ -101,7 +101,7 @@ tree.
    incomplete, or inconsistent. Every formalized statement gains a *Review*
    disclosure showing the exact hashed packet, its read-back, the article and
    source evidence it is bound to, and the approval state. A current approval
-   reads self-approved.
+   reads self-approved until a verifier names the person who approved it.
 5. Walk the person through each statement: source and book text first, then the
    read-back, then the exact packet. Ask whether the read-back says what the
    book says, whether any hypothesis is missing or added, and whether the
@@ -110,10 +110,23 @@ tree.
    `review_approved`. That hash binds the article title and statement, cited passage,
    exact packets, and current read-backs. This edit is the person's assertion,
    not the agent's, but the hash only shows that nothing changed since it was
-   written, and anyone can copy it. Commit the approval in a pull request into
-   the default branch and ask a code owner of the article to approve it; a
-   later push needs a new approval. When the person does not approve, record
-   `revise` with their reason and hand the change to Roadmap.
+   written, and anyone can copy it. Commit the approval from a fresh branch of
+   the project's own repository (not a fork) in a pull request into the
+   default branch that changes only articles and read-back cards. Once
+   `review check` is green on its final head commit, ask an individual `@user`
+   code owner of the article with write access, who neither opened the pull
+   request nor wrote any of its commits, to approve that head; a later push
+   needs a new approval. Anything else reads self-approved with the reason;
+   the [CLI reference](../../autoform_cli/README.md#commands) states the full
+   rule, including how to re-approve. To withdraw an approval, dismiss the
+   review. The site reads self-approved after the next Pages build, which the
+   hourly schedule starts a day after the last one, and builds only while at
+   most 100 of the hour's API requests are spent; run the Pages workflow by
+   hand (`workflow_dispatch`) to show it at once. The
+   `autoform-review-gate.yml` check on the pull request is early feedback; the
+   Pages label decides. When
+   the person does not approve, record `revise` with their reason and hand the
+   change to Roadmap.
 6. Run the review-aware audit again before reporting. Treat missing testimony,
    unresolved extraction, an incomplete bundle, any packet or read-back
    mismatch, and any approval drift as failures. An edit to any reviewed input

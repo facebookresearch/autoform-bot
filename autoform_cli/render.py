@@ -15,13 +15,14 @@ import json
 import re
 import shutil
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 from markdown.extensions.toc import slugify
 
 from . import graph_pages, graph_views, mermaid, status
+from .approvals import ApprovalStatus, ApprovalVerifier, approval_statuses, current_approvals
 from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage
 from .graph import Graph, Node, load_graph
 from .lean import (
@@ -554,6 +555,7 @@ def render_site(
     skeleton: SkeletonReport | None = None,
     review_bundle: ReviewBundle | None = None,
     readbacks: dict[tuple[str, str], Readback] | None = None,
+    approval_verifier: ApprovalVerifier | None = None,
 ) -> RenderReport:
     """Write deterministic, read-only projections of the Markdown blueprint.
 
@@ -570,6 +572,11 @@ def render_site(
     Every input is read once: pages, copied files, page order, and the
     revision hash all come from one capture, so a file written during the
     render never puts a second state of the blueprint on the site.
+
+    A current approval is labelled self-approved unless ``approval_verifier``
+    authenticates it; without one no network is used. With one, the
+    publication manifest's ``unchecked_approvals`` lists the approvals it
+    could not finish checking, and why.
     """
     blueprint = Path(blueprint_dir).expanduser().resolve()
     requested_destination = Path(output_dir).expanduser()
@@ -625,6 +632,15 @@ def render_site(
         readbacks = {}
     elif readbacks is None:
         readbacks = load_readbacks(blueprint)
+    # Before anything is written, so a failed lookup leaves no partial site.
+    approvals: dict[str, ApprovalStatus] = {}
+    unchecked = None
+    if review_bundle is not None and approval_verifier is not None:
+        web_url = getattr(approval_verifier, "web_url", None)
+        current = current_approvals(graph, review_bundle, readbacks)
+        for node_id, verdict in approval_statuses(graph, current, approval_verifier).items():
+            approvals[node_id] = _linkable(verdict, web_url)
+        unchecked = dict(getattr(approval_verifier, "unchecked", {}))
 
     _prepare_destination(destination, clean=clean)
     _write_publication_manifest(
@@ -635,6 +651,7 @@ def render_site(
         linker,
         coverage=coverage,
         complete=False,
+        unchecked=unchecked,
     )
 
     report = RenderReport(output_dir=destination)
@@ -692,6 +709,7 @@ def render_site(
             skeleton=skeleton,
             review_bundle=review_bundle,
             readbacks=readbacks,
+            approvals=approvals,
         )
         page.write_text(chapter, encoding="utf-8")
         if narrative is None:  # a milestone with no narrative page of its own
@@ -755,6 +773,7 @@ def render_site(
         linker,
         coverage=coverage,
         complete=True,
+        unchecked=unchecked,
     )
     return report
 
@@ -931,8 +950,9 @@ def _write_publication_manifest(
     *,
     coverage: CoverageSummary,
     complete: bool,
+    unchecked: dict[str, str] | None,
 ) -> None:
-    manifest = {
+    manifest: dict[str, object] = {
         "complete": complete,
         "coverage": {
             "complete": coverage.complete,
@@ -949,6 +969,9 @@ def _write_publication_manifest(
         "dependencies": graph.edge_count,
         "views": ["book", "progress", "project", "chapter", "focus", "full"],
     }
+    if unchecked is not None:
+        # Approvals a failed request or spent budget left self-approved; a later build may authenticate them.
+        manifest["unchecked_approvals"] = dict(sorted(unchecked.items()))
     (destination / PUBLICATION_MANIFEST).write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -1855,6 +1878,7 @@ def _render_chapter(
     skeleton: SkeletonReport | None,
     review_bundle: ReviewBundle | None,
     readbacks: dict[tuple[str, str], Readback],
+    approvals: dict[str, ApprovalStatus],
 ) -> tuple[str, int, list[str]]:
     """Render one narrative article with statements at its authored link slots."""
     links = _anchored_links(targets, page)
@@ -1878,6 +1902,7 @@ def _render_chapter(
             skeleton=skeleton,
             review_bundle=review_bundle,
             readbacks=readbacks,
+            approvals=approvals,
         )
         environments[node_id] = environment
         linked += node_linked
@@ -2011,6 +2036,7 @@ def _render_environment(
     skeleton: SkeletonReport | None,
     review_bundle: ReviewBundle | None,
     readbacks: dict[tuple[str, str], Readback],
+    approvals: dict[str, ApprovalStatus],
 ) -> tuple[str, int, list[str]]:
     node_status = statuses[node.id]
     caption, _, number = numbers[node.id].rpartition(" ")
@@ -2070,11 +2096,23 @@ def _render_environment(
     if dependencies:
         lines.append(dependencies)
     if skeleton is not None and review_bundle is not None:
-        review = _review_disclosure(node, skeleton, review_bundle, readbacks)
+        review = _review_disclosure(node, skeleton, review_bundle, readbacks, approvals)
         if review:
             lines.extend(["", review, ""])
     lines.append("</div>")
     return "\n".join(lines), linked, unresolved
+
+
+def _linkable(status: ApprovalStatus, web_url: object) -> ApprovalStatus:
+    """Keep a review reference only when it is a page on the verifier's own https site."""
+
+    attestation = status.attestation
+    if attestation is None:
+        return status
+    if isinstance(web_url, str) and web_url.startswith("https://"):
+        if attestation.reference.startswith(web_url.rstrip("/") + "/"):
+            return status
+    return replace(status, attestation=replace(attestation, reference=""))
 
 
 def _review_disclosure(
@@ -2082,11 +2120,13 @@ def _review_disclosure(
     skeleton: SkeletonReport,
     bundle: ReviewBundle,
     readbacks: dict[tuple[str, str], Readback],
+    approvals: dict[str, ApprovalStatus],
 ) -> str:
     """Show what a reviewer must trust, and what a blind auditor says it means.
 
     The approval hash covers the prepared bundle and the read-backs; a match
-    says only that nothing changed, so it is shown as self-approved.
+    says only that nothing changed, and is self-approved until a verifier
+    names the person who approved it.
     """
 
     record = skeleton.node(node.id)
@@ -2099,21 +2139,37 @@ def _review_disclosure(
         expected_approval = bundle.review_hash(article.article_id, readbacks)
     except ReviewError:
         expected_approval = None
+    evidence = None
+    reason = None
     if node.review_approved is None:
         ready = "not yet approved" if expected_approval is None else f"ready to approve · {expected_approval}"
         approval = ("bp-review-open", ready)
     elif expected_approval is None:
         approval = ("bp-review-drift", "approval cannot be verified because testimony is incomplete or invalid")
     elif node.review_approved == expected_approval:
-        approval = ("bp-review-self-approved", f"self-approved · {expected_approval}")
+        status = approvals.get(node.id)
+        if status is not None and status.review_hash != expected_approval:
+            status = None
+        attestation = None if status is None else status.attestation
+        if attestation is None:
+            approval = ("bp-review-self-approved", f"self-approved · {expected_approval}")
+            reason = None if status is None else status.reason
+        else:
+            approval = ("bp-review-approved", f"approved by @{attestation.reviewer} · {expected_approval}")
+            evidence = attestation.reference or None
     else:
         approval = (
             "bp-review-drift",
             f"approval {node.review_approved} does not match the current complete review {expected_approval}",
         )
+    label = html.escape(approval[1])
+    if evidence is not None:
+        label = f'<a href="{html.escape(evidence, quote=True)}">{label}</a>'
+    # Why an approval stayed self-approved, for whoever hovers over it.
+    title = "" if reason is None else f' title="{html.escape(reason, quote=True)}"'
     summary = (
         f"Review · {count} skeleton{'s' if count != 1 else ''}, {lines_to_read} lines to trust · "
-        f'<span class="{approval[0]}">{html.escape(approval[1])}</span>'
+        f'<span class="{approval[0]}"{title}>{label}</span>'
     )
     parts = ['<details class="bp-review" markdown="1">', f"<summary>{summary}</summary>", ""]
     parts.extend(
@@ -2957,6 +3013,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   user-select: none;
 }}
 .bp-review summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+.bp-review-approved {{ color: #31A24C; font-weight: 600; }}
+.bp-review-approved a {{ color: inherit; }}
 .bp-review-self-approved {{ color: var(--bp-muted); font-style: italic; }}
 .bp-review-open {{ color: var(--bp-muted); }}
 .bp-review-drift {{ color: #B77900; font-weight: 600; }}

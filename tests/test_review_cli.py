@@ -1955,7 +1955,39 @@ def test_a_pasted_current_hash_is_only_self_approved(
     assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "--review", "--output", str(site)]) == 0
     pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
     assert pages.count('<span class="bp-review-self-approved">self-approved · sha256:') == 2
+    assert "bp-review-approved" not in pages
     assert re.search(r"(?<!self-)approved ·", pages) is None
+
+
+def _no_lean(*args: object, **kwargs: object) -> SkeletonReport:
+    raise AssertionError("this command must not run Lean")
+
+
+def _reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **scope: object) -> tuple[Path, Path]:
+    """Approve both articles, then write the report a Lean job would hand on, and forbid Lean."""
+
+    extraction = _Extraction()
+    blueprint = _approved_articles(tmp_path, monkeypatch, extraction)
+    report = tmp_path / "artifact" / "skeleton-report.json"
+    report.parent.mkdir()
+    report.write_text(extraction(blueprint, **scope).to_json(), encoding="utf-8")
+    monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", _no_lean)
+    return blueprint, report
+
+
+def test_check_and_render_take_the_skeleton_report_of_a_job_that_built_lean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blueprint, report = _reported(tmp_path, monkeypatch)
+
+    assert main(["review", "check", str(blueprint), "--skeleton-report", str(report)]) == 0
+    assert "OK: statement reviews match" in capsys.readouterr().out
+
+    site = tmp_path / "site"
+    assert main(["render", str(blueprint), "--review", "--skeleton-report", str(report), "--output", str(site)]) == 0
+    pages = "\n".join(path.read_text(encoding="utf-8") for path in site.rglob("*.md"))
+    assert "The statement Review.result asserts True." in pages
+    assert "bp-readback-current" in pages
 
 
 def test_a_card_directory_that_cannot_be_listed_is_an_error_not_missing_cards(
@@ -1963,14 +1995,57 @@ def test_a_card_directory_that_cannot_be_listed_is_an_error_not_missing_cards(
 ) -> None:
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("permissions do not bind root")
-    blueprint = _approved_articles(tmp_path, monkeypatch, _Extraction())
+    blueprint, report = _reported(tmp_path, monkeypatch)
     cards = (blueprint / "readbacks" / "af_0123456789abcdef01234567").resolve()
     cards.chmod(0o000)
     try:
-        assert _check(blueprint, tmp_path) == 2
+        assert main(["review", "check", str(blueprint), "--skeleton-report", str(report)]) == 2
     finally:
         cards.chmod(0o755)
     captured = capsys.readouterr()
     assert f"error: cannot list read-back directory {cards}: Permission denied" in captured.err
     assert "no read-back filed" not in captured.err
     assert "OK:" not in captured.out
+
+
+def test_a_skeleton_report_of_another_blueprint_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blueprint, report = _reported(tmp_path, monkeypatch)
+    article = blueprint / "roadmap" / "basics" / "result.md"
+    article.write_text(article.read_text(encoding="utf-8") + "\nA later remark.\n", encoding="utf-8")
+
+    assert main(["review", "check", str(blueprint), "--skeleton-report", str(report)]) == 2
+    captured = capsys.readouterr()
+    assert f"{report} was extracted from blueprint sha256:" in captured.err
+    assert "not from this checkout's sha256:" in captured.err
+    assert "OK:" not in captured.out
+
+    assert main(["render", str(blueprint), "--review", "--skeleton-report", str(report), "--output",
+                 str(tmp_path / "site")]) == 1
+    assert f"{report} was extracted from blueprint sha256:" in capsys.readouterr().out
+
+
+def test_a_skeleton_report_of_some_articles_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blueprint, report = _reported(tmp_path, monkeypatch, node_ids=["basics/result"])
+
+    assert main(["review", "check", str(blueprint), "--skeleton-report", str(report)]) == 2
+    assert f"{report} covers selected articles only; review needs every article" in capsys.readouterr().err
+
+
+def test_review_evidence_comes_from_lean_or_a_report_but_not_both(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blueprint = _blueprint(tmp_path)
+    report = tmp_path / "skeleton-report.json"
+
+    for flags in ([], ["--lean-root", str(tmp_path), "--skeleton-report", str(report)]):
+        with pytest.raises(SystemExit) as refused:
+            main(["review", "check", str(blueprint), *flags])
+        assert refused.value.code == 2
+    capsys.readouterr()
+
+    assert main(["render", str(blueprint), "--skeleton-report", str(report), "--output", str(tmp_path / "site")]) == 2
+    assert "--skeleton-report requires --review or --review-bundle" in capsys.readouterr().err
