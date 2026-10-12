@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -8,9 +9,11 @@ from pathlib import Path
 
 import pytest
 
+import autoform_cli.render as render_module
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS
-from autoform_cli.graph import load_graph
+from autoform_cli.graph import Graph, load_graph
 from autoform_cli.lean import LeanSourceError, _normalize_remote
+from autoform_cli.markdown import site_converter, statement_and_notes
 from autoform_cli.render import (
     PUBLICATION_MANIFEST,
     PublicationError,
@@ -129,7 +132,7 @@ def test_a_graph_page_hides_its_legend_behind_an_icon(tmp_path: Path) -> None:
     assert 'class="bp-legend-icon"' in page
     # The legend itself is still there, just not laid out on the page.
     assert 'class="bp-legend-grid"' in page
-    assert page.index("bp-legend-icon") < page.index("```mermaid")
+    assert page.index("bp-legend-icon") < page.index('<div class="mermaid bp-graph">')
     assert "<button" in page and 'aria-describedby="bp-legend-note"' in page
     assert ".bp-legend-tip:focus-within .bp-legend-note" in css
 
@@ -702,6 +705,84 @@ def test_the_generated_script_is_valid_javascript(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_render_marks_each_graph_it_draws(tmp_path: Path) -> None:
+    """Render writes each graph as raw HTML of a class only it gives, which
+    no article can write, and the site converts it as written."""
+
+    _render(tmp_path)
+    out = tmp_path / "out"
+
+    for name in ("README.md", "dependencies.md", "dependencies/full.md", "dependencies/chapters/roadmap.md"):
+        page = (out / name).read_text(encoding="utf-8")
+        assert "```mermaid" not in page, name
+        assert page.count('<div class="mermaid bp-graph">graph LR\n') == 1, name
+        published = site_converter().convert(page)
+        start = published.index('<div class="mermaid bp-graph">graph LR\n')
+        assert "click n0 " in published[start : published.index("</div>", start)], name
+    page = (out / "dependencies/nodes/top.md").read_text(encoding="utf-8")
+    assert "  n0 --&gt; n1" in page
+
+
+_MERMAID_HARNESS = r"""
+const fs = require("fs");
+const calls = {initialize: [], render: []};
+function element(classes, text) { return {tagName: "DIV", classes: classes, textContent: text, innerHTML: ""}; }
+const elements = [
+  element(["mermaid", "bp-graph"], "graph LR\n  n0"),
+  element(["mermaid"], 'flowchart LR\n  A\n  click A call eval("document.title=1")'),
+  element(["mermaid", "highlight"], "graph LR\n  B"),
+];
+function matches(e, selector) {
+  var parts = selector.split(".");
+  return (parts[0] === "" || parts[0].toUpperCase() === e.tagName) &&
+    parts.slice(1).every(function (name) { return e.classes.indexOf(name) >= 0; });
+}
+global.document = {
+  readyState: "complete",
+  body: {getAttribute: function () { return null; }},
+  querySelectorAll: function (selector) {
+    return elements.filter(function (e) { return matches(e, selector); });
+  },
+};
+global.MutationObserver = function () { this.observe = function () {}; };
+global.mermaid = {
+  initialize: function (config) { calls.initialize.push(config); },
+  render: function (id, source) {
+    calls.render.push(source);
+    return Promise.resolve({svg: "<svg>" + id + "</svg>"});
+  },
+};
+eval(fs.readFileSync(process.argv[2], "utf8"));
+setTimeout(function () {
+  console.log(JSON.stringify({calls: calls, drawn: elements.map(function (e) { return e.innerHTML; })}));
+}, 0);
+"""
+
+
+def test_the_script_draws_only_the_graphs_render_marked(tmp_path: Path) -> None:
+    """Loose security, which the graphs' links need, runs a click's call as
+    script, so a Mermaid block the page got anywhere else is left as typed."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not available")
+    _render(tmp_path)
+    harness = tmp_path / "harness.js"
+    harness.write_text(_MERMAID_HARNESS, encoding="utf-8")
+
+    result = subprocess.run(
+        [node, str(harness), str(tmp_path / "out/javascripts/blueprint-mermaid.js")],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    report = json.loads(result.stdout)
+
+    assert report["drawn"] == ["<svg>bp-graph-0</svg>", "", ""]
+    assert [source.split("\n")[:2] for source in report["calls"]["render"]] == [["graph LR", "  n0"]]
+    assert {config["securityLevel"] for config in report["calls"]["initialize"]} == {"loose"}
+
+
 @pytest.mark.parametrize("destination", ("same", "child", "parent"))
 def test_refuses_overlapping_source_and_output(tmp_path: Path, destination: str) -> None:
     project = _project(tmp_path)
@@ -876,6 +957,24 @@ def test_render_refuses_a_contract_truncated_by_a_fenced_block(tmp_path: Path) -
         render_site(project / "blueprint", output, lean_root=project)
 
     assert not (output / PUBLICATION_MANIFEST).exists()
+
+
+@pytest.mark.parametrize(
+    ("body", "published"),
+    [
+        # CommonMark closes a fence only with a line of its marker alone.
+        ("```text\n``` trailing text\n## still fenced\n```\n\nAfter the fence.", None),
+        ("<!--\n## hidden section\n-->\nClaim B.", "<!--\n###### hidden section\n-->\nClaim B."),
+    ],
+    ids=["fence", "comment"],
+)
+def test_statement_split_ignores_headings_in_fences_and_comments(body: str, published: str | None) -> None:
+    statement, remainder = statement_and_notes(
+        f"---\n---\n\n# Result\n\nClaim.\n\n{body}\n\n## Sources\n\n[Book](source.txt#L1-L1)\n"
+    )
+
+    assert statement == f"Claim.\n\n{published or body}"
+    assert remainder == "###### Sources\n\n[Book](source.txt#L1-L1)"
 
 
 def test_render_refuses_a_contract_whose_header_layout_is_hidden(tmp_path: Path) -> None:
@@ -1247,6 +1346,39 @@ def test_a_directory_link_uses_tree_even_when_the_repo_url_says_blob() -> None:
     assert base.href(()) == "https://git.example/blob/x/repo/tree/abc/blueprint/sources"
 
 
+@pytest.mark.parametrize(
+    "markup",
+    ["<script>alert(1)</script>", "<img/src=x onerror=alert(1)>", "<div markdown>x</div>", "&lt;"],
+)
+def test_render_refuses_an_article_with_raw_html(tmp_path: Path, markup: str) -> None:
+    project = _project(tmp_path)
+    top = project / "blueprint" / "roadmap" / "top.md"
+    top.write_text(top.read_text(encoding="utf-8").replace("The main result.", f"The main result. {markup}"),
+                   encoding="utf-8")
+
+    with pytest.raises(PublicationError) as refused:
+        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    assert any(issue.startswith("top: ") for issue in refused.value.issues), refused.value.issues
+    assert not (tmp_path / "out").exists()
+
+
+def test_render_leaves_html_comments_out_of_the_site(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    top = project / "blueprint" / "roadmap" / "top.md"
+    top.write_text(
+        top.read_text(encoding="utf-8").replace(
+            "The main result.", "The main result.<!-- secret note --> Shown.<!-->gone-->"
+        ),
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    pages = "\n".join(path.read_text(encoding="utf-8") for path in (tmp_path / "out").rglob("*.md"))
+    assert "The main result. Shown." in pages
+    assert "secret note" not in pages
+    assert "gone" not in pages
+
+
 def _count_relative_links(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
     """Record the target of every `mermaid.relative_link` call."""
     from autoform_cli import mermaid
@@ -1534,6 +1666,78 @@ def test_a_statement_written_below_a_section_is_still_published(tmp_path: Path) 
 
     assert "The main result." in _statement_box(page, "top")
     assert "## Depends on" not in page
+
+
+def test_render_orders_the_book_by_the_roadmap_it_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The book's page order follows the roadmap page the site publishes, even
+    when the file is rewritten after it was copied."""
+
+    readme = _project(tmp_path) / "blueprint" / "roadmap" / "README.md"
+    authored = readme.read_text(encoding="utf-8")
+    for name in ("Intro", "Basics"):
+        (readme.parent / name.lower()).mkdir()
+        (readme.parent / name.lower() / "README.md").write_text(f"# {name}\n\nNarrative.\n", encoding="utf-8")
+    readme.write_text(authored + "\n- [Intro](intro/README.md)\n- [Basics](basics/README.md)\n", encoding="utf-8")
+    order = render_module._book_page_order
+
+    def rewrite_then_order(*args: object, **kwargs: object) -> object:
+        readme.write_text(authored + "\n- [Basics](basics/README.md)\n- [Intro](intro/README.md)\n", encoding="utf-8")
+        return order(*args, **kwargs)
+
+    monkeypatch.setattr(render_module, "_book_page_order", rewrite_then_order)
+    site = tmp_path / "site"
+    render_site(readme.parent.parent, site)
+
+    published = (site / "roadmap" / "README.md").read_text(encoding="utf-8")
+    assert published.index("[Intro]") < published.index("[Basics]")
+    summary = (site / "SUMMARY.md").read_text(encoding="utf-8")
+    assert summary.index("intro/README.md") < summary.index("basics/README.md")
+
+
+def test_render_refuses_a_roadmap_page_that_appeared_after_the_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A page the graph never parsed is not published beside the graph."""
+
+    blueprint = _project(tmp_path) / "blueprint"
+    load = load_graph
+
+    def load_then_add(*args: object, **kwargs: object) -> Graph:
+        graph = load(*args, **kwargs)
+        (blueprint / "roadmap" / "late.md").write_text("# Late\n\nUnparsed.\n", encoding="utf-8")
+        return graph
+
+    monkeypatch.setattr(render_module, "load_graph", load_then_add)
+    site = tmp_path / "site"
+    with pytest.raises(PublicationError, match="roadmap page appeared after the blueprint was loaded"):
+        render_site(blueprint, site)
+    assert not site.exists()
+
+
+def test_render_publishes_the_coverage_contract_it_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = _project(tmp_path) / "blueprint"
+    contract = blueprint / "coverage" / "README.md"
+    validated = contract.read_bytes()
+    load = render_module.load_coverage
+
+    def load_then_rewrite(*args: object, **kwargs: object) -> object:
+        loaded = load(*args, **kwargs)
+        contract.write_text("# Coverage\n\nPLANTED: nothing is covered.\n", encoding="utf-8")
+        return loaded
+
+    monkeypatch.setattr(render_module, "load_coverage", load_then_rewrite)
+    site = tmp_path / "site"
+    render_site(blueprint, site)
+
+    published = (site / "coverage" / "README.md").read_text(encoding="utf-8")
+    assert "PLANTED" not in published
+    assert "| Project scope | MAPPED | Source audit pending |" in published
+    manifest = json.loads((site / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert manifest["coverage"]["source_sha256"] == hashlib.sha256(validated).hexdigest()
 
 
 def test_a_heading_shown_as_code_is_not_a_page_title() -> None:

@@ -94,7 +94,7 @@ def test_the_extension_config_matches_the_scaffolded_mkdocs_yml() -> None:
     block = template[template.index("markdown_extensions:") :]
     block = block[: block.index("\nextra_css:")]
 
-    declared = set(re.findall(r"^  - ([\w.]+):?(?:\s+#.*)?$", block, re.MULTILINE))
+    declared = set(re.findall(r"^  - ([\w.]+(?::\w+)?):?(?:\s+#.*)?$", block, re.MULTILINE))
 
     assert declared == set(SITE_EXTENSIONS)
     # Settings that change heading IDs have to agree too, not just the names.
@@ -102,6 +102,12 @@ def test_the_extension_config_matches_the_scaffolded_mkdocs_yml() -> None:
     assert SITE_EXTENSION_CONFIGS["toc"] == {"toc_depth": "2-3"}
     assert "generic: true" in block
     assert SITE_EXTENSION_CONFIGS["pymdownx.arithmatex"] == {"generic": True}
+    # So do the fences, which the protected formula form is one of.
+    fences = re.findall(r"- name: (\w+)\n +class: (\w+)\n +format: !!python/name:([\w.]+)\.(\w+)\n", block)
+    assert [
+        (fence["name"], fence["class"], fence["format"].__module__, fence["format"].__name__)
+        for fence in SITE_EXTENSION_CONFIGS["pymdownx.superfences"]["custom_fences"]  # type: ignore[index]
+    ] == fences
 
 
 #: Pins the Pages build may keep below uv.lock. mkdocs-literate-nav 0.6.2
@@ -137,6 +143,8 @@ def test_the_pages_build_pins_the_renderer_and_the_locked_versions(workflow: str
         pins = re.findall(rf'^    "{re.escape(package)}==([^"]+)",$', pyproject, re.MULTILINE)
         assert len(pins) >= 1 and len(set(pins)) == 1, (package, pins)
         assert re.findall(rf"--with {re.escape(package)}==(\S+)", pages) == pins[:1], package
+    # The site's Markdown reads formulas with autoform's own extension.
+    assert '--with "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in build
     pinned = dict(re.findall(r"--(?:from|with) ([\w.-]+)==(\S+)", build))
 
     assert "mkdocs-material" in pinned
@@ -146,6 +154,18 @@ def test_the_pages_build_pins_the_renderer_and_the_locked_versions(workflow: str
         if name in locked and locked[name] != {version} and PAGES_PINS_BELOW_THE_LOCK.get(name) != version
     }
     assert drifted == {}, "Pages pins that differ from uv.lock"
+
+
+def test_the_documented_site_build_installs_autoform() -> None:
+    """The README's build command, like the workflow's, installs autoform,
+    whose Markdown extension mkdocs.yml loads."""
+
+    readme = (Path(__file__).resolve().parents[1] / "autoform_cli/README.md").read_text(encoding="utf-8")
+    builds = re.findall(r"^uv run --with mkdocs .*?mkdocs build --strict$", readme, re.MULTILINE | re.DOTALL)
+
+    assert builds
+    for command in builds:
+        assert '--with "<AUTOFORM_PLUGIN_ROOT>"' in command, command
 
 
 def test_frontmatter_cannot_contribute_anchors(tmp_path: Path) -> None:

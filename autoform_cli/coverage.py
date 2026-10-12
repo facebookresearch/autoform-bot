@@ -26,6 +26,7 @@ from .markdown import (
     published_tables,
     rendered_visible_text,
 )
+from .snapshot import BlueprintSnapshot
 from .markdown import has_substance as _has_substance
 from .markdown import is_placeholder as _is_placeholder
 
@@ -112,15 +113,21 @@ class CoverageSummary:
         return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
 
 
-def load_coverage(blueprint_dir: str | Path) -> tuple[CoverageSummary | None, tuple[CoverageIssue, ...]]:
-    """Read and validate ``coverage/README.md`` without modifying it."""
+def load_coverage(
+    blueprint_dir: str | Path, *, snapshot: BlueprintSnapshot | None = None
+) -> tuple[CoverageSummary | None, tuple[CoverageIssue, ...]]:
+    """Read and validate ``coverage/README.md`` without modifying it.
+
+    With ``snapshot``, the contract is the bytes captured there, so a caller
+    that publishes the file publishes the contract it validated.
+    """
 
     blueprint = Path(blueprint_dir).expanduser().resolve()
     path = blueprint / "coverage" / "README.md"
     try:
-        content = path.read_bytes()
+        content = path.read_bytes() if snapshot is None else snapshot.files[path]
         text = content.decode("utf-8")
-    except FileNotFoundError:
+    except (FileNotFoundError, KeyError):
         return None, (CoverageIssue(0, "coverage contract is missing"),)
     except UnicodeError:
         return None, (CoverageIssue(0, "coverage contract cannot be read as UTF-8"),)

@@ -60,13 +60,18 @@ markdown_extensions:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_div_format
+        # GitHub's ```math and $`...`$ formulas, read by autoform's extension.
+        - name: math
+          class: arithmatex
+          format: !!python/name:autoform_cli.markdown.formula_fence
+  - autoform_cli.markdown:FormulaExtension
 
 extra_css:
   - stylesheets/blueprint.css
 
 extra_javascript:
+  # Written by `autoform render`; it loads the MathJax release the checks target.
   - javascripts/mathjax.js
-  - https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js
   - https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js
   - javascripts/blueprint-mermaid.js
   - javascripts/blueprint-live.js

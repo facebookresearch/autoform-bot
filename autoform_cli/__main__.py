@@ -24,7 +24,7 @@ from .graph import GraphValidationError, load_graph
 from .impact import ImpactError, format_impact, revision_impact
 from .lean import build_linker, declaration_names, index_failure_message
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
-from .render import PublicationError, render_site
+from .render import PublicationError, publication_issues, render_site
 from .runtime import RuntimeProjectionError, load_runtime_graph, resolve_runtime_paths
 from .scaffold import ScaffoldError, scaffold_project
 from .search import SearchError, search_blueprint, statement_preview
@@ -415,9 +415,15 @@ def _init(args: argparse.Namespace) -> int:
 def _check(args: argparse.Namespace) -> int:
     try:
         graph = load_graph(args.blueprint_dir)
+        # Render refuses to publish on these same issues.
+        markup = publication_issues(graph, Path(args.blueprint_dir), lean_root=args.lean_root)
     except GraphValidationError as exc:
         for issue in exc.issues:
             print(f"error: {issue}")
+        return 1
+    for issue in markup:
+        print(f"error: {issue}")
+    if markup:
         return 1
 
     linker = None

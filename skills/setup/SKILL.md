@@ -92,6 +92,11 @@ Autoform rules through a retained bounded regular root `.gitignore` file, so it
 is also the repair path; it reports what it left alone. See the
 [CLI reference](../../autoform_cli/README.md#commands) for its flags.
 
+The site's MathJax configuration is not part of the vault: `autoform render`
+writes `javascripts/mathjax.js` on every build. Put the project's notation in
+`blueprint/tex-macros.json`, an object from macro names to MathJax `tex.macros`
+definitions; `autoform check` refuses notation defined in an article.
+
 `init` pins the generated workflows to the Autoform commit that ran it, using a
 safe remote only when a cached remote-tracking ref contains that commit. It
 prefers Autoform's canonical repository, then `origin`, then `upstream`, then a

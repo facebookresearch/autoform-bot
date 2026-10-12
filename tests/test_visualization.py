@@ -52,10 +52,13 @@ def test_export_writes_a_mermaid_page_linking_to_markdown(tmp_path: Path) -> Non
     # Handles are assigned in sorted order, so pin the links and the edge by
     # their targets rather than by whichever index a node happens to get.
     handles = dict(re.findall(r'click (n\d+) "([^"]+)"', document))
-    lemma = next(k for k, v in handles.items() if v == "roadmap/foundations/base lemma.md")
+    lemma = next(k for k, v in handles.items() if v == "roadmap/foundations/base%20lemma.md")
     main = next(k for k, v in handles.items() if v == "roadmap/main.md")
     assert f"  {lemma} --> {main}" in document
-    assert "Main <result>" in document
+    # Mermaid shows its entity codes as the characters, so the title reads as
+    # typed without becoming markup in the label.
+    assert f'{main}("Main #lt;result#gt;")' in document
+    assert "<result>" not in document
 
 
 def test_diagram_colours_and_shapes_follow_derived_status(tmp_path: Path) -> None:
