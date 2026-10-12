@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -9,11 +10,15 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.__main__ import main
+from autoform_cli import render
+from autoform_cli.__main__ import _current_review, main
 from autoform_cli.graph import load_graph
+from autoform_cli.markdown import site_converter
 from autoform_cli.readback import load_readbacks
-from autoform_cli.review import REVIEW_PACKET_SCHEMA
-from autoform_cli.skeleton import NodeSkeleton, SkeletonReport, blueprint_hash
+from autoform_cli.render import render_site
+from autoform_cli.review import REVIEW_PACKET_SCHEMA, ReviewError
+from autoform_cli.lean import declaration_names
+from autoform_cli.skeleton import NodeSkeleton, SkeletonReport, _article_path, blueprint_hash, source_passage
 from tests.skeleton_fixtures import declaration as fixture_declaration
 
 
@@ -92,6 +97,39 @@ def extraction(monkeypatch: pytest.MonkeyPatch) -> _Extraction:
     return fake
 
 
+def _whole_extraction(blueprint_dir: object, **kwargs: object) -> SkeletonReport:
+    """A fake extraction of every Lean-mapped article in the vault, a folder
+    that is not published included, each passage cut as the real one cuts it."""
+
+    graph = load_graph(blueprint_dir)
+    nodes = []
+    for node in sorted(graph.nodes.values(), key=lambda item: item.id):
+        if node.lean is not None:
+            passage, locator = source_passage(node, graph.blueprint_dir)
+            nodes.append(
+                NodeSkeleton(
+                    node_id=node.id,
+                    article_path=_article_path(node, graph),
+                    declarations=tuple(fixture_declaration(name) for name in declaration_names(node.lean)),
+                    passage=passage,
+                    passage_locator=locator,
+                )
+            )
+    return SkeletonReport(
+        blueprint_hash=blueprint_hash(graph),
+        targets=tuple((item.node_id, tuple(declaration.name for declaration in item.declarations)) for item in nodes),
+        selection="all",
+        selected_nodes=tuple(item.node_id for item in nodes),
+        nodes=tuple(nodes),
+        unresolved=(),
+    )
+
+
+@pytest.fixture
+def whole_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", _whole_extraction)
+
+
 def _prepare(blueprint: Path, root: Path, *extra: str) -> dict[str, dict[str, str]]:
     """Run `review prepare` and write a testimony for each packet; return the
     flags `review record` takes for each, keyed by declaration."""
@@ -122,6 +160,10 @@ def _record(blueprint: Path, record: dict[str, str]) -> int:
 
 def _check(blueprint: Path, root: Path, *extra: str) -> int:
     return main(["review", "check", str(blueprint), "--lean-root", str(root), *extra])
+
+
+def _render(blueprint: Path, root: Path, *extra: str) -> int:
+    return main(["render", str(blueprint), "--lean-root", str(root), "--review", "-o", str(root / "site"), *extra])
 
 
 def _approve(article: Path, approval: str) -> None:
@@ -184,8 +226,12 @@ def test_review_cli_prepares_records_and_checks_exact_evidence(
     _approve_as_printed(blueprint, tmp_path, capsys)
     assert _check(blueprint, tmp_path, "--timeout", "1800") == 0
     assert "OK: 2 statement review(s) complete and current\n" in capsys.readouterr().out
-    # The record runs no Lean: one extraction per prepare and per check.
-    assert [call.get("timeout") for call in extraction.calls] == [1800.0, 1800.0, None, 1800.0]
+    assert _render(blueprint, tmp_path, "--timeout", "1800") == 0
+    assert "The statement Review.result asserts True." in (tmp_path / "site/roadmap/basics/README.md").read_text(
+        encoding="utf-8"
+    )
+    # The record runs no Lean: one extraction per prepare, per check, and per render.
+    assert [call.get("timeout") for call in extraction.calls] == [1800.0, 1800.0, None, 1800.0, 1800.0]
 
 
 @pytest.mark.parametrize(
@@ -205,11 +251,17 @@ def test_review_commands_need_their_flags(
     assert f"the following arguments are required: {missing}" in capsys.readouterr().err
 
 
-def test_check_refuses_the_blank_passage_prepare_refuses(
+def test_render_review_needs_a_lean_root(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["render", str(_blueprint(tmp_path)), "--review", "-o", str(tmp_path / "site")]) == 2
+    assert "--review requires --lean-root" in capsys.readouterr().err
+
+
+def test_check_and_render_refuse_the_blank_passage_prepare_refuses(
     tmp_path: Path, extraction: _Extraction, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """An article not marked cited may cite only blank lines; prepare refuses
-    that passage, and so does check, whatever the cards and approval say."""
+    that passage, and so do check and render, whatever the cards and approval
+    say."""
 
     blueprint = _blueprint(tmp_path)
     article = blueprint / "roadmap/basics/result.md"
@@ -234,6 +286,9 @@ def test_check_refuses_the_blank_passage_prepare_refuses(
     assert _check(blueprint, tmp_path) == 2
     captured = capsys.readouterr()
     assert captured.err == refused and captured.out == ""
+    assert _render(blueprint, tmp_path) == 1
+    assert capsys.readouterr().out == refused
+    assert not (tmp_path / "site").exists()
 
 
 def test_a_record_from_a_stale_packet_is_filed_and_then_reported_invalid(
@@ -556,7 +611,7 @@ def test_a_pasted_current_hash_is_only_self_approved(
     pass. Matching the hash proves the review is current, not who approved it."""
 
     def no_network(*args: object, **kwargs: object) -> object:
-        raise AssertionError("an unauthenticated check used the network")
+        raise AssertionError("an unauthenticated check or render used the network")
 
     monkeypatch.setattr("urllib.request.urlopen", no_network)
     # _approved_articles pastes exactly the hash the check prints.
@@ -570,3 +625,179 @@ def test_a_pasted_current_hash_is_only_self_approved(
         ("basics/other", "self-approved"),
         ("basics/result", "self-approved"),
     ]
+    assert _render(blueprint, tmp_path) == 0
+    page = (tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8")
+    assert page.count('<span class="bp-review-self-approved">self-approved · sha256:') == 2
+    assert re.search(r"(?<!self-)approved ·", page) is None
+
+
+def test_render_refuses_articles_edited_after_its_review_check(
+    tmp_path: Path, extraction: _Extraction, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """render_site loads the articles itself, after the check: they must be the
+    ones the checked extraction saw, or the cards it was handed describe
+    another state."""
+
+    blueprint = _approved_articles(tmp_path, capsys)
+    _, skeleton, _, cards = _current_review(blueprint, lean_root=tmp_path)
+    _approve(blueprint / "roadmap" / "basics" / "result.md", "sha256:" + "f" * 64)
+
+    with pytest.raises(ReviewError, match="the blueprint changed after its review evidence was extracted"):
+        render_site(blueprint, tmp_path / "site", lean_root=tmp_path, skeleton=skeleton, readbacks=cards)
+    assert not (tmp_path / "site").exists()
+
+
+def _approve_every_article(blueprint: Path, root: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    for record in _prepare(blueprint, root).values():
+        assert _record(blueprint, record) == 0
+    _approve_as_printed(blueprint, root, capsys)
+
+
+def _cite(article: Path, target: str) -> None:
+    article.write_text(article.read_text(encoding="utf-8") + f"\n## Sources\n\n[Book]({target})\n", encoding="utf-8")
+
+
+def test_render_shows_the_review_of_a_vault_with_an_unpublished_folder(
+    tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The evidence covers the whole vault, a folder render leaves out
+    included, so render derives it from the vault and shows it for the
+    articles it publishes."""
+
+    blueprint = _blueprint(tmp_path)
+    drafts = blueprint / "roadmap" / "drafts"
+    drafts.mkdir()
+    (drafts / "README.md").write_text("---\npublished: false\n---\n\n# Drafts\n", encoding="utf-8")
+    (drafts / "idea.md").write_text(
+        "---\narticle_id: af_0123456789abcdef01234599\ndeclaration: theorem\nlean: Review.idea\n"
+        "statement: formalized\n---\n\n# Idea\n\nAn idea holds.\n\n## Depends on\n\nNone.\n",
+        encoding="utf-8",
+    )
+    _approve_every_article(blueprint, tmp_path, capsys)
+
+    assert _check(blueprint, tmp_path) == 0
+    assert _render(blueprint, tmp_path) == 0
+    page = (tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8")
+    assert page.count('<details class="bp-review"') == 2
+    assert not (tmp_path / "site/roadmap/drafts").exists()
+
+
+def _render_restoring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: Path, written: bytes, *, delete: bool = False
+) -> None:
+    """Render with the review of the blueprint as checked, after ``path`` was
+    changed, and with it put back once render has its copy and before it
+    reads the vault."""
+
+    blueprint = tmp_path / "blueprint"
+    _, skeleton, _, cards = _current_review(blueprint, lean_root=tmp_path)
+    original = path.read_bytes()
+    if delete:
+        path.unlink()
+    else:
+        path.write_bytes(written)
+    load = render.load_graph
+
+    def restore_then_load(where: Path) -> object:
+        if Path(where) == blueprint:
+            path.write_bytes(original)
+        return load(where)
+
+    monkeypatch.setattr(render, "load_graph", restore_then_load)
+    render_site(blueprint, tmp_path / "site", lean_root=tmp_path, skeleton=skeleton, readbacks=cards)
+
+
+def test_render_refuses_an_article_edited_while_it_renders(
+    tmp_path: Path, extraction: _Extraction, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pages come from render's copy and the evidence from the vault, so
+    an article that differs between the two reads is refused, though the
+    vault ends as it was checked."""
+
+    blueprint = _approved_articles(tmp_path, capsys)
+    article = blueprint / "roadmap" / "basics" / "result.md"
+
+    with pytest.raises(ReviewError, match="the article changed while the site was being rendered"):
+        _render_restoring(tmp_path, monkeypatch, article, article.read_bytes() + b"\nAn edit.\n")
+    assert not (tmp_path / "site").exists()
+
+
+def test_render_refuses_a_published_article_its_copy_lacks(
+    tmp_path: Path, extraction: _Extraction, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = _approved_articles(tmp_path, capsys)
+
+    with pytest.raises(ReviewError, match="the article changed while the site was being rendered"):
+        _render_restoring(tmp_path, monkeypatch, blueprint / "roadmap" / "basics" / "other.md", b"", delete=True)
+    assert not (tmp_path / "site").exists()
+
+
+def test_render_refuses_a_cited_passage_edited_while_it_renders(
+    tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The site publishes the copy's source file, so the passage a disclosure
+    shows must be the one the copy cuts."""
+
+    blueprint = _blueprint(tmp_path)
+    _cite(blueprint / "roadmap/basics/result.md", "sources/book.txt#L2-L2")
+    source = blueprint / "roadmap/basics/sources/book.txt"
+    source.parent.mkdir()
+    source.write_text("Heading\nThe original line.\n", encoding="utf-8")
+    _approve_every_article(blueprint, tmp_path, capsys)
+
+    with pytest.raises(ReviewError, match="the cited passage changed while the site was being rendered"):
+        _render_restoring(tmp_path, monkeypatch, source, b"Heading\nAn edited line.\n")
+    assert not (tmp_path / "site").exists()
+
+
+def test_render_refuses_a_passage_the_site_does_not_publish(
+    tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A hidden source note is reviewed, as check only warns about it, but
+    render never reads it, so its passage cannot be shown beside the page."""
+
+    blueprint = _blueprint(tmp_path)
+    _cite(blueprint / "roadmap/basics/result.md", "../../sources/.private/book.txt#L2-L2")
+    source = blueprint / "sources/.private/book.txt"
+    source.parent.mkdir(parents=True)
+    source.write_text("Heading\nA hidden line.\n", encoding="utf-8")
+    _approve_every_article(blueprint, tmp_path, capsys)
+    assert _check(blueprint, tmp_path) == 0
+    capsys.readouterr()
+
+    assert _render(blueprint, tmp_path) == 1
+    assert "review-source-unpublished: cites a passage the site does not publish" in capsys.readouterr().out
+    assert not (tmp_path / "site").exists()
+
+
+def test_the_site_shows_a_card_as_it_was_validated(
+    tmp_path: Path, extraction: _Extraction, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The page's Markdown reads nothing in a card: the testimony is published
+    escaped, line for line, with only the formulas split_testimony found marked
+    for the card's own TeX input, beside the exact packet it was written from."""
+
+    blueprint = _blueprint(tmp_path)
+    article = blueprint / "roadmap/basics/result.md"
+    article.write_text(
+        article.read_text(encoding="utf-8") + "\n[src]: https://example.test/elsewhere\n", encoding="utf-8"
+    )
+    record = _prepare(blueprint, tmp_path)["Review.result"]
+    Path(record["testimony"]).write_text(
+        "For $a<b$, **this** and [src] are as typed.\n\n    <b>x</b> & `y`\n$$\nx \\le y\n$$\nIt costs \\$5.\n",
+        encoding="utf-8",
+    )
+    assert _record(blueprint, record) == 0
+    assert _render(blueprint, tmp_path) == 0
+
+    published = site_converter().convert((tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8"))
+    body = (
+        'For <span class="bp-card-formula">\\(a&lt;b\\)</span>, **this** and [src] are as typed.&#10;&#10;'
+        "    &lt;b&gt;x&lt;/b&gt; &amp; `y`&#10;"
+        '<span class="bp-card-formula">\\[&#10;x \\le y&#10;\\]</span>&#10;It costs \\$5.'
+    )
+    assert f'<div class="bp-readback-body">{body}</div>' in published
+    assert '<span class="bp-readback-status">current</span>' in published
+    assert "example.test" not in published
+    packet = load_readbacks(blueprint)[(_RESULT_ID, "Review.result")].shown_text
+    assert f'<pre class="bp-lean"><code>{html.escape(packet.rstrip())}</code></pre>' in published

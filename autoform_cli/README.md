@@ -136,7 +136,7 @@ An article asserts only facts a human or agent verified:
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
 | `lean: Ns.decl` | Declaration name(s) that discharge the article. |
 | `discussion: 42` | Issue number or URL where the article is being discussed. |
-| `article_id: af_...` | Durable identity, `af_` plus 24 lowercase hex digits; `autoform work` requires it on unfinished formalizable leaves, `review record` on the article it records, and `review prepare` and `review check` on every Lean-mapped article. |
+| `article_id: af_...` | Durable identity, `af_` plus 24 lowercase hex digits; `autoform work` requires it on unfinished formalizable leaves, `review record` on the article it records, and `review prepare`, `review check`, and `render --review` on every Lean-mapped article. |
 | `review_approved: sha256:<64 hex>` | The hash of the complete review surface someone approved for this article. It shows that surface is unchanged, not who approved it. |
 | `open_statements: allowed` | Project policy, valid only in `roadmap/README.md`: a theorem's statement may land with a `sorry` proof (see [Open statements](#open-statements)). Absent or `forbidden` keeps the strict policy. |
 | `published: false` | Folder setting, valid only in the `README.md` of a folder below `roadmap/`: `check` and `audit` validate the folder and everything in it, but render leaves it out of the site and of the publication hash. No link on a published page may point into it, whether a dependency, a source or prose, and `audit` and render reject coverage evidence that does. A folder inside an unpublished one is unpublished too, whatever its own README says. |
@@ -815,7 +815,7 @@ declarations together and each alone is honestly incomplete. A judge of
 faithfulness is given the article packet and its passage; an auditor asked what
 one declaration asserts is given that declaration's packet alone.
 
-Review a formalized statement with three commands:
+Review a formalized statement with three commands, then publish the review:
 
 ```bash
 autoform review prepare blueprint --lean-root . --packets review-packets
@@ -823,6 +823,7 @@ autoform review record blueprint --packets review-packets \
   --article-id af_0123456789abcdef01234567 --declaration Ns.result \
   --testimony read-back.txt --model muse-spark-1.1
 autoform review check blueprint --lean-root .
+autoform render blueprint --lean-root . --review
 ```
 
 `review prepare` extracts every Lean-mapped article from the current built
@@ -856,8 +857,18 @@ the bytes it read first. An edit that breaks any of these comparisons fails the
 check with `review-snapshot-changed`; run it again once the blueprint is idle.
 These are comparisons, not a lock: a change restored between them goes unseen,
 and an edit after the last does not affect a verdict already reached.
-`review prepare` and `review check` accept the same `--timeout SECONDS` probe
-override as `skeleton`.
+`review prepare`, `review check`, and `render --review` accept the same
+`--timeout SECONDS` probe override as `skeleton`.
+
+`render --review` makes the same check, from one extraction of its own, and
+puts a *Review* disclosure under every formalized statement: the approval state,
+the cited passage, and for each declaration the exact packet that was hashed
+and its read-back card, marked current, invalid with the reasons, or missing.
+It shows the cards the check compared, not a later read, and loads the articles
+again to render them: an edit to any article or cited passage since the check
+fails it with `review-snapshot-changed`. A folder whose README says
+`published: false` is reviewed with the rest of the vault, and its articles,
+which render leaves out, get no disclosure.
 
 Newly scaffolded projects commit the versioned `.autoform-review` policy marker,
 so generated CI enforces this gate from the first formalized statement. Older
@@ -1224,13 +1235,15 @@ example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 configuration, on every build; `mkdocs.yml` lists it before the MathJax
 bundle, as `autoform init` writes both. It expects MathJax 3.2.2, the release
 its TeX settings were checked against, loads it itself when no bundle is
-listed, and leaves formulas as typed under any other release. The articles on
-a page share one TeX input, with the packages base, ams, noundefined,
-boldsymbol, mathtools, braket, mhchem, and amscd (`CD` diagrams), and the
-project's macros from
-`blueprint/tex-macros.json`, written as MathJax's `tex.macros` is: a name maps
-to a body, `[body, arguments]`, or `[body, arguments, default]`. So that no
-formula changes another or colors a
+listed, and leaves formulas as typed under any other release. Another script
+in `mkdocs.yml` cannot replace that configuration: an assignment to
+`window.MathJax`, such as the snippet Material's documentation gives, is
+ignored with an error in the browser console. The articles on a page share
+one TeX input, with the packages base, ams, noundefined, boldsymbol,
+mathtools, braket, mhchem, and amscd (`CD` diagrams), and the project's macros
+from `blueprint/tex-macros.json`, written as MathJax's `tex.macros` is: a name
+maps to a body, `[body, arguments]`, or `[body, arguments, default]`. So that
+no formula changes another or colors a
 symbol like the site's status marks, that input turns off `\label`,
 `\mmlToken`, `\DeclareMathOperator`, the paired-delimiter and tag-form
 commands of mathtools, and `\mathtoolsset`: each shows in red and does nothing,
@@ -1244,15 +1257,19 @@ commands; and verb and bussproofs are not loaded either. So `\cancel`,
 take one of their names; `check` and `render` warn about a macro they leave
 out. They judge and build the script from
 the copy of `tex-macros.json` that `render` reads once and publishes beside it,
-so an edit made during a render reaches neither. That input reads only the
-formulas the site's Markdown marks, such as
+so an edit made during a render reaches neither. Each read-back card is
+typeset with a TeX input of its own that knows only base, ams, and
+noundefined, so nothing an article, another card, or the project's macros
+define reaches it. The articles' input, and `check`, read only the formulas
+the site's Markdown marks, such as
 `$...$` or `$$...$$` in an article. Other text, such as a
 statement's title in its heading, a `discussion:` value, the lead on the home
 page, the navigation, and a table of contents, is shown as typed, TeX and all.
 Every formula paints only within its own line and the block that holds it,
 with either renderer and any theme, so no article formula can cover a card, a
 mark, or the text beside it. An inline formula wider than its paragraph is cut
-at the paragraph's edge, so write one that wide as a display, which scrolls.
+at the paragraph's edge, so write one that wide as a display, which scrolls,
+as does a card too wide for the page.
 
 A project scaffolded before `render` wrote that file keeps a
 `blueprint/javascripts/mathjax.js` and lists the MathJax bundle in `mkdocs.yml`

@@ -548,26 +548,32 @@ def _article_readback_findings(
         if card is None:
             reason = f"no read-back filed for {declaration.name}"
             findings.append(ReviewFinding(article.node_id, "readback-missing", reason))
-            continue
-        errors = list(card.validate())
-        # A card that could not be read is reported by that reason alone.
-        if not card.unreadable:
-            if card.article_id != article.article_id:
-                errors.append("card identity does not match the prepared article_id")
-            if card.declaration != declaration.name:
-                errors.append("declaration metadata does not match the card path")
-            if card.skeleton_hash != declaration.skeleton_hash:
-                errors.append("skeleton hash does not match the prepared declaration")
-            if card.packet_hash != declaration.packet_hash:
-                errors.append("packet hash does not match the prepared declaration")
-            if card.shown_hash != declaration.packet_hash:
-                errors.append("displayed packet is missing or differs from the prepared declaration")
-            if getattr(card, "shown_text", None) != declaration.packet:
-                errors.append("displayed packet bytes differ from the prepared declaration")
-        if errors:
-            reason = f"read-back for {declaration.name} is invalid: " + "; ".join(dict.fromkeys(errors))
+        elif errors := readback_errors(article.article_id, declaration, card):
+            reason = f"read-back for {declaration.name} is invalid: " + "; ".join(errors)
             findings.append(ReviewFinding(article.node_id, "readback-invalid", reason))
     return findings
+
+
+def readback_errors(article_id: str, declaration: ReviewDeclaration, card: Readback) -> tuple[str, ...]:
+    """Why ``card`` is not a valid read-back of ``declaration`` as it is now;
+    empty when it is."""
+
+    errors = list(card.validate())
+    # A card that could not be read is reported by that reason alone.
+    if not card.unreadable:
+        if card.article_id != article_id:
+            errors.append("card identity does not match the prepared article_id")
+        if card.declaration != declaration.name:
+            errors.append("declaration metadata does not match the card path")
+        if card.skeleton_hash != declaration.skeleton_hash:
+            errors.append("skeleton hash does not match the prepared declaration")
+        if card.packet_hash != declaration.packet_hash:
+            errors.append("packet hash does not match the prepared declaration")
+        if card.shown_hash != declaration.packet_hash:
+            errors.append("displayed packet is missing or differs from the prepared declaration")
+        if getattr(card, "shown_text", None) != declaration.packet:
+            errors.append("displayed packet bytes differ from the prepared declaration")
+    return tuple(dict.fromkeys(errors))
 
 
 def _review_hash(article: ReviewArticle, readbacks: Mapping[tuple[str, str], Readback]) -> str:
@@ -615,6 +621,7 @@ __all__ = [
     "canonical_statement",
     "read_regular_file",
     "read_review_packet",
+    "readback_errors",
     "review_findings",
     "review_states",
     "write_review_packets",

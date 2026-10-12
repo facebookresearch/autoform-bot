@@ -479,6 +479,11 @@ def test_a_long_named_card_that_is_not_utf8_is_one_invalid_card_not_a_missing_ca
     findings = [item for item in _findings(blueprint, _report(_declaration(name))) if item.code.startswith("readback-")]
     assert [(item.node_id, item.code) for item in findings] == [("basics/result", "readback-invalid")]
     assert findings[0].reason == f"read-back for {name} is invalid: card is not UTF-8 text"
+    graph = load_graph(blueprint)
+    report = _extracted(graph, _report(_declaration(name)))
+    disclosure = render._review_disclosures(blueprint, graph, report, load_readbacks(blueprint))["basics/result"]
+    assert '<span class="bp-readback-status">invalid · card is not UTF-8 text</span>' in disclosure
+    assert "No read-back filed" not in disclosure
 
 
 def test_approval_rejects_a_hand_constructed_card_with_invented_hashes(tmp_path: Path) -> None:
@@ -680,3 +685,34 @@ def test_a_packet_is_read_only_as_review_prepare_wrote_it(tmp_path: Path, damage
 
     with pytest.raises(ReviewError, match=reason):
         read_review_packet(packets, _ARTICLE_ID, "Skel.sup_unique")
+
+
+@pytest.mark.parametrize(
+    ("path", "old"), [("roadmap/basics/result.md", "A supremum is **unique**."), (_SOURCE, "Source theorem.")]
+)
+def test_render_publishes_the_article_and_source_its_review_was_built_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str, old: str
+) -> None:
+    """A statement or cited source rewritten once render has built the review
+    is not published in place of what that review showed, and the revision
+    hash describes the bytes published."""
+
+    blueprint = _blueprint(tmp_path)
+    report = _extracted(load_graph(blueprint))
+    render.render_site(blueprint, tmp_path / "idle", skeleton=report)
+    build = render.build_review_bundle
+
+    def build_then_rewrite(*args: object, **kwargs: object) -> object:
+        bundle = build(*args, **kwargs)
+        _edit(blueprint / path, old, "PLANTED")
+        return bundle
+
+    monkeypatch.setattr(render, "build_review_bundle", build_then_rewrite)
+    render.render_site(blueprint, tmp_path / "site", skeleton=report)
+
+    assert not [file for file in (tmp_path / "site").rglob("*") if file.is_file() and b"PLANTED" in file.read_bytes()]
+    revisions = [
+        json.loads((tmp_path / site / render.PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["source_revision"]
+        for site in ("idle", "site")
+    ]
+    assert revisions[0] == revisions[1]
