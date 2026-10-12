@@ -66,7 +66,8 @@ and the published theorem box both read that span. A fence closes only on a
 bare fence line. A fence that never closes is read as plain text when its
 article is inspected alone, so it hides no heading or dependency link there,
 but on a chapter page it can pair with a later article's closing fence and hide
-everything between them. The audit reports a fence with no closing line as
+everything between them, so `check` and `render` refuse one at the margin (see
+[Validation](#validation)). The audit reports a fence with no closing line as
 `unclosed-code-fence`. A later bare fence line of the same character and at
 least the opener's length closes it here, though the page asks for the opener's
 exact length and indent, so close each fence with its own line. The page can
@@ -302,9 +303,12 @@ uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform-visualize blueprint
 uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform render blueprint \
   --output site-src --lean-root . --require-declarations
 uv run --with mkdocs --with mkdocs-material --with mkdocs-literate-nav \
-  --with pymdown-extensions mkdocs build --strict
+  --with pymdown-extensions --with "<AUTOFORM_PLUGIN_ROOT>" mkdocs build --strict
 uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform dashboard . --site-dir site
 ```
+
+The build needs autoform too: `mkdocs.yml` reads formulas with its Markdown
+extension, `autoform_cli.markdown:FormulaExtension`.
 
 Drop `--require-declarations` when reviewing work in progress, where a
 statement may name a Lean declaration that does not exist yet.
@@ -941,9 +945,72 @@ icon when a `lean:` declaration resolves to a repository permalink. Its
 `dependencies.md` entry point rolls dependencies through the article hierarchy,
 with links to declaration maps, one-hop local contexts, and the complete DAG.
 Every graph article returns to the book, and every formal statement links to
-its local context. Point `mkdocs.yml` at `docs_dir: site-src` and enable
-`md_in_html` plus a `pymdownx.superfences` mermaid fence; see the [repository
-example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
+its local context. Each graph is written as raw HTML of class `bp-graph`,
+which no article may hold, and `javascripts/blueprint-mermaid.js` draws those
+elements and no other Mermaid. A title is shown in a graph as typed, and a
+link, made from file and folder names, is percent-encoded, so a name can
+neither end Mermaid's string nor make the link a `javascript:` URL. Point
+`mkdocs.yml` at `docs_dir: site-src` and enable `md_in_html`; see the
+[repository example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
+
+`render` also writes `javascripts/mathjax.js`, the site's MathJax
+configuration, on every build; list it in `mkdocs.yml` and nothing else for
+MathJax. It loads MathJax 3.2.2, the release its TeX settings were checked
+against, and refuses to typeset with any other. The articles on a page share
+one TeX input, with the packages base, ams, noundefined, boldsymbol, and
+mathtools, and the project's macros from `blueprint/tex-macros.json`, written
+as MathJax's `tex.macros` is: a name maps to a body, `[body, arguments]`, or
+`[body, arguments, default]`. So that no formula changes another or colors a
+symbol like the site's status marks, that input turns off `\label`,
+`\mmlToken`, `\DeclareMathOperator`, the paired-delimiter and tag-form
+commands of mathtools, and `\mathtoolsset`: each shows in red and does nothing,
+however a formula or a macro reaches it, as `\newcommand`, `\def`, `\require`,
+and any other command those packages do not define already do. A macro may not
+take one of their names. `check` and `render` judge and build the script from
+the copy of `tex-macros.json` that `render` reads once and publishes beside it,
+so an edit made during a render reaches neither. That input reads only the
+formulas the site's Markdown marks, such as
+`$...$` or `$$...$$` in an article, or `` $`...`$ `` and a ```` ```math ````
+fence, the forms GitHub also shows as formulas. Other text, such as a
+statement's title in its heading, a `discussion:` value, the lead on the home
+page, the navigation, and a table of contents, is shown as typed, TeX and all.
+Every formula paints only within its own line and the block that holds it,
+with either renderer and any theme, so no article formula can cover a card, a
+mark, or the text beside it. An inline formula wider than its paragraph is cut
+at the paragraph's edge, so write one that wide as a display, which scrolls.
+
+A project scaffolded before `render` wrote that file keeps a
+`blueprint/javascripts/mathjax.js` and lists the MathJax bundle in `mkdocs.yml`
+after it. It needs no edits: `render` replaces a copy `autoform init` wrote
+with its own, and the script finds MathJax already loaded and checks its
+version instead of loading it. A copy edited since is refused, since the edits
+would be lost; move its macros to `tex-macros.json` and delete it.
+`render` writes `stylesheets/blueprint.css`, `javascripts/blueprint-mermaid.js`,
+and `assets/autoform.svg` over the vault's copies the same way, and writes
+`SUMMARY.md`, `structure.md`, `publication.json`, the `dependencies.md` and
+`dependencies/` graph pages, and the chapter pages it consolidates. A
+directory holding a file at any of these paths, at `tex-macros.json`, or at the
+stale `dependencies.html`, `graph.html`, or `progress.md` it keeps out of the
+site, or a file where one of their folders goes, is refused by `check` and
+`render` with the path it is at, before anything is written.
+
+Besides its Markdown pages, a vault publishes only files a browser shows or
+offers to save and runs nothing in: images (`.png`, `.jpg`, `.jpeg`, `.gif`,
+`.webp`, `.avif`, `.bmp`, `.ico`), `.pdf`, and plain-text `.txt`, `.csv`,
+`.json`, `.bib`, `.tex`, and `.lean` files, whatever the case of the suffix.
+Render copies them into the site as they are. Any other file under
+`blueprint/`, such as an `.html` page, an `.svg`, a script, or a stylesheet,
+would be the site's own markup once a reader followed a link to it, so
+`check` and `render` refuse it by its path: write it as Markdown, save it as
+an image, a PDF, or plain text, or keep it outside `blueprint/`. A copy of one
+of the files render writes, listed above, is not published; render's own is.
+
+The site's Markdown reads `` $`...`$ `` and a ```` ```math ```` fence with
+`autoform_cli.markdown:FormulaExtension` and a `math` fence formatted by
+`autoform_cli.markdown.formula_fence`, which `mkdocs.yml` lists. A project
+scaffolded before then shows both as code until its `mkdocs.yml` and
+`.github/workflows/blueprint-pages.yml` get those lines from `autoform init`'s
+templates.
 
 ## Validation
 
@@ -955,7 +1022,44 @@ it does not recognize, and assertions the Lean cannot back: `proof: formalized`
 without `statement: formalized`, or either without a `lean:` name, even beside
 `mathlib: true`. With `--lean-root` it also fails on a `lean:` name
 absent from the sources, as `leanblueprint checkdecls` does for LaTeX
-blueprints. It validates structure and leaves mathematical correctness to the
+blueprints. It also refuses, naming the file and the line, what a published
+page could use to run script or pass for the site's own markup:
+
+- Raw HTML: a tag, a character reference, an unclosed comment, or anything the
+  site's Markdown would pass through as HTML. Write it in Markdown, or in code
+  to show it as typed; in a formula, put a space after `<`. A complete
+  `<!-- ... -->` comment outside code is left out of the page, and one in a code
+  block is code, shown as typed. A reference a browser shows as typed, such as
+  the `&D;` in `R&D;`, is allowed.
+- A link, an image, or a link definition, used or not, to anything but the
+  site's own pages or an `http:`, `https:`, or `mailto:` address, in any case:
+  a `javascript:` or `data:` one would run or show what it holds on the site's
+  origin. An address shown in code is allowed.
+- An attribute list, which could give text an id, a class, or a style that
+  makes it look like the site's own markup, such as a status mark; a heading's
+  id comes from its title. The braces of a code fence may only name its
+  language, as in ```` ```{.lean} ````, and options such as `title` or
+  `linenums`.
+- A code fence at the margin left open where an article, a statement, its
+  notes, or a stretch of a chapter ends. The site reads fences over a whole
+  page, so it would run on through what `render` puts after it, status marks
+  included, to the next fence on the page; close it.
+
+TeX is the site's MathJax's to judge (see above), and a ```` ```mermaid ````
+fence is shown as code, since the site draws only the graphs `render` writes.
+`check` reads each page as `render` publishes it: its relative links pointed at
+the pages and anchors they land on, every line break Python reads (a form feed
+or U+2028 among them) as a new line, its frontmatter replaced by a header of
+`render`'s own, since the theme prints a page's metadata unescaped, a statement
+in its box with its indentation kept, and a chapter's narrative in the
+stretches between the statements `render` puts in place of their links. Every
+Markdown page the site publishes is held to these rules: articles, the landing
+page `blueprint/README.md` (the text you wrote, before `render` adds its
+dashboard), `coverage/README.md`, and any other. `render` writes a moved link's
+target percent-encoded, so a target such as `%3Cscript%3E.md` stays a link and
+adds no markup. `render` refuses the same pages, so the site never publishes
+markup that an article's reviewer read as text and the owners of its theme
+never saw. It validates structure and leaves mathematical correctness to the
 agent and the Lean kernel.
 
 Source-aware `--lean-root` inspection requires directory-descriptor traversal.

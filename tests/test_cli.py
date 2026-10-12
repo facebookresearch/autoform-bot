@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import autoform_cli.__main__ as cli
 from autoform_cli.__main__ import main
 from autoform_cli.runtime import load_runtime_graph
 
@@ -149,3 +150,32 @@ def test_audit_cli_reports_stable_json_and_failure(tmp_path: Path, capsys) -> No
             }
         ],
     }
+
+
+def _with_body(blueprint: Path, body: str) -> Path:
+    article = blueprint / "roadmap" / "result.md"
+    article.write_text(
+        article.read_text(encoding="utf-8").replace("A precise statement.\n", f"A precise statement.\n\n{body}\n"),
+        encoding="utf-8",
+    )
+    return blueprint
+
+
+def test_check_judges_the_articles_its_graph_loaded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """The verdict is about the articles the graph parsed; markup written after
+    the load is judged by the next check, never paired with the earlier parse."""
+
+    blueprint = _clean_blueprint(tmp_path)
+    load = cli.load_graph
+
+    def load_then_edit(*args: object, **kwargs: object) -> object:
+        graph = load(*args, **kwargs)
+        _with_body(blueprint, "<script>alert(1)</script>")
+        return graph
+
+    monkeypatch.setattr(cli, "load_graph", load_then_edit)
+    assert main(["check", str(blueprint)]) == 0, capsys.readouterr().out
+    monkeypatch.undo()
+
+    assert main(["check", str(blueprint)]) == 1
+    assert "error: result: line 9: raw HTML is not allowed: <script>" in capsys.readouterr().out
