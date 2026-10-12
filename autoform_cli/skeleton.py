@@ -1431,6 +1431,16 @@ def _run_registered_command(
             process = None
 
 
+def evidence_hash_of(packet: str) -> str:
+    """The evidence hash of packet text, however it reached the caller.
+
+    A read-back card shows its packet verbatim, so a reader can hash what the
+    card displays and compare it with what the card records.
+    """
+
+    return _sha256_id(packet.encode("utf-8"))
+
+
 # --------------------------------------------------------------------------- #
 # Lean project layout
 # --------------------------------------------------------------------------- #
@@ -3247,12 +3257,18 @@ def _safe_node_path(node_id: str) -> Path:
     return path
 
 
-def _packet_filename(name: str) -> str:
+def declaration_filename(name: str, *, suffix: str = ".lean") -> str:
+    """Return a portable, collision-resistant filename for a Lean name."""
+
+    if not name:
+        raise ValueError("a declaration name cannot be empty")
+    if not suffix.startswith(".") or any(character in suffix for character in "/\\\0\r\n"):
+        raise ValueError(f"invalid declaration filename suffix: {suffix!r}")
     encoded = quote(name, safe="").replace("~", "%7E")
     digest = hashlib.sha256(name.encode("utf-8")).hexdigest()
     if not encoded or len(os.fsencode(encoded)) > 180:
         encoded = "declaration"
-    return f"{encoded}--{digest}.lean"
+    return f"{encoded}--{digest}{suffix}"
 
 
 def _stage_output(destination: Path, content: str | None = None) -> Path:
@@ -3590,7 +3606,7 @@ def write_packets(
                 files.append((packet_stage / article_relative, node.blind_text()))
                 written.append(root / article_relative)
             for declaration in node.declarations:
-                relative = node_path / _packet_filename(declaration.name)
+                relative = node_path / declaration_filename(declaration.name)
                 files.append((packet_stage / relative, declaration.blind_text()))
                 written.append(root / relative)
                 entry = {
@@ -3677,6 +3693,8 @@ __all__ = [
     "TrustedDeclaration",
     "check_configuration_unchanged",
     "check_inputs_unchanged",
+    "declaration_filename",
+    "evidence_hash_of",
     "extract_graph_skeletons",
     "extract_skeletons",
     "format_report",

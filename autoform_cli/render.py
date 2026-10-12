@@ -86,6 +86,7 @@ from .markdown import content_lines as _content_lines
 from .markdown import outside_fences as _outside_fences
 from .mathjax import MATHJAX_SCRIPT, TEX_MACROS, mathjax_script
 from .publishable import publishable_article, shown_as_typed
+from .readback import READBACKS_DIR
 from .status import is_definition
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
@@ -470,7 +471,8 @@ def _publication(
         for source in snapshot
         if source.relative_to(blueprint).as_posix() not in written_over
         and (
-            source.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
+            source.relative_to(blueprint).parts[:1] == (READBACKS_DIR,)
+            or source.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
             or (source.suffix.lower() in PAGE_SUFFIXES and not _is_utf8(snapshot[source]))
         )
     )
@@ -545,6 +547,10 @@ def _publication(
         # Source notes leave the site entirely once readers can reach them in
         # the repository, so the book has one reference surface rather than two.
         if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
+            continue
+        # Read-backs are testimony about a statement, shown inside its box,
+        # never pages of their own.
+        if relative.parts[:1] == (READBACKS_DIR,):
             continue
         if source.resolve() in node_sources:
             if source.resolve() in articles:
@@ -1850,6 +1856,10 @@ def _render_structure_page(
 
     def keep(relative: Path) -> bool:
         if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
+            return False
+        # A read-back card is not a page, and one may be for an article in a
+        # folder the site leaves out, whose name and Lean names it would show.
+        if relative.parts[:1] == (READBACKS_DIR,):
             return False
         return not (sources_base is not None and relative.parts[:1] == (SOURCES_DIR,))
 

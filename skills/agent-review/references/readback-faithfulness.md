@@ -14,9 +14,9 @@ Keep the three roles separate.
    Lean packets, source passages, and their manifests. It does not produce a
    read-back or a verdict.
 2. A **blind auditor** receives one declaration packet and no article, source,
-   locator, or statement of intent. The auditor returns a nonempty UTF-8
-   Markdown account of what that packet literally asserts. This returned text
-   is the read-back artifact.
+   locator, or statement of intent. The auditor returns a nonempty plain-text
+   account, with TeX formulas between dollar signs, of what that packet
+   literally asserts. This returned text is the read-back artifact.
 3. A **faithfulness judge** receives the source passage, the raw read-back text
    for every declaration in the article, and the opaque provenance projection
    below. The judge must not receive a packet, Lean name, article path, or

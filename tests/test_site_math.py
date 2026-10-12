@@ -1424,6 +1424,24 @@ def test_no_title_on_the_built_site_is_markup(tmp_path: Path) -> None:
     assert [path.name for path in pages if "<svg onload" in path.read_text(encoding="utf-8")] == []
     index = json.loads((built / "search/search_index.json").read_text(encoding="utf-8"))
     assert [doc["title"] for doc in index["docs"] if "<svg" in doc["title"]] == []
+def test_a_link_to_a_read_back_card_keeps_only_its_text(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A read-back card is never a page of its own, so a link to one keeps
+    only its text, as a link to any other file the site leaves out does."""
+
+    blueprint = _vault(tmp_path)
+    card = blueprint / "readbacks/af_000000000000000000000000/Main.md"
+    card.parent.mkdir(parents=True)
+    card.write_text("A read-back.\n", encoding="utf-8")
+    _with_article(blueprint, "The main result, [as read back](../readbacks/af_000000000000000000000000/Main.md).")
+
+    assert main(["check", str(blueprint)]) == 0, capsys.readouterr().out
+    site = _render(blueprint)
+    chapter = (site / "roadmap/README.md").read_text(encoding="utf-8")
+    assert "readbacks" not in chapter
+    assert "The main result, as read back." in chapter
+    assert not (site / "readbacks").exists()
+    # Nor is a card a row of the vault's structure page.
+    assert "Main.md" not in (site / "structure.md").read_text(encoding="utf-8")
 
 
 def test_a_chapter_shown_as_typed_keeps_its_statements_outside_the_block(
