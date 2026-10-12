@@ -72,6 +72,7 @@ _SNAPSHOT_RETRY_DELAY_SECONDS = 0.05
 #: Known schemas of the skeleton command's packet and passage manifests.
 PACKET_SCHEMA = "autoform-skeleton-packets/v2"
 PASSAGE_SCHEMA = "autoform-skeleton-passages/v2"
+REVIEW_PACKET_SCHEMA = "autoform-review-packets/v1"
 MANAGED_OUTPUT_SCHEMAS = frozenset(
     {
         ("packets", "autoform-skeleton-packets/v1"),
@@ -80,6 +81,7 @@ MANAGED_OUTPUT_SCHEMAS = frozenset(
         ("passages", PASSAGE_SCHEMA),
     }
 )
+_IGNORED_OUTPUT_SCHEMAS = MANAGED_OUTPUT_SCHEMAS | {("packets", REVIEW_PACKET_SCHEMA)}
 
 @dataclass(frozen=True, slots=True)
 class Declaration:
@@ -696,7 +698,7 @@ def _is_managed_output_manifest_bytes(data: bytes) -> bool:
     return (
         isinstance(kind, str)
         and isinstance(schema, str)
-        and (kind, schema) in MANAGED_OUTPUT_SCHEMAS
+        and (kind, schema) in _IGNORED_OUTPUT_SCHEMAS
         and isinstance(value.get(kind), list)
     )
 
@@ -1186,6 +1188,7 @@ __all__ = [
     "MANAGED_OUTPUT_SCHEMAS",
     "PACKET_SCHEMA",
     "PASSAGE_SCHEMA",
+    "REVIEW_PACKET_SCHEMA",
     "SourceIndex",
     "SourceLinker",
     "bind_project_source_snapshot",

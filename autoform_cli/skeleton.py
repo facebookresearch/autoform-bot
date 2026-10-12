@@ -2959,7 +2959,9 @@ def _output_identity(path: Path) -> tuple[int, int, str] | None:
     return metadata.st_dev, metadata.st_ino, digest.hexdigest()
 
 
-def _validate_managed_output(path: Path, *, kind: str) -> tuple[int, int, str] | None:
+def _validate_managed_output(path: Path, *, kind: str, schema: str | None = None) -> tuple[int, int, str] | None:
+    """Validate an output tree against its exact producer schema."""
+
     identity = _output_identity(path)
     if identity is None:
         return identity
@@ -2972,17 +2974,21 @@ def _validate_managed_output(path: Path, *, kind: str) -> tuple[int, int, str] |
         raise SkeletonError([f"cannot inspect skeleton output {path}: {exc}"]) from exc
     manifest = path / PACKET_MANIFEST
     try:
-        payload = json.loads(manifest.read_text(encoding="utf-8")) if manifest.is_file() else None
+        readable = manifest.is_file() and not manifest.is_symlink()
+        payload = json.loads(manifest.read_text(encoding="utf-8")) if readable else None
     except (OSError, RecursionError, ValueError):
         payload = None
     if not (
         isinstance(payload, dict)
         and payload.get("kind") == kind
-        and (kind, payload.get("schema")) in MANAGED_OUTPUT_SCHEMAS
+        and (kind, payload.get("schema")) in (MANAGED_OUTPUT_SCHEMAS if schema is None else ((kind, schema),))
         and isinstance(payload.get(kind), list)
     ):
         raise SkeletonError([f"refusing to overwrite non-Autoform packet output: {path}"])
     return identity
+
+
+validate_managed_output = _validate_managed_output
 
 
 def _safe_node_path(node_id: str) -> Path:
@@ -3086,7 +3092,7 @@ class OutputTransaction:
     def directory(self, destination: Path, identity: tuple[int, int, str] | None) -> Path:
         """Stage a replacement for the managed directory ``destination``.
 
-        ``identity`` is what :func:`_validate_managed_output` returned for it;
+        ``identity`` is what :func:`validate_managed_output` returned for it;
         the commit refuses if the directory changed since.
         """
 
@@ -3478,6 +3484,7 @@ __all__ = [
     "render_probe",
     "run_probe",
     "source_excerpt",
+    "validate_managed_output",
     "write_packets",
     "write_skeleton_report",
 ]

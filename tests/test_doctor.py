@@ -138,6 +138,15 @@ def test_audit_findings_fail_only_the_audit_check(tmp_path: Path) -> None:
     assert _checks(result)["audit"] == (False, "1 finding(s): declared-coverage-gap")
 
 
+def test_review_approval_does_not_fail_the_roadmap_audit(tmp_path: Path) -> None:
+    project = _clean_project(tmp_path, metadata=("declaration: theorem", "review_approved: sha256:" + "a" * 64))
+
+    result = diagnose_project(project)
+
+    assert result.clean
+    assert _checks(result)["audit"] == (True, "roadmap audit passed")
+
+
 def test_optional_lean_targets_report_success_missing_and_kind_mismatch(tmp_path: Path) -> None:
     project = _clean_project(
         tmp_path,

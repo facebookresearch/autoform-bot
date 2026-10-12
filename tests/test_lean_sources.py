@@ -1803,6 +1803,7 @@ def test_replaced_source_changes_only_the_generation_revision(tmp_path: Path) ->
         ("packets", "autoform-skeleton-packets/v2"),
         ("passages", "autoform-skeleton-passages/v1"),
         ("passages", "autoform-skeleton-passages/v2"),
+        ("packets", "autoform-review-packets/v1"),
     ],
 )
 def test_managed_skeleton_output_is_not_indexed_as_project_source(

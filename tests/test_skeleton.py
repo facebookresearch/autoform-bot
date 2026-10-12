@@ -4160,7 +4160,7 @@ def test_an_unrelated_modules_attribute_does_not_change_a_trusted_declaration(tm
 def test_a_declaration_reads_as_its_own_root_module_prints_it(tmp_path: Path) -> None:
     # Only PktWrapNotation declares the notation. Each declaration is printed
     # where its own module is imported, so neither selecting nor adding another
-    # article changes its packet, and a trusted
+    # article changes the packet `review record` re-extracts, and a trusted
     # declaration reads as each root module that reaches it prints it.
     project = _project(tmp_path)
     modules = {

@@ -983,3 +983,13 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
     ).read_text(encoding="utf-8")
 
     assert significant(example) == significant(template)
+
+
+def test_review_skills_route_statement_review_through_the_cli_reference(repo_root: Path) -> None:
+    """Skills say what to achieve and link the CLI reference; flags live in one place."""
+
+    human = (repo_root / "skills/human-review/SKILL.md").read_text(encoding="utf-8")
+
+    assert "../../autoform_cli/README.md#commands" in human
+    assert "(references/readback.md)" in human
+    assert (repo_root / "skills/human-review/references/readback.md").is_file()

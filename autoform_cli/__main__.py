@@ -3,34 +3,59 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
 import shlex
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from . import status
+from .approvals import ApprovalStatus, approval_statuses, current_approvals
 from .article_identity import plan_article_ids
 from .audit import audit_blueprint
 from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_key
 from .doctor import diagnose_project
 from .dashboard import publication_bound_live_state, serve_dashboard
-from .graph import GraphValidationError, load_graph
+from .graph import Graph, GraphValidationError, load_graph
 from .impact import ImpactError, format_impact, revision_impact
 from .lean import build_linker, declaration_names, index_failure_message
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
+from .readback import (
+    PreparedReadback,
+    Readback,
+    load_readbacks,
+    prepare_readback,
+    publish_readback,
+    readback_conflicts,
+)
 from .render import PublicationError, publication_issues, render_site
+from .review import (
+    ReviewBundle,
+    ReviewError,
+    ReviewFinding,
+    build_review_bundle,
+    load_review_bundle,
+    review_findings,
+    validate_review_article,
+    validate_review_bundle,
+    write_review_bundle,
+    write_review_packets,
+)
 from .runtime import RuntimeProjectionError, load_runtime_graph, resolve_runtime_paths
 from .scaffold import ScaffoldError, scaffold_project
 from .search import SearchError, search_blueprint, statement_preview
 from .skeleton import (
     DEFAULT_PROBE_TIMEOUT,
     SkeletonError,
+    SkeletonReport,
+    blueprint_hash,
     extract_skeletons,
     format_report,
     write_packets,
@@ -75,6 +100,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     audit.add_argument("blueprint_dir")
     audit.add_argument("--lean-root", type=Path, help="Lean project to resolve local targets against")
     audit.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    audit_review = audit.add_mutually_exclusive_group()
+    audit_review.add_argument(
+        "--review-bundle",
+        type=Path,
+        help="prepared review evidence; re-extracted and checked against the current Lean project",
+    )
+    audit_review.add_argument(
+        "--review",
+        action="store_true",
+        help="check review approvals against evidence derived in this run, without a prepared bundle",
+    )
+    _add_probe_timeout_argument(audit)
 
     doctor = subparsers.add_parser("doctor", help="diagnose the local Markdown runtime contract")
     doctor.add_argument("project_or_blueprint")
@@ -305,6 +342,50 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     _add_probe_timeout_argument(skeleton)
 
+    review = subparsers.add_parser("review", help="prepare and verify statement-review evidence")
+    review_subparsers = review.add_subparsers(dest="review_command", required=True)
+    review_prepare = review_subparsers.add_parser(
+        "prepare",
+        help="prepare a current-tree evidence bundle and optional blind packets",
+    )
+    review_prepare.add_argument("blueprint_dir")
+    review_prepare.add_argument("--lean-root", type=Path, required=True)
+    review_prepare.add_argument("-o", "--output", type=Path, required=True)
+    review_prepare.add_argument("--packets", type=Path, metavar="DIR")
+    _add_probe_timeout_argument(review_prepare)
+
+    review_record = review_subparsers.add_parser(
+        "record",
+        help="validate and file testimony about one exact prepared packet",
+    )
+    review_record.add_argument("blueprint_dir")
+    review_record.add_argument("--lean-root", type=Path, required=True)
+    review_record.add_argument("--bundle", type=Path, required=True)
+    review_record.add_argument("--article-id", required=True, metavar="AF_ID")
+    review_record.add_argument("--declaration", required=True, metavar="LEAN_NAME")
+    review_record.add_argument("--packet", type=Path, required=True)
+    review_record.add_argument("--testimony", type=Path, required=True)
+    review_record.add_argument("--model", required=True)
+    review_record.add_argument(
+        "--expected-card-hash",
+        help="replace an existing different card only if its current content has this hash",
+    )
+    _add_probe_timeout_argument(review_record)
+
+    review_check = review_subparsers.add_parser(
+        "check",
+        help="check evidence freshness, read-backs, and human approvals",
+    )
+    review_check.add_argument("blueprint_dir")
+    review_check.add_argument("--lean-root", type=Path, required=True)
+    review_check.add_argument(
+        "--bundle",
+        type=Path,
+        help="the bundle `review prepare` wrote; without it, one is derived from this run's own extraction",
+    )
+    review_check.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    _add_probe_timeout_argument(review_check)
+
     render = subparsers.add_parser("render", help="build the publishable blueprint")
     render.add_argument("blueprint_dir")
     render.add_argument("-o", "--output", default="site-src", help="output directory")
@@ -341,6 +422,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _migrate(args)
     if args.command == "skeleton":
         return _skeleton(args)
+    if args.command == "review":
+        return _review(args)
     if args.command == "render":
         return _render(args)
     return 2
@@ -459,7 +542,30 @@ def _check(args: argparse.Namespace) -> int:
 
 
 def _audit(args: argparse.Namespace) -> int:
-    result = audit_blueprint(args.blueprint_dir, lean_root=args.lean_root)
+    skeleton = bundle = cards = None
+    if args.review_bundle is not None or args.review:
+        if args.lean_root is None:
+            flag = "--review" if args.review else "--review-bundle"
+            print(f"error: {flag} requires --lean-root", file=sys.stderr)
+            return 2
+        try:
+            _, skeleton, bundle, cards = _current_review(
+                args.blueprint_dir,
+                lean_root=args.lean_root,
+                bundle_path=args.review_bundle,
+                timeout=args.timeout,
+            )
+        except (GraphValidationError, ReviewError, SkeletonError) as exc:
+            for issue in exc.issues:
+                print(f"error: {issue}", file=sys.stderr)
+            return 2
+    result = audit_blueprint(
+        args.blueprint_dir,
+        lean_root=args.lean_root,
+        skeleton=skeleton,
+        review_bundle=bundle,
+        readbacks=cards,
+    )
     if args.json:
         print(result.to_json())
     else:
@@ -1025,6 +1131,379 @@ def _skeleton(args: argparse.Namespace) -> int:
     else:
         print(format_report(report, lean_root=args.lean_root), end="")
     return 0 if report.clean else 1
+
+
+def _review(args: argparse.Namespace) -> int:
+    if args.review_command == "prepare":
+        return _review_prepare(args)
+    if args.review_command == "record":
+        return _review_record(args)
+    if args.review_command == "check":
+        return _review_check(args)
+    return 2
+
+
+def _review_prepare(args: argparse.Namespace) -> int:
+    output = args.output.expanduser().resolve()
+    if args.packets is not None:
+        packets = args.packets.expanduser().resolve()
+        if output == packets or output in packets.parents or packets in output.parents:
+            print("error: --output and --packets must be disjoint", file=sys.stderr)
+            return 2
+    try:
+        graph = load_graph(args.blueprint_dir)
+        skeleton = extract_skeletons(
+            args.blueprint_dir,
+            lean_root=args.lean_root,
+            timeout=args.timeout,
+        )
+        bundle = build_review_bundle(graph, skeleton)
+        if args.packets is not None:
+            written = write_review_packets(bundle, args.packets)
+            print(f"{args.packets}: {len(written)} blind packet(s) written")
+        destination = write_review_bundle(bundle, args.output)
+    except (GraphValidationError, ReviewError, SkeletonError) as exc:
+        for issue in exc.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        return 2
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"{destination}: prepared {len(bundle.articles)} review article(s) · {bundle.hash}")
+    return 0
+
+
+def _review_record(args: argparse.Namespace) -> int:
+    try:
+        bundle = load_review_bundle(args.bundle)
+        # The inputs are read, and checked against the prepared bundle, before
+        # any Lean work: a missing file or a changed packet stops the record
+        # without an extraction.
+        packet, testimony = _record_input(bundle, args)
+        graph = load_graph(args.blueprint_dir)
+        before = _record_snapshot(graph, args)
+        node_id, _, digest = before
+        # The article is read again before the card is written, by its name
+        # rather than the file it resolves to, so that a link pointed at
+        # another file is seen.
+        article = _named_article_path(graph, node_id)
+        skeleton = extract_skeletons(
+            args.blueprint_dir,
+            lean_root=args.lean_root,
+            timeout=args.timeout,
+            node_ids=(node_id,),
+        )
+        # The extraction must describe the blueprint the card is filed
+        # against. Reload it and refuse if the selected article changed while
+        # Lean ran; otherwise the evidence below would pair a graph and a Lean
+        # state that never coexisted.
+        graph = load_graph(args.blueprint_dir)
+        if _record_snapshot(graph, args) != before:
+            reason = "an article being recorded changed during extraction; nothing was filed, so rerun the record"
+            raise ReviewError([ReviewFinding("record", "review-snapshot-changed", reason)])
+        # The extraction selected only this article, so its report is scoped
+        # as validate_review_article insists.
+        findings = validate_review_article(graph, bundle, skeleton, args.article_id)
+        if findings:
+            raise ReviewError(findings)
+        card = _build_card(args, lambda: _prepared_card(graph, skeleton, args, packet, testimony))
+        _refuse_conflict(card)
+        # The article is read again just before the card is written. That
+        # narrows the window without closing it: an edit after this read,
+        # while the card is written, goes unseen, and so does an edit to a
+        # source the article cites, which only the reload above compares.
+        _refuse_changed_article(card, article, digest)
+        try:
+            path = publish_readback(card)
+        except ValueError as exc:
+            # Named as the conflict check names it.
+            raise ValueError(f"{card.declaration}: {exc}") from exc
+    except (GraphValidationError, ReviewError, SkeletonError) as exc:
+        for issue in exc.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        return 2
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"{path}: recorded read-back for {card.declaration}")
+    return 0
+
+
+def _record_input(bundle: ReviewBundle, args: argparse.Namespace) -> tuple[str, str]:
+    """Read the packet and testimony, and check the packet against the bundle.
+
+    Return the packet the auditor read, which is the prepared declaration's,
+    and what the auditor wrote.
+    """
+
+    prepared = bundle.declaration(args.article_id, args.declaration)
+    if prepared is None:
+        reason = f"prepared review bundle has no declaration {args.declaration!r} for article_id {args.article_id}"
+        raise ReviewError([ReviewFinding(args.article_id, "review-selection-missing", reason)])
+    try:
+        packet_bytes = _read_regular_file(args.packet)
+    except OSError as exc:
+        raise ReviewError([_unreadable_input(args, "packet", args.packet, exc)]) from exc
+    if packet_bytes != prepared.packet.encode("utf-8"):
+        reason = f"packet bytes do not match the prepared declaration {args.declaration}"
+        raise ReviewError([ReviewFinding(args.article_id, "review-packet-mismatch", reason)])
+    try:
+        raw = _read_regular_file(args.testimony)
+    except OSError as exc:
+        raise ReviewError([_unreadable_input(args, "testimony", args.testimony, exc)]) from exc
+    try:
+        # Decoded as a text file is read: "\r\n" and a lone "\r" end a
+        # line as "\n" does.
+        testimony = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    except UnicodeError as exc:
+        raise ReviewError([_unreadable_input(args, "testimony", args.testimony, exc)]) from exc
+    # Equal to the bundle's text, so already valid UTF-8.
+    return packet_bytes.decode("utf-8"), testimony
+
+
+def _read_regular_file(path: Path) -> bytes:
+    """The bytes of the regular file at ``path``."""
+
+    # Opened without waiting for a writer, so a FIFO is refused unread
+    # instead of holding the record.
+    nonblocking = getattr(os, "O_NONBLOCK", 0)
+    with open(path, "rb", opener=lambda name, flags: os.open(name, flags | nonblocking)) as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise OSError("not a regular file")
+        return handle.read()
+
+
+def _unreadable_input(args: argparse.Namespace, role: str, path: Path, exc: Exception) -> ReviewFinding:
+    return ReviewFinding(
+        args.article_id,
+        "review-input-unreadable",
+        f"{args.declaration}: cannot read the {role} {path}: {exc}",
+    )
+
+
+def _build_card(args: argparse.Namespace, build: Callable[[], PreparedReadback]) -> PreparedReadback:
+    """The record's card, built with *build*, or a refusal naming why it cannot be."""
+
+    try:
+        return build()
+    except ValueError as exc:
+        raise ReviewError(
+            [ReviewFinding(args.article_id, "review-record-invalid", f"{args.declaration}: {exc}")]
+        ) from exc
+
+
+def _refuse_conflict(card: PreparedReadback) -> None:
+    """Refuse the record if publishing would refuse its card.
+
+    An existing card that cannot be safely read (a link, a directory, a FIFO,
+    or a file over the card limit) is refused as a conflict too.
+    """
+
+    try:
+        conflicts = readback_conflicts([card])
+    except ValueError as exc:
+        conflicts = [f"{card.declaration}: {exc}"]
+    if conflicts:
+        raise ReviewError([ReviewFinding("record", "review-card-conflict", conflict) for conflict in conflicts])
+
+
+def _record_snapshot(graph: Graph, args: argparse.Namespace) -> tuple[str, str, str]:
+    """What the selected article is right now: its node, file, and source hash."""
+
+    matches = [node for node in graph.nodes.values() if node.article_id == args.article_id]
+    if len(matches) != 1:
+        reason = f"current graph has no unique article with article_id {args.article_id}"
+        raise ReviewError([ReviewFinding(args.article_id, "review-article-missing", reason)])
+    node = matches[0]
+    return node.id, str(node.path), node.source_sha256 or ""
+
+
+def _named_article_path(graph: Graph, node_id: str) -> str:
+    """The path the blueprint names an article by, which for a link is the link.
+
+    ``load_graph`` keeps the file a link resolves to, and reading that file
+    again would miss the link being pointed at another one. The name is the
+    candidate for the article's id that resolves to the loaded file; if none
+    does, the article changed after the load, which the reload after the
+    extraction refuses.
+    """
+
+    roadmap = graph.blueprint_dir / "roadmap"
+    path = str(graph.nodes[node_id].path)
+    names = (roadmap / f"{node_id}.md", roadmap / node_id / "README.md", roadmap / "README.md")
+    return next((str(name) for name in names if os.path.realpath(name) == path), path)
+
+
+def _refuse_changed_article(card: PreparedReadback, path: str, digest: str) -> None:
+    """Refuse to file ``card`` unless its article's file still holds the bytes its evidence was checked against."""
+
+    try:
+        if hashlib.sha256(_read_regular_file(Path(path))).hexdigest() == digest:
+            return
+        what = (
+            "changed after its evidence was checked, so its card was not filed; rerun the record, after review "
+            "prepare if the change is to that evidence"
+        )
+    except (FileNotFoundError, NotADirectoryError):
+        # A link left naming a missing file is still there; only its target is gone.
+        gone = "now links to a missing file" if os.path.islink(path) else "was deleted after its evidence was checked"
+        what = f"{gone}, so its card was not filed; restore the article, or drop its records, and rerun the record"
+    except OSError as exc:
+        what = (
+            f"cannot be read ({exc.strerror or exc}), so its card was not filed; rerun the record once it can be read"
+        )
+        # A FIFO or device put at the path, or linked to, is refused unread, a
+        # directory or socket cannot be opened, and a link that loops, or a chain
+        # of links too long to follow, cannot be followed: none of them reads as
+        # a regular file, however often the record is rerun.
+        if exc.errno in (None, errno.ELOOP) or (os.path.exists(path) and not os.path.isfile(path)):
+            what = (
+                "is no longer a regular file, so its card was not filed; restore the article, or drop its records, "
+                "and rerun the record"
+            )
+    raise ReviewError(
+        [ReviewFinding(card.article_id, "review-snapshot-changed", f"{card.declaration}: article {path} {what}")]
+    )
+
+
+def _prepared_card(
+    graph: Graph, skeleton: SkeletonReport, args: argparse.Namespace, packet: str, testimony: str
+) -> PreparedReadback:
+    """Build the record's card against the extraction."""
+
+    node = next(node for node in graph.nodes.values() if node.article_id == args.article_id)
+    # validate_review_article matched this article's extracted declarations
+    # to the bundle's, where _record_input found this one.
+    current = next(item for item in skeleton.declarations(node.id) if item.name == args.declaration)
+    return prepare_readback(
+        graph.blueprint_dir,
+        article_id=args.article_id,
+        declaration=current,
+        model=args.model,
+        text=testimony,
+        packet_text=packet,
+        expected_card_hash=args.expected_card_hash,
+    )
+
+
+def _review_check(args: argparse.Namespace) -> int:
+    try:
+        graph, skeleton, bundle, cards = _current_review(
+            args.blueprint_dir,
+            lean_root=args.lean_root,
+            bundle_path=args.bundle,
+            timeout=args.timeout,
+        )
+        findings = review_findings(graph, bundle, skeleton, readbacks=cards)
+        approvals = approval_statuses(graph, current_approvals(graph, bundle, cards))
+    except (GraphValidationError, ReviewError, SkeletonError) as exc:
+        for issue in exc.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "approvals": [_approval_json(item) for item in approvals.values()],
+                    "bundle": bundle.hash,
+                    "clean": not findings,
+                    "findings": [
+                        {"code": item.code, "node_id": item.node_id, "reason": item.reason}
+                        for item in findings
+                    ],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+    elif findings:
+        for finding in findings:
+            print(f"error: {finding.node_id}: {finding.code}: {finding.reason}")
+    else:
+        print(f"OK: statement reviews match {bundle.hash}")
+    if not args.json:
+        for item in approvals.values():
+            print(_approval_line(item))
+    return 1 if findings else 0
+
+
+def _approval_line(item: ApprovalStatus) -> str:
+    return f"{item.node_id}: {item.label} · {item.review_hash}"
+
+
+def _approval_json(item: ApprovalStatus) -> dict[str, object]:
+    attestation = item.attestation
+    return {
+        "authenticated": item.authenticated,
+        "label": item.label,
+        "method": None if attestation is None else attestation.method,
+        "node_id": item.node_id,
+        "reason": item.reason,
+        "reference": None if attestation is None else attestation.reference,
+        "review_hash": item.review_hash,
+        "reviewer": None if attestation is None else attestation.reviewer,
+    }
+
+
+def _current_review(
+    blueprint_dir: str | Path,
+    *,
+    lean_root: Path | None,
+    bundle_path: Path | None,
+    timeout: float | None = None,
+):
+    """The graph, one extraction, a review bundle validated against both, and the cards.
+
+    With ``bundle_path`` the bundle is the one ``review prepare`` wrote, and it
+    must still describe the current tree. Without it, the bundle is derived
+    from this same extraction. CI wants the latter: it never trusts a committed
+    bundle, and preparing one in a separate command would pay for a second
+    extraction of the same unchanged checkout.
+
+    Everything returned describes one state of the blueprint. The graph and the
+    read-back cards are read before Lean runs. The extraction refuses a
+    blueprint that changes while it runs, and its hash must name the graph read
+    here, which covers the time before it took its own snapshot. Cards are not
+    articles, so they are read again afterwards and must be unchanged. Callers
+    judge the cards returned here rather than reading the vault again. Article
+    text and source passages used later, such as a statement compared, are
+    the bytes the graph captured. A caller that loads the articles again, as
+    audit does, is held to the same state by ``build_review_bundle``, which
+    refuses a skeleton report paired with a blueprint, cited sources included,
+    other than the one it was extracted from.
+    """
+
+    graph = load_graph(blueprint_dir)
+    cards = _review_cards(graph.blueprint_dir)
+    skeleton = extract_skeletons(blueprint_dir, lean_root=lean_root, timeout=timeout)
+    changed = [
+        ReviewFinding(
+            "review",
+            "review-snapshot-changed",
+            f"{what} changed while the review evidence was being extracted; rerun once the blueprint is idle",
+        )
+        for what, moved in (
+            ("an article", skeleton.blueprint_hash != blueprint_hash(graph)),
+            ("a read-back", _review_cards(graph.blueprint_dir) != cards),
+        )
+        if moved
+    ]
+    if changed:
+        raise ReviewError(changed)
+    bundle = build_review_bundle(graph, skeleton) if bundle_path is None else load_review_bundle(bundle_path)
+    findings = validate_review_bundle(graph, bundle, skeleton)
+    if findings:
+        raise ReviewError(findings)
+    return graph, skeleton, bundle, cards
+
+
+def _review_cards(blueprint_dir: Path) -> dict[tuple[str, str], Readback]:
+    """The vault's read-back cards; a card directory that cannot be listed is a review error, not missing cards."""
+
+    try:
+        return load_readbacks(blueprint_dir)
+    except ValueError as exc:
+        raise ReviewError([ReviewFinding("review", "readback-unlistable", str(exc))]) from exc
 
 
 def _claim_board(args: argparse.Namespace) -> ClaimBoard:

@@ -118,6 +118,14 @@ rejected, however faithful it is. Keep it to a few kilobytes: a read-back over
 32 KiB, or with more than 64 `[`, is refused unread; in a formula `\lbrack` and
 `\rbrack` do not count.
 
+## Return only testimony
+
+Return only the Markdown testimony described above. Do not create a vault
+card, copy metadata, infer a destination path, or inspect a manifest. The
+coordinator records your response with the exact packet through Autoform's
+`review record` command. That command rejects a response if the prepared
+bundle, current Lean declaration, or packet bytes no longer agree.
+
 A read-back testifies about one exact packet. If either the packet's meaning
 or its bytes change, a coordinator must request a new blind read-back. Never
 revise old testimony after seeing an article or intended statement.

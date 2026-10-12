@@ -153,7 +153,8 @@ def diagnose_project(
             AuditFinding(".", "invalid-lean-root", "Lean root does not exist or is not a directory"),
             *lean_findings,
         )
-    roadmap_findings = tuple(finding for finding in audit.findings if finding.code not in _LEAN_FINDING_CODES)
+    skipped = _LEAN_FINDING_CODES | {"review-bundle-missing"}
+    roadmap_findings = tuple(finding for finding in audit.findings if finding.code not in skipped)
     checks.append(_finding_check("audit", roadmap_findings, "roadmap audit passed"))
     if lean_root is None:
         checks.append(DoctorCheck("lean targets", True, "not checked; no Lean root supplied"))

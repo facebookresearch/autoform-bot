@@ -60,7 +60,8 @@ State the intended result and proof sketch here.
 An article's statement is its body from the end of the frontmatter to the first
 `##` heading, without the H1 line. A deeper heading does not end it, and neither
 does a `##` line inside a fenced code block or an HTML comment. `autoform audit`
-and the published theorem box both read that span. A fence closes only on a
+and the published theorem box both read that span, and `review_approved` binds
+it without the HTML comments outside its fences. A fence closes only on a
 bare fence line; one that never closes is plain text on the page and hides no
 heading and no dependency link. A later bare fence line of the same character
 and at least the opener's length closes it here, though the page asks for the
@@ -102,7 +103,8 @@ An article asserts only facts a human or agent verified:
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
 | `lean: Ns.decl` | Declaration name(s) that discharge the article. |
 | `discussion: 42` | Issue number or URL where the article is being discussed. |
-| `article_id: af_...` | Durable identity, `af_` plus 24 lowercase hex digits; `autoform work` requires it on unfinished formalizable leaves. |
+| `article_id: af_...` | Durable identity, `af_` plus 24 lowercase hex digits; `autoform work` requires it on unfinished formalizable leaves, `review record` on the articles it records, and `review prepare`, `review check` and the review flags of `audit` on every Lean-mapped article. |
+| `review_approved: sha256:<64 hex>` | The hash of the complete review surface someone approved for this article. It shows that surface is unchanged, not who approved it. |
 | `open_statements: allowed` | Project policy, valid only in `roadmap/README.md`: a theorem's statement may land with a `sorry` proof (see [Open statements](#open-statements)). Absent or `forbidden` keeps the strict policy. |
 
 Everything a reader thinks of as progress is *derived* from the DAG on every
@@ -420,7 +422,8 @@ valid contract with `MAPPED` rows publishes normally even though `audit` reports
 each one as a `declared-coverage-gap`. That is intended: a roadmap is published
 while it is still being decomposed, and the published `coverage.complete: false`
 is how a reader sees that. Run `autoform audit` in CI when you want mapped rows
-to block a merge.
+to block a merge. Once articles record `review_approved`, run it after the Lean
+build with `--lean-root . --review`, or it reports `review-bundle-missing`.
 
 Extract what a reader must trust for each formalized statement:
 
@@ -522,8 +525,10 @@ report identifies the exact blueprint, by a hash of every article's bytes and
 of each cited source file a passage is cut from, its complete target set, and whether
 the extraction covered all targets or an explicit `--node` selection; a
 report whose selection, articles, and unresolved declarations disagree can be
-neither built nor loaded.
-It quotes each trusted definition's source and records theorem
+neither built nor loaded. Review evidence is prepared only from a report that
+selects every article and whose targets are the blueprint's `lean:` names, and
+a record validates each article against a report scoped to that article. It
+quotes each trusted definition's source and records theorem
 dependencies by elaborated signature, so it stands on its own without ever
 copying a theorem proof. Declarations in one project share most of what they
 trust, so the report states each trusted declaration, each external
@@ -595,12 +600,15 @@ reviewed them. An article review hash additionally binds the joint packet to the
 cited passage, its locator, and the drift hash, so a review recorded against it
 does not survive a change of meaning that leaves the packet text unchanged. All
 three are advisory provenance checksums when candidate code controls the
-checkout.
+checkout. Human approval records one `review_approved` hash over the complete
+review surface: the article's title and statement, cited passage and locator,
+exact joint packet, each declaration's drift hash, and every validated
+read-back card, so changing any of them invalidates it.
 
 A read-back is an independent agent's mathematical-English account of one
 declaration packet. The coordinator gives that agent only an opaque packet and
-the read-back instructions, then records the returned testimony.
-Cards live at `blueprint/readbacks/<article_id>/<encoded-declaration>.md`;
+the read-back instructions, then records the returned testimony through the
+CLI. Cards live at `blueprint/readbacks/<article_id>/<encoded-declaration>.md`;
 the durable `article_id` keeps testimony attached when an article moves, while
 the encoded filename avoids platform-specific Lean-name collisions. Each
 versioned card contains the exact packet, both hashes, a model label, and
@@ -786,6 +794,100 @@ names, because a source theorem is often formalized by several declarations
 together and each alone is honestly incomplete. A judge of faithfulness is
 given the article packet and its passage; an auditor asked what one
 declaration asserts is given that declaration's packet alone.
+
+Prepare and check the complete review protocol through first-class commands:
+
+```bash
+autoform review prepare blueprint --lean-root . \
+  --output review.json --packets review-packets
+autoform review record blueprint --lean-root . --bundle review.json \
+  --article-id af_0123456789abcdef01234567 --declaration Ns.result \
+  --packet review-packets/blind/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.lean \
+  --testimony read-back.md --model muse-spark-1.1
+autoform review check blueprint --lean-root . --bundle review.json
+autoform audit blueprint --lean-root . --review-bundle review.json
+autoform review check blueprint --lean-root .
+autoform audit blueprint --lean-root . --review
+```
+
+`review prepare` extracts Lean evidence from the current built tree and writes
+a strict, versioned bundle plus opaque packets. The bundle contains the exact
+article titles and statements, cited passages, declaration mapping, and packet bytes, but
+not the later testimony. Every Lean-mapped review article must be a
+declaration-sized leaf. An article marked `origin: cited` must link
+to an in-vault, non-Markdown source snapshot with an exact
+`#L<start>-L<end>` range; preparation refuses a citation it cannot put before
+the reviewer. `review record` rechecks the selected current article
+and the exact packet bytes before filing a card. Validation is per article, so
+an unrelated article that changed since `review prepare` does not block the
+record. Any blueprint change during the extraction itself does, even in an
+article the record does not touch. Nothing is then filed, and running the
+record again once the blueprint is idle completes it, unless the change
+altered or removed the evidence of an article it records, which the rerun then
+refuses.
+Another article's empty or duplicated `lean:` list stops every extraction, so
+nothing is filed until that list is fixed. A record probes only the
+modules of the article it files, so only those modules need to be built and
+fresh, and its packets match the ones `review prepare` wrote from a full
+extraction.
+
+The packet and testimony are read (either is refused unread if it is not a
+regular file, such as a FIFO), and the packet checked against the bundle,
+before Lean starts; the testimony is validated when the card is built. The
+blueprint is reloaded after the extraction, and nothing is filed if the
+selected article
+changed while Lean ran or the reloaded blueprint is not the one the extraction
+saw. The card is written under its compare-and-swap, and the article is read
+again just before; only the article's own file is read again, through the link
+if the article is one, and an edit after that read, while the card is written,
+goes unseen. When another writer filed, replaced, or removed the card
+meanwhile, the record must name the hash of the card now there, or no hash if
+there is none. When the article was deleted meanwhile, or replaced by something
+other than a regular file, such as a directory or FIFO, it must be restored,
+and one made unreadable must be readable again.
+
+`review check` and `audit` re-extract the
+current Lean evidence and reject unresolved, partial, foreign, or stale
+bundles. `review check` also requires complete current cards and matching human
+approvals, and judges them as one state of the blueprint: it reads the
+articles, the sources they cite, and the cards once before Lean runs, cuts
+every statement and passage it compares from those bytes, and requires the
+extraction to have seen the same articles and sources and the cards to be
+unchanged when it ends. An edit that breaks any of these comparisons fails the
+check with `review-snapshot-changed` rather than mixing old and new evidence;
+run it again once the blueprint is idle. These are comparisons, not a lock: a
+change restored between two of them goes unseen, and an edit after the last
+does not affect a verdict already reached. `audit --review` and
+`audit --review-bundle` make the same check, then judge the cards it validated
+rather than reading them again. They load the articles again to audit them, and
+an edit to any article or cited source since the check fails them with
+`review-snapshot-changed` too; what they audit is the bytes that second load
+read. Without `--bundle`, `review check` derives the bundle from its own
+extraction, and `audit --review` does the same: each extracts the tree once
+instead of once to prepare and again to check. Each review command that
+extracts Lean, plus review-enabled `audit`, accepts the same
+`--timeout SECONDS` probe override as `skeleton`.
+
+Newly scaffolded projects commit the versioned `.autoform-review` policy marker,
+so generated CI enforces this gate from the first formalized statement. Older
+projects opt in by adding that marker; cards or `review_approved` assertions
+without it fail instead of silently disabling review. CI never trusts a
+committed bundle: after the Lean build it runs the review-only check against
+one derived in the same run, without turning advisory roadmap or coverage
+findings into merge blockers.
+
+`review_approved` records unchanged evidence, not who approved it:
+`review check` prints the expected hash, so anyone, an agent included, can
+paste it. An approval is current when `review_approved` equals the current
+review hash, which `review check` enforces, and a current approval is labelled
+self-approved wherever it is shown.
+
+`review_approved` is thus a drift checksum, not an authorization.
+Authorization has to come from repository policy: CODEOWNERS gives `blueprint/`
+a code owner (the `/blueprint/` rule in `CODEOWNERS.autoform.example`), and a
+ruleset on the default branch requires code-owner review, dismisses stale
+approvals and requires approval of the most recent push. Without that policy,
+a current approval authorizes nothing.
 
 When `--output`, `--packets`, and `--passages` are combined, all three outputs
 are staged before publication and a failed commit restores the previous set.
@@ -1062,8 +1164,8 @@ it does not recognize, and assertions the Lean cannot back: `proof: formalized`
 without `statement: formalized`, or either without a `lean:` name, even beside
 `mathlib: true`. With `--lean-root` it also fails on a `lean:` name
 absent from the sources, as `leanblueprint checkdecls` does for LaTeX
-blueprints. It also refuses raw HTML in an article: a tag, a character
-reference, an unclosed comment, or anything the
+blueprints. It also refuses raw HTML in an article, as `review record` does in
+a read-back: a tag, a character reference, an unclosed comment, or anything the
 site's Markdown would pass through as HTML. A complete `<!-- ... -->` comment
 is allowed and is left out of the rendered page. Code is shown as typed, so
 markup written in code is allowed, and so is a reference a browser shows as
@@ -1155,7 +1257,12 @@ and an explicit dependency section, that asserted Mathlib facts are
 internally consistent, and that cited work resolves to local source
 material without escaping the blueprint. Coverage files are checked for broken
 links and explicitly declared gaps. With `--lean-root`, local declaration names
-and declaration kinds are checked against the Lean source index.
+and declaration kinds are checked against the Lean source index. With
+`--review`, which derives review evidence in the same run, or
+`--review-bundle FILE`, which reads a prepared bundle, either one with
+`--lean-root`, it also reports the findings `review check` reports. Without
+either, a blueprint where any article records `review_approved` gets one
+`review-bundle-missing` finding, at `.`.
 
 ### Structure
 
@@ -1409,7 +1516,7 @@ job that runs no project code; the generated workflow does not have one.
 
 `autoform init` writes `.github/CODEOWNERS.autoform.example`. GitHub ignores
 that filename, so the example cannot mask or replace a repository's active
-owners. Its two suggested rules cover Autoform's control paths: the roadmap's
+owners. Two of its suggested rules cover Autoform's control paths: the roadmap's
 `open_statements` policy and `.github/` CI. To activate them, find the first
 existing CODEOWNERS file in GitHub's order (`.github/CODEOWNERS`, `CODEOWNERS`,
 then `docs/CODEOWNERS`), or choose `.github/CODEOWNERS` when none exists; copy
@@ -1581,6 +1688,11 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
    every other dependent. Roadmap edits only Markdown: it releases its claims
    and leaves the Lean revision to Formalize.
 
+With the review marker, a commit that drops a declaration from an article's
+`lean:` also deletes that declaration's read-back cards under
+`blueprint/readbacks/<article_id>/`, which `review check` otherwise reports as
+orphaned, and one that removes `lean:` also removes `review_approved`.
+
 ## Local runtime doctor
 
 Use the runtime projection and roadmap audit together without contacting any
@@ -1597,7 +1709,9 @@ targets. It exits zero only when every required check passes. Omitting
 `--lean-root` records an explicit advisory pass; supplying it performs only a
 lexical local-source check, not a Lean build, kernel check, or proof-honesty
 review. The bundled example intentionally exits nonzero while its declared
-coverage still holds `MAPPED` rows.
+coverage still holds `MAPPED` rows. The roadmap audit leaves `review_approved`
+to `autoform audit blueprint --lean-root . --review`, since judging it needs
+review evidence.
 
 This command is strictly read-only and local. It does not invoke Git, GitHub,
 subprocesses, network services, claims, queues, reviews, recovery state,

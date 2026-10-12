@@ -14,8 +14,8 @@ auditor was shown, in a Lean block, followed by the testimony under a
 its rendering side by side without the site. They are testimony, not derived
 state, so they are committed with the book, and each one records the skeleton
 hash it testifies about and the evidence hash of the packet text it was
-written from. When either no longer matches the prepared declaration,
-validation reports the card invalid, rather than silently presenting it as
+written from. When either no longer matches the prepared declaration, the
+review check reports the card invalid, rather than silently presenting it as
 current.
 """
 
