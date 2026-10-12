@@ -444,13 +444,35 @@ name so a reader can see that a statement uses the library's notion of a limit
 rather than a homemade one.
 
 The closure is computed from elaborated terms, which is why this is the one
-command that runs Lean: it writes a small probe and runs it with
-`lake env lean` against the built project. Before the probe, Lake must confirm
-without rebuilding that every imported module matches its exact source inputs;
-a missing `lake-manifest.json`, stale artifacts, or a source tree that changes
-during extraction makes the command fail. That check rehashes every input and
-rewrites Lake's `.hash` files, so the project's `.lake` directory must be
-writable. A lexical closure would miss what
+command that runs Lean: for each module that declares a selected `lean:`
+target it writes a small probe that imports that module and the probe's
+helper module and makes one fully qualified call, with no `open` or
+`set_option`, and runs it with `lake env lean` against the built project. The
+helpers are compiled with the project's toolchain and no project module in
+scope into a module named `autoform-skeleton-helper`; a project, dependency,
+or `LEAN_PATH` module or directory of that name stops the extraction.
+The helper's constants are all in the reserved `AutoformSkeleton` namespace: a
+module that declares one of them there cannot import the helper, and the
+extraction stops with an error that names the constant. A declaration's
+packet reads as it does to a file that imports its module, whichever other
+articles are extracted with it.
+That environment has the module's global notation, instances, and
+attributes, including any the module declares after the declaration; it lacks
+the module's `local notation` and local instances, and the `open` and
+`set_option` commands in effect at the declaration. The probe adds exactly two
+printing options, `pp.funBinderTypes` and `pp.coercions.types`, so a reader
+sees what each binder ranges over and where each cast lands; signatures
+otherwise print as `#check` prints them in a file whose only import is the
+module, with an identifier that spells one of that file's tokens escaped as
+`«»`. The helper's own imports (`Lean.Elab.Command`,
+`Lean.Util.CollectAxioms`, `Lean.Util.Path`, and `Lean.Data.Json`) are in that
+environment too, though their tokens do not change how a signature is escaped.
+Before any probe, Lake must confirm once, without rebuilding, that every
+probed module (only those need to be built) matches its exact source inputs;
+a missing `lake-manifest.json`, stale artifacts, or a source tree that
+changes during extraction makes the command fail. That check rehashes every
+input and rewrites Lake's `.hash` files, so the project's `.lake` directory
+must be writable. A lexical closure would miss what
 `open`, notation, implicit instances, and auto-bound variables bring in, and
 every miss silently shrinks the surface a reader is told to trust. Constructors,
 projections, recursors, `noConfusion` helpers, and matchers are folded onto the
@@ -468,22 +490,36 @@ environment rather than by the source text: its kernel face is an opaque
 constant, so the body a reader would see is not what Lean checks. The command
 exits nonzero when a `lean:` name is absent from the sources or from the built
 environment, or reaches a refused declaration; that name is unresolved for its article only, other articles still extract, and it writes nothing into the vault.
-The lexical index reads each file only up to `#exit`, and a name that several
-indexed files declare, even when all but one of them declare it `private`, is
-unresolved without a probe, because the index cannot tell which one Lean binds;
-every reason given for it names each of those files in sorted order.
-`--output` records the `autoform-skeleton/v4` report, which contains no
+Each name is probed in the module whose source the lexical index finds it in,
+reading each file only up to `#exit`; a name Lean declares in another module
+is unresolved too. A name that several indexed files declare, even when all
+but one of them declare it `private`, is unresolved without a probe, because
+the index cannot tell which one Lean binds, and every reason given for it
+names each of those files in sorted order.
+A declaration that resolves has the same hash under any selection.
+`--output` records the `autoform-skeleton/v5` report, which contains no
 timestamp or absolute path, for a later render or review to consume. The
-report identifies the exact blueprint, its complete target set, and whether
-the extraction covered all targets or an explicit `--node` selection. It
-quotes each trusted definition's source and records theorem
+report identifies the exact blueprint, by a hash of every article's bytes and
+of each cited source file a passage is cut from, its complete target set, and whether
+the extraction covered all targets or an explicit `--node` selection; a
+report whose selection, articles, and unresolved declarations disagree can be
+neither built nor loaded.
+It quotes each trusted definition's source and records theorem
 dependencies by elaborated signature, so it stands on its own without ever
 copying a theorem proof. Declarations in one project share most of what they
 trust, so the report states each trusted declaration, each external
 constant's semantic material, and each boundary module's identity once, in the
 top-level `trusted`, `semantics`, and `boundary_modules` tables, and each
 declaration names the entries it uses; the probe's own output is shared the
-same way. The probe also states each elaborated subterm of 256 bytes or more
+same way. A name means what the root's module environment declares under it,
+so a trusted declaration can read differently under two root modules, and two
+roots with different imports can see different external constants or axioms
+under one name. So `trusted` and `semantics` are keyed by root module and then
+by name, and a declaration may name only the entries under its own module. A
+module identity is the digest of its compiled files, which one workspace
+builds once for every root, so `boundary_modules` is keyed by module name
+alone; two probes that disagree about one module's files stop the command.
+The probe also states each elaborated subterm of 256 bytes or more
 once, since proof terms repeat large subterms heavily; the report keeps each
 material's full text.
 
@@ -491,10 +527,13 @@ Run skeleton extraction only in a trusted checkout or an operating-system
 sandbox. Lake evaluates `lakefile.lean`, and the generated probe imports project
 code whose initializers, macros, and metaprograms may perform arbitrary IO and
 can forge probe output. The timeout and output cap bound the direct batch
-command; on POSIX, Autoform also terminates its process group. The Lake
-freshness check and the probe each have their own 600-second budget;
-`--timeout SECONDS` sets the probe's, which a large project may need. They are resource
-controls, not a security or authenticity boundary.
+command; on POSIX, Autoform also terminates its process group, for every
+probe, on every failure and on interruption. The Lake freshness check, the
+helper's build, and each probe have their own 600-second budget;
+`--timeout SECONDS` sets the helper's and each probe's, which a large
+project may need. The parsed records, at most 512 Mi characters of semantic
+material per probed module, stay in memory until the report is built. These
+limits are resource controls, not a security or authenticity boundary.
 
 Every skeleton carries a full SHA-256 **drift hash**. It is derived from
 canonical elaborated expressions for the root, every trusted declaration, each
@@ -546,17 +585,62 @@ signature printed in Lean's raw expression form, the canonical kernel material,
 the statement as written, and the source of every project definition it rests
 on, with every comment and docstring the probe can identify removed, so that a
 reader who is asked what the Lean literally asserts cannot read the author's
-intent into it. Lean's parser, not a separate lexer, locates those comments.
-The probe parses each source in its own environment, which has the notation of
-every module the run imports but not the file's `local` notation.
-A source it cannot parse there (a body that uses `local notation`) is withheld
-if it may hold a comment. Source containing a known non-builtin token with
-`--` or `/-` is also withheld unless that token was globally active through an
-import, since the probe cannot reconstruct when a same-module token was declared
-or where a scoped token was active. A withheld source leaves the declaration's
-signatures and kernel material in the packet and does not make the article
-unresolved. A `local` token containing `--` is invisible to the probe: the
-packet can then show code as a comment or a comment as code.
+intent into it. Lean's parser, not a separate lexer, locates those comments,
+and a source is shown only when the probe can prove it reads the source as
+Lean read it when compiling the file, apart from the residual cases listed
+below. Where a
+comment starts depends on the parser state in force at the declaration: with
+`++"` a token, `x ++" -- y "` holds a comment, and without it a string. Lean
+does not record that state, so the probe rebuilds every state Lean could have
+had there from what the environment does record, once per module:
+- The state at the module's first line holds the builtin grammar and the
+  global parser entries of every module Lean loads to compile the file, and
+  nothing else; under the module system Lean loads the file's imports and,
+  through each loaded module, only what that module imports `public`ly,
+  unless a chain of `import all` reaches it.
+- Lean keeps a module's own parser entries in the order its commands added
+  them, and parsed the declaration with some prefix of them. An entry naming
+  a parser declared in the same module was added after that declaration
+  began; the prefix stops before the first entry so placed at or after the
+  declaration's start. Nothing places any other entry: the token and kind
+  entries written for such a parser, a parser declared in another module, a
+  later `attribute [term_parser]`, or a token added by a metaprogram may have
+  been added anywhere before that point.
+- A namespace's scoped entries, imported or the module's own, count as
+  possibly active only when the file's text above the declaration contains
+  the namespace's last component, since `namespace` and `open` name what they
+  activate; the probe tries each subset of those namespaces.
+A state adds the scoped entries of its namespaces before the module's own
+entries, where Lean interleaves them as `open` and `namespace` run. The
+order cannot change the result: the token table and the node kinds are sets,
+a longest-match tie keeps every alternative whatever the parsers' order, and
+the probe takes comment ranges from every alternative and leaves a statement
+unknown when a choice node holds its value.
+The probe parses the source under every state these choices allow, leaving
+out entries that cannot change the parse (a token that does not occur in the
+text, a parser none of whose first tokens occurs in it), and keeps the
+comment ranges only when every state under which the source parses agrees on
+the text and on where each comment lies. Because the state Lean had is one of
+them, a state under which the source fails to parse is not it. Otherwise, or
+when no state parses the source, when it holds an `open` of one of those
+namespaces or a quotation `` `(p| …) `` whose `p` names a parser rather than
+a category (Lean resolved that name in the current namespace and under the
+`open`s in force, which the probe's parse does not have), or when there are
+more than 256 states, a source that may hold a comment is withheld. A withheld
+source leaves the declaration's signatures and kernel material in the packet and
+does not make the article unresolved. What the probe cannot prove, and so
+can get wrong, showing code as a comment or a comment as code: `local`
+syntax, which Lean records nowhere; a metaprogram that changes the parser
+state without recording an entry, records a parser entry naming a
+declaration made later in the module, activates a namespace without the
+file naming it, records a second entry for a declared
+category (Lean keeps the first it adds, and `declare_syntax_cat` refuses a
+declared category), or gives a declaration a range outside the command that
+made it; a parser that reads the environment, the options, the current
+namespace or the `open`s beyond the parser state, or input past the
+declaration's end; an initializer that changes the builtin grammar; and a
+source with CRLF line ends, whose offsets the probe takes from the text as
+Lean stores it.
 
 Every item's signature is also printed raw, bypassing project notation,
 unexpanders, and custom delaborators, so an `infixl " + " => HMul.hMul` cannot
@@ -567,9 +651,11 @@ generated companions, only the canonical kernel material, shown for every item,
 states the meaning without notation.
 
 Each theorem's packet also carries the statement *as written*, cut before a
-`:=` value or a structure-style `where` value by Lean's parser with its
-enclosing namespaces and the file's opened namespaces in scope. A proof Lean
-cannot parse, for example one using `local notation`, does not stop those cuts.
+`:=` value or a structure-style `where` value by Lean's parser under the
+parser states its source is parsed under, and only where they agree. A proof Lean
+cannot parse, for example one using `local notation`, does not stop those cuts,
+nor does an `open` or quotation inside the proof that leaves the rest of the
+source withheld.
 The statement sits beside the elaborated signature: the printed form shows
 binders that `variable` and `include` inject and the type every cast lands in;
 the written form shows what the pretty-printer elides. Equation-style forms

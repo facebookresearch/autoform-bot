@@ -13,14 +13,15 @@ import hashlib
 import os
 import re
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .lean import declaration_names
+from .snapshot import BlueprintSnapshot, SnapshotError, read_regular_file
 from .markdown import mask_code_and_comments
 
-
+_LINE_LOCATOR = re.compile(r"\AL(\d+)(?:-L(\d+))?\Z")
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 _LINK = re.compile(r"(?<!!)\[[^\]]+\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+[^)]*)?\)")
 _INLINE_CODE = re.compile(r"(`+).*?\1")
@@ -63,6 +64,23 @@ class GraphValidationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class CitedSource:
+    """The first ``## Sources`` link that locates lines in a non-Markdown file.
+
+    ``file`` is the canonical file whose bytes the graph captured, and
+    ``locator`` the path and lines a passage from it is cited as. ``problem``
+    says why the link names no captured file.
+    """
+
+    target: str
+    start: int
+    end: int
+    file: Path | None = None
+    locator: str | None = None
+    problem: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Node:
     """One Markdown article in a blueprint.
 
@@ -98,6 +116,7 @@ class Node:
     depth: int = 0
     article_id: str | None = None
     source_sha256: str | None = None
+    cited_source: CitedSource | None = None
 
     @property
     def formalizable(self) -> bool:
@@ -107,14 +126,26 @@ class Node:
 
 @dataclass(frozen=True, slots=True)
 class Graph:
-    """A validated blueprint graph, keyed by stable node id."""
+    """A validated blueprint graph, keyed by stable node id.
+
+    ``snapshot`` holds the bytes the graph was built from, keyed by canonical
+    path: every article it parsed and every source an article cites with a
+    line locator. Text shown or judged beside the graph is read from there, so
+    it is always the state the graph describes.
+    """
 
     blueprint_dir: Path
     nodes: dict[str, Node]
+    snapshot: BlueprintSnapshot = field(default_factory=BlueprintSnapshot)
     #: ``open_statements: allowed`` in ``roadmap/README.md``: a theorem's
     #: statement may land with a ``sorry`` proof. Absent or ``forbidden`` keeps
     #: the strict policy, where CI rejects every ``sorry``.
     open_statements: bool = False
+
+    def article_text(self, node: Node) -> str:
+        """Return the text ``node`` was parsed from."""
+
+        return self.snapshot.text(node.path)
 
     @property
     def edge_count(self) -> int:
@@ -140,6 +171,7 @@ class _ParsedNode:
 class _NodeSource:
     id: str
     path: Path
+    content: bytes
     text: str
     source_sha256: str
 
@@ -159,6 +191,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     issues.extend(discovery_issues)
     article_ids: dict[str, str] = {}
     source_hashes = {source.id: source.source_sha256 for source in sources}
+    files: dict[Path, bytes] = {}
     policy_page = (blueprint / "roadmap" / "README.md").resolve()
     open_statements = False
 
@@ -176,6 +209,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             continue
         canonical_ids[canonical] = source.id
         node_ids[source.id] = canonical
+        files[canonical] = source.content
         node, node_issues = _parse_node(source.id, canonical, source.text)
         issues.extend(node_issues)
         if node is not None:
@@ -203,6 +237,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
 
     parents = _article_parents(parsed)
     nodes: dict[str, Node] = {}
+    cited_files: dict[Path, bytes | str] = {}
     for parsed_node in parsed:
 
         def resolve(targets: tuple[str, ...], node: _ParsedNode = parsed_node) -> list[str]:
@@ -248,6 +283,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             depth=_article_depth(parsed_node.id, parents),
             article_id=metadata.get("article_id"),
             source_sha256=source_hashes[parsed_node.id],
+            cited_source=_cite(parsed_node, blueprint, cited_files),
         )
 
     if not issues:
@@ -256,7 +292,89 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         issues.extend(_find_rollup_cycles(nodes))
     if issues:
         raise GraphValidationError(issues)
-    return Graph(blueprint_dir=blueprint, nodes=nodes, open_statements=open_statements)
+    files.update((path, content) for path, content in cited_files.items() if isinstance(content, bytes))
+    return Graph(
+        blueprint_dir=blueprint, nodes=nodes, snapshot=BlueprintSnapshot(files), open_statements=open_statements
+    )
+
+
+def _cite(node: _ParsedNode, blueprint: Path, captured: dict[Path, bytes | str]) -> CitedSource | None:
+    """Capture the first non-Markdown source ``node`` cites with a line locator.
+
+    ``captured`` holds each file read so far, or why it could not be, so a
+    source several articles cite is read once and they all see the same bytes.
+    """
+
+    for target in node.source_targets:
+        parsed = urlsplit(target)
+        path = unquote(parsed.path)
+        match = _LINE_LOCATOR.fullmatch(unquote(parsed.fragment) or "")
+        if parsed.scheme or parsed.netloc or match is None or not path or Path(path).suffix.casefold() == ".md":
+            continue
+        start = int(match.group(1))
+        end = int(match.group(2) or start)
+        if "\x00" in path:
+            return CitedSource(target, start, end, problem="contains an invalid path")
+        try:
+            candidate = (node.path.parent / path).resolve()
+            relative = candidate.relative_to(blueprint).as_posix()
+        except ValueError:
+            return CitedSource(target, start, end, problem="points outside the blueprint")
+        if candidate not in captured:
+            captured[candidate] = _capture_cited_file(candidate)
+        content = captured[candidate]
+        if isinstance(content, str):
+            return CitedSource(target, start, end, problem=content)
+        return CitedSource(target, start, end, file=candidate, locator=f"{relative}#L{start}-L{end}")
+    return None
+
+
+def _capture_cited_file(path: Path) -> bytes | str:
+    if os.path.lexists(path) and not path.is_file():
+        return "names something other than a regular file"
+    try:
+        content = read_regular_file(path, label="cited source")
+    except SnapshotError:
+        return "names a file that is not readable UTF-8 text"
+    return "names a missing file" if content is None else content
+
+
+def source_passage(graph: Graph, node: Node, *, issues: list[str] | None = None) -> tuple[str | None, str | None]:
+    """Return the passage an article cites through a line locator, and the locator.
+
+    A ``## Sources`` link to a non-Markdown file inside the blueprint with a
+    ``#L<start>-L<end>`` fragment names the exact source text the statement
+    came from. The first such link wins. Markdown targets are notes, not
+    passages, and are ignored here. The text is cut from the bytes ``graph``
+    captured when it was loaded, so it is the passage of the state the graph
+    describes. When the first locator names no text there is no passage, and
+    the reason is appended to ``issues`` if given.
+    """
+
+    cited = node.cited_source
+    if cited is None:
+        return None, None
+
+    def broken(why: str) -> tuple[None, None]:
+        if issues is not None:
+            issues.append(f"source locator {cited.target} {why}")
+        return None, None
+
+    if cited.problem is not None or cited.file is None:
+        return broken(cited.problem or "names a missing file")
+    try:
+        # Lines are what an editor or `sed` counts: newline-separated. Python's
+        # `splitlines` also breaks on form feeds, which `pdftotext` writes
+        # between pages, and every locator into such a file would then drift
+        # by one line per page.
+        lines = graph.snapshot.text(cited.file).split("\n")
+    except UnicodeError:
+        return broken("names a file that is not readable UTF-8 text")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if cited.start < 1 or cited.end < cited.start or cited.end > len(lines):
+        return broken("names no lines of its file")
+    return "\n".join(lines[cited.start - 1 : cited.end]), cited.locator
 
 
 def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
@@ -321,7 +439,7 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
             issues.append(f"{relative}: links to {target}; replace the link with the page itself")
             continue
         sources.append(
-            _NodeSource(node_id, canonical, text, hashlib.sha256(content).hexdigest())
+            _NodeSource(node_id, canonical, content, text, hashlib.sha256(content).hexdigest())
         )
 
     if not unchecked:
@@ -773,8 +891,10 @@ def _is_within(path: Path, directory: Path) -> bool:
 
 
 __all__ = [
+    "CitedSource",
     "Graph",
     "GraphValidationError",
     "Node",
     "load_graph",
+    "source_passage",
 ]

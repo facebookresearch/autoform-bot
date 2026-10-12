@@ -169,7 +169,9 @@ def audit_graph(
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
         children = contained.get(node_id, ())
-        article = _read_article(node.path)
+        # The text the graph parsed, so it is never judged beside metadata
+        # parsed from other bytes.
+        article = _read_article(graph.article_text(node))
 
         if node.formalizable:
             if children:
@@ -253,12 +255,7 @@ class _ArticleShape:
     has_depends_section: bool
 
 
-def _read_article(path: Path) -> _ArticleShape:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return _ArticleShape(statement="", has_depends_section=False)
-
+def _read_article(text: str) -> _ArticleShape:
     parts = _article_parts(text)
     return _ArticleShape(
         statement=parts.statement,
