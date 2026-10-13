@@ -335,6 +335,9 @@ run_cmd do
         unless allowed.contains usedAxiom do
           badAxioms := badAxioms.push (declName, usedAxiom)
   for (declName, article) in targets do
+    if (Compiler.isUnsafeRecName? declName).isSome then
+      errors := errors.push m!"{{declName}} [{{article}}] is Lean's compiled copy of a recursive definition; name the definition itself"
+      continue
     match env.find? declName with
     | none =>
       errors := errors.push m!"{{declName}} [{{article}}] is not a declaration of the Lean build; fix the article's lean: name or build the module that declares it"
@@ -747,9 +750,9 @@ partial def autoformOpenAuditOpenHits (env : Environment) (isRoot : Name → Boo
     (node : Name) : StateM (Std.HashMap Name (Array Name)) (Array Name) := do
   if let some known := (← get).get? node then
     return known
-  -- In progress. Only recursion among unsafe or partial constants comes back here.
-  -- The audit refuses those, except `_unsafe_rec` copies, where a missed hit can
-  -- only fail closed.
+  -- In progress. Only recursion among unsafe or partial constants comes back here,
+  -- so a cycle of `_unsafe_rec` copies can get incomplete results. No article can
+  -- name a copy, and the root scan also checks the definition each copy comes from.
   modify (·.insert node #[])
   let mut hits : Array Name := if openSet.contains node then #[node] else #[]
   for used in autoformAuditEdges env openSet node do
@@ -861,6 +864,9 @@ run_cmd do
   let mut statusLines : Array MessageData := #[]
   for (declName, article, isOpen, allowedOpen) in articles do
     let reported := errors.size
+    if (Compiler.isUnsafeRecName? declName).isSome then
+      errors := errors.push m!"{{declName}} [{{article}}] is Lean's compiled copy of a recursive definition; name the definition itself"
+      continue
     match env.find? declName with
     | none =>
       errors := errors.push m!"{{declName}} [{{article}}] is not a declaration of the Lean build; fix the article's lean: name or build the module that declares it"

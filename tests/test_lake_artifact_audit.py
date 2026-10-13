@@ -143,6 +143,7 @@ def test_archive_modules_are_sorted_and_probe_fails_on_zero_declarations(
     assert 'Name.str (Name.anonymous) "Fixture", Name.str (Name.str (Name.anonymous) "Fixture") "Basic"' in probe
     assert 'throwError "kernel-trust audit found no root-package declarations"' in probe
     assert "autoformAuditUnsafeOrPartial env declName info" in probe
+    assert "info.isUnsafe || info.isPartial" not in probe
     assert "Lean.collectAxioms" not in probe
     assert "autoformAuditAxioms env declName" in probe
 
@@ -965,6 +966,7 @@ _DEPENDENCY_LEAN = """theorem Dep.dep_sorry : True := sorry
 theorem Dep.dep_clean : True := trivial
 theorem Dep.dep_native : 10 + 10 = 20 := by native_decide
 unsafe def Dep.dep_unsafe : Nat := 0
+partial def Dep.dep_partial (n : Nat) : Nat := Dep.dep_partial (n + 1)
 """
 
 _OPEN_LEAN = """import Dep
@@ -1379,6 +1381,7 @@ def test_strict_probe_requires_every_target_and_checks_non_root_ones(
             _article("unimported", ["Fixture.unimported"]),
             _article("native", ["Dep.dep_native"]),
             _article("unsafe", ["Dep.dep_unsafe"]),
+            _article("partial", ["Dep.dep_partial"]),
             _article("sorry", ["Dep.dep_sorry"]),
         ],
     )
@@ -1397,6 +1400,7 @@ def test_strict_probe_requires_every_target_and_checks_non_root_ones(
     for message in (
         "Dep.dep_native [native] is outside the root package and depends on unexpected axiom ",
         "Dep.dep_unsafe [unsafe] is outside the root package and is unsafe or partial",
+        "Dep.dep_partial [partial] is outside the root package and is unsafe or partial",
         "Dep.dep_sorry [sorry] is outside the root package and depends on unexpected axiom sorryAx",
         "root-package declarations failed the kernel-trust audit",
     ):
@@ -1467,6 +1471,7 @@ def test_open_probe_checks_the_axioms_of_a_target_outside_the_root_package(
             _article("core", ["Nat.add_comm"]),
             _article("native", ["Dep.dep_native"]),
             _article("unsafe", ["Dep.dep_unsafe"]),
+            _article("partial", ["Dep.dep_partial"]),
             _article("sorry", ["Dep.dep_sorry"]),
         ),
     )
@@ -1477,6 +1482,7 @@ def test_open_probe_checks_the_axioms_of_a_target_outside_the_root_package(
         "sorry-free: Nat.add_comm [core]",
         "Dep.dep_native [native] is outside the root package and depends on unexpected axiom ",
         "Dep.dep_unsafe [unsafe] is outside the root package and is unsafe or partial",
+        "Dep.dep_partial [partial] is outside the root package and is unsafe or partial",
         "Dep.dep_sorry [sorry] is outside the root package and depends on sorry",
         "root-package declarations failed the open-statement audit",
     ):
@@ -1713,9 +1719,22 @@ def test_both_probes_refuse_partial_and_unsafe_definitions_under_their_own_names
     for audited, summary in _both_probes(helper, recursion_projects["partial"], [_article("ok", ["Fixture.ok"])]):
         output = audited.stdout + audited.stderr
         assert audited.returncode != 0, output
-        assert "unsafe or partial declaration: Fixture.loop" in output
-        assert "unsafe or partial declaration: Fixture.raw" in output
+        assert re.search(r"unsafe or partial declaration: Fixture\.loop$", output, re.MULTILINE), output
+        assert re.search(r"unsafe or partial declaration: Fixture\.raw$", output, re.MULTILINE), output
         assert "_unsafe_rec" not in output
+        assert summary in output
+        assert "kernel trust clean" not in output
+
+
+def test_both_probes_refuse_a_lean_name_for_a_compiled_copy(
+    helper: ModuleType, recursion_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    for audited, summary in _both_probes(
+        helper, recursion_projects["recursive"], [_article("copy", ["Fixture.countdown._unsafe_rec"])]
+    ):
+        output = audited.stdout + audited.stderr
+        assert audited.returncode != 0, output
+        assert "Fixture.countdown._unsafe_rec [copy] is Lean's compiled copy of a recursive definition; name the definition itself" in output
         assert summary in output
         assert "kernel trust clean" not in output
 
