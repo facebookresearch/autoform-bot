@@ -117,11 +117,11 @@ def test_parse_places_counts_and_errors() -> None:
         ]
     )
 
-    counts, errors, inserted = parse_probe_output(output, origin, {"A.a": (4, 5), "A.b": (1, 3)})
+    counts, errors, stray = parse_probe_output(output, origin, {"A.a": (4, 5), "A.b": (2, 3)})
 
     assert counts == {"A.a": 312}
     assert errors == {"A.a": ["line 5: unknown identifier 'x'"]}
-    assert inserted == ["bad counter"]
+    assert stray == ["bad counter"]
 
 
 def test_targets_under_raised_limits_are_measured_and_advised(tmp_path: Path) -> None:
@@ -181,14 +181,42 @@ def test_module_system_files_are_reported_unmeasured(tmp_path: Path) -> None:
     ]
 
 
+def test_mutual_blocks_and_silent_failures_are_reported_unmeasured(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    (project / "Skel" / "Pair.lean").write_text(
+        "import Skel.Main\n\nnamespace Skel.Pair\n\ntheorem after : True := trivial\n\nmutual\n"
+        "def even : Nat → Bool\n  | 0 => true\n  | n + 1 => odd n\n"
+        "def odd : Nat → Bool\n  | 0 => false\n  | n + 1 => even n\nend\n\nend Skel.Pair\n",
+        encoding="utf-8",
+    )
+    blueprint = _blueprint(tmp_path, lean={"even": "Skel.Pair.even", "after": "Skel.Pair.after"})
+
+    def silent(probe: str, lean_root: Path, module: str) -> str:
+        return "/tmp/Probe.lean:1:0: error: unknown module prefix 'Skel'\n"
+
+    report = measure_heartbeats(
+        blueprint, lean_root=project, node_ids=("basics/even", "basics/after"), runner=silent
+    )
+
+    assert report.measurements == ()
+    assert [item.message for item in report.unresolved] == [
+        "basics/after: Skel.Pair.after: Lean reported no heartbeat count; first error: "
+        "line 1: unknown module prefix 'Skel'",
+        "basics/even: Skel.Pair.even: declarations inside a `mutual` block cannot be measured one at a time",
+    ]
+
+
 def test_cli_writes_the_report_as_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     project, blueprint = _limits_project(tmp_path)
     monkeypatch.setattr(heartbeats, "_run_probe", lambda probe, root, module, timeout: _counting({})(probe, root, module))
+    fresh: list[tuple[str, ...]] = []
+    monkeypatch.setattr(heartbeats, "_check_fresh", lambda root, modules: fresh.append(modules))
 
     code = main(["heartbeats", str(blueprint), "--lean-root", str(project), "--node", "basics/filewide", "--json"])
 
     report = json.loads(capsys.readouterr().out)
     assert code == 0
+    assert fresh == [("Skel.Limits",)]
     assert report["schema"] == "autoform-heartbeats/v1"
     assert report["measurements"] == [
         {

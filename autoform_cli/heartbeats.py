@@ -29,8 +29,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .elaboration_limits import _ANY_OPTION_IN, _ATTRIBUTES_ONLY, _WRAPPER_IN, LIMIT_DEFAULTS, LimitSetting
-from .elaboration_limits import limits_in_force
+from .elaboration_limits import (
+    _ANY_OPTION_IN,
+    _ATTRIBUTES_ONLY,
+    _SCOPE_CLOSE,
+    _SCOPE_OPEN,
+    _WRAPPER_IN,
+    LIMIT_DEFAULTS,
+    LimitSetting,
+    limits_in_force,
+)
 from .graph import GraphValidationError, load_graph
 from .lean import SourceIndex, _without_lean_comments, index_failure_message, index_project
 from .skeleton import (
@@ -229,9 +237,15 @@ def measure_heartbeats(
             )
             if node_ids is None and not any(limit.raised for limit in limits):
                 continue
+            if _in_mutual(lines, declaration.line):
+                reason = "declarations inside a `mutual` block cannot be measured one at a time"
+                unresolved.append(UnresolvedTarget(node.id, name, reason))
+                continue
             by_file.setdefault(path, []).append((node.id, name, declaration.line, limits))
             modules[path] = module
 
+    if runner is None and by_file:
+        _check_fresh(root, tuple(sorted({modules[path] for path in by_file})))
     execute = runner or (lambda probe, lean_root_, module: _run_probe(probe, lean_root_, module, timeout=timeout))
     measurements: list[Measurement] = []
     for path in sorted(by_file):
@@ -248,11 +262,13 @@ def measure_heartbeats(
             reason = "; ".join(exc.issues)
             unresolved.extend(UnresolvedTarget(node_id, name, reason) for node_id, name, _, _ in targets)
             continue
-        counts, errors, inserted = parse_probe_output(output, origin, _spans(text, index, path, targets))
+        counts, errors, stray = parse_probe_output(output, origin, _spans(text, index, path, targets))
         for node_id, name, line, limits in targets:
             if name not in counts and not errors.get(name):
                 reason = "Lean reported no heartbeat count"
-                unresolved.append(UnresolvedTarget(node_id, name, f"{reason}: {inserted[0]}" if inserted else reason))
+                if stray:
+                    reason += f"; first error: {stray[0]}"
+                unresolved.append(UnresolvedTarget(node_id, name, reason))
                 continue
             measurements.append(
                 Measurement(
@@ -314,11 +330,11 @@ def parse_probe_output(
     output: str, origin: list[int | None], spans: dict[str, tuple[int, int]]
 ) -> tuple[dict[str, int], dict[str, list[str]], list[str]]:
     """Read each target's count, the errors Lean placed inside its source span,
-    and the errors in the lines the probe inserted."""
+    and every other error, such as one in a line the probe inserted."""
 
     counts: dict[str, int] = {}
     errors: dict[str, list[str]] = {}
-    inserted: list[str] = []
+    stray: list[str] = []
     for line in output.splitlines():
         record = _COUNT_RECORD.search(line)
         if record is not None:
@@ -331,13 +347,15 @@ def parse_probe_output(
             continue
         generated = int(error.group(1))
         source_line = origin[generated - 1] if 0 < generated <= len(origin) else None
-        if source_line is None:
-            inserted.append(error.group(2).strip())
-            continue
-        for name, (first, last) in spans.items():
-            if first <= source_line <= last:
-                errors.setdefault(name, []).append(f"line {source_line}: {error.group(2).strip()}")
-    return counts, errors, inserted
+        message = error.group(2).strip()
+        owners = [
+            name for name, (first, last) in spans.items() if source_line is not None and first <= source_line <= last
+        ]
+        for name in owners:
+            errors.setdefault(name, []).append(f"line {source_line}: {message}")
+        if not owners:
+            stray.append(message if source_line is None else f"line {source_line}: {message}")
+    return counts, errors, stray
 
 
 def format_heartbeats(report: HeartbeatsReport) -> str:
@@ -408,6 +426,21 @@ def _spans(
     return spans
 
 
+def _in_mutual(stripped: list[str], line: int) -> bool:
+    """Whether the declaration on ``line`` sits in a ``mutual`` block, which no command can enter."""
+
+    scopes: list[bool] = []
+    for text in stripped[: line - 1]:
+        command = text.strip()
+        if not command or text[0].isspace():
+            continue
+        if _SCOPE_OPEN.match(command):
+            scopes.append(command == "mutual")
+        elif _SCOPE_CLOSE.match(command) and scopes:
+            scopes.pop()
+    return bool(scopes) and scopes[-1]
+
+
 def _unsupported(text: str) -> str | None:
     """Why the probe cannot add its import to this file's header, if it cannot."""
 
@@ -421,15 +454,23 @@ def _unsupported(text: str) -> str | None:
     return None
 
 
-def _run_probe(probe: str, lean_root: Path, module: str, *, timeout: float) -> str:
-    """Elaborate ``probe`` with ``lake env lean`` once ``module``'s imports are fresh."""
-
+def _lake() -> str:
     lake = shutil.which("lake")
     if lake is None:
         raise SkeletonError(["lake is not on PATH; measuring heartbeats requires a Lean toolchain"])
-    _check_artifacts_fresh(
-        lake, lean_root, (module,), timeout=DEFAULT_FRESHNESS_TIMEOUT, label="heartbeats probe"
-    )
+    return lake
+
+
+def _check_fresh(lean_root: Path, modules: tuple[str, ...]) -> None:
+    """Refuse to measure against stale build artifacts, once for every declaring module."""
+
+    _check_artifacts_fresh(_lake(), lean_root, modules, timeout=DEFAULT_FRESHNESS_TIMEOUT, label="heartbeats probe")
+
+
+def _run_probe(probe: str, lean_root: Path, module: str, *, timeout: float) -> str:
+    """Elaborate ``probe``, a copy of ``module``'s source, with ``lake env lean``."""
+
+    lake = _lake()
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
     with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-heartbeats-") as scratch:
