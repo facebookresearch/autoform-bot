@@ -815,6 +815,8 @@ autoform review record blueprint --packets review-packets \
   --testimony read-back.txt --model muse-spark-1.1
 autoform review check blueprint --lean-root .
 autoform render blueprint --lean-root . --review
+autoform review check blueprint --lean-root . --policy github
+autoform render blueprint --lean-root . --review --policy github
 ```
 
 `review prepare` extracts every Lean-mapped article from the current built
@@ -856,20 +858,28 @@ the cited passage, and for each declaration the exact packet that was hashed
 and its read-back card, marked current, invalid with the reasons, or missing.
 It shows the cards the check compared, not a later read, and loads the articles
 again to render them: an edit to any article or cited passage since the check
-fails it with `review-snapshot-changed`.
+fails it with `review-snapshot-changed`. `review check` and `render --review`
+may instead read a report `autoform skeleton --output` wrote, with
+`--skeleton-report FILE` in place of `--lean-root` for `review check` and beside
+it for `render`; the report must cover every article and match the blueprint's
+hash.
 
 Newly scaffolded projects commit the versioned `.autoform-review` policy marker,
 so generated CI enforces this gate from the first formalized statement. Older
 projects opt in by adding that marker; cards or `review_approved` assertions
 without it fail instead of silently disabling review. After the Lean build, CI
-runs `review check`, without turning advisory roadmap or coverage findings into
-merge blockers.
+runs `review check`; Pages extracts in the job that builds Lean and checks and
+renders that report in a separate job (see below), without turning advisory
+roadmap or coverage findings into merge blockers.
 
 `review_approved` records unchanged evidence, not who approved it:
 `review check` prints the expected hash, so anyone, an agent included, can
 paste it. An approval is current when `review_approved` equals the current
-review hash, which `review check` enforces, and a current approval is labelled
-self-approved wherever it is shown.
+review hash, which `review check` enforces. A current approval is labelled
+self-approved wherever it is shown, unless the policy check below finds that
+the repository requires a code owner's review of every change, when it is
+labelled policy-enforced. Without `--policy` nothing uses the network
+and every approval is self-approved.
 
 `review_approved` is thus a drift checksum, not an authorization.
 Authorization has to come from repository policy: CODEOWNERS gives `blueprint/`
@@ -877,6 +887,106 @@ a code owner (the `/blueprint/` rule in `CODEOWNERS.autoform.example`), and a
 ruleset on the default branch requires code-owner review, dismisses stale
 approvals and requires approval of the most recent push. Without that policy,
 a current approval authorizes nothing.
+
+`--policy github` checks that policy once per run, as GitHub holds it
+now on the default branch, not as the checkout has it. It needs
+`GITHUB_TOKEN`, `GITHUB_REPOSITORY`, and optionally `GITHUB_API_URL`. The
+token needs `contents` read access; rulesets and collaborator permissions are
+read with the metadata access every token has. The policy holds when all of
+these do:
+
+- **Ruleset.** The active rulesets on the default branch, as
+  `GET /repos/{owner}/{repo}/rules/branches/{branch}` reports them, have pull
+  request rules that turn on *Require review from Code Owners*
+  (`require_code_owner_review`), *Dismiss stale pull request approvals when
+  new commits are pushed* (`dismiss_stale_reviews_on_push`), and *Require
+  approval of the most recent reviewable push* (`require_last_push_approval`).
+  Without the second, an owner's approval of a typo fix still counts after
+  the author pushes a CODEOWNERS line naming themselves; without the third, a
+  code owner can push to someone else's pull request and approve their own
+  push. GitHub enforces the strictest rule of every ruleset that applies, so
+  each setting may come from a different ruleset, but only from one that
+  `GET /repos/{owner}/{repo}/rulesets/{id}` says the token cannot bypass
+  (`current_user_can_bypass` is `never`): a workflow whose token can bypass
+  the ruleset can push to the default branch unreviewed. Classic branch
+  protection does not count, because a workflow token cannot read it: a
+  project protected only that way reads self-approved until it adds a
+  ruleset.
+- **Coverage.** CODEOWNERS on the default branch gives every path that could
+  exist an owner GitHub enforces. That is read from the rules, not from the
+  files the branch tracks: a pull request adding a file nobody owns, such as
+  a new workflow, needs no code owner review. The last matching rule decides
+  and `*` matches every path, so every path is decided by the last `*` rule
+  or a later one, and each of those must name an enforced owner; rules before
+  the last `*` decide nothing. Only a literal `*` is read as matching every
+  path: a file whose catch-all is `**` or `/**` is refused as having no `*`
+  rule. Start CODEOWNERS with a line such as `* @owner` and narrow it after,
+  for instance with `blueprint/ @alice`; the blueprint gets no exception,
+  since its articles and cards are what approvals rest on. An individual
+  `@user` counts when GitHub gives them admin, maintain, or write permission.
+  A team (`@org/team`) counts only when `org` is the repository's owner:
+  GitHub enforces a team only when it has write access, which a workflow
+  token cannot read, and reports a team without it as an `Unknown owner`
+  error, which the next check refuses. Email owners do not count.
+- **GitHub's reading.**
+  `GET /repos/{owner}/{repo}/codeowners/errors?ref={branch}` lists no error.
+  GitHub skips a line it cannot parse and ignores an owner it cannot use, so
+  any error (`Invalid pattern`, `Invalid owner`, `Unknown owner`, or another
+  kind) refuses, naming the lines. The verifier's own parser only ever
+  narrows what GitHub accepts.
+
+Code owners come from the first of `.github/CODEOWNERS`, `CODEOWNERS`, and
+`docs/CODEOWNERS` that exists on the default branch. One that GitHub's
+contents API does not return whole (over 1 MB) or that is not UTF-8 is refused
+instead of falling through to the next. Lines end at a line feed (a trailing
+carriage return is dropped) and tokens are separated by spaces and tabs. A
+line holding any other control or separator character, such as U+2028 or a
+non-breaking space, might be split differently by GitHub, and an owner in
+another form than `@user`, `@org/team`, or an email cannot be read; at or
+after the last `*` rule, either fails the coverage check.
+
+When the policy does not hold, every approval is self-approved with one reason
+that names the missing settings, GitHub's errors, or the rules without an
+enforced owner, ten at most: `review check --policy github` prints it
+beside each approval, `render` prints it once as a warning, and the site shows
+it on hover. Reasons are printed with every unprintable character escaped, so
+a CODEOWNERS line cannot start a workflow command in the log. A request that
+fails, or an answer that cannot be read, labels nothing: `review check` exits
+2, and `render` exits 1 before writing the site, so Pages keeps the site it
+has.
+
+Policy-enforced describes the repository, not one approval. While the policy
+holds, a commit reaches the default branch only through a pull request that a
+code owner of every path it changes approved after its last push, so a pasted
+hash lands only where a code owner could have seen it. The label does not say
+who approved, or that the approving review read the `review_approved` line: a
+code owner approving a large pull request for its Lean changes approves any
+hash in it too, so record approvals in pull requests that change only articles
+and read-back cards. The policy is checked as it is now, not as it was when
+each approval merged, so an approval merged before the ruleset existed, by a
+direct push, or by anyone a ruleset lets bypass it reads policy-enforced while
+the policy holds. Listing bypass actors needs admin access, which the token
+does not have, so the people and apps a ruleset exempts, repository admins
+included where it does, are trusted: what they merge is taken as reviewed. A
+sole maintainer, who cannot approve their own pull request and so must bypass
+to merge it, gets a label that overstates the review; keep the bypass list
+empty where the label should mean what it says. A team GitHub enforces is
+trusted as a whole: any member's review satisfies it. A label changes only
+when the site is rebuilt: Pages rebuilds on pushes to `main`, a CODEOWNERS
+change included, and shows a ruleset or access change after the next such push
+or a manual run (`workflow_dispatch`).
+
+The generated Pages workflow keeps the Lean build, which runs the project's
+own code (`lakefile.lean` and every dependency's build code), out of the job
+that holds the token and uploads the site. Its `lean` job builds the project
+and uploads only the skeleton report `autoform skeleton --output` writes. Its
+`build` job starts from a fresh checkout and runs `review check` and
+`render --review` with `--skeleton-report`; it never runs Lake. The report is
+refused unless it matches the `build` job's checkout and covers every article,
+so the `lean` job decides which statements are current, never how approvals
+are labelled. Both jobs install uv with its cache disabled, so nothing the
+`lean` job writes is restored into the `build` job. Only a build of `main`
+outside a pull request checks the policy and deploys.
 
 When `--output`, `--packets`, and `--passages` are combined, all three outputs
 are staged before publication and a failed commit restores the previous set.
@@ -1927,7 +2037,9 @@ including a fork on GitHub, so the audit trusts that toolchain too.
 `autoform init` writes `.github/CODEOWNERS.autoform.example`. GitHub ignores
 that filename, so the example cannot mask or replace a repository's active
 owners. Two of its suggested rules cover Autoform's control paths: the roadmap's
-`open_statements` policy and `.github/` CI. To activate them, find the first
+`open_statements` policy and `.github/` CI. Its `*` rule gives every path an
+owner, as policy-enforced approvals require (see Coverage above). To activate
+them, find the first
 existing CODEOWNERS file in GitHub's order (`.github/CODEOWNERS`, `CODEOWNERS`,
 then `docs/CODEOWNERS`), or choose `.github/CODEOWNERS` when none exists; copy
 the rules there, replace `@OWNER`, and uncomment them. Consider rules for the

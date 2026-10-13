@@ -216,9 +216,19 @@ def test_review_commands_need_their_flags(
     assert f"the following arguments are required: {missing}" in capsys.readouterr().err
 
 
-def test_render_review_needs_a_lean_root(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["render", str(_blueprint(tmp_path)), "--review", "-o", str(tmp_path / "site")]) == 2
-    assert "--review requires --lean-root" in capsys.readouterr().err
+def test_review_evidence_comes_from_lean_or_a_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    blueprint = str(_blueprint(tmp_path))
+    site = ["-o", str(tmp_path / "site")]
+    assert main(["render", blueprint, "--review", *site]) == 2
+    assert "--review requires --lean-root or --skeleton-report" in capsys.readouterr().err
+    for flag in (["--skeleton-report", "report.json"], ["--policy", "github"]):
+        assert main(["render", blueprint, *flag, *site]) == 2
+        assert f"{flag[0]} requires --review" in capsys.readouterr().err
+    for flags in ([], ["--lean-root", ".", "--skeleton-report", "report.json"]):
+        with pytest.raises(SystemExit) as refused:
+            main(["review", "check", blueprint, *flags])
+        assert refused.value.code == 2
+    assert not (tmp_path / "site").exists()
 
 
 def test_check_and_render_refuse_the_blank_passage_prepare_refuses(
@@ -586,9 +596,9 @@ def test_a_pasted_current_hash_is_only_self_approved(
     assert "basics/result: self-approved · sha256:" in capsys.readouterr().out
     assert _check(blueprint, tmp_path, "--json") == 0
     approvals = json.loads(capsys.readouterr().out)["approvals"]
-    assert [(item["node_id"], item["label"]) for item in approvals] == [
-        ("basics/other", "self-approved"),
-        ("basics/result", "self-approved"),
+    assert [(item["node_id"], item["label"], item["policy_enforced"], item["reason"]) for item in approvals] == [
+        ("basics/other", "self-approved", False, None),
+        ("basics/result", "self-approved", False, None),
     ]
     assert _render(blueprint, tmp_path) == 0
     page = (tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8")
@@ -643,3 +653,36 @@ def test_the_site_shows_a_card_as_it_was_validated(
     assert "example.test" not in published
     packet = load_readbacks(blueprint)[(_RESULT_ID, "Review.result")].shown_text
     assert f'<pre class="bp-lean"><code>{html.escape(packet.rstrip())}</code></pre>' in published
+
+
+def test_check_and_render_take_the_skeleton_report_of_a_job_that_built_lean(
+    tmp_path: Path, extraction: _Extraction, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Pages builds Lean in one job and hands the report to the job holding the
+    token, which must never run Lean; the report must be of this checkout."""
+
+    blueprint = _approved_articles(tmp_path, capsys)
+    report = tmp_path / "skeleton-report.json"
+    report.write_text(extraction(blueprint).to_json(), encoding="utf-8")
+    monkeypatch.setattr("autoform_cli.__main__.extract_skeletons", _no_lean)
+    reported = ["--skeleton-report", str(report)]
+
+    assert main(["review", "check", str(blueprint), *reported]) == 0
+    assert "OK: 2 statement review(s) complete and current" in capsys.readouterr().out
+    assert main(["render", str(blueprint), "--review", *reported, "-o", str(tmp_path / "site")]) == 0
+    page = (tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8")
+    assert "The statement Review.result asserts True." in page
+    assert '<span class="bp-readback-status">current</span>' in page
+
+    _approve(blueprint / "roadmap" / "basics" / "result.md", "sha256:" + "f" * 64)
+    assert main(["review", "check", str(blueprint), *reported]) == 2
+    refused = capsys.readouterr().err
+    assert f"error: {report} was extracted from blueprint sha256:" in refused
+    assert "not from this checkout's sha256:" in refused
+    assert main(["render", str(blueprint), "--review", *reported, "-o", str(tmp_path / "site2")]) == 1
+    assert f"error: {report} was extracted from blueprint sha256:" in capsys.readouterr().out
+    assert not (tmp_path / "site2").exists()
+
+
+def _no_lean(*args: object, **kwargs: object) -> SkeletonReport:
+    raise AssertionError("this command must not run Lean")
