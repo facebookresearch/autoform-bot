@@ -666,6 +666,34 @@ build is current. `--timeout SECONDS` sets the Lean run's budget, as for
 its packets, or their hashes, and findings name Lean hypotheses, so they stay
 out of the blind read-back route.
 
+Measure the heartbeats each target's elaboration uses, against the limit it
+runs under:
+
+```bash
+autoform heartbeats blueprint --lean-root .
+autoform heartbeats blueprint --lean-root . --node chapter/main-result --json
+```
+
+The audit's [elaboration limits](#elaboration-limits) check says where a raised
+`maxHeartbeats` sits; only Lean can say whether the declaration needs it. For
+each declaring file, the command elaborates a copy in which every selected
+target is wrapped in a counting command, defined in the copy and needing only
+Lean. Like Mathlib's `#count_heartbeats in`, the command lifts the limit for
+that one declaration and reports the heartbeats it used, in the units
+`set_option maxHeartbeats` takes. Nothing else in the copy changes, so the
+declarations around it elaborate as in the build. Without `--node`, it
+measures only the targets under a raised or unbounded `maxHeartbeats`, since
+each file costs a full elaboration; with `--node`, every target of the named
+articles. A finding says a raised limit is not needed when the count fits the
+default 200000, and otherwise names the least `200000 * 2^k` that covers it,
+Mathlib's rounding, which keeps headroom as the library changes: put it on the
+declaration instead of an unbounded or file-wide setting, or lower a larger
+declaration-scoped one to it. Findings advise and never fail the run; it exits
+1 when a target cannot be measured or does not elaborate. `--json` writes the
+`autoform-heartbeats/v1` report. Files that use the module system (`module`) or
+`prelude` are reported unmeasured. The Lake freshness check, trust caveats, and
+`--timeout SECONDS`, here per declaring file, are as for `autoform skeleton`.
+
 Inspect the current Markdown-derived formalization frontier without creating a
 queue or scheduler state:
 

@@ -17,6 +17,8 @@ code for established names and APIs.
 - Proofs use existing APIs and appropriate tactics, expose meaningful intermediate steps, handle
   degenerate cases clearly, and avoid broad unfolding or brittle automation.
 - The code is readable enough for a Mathlib contributor to maintain without reverse engineering.
+- A raised `maxHeartbeats` is scoped to the declaration that needs it. When one applies, cite the
+  count from `autoform heartbeats --node <ID>` rather than guessing at slow automation.
 
 ## Scores
 

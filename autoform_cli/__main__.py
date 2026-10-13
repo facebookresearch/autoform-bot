@@ -27,6 +27,7 @@ from .project import ProjectCatalogError, ProjectCreateError, create_project, in
 from .render import PublicationError, render_site
 from .runtime import RuntimeProjectionError, resolve_runtime_paths
 from .scaffold import ScaffoldError, scaffold_project
+from .heartbeats import format_heartbeats, measure_heartbeats
 from .search import SearchError, search_blueprint, statement_preview
 from .skeleton import (
     DEFAULT_PROBE_TIMEOUT,
@@ -347,6 +348,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         "the Lake freshness check before it has its own budget",
     )
 
+    heartbeats = subparsers.add_parser(
+        "heartbeats",
+        help="measure the heartbeats each Lean target the blueprint names uses, against the limit it runs under",
+    )
+    heartbeats.add_argument("blueprint_dir")
+    heartbeats.add_argument(
+        "--lean-root",
+        type=Path,
+        required=True,
+        help="built Lean project whose declarations the blueprint names",
+    )
+    heartbeats.add_argument(
+        "--node",
+        action="append",
+        dest="nodes",
+        metavar="ID",
+        help="measure this article's targets (repeatable); by default, every target under a raised limit",
+    )
+    heartbeats.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    heartbeats.add_argument(
+        "--timeout",
+        type=_positive_seconds,
+        metavar="SECONDS",
+        help=f"seconds Lean may spend on each declaring file (default {DEFAULT_PROBE_TIMEOUT:g}); "
+        "the Lake freshness check before it has its own budget",
+    )
+
     render = subparsers.add_parser("render", help="build the publishable blueprint")
     render.add_argument("blueprint_dir")
     render.add_argument("-o", "--output", default="site-src", help="output directory")
@@ -389,6 +417,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _skeleton(args)
     if args.command == "unused-hypotheses":
         return _unused_hypotheses(args)
+    if args.command == "heartbeats":
+        return _heartbeats(args)
     if args.command == "render":
         return _render(args)
     return 2
@@ -1084,6 +1114,22 @@ def _unused_hypotheses(args: argparse.Namespace) -> int:
             print(f"error: {issue}", file=sys.stderr)
         return 2
     print(report.to_json() if args.json else format_unused_hypotheses(report), end="\n" if args.json else "")
+    return 0 if report.clean else 1
+
+
+def _heartbeats(args: argparse.Namespace) -> int:
+    try:
+        report = measure_heartbeats(
+            args.blueprint_dir,
+            lean_root=args.lean_root,
+            node_ids=tuple(args.nodes) if args.nodes else None,
+            timeout=args.timeout or DEFAULT_PROBE_TIMEOUT,
+        )
+    except SkeletonError as exc:
+        for issue in exc.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        return 2
+    print(report.to_json() if args.json else format_heartbeats(report), end="\n" if args.json else "")
     return 0 if report.clean else 1
 
 
