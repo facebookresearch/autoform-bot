@@ -27,13 +27,13 @@ set_option maxHeartbeats 800000
 
 namespace Skel.Limits
 
+-- why the limit is raised
+set_option maxHeartbeats 1600000 in
+open Nat in
 /-- A docstring
 
 with a blank line. -/
 @[simp]
--- why the limit is raised
-set_option maxHeartbeats 1600000 in
-open Nat in
 theorem scoped : True := trivial
 
 theorem fileWide : True := trivial
@@ -90,7 +90,7 @@ def test_the_probe_wraps_each_target_with_its_docstring_and_wrappers() -> None:
     assert lines[header + 1] == "import Lean.Elab.Command"
     assert lines[header + 2] == "open Lean Elab Command in"
     wrapped = lines.index('#autoform_count_heartbeats "Skel.Limits.scoped" in')
-    assert lines[wrapped + 1] == "/-- A docstring"
+    assert lines[wrapped + 1] == "-- why the limit is raised"
     assert lines[lines.index('#autoform_count_heartbeats "Skel.Limits.fileWide" in') + 1].startswith("theorem fileWide")
     # Every source line survives, in order, and is traced back to its number.
     assert [line for line, source in zip(lines, origin) if source is not None] == _SOURCE.splitlines()
@@ -147,7 +147,7 @@ def test_targets_under_raised_limits_are_measured_and_advised(tmp_path: Path) ->
         "basics/filewide: Skel.Limits.fileWide: uses 1200 heartbeats, within the default 200000; "
         "`set_option maxHeartbeats 800000` at Skel/Limits.lean:6 is not needed",
         "basics/scoped: Skel.Limits.scoped: uses 350000 heartbeats; lower "
-        "`set_option maxHeartbeats 1600000` at Skel/Limits.lean:15 to 400000",
+        "`set_option maxHeartbeats 1600000` at Skel/Limits.lean:11 to 400000",
         "basics/unbounded: Skel.Limits.unbounded: uses 900000 heartbeats; put `set_option maxHeartbeats 1600000 in` "
         "on it instead of `set_option maxHeartbeats 0` at Skel/Limits.lean:21",
     )
@@ -240,12 +240,12 @@ set_option maxHeartbeats 800000
 
 namespace Skel.Heavy
 
+-- the limit below is what the probe must keep
+set_option maxHeartbeats 400000 in
 /-- Documented,
 
 across a blank line. -/
 @[simp]
--- the limit below is what the probe must keep
-set_option maxHeartbeats 400000 in
 theorem documented : (List.range 50).length = 50 := by
   simp
 

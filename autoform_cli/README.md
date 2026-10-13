@@ -690,8 +690,9 @@ Mathlib's rounding, which keeps headroom as the library changes: put it on the
 declaration instead of an unbounded or file-wide setting, or lower a larger
 declaration-scoped one to it. Findings advise and never fail the run; it exits
 1 when a target cannot be measured or does not elaborate. `--json` writes the
-`autoform-heartbeats/v1` report. Files that use the module system (`module`) or
-`prelude` are reported unmeasured. The Lake freshness check, trust caveats, and
+`autoform-heartbeats/v1` report. Targets in files that use the module system
+(`module`) or `prelude`, and targets inside a `mutual` block, which no command
+can wrap alone, are reported unmeasured. The Lake freshness check, trust caveats, and
 `--timeout SECONDS`, here per declaring file, are as for `autoform skeleton`.
 
 Inspect the current Markdown-derived formalization frontier without creating a
