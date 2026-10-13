@@ -335,7 +335,7 @@ run_cmd do
         unless allowed.contains usedAxiom do
           badAxioms := badAxioms.push (declName, usedAxiom)
   for (declName, article) in targets do
-    if (Compiler.isUnsafeRecName? declName).isSome then
+    if (Compiler.isUnsafeRecName? declName).isSome && (env.find? declName).isSome then
       errors := errors.push m!"{{declName}} [{{article}}] is Lean's compiled copy of a recursive definition; name the definition itself"
       continue
     match env.find? declName with
@@ -373,8 +373,9 @@ run_cmd do
 # Both probes define these helpers after their own.
 _AXIOM_WALK = """
 /-- The types and constructors of one mutual inductive block refer to each
-other. Nothing else in a safe environment does, so the walk treats a block as
-one node and needs no cycle handling. -/
+other, so the walk treats a block as one node. Otherwise only unsafe or partial
+constants refer back to themselves, such as the `_unsafe_rec` copies of mutual
+definitions, and the walk can give those incomplete results. -/
 def autoformAuditBlockOf (env : Environment) (declName : Name) : Name :=
   let induct := match env.find? declName with
     | some (.ctorInfo info) => info.induct
@@ -864,7 +865,7 @@ run_cmd do
   let mut statusLines : Array MessageData := #[]
   for (declName, article, isOpen, allowedOpen) in articles do
     let reported := errors.size
-    if (Compiler.isUnsafeRecName? declName).isSome then
+    if (Compiler.isUnsafeRecName? declName).isSome && (env.find? declName).isSome then
       errors := errors.push m!"{{declName}} [{{article}}] is Lean's compiled copy of a recursive definition; name the definition itself"
       continue
     match env.find? declName with

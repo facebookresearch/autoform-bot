@@ -1734,7 +1734,10 @@ def test_both_probes_refuse_a_lean_name_for_a_compiled_copy(
     ):
         output = audited.stdout + audited.stderr
         assert audited.returncode != 0, output
-        assert "Fixture.countdown._unsafe_rec [copy] is Lean's compiled copy of a recursive definition; name the definition itself" in output
+        assert (
+            "Fixture.countdown._unsafe_rec [copy] is Lean's compiled copy of a recursive definition; "
+            "name the definition itself"
+        ) in output
         assert summary in output
         assert "kernel trust clean" not in output
 

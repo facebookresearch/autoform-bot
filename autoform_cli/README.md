@@ -1148,7 +1148,9 @@ what to change, and ends with `root-package declarations failed the
 open-statement audit`.
 
 Both audits refuse an unsafe or partial root-package declaration with `unsafe or
-partial declaration: NAME`. A `partial def` is refused under its own name. The
+partial declaration: NAME`. A compiled `partial def` is refused under its own
+name; a `noncomputable partial def` has no copy and is an ordinary `opaque` to
+the kernel. The
 partial `_unsafe_rec` copy that Lean compiles for every computable recursive
 definition does not count on its own, so structural, well-founded and mutual
 recursive definitions pass. A `lean:` name may not be such a copy: it fails with
@@ -1162,7 +1164,8 @@ outside the root package and is unsafe or partial` or `NAME [ID] is outside the
 root package and depends on unexpected axiom AX`. The open-statement audit
 reports `sorryAx` there as `NAME [ID] is outside the root package and depends
 on sorry`. And both replay every root-package declaration through the kernel
-on top of a fresh import of the modules outside the root package, because the
+on top of a fresh import of the modules outside the root package, except the
+partial `_unsafe_rec` copies, which Lean's replay skips, because the
 build's `.olean` files can hold anything and a root `run_cmd` can add a
 declaration with kernel checking off. The replay runs only once every other
 check has passed: replaying a declaration that reaches `Lean.reduceBool` or
