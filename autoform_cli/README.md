@@ -1147,6 +1147,12 @@ declaration(s))`; a failing one logs each error, naming the declaration and
 what to change, and ends with `root-package declarations failed the
 open-statement audit`.
 
+Both audits refuse an unsafe or partial root-package declaration with `unsafe or
+partial declaration: NAME`. A `partial def` is refused under its own name. The
+partial `_unsafe_rec` copy that Lean compiles for every computable recursive
+definition does not count on its own, so structural, well-founded and mutual
+recursive definitions pass.
+
 Both audits check two more things. A `lean:` name outside the root package, as
 a Mathlib article's is, must be safe and use no axiom beyond `propext`,
 `Classical.choice`, and `Quot.sound`; otherwise it fails with `NAME [ID] is

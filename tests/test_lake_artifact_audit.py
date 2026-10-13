@@ -142,7 +142,7 @@ def test_archive_modules_are_sorted_and_probe_fails_on_zero_declarations(
     assert "import Fixture" not in probe
     assert 'Name.str (Name.anonymous) "Fixture", Name.str (Name.str (Name.anonymous) "Fixture") "Basic"' in probe
     assert 'throwError "kernel-trust audit found no root-package declarations"' in probe
-    assert "info.isUnsafe || info.isPartial" in probe
+    assert "autoformAuditUnsafeOrPartial env declName info" in probe
     assert "Lean.collectAxioms" not in probe
     assert "autoformAuditAxioms env declName" in probe
 
@@ -1638,6 +1638,55 @@ def hostile_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tupl
     return projects
 
 
+_RECURSIVE_LEAN = """def Fixture.countdown : Nat → Nat
+  | 0 => 0
+  | n + 1 => Fixture.countdown n
+
+theorem Fixture.countdown_zero : Fixture.countdown 0 = 0 := rfl
+
+def Fixture.halve (n : Nat) : Nat :=
+  if h : n < 2 then 0 else Fixture.halve (n - 2) + 1
+termination_by n
+decreasing_by omega
+
+mutual
+def Fixture.isEven : Nat → Bool
+  | 0 => true
+  | n + 1 => Fixture.isOdd n
+def Fixture.isOdd : Nat → Bool
+  | 0 => false
+  | n + 1 => Fixture.isEven n
+end
+"""
+
+_PARTIAL_LEAN = """partial def Fixture.loop (n : Nat) : Nat := Fixture.loop (n + 1)
+
+unsafe def Fixture.raw : Nat := 0
+
+theorem Fixture.ok : True := trivial
+"""
+
+
+@pytest.fixture(scope="module")
+def recursion_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[Path, Path]]:
+    if not _REAL_LEAN:
+        pytest.skip("needs lake and the fixture's Lean toolchain")
+    root = tmp_path_factory.mktemp("recursion")
+    projects: dict[str, tuple[Path, Path]] = {}
+    for name, source in (("recursive", _RECURSIVE_LEAN), ("partial", _PARTIAL_LEAN)):
+        project = root / name
+        _write(project / "lean-toolchain", _TOOLCHAIN)
+        _write(project / "lakefile.toml", 'name = "Fixture"\ndefaultTargets = ["Fixture"]\n\n[[lean_lib]]\nname = "Fixture"\n')
+        _write(project / "Fixture.lean", source)
+        built = _run(project, "lake", "build")
+        assert built.returncode == 0, built.stdout + built.stderr
+        archive = project / "root.tgz"
+        packed = _run(project, "lake", "pack", str(archive))
+        assert packed.returncode == 0, packed.stdout + packed.stderr
+        projects[name] = (project, archive)
+    return projects
+
+
 def _both_probes(
     helper: ModuleType, project: tuple[Path, Path], articles: list[dict[str, object]]
 ) -> list[tuple[subprocess.CompletedProcess[str], str]]:
@@ -1645,6 +1694,30 @@ def _both_probes(
         (_strict_audit(helper, project, articles), "root-package declarations failed the kernel-trust audit"),
         (_audit(helper, project, _contract(*articles)), "root-package declarations failed the open-statement audit"),
     ]
+
+
+def test_both_probes_pass_computable_recursive_definitions(
+    helper: ModuleType, recursion_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    # Each of these has a partial `_unsafe_rec` copy, which is not refused on its own (#177).
+    for audited, _ in _both_probes(helper, recursion_projects["recursive"], [_article("zero", ["Fixture.countdown_zero"])]):
+        output = audited.stdout + audited.stderr
+        assert audited.returncode == 0, output
+        assert "_unsafe_rec" not in output
+        assert _ends_with_the_success_line(audited.stdout), audited.stdout
+
+
+def test_both_probes_refuse_partial_and_unsafe_definitions_under_their_own_names(
+    helper: ModuleType, recursion_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    for audited, summary in _both_probes(helper, recursion_projects["partial"], [_article("ok", ["Fixture.ok"])]):
+        output = audited.stdout + audited.stderr
+        assert audited.returncode != 0, output
+        assert "unsafe or partial declaration: Fixture.loop" in output
+        assert "unsafe or partial declaration: Fixture.raw" in output
+        assert "_unsafe_rec" not in output
+        assert summary in output
+        assert "kernel trust clean" not in output
 
 
 def test_both_probes_run_no_initializer_of_the_build(

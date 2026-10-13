@@ -329,7 +329,7 @@ run_cmd do
   for (declName, info) in env.constants do
     if isRoot declName then
       checked := checked + 1
-      if info.isUnsafe || info.isPartial then
+      if autoformAuditUnsafeOrPartial env declName info then
         badSafety := badSafety.push declName
       for usedAxiom in (← axiomsOf declName) do
         unless allowed.contains usedAxiom do
@@ -340,7 +340,7 @@ run_cmd do
       errors := errors.push m!"{{declName}} [{{article}}] is not a declaration of the Lean build; fix the article's lean: name or build the module that declares it"
     | some info =>
       unless isRoot declName do
-        if info.isUnsafe || info.isPartial then
+        if autoformAuditUnsafeOrPartial env declName info then
           errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and is unsafe or partial"
         for usedAxiom in (← axiomsOf declName) do
           if (env.find? usedAxiom).isNone then
@@ -379,6 +379,15 @@ def autoformAuditBlockOf (env : Environment) (declName : Name) : Name :=
   match env.find? induct with
   | some (.inductInfo info) => info.all.head?.getD induct
   | _ => declName
+
+/-- Whether the audit refuses a constant as unsafe or partial. Lean compiles a
+partial `_unsafe_rec` copy of every computable recursive definition, so that
+copy alone is not evidence. A `partial def` is a safe `opaque` whose copy is
+partial, and is refused under its own name. -/
+def autoformAuditUnsafeOrPartial (env : Environment) (declName : Name) (info : ConstantInfo) : Bool :=
+  if info.isUnsafe then true
+  else if info.isPartial then (Compiler.isUnsafeRecName? declName).isNone
+  else (info matches .opaqueInfo _) && (env.find? (Compiler.mkUnsafeRecName declName)).any (·.isPartial)
 
 /-- The constants a node refers to, as `collectAxioms` follows them, except that
 an open statement's proof is not entered: a dependent rests on the statement,
@@ -738,7 +747,9 @@ partial def autoformOpenAuditOpenHits (env : Environment) (isRoot : Name → Boo
     (node : Name) : StateM (Std.HashMap Name (Array Name)) (Array Name) := do
   if let some known := (← get).get? node then
     return known
-  -- In progress. Only unsafe recursion comes back here, and the audit rejects it.
+  -- In progress. Only recursion among unsafe or partial constants comes back here.
+  -- The audit refuses those, except `_unsafe_rec` copies, where a missed hit can
+  -- only fail closed.
   modify (·.insert node #[])
   let mut hits : Array Name := if openSet.contains node then #[node] else #[]
   for used in autoformAuditEdges env openSet node do
@@ -811,7 +822,7 @@ run_cmd do
   for declName in roots do
     let some info := env.find? declName | continue
     let reported := errors.size
-    if info.isUnsafe || info.isPartial then
+    if autoformAuditUnsafeOrPartial env declName info then
       errors := errors.push m!"unsafe or partial declaration: {{declName}}"
     let usedAxioms ← axiomsOf declName
     for usedAxiom in usedAxioms do
@@ -855,7 +866,7 @@ run_cmd do
       errors := errors.push m!"{{declName}} [{{article}}] is not a declaration of the Lean build; fix the article's lean: name or build the module that declares it"
     | some info =>
       if !isRoot declName then
-        if info.isUnsafe || info.isPartial then
+        if autoformAuditUnsafeOrPartial env declName info then
           errors := errors.push m!"{{declName}} [{{article}}] is outside the root package and is unsafe or partial"
         for usedAxiom in (← axiomsOf declName) do
           if (env.find? usedAxiom).isNone then
