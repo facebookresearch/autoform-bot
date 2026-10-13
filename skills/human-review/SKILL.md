@@ -76,7 +76,9 @@ kernel covers everything below this surface.
 Use the `review` commands documented in the
 [CLI reference](../../autoform_cli/README.md#commands). `review check` derives
 its evidence from a fresh extraction of the current blueprint and built Lean
-tree; it is the one judge of whether cards and approvals are current.
+tree; it is the one judge of whether cards and approvals are current. Pages
+hands it the skeleton report its own Lean job extracted in the same run; never
+pass it a saved one.
 
 1. Confirm that the repository has opted into enforcement with the versioned
    `blueprint/.autoform-review` policy marker. Require durable `article_id`
@@ -104,7 +106,9 @@ tree; it is the one judge of whether cards and approvals are current.
    steps 2 and 3 for each stale card. Then render with `--review` and
    strict-build the site: every formalized statement gains a *Review*
    disclosure with the cited passage, the exact packet, its read-back, and the
-   approval state.
+   approval state. A current approval reads self-approved unless the Pages
+   build found the repository's review policy in force, when it reads
+   policy-enforced.
 5. Walk the person through each statement: source and book text first, then the
    read-back, then the exact packet. Ask whether the read-back says what the
    book says, whether any hypothesis is missing or added, and whether the
@@ -114,9 +118,11 @@ tree; it is the one judge of whether cards and approvals are current.
    current read-backs. This edit is the person's assertion, not the agent's,
    but the hash only shows that nothing changed since it was written, and
    anyone can copy it. Commit the approval in a pull request into the default
-   branch and ask a code owner of the article to approve it; a later push needs
-   a new approval. When the person does not approve, record `revise` with their
-   reason and hand the change to Roadmap.
+   branch that changes only the approved articles and their read-back cards,
+   and ask a code owner of the article to approve its final commit; a later
+   push needs a new approval. Policy-enforced says the repository requires that
+   review, not who gave it. When the person does not approve, record `revise`
+   with their reason and hand the change to Roadmap.
 6. Run `review check` again before reporting, and treat each finding as a
    failure. An edit to any reviewed input must invalidate the approval it
    changed. Do not report a statement as approved by a person while its label
