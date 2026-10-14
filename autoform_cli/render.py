@@ -40,7 +40,7 @@ from ._tree_snapshot import (
     bind_directory_tree,
     descriptor_capture_supported,
 )
-from .approvals import approval_statuses
+from .approvals import ApprovalStatus, GitHubPolicyVerifier, approval_statuses
 from .coverage import COVERAGE_DISPOSITIONS, CoverageSummary, load_coverage
 from .graph import Graph, GraphValidationError, Node, _implementation_note_issues, load_graph
 from .lean import (
@@ -585,6 +585,7 @@ def render_site(
     ref: str | None = None,
     skeleton: SkeletonReport | None = None,
     readbacks: Mapping[tuple[str, str], Readback] | None = None,
+    approval_verifier: GitHubPolicyVerifier | None = None,
 ) -> RenderReport:
     """Write deterministic, read-only projections of the Markdown blueprint.
 
@@ -599,7 +600,9 @@ def render_site(
     with ``readbacks``, the cards the caller read with that extraction, as
     ``review check`` judges it. The review is refused unless the articles
     loaded here, and the sources they cite, are the blueprint ``skeleton`` was
-    extracted from.
+    extracted from. A current approval is labelled self-approved unless
+    ``approval_verifier`` finds the repository policy holding; without one no
+    network is used.
     """
     blueprint = Path(blueprint_dir).expanduser().resolve()
     requested_destination = Path(output_dir).expanduser()
@@ -631,7 +634,8 @@ def render_site(
     relative = blueprint.relative_to(repo_root) if _is_within(blueprint, repo_root) else Path("blueprint")
     with _private_copy(snapshot, relative) as (copy_root, copy):
         graph = _load_graph(copy, blueprint)
-        reviews = {} if skeleton is None else _review_disclosures(graph, skeleton, readbacks or {})
+        # Before anything is written, so a failed policy lookup leaves no partial site.
+        reviews = {} if skeleton is None else _review_disclosures(graph, skeleton, readbacks or {}, approval_verifier)
         coverage, coverage_issues = load_coverage(copy)
         if coverage_issues:
             raise PublicationError(
@@ -2642,7 +2646,10 @@ def _render_environment(
 
 
 def _review_disclosures(
-    graph: Graph, skeleton: SkeletonReport, readbacks: Mapping[tuple[str, str], Readback]
+    graph: Graph,
+    skeleton: SkeletonReport,
+    readbacks: Mapping[tuple[str, str], Readback],
+    verifier: GitHubPolicyVerifier | None = None,
 ) -> dict[str, str]:
     """Each Lean-mapped statement's review, by node id: what a reviewer must
     trust, what a blind auditor says it means, and where its approval stands.
@@ -2654,13 +2661,13 @@ def _review_disclosures(
 
     bundle = build_review_bundle(graph, skeleton)
     states = review_states(graph, bundle, readbacks)
-    labels = approval_statuses(states)
+    labels = approval_statuses(states, verifier)
     return {
         article.node_id: _review_disclosure(
             article,
             skeleton.node(article.node_id),
             states[article.node_id],
-            labels[article.node_id].label if article.node_id in labels else None,
+            labels.get(article.node_id),
             readbacks,
         )
         for article in bundle.articles
@@ -2671,9 +2678,10 @@ def _review_disclosure(
     article: ReviewArticle,
     record: NodeSkeleton,
     state: ReviewState,
-    label: str | None,
+    status: ApprovalStatus | None,
     readbacks: Mapping[tuple[str, str], Readback],
 ) -> str:
+    label = "" if status is None else status.label
     count = len(record.declarations)
     lines_to_trust = sum(item.skeleton_lines for item in record.declarations)
     approval = {
@@ -2684,10 +2692,12 @@ def _review_disclosure(
         "approved": (label, f"{label} · {state.review_hash}"),
     }
     kind, shown = approval[state.status]
+    # Why an approval stayed self-approved, for whoever hovers over it.
+    title = "" if status is None or status.reason is None else f' title="{html.escape(status.reason)}"'
     parts = [
         '<details class="bp-review" markdown="1">',
         f"<summary>Review · {count} skeleton{'s' if count != 1 else ''}, {lines_to_trust} lines to trust · "
-        f'<span class="bp-review-{kind}">{html.escape(shown)}</span></summary>',
+        f'<span class="bp-review-{kind}"{title}>{html.escape(shown)}</span></summary>',
         "",
         _render_rows(
             [("Prepared evidence", f"<code>{html.escape(article.evidence_hash)}</code>")], css_class="bp-skeleton-meta"
@@ -3523,6 +3533,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   user-select: none;
 }}
 .bp-review summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+.bp-review-policy-enforced {{ color: #31A24C; font-weight: 600; }}
 .bp-review-self-approved {{ color: var(--bp-muted); font-style: italic; }}
 .bp-review-open {{ color: var(--bp-muted); }}
 .bp-review-drift {{ color: #B77900; font-weight: 600; }}

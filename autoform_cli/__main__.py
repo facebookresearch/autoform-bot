@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from . import status
-from .approvals import ApprovalStatus, approval_statuses
+from .approvals import ApprovalError, ApprovalStatus, GitHubPolicyVerifier, approval_statuses
 from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
 from .audit import audit_blueprint
 from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_key
@@ -57,8 +57,10 @@ from .skeleton import (
     DEFAULT_PROBE_TIMEOUT,
     SkeletonError,
     SkeletonReport,
+    blueprint_hash,
     extract_skeletons,
     format_report,
+    load_skeleton_report,
     write_packets,
     write_skeleton_report,
 )
@@ -462,7 +464,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="check evidence freshness, read-backs, and human approvals",
     )
     review_check.add_argument("blueprint_dir")
-    review_check.add_argument("--lean-root", type=Path, required=True)
+    review_evidence = review_check.add_mutually_exclusive_group(required=True)
+    review_evidence.add_argument("--lean-root", type=Path, help="built Lean project to extract the skeletons from")
+    review_evidence.add_argument(
+        "--skeleton-report",
+        type=Path,
+        metavar="FILE",
+        help="use the report `autoform skeleton --output` wrote for every article of this same blueprint, "
+        "instead of running Lean; it is refused unless its blueprint hash is this checkout's",
+    )
+    review_check.add_argument(
+        "--policy",
+        choices=["github"],
+        help="label current approvals policy-enforced when GitHub shows the default branch requires code "
+        "owner review of every path (needs GITHUB_TOKEN and GITHUB_REPOSITORY); without it every approval is "
+        "self-approved",
+    )
     review_check.add_argument("--json", action="store_true", help="write stable machine-readable output")
     _add_probe_timeout_argument(review_check)
 
@@ -485,9 +502,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     render.add_argument(
         "--review",
         action="store_true",
-        help="add each statement's review, judged as review check judges it (needs --lean-root)",
+        help="add each statement's review, judged as review check judges it (needs --lean-root or "
+        "--skeleton-report)",
+    )
+    render.add_argument(
+        "--skeleton-report",
+        type=Path,
+        metavar="FILE",
+        help="with --review, take the skeletons from this report, as review check does, instead of running Lean",
     )
     _add_probe_timeout_argument(render)
+    render.add_argument(
+        "--policy",
+        choices=["github"],
+        help="label current approvals policy-enforced when GitHub shows the default branch requires code "
+        "owner review of every path (needs GITHUB_TOKEN and GITHUB_REPOSITORY); without it every approval is "
+        "self-approved",
+    )
 
     args = parser.parse_args(argv)
 
@@ -1458,7 +1489,9 @@ def _review(args: argparse.Namespace) -> int:
     return 2
 
 
-def _print_refusal(exc: GraphValidationError | PublicationError | ReviewError | SkeletonError, *, stream=None) -> None:
+def _print_refusal(
+    exc: ApprovalError | GraphValidationError | PublicationError | ReviewError | SkeletonError, *, stream=None
+) -> None:
     """Print why review evidence was refused, naming the article each finding is about."""
 
     stream = stream or sys.stderr
@@ -1530,12 +1563,15 @@ def _review_record(args: argparse.Namespace) -> int:
 
 def _review_check(args: argparse.Namespace) -> int:
     try:
-        graph, _, bundle, cards = _current_review(args.blueprint_dir, lean_root=args.lean_root, timeout=args.timeout)
-    except (GraphValidationError, ReviewError, SkeletonError) as exc:
+        verifier = GitHubPolicyVerifier.from_environment() if args.policy else None
+        graph, _, bundle, cards = _current_review(
+            args.blueprint_dir, lean_root=args.lean_root, skeleton_path=args.skeleton_report, timeout=args.timeout
+        )
+        findings = review_findings(graph, bundle, cards)
+        approvals = approval_statuses(review_states(graph, bundle, cards), verifier)
+    except (ApprovalError, GraphValidationError, ReviewError, SkeletonError) as exc:
         _print_refusal(exc)
         return 2
-    findings = review_findings(graph, bundle, cards)
-    approvals = approval_statuses(review_states(graph, bundle, cards))
     if args.json:
         print(
             json.dumps(
@@ -1562,20 +1598,33 @@ def _review_check(args: argparse.Namespace) -> int:
 
 
 def _approval_line(item: ApprovalStatus) -> str:
-    return f"{item.node_id}: {item.label} · {item.review_hash}"
+    line = f"{item.node_id}: {item.label} · {item.review_hash}"
+    return line if item.reason is None else f"{line} ({item.reason})"
 
 
 def _approval_json(item: ApprovalStatus) -> dict[str, object]:
-    return {"label": item.label, "node_id": item.node_id, "review_hash": item.review_hash}
+    return {
+        "label": item.label,
+        "node_id": item.node_id,
+        "policy_enforced": item.enforced,
+        "reason": item.reason,
+        "review_hash": item.review_hash,
+    }
 
 
 def _current_review(
     blueprint_dir: str | Path,
     *,
-    lean_root: Path,
+    lean_root: Path | None,
+    skeleton_path: Path | None = None,
     timeout: float | None = None,
 ) -> tuple[Graph, SkeletonReport, ReviewBundle, dict[tuple[str, str], Readback]]:
     """The graph, one extraction of it, the review evidence derived from both, and the cards.
+
+    With ``skeleton_path`` the extraction is the report found there, written by
+    ``autoform skeleton --output`` in a job that built the Lean project, and
+    no Lean runs here. It must name this checkout's blueprint hash and, like
+    any extraction, cover every article; it is refused, not reconciled.
 
     Everything returned describes one state of the blueprint. The graph and the
     read-back cards are read before Lean runs. The extraction refuses a
@@ -1590,7 +1639,19 @@ def _current_review(
 
     graph = load_graph(blueprint_dir)
     cards = _review_cards(graph.blueprint_dir)
-    skeleton = extract_skeletons(blueprint_dir, lean_root=lean_root, timeout=timeout)
+    if skeleton_path is not None:
+        skeleton = load_skeleton_report(skeleton_path)
+        # build_review_bundle refuses this too, but as an edit made while Lean ran.
+        if skeleton.blueprint_hash != blueprint_hash(graph):
+            raise SkeletonError(
+                [
+                    f"{skeleton_path} was extracted from blueprint {skeleton.blueprint_hash}, "
+                    f"not from this checkout's {blueprint_hash(graph)}"
+                ]
+            )
+    else:
+        # Every caller has refused a run with neither.
+        skeleton = extract_skeletons(blueprint_dir, lean_root=lean_root, timeout=timeout)
     if _review_cards(graph.blueprint_dir) != cards:
         reason = "a read-back changed while the review evidence was being extracted; rerun once the blueprint is idle"
         raise ReviewError([ReviewFinding("review", "review-snapshot-changed", reason)])
@@ -1649,11 +1710,18 @@ def _default_claim_scratch(repo: str, worker_id: str) -> Path:
 def _render(args: argparse.Namespace) -> int:
     try:
         skeleton = cards = None
-        if args.review:
-            if args.lean_root is None:
-                print("error: --review requires --lean-root", file=sys.stderr)
+        for flag, value in (("--policy", args.policy), ("--skeleton-report", args.skeleton_report)):
+            if value is not None and not args.review:
+                print(f"error: {flag} requires --review", file=sys.stderr)
                 return 2
-            _, skeleton, _, cards = _current_review(args.blueprint_dir, lean_root=args.lean_root, timeout=args.timeout)
+        verifier = GitHubPolicyVerifier.from_environment() if args.policy else None
+        if args.review:
+            if args.lean_root is None and args.skeleton_report is None:
+                print("error: --review requires --lean-root or --skeleton-report", file=sys.stderr)
+                return 2
+            _, skeleton, _, cards = _current_review(
+                args.blueprint_dir, lean_root=args.lean_root, skeleton_path=args.skeleton_report, timeout=args.timeout
+            )
         report = render_site(
             args.blueprint_dir,
             args.output,
@@ -1662,12 +1730,16 @@ def _render(args: argparse.Namespace) -> int:
             ref=args.ref,
             skeleton=skeleton,
             readbacks=cards,
+            approval_verifier=verifier,
         )
-    except (GraphValidationError, PublicationError, ReviewError, SkeletonError) as exc:
+    except (ApprovalError, GraphValidationError, PublicationError, ReviewError, SkeletonError) as exc:
         _print_refusal(exc, stream=sys.stdout)
         return 1
 
     print(f"{report.output_dir}: {report.pages} pages, {report.nodes} nodes, {report.linked} code links")
+    # The site shows why only on hover, so the build log says it too.
+    if verifier is not None and verifier.reason is not None:
+        print(f"warning: every approval is self-approved: {verifier.reason}")
     for issue in report.unresolved:
         print(f"warning: declaration not found in the Lean sources: {issue}")
     for issue in report.warnings:

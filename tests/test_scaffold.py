@@ -699,15 +699,23 @@ def test_generated_ci_pins_the_checkout_that_scaffolded_it(
 
 def test_generated_ci_rebuilds_opted_in_statement_review_evidence(tmp_path: Path) -> None:
     scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
-    verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
+    workflows = tmp_path / ".github/workflows"
+    verify = (workflows / "autoform-verify.yml").read_text(encoding="utf-8")
+    pages = (workflows / "blueprint-pages.yml").read_text(encoding="utf-8")
 
-    assert 'marker="blueprint/.autoform-review"' in verify
-    assert "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620" in verify
-    assert "review cards or approvals exist without $marker" in verify
-    assert "review_approved[[:space:]]*:' -- blueprint/roadmap" in verify
-    assert "AUTOFORM_REVIEW_ENABLED=true" in verify
+    for workflow in (verify, pages):
+        assert 'marker="blueprint/.autoform-review"' in workflow
+        assert "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620" in workflow
+        assert "review cards or approvals exist without $marker" in workflow
+        assert "review_approved[[:space:]]*:' -- blueprint/roadmap" in workflow
+        assert "AUTOFORM_REVIEW_ENABLED=true" in workflow
     # The check derives its own evidence, so CI extracts once.
     assert "autoform review check blueprint --lean-root .\n" in verify
+    # Pages extracts once, in the job that builds Lean, and checks the report.
+    report = '"$RUNNER_TEMP/autoform-skeleton/skeleton-report.json"'
+    assert f"autoform review check blueprint\n          --skeleton-report {report}\n" in pages
+    assert f"review_args=(--review --skeleton-report {report})" in pages
+    assert "Build Lean for statement review" in pages
     assert (tmp_path / "blueprint/.autoform-review").read_text(encoding="utf-8") == "autoform-review-policy/v1\n"
 
 
@@ -715,19 +723,27 @@ def test_generated_ci_rebuilds_opted_in_statement_review_evidence(tmp_path: Path
 # --review flag, the skeleton report's directory or artifact, or Lean set up
 # for the review.
 _REVIEW_MARKERS = ("autoform review", "autoform skeleton", "--review", "autoform-skeleton", "for statement review")
+# The same opt-in, tested inside a script that must run either way. Only the
+# branch taken when it holds is exempt; an else or elif branch is read too.
+_REVIEW_BRANCH = re.compile(
+    r'^if \[\[ "\$\{AUTOFORM_REVIEW_ENABLED:-\}" == true \]\]; then\n.*?^(?=else$|elif |fi$)', re.MULTILINE | re.DOTALL
+)
 
 
 @pytest.mark.parametrize(
     ("name", "gated"),
     [
         ("autoform-verify.yml", "Verify statement reviews"),
+        ("blueprint-pages.yml", "Verify statement reviews"),
     ],
 )
 def test_statement_review_steps_run_only_in_projects_that_opted_in(tmp_path: Path, name: str, gated: str) -> None:
     """A project without the review marker never extracts a skeleton report,
     and its Lean-mapped articles need no durable article_id, so a review step
     that ran there would fail its CI. Steps are found by what they mention, not
-    by name, so a step added later is held to the gate too."""
+    by name, so a step added later is held to the gate too. Rendering the site
+    must run either way, so its script sets its review arguments only in the
+    branch that runs when the same test holds."""
 
     yaml = pytest.importorskip("yaml")
     scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
@@ -741,7 +757,35 @@ def test_statement_review_steps_run_only_in_projects_that_opted_in(tmp_path: Pat
 
     assert gated in [step.get("name") for step in review]
     for step in review:
-        assert step.get("if") == "env.AUTOFORM_REVIEW_ENABLED == 'true'", f"{step.get('name')} runs without the opt-in"
+        if step.get("if") == "env.AUTOFORM_REVIEW_ENABLED == 'true'":
+            continue
+        rest = json.dumps(dict(step, run=_REVIEW_BRANCH.sub("", step.get("run", ""))))
+        assert not any(marker in rest for marker in _REVIEW_MARKERS), f"{step.get('name')} runs without the opt-in"
+
+
+def test_pages_checks_the_review_policy_in_a_job_that_never_builds_the_project(
+    tmp_path: Path,
+) -> None:
+    """Building Lean runs the project's own build code, so the job that reads
+    the token, labels approvals, and uploads the site takes only the skeleton
+    report from the Lean job, and restores no cache that job could write."""
+
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    pages = (tmp_path / ".github/workflows/blueprint-pages.yml").read_text(encoding="utf-8")
+    jobs = pages.split("\njobs:\n")[1]
+    lean = jobs.split("\n  lean:\n")[1].split("\n  build:\n")[0]
+    build = jobs.split("\n  build:\n")[1].split("\n  deploy:\n")[0]
+
+    assert "lake build" in lean and "autoform skeleton blueprint --lean-root ." in lean
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in lean
+    assert "GITHUB_TOKEN" not in lean and "--policy" not in lean and "persist-credentials: false" in lean
+    assert "    needs: lean\n" in build
+    assert "lake" not in build and "elan" not in build
+    assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in build
+    assert "--policy github" in build and "GITHUB_TOKEN: ${{ github.token }}" in build
+    # The policy is read from GitHub, so the build job needs neither history nor more than contents: read.
+    assert "fetch-depth" not in pages and "permissions:" not in jobs.split("\n  deploy:\n")[0]
+    assert pages.count("enable-cache: false") == 2
 
 
 def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:
