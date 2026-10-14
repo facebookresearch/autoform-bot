@@ -690,6 +690,14 @@ theorem itself, the antecedent of `p → q`, or a binder such as `∀ n > 0`; th
 command does, so renaming a hypothesis to `_h` does not hide it. It also reports per article,
 for the reviewer of that article.
 
+Batteries' `unusedArguments` linter, which `#lint` runs, makes a similar check,
+but its releases for Lean v4.30.0 and v4.31.0 check no theorem. Since Batteries
+v4.32.0 it skips an argument named with a leading `_` and any unnamed argument
+other than an instance, so it reports neither `_h` nor the antecedent of
+`p → q`. It also covers data arguments and definitions, and `#lint` fails on
+any finding unless the declaration is marked `@[nolint unusedArguments]`. This
+command reads proofs the same way on every supported Lean version.
+
 Like `autoform skeleton`, it runs a small program with `lake env lean` after the
 same Lake freshness check, over the modules that hold the named theorems, and
 the same trust caveats apply: run it in a trusted checkout or a sandbox whose
