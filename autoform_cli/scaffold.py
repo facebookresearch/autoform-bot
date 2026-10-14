@@ -58,7 +58,6 @@ _TEMPLATE_PATHS = frozenset(
         "blueprint/README.md",
         "blueprint/coverage/README.md",
         "blueprint/gitignore",
-        "blueprint/javascripts/mathjax.js",
         "blueprint/roadmap/README.md",
         "blueprint/sources/README.md",
         "github/CODEOWNERS.autoform.example",

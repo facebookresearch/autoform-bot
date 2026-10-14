@@ -216,7 +216,9 @@ def audit_graph(
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
         children = contained.get(node_id, ())
-        article = _read_article(node.path)
+        # The text the graph parsed, so it is never judged beside metadata
+        # parsed from other bytes.
+        article = _read_article(graph.article_text(node))
 
         implementation_done = derived[node_id].proved or (
             scope_has_formalizable[node_id] and scope_fully_implemented[node_id]
@@ -326,12 +328,7 @@ class _ArticleShape:
     unclosed_fence: int | None = None
 
 
-def _read_article(path: Path) -> _ArticleShape:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return _ArticleShape(statement="", has_depends_section=False)
-
+def _read_article(text: str) -> _ArticleShape:
     parts = _article_parts(text)
     lines = text.splitlines()
     start = _frontmatter_end(lines)

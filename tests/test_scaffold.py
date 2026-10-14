@@ -33,7 +33,6 @@ _EXPECTED = {
     "blueprint/.gitignore",
     "blueprint/README.md",
     "blueprint/coverage/README.md",
-    "blueprint/javascripts/mathjax.js",
     "blueprint/roadmap/README.md",
     "blueprint/sources/README.md",
     "mkdocs.yml",
@@ -308,7 +307,7 @@ def test_force_overwrites(tmp_path: Path) -> None:
     ("relative", "expected"),
     [
         ("mkdocs.yml", b'site_name: "Finite Flat"'),
-        ("blueprint/javascripts/mathjax.js", b"window.MathJax"),
+        ("theme/main.html", b'{% extends "base.html" %}'),
     ],
 )
 def test_force_atomically_breaks_hard_links_for_rendered_and_static_files(

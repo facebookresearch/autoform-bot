@@ -13,12 +13,13 @@ import hashlib
 import os
 import re
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
 from .lean import declaration_names
 from .markdown import mask_code_and_comments
+from .snapshot import BlueprintSnapshot
 
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
@@ -108,14 +109,25 @@ class Node:
 
 @dataclass(frozen=True, slots=True)
 class Graph:
-    """A validated blueprint graph, keyed by stable node id."""
+    """A validated blueprint graph, keyed by stable node id.
+
+    ``snapshot`` holds the bytes the graph was built from, keyed by canonical
+    path: every article it parsed. Text shown or judged beside the graph is
+    read from there, so it is always the state the graph describes.
+    """
 
     blueprint_dir: Path
     nodes: dict[str, Node]
+    snapshot: BlueprintSnapshot = field(default_factory=BlueprintSnapshot)
     #: ``open_statements: allowed`` in ``roadmap/README.md``: a theorem's
     #: statement may land with a ``sorry`` proof. Absent or ``forbidden`` keeps
     #: the strict policy, where CI rejects every ``sorry``.
     open_statements: bool = False
+
+    def article_text(self, node: Node) -> str:
+        """Return the text ``node`` was parsed from."""
+
+        return self.snapshot.text(node.path)
 
     @property
     def edge_count(self) -> int:
@@ -141,6 +153,7 @@ class _ParsedNode:
 class _NodeSource:
     id: str
     path: Path
+    content: bytes
     text: str
     source_sha256: str
 
@@ -160,6 +173,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     issues.extend(discovery_issues)
     article_ids: dict[str, str] = {}
     source_hashes = {source.id: source.source_sha256 for source in sources}
+    files: dict[Path, bytes] = {}
     policy_page = (blueprint / "roadmap" / "README.md").resolve()
     open_statements = False
 
@@ -177,6 +191,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             continue
         canonical_ids[canonical] = source.id
         node_ids[source.id] = canonical
+        files[canonical] = source.content
         node, node_issues = _parse_node(source.id, canonical, source.text)
         issues.extend(node_issues)
         if node is not None:
@@ -262,7 +277,9 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         issues.extend(_find_rollup_cycles(nodes))
     if issues:
         raise GraphValidationError(issues)
-    return Graph(blueprint_dir=blueprint, nodes=nodes, open_statements=open_statements)
+    return Graph(
+        blueprint_dir=blueprint, nodes=nodes, snapshot=BlueprintSnapshot(files), open_statements=open_statements
+    )
 
 
 def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
@@ -315,7 +332,7 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
             issues.append(f"{node_id}: node file escapes the roadmap directory")
             continue
         sources.append(
-            _NodeSource(node_id, canonical, text, hashlib.sha256(content).hexdigest())
+            _NodeSource(node_id, canonical, content, text, hashlib.sha256(content).hexdigest())
         )
 
     issues.extend(_chapter_issues(roadmap_root))

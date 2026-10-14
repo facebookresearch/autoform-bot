@@ -36,7 +36,7 @@ from .library.locate import LibraryError, WorkspaceError
 from .library.search import LibraryResult, library_argument, search_with_libraries
 from .markdown import local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
-from .render import PublicationError, render_site
+from .render import PublicationError, publication_issues, render_site
 from .runtime import RuntimeProjectionError, resolve_runtime_paths
 from .scaffold import ScaffoldError, scaffold_project
 from .search import SearchError, search_blueprint, statement_preview
@@ -556,6 +556,8 @@ def _source_link_issues(graph: Graph) -> list[str]:
 def _check(args: argparse.Namespace) -> int:
     try:
         graph = load_graph(args.blueprint_dir)
+        # Render refuses to publish on these same issues.
+        markup = publication_issues(graph, Path(args.blueprint_dir), lean_root=args.lean_root)
     except GraphValidationError as exc:
         for issue in exc.issues:
             print(f"error: {issue}")
@@ -563,6 +565,10 @@ def _check(args: argparse.Namespace) -> int:
     if source_issues := _source_link_issues(graph):
         for issue in source_issues:
             print(f"error: {issue}")
+        return 1
+    for issue in markup:
+        print(f"error: {issue}")
+    if markup:
         return 1
 
     linker = None
