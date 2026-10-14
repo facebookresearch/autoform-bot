@@ -81,6 +81,14 @@ for a percent sign, never `%`. A read-back that breaks this is rejected,
 however faithful it is. Keep it to a few kilobytes: a read-back over 32 KiB or
 500 lines is refused.
 
+## Return only testimony
+
+Return only the testimony described above. Do not create a vault card, copy
+metadata, infer a destination path, or inspect a manifest. The coordinator
+records your response for the exact packet through Autoform's `review record`
+command, and `review check` rejects it once the packet is no longer the
+declaration's.
+
 A read-back testifies about one exact packet. If either the packet's meaning
 or its bytes change, a coordinator must request a new blind read-back. Never
 revise old testimony after seeing an article or intended statement.
