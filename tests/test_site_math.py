@@ -28,6 +28,7 @@ _EXAMPLE = _ROOT / "skills/setup/assets/cabannes-thesis-project"
 _BASE = "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5"
 _BUNDLE = f"{_BASE}/tex-mml-chtml.js"
 _PAGE_PACKAGES = ["base", "ams", "noundefined", "boldsymbol", "mathtools", "configmacros"]
+_CARD_PACKAGES = ["base", "ams", "noundefined"]
 _MACROS = {"RR": "\\mathbb{R}", "norm": ["\\left\\lVert #1 \\right\\rVert", 1]}
 #: What the page's TeX input maps the commands it turns off to.
 _OFF = {name: "\\notallowed" for name in NEUTRALISED}
@@ -95,6 +96,7 @@ def test_render_writes_the_site_mathjax_configuration(tmp_path: Path) -> None:
     assert settings["bundle"] == _BUNDLE
     assert settings["load"] == ["ui/safe", "[tex]/boldsymbol", "[tex]/mathtools"]
     assert settings["page"]["packages"] == _PAGE_PACKAGES
+    assert settings["card"]["packages"] == _CARD_PACKAGES
     assert settings["safe"] == {"allow": {"URLs": "none", "classes": "none", "cssIDs": "none", "styles": "none"}}
 
 
@@ -107,6 +109,7 @@ def test_the_page_turns_off_tex_that_reaches_past_its_own_formula() -> None:
     settings = _settings(mathjax_script(None, json.dumps(_MACROS).encode())[0])
 
     assert settings["page"]["macros"] == {**_MACROS, **_OFF}
+    assert "macros" not in settings["card"]
     assert {"label", "mmlToken", "DeclareMathOperator", "newtagform", "mathtoolsset"} <= set(NEUTRALISED)
 
 
@@ -1076,8 +1079,8 @@ def test_a_fence_that_imitates_a_graph_render_drew_is_refused() -> None:
 def test_every_formula_paints_inside_its_own_band(tmp_path: Path) -> None:
     """No formula can cover a card, a mark, a label, another line, or a side
     column, with either renderer and any theme; a lap keeps the ink beside its
-    box inside the block that holds it; and a wide display scrolls rather than
-    being cut off."""
+    box inside the block that holds it; and a wide display or card scrolls,
+    a card with a shade at the edge, rather than being cut off."""
 
     css = (_render(_vault(tmp_path)) / "stylesheets/blueprint.css").read_text(encoding="utf-8")
     rules = {
@@ -1105,3 +1108,12 @@ def test_every_formula_paints_inside_its_own_band(tmp_path: Path) -> None:
     # card's blocks are left to scroll with it.
     block = rules[":is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *)"]
     assert "overflow-x: clip" in block and "overflow-y" not in block
+    card = rules[".bp-readback"]
+    assert "overflow-x: auto" in card
+    assert card.count(" local") == 2 and card.count(" scroll") == 2
+    # The covers, and the card under them, are the color of the review panel a
+    # card sits in, which in Material's dark scheme is not the page's.
+    assert card.count("var(--md-admonition-bg-color, var(--bp-page))") == 3
+    # Testimony is shown as typed, line ends and spaces included.
+    assert "white-space: pre-wrap" in rules[".bp-readback-body"]
+    assert "overflow-wrap: anywhere" in rules[".bp-review summary"]

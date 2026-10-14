@@ -101,7 +101,10 @@ tree; it is the one judge of whether cards and approvals are current.
    hand-author or repair a card's path, hashes, or frontmatter.
 4. Run `review check`. It fails on a missing or stale card, an incomplete
    extraction, and any approval that does not match; prepare again and repeat
-   steps 2 and 3 for each stale card.
+   steps 2 and 3 for each stale card. Then render with `--review` and
+   strict-build the site: every formalized statement gains a *Review*
+   disclosure with the cited passage, the exact packet, its read-back, and the
+   approval state.
 5. Walk the person through each statement: source and book text first, then the
    read-back, then the exact packet. Ask whether the read-back says what the
    book says, whether any hypothesis is missing or added, and whether the
