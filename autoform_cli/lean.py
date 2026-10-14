@@ -859,6 +859,23 @@ def _name_token(text: str) -> str | None:
 
 _RAW_OPEN = re.compile(r'r(#*)"')
 _CHAR_LITERAL = re.compile(r"'(?:\\.|[^'\\\n])*'")
+# Where a comment, literal, or interpolation brace can start. The text between
+# two of these positions is copied as one slice, not character by character.
+_CODE_EVENT = re.compile(r"""--|/-|r#*"|["«']""")
+_INTERPOLATION_EVENT = re.compile(r"""--|/-|r#*"|["«'{}]""")
+_COMMENT_EVENT = re.compile(r"-/|/-")
+_LITERAL_EVENTS: dict[tuple[str, bool, bool], re.Pattern[str]] = {}
+
+
+def _literal_event(close: str, interpolated: bool) -> re.Pattern[str]:
+    """Where a literal ended by *close* can next close, escape, or interpolate."""
+
+    key = (close[0], close in {'"', "'"}, interpolated)
+    pattern = _LITERAL_EVENTS.get(key)
+    if pattern is None:
+        chars = close[0] + ("\\" if key[1] else "") + ("{" if interpolated else "")
+        pattern = _LITERAL_EVENTS[key] = re.compile(f"[{re.escape(chars)}]")
+    return pattern
 
 
 def _without_lean_comments(text: str) -> str:
@@ -869,9 +886,16 @@ def _without_lean_comments(text: str) -> str:
     index = 0
     while index < len(text):
         top = stack[-1] if stack else None
-        char = text[index]
         if top is not None and top[0] is not None:
             close, interpolated = top
+            event = _literal_event(close, interpolated).search(text, index)
+            if event is None:
+                out.append(text[index:])
+                break
+            if event.start() > index:
+                out.append(text[index : event.start()])
+                index = event.start()
+            char = text[index]
             if text.startswith(close, index):
                 out.append(close)
                 index += len(close)
@@ -886,6 +910,14 @@ def _without_lean_comments(text: str) -> str:
             out.append(char)
             index += 1
             continue
+        event = (_CODE_EVENT if top is None else _INTERPOLATION_EVENT).search(text, index)
+        if event is None:
+            out.append(text[index:])
+            break
+        if event.start() > index:
+            out.append(text[index : event.start()])
+            index = event.start()
+        char = text[index]
         if text.startswith("--", index):
             newline = text.find("\n", index + 2)
             if newline < 0:
@@ -898,14 +930,14 @@ def _without_lean_comments(text: str) -> str:
             depth, index = 1, index + (3 if text[index + 2 : index + 3] in {"-", "!"} else 2)
             out.append(" ")
             while index < len(text) and depth:
-                pair = text[index : index + 2]
-                if pair in {"-/", "/-"}:
-                    depth += 1 if pair == "/-" else -1
-                    index += 2
-                    continue
-                if text[index] == "\n":
-                    out.append("\n")
-                index += 1
+                pair = _COMMENT_EVENT.search(text, index)
+                end = len(text) if pair is None else pair.start()
+                out.append("\n" * text.count("\n", index, end))
+                if pair is None:
+                    index = end
+                    break
+                depth += 1 if pair.group() == "/-" else -1
+                index = pair.end()
             continue
         raw = _RAW_OPEN.match(text, index)
         if raw:
