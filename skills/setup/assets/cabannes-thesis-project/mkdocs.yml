@@ -8,6 +8,12 @@ docs_dir: site-src
 site_dir: site
 use_directory_urls: false
 
+# Source ledgers remain available to Autoform's local publication overlay, but
+# roadmap source links point at the repository. They are evidence, not pages in
+# the public mathematical book.
+exclude_docs: |
+  sources/**
+
 # The nav is not listed here. `autoform render` writes it to SUMMARY.md from
 # the vault's own page order, which mkdocs-literate-nav reads, so a project's
 # chapters cannot drift out of step with a second list kept in this file.

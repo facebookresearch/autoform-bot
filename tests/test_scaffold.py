@@ -281,6 +281,15 @@ def test_substitutions_reach_the_site_config(tmp_path: Path) -> None:
     assert "python3 .github/autoform_audit.py" in verify
 
 
+def test_site_config_keeps_source_ledgers_out_of_the_public_book(
+    tmp_path: Path,
+) -> None:
+    scaffold_project(tmp_path, title="Finite Flat")
+
+    mkdocs = (tmp_path / "mkdocs.yml").read_text(encoding="utf-8")
+    assert "exclude_docs: |\n  sources/**\n" in mkdocs
+
+
 def test_no_placeholder_survives_anywhere(tmp_path: Path) -> None:
     """`${{ }}` is Actions syntax and `{{declName}}` is Lean interpolation.
 
