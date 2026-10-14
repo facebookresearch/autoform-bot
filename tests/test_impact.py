@@ -1213,6 +1213,8 @@ _UNCAPTURED = (
         ),
         # The project is built, so these refusals come alone, without the rebuild hint.
         *((f"Probe.lean:131:0: error: {refusal}\nnext line", refusal) for refusal in _UNCAPTURED),
+        # Even after more output than a failure reason keeps.
+        ("warning: unused\n" * 200 + f"error: {_UNCAPTURED[0]}", _UNCAPTURED[0]),
     ],
 )
 def test_probe_failures_name_the_impact_probe(
