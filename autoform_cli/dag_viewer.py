@@ -492,6 +492,11 @@ def viewer_script() -> str:
     return "\n".join(lines) + "\n"
 
 
+# Published pages put the explorer inside Material's article.md-typeset, whose
+# list, code and heading rules reach a specificity of (0,2,2). The rules they
+# would override carry a doubled .bp-dag-viewer class, and the status filter is
+# a button and popover because Material styles details and summary as an
+# admonition.
 _STYLE = r"""
 .bp-dag-viewer {
   --dag-border: var(--bp-rule, #d8dade); --dag-bg: var(--bp-surface, #fff);
@@ -521,8 +526,8 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-head { z-index: 8; border-bottom: 1px solid var(--dag-border); background: var(--dag-bg); }
 .bp-dag-context { display: flex; align-items: center; gap: .7rem; min-height: 2.45rem; padding: .42rem 1rem .08rem; }
 .bp-dag-breadcrumb { min-width: 0; flex: 1; color: var(--dag-muted); font-size: .72rem; }
-.bp-dag-breadcrumb ol { display: flex; align-items: center; gap: .35rem; margin: 0; padding: 0; list-style: none; }
-.bp-dag-breadcrumb li { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb ol { display: flex; align-items: center; gap: .35rem; margin: 0; padding: 0; list-style: none; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-breadcrumb li + li::before { content: "/"; margin-right: .35rem; color: var(--dag-border); }
 .bp-dag-breadcrumb [aria-current=page] { color: var(--dag-fg); font-weight: 650; }
 .bp-dag-view-kind { flex: none; padding: .18rem .45rem; border: 1px solid var(--dag-border); border-radius: 999px; color: var(--dag-muted); font-size: .64rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
@@ -533,7 +538,8 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-search:focus { border-color: var(--dag-link); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dag-link) 18%, transparent); }
 .bp-dag-search-results { position: absolute; z-index: 20; top: calc(100% + .35rem); left: 0; right: 0; max-height: min(27rem, 60vh); overflow: auto; padding: .35rem; border: 1px solid var(--dag-border); border-radius: 10px; background: var(--dag-bg); box-shadow: 0 16px 38px rgba(15, 23, 42, .2); }
 .bp-dag-search-results[hidden] { display: none; }
-.bp-dag-results, .bp-dag-relation-list, .bp-dag-inventory-list { margin: 0; padding: 0; list-style: none; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-dag-results, .bp-dag-relation-list, .bp-dag-inventory-list) { display: block; margin: 0; padding: 0; list-style: none; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-dag-results, .bp-dag-relation-list, .bp-dag-inventory-list) > li { margin: 0; }
 .bp-dag-result { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; gap: .15rem .6rem; padding: .52rem .55rem; border: 0; border-radius: 7px; background: transparent; color: var(--dag-fg); text-align: left; cursor: pointer; }
 .bp-dag-result:hover, .bp-dag-result:focus-visible { background: color-mix(in srgb, var(--dag-link) 9%, transparent); }
 .bp-dag-result:focus-visible, .bp-dag-inventory-row:focus-visible { outline: 3px solid color-mix(in srgb, var(--dag-link) 52%, transparent); outline-offset: -3px; }
@@ -550,8 +556,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-zoom :last-child, .bp-dag-modes :last-child { border-radius: 0 8px 8px 0; }
 .bp-dag-mode-button[aria-pressed=true], .bp-dag-pivot[aria-pressed=true] { border-color: var(--dag-link); background: color-mix(in srgb, var(--dag-link) 10%, var(--dag-bg)); color: var(--dag-link); }
 .bp-dag-filters { position: relative; flex: none; }
-.bp-dag-filter-summary { display: flex; align-items: center; list-style: none; white-space: nowrap; }
-.bp-dag-filter-summary::-webkit-details-marker { display: none; }
+.bp-dag-filter-summary { display: flex; align-items: center; white-space: nowrap; }
 .bp-dag-filter-popover { position: absolute; z-index: 18; top: calc(100% + .35rem); right: 0; width: 15rem; max-height: 23rem; overflow: auto; padding: .65rem; border: 1px solid var(--dag-border); border-radius: 10px; background: var(--dag-bg); box-shadow: 0 14px 32px rgba(15, 23, 42, .18); }
 .bp-dag-filter-popover fieldset { display: grid; gap: .2rem; margin: 0; padding: 0; border: 0; }
 .bp-dag-filter-popover legend { margin-bottom: .35rem; color: var(--dag-muted); font-size: .68rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
@@ -619,7 +624,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-inventory { position: absolute; inset: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; background: var(--dag-bg); }
 .bp-dag-inventory[hidden] { display: none; }
 .bp-dag-inventory-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; padding: .75rem 1rem; border-bottom: 1px solid var(--dag-border); }
-.bp-dag-inventory-head h2 { margin: 0; font-size: .95rem; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-inventory-head h2 { margin: 0; font-size: .95rem; font-weight: 700; letter-spacing: normal; line-height: 1.3; }
 .bp-dag-inventory-summary { color: var(--dag-muted); font-size: .7rem; }
 .bp-dag-inventory-scroll { overflow: auto; padding: .45rem; }
 .bp-dag-inventory-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; gap: .15rem .8rem; padding: .62rem .7rem; border: 0; border-bottom: 1px solid var(--dag-border); background: transparent; color: var(--dag-fg); text-align: left; cursor: pointer; }
@@ -634,10 +639,10 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-inspector-inner { padding: 1rem; }
 .bp-dag-sheet-handle { display: none; }
 .bp-dag-inspector-header { display: flex; align-items: flex-start; gap: .5rem; }
-.bp-dag-inspector-header h2 { flex: 1; margin: 0; font-size: 1rem; line-height: 1.25; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-inspector-header h2 { flex: 1; margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: normal; line-height: 1.25; }
 .bp-dag-close { min-width: 2rem; min-height: 2rem; padding: .2rem; border: 0; background: transparent; color: var(--dag-muted); cursor: pointer; }
 .bp-dag-kicker { margin: 0 0 .35rem; color: var(--dag-muted); font-size: .64rem; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
-.bp-dag-node-id { display: block; margin: .45rem 0; overflow-wrap: anywhere; color: var(--dag-muted); font: .66rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-node-id { display: block; margin: .45rem 0; padding: 0; overflow-wrap: anywhere; border-radius: 0; background: none; color: var(--dag-muted); font: .66rem ui-monospace, SFMono-Regular, Consolas, monospace; }
 .bp-dag-status-pill { display: inline-flex; align-items: center; gap: .35rem; margin: .3rem 0 .65rem; color: var(--dag-muted); font-size: .7rem; }
 .bp-dag-status-pill::before { content: ""; width: .58rem; height: .58rem; border: 2px solid var(--dag-pill-stroke); border-radius: 50%; background: var(--dag-pill-fill); }
 .bp-dag-open { display: inline-flex; align-items: center; justify-content: center; min-height: 2.2rem; padding: .4rem .65rem; border-radius: 8px; background: var(--dag-link); color: #fff !important; font-size: .74rem; font-weight: 700; text-decoration: none !important; }
@@ -646,7 +651,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-summary { margin: .8rem 0; color: var(--dag-fg); font-family: Georgia, "Iowan Old Style", serif; font-size: .88rem; line-height: 1.55; }
 .bp-dag-lean { margin: .6rem 0 0; overflow-wrap: anywhere; color: var(--dag-muted); font: .68rem ui-monospace, SFMono-Regular, Consolas, monospace; }
 .bp-dag-section { margin-top: 1rem; padding-top: .8rem; border-top: 1px solid var(--dag-border); }
-.bp-dag-section h3 { margin: 0 0 .45rem; font-size: .76rem; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-section h3 { margin: 0 0 .45rem; font-size: .76rem; font-weight: 700; letter-spacing: normal; line-height: 1.3; }
 .bp-dag-pivots { display: grid; grid-template-columns: repeat(3, 1fr); gap: .3rem; }
 .bp-dag-pivot { min-height: 2.7rem; padding: .3rem; font-size: .66rem; }
 .bp-dag-relation-button { width: 100%; padding: .35rem .25rem; overflow: hidden; border: 0; background: transparent; color: var(--dag-link); font: inherit; font-size: .72rem; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
@@ -852,9 +857,11 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       refs.searchResults.hidden = true;
       searchWrap.appendChild(refs.search); searchWrap.appendChild(refs.searchResults); toolbar.appendChild(searchWrap);
 
-      var filters = element("details", "bp-dag-filters");
-      refs.filterSummary = element("summary", "bp-dag-filter-summary", "Status");
-      var filterPopover = element("div", "bp-dag-filter-popover"), fieldset = element("fieldset");
+      refs.filters = element("div", "bp-dag-filters");
+      refs.filterSummary = button("bp-dag-filter-summary", "Status"); refs.filterSummary.setAttribute("aria-expanded", "false");
+      refs.filterPopover = element("div", "bp-dag-filter-popover"); refs.filterPopover.hidden = true;
+      refs.filterPopover.id = "bp-dag-filters-" + instance; refs.filterSummary.setAttribute("aria-controls", refs.filterPopover.id);
+      var fieldset = element("fieldset");
       fieldset.appendChild(element("legend", "", "Statuses in this view")); refs.statusInputs = new Map();
       presentStatuses.forEach(function (key) {
         var label = element("label", "bp-dag-check"), input = element("input");
@@ -862,8 +869,8 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         refs.statusInputs.set(key, input); label.appendChild(input); label.appendChild(document.createTextNode(statusLabel(key)));
         label.appendChild(element("span", "bp-dag-check-count", String(statusCounts.get(key) || 0))); fieldset.appendChild(label);
       });
-      filterPopover.appendChild(fieldset); filters.appendChild(refs.filterSummary); filters.appendChild(filterPopover);
-      toolbar.appendChild(filters);
+      refs.filterPopover.appendChild(fieldset); refs.filters.appendChild(refs.filterSummary); refs.filters.appendChild(refs.filterPopover);
+      toolbar.appendChild(refs.filters);
 
       refs.isolatedLabel = element("label", "bp-dag-isolated"); refs.isolated = element("input");
       refs.isolated.type = "checkbox"; refs.isolated.checked = state.showIsolated; refs.isolatedLabel.appendChild(refs.isolated);
@@ -1003,6 +1010,11 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
           var matches = searchMatches(); if (matches.length) { event.preventDefault(); activateNode(matches[0].node, true); }
         }
       });
+      refs.filterSummary.addEventListener("click", function () { setFilters(refs.filterPopover.hidden); });
+      refs.filters.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && !refs.filterPopover.hidden) { event.preventDefault(); setFilters(false); refs.filterSummary.focus(); }
+      });
+      document.addEventListener("pointerdown", function (event) { if (!refs.filters.contains(event.target)) setFilters(false); });
       refs.isolated.addEventListener("change", function () {
         state.showIsolated = refs.isolated.checked; state.activeDirty = true;
         writeLocation("replace"); refresh(true);
@@ -1493,6 +1505,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       if (next) { event.preventDefault(); next.focus(); }
       else if (event.key === "ArrowUp") { event.preventDefault(); refs.search.focus(); }
     }
+    function setFilters(open) { refs.filterPopover.hidden = !open; refs.filterSummary.setAttribute("aria-expanded", String(open)); }
     function closeSearch() { refs.searchResults.hidden = true; refs.search.setAttribute("aria-expanded", "false"); }
     function activateNode(node, moveCamera) {
       var href = safeHref(node.url);
