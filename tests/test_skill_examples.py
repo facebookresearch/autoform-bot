@@ -1415,6 +1415,10 @@ def test_skills_search_shared_libraries_and_say_what_to_do_with_a_hit(repo_root:
     assert "reuse that proof instead of proving the result again" in roadmap
     assert "the result keeps its article" in roadmap
     assert "add an article for it, proved from the library" in roadmap
+    # A trial Roadmap set lean: to the library declarations it found, which check cannot resolve (#349).
+    assert "`lean:` names a project declaration, never a library one" in roadmap
+    assert "leave it unset on an article a library proves or defines" in roadmap
+    assert "Formalize declares the result in the project from the library declaration" in roadmap
     assert "refusal naming a library" in roadmap
     assert "Before stating an article's result" in formalize
     assert "rerun without that library" in formalize

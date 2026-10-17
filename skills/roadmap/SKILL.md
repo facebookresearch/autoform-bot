@@ -78,7 +78,10 @@ If a library already proves a result, reuse that proof instead of proving the
 result again: the result keeps its article, and its proof cites the library
 declaration. If a proof needs a library result that has no article yet, add an
 article for it, proved from the library, and link it under `## Proof depends
-on`. A refusal (exit 2) is not an empty result: resolve what it reports without
+on`. `lean:` names a project declaration, never a library one: leave it unset
+on an article a library proves or defines, and Formalize declares the result in
+the project from the library declaration, as the library search rules say.
+A refusal (exit 2) is not an empty result: resolve what it reports without
 adding the article, and search again, except that a refusal naming a library is
 handled as the library search rules say. A dependency link to a page not yet
 written causes one, so search for a batch of articles before writing the first.
