@@ -624,6 +624,25 @@ def test_a_statement_the_renderer_gives_up_on_is_still_found_by_its_title(tmp_pa
     assert _ids(project, "affine") == ["convexity/hyperplane"]
 
 
+@pytest.mark.parametrize(
+    ("public_files", "line", "source_file"),
+    [(("Public.lean",), 3, "Public.lean"), (("Public.lean", "Second.lean"), None, None)],
+)
+def test_a_lean_target_skips_a_private_twin_and_an_ambiguous_one_is_unlocated(
+    tmp_path: Path, public_files: tuple[str, ...], line: int | None, source_file: str | None
+) -> None:
+    project = _project(tmp_path)
+    (project / "A.lean").write_text(_LEAN_SOURCE.replace("theorem", "private theorem"), encoding="utf-8")
+    for name in public_files:
+        (project / name).write_text(_LEAN_SOURCE, encoding="utf-8")
+
+    (hit,) = search_blueprint(project, "separating hyperplane", lean_root=project).hits
+
+    assert [target.as_dict() for target in hit.lean_targets] == [
+        {"declaration": "Project.separation", "line": line, "source_file": source_file}
+    ]
+
+
 def test_the_bundled_example_answers_a_reuse_question(repo_root: Path) -> None:
     project = repo_root / "skills/setup/assets/cabannes-thesis-project"
 

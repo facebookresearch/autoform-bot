@@ -20,6 +20,7 @@ import pytest
 import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
 import autoform_cli.render as render_module
+from autoform_cli.__main__ import main
 from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS
@@ -688,9 +689,40 @@ def test_unresolved_declarations_are_reported_not_linked(tmp_path: Path) -> None
     )
     report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
-    assert report.unresolved == ["top: Project.absent"]
+    assert report.unresolved == ["declaration not found in the Lean sources: top: Project.absent"]
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert "not found in the Lean sources" in page
+
+
+def test_a_declaration_beside_an_earlier_private_twin_is_located_at_the_public_one(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    (project / "Project" / "A.lean").write_text("private theorem Project.top : True := trivial\n", encoding="utf-8")
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert report.unresolved == []
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert '<code>Project.top</code> <span class="bp-where">Project/Basic.lean</span>' in page
+
+
+def test_a_declaration_defined_twice_is_reported_not_located(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project = _project(tmp_path)
+    (project / "Project" / "A.lean").write_text("theorem Project.top : True := trivial\n", encoding="utf-8")
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    message = (
+        "declaration defined more than once in the Lean sources: top: Project.top "
+        "(Project/A.lean:1, Project/Basic.lean:5)"
+    )
+    assert report.unresolved == [message]
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert '<code>Project.top</code> <span class="bp-missing">defined more than once in the Lean sources</span>' in page
+    arguments = ["render", str(project / "blueprint"), "--output", str(tmp_path / "again"), "--require-declarations"]
+    assert main([*arguments, "--lean-root", str(project)]) == 1
+    assert f"warning: {message}" in capsys.readouterr().out.splitlines()
 
 
 def test_stale_generated_files_are_not_republished(tmp_path: Path) -> None:
