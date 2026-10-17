@@ -576,7 +576,7 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     playwright.expect(page.locator(".bp-dag-status-pill")).to_have_text("inventory only")
     # Contents names each topic's region, which the map paints only on the canvas.
     page.get_by_role("button", name="Contents").click()
-    topology = page.locator(".bp-dag-inventory-row", has_text="Topology")
+    topology = page.locator(".bp-dag-inventory-row").filter(has=page.get_by_text("Topology", exact=True))
     playwright.expect(topology.locator(".bp-dag-inventory-meta")).to_contain_text("Geometry & Topology")
 
 
@@ -589,7 +589,7 @@ def test_a_view_of_topics_and_results_draws_readable_result_cards(desktop_page: 
     assert not page.locator(".bp-dag-viewer").evaluate("element => element.classList.contains('bp-dag-atlas')")
     assert title.evaluate("element => element.scrollWidth <= element.clientWidth")
     meta = page.locator('[data-autoform-node-id="topics/compactness"] .bp-dag-node-meta')
-    playwright.expect(meta).to_have_text("1 item · 0 internal links")
+    playwright.expect(meta).to_have_text("1 item")
     # A drawn DAG counts its nodes by status; only an atlas counts topics by their least-complete item.
     playwright.expect(page.locator(".bp-dag-inspector h3")).to_have_text("Nodes by status")
     page.locator('[data-autoform-node-id="topics/library"]').click()

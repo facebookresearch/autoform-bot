@@ -652,6 +652,7 @@
         var control = overlays.get(node.id);
         if (!control) { control = makeNodeControl(node); overlays.set(node.id, control); refs.nodeLayer.appendChild(control); }
         var box = screen(node), color = colors(node);
+        control.style.setProperty("--dag-scale", String(state.transform.scale));
         control.style.transform = "translate3d(" + box.x + "px," + box.y + "px,0) scale(" + state.transform.scale + ")";
         control.style.width = node.width + "px"; control.style.height = node.height + "px";
         control.style.setProperty("--dag-node-fill", color.fill); control.style.setProperty("--dag-node-stroke", color.stroke);
@@ -681,7 +682,9 @@
         (scopeMeta || statusLabel(node.status)) + (node.isolated ? ", no dependency edges in this view" : ""));
       var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : control;
       content.appendChild(element("span", "bp-dag-node-title", node.title));
-      content.appendChild(element("span", "bp-dag-node-meta", scopeMeta || statusLabel(node.status) + " · " + node.id));
+      content.appendChild(element("span", "bp-dag-node-meta", node.kind === "scope" ?
+        plural(node.member_count || 0, "item", "items") :
+        node.kind === "boundary" ? "Related topic" : statusLabel(node.status)));
       content.appendChild(element("span", "bp-dag-node-relation", ""));
       if (content !== control) control.appendChild(content);
       control.addEventListener("click", function (event) {
