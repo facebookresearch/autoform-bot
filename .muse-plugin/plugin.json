@@ -40,6 +40,11 @@
         "id": "develop-plugin",
         "path": "skills/develop-plugin/SKILL.md",
         "enabledDefault": true
+      },
+      {
+        "id": "debrief-orchestrator",
+        "path": "skills/debrief-orchestrator/SKILL.md",
+        "enabledDefault": true
       }
     ],
     "hooks": [],

@@ -244,9 +244,15 @@ integration fails, report the branch and commit for handoff. When the run uses
 claims, the [claim rules](references/claims.md#integration-and-handoff) say how
 to renew, keep, hand off, and release the claim set.
 
+When `AUTOFORM_SUBAGENT_DEBRIEF=1`, the agent that worked an attempt then
+follows the [subagent debrief steps](references/debrief-subagent.md) before
+reporting.
+
 Re-read the work frontier from the updated shared branch and repeat while
 independent ready leaves and authorized capacity remain. Stop when the frontier
 is empty or every remaining attempt has a concrete mathematical or ownership
-blocker. Report changed articles and Lean files, integrated commits, branches
+blocker. Then the lead follows
+[Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with `--skill
+formalize`. Report changed articles and Lean files, integrated commits, branches
 and commits handed off, any claims released or handed off, checks and reviews
 run, and exact remaining goals.

@@ -171,4 +171,6 @@ area links to a source-grounded fine DAG, affected pages and the graph agree,
 and the latest commit contains every change from the pass. Do not stop after
 discovery, a coarse proposal, one chapter, or unchanged validation. Report the
 material delta, evidence, remaining explicit blockers, and next execution
-frontier. Mark an active Goal complete only after these conditions hold.
+frontier. Before reporting, follow
+[Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with `--skill roadmap`.
+Mark an active Goal complete only after these conditions hold.

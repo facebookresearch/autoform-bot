@@ -231,7 +231,8 @@ asks to discover community context or announce and coordinate the project, read
 and follow [the shared Zulip workflow](references/zulip.md). Do not infer consent
 to post from repository setup, roadmap work, or permission to search.
 
-Report the Lean toolchain, vault path, CI and Pages files, validation results,
-the publication decision, and any one-time GitHub setting the user must still
-apply. State explicitly that no sources were scoped, roadmap nodes created, or
+Before reporting, follow [Debrief Orchestrator](../debrief-orchestrator/SKILL.md)
+with `--skill setup`. Report the Lean toolchain, vault path, CI and Pages files,
+validation results, the publication decision, and any one-time GitHub setting
+the user must still apply. State explicitly that no sources were scoped, roadmap nodes created, or
 proofs started, then hand the repository to Roadmap.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Debrief Orchestrator"
+  short_description: "Report friction with AutoformBot after a run"
+  default_prompt: "Use $debrief-orchestrator to record what got in the way of this run and draft an AutoformBot issue for me to review."
