@@ -17,6 +17,7 @@ from autoform_cli.graph import (
 )
 from autoform_cli import graph_pages, graph_views, render
 from autoform_cli.audit import audit_graph
+from autoform_cli.coverage import load_coverage, validate_coverage_roles
 from autoform_cli.graph_views import chapter_view, group_nodes, project_view, scope_view
 from autoform_cli.render import _book_page_order, render_site
 from autoform_cli.runtime import (
@@ -233,19 +234,6 @@ def test_graph_pickles_only_public_types(tmp_path: Path, protocol: int) -> None:
     assert restored.children("root") == ("child",)
 
 
-def test_node_loads_the_previous_runtime_pickle_shape(tmp_path: Path) -> None:
-    original = Node("root", "Root", tmp_path / "README.md", ())
-    previous_state = original.__getstate__()[:-3]
-    restored = object.__new__(Node)
-
-    restored.__setstate__(previous_state)
-
-    assert restored == original
-    assert restored.catalog is None
-    assert restored.summary is None
-    assert restored.area is None
-
-
 def _raises_promptly(call: Callable[[], object]) -> BaseException | None:
     outcome: list[BaseException | None] = []
 
@@ -460,7 +448,7 @@ def test_graph_page_publication_builds_whole_graph_indexes_a_fixed_number_of_tim
     # Every section has its own page. Rebuilding the containers set for each
     # page's legend made the graph walks grow with the chapters.
     assert large == small
-    assert max(small["_containment_children"], small["_relations"]) <= 5
+    assert max(small["_containment_children"], small["_relations"]) <= 4
 
 
 def _written_blueprint(tmp_path: Path, sections: int = 1) -> Path:
@@ -521,7 +509,9 @@ def _container_index_builds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sec
         return original(graph)
 
     with monkeypatch.context() as patch:
+        # render imports the index builder that graph_views' own helpers call.
         patch.setattr(render, "_containers", counted)
+        patch.setattr(graph_views, "_containers", counted)
         render_site(blueprint, tmp_path / str(sections) / "site")
     return builds
 
@@ -553,24 +543,44 @@ def test_site_rendering_resolves_paths_linearly_in_the_number_of_sections(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    small = _path_resolves(tmp_path, monkeypatch, 4)
-    large = _path_resolves(tmp_path, monkeypatch, 8)
-
-    # Every section has its own scope map page. Linking every node from every
-    # page made doubling the sections multiply the resolves by 2.4.
-    assert large <= 2 * small
-
-
-def test_site_rendering_resolves_paths_linearly_in_the_number_of_coverage_rows(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
     small = _path_resolves(tmp_path, monkeypatch, 8)
     large = _path_resolves(tmp_path, monkeypatch, 16)
 
-    # Every section also has a DECOMPOSED coverage row. Resolving every node's
-    # path again for each row multiplied the resolves by 2.26 from 8 sections,
-    # but only by 1.98 from 4.
+    # Every section has its own scope map page and a DECOMPOSED coverage row.
+    # Linking every node from every page made the resolves grow with sections
+    # times nodes.
+    assert large <= 2 * small
+
+
+def _coverage_role_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sections: int) -> int:
+    blueprint = _written_blueprint(tmp_path / str(sections), sections)
+    graph = load_graph(blueprint)
+    coverage, _issues = load_coverage(blueprint)
+    assert coverage is not None
+    calls = 0
+    original = Path.resolve
+
+    def counted(self: Path, strict: bool = False) -> Path:
+        nonlocal calls
+        calls += 1
+        return original(self, strict)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "resolve", counted)
+        validate_coverage_roles(graph, coverage)
+    return calls
+
+
+def test_coverage_roles_resolve_paths_linearly_in_the_number_of_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    small = _coverage_role_resolves(tmp_path, monkeypatch, 8)
+    large = _coverage_role_resolves(tmp_path, monkeypatch, 16)
+
+    # Every section adds a DECOMPOSED row. Resolving every article's path again
+    # for each row took the role check from 216 to 816 resolves; counted across
+    # a whole render, the same growth read as only 2.26 times.
     assert large <= 2 * small
 
 

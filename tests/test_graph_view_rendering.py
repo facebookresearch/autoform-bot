@@ -1,88 +1,12 @@
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from autoform_cli import dag_viewer, graph_pages
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
-from autoform_cli.mermaid import render_view_diagram
-
-
-def test_project_view_renders_status_distribution_and_aggregated_edges() -> None:
-    view = GraphView(
-        kind="project",
-        title="Project map",
-        nodes=(
-            ViewNode(
-                id="scope:a",
-                title="Foundations",
-                kind="scope",
-                members=("a/one", "a/two", "a/three"),
-                status_counts=(("fully_proved", 2), ("can_prove", 1)),
-            ),
-            ViewNode(
-                id="scope:b",
-                title="Applications",
-                kind="scope",
-                members=("b/result",),
-                status_counts=(("planned", 1),),
-            ),
-        ),
-        edges=(ViewEdge("scope:a", "scope:b", statement_count=3, proof_count=1),),
-    )
-
-    diagram = render_view_diagram(
-        view,
-        links={"scope:a": "chapters/a.html", "scope:b": "chapters/b.html"},
-    )
-
-    assert 'n0["Foundations<br/><small>3 items · 2 fully proved · 1 ready to prove</small>"]:::scope' in diagram
-    assert "n0 -->|3| n1" in diagram
-    assert "n0 -.-> n1" in diagram
-    assert 'click n0 "chapters/a.html"' in diagram
-    assert "classDef scope fill:#EBF2FE" in diagram
-
-
-def test_chapter_boundary_and_focused_theorem_have_distinct_presentation() -> None:
-    view = GraphView(
-        kind="focus",
-        title="Local context",
-        focus="chapter/result",
-        radius=1,
-        nodes=(
-            ViewNode(
-                id="boundary:foundations",
-                title="Foundations",
-                kind="boundary",
-                members=("foundations/base",),
-                status_counts=(("fully_proved", 1),),
-            ),
-            ViewNode(
-                id="chapter/result",
-                title="Main result",
-                kind="node",
-                members=("chapter/result",),
-                status_counts=(("can_state", 1),),
-                declaration="theorem",
-                status_key="can_state",
-                focus=True,
-            ),
-        ),
-        edges=(ViewEdge("boundary:foundations", "chapter/result", proof_count=1),),
-    )
-
-    diagram = render_view_diagram(view, links={"chapter/result": "../book.html#result"})
-
-    assert "External chapter: Foundations" in diagram
-    assert ":::boundary" in diagram
-    assert 'n1("Main result"):::can_state' in diagram
-    assert "n0 -.-> n1" in diagram
-    assert "class n1 focus" in diagram
-    assert 'click n1 "../book.html#result"' in diagram
 
 
 def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path: Path) -> None:
@@ -99,13 +23,13 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
             summary="A reader-facing mathematical summary." if index == 0 else None,
             lean="Project.node" if index == 0 else None,
         )
-        for index in range(170)
+        for index in range(dag_viewer.MAX_MAP_NODES)
     )
     view = GraphView(
         kind="full",
         title="Full graph",
         nodes=nodes,
-        edges=tuple(ViewEdge(nodes[index].id, nodes[index + 1].id, statement_count=1) for index in range(169)),
+        edges=tuple(ViewEdge(source.id, target.id, statement_count=1) for source, target in zip(nodes, nodes[1:])),
     )
     outputs = [tmp_path / "one.json", tmp_path / "two.json"]
     for output in outputs:
@@ -114,43 +38,44 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
     assert outputs[0].read_bytes() == outputs[1].read_bytes()
     payload = json.loads(outputs[0].read_text(encoding="utf-8"))
     assert payload["schema"] == "autoform-dag-view/v2"
-    assert payload["node_count"] == 170
-    assert payload["edge_count"] == 169
-    assert payload["counts"] == {
-        "connected": 170,
-        "dependencies": 169,
-        "isolated": 0,
-        "nodes": 170,
+    # The explorer reads each field once; nothing is duplicated for other readers.
+    assert set(payload) == {
+        "edge_count",
+        "edges",
+        "nodes",
+        "palette",
+        "present_statuses",
+        "regions",
+        "schema",
+        "title",
+        "view",
     }
+    assert set(payload["nodes"][0]["layout"]) == {"column", "height", "row", "width", "x", "y"}
+    assert len(payload["nodes"]) == dag_viewer.MAX_MAP_NODES
+    assert payload["edge_count"] == dag_viewer.MAX_MAP_NODES - 1
     assert payload["view"] == {
+        "book": None,
         "breadcrumbs": [],
-        "focus": None,
         "kind": "full",
         "presentation": "dag",
-        "radius": None,
-        "scope": None,
         "summary": None,
     }
     assert payload["present_statuses"] == ["planned", "inventory_checked"]
     assert payload["nodes"][0]["title"] == "Unsafe <script>"
-    assert payload["nodes"][0]["catalog"] == "module"
     assert payload["nodes"][0]["status"] == "inventory_checked"
     assert payload["nodes"][0]["member_count"] == 1
-    assert payload["nodes"][0]["member_count"] == 1
     assert "members" not in payload["nodes"][0]
-    assert payload["nodes"][0]["status_counts"] == {"inventory_checked": 1}
+    assert payload["nodes"][0]["status_counts"] == [["inventory_checked", 1]]
     assert payload["nodes"][0]["summary"] == "A reader-facing mathematical summary."
     assert payload["nodes"][0]["lean"] == "Project.node"
     assert payload["nodes"][0]["isolated"] is False
     assert payload["palette"]["inventory_checked"]["label"] == "inventory checked"
     assert payload["palette"]["inventory_checked"]["neutral"] is True
-    assert payload["palette"]["inventory_checked"]["light"] == payload["palette"]["planned"]["light"]
-    assert max(node["row"] for node in payload["nodes"]) < dag_viewer.MAX_LAYOUT_ROWS
-    assert max(node["column"] for node in payload["nodes"]) > 0
+    assert max(node["layout"]["column"] for node in payload["nodes"]) > 0
     positions = {(node["layout"]["x"], node["layout"]["y"]) for node in payload["nodes"]}
     assert len(positions) == len(nodes)
     assert all(
-        payload["nodes"][index]["layout"]["rank"] < payload["nodes"][index + 1]["layout"]["rank"]
+        payload["nodes"][index]["layout"]["x"] < payload["nodes"][index + 1]["layout"]["x"]
         for index in range(len(nodes) - 1)
     )
 
@@ -158,19 +83,37 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
     assert "innerHTML" not in script
     assert "textContent" in script
     assert "requestAnimationFrame" in script
-    assert 'params.set("node", state.selected.id)' in script
-    assert 'window.addEventListener("hashchange"' in script
-    assert 'window.addEventListener("popstate"' in script
-    assert 'view.kind !== "full"' in script
     assert 'statusCounts.has("inventory_pending")' in script
     assert '"Inventory statuses are neutral:' in script
 
 
-def test_a_pending_inventory_has_a_neutral_colour_of_its_own(tmp_path: Path) -> None:
-    """A catalog not yet checked is drawn apart from the checked ones and from every state.
+def test_a_view_too_large_for_the_map_gets_no_layout(tmp_path: Path) -> None:
+    """The explorer only browses a view above its map limit, yet each node carried a layout it never drew."""
+    nodes = tuple(
+        ViewNode(f"n{index}", f"N{index}", "node", (f"n{index}",), (("planned", 1),))
+        for index in range(dag_viewer.MAX_MAP_NODES + 1)
+    )
+    output = tmp_path / "large.json"
+    dag_viewer.write_payload(output, GraphView(kind="chapter", title="Large", nodes=nodes, edges=()), links={})
 
-    It is neutral like a checked inventory, but a ring holding both kinds
-    needs two greys, and borrowing a state's colour would read as target work.
+    assert not any("layout" in node for node in json.loads(output.read_text(encoding="utf-8"))["nodes"])
+    # The runtime draws a map up to the same limit.
+    assert f"MAX_MAP_NODES = {dag_viewer.MAX_MAP_NODES}," in dag_viewer.viewer_script()
+    # An atlas that large keeps its overview's count of topics in each region.
+    topics = tuple(
+        ViewNode(node.id, node.title, "scope", node.members, node.status_counts, area="Algebra") for node in nodes
+    )
+    dag_viewer.write_payload(output, GraphView(kind="project", title="Large", nodes=topics, edges=()), links={})
+    regions = json.loads(output.read_text(encoding="utf-8"))["regions"]
+    assert regions == [{"count": dag_viewer.MAX_MAP_NODES + 1, "label": "Algebra"}]
+
+
+def test_each_inventory_has_a_neutral_colour_of_its_own(tmp_path: Path) -> None:
+    """Checked and pending catalogs are drawn apart from each other and from every state.
+
+    Both are neutral, but a ring holding planned targets and both kinds of
+    inventory needs three greys, and borrowing a state's colour would read as
+    target work.
     """
     statuses = ("planned", "inventory_pending", "inventory_checked")
     view = GraphView(
@@ -199,16 +142,64 @@ def test_a_pending_inventory_has_a_neutral_colour_of_its_own(tmp_path: Path) -> 
     pending = payload["palette"]["inventory_pending"]
     assert pending["label"] == "inventory pending"
     assert pending["neutral"] is True
-    for scheme in ("light", "dark"):
-        assert all(
-            entry[scheme]["stroke"] != pending[scheme]["stroke"]
-            for key, entry in payload["palette"].items()
-            if key != "inventory_pending"
-        )
+    for inventory in ("inventory_checked", "inventory_pending"):
+        for scheme in ("light", "dark"):
+            assert all(
+                entry[scheme]["stroke"] != payload["palette"][inventory][scheme]["stroke"]
+                for key, entry in payload["palette"].items()
+                if key != inventory
+            )
 
 
-def test_isolated_inventory_does_not_spread_the_connected_dag() -> None:
-    node_ids = ["root", "result", *(f"isolated-{index}" for index in range(1_000))]
+def test_status_counts_keep_the_legend_order(tmp_path: Path) -> None:
+    """Sorted object keys split a ring's finished arcs with grey ones and listed rows out of legend order."""
+    counts = (
+        ("mathlib", 10),
+        ("fully_proved", 50),
+        ("proved", 5),
+        ("can_prove", 4),
+        ("planned", 35),
+        ("inventory_checked", 3),
+    )
+    view = GraphView(kind="project", title="Project", nodes=(ViewNode("scope:a", "A", "scope", (), counts),), edges=())
+    output = tmp_path / "project.json"
+    dag_viewer.write_payload(output, view, links={})
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["nodes"][0]["status_counts"] == [list(entry) for entry in counts]
+
+
+def test_a_catalog_carries_a_few_lean_names_and_counts_the_rest(tmp_path: Path) -> None:
+    """A catalog lists its keyword-declared public names, which made its payload and inspector line unbounded."""
+    names = [f"Mathlib.Algebra.Module.lemma_{index:03d}" for index in range(150)]
+    nodes = (
+        ViewNode(
+            "catalog",
+            "Catalog",
+            "node",
+            ("catalog",),
+            (("inventory_checked", 1),),
+            catalog="module",
+            lean=", ".join(names),
+        ),
+        ViewNode(
+            "leaf", "Leaf", "node", ("leaf",), (("planned", 1),), declaration="theorem", lean=" ".join(names[:20])
+        ),
+    )
+    output = tmp_path / "inventory.json"
+    dag_viewer.write_payload(output, GraphView(kind="chapter", title="Inventory", nodes=nodes, edges=()), links={})
+
+    catalog, leaf = json.loads(output.read_text(encoding="utf-8"))["nodes"]
+    assert catalog["lean"] == ", ".join(names[:8])
+    assert catalog["lean_more"] == 142
+    assert len(catalog["lean"].encode()) < 400
+    # A declaration leaf names only its own declarations, so it keeps them all.
+    assert leaf["lean"] == " ".join(names[:20])
+    assert "lean_more" not in leaf
+
+
+def test_isolated_inventory_does_not_spread_the_connected_dag(tmp_path: Path) -> None:
+    node_ids = ["root", "result", *(f"isolated-{index}" for index in range(100))]
     nodes = tuple(
         ViewNode(
             id=node_id,
@@ -228,12 +219,14 @@ def test_isolated_inventory_does_not_spread_the_connected_dag() -> None:
         edges=(ViewEdge("root", "result", statement_count=1),),
     )
 
-    positions = dag_viewer._positions(view)
+    output = tmp_path / "mixed.json"
+    dag_viewer.write_payload(output, view, links={})
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    columns = {node["id"]: node["layout"]["column"] for node in payload["nodes"]}
 
-    assert positions["root"]["column"] == 0
-    assert positions["result"]["column"] == 1
-    assert positions["isolated-0"]["column"] >= 3
-    assert max(positions[node_id]["column"] for node_id in ("root", "result")) == 1
+    assert columns["root"] == 0
+    assert columns["result"] == 1
+    assert columns["isolated-0"] >= 3
 
 
 def test_high_level_topics_use_a_readable_grouped_knowledge_atlas(tmp_path: Path) -> None:
@@ -250,20 +243,63 @@ def test_high_level_topics_use_a_readable_grouped_knowledge_atlas(tmp_path: Path
         for index in range(33)
     )
     view = GraphView(kind="project", title="Project", nodes=nodes, edges=())
-    positions = dag_viewer._positions(view)
     output = tmp_path / "atlas.json"
     dag_viewer.write_payload(output, view, links={})
     payload = json.loads(output.read_text(encoding="utf-8"))
+    layouts = [node["layout"] for node in payload["nodes"]]
 
     assert payload["view"]["presentation"] == "atlas"
     assert {(region["label"], region["count"]) for region in payload["regions"]} == {
         ("Applications", 23),
         ("Foundations", 10),
     }
-    assert len({(position["x"], position["y"]) for position in positions.values()}) == len(nodes)
-    assert all(position["width"] > position["height"] for position in positions.values())
-    assert min(position["width"] for position in positions.values()) >= 220
-    assert min(position["height"] for position in positions.values()) >= 88
+    assert len({(layout["x"], layout["y"]) for layout in layouts}) == len(nodes)
+    assert all(layout["width"] > layout["height"] for layout in layouts)
+    assert min(layout["width"] for layout in layouts) >= 220
+    assert min(layout["height"] for layout in layouts) >= 88
+
+
+def test_atlas_regions_that_differ_only_in_case_keep_one_order(tmp_path: Path) -> None:
+    """Identical inputs publish identical bytes, whatever the hash seed of the render."""
+    areas = ("algebra", "Algebra", "ALGEBRA", "aLGEBRA", "AlgebrA", "alGEBRA")
+    view = GraphView(
+        kind="project",
+        title="Project",
+        nodes=tuple(ViewNode(f"scope:{area}", area, "scope", (), (("planned", 1),), area=area) for area in areas),
+        edges=(),
+    )
+    output = tmp_path / "atlas.json"
+    dag_viewer.write_payload(output, view, links={})
+
+    regions = json.loads(output.read_text(encoding="utf-8"))["regions"]
+    assert [region["label"] for region in regions] == sorted(areas)
+
+
+def test_a_view_of_topics_and_leaves_is_a_dag_not_an_atlas(tmp_path: Path) -> None:
+    """Catalogs carry no edges, so a chapter holding them beside its sections is edgeless but not all topics."""
+    nodes = (
+        ViewNode("scope:section", "Section", "scope", ("section/a",), (("planned", 1),), area="Topology"),
+        ViewNode("heine-borel", "Heine-Borel theorem", "node", ("heine-borel",), (("planned", 1),)),
+        ViewNode("catalog", "Existing module", "node", ("catalog",), (("inventory_checked", 1),), catalog="module"),
+    )
+    output = tmp_path / "chapter.json"
+    dag_viewer.write_payload(output, GraphView(kind="chapter", title="Chapter", nodes=nodes, edges=()), links={})
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert payload["view"]["presentation"] == "dag"
+    assert payload["regions"] == []
+    assert {node["layout"]["width"] for node in payload["nodes"]} == {196}
+
+
+def test_an_explorer_page_is_named_for_how_the_explorer_draws_it() -> None:
+    """The heading followed the edges, so an edgeless chapter of results was a "knowledge map" drawn as cards."""
+    results = GraphView("chapter", "Results dependency map", (ViewNode("a", "A", "node", ("a",), (("planned", 1),)),), ())
+    topics = tuple(ViewNode(f"scope:{name}", name, "scope", (), (("planned", 1),), area="Algebra") for name in "xy")
+    atlas = GraphView("chapter", "Topics dependency map", topics, (ViewEdge("scope:x", "scope:y", statement_count=1),))
+
+    assert graph_pages._dependency_heading(results) == "Results dependencies"
+    assert graph_pages._dependency_heading(atlas) == "Topics knowledge map"
+    assert graph_pages._dependency_heading(results, "Top level") == "Top level dependencies"
 
 
 def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_path: Path) -> None:
@@ -289,12 +325,10 @@ def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_pa
     dag_viewer.write_payload(output, view, links={})
     payload = json.loads(output.read_text(encoding="utf-8"))
 
-    assert payload["counts"]["isolated"] == 1
     assert {node["id"] for node in payload["nodes"] if node["isolated"]} == {"isolated"}
     script = dag_viewer.viewer_script()
     assert "inventoryNodes" in script
     assert '" · items without edges included"' in script
-    assert "MAX_DOM_NODES = 180" in script
     assert "MAX_MAP_NODES = 120" in script
     assert "MIN_READABLE_SCALE = .8" in script
     assert "MIN_ATLAS_SCALE = .68" in script
@@ -304,7 +338,7 @@ def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_pa
     assert '"+" + hidden + " hidden"' in script
 
 
-def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Path) -> None:
+def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     container = dag_viewer.render_container(
         'unsafe" data-x="oops',
         script_href='scripts/viewer" onload="oops.js',
@@ -331,27 +365,20 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
     assert "100dvh" in container
     assert 'refs.canvas.setAttribute("aria-hidden", "true")' in script
     assert 'refs.stage.setAttribute("role", "region")' in script
-    assert 'toolbar.setAttribute("role", "toolbar")' in script
+    assert 'toolbar.setAttribute("role", "group")' in script
     assert 'refs.navigation = element("aside", "bp-dag-navigation")' in script
     assert 'refs.navigation.setAttribute("aria-label", "Wiki hierarchy")' in script
     assert 'renderNavigation()' in script
     assert 'element("div", "bp-dag-main")' in script
     assert 'element("main", "bp-dag-main")' not in script
     assert 'refs.announcement.setAttribute("aria-live", "polite")' in script
-    assert 'refs.sheetHandle.setAttribute("aria-controls", refs.inspectorInner.id)' in script
-    assert 'refs.inspectorInner.setAttribute("inert", "")' in script
-    assert 'refs.inspectorInner.setAttribute("aria-hidden", "true")' in script
-    assert 'window.addEventListener("resize", syncSheetAccessibility)' in script
     assert "control.dataset.autoformNodeId = node.id" in script
-    assert 'key === "ArrowLeft"' in script
     assert "new ResizeObserver(resize)" in script
     assert "state.pointers.size === 2" in script
     assert "event.type === \"pointerup\" && wasSingle && !state.moved" in script
     assert "touch-action: pan-y" in container
     assert '.bp-dag-viewer[data-layout=app] .bp-dag-stage { touch-action: none; }' in container
     assert 'url.origin === window.location.origin' in script
-    assert 'if (target === current) return' in script
-    assert 'state.selected && !state.selectedStatuses.has(state.selected.status)' in script
     assert 'w: node.width, h: node.height' in script
     assert 'spotlight.before.has(edge.source) && spotlight.before.has(edge.target)' in script
     assert 'spotlight.after.has(edge.source) && spotlight.after.has(edge.target)' in script
@@ -364,14 +391,8 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
     assert "Title prefix" in script and "Id prefix" in script and "Word prefix" in script
     assert "Exact Lean name" in script and "Statement match" in script and "All terms match" in script
 
-    node = shutil.which("node")
-    if node:
-        runtime = tmp_path / "viewer.js"
-        runtime.write_text(script, encoding="utf-8")
-        subprocess.run([node, "--check", str(runtime)], check=True, capture_output=True, text=True)
 
-
-def test_explorer_pages_large_searches_and_relations_and_fits_deep_graphs() -> None:
+def test_explorer_pages_relations_and_clamps_zoom() -> None:
     script = dag_viewer.viewer_script()
 
     assert "MIN_SCALE = .002, MIN_READABLE_SCALE = .8, MIN_ATLAS_SCALE = .68" in script
@@ -380,7 +401,6 @@ def test_explorer_pages_large_searches_and_relations_and_fits_deep_graphs() -> N
     assert "Math.min(visible + RELATION_PAGE, ids.length)" in script
     assert "ids.slice(visible, next)" in script
     assert "clamp(old * factor, MIN_SCALE, 4)" in script
-    assert "Math.max(fitted, readableFloor), MIN_SCALE, 1.35" in script
 
 
 def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path) -> None:
@@ -414,7 +434,7 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
 
     # The hierarchy rail is part of the shared runtime, but the dependency-free
     # application still stays below one small uncompressed network response.
-    assert len(dag_viewer.viewer_script().encode()) < 64_000
+    assert len(dag_viewer.viewer_script().encode()) < 68_000
     assert output.stat().st_size < 300_000
     assert search.stat().st_size < 100_000
     search_payload = json.loads(search.read_text(encoding="utf-8"))
@@ -426,31 +446,6 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
     assert "summary" not in search_payload["nodes"][1]
 
 
-def test_large_views_fail_over_before_mermaid_hard_limits() -> None:
-    node = ViewNode(
-        id="n",
-        title="Node",
-        kind="node",
-        members=("n",),
-        status_counts=(("planned", 1),),
-        status_key="planned",
-    )
-    edge_heavy = GraphView(
-        kind="chapter",
-        title="Large",
-        nodes=(node,),
-        edges=tuple(ViewEdge("n", "n", statement_count=1) for _ in range(dag_viewer.MAX_MERMAID_EDGE_LINES + 1)),
-    )
-    assert dag_viewer.requires_interactive(edge_heavy, "small")
-
-    text_heavy = GraphView(kind="chapter", title="Large", nodes=(node,), edges=())
-    assert dag_viewer.requires_interactive(
-        text_heavy,
-        "x" * (dag_viewer.MAX_MERMAID_CHARACTERS + 1),
-    )
-    assert not dag_viewer.requires_interactive(text_heavy, "small")
-
-
 def test_viewer_script_links_are_relative_to_the_rendered_site_root(tmp_path: Path) -> None:
     assert graph_pages._viewer_script_link(tmp_path / "dependencies.md", tmp_path) == "javascripts/blueprint-dag.js"
     assert graph_pages._viewer_script_link(tmp_path / "dependencies/full.md", tmp_path) == "../javascripts/blueprint-dag.js"
@@ -460,7 +455,7 @@ def test_viewer_script_links_are_relative_to_the_rendered_site_root(tmp_path: Pa
     )
 
 
-def test_payload_layout_follows_dependencies_and_keeps_collapsed_cycles_stable() -> None:
+def test_payload_layout_follows_dependencies_and_keeps_collapsed_cycles_stable(tmp_path: Path) -> None:
     nodes = (
         ViewNode("result", "Result", "node", ("result",), (("planned", 1),)),
         ViewNode("base", "Base", "node", ("base",), (("planned", 1),)),
@@ -481,13 +476,18 @@ def test_payload_layout_follows_dependencies_and_keeps_collapsed_cycles_stable()
         ),
     )
 
-    acyclic_positions = dag_viewer._positions(acyclic)
-    assert acyclic_positions["base"]["rank"] < acyclic_positions["result"]["rank"]
-    assert dag_viewer._positions(cyclic) == dag_viewer._positions(cyclic)
-    assert len({(entry["x"], entry["y"]) for entry in dag_viewer._positions(cyclic).values()}) == 2
+    def layout(view: GraphView) -> dict[str, tuple[int, int]]:
+        output = tmp_path / f"{view.kind}.json"
+        dag_viewer.write_payload(output, view, links={})
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        return {node["id"]: (node["layout"]["x"], node["layout"]["y"]) for node in payload["nodes"]}
+
+    assert layout(acyclic) == {"base": (0, 0), "result": (312, 0)}
+    # A collapsed cycle has no topological order, so it keeps source order.
+    assert layout(cyclic) == {"result": (0, 0), "base": (312, 0)}
 
 
-def test_payload_rejects_duplicate_nodes_and_unknown_edges() -> None:
+def test_payload_rejects_duplicate_nodes_and_unknown_edges(tmp_path: Path) -> None:
     node = ViewNode("a", "A", "node", ("a",), (("planned", 1),))
     duplicate = GraphView(kind="full", title="Duplicate", nodes=(node, node), edges=())
     unknown = GraphView(
@@ -498,9 +498,30 @@ def test_payload_rejects_duplicate_nodes_and_unknown_edges() -> None:
     )
 
     with pytest.raises(ValueError, match="duplicate node ids"):
-        dag_viewer._positions(duplicate)
+        dag_viewer.write_payload(tmp_path / "duplicate.json", duplicate, links={})
     with pytest.raises(ValueError, match="unknown node"):
-        dag_viewer._positions(unknown)
+        dag_viewer.write_payload(tmp_path / "unknown.json", unknown, links={})
+
+
+def test_an_explorer_page_encodes_a_literal_percent_in_its_payload_name(tmp_path: Path) -> None:
+    """render_container keeps % for hrefs that arrive encoded, so the page encodes the payload's name."""
+    page = tmp_path / "100%25 results.md"
+    node = ViewNode("a", "A", "node", ("a",), (("planned", 1),))
+
+    graph_pages._write_page(
+        page,
+        view=GraphView(kind="chapter", title="Results", nodes=(node,), edges=()),
+        statuses={},
+        links={},
+        heading="Results",
+        lead="One result.",
+        site_root=tmp_path,
+        search_href="index.json",
+        breadcrumbs=(),
+    )
+
+    assert (tmp_path / "100%25 results.json").is_file()
+    assert 'data-graph-src="100%2525%20results.json"' in page.read_text(encoding="utf-8")
 
 
 def test_interactive_graph_urls_encode_authored_path_delimiters() -> None:

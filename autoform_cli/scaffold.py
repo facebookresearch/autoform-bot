@@ -66,7 +66,6 @@ _TEMPLATE_PATHS = frozenset(
         "github/workflows/autoform-verify.yml",
         "github/workflows/blueprint-pages.yml",
         "gitignore",
-        "hooks/title_only_search.py",
         "mkdocs.yml",
         "theme/main.html",
     }

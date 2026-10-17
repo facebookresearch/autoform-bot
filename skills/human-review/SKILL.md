@@ -24,10 +24,9 @@ this skill's `skills/` folder, along with `pyproject.toml` and `autoform_cli/`.
 Give a subagent that root and this prefix with its task.
 
 Regenerate the review views from `<PROJECT>`: validate the blueprint, refresh
-the bounded Mermaid project graph with `autoform-visualize` so Obsidian shows
-current high-level dependencies, render the site source, then strict-build the
-site. Follow the publication sequence in the
-[CLI reference](../../autoform_cli/README.md#commands),
+the Mermaid graph with `autoform-visualize` so Obsidian shows current
+dependencies, render the site source, then strict-build the site. Follow the
+publication sequence in the [CLI reference](../../autoform_cli/README.md#commands),
 but omit `--require-declarations`: review happens while statements are still
 unformalized, and a missing declaration is something for the reviewer to see
 rather than a reason to refuse to render.
@@ -40,24 +39,26 @@ GitHub Pages is served on loopback with local-only live claim badges. Provide
 the overview, including its progress summary, plus the relevant project,
 chapter, nested-scope, and statement-context links. Every generated site route
 uses the same Canvas plus semantic-DOM viewer. Open its full-page route and move
-from project clusters to a chapter, a nested scope, then a searched statement
+from the project's topics to a chapter, a nested scope, then a searched statement
 and its immediate dependencies. Keep the hierarchy rail visible while drilling;
 at project scale, select one topic to reveal its direct dependency neighborhood
 instead of displaying every cross-topic edge at once. Never begin with a
 fitted all-repository node cloud: global search enters the statement's smallest
-useful scope, while breadcrumbs and Back return to the project overview. The authored vault graph remains Mermaid;
+useful scope, while breadcrumbs and Back return to the project overview. The
+authored vault graph remains Mermaid;
 never raise Mermaid's text or edge limits to publish scale.
 
 Judge the explorer as a mathematical knowledge map, not navigation chrome.
 Authored mathematical regions and prose should control the atlas and reading
-panel; repository, provenance, and pagination folders remain facets. Containment
-uses regions or hulls, dependency uses typed arrows, and a level with no authored
-dependency edges says so instead of fabricating relations.
+panel. Regions come only from authored `area:` or `blueprint/atlas.json`;
+folders that only file or paginate pages never become regions. Areas show as
+regions, containment as topics you open, and dependency as arrows; a level with
+no authored dependency edges says so instead of fabricating relations.
 
 Guide the review from coarse to fine: declared scope and exclusions, milestone
 book, landing-page progress summary, cross-chapter graph, chapter graph, then
-individual node and Lean-source links. Record each human decision as `approve`,
-`revise`, or `block`, with the exact page or node and rationale. Separate validator output
+individual node and Lean-source links. Record each human decision as `approve`, `revise`, or
+`block`, with the exact page or node and rationale. Separate validator output
 from the person's judgment. Do not silently apply requested revisions: hand
 mathematical-plan changes and Lean implementation changes to Roadmap, which
 records the decision and retracts the affected article so Formalize takes it up

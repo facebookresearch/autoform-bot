@@ -23,6 +23,8 @@ from .graph import (
     Graph,
     GraphValidationError,
     Node,
+    atlas_omissions,
+    catalogs_without_ledger,
     load_graph,
 )
 from .lean import (
@@ -157,7 +159,10 @@ class AuditResult:
             "clean": self.clean,
             "coverage": self.coverage.as_dict() if self.coverage is not None else None,
             "findings": [asdict(finding) for finding in self.findings],
-            "warnings": [asdict(warning) for warning in self.warnings],
+            "warnings": [
+                {**asdict(warning), "declarations": [asdict(entry) for entry in warning.declarations]}
+                for warning in self.warnings
+            ],
         }
 
     def to_json(self) -> str:
@@ -227,8 +232,9 @@ def audit_graph(
         fully_implemented = True
         for child_id in contained.get(node_id, ()):
             child = graph.nodes[child_id]
-            # As on the site, a leaf marked not ready is a target too, so its scope stays open until it is proved.
-            if child.formalizable or (child.not_ready and child_id not in contained):
+            # As on the site, a leaf marked not ready is a target too, so its scope stays open until it
+            # is proved, and a module catalog never is.
+            if child.catalog is None and (child.formalizable or (child.not_ready and child_id not in contained)):
                 has_formalizable = True
                 fully_implemented = fully_implemented and derived[child_id].proved
             if scope_has_formalizable[child_id]:
@@ -347,18 +353,30 @@ def audit_graph(
                 AuditFinding(
                     article_path,
                     "missing-declaration-intent",
-                    "formalization-bearing leaf has neither declaration nor catalog intent metadata",
+                    "formalization-bearing leaf has no declaration intent metadata",
                 )
             )
 
         findings.extend(_source_findings(graph, node, article_path))
 
+    findings.extend(
+        AuditFinding(
+            _relative_path(graph.nodes[node_id].path, graph.blueprint_dir),
+            "catalog-missing-ledger",
+            "module catalog links no declaration ledger under blueprint/sources/ from '## Sources'",
+        )
+        for node_id in catalogs_without_ledger(graph)
+    )
     if coverage_findings is None:
         coverage, coverage_findings = _coverage_findings(graph.blueprint_dir)
     findings.extend(coverage_findings)
-    if coverage is not None:
-        findings.extend(_coverage_role_findings(graph, coverage))
-    warnings: list[AuditWarning] = []
+    warnings = [AuditWarning("atlas.json", "atlas-omission", omission, ()) for omission in atlas_omissions(graph)]
+    for issue in () if coverage is None else validate_coverage_roles(graph, coverage):
+        reason = f"{issue.reason}{f' (line {issue.line})' if issue.line else ''}"
+        if issue.code == "decomposed-without-declaration":
+            warnings.append(AuditWarning("coverage/README.md", issue.code, reason, ()))
+        else:
+            findings.append(AuditFinding("coverage/README.md", issue.code, reason))
     if lean_root is not None:
         findings.extend(_lean_findings(graph, lean_root, warnings=warnings))
     return _result(findings, coverage=coverage, warnings=warnings)
@@ -478,22 +496,6 @@ def _coverage_findings(
     return coverage, findings
 
 
-def _coverage_role_findings(
-    graph: Graph,
-    coverage: CoverageSummary,
-) -> list[AuditFinding]:
-    """Project public coverage-role issues into the audit result model."""
-
-    return [
-        AuditFinding(
-            "coverage/README.md",
-            issue.code,
-            f"{issue.reason}{f' (line {issue.line})' if issue.line else ''}",
-        )
-        for issue in validate_coverage_roles(graph, coverage)
-    ]
-
-
 def _lean_findings(
     graph: Graph,
     lean_root: str | Path,
@@ -508,15 +510,8 @@ def _lean_findings(
         return [AuditFinding(".", "invalid-lean-root", str(error))]
 
     findings: list[AuditFinding] = []
-    names_to_resolve = tuple(
-        dict.fromkeys(
-            name
-            for node in graph.nodes.values()
-            for name in declaration_names(node.lean or "")
-        )
-    )
     try:
-        snapshot = snapshot_project_sources(root, names=names_to_resolve)
+        snapshot = snapshot_project_sources(root, names=graph.lean_names())
     except OSError as error:
         return [
             AuditFinding(
@@ -538,13 +533,11 @@ def _lean_findings(
         for name in names:
             declaration = index.find(name)
             if declaration is None:
-                findings.append(
-                    AuditFinding(
-                        article_path,
-                        "lean-target-not-found",
-                        f"Lean declaration target was not found: {name}",
-                    )
-                )
+                reason = f"Lean declaration target was not found: {name}"
+                if node.catalog:
+                    # The index records only names written after a declaration keyword.
+                    reason += "; a name Lean generates is not indexed and belongs in the catalog's ledger"
+                findings.append(AuditFinding(article_path, "lean-target-not-found", reason))
             else:
                 resolved.append(declaration)
 
@@ -575,10 +568,13 @@ def _lean_findings(
 
         # Catalog declarations must resolve like every other asserted Lean
         # target. A catalog inventories code that already exists, so its
-        # limits are only warnings, and declaration-specific policy is
+        # limits are only warnings, read like a declaration article's from
+        # what each alias reaches, and declaration-specific policy is
         # inapplicable to a non-dispatchable inventory container.
         if node.catalog is not None:
-            catalogs[article_path] = tuple(dict.fromkeys(resolved))
+            catalogs[article_path] = tuple(
+                dict.fromkeys(index.reached(declaration) or declaration for declaration in resolved)
+            )
             continue
 
         for declaration in resolved:
@@ -613,7 +609,7 @@ def _lean_findings(
                 )
             )
 
-        if resolved and node.catalog is None:
+        if resolved:
             sizes[node_id] = sum(spans[body.name] for body in bodies)
 
     findings.extend(_size_findings(graph, sizes))
@@ -770,40 +766,37 @@ def _catalog_limit_warnings(
             count = len({entry.name for entry in entries})
             options = sorted({entry.option for entry in entries})
             example = f"{entries[0].name} at {entries[0].location}" + (f" and {count - 1} more" if count > 1 else "")
+            # A catalog lists code that builds today, so the warning informs:
+            # a guessed limit can stop a declaration from elaborating.
             if problem == "unbounded":
                 verb = "has" if count == 1 else "have"
                 summary = f"{verb} " + " or ".join(f"no {option} limit" for option in options)
-                action = "set a finite limit"
+                change = "a finite limit"
             else:
                 verb = "inherits" if count == 1 else "inherit"
                 summary = f"{verb} a file- or section-wide raised {' or '.join(options)} limit"
                 wrappers = " or ".join(f"`set_option {option} N in`" for option in options)
-                action = f"put {wrappers} on the declarations that need it"
-            message = f"{count} of {len(declarations)} catalogued {noun} {summary} ({example}); {action}"
+                change = f"{wrappers} on the declarations that need it"
+            message = (
+                f"{count} of {len(declarations)} catalogued {noun} {summary} ({example}); "
+                f"existing code: change it only on request, and {change} must pass a rebuild"
+            )
             warnings.append(AuditWarning(article_path, f"catalog-{problem}-limit", message, tuple(entries)))
     return warnings
 
 
 def _source_spans(index: SourceIndex) -> dict[str, int]:
-    """Measure each declaration's source span, up to the next declaration.
+    """Measure each declaration's source span, up to the next declaration in its file.
 
     This is the retrospective size signal: unlike anything authored in the
     article, it is what the node actually cost once it was formalized.
     """
 
-    starts: dict[Path, list[int]] = {}
-    for declaration in index.declarations.values():
-        starts.setdefault(declaration.path, []).append(declaration.line)
-    tails: dict[Path, int] = {}
-    for path, lines in starts.items():
-        lines.sort()
-        tails[path] = index.line_counts.get(path, 0)
-
     spans: dict[str, int] = {}
     for declaration in index.declarations.values():
-        lines = starts[declaration.path]
+        lines = index.declaration_lines[declaration.path]
         following = bisect_right(lines, declaration.line)
-        end = lines[following] - 1 if following < len(lines) else tails[declaration.path]
+        end = lines[following] - 1 if following < len(lines) else index.line_counts.get(declaration.path, 0)
         spans[declaration.name] = max(1, end - declaration.line + 1)
     return spans
 

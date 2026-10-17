@@ -16,7 +16,9 @@ scope against the sources, then inspect the fine DAG and its coarse roadmap.
    [search contract](../../../autoform_cli/README.md#search-contract), for each
    main result in scope, by a few distinctive words and by its Lean name when
    it has one, and list the queries run. Each result hits its own article; a
-   second article stating the same result is a duplicate. Finding none, even
+   second article stating the same result is a duplicate, but a hit whose
+   `catalog` is `module` is an inventory listing the declaration, not a
+   duplicate of the article that expounds it. Finding none, even
    after a retry with fewer words, is not proof, because matching is literal:
    also compare the statements read for item 3.
    Include the project's usable shared libraries, as the
@@ -30,8 +32,11 @@ scope against the sources, then inspect the fine DAG and its coarse roadmap.
 - Every planned main result has a stable source location and preserves its
   objects, hypotheses, quantifiers, and conclusion.
 - The machine-checkable `Area | Coverage | Evidence` table uses `MAPPED`,
-  `DECOMPOSED`, `DEFERRED`, and `OUT` to distinguish known material, roadmap
-  nodes, explicit later work, and material outside formalization scope.
+  `DECOMPOSED`, `INVENTORIED`, `DEFERRED`, and `OUT` to distinguish known
+  material, roadmap nodes, inventoried existing modules, explicit later work,
+  and material outside formalization scope. `DECOMPOSED` evidence reaches
+  declaration articles, and `INVENTORIED` evidence reaches `catalog: module`
+  leaves.
 - Every row has concrete evidence, and no `MAPPED` row is described as complete.
 - The fine nodes and coarse roadmap agree; discoveries made during decomposition
   are reflected in the milestones and coverage contract.
@@ -43,6 +48,10 @@ scope against the sources, then inspect the fine DAG and its coarse roadmap.
 - Each node is a plausible pull-request unit with one unique main result.
   Several definitions or statements may share a node when they support that
   result and should be reviewed and landed together.
+- A `catalog: module` leaf records existing code and is never dispatched, so
+  judge it by reconciliation instead: its `lean:` names resolve, it links its
+  ledger under `blueprint/sources/`, and an `INVENTORIED` row reaches it. The
+  pull-request-unit and unique-main-result rules do not apply to it.
 - Every dependency is genuinely used. Missing intermediates, spurious edges,
   duplicates, and cross-milestone prerequisites are identified.
 - `## Depends on` contains statement prerequisites; `## Proof depends on`
@@ -69,5 +78,5 @@ misleading; 1 mostly unreliable; 0 absent or vacuous. Weight the three axes
 40/40/20. Call the roadmap clean only when source fidelity and DAG quality are
 at least 4 and usability is at least 3. Reject when source fidelity or DAG
 quality is 2 or below. Missing source evidence caps source fidelity at 2; a node
-with several peer main results and no unique completion target caps DAG quality
-at 2.
+other than a catalog with several peer main results and no unique completion
+target caps DAG quality at 2.

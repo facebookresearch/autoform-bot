@@ -100,7 +100,7 @@ def test_render_publishes_dependencies_between_the_roadmap_root_and_a_chapter(
     assert 'class="bp-dag-viewer"' in full_page
     full_payload = json.loads((output / "dependencies/full.json").read_text(encoding="utf-8"))
     assert {node["title"] for node in full_payload["nodes"]} == {
-        "Root result",
+        "Top level",
         "Chapter",
     }
     search_index = json.loads((output / "dependencies/index.json").read_text(encoding="utf-8"))

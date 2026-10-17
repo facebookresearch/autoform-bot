@@ -51,10 +51,9 @@ choosing one would discard accepted work.
 
 ## Inventory existing project mathematics
 
-When the adopted boundary is a repository-wide catalog, library, global wiki,
-or other existing codebase, project-owned Lean is a primary mathematical
-source rather than implementation prior art to omit. Before planning future
-work:
+When the adopted boundary is a repository-wide library, global wiki, or other
+existing codebase, project-owned Lean is a primary mathematical source rather
+than implementation prior art to omit. Before planning future work:
 
 - inventory every in-scope tracked module and public mathematical declaration,
   plus declaration-like wishlist or conjecture entries and adopted planning
@@ -73,10 +72,10 @@ does not make an area `DECOMPOSED`.
 
 A future-work slice cannot stand in for a repository-wide inventory. Keep
 existing, wishlist, conjectural, and planned mathematics in the same book and
-DAG. `DECOMPOSED` means represented by roadmap articles, not unfinished, so it
-may describe mathematics whose Lean implementation is already complete. A
-checked local declaration is valid grounding for repository documentation; do
-not invent an external citation or historical-source claim.
+DAG. `DECOMPOSED` means represented by declaration articles, not unfinished,
+so it may describe mathematics whose Lean implementation is already complete.
+A checked local declaration is valid grounding for repository documentation;
+do not invent an external citation or historical-source claim.
 
 ## Ground and decompose
 
@@ -84,15 +83,16 @@ Inspect the repository and existing vault before writing. Preserve accepted
 material and unrelated changes; send missing infrastructure to Setup. Formalize
 owns Lean execution after this skill produces a validated ready frontier.
 
-Before external research, extract module and declaration docstrings and nearby
-source comments alongside the Lean signatures and implementations. Work from
-those exact source passages. Record stable source locations, assumptions, and
-uncovered prerequisites under `blueprint/sources/`; label project-authored
-specifications honestly. Search the pinned Mathlib checkout and every usable
-shared library before planning a replacement. External research is read-only,
-and contacting people requires permission. Do not invent a statement,
-motivation, proof narrative, dependency, citation, or historical attribution
-that the available sources do not support. Read
+Work from exact source passages. When the boundary includes existing Lean,
+first extract module and declaration docstrings and nearby source comments
+alongside the Lean signatures and implementations; they locate and describe
+code but never replace the adopted source. Record stable source locations,
+assumptions, and uncovered prerequisites under `blueprint/sources/`; label
+project-authored specifications honestly. Search the pinned Mathlib checkout
+and every usable shared library before planning a replacement. External
+research is read-only, and contacting people requires permission. Do not invent
+a statement, motivation, proof narrative, dependency, citation, or historical
+attribution that the available sources do not support. Read
 [Setup's Zulip workflow](../setup/references/zulip.md) only for requested
 Zulip work.
 
@@ -126,12 +126,12 @@ given, so the owner of global consistency repeats it for what parallel agents
 added.
 
 Enumerate the entire adopted boundary in `blueprint/coverage/README.md`.
-`MAPPED` is unfinished, `DECOMPOSED` links mathematical exposition,
-`INVENTORIED` links exact module catalogs, `DEFERRED` records an explicit user
-decision or concrete external blocker, and `OUT` explains an exclusion. Treat
-every other `DEFERRED` row as queued work; never defer merely to shorten the
-run. Because `coverage.complete` only checks declared rows, compare the table
-with the source structure yourself.
+`MAPPED` is unfinished, `DECOMPOSED` links source-grounded declaration
+articles, `INVENTORIED` links exact module catalogs, `DEFERRED` records an
+explicit user decision or concrete external blocker, and `OUT` explains an
+exclusion. Treat every other `DEFERRED` row as queued work; never defer merely
+to shorten the run. Because `coverage.complete` only checks declared rows,
+compare the table with the source structure yourself.
 
 Write milestone pages under `blueprint/roadmap/` by mathematical significance,
 then one fine article per coherent unit with one unique main result. For an
@@ -155,7 +155,8 @@ stays out of the mathematical wiki and remains valid when the article moves.
 Never link it from an article. Delete it when the article is proved or marked
 `mathlib: true`; delete a container's note when every formalizable descendant,
 and every leaf marked `not_ready` beneath it, is proved and there is at least
-one. To move an article, move its file, which keeps its `article_id` line and
+one; a module catalog never counts. To move an article, move its file, which
+keeps its `article_id` line and
 so its note; a page written afresh must take that line in the same edit that
 deletes the old page. When a commit deletes or merges an article,
 move anything still useful from its note into a surviving article's note and
@@ -169,8 +170,9 @@ editing and release it once the committed revision is on the branch Formalize
 works from. A refused acquire means another agent owns the article: leave it and
 report it. Claims write refs to the board's remote, which is outward-facing, so
 make sure the request covers them. When a revision changes a statement whose
-article has `lean:`, retract it: replace `statement: formalized` with
-`statement: retracted`, remove `proof: formalized`, and keep `lean:`, which
+article has `lean:` once rebased onto the branch Formalize works from, retract
+it: replace `statement: formalized` with `statement: retracted`, remove
+`proof: formalized`, and keep `lean:`, which
 Formalize needs to run `autoform work impact`; an article without `lean:` just
 loses `statement` and `proof`. When the project's CI pins an `AUTOFORM_REF`
 older than the marker, its `autoform check` rejects `statement: retracted`:
@@ -195,12 +197,6 @@ the user's request and only once CI meets the
 Turn it back off only once no open statement remains: the strict audit rejects
 every `sorry`, and strict status shows a proof resting on one as proved.
 
-Use `catalog: module` only as a source inventory for one existing Lean module,
-with an exact declaration ledger and explicit private/supporting exclusions.
-It may accompany exposition, but names, signatures, status tables, and imports
-do not replace reader-facing mathematical prose. A catalog leaf omits
-`declaration` and is never dispatchable proof work.
-
 Assert `statement: formalized`, `proof: formalized`, or `mathlib: true` only
 after exact verification. For declaration leaves, record exact compiled names
 in `lean`. Definitions, structures, classes, instances, and inductives have no
@@ -212,13 +208,30 @@ statement representation, not the conjecture. Set `mathlib: true` only for an
 exact verified upstream result. Hand deeper trust and axiom review to Agent
 Review.
 
+Use `catalog: module` only as a source inventory for one existing Lean module.
+It may accompany exposition, but names, signatures, status tables, and imports
+do not replace reader-facing mathematical prose. A catalog leaf omits
+`declaration` and is never dispatchable proof work. When the project's CI pins
+an `AUTOFORM_REF` older than catalogs, its `autoform check` rejects `catalog:`
+and `area:`, and its `render` rejects `INVENTORIED`: move the pin, or report
+it, before adding catalogs, areas, or `INVENTORIED` rows.
+
 For a `catalog: module` leaf, assertion keys describe the whole tracked module:
 set `statement: formalized` only when all inventoried public declarations
 exist, and `proof: formalized` only when every included implementation or proof
-is complete under the repository's trust policy. Record every exact compiled
-public name in `lean` and in the declaration ledger linked from the article's
-exact `## Sources` section. A deferred compiled name means the catalog is not
-yet verified and must not carry formalized assertions.
+is complete under the repository's trust policy. Record the full name of every
+public declaration the module writes with a declaration keyword, as the Lean
+source index records them, in `lean` and in the declaration ledger linked from
+the article's `## Sources` section. Names Lean generates
+(constructors, structure fields, derived or unnamed instances, and `@[ext]`,
+`@[simps]`, or `@[to_additive]` results) and declarations the index cannot see
+yet (behind `nonrec` or `meta`, or written `class inductive`) go in the ledger
+as supporting entries, never in `lean`; a `private` name never goes in `lean`.
+A keyword-declared public name left out of `lean` or unresolved means the
+catalog is not yet verified and must not carry formalized assertions. Like any
+prerequisite, a catalog linked under `## Depends on` or `## Proof depends on`
+holds its dependents back until its whole-module assertion is recorded, so a
+dependent that needs one result links the declaration article that expounds it.
 
 For a large source, divide independent sections among available agents while
 retaining one owner for global coverage, status semantics, and dependency
@@ -228,18 +241,23 @@ contract, `blueprint/README.md`, and the repository `README.md`.
 ## Finish
 
 After the final edit, use the CLI reference to run `autoform check` and
-`autoform audit`, refresh the bounded vault graph, and resolve every finding
+`autoform audit`, refresh the Mermaid graph, and resolve every finding
 introduced by this work or inside the adopted boundary. Report unrelated
-pre-existing findings instead of silently widening scope. Commit the vault and
-refreshed graph only after this final validation; pushing is outward-facing and
-requires a user request.
+pre-existing findings instead of silently widening scope. A
+`catalog-unbounded-limit` or `catalog-unscoped-limit` warning describes
+existing Lean code and never fails the audit: report it, and change that code
+only when the user asks, through Formalize, rebuilding before anything is
+recorded. Fix the other `warning:` lines inside the adopted boundary as you
+would a finding. Commit the vault and refreshed graph only after this final
+validation; pushing is outward-facing and requires a user request.
 
 Finish only when the adopted boundary has no `MAPPED` rows, every `DECOMPOSED`
-area links source-grounded expositional articles, every `INVENTORIED` area links
-exact catalogs, every in-scope declaration is reconciled, affected pages and
-the graph agree, and the latest commit contains every change from the pass. Do
-not stop after discovery, a coarse proposal, one chapter, or unchanged
-validation. Report the material delta, evidence, existing/formalized versus
-wishlist/conjectural/planned counts, reconciliation gaps, remaining blockers,
-and the next execution frontier. Mark an active Goal complete only after these
-conditions hold.
+area links source-grounded declaration articles, every `INVENTORIED` area links
+exact catalogs, affected pages and the graph agree, and the latest commit
+contains every change from the pass; a repository inventory also needs every
+in-scope declaration reconciled. Do not stop after discovery, a coarse
+proposal, one chapter, or unchanged validation. Report the material delta,
+evidence, remaining blockers, and the next execution frontier, and for a
+repository inventory the existing/formalized versus wishlist/conjectural/planned
+counts and the reconciliation gaps. Mark an active Goal complete only after
+these conditions hold.

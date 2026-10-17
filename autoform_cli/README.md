@@ -21,7 +21,8 @@ The H1 is the article's human title. Container
 prose supplies the mathematical exposition, and a standalone list item linking
 to a formalizable leaf places that definition or result at the exact position in
 the published chapter. Leaves without a placement slot appear under an explicit
-“Additional formalization targets” section rather than disappearing.
+“Additional formalization targets” section rather than disappearing; a module
+catalog without one appears under “Module inventories” instead.
 
 Keep the root roadmap article short: it is the book's preface and table of
 contents, not a dump of every planned milestone. Large planning inventories
@@ -33,7 +34,6 @@ Frontmatter records checked facts:
 ```markdown
 ---
 article_id: af_5b0e4d3c2a1f09e8d7c6b5a4
-area: Analysis & Probability
 declaration: theorem
 origin: cited
 statement: formalized
@@ -103,11 +103,11 @@ target, `bridged` for a result introduced between source targets, and
 Frontmatter is optional. A container article that only supplies prose and
 placement needs none at all; only checked facts are recorded.
 
-The optional `area` field assigns a container to an authored mathematical
-region in the knowledge atlas. Use mathematical areas such as `Foundations` or
-`Geometry & Topology`, never repository or workflow buckets such as
-`MathlibExt` or `catalog-01`. Autoform does not guess areas from paths, imports,
-or titles.
+The optional `area` field places a container in an authored mathematical
+region of its parent's explorer map; on a leaf it only labels the article. Use
+mathematical areas such as `Foundations` or `Geometry & Topology`, never
+repository or workflow buckets such as `MathlibExt` or `catalog-01`. Autoform
+does not guess areas from paths, imports, or titles.
 
 For a taxonomy maintained separately from article files, `blueprint/atlas.json`
 may assign the same areas without moving pages:
@@ -116,23 +116,41 @@ may assign the same areas without moving pages:
 {"schema":"autoform-atlas/v1","areas":{"Geometry & Topology":["topology","geometry"]}}
 ```
 
-Every listed value is a roadmap node id, each node may appear once, and a
-manifest assignment must agree with any `area:` already authored on that node.
+Every listed value is a roadmap node id. A node takes the first area that
+lists it, and an `area:` authored on the node wins over the file. The file only
+assigns areas, so it never stops a command: `check` and `render`
+warn about each entry they ignore, or about the whole file when it is not
+readable `autoform-atlas/v1` JSON, and `audit` reports each as an
+`atlas-omission` [warning](#warnings). An older `AUTOFORM_REF` ignores the file.
 
 A repository-wide inventory may use a narrative leaf to summarize an existing
 Lean module containing several declarations. Such a leaf sets
 `catalog: module` and omits `declaration`, so it is never dispatched as one
-proof task. A completed catalog records every exact compiled public name in
-`lean:` and links a declaration ledger under `blueprint/sources/` from its exact
-`## Sources` section; it may assert
-`statement: formalized` and `proof: formalized` when the complete module has
-been checked. It contributes to the neutral inventory metric and graph status
-while remaining a readable catalog page, but stays outside the mathematical
-`Scoped roadmap` completion percentage.
+proof task. A catalog must be a leaf: `audit` reports one with contained
+articles as `catalog-container`. Every catalog links a declaration ledger under
+`blueprint/sources/` from its `## Sources` section: `check` warns about a
+catalog that links none and `audit` reports it as `catalog-missing-ledger`,
+while a link to a missing or hidden ledger fails both, as such a source link
+does for any article. A completed catalog also
+records in `lean:` the full name of every public declaration the module writes
+with a declaration keyword, which is what the Lean source index records (see
+[Validation](#validation)). Names Lean generates, such as constructors,
+structure fields, derived or unnamed instances, and `@[ext]`, `@[simps]`, or
+`@[to_additive]` results, and declarations the index cannot see yet, behind
+`nonrec` or `meta` or written `class inductive`, go in the ledger as
+supporting entries, never in `lean:`; a `private` name never goes in `lean:`.
+A completed catalog may assert `statement: formalized` and `proof: formalized`
+when the complete module has been checked. It contributes to the neutral
+inventory metric and graph status while remaining a readable page in the vault
+and a section of its parent chapter on the site, but its own entry stays
+outside the mathematical `Scoped roadmap` completion percentage. Like any
+prerequisite, a catalog linked under `## Depends on` or `## Proof depends on`
+holds its dependents back until its whole-module assertion is recorded, so a
+dependent that needs one result links the declaration article that expounds it.
 
-`check --lean-root` and `audit --lean-root` resolve every compiled name the
-catalog lists, and every command that loads the blueprint validates the local
-ledger link. They cannot prove that the list omitted no newly added public
+`check --lean-root` and `audit --lean-root` resolve every name the catalog
+lists, and say for a catalog's unresolved name that a generated name belongs in
+the ledger. They cannot prove that the list omitted no newly added public
 declaration; completeness remains an authored assertion pending
 repository-inventory reconciliation. `audit --lean-root` also reads the
 [elaboration limits](#elaboration-limits) of the declarations a catalog
@@ -155,7 +173,7 @@ deleting the orphan. When the article still exists but lost its `article_id`
 line, restore the line instead.
 Delete the file once its article is proved; for a container, delete it once
 every formalizable descendant, and every leaf marked `not_ready` beneath it,
-is proved and there is at least one. The
+is proved and there is at least one; a module catalog never counts. The
 directory is hidden, so current and older renderers omit it from the site and
 publication hash without requiring an `AUTOFORM_REF` migration; `autoform
 audit` reports a note left behind after that point.
@@ -166,8 +184,8 @@ An article asserts only facts a human or agent verified:
 
 | Key | Meaning |
 | --- | --- |
-| `area: Geometry & Topology` | Authored mathematical region for atlas grouping. |
-| `catalog: module` | A non-dispatchable leaf cataloging one existing Lean module. |
+| `area: Geometry & Topology` | Authored mathematical region for atlas grouping. CI's `autoform check` at an older `AUTOFORM_REF` rejects the key, so move the pin first, or assign the area in `blueprint/atlas.json`, which older refs ignore. |
+| `catalog: module` | A non-dispatchable leaf cataloging one existing Lean module. Its `lean:` lists the module's public keyword-declared names, and it links its declaration ledger under `blueprint/sources/` from `## Sources`; cannot be combined with `declaration` or the `mathlib*` keys. CI's `autoform check` at an older `AUTOFORM_REF` rejects the key, so move the pin first. |
 | `statement: formalized` | The Lean statement exists and compiles. Requires `lean:`. |
 | `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. CI's `autoform check` at an older `AUTOFORM_REF` rejects the marker, so move the pin first; until then, retract by removing `statement` and `proof` and keeping `lean:`. |
 | `proof: formalized` | The Lean proof compiles. Requires `statement: formalized` and `lean:`. Under the open policy it may rest on open statements, and the article is then conditional; only the derived `fully_proved` means complete and `sorry`-free. |
@@ -405,15 +423,24 @@ never change it. The machine-checkable
 with `MAPPED`, `INVENTORIED`, `DECOMPOSED`, `DEFERRED`, or `OUT` dispositions.
 `MAPPED` is nonterminal. `INVENTORIED` is the terminal disposition for exact
 source accounting and must link to a `catalog: module` record, directly or
-through a containing roadmap scope. `DECOMPOSED` is reserved for
-source-grounded declaration articles and must link to one, directly or through
-a containing roadmap scope. `DEFERRED` and `OUT` record an explicit later
-milestone or exclusion. Audit JSON includes canonical rows, counts, and the
+through a containing roadmap scope: `coverage-role-mismatch` names a link that
+reaches none, and `unclassified-inventory` the first catalogs no such row
+reaches. CI's `render` at an older `AUTOFORM_REF` rejects `INVENTORIED` as an
+unknown disposition, so move the pin first. `DECOMPOSED` is reserved for
+source-grounded declaration articles and links to them, directly or through a
+containing roadmap scope. A row whose links reach nothing but catalogs is a
+`coverage-role-mismatch`. Any other link that reaches no declaration leaf, such
+as one to prose or to leaves marked `not_ready` that declare nothing yet, is a
+`decomposed-without-declaration` [warning](#warnings), since earlier versions
+accepted it. `DEFERRED` and `OUT` record an explicit later milestone or
+exclusion. Audit JSON includes canonical rows, counts, and the
 exact coverage source hash, while `publication.json` records aggregate counts
-without duplicating the authored rows.
+without duplicating the authored rows. The `counts` object always includes an
+integer `INVENTORIED` key, zero when no row uses it.
 
 One row carries one disposition, so represent both axes with distinct,
-axis-qualified `Area` labels. For example, `Repository inventory / MathlibExt`
+axis-qualified `Area` labels; these name source areas and are unrelated to an
+article's `area:` field. For example, `Repository inventory / MathlibExt`
 may be `INVENTORIED` while `Mathematical exposition / MathlibExt` remains
 `MAPPED` and later becomes `DECOMPOSED`; duplicate exact area labels are
 invalid. A broad inventory row may link a container and classify every catalog
@@ -533,30 +560,10 @@ counts toward none of them. A scope's status ring and item count, and the
 legend beside each dependency map, also count a leaf marked `not_ready` that
 declares nothing yet, so deferred work holds its scope open. All three also
 count every catalog, under a neutral status: `inventory checked` once the
-catalog is fully proved, `inventory pending` until then. Neither status changes
-a scope's rolled-up status or completion.
-The coverage `counts` object always includes an integer
-`INVENTORIED` key, including zero when no row uses it. Status assertions on a
-catalog remain accepted. The presentation calls a fully checked catalog
-`inventory checked`, not a completed definition or result, and any other
-catalog `inventory pending`, whatever its derived state. The rendered site and
-`autoform check` show the module-inventory count separately from those target
-metrics.
-
-For an existing blueprint, migrate a catalog-only `DECOMPOSED` row to
-`INVENTORIED`. If the same source also has declaration articles, keep that
-inventory row and add distinct, axis-qualified `DECOMPOSED` rows for the
-mathematical scopes; do not overwrite the inventory claim. Existing coverage
-Markdown remains readable, but emitted audit and publication coverage uses
-`autoform-coverage/v2`: `INVENTORIED` is a new disposition, terminal meaning,
-and counts key. The shared-explorer publication manifest uses
-`autoform-publication/v3`, as described below. Until migrated, a catalog-only
-`DECOMPOSED` row
-remains syntactically accepted: `render` warns and still publishes, while audit
-reports `coverage-role-mismatch`. A catalog not reached by any `INVENTORIED`
-evidence is treated the same way and reported as `unclassified-inventory`.
-Target-completion percentages may change because catalog records are no longer
-included in their denominator.
+catalog is fully proved, which records inspection rather than a completed
+result, and `inventory pending` until then, whatever its derived state. Neither
+status changes a scope's rolled-up status or completion, though a target that
+depends on a catalog waits for it like any prerequisite.
 
 Publication and audit are deliberately different gates. The generated
 `blueprint-pages.yml` runs `check` and `render`; it does not run `audit`. An
@@ -564,7 +571,7 @@ invalid coverage contract fails `render` before any output is written, but a
 valid contract with `MAPPED` rows publishes normally even though `audit` reports
 each one as a `declared-coverage-gap`. That is intended: a roadmap is published
 while it is still being decomposed, and the published `coverage.complete: false`
-is how a reader sees that. Coverage-role findings take the same path: `render`
+is how a reader sees that. Coverage-role issues take the same path: `render`
 prints each one as a warning and publishes, and `audit` reports it. Run
 `autoform audit` in CI when you want mapped rows or role findings to block a
 merge.
@@ -997,35 +1004,73 @@ autoform render blueprint --output site-src --lean-root . --require-declarations
 ```
 
 `render` never writes into the vault. It leads the landing page with the project
-explorer over a summary of what is formalized and what is unblocked, places a compact
+explorer, once the roadmap has articles to draw, over a summary of what is
+formalized and what is unblocked, places a compact
 progress summary after each chapter's opening prose, writes `structure.md` so a
 vault's layout can be checked against the book it produces, and shows a source
-icon when a `lean:` declaration resolves to a repository permalink. Its
+icon when a `lean:` declaration resolves to a repository permalink; a catalog
+instead links its first eight names in its Lean row and counts the rest. Its
 `dependencies.md` opens a full-viewport application and rolls dependencies
 through the article hierarchy, with bounded project, chapter, and nested-scope
 projections. Global search loads a layout-free index and jumps to the smallest
-useful scope; the compatibility `dependencies/full.md` route renders only the
-project shell and never fits the whole repository into one canvas. Every generated
-site projection uses the same deterministic JSON-derived Canvas and semantic-DOM
-explorer with search, filters, pan/zoom, and hash-routed node neighborhoods, so
-none inherits Mermaid's text, edge, or SVG-size ceilings. Authored Mermaid remains
-supported in the vault and book, including the bounded graph produced by
-`autoform-visualize`. A persistent hierarchy rail keeps the current ancestry and
-immediate contents visible. The project overview groups readable topic cards by
-authored mathematical area and reveals only a selected topic's direct dependency
+useful scope; that index, `dependencies/index.json`, is internal to the bundled
+viewer, and its schema may change. The compatibility `dependencies/full.md`
+route renders only the project shell and never fits the whole repository into
+one canvas. Every generated site projection uses the same deterministic
+JSON-derived Canvas and semantic-DOM explorer with search, filters, pan/zoom,
+and hash-routed node neighborhoods, so none inherits Mermaid's text, edge, or
+SVG-size ceilings. Authored Mermaid remains supported in the vault and book.
+A persistent hierarchy rail keeps the current ancestry and immediate contents
+visible. The project overview groups readable topic cards by authored
+mathematical area and reveals only a selected topic's direct dependency
 neighborhood; its detail drawer overlays the map instead of shrinking it.
-Breadcrumbs return through the explorer hierarchy to the book, and every formal
+Breadcrumbs return through the explorer hierarchy to the book (to the home page
+for a roadmap with neither a root article nor root leaves), and every formal
 statement links to the smallest explorer scope containing that item. Point
 `mkdocs.yml` at `docs_dir: site-src` and enable `md_in_html` plus a
 `pymdownx.superfences` mermaid fence; see the [repository
 example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 
-This shared-explorer layout is recorded as `autoform-publication/v3`; it
-replaces the `dependencies/nodes/*.html` focus pages of earlier sites. Legacy
-`dependencies/full.html#node=<id>` links use the global index to redirect to the
-smallest bounded scope containing that node. Render replaces a v2 site as it
-replaces a v3 one, while a v1 output must be deleted once by hand; the
-[publication contract](#publication-contract) gives the rules.
+This shared-explorer layout replaces the `dependencies/nodes/*.html` focus
+pages of earlier sites: a statement's dependency link is now
+`<scope>.html#node=<id>`, and an old focus-page link no longer resolves. Only a
+legacy `dependencies/full.html#node=<id>` link redirects, through the global
+index, to the smallest bounded scope containing that node. The [publication
+contract](#publication-contract) gives the schema and when render replaces an
+earlier site.
+
+### Upgrading from an earlier Autoform
+
+What an existing repository meets when it moves to this version:
+
+1. CI at an older `AUTOFORM_REF` rejects `catalog:` and `area:` as unsupported
+   frontmatter keys and `INVENTORIED` as an unknown coverage disposition, so
+   move the pin before using them. Older refs ignore `blueprint/atlas.json`.
+2. A `DECOMPOSED` link that reaches only prose or leaves marked `not_ready`
+   that declare nothing yet is now a `decomposed-without-declaration` audit
+   warning, which `render` also prints; neither fails.
+3. Coverage JSON is `autoform-coverage/v2`: `INVENTORIED` is a new terminal
+   disposition, and `counts` always holds an `INVENTORIED` key. `audit`'s
+   coverage line always shows an inventoried count.
+4. `publication.json` is `autoform-publication/v3`. The first render replaces a
+   v2 site and refuses a v1 one, and the dashboard reports an older site as
+   stale until then; the [publication contract](#publication-contract) gives
+   the rules.
+5. The runtime is `autoform-runtime/v4`, which gives each node a nullable
+   `catalog`.
+6. `audit --json` carries a `warnings` list beside `findings`, and the text
+   output adds `warning:` lines; neither changes the exit status.
+7. `check`'s status line counts only leaves that carry `declaration`, so
+   containers, prose leaves and `not_ready` leaves that declare nothing yet
+   drop out of it, and with `--lean-root` it counts the distinct `lean:` names
+   it resolved rather than the articles naming them. A `blueprint/atlas.json`
+   that is not `autoform-atlas/v1`, which earlier versions ignored, now draws a
+   warning from `check`, `render` and `audit`; it fails nothing.
+8. Old `dependencies/nodes/*.html` links no longer resolve: only
+   `dependencies/full.html#node=<id>` redirects, and a statement's dependency
+   link is now `<scope>.html#node=<id>`.
+9. Setup leaves an existing `mkdocs.yml` alone. A large site can add Material's
+   `navigation.prune` feature by hand, as the scaffolded configuration does.
 
 ## Validation
 
@@ -1184,18 +1229,20 @@ declaration of the Lean build, as it does for any `private` declaration.
 
 ### Warnings
 
-A finding is a problem the audit fails on. A warning tells the agent about code
-it may decide to leave alone, and never fails the audit: `clean` and the exit
-status depend on findings alone, so a repository that passes keeps passing when
-a warning appears. The text output prints a
+A finding is a problem the audit fails on. A warning never fails the audit:
+`clean` and the exit status depend on findings alone, so a repository that
+passes keeps passing when a warning appears. The text output prints a
 `warning: <path>: <code>: <message>` line for each, after the error lines.
 `--json` lists them after `findings` as `warnings`, sorted by `article_path`
 and `code`. Each also carries a `message` and `declarations`, one object per
 affected declaration and setting with its `name`, `option`, `value`,
 `location` (the `set_option` as `path:line` relative to the Lean root), and
 `scope` (`file`, `section`, `declaration`, or `proof`), sorted by name. The
-catalog limit warnings under [Elaboration limits](#elaboration-limits) are the
-only warnings so far.
+catalog limit warnings under [Elaboration limits](#elaboration-limits) fill
+`declarations`. Two warnings leave it empty: `atlas-omission`, at `atlas.json`,
+names what loading ignored in that file, and `decomposed-without-declaration`,
+at `coverage/README.md`, names a `DECOMPOSED` row's links that reach no
+declaration leaf.
 
 ### Structure
 
@@ -1206,10 +1253,11 @@ directory directly under `roadmap/` that holds articles but names no chapter.
 Deeper directories (the `definitions/` and `theorems/` buckets the bundled
 example uses) are a filing convention inside a chapter and are not checked.
 `overfull-container` reports a mathematical article with more than 24 direct
-children, or a repository-wide root subject index with more than 64,
-which is a table of contents rather than a chapter. Both defects leave a valid
-graph, which is why they need their own checks rather than falling out of
-`autoform check`.
+children, which is a table of contents rather than a chapter. A roadmap root
+whose direct children are all chapter pages is a repository-wide subject index
+and may hold 64; one root-level leaf returns the root to the 24-article limit.
+Both defects leave a valid graph, which is why they need their own checks
+rather than falling out of `autoform check`.
 
 ### Node size
 
@@ -1251,12 +1299,15 @@ proof above it.
 
 A catalog inventories code that already exists, so its declarations get the
 same two checks as [warnings](#warnings), at most one per catalog and code:
-`catalog-unbounded-limit` and `catalog-unscoped-limit`. The message counts the
-affected declarations against all the resolved ones the catalog names, names
-the options involved, and locates the `set_option` of the first by name, for
+`catalog-unbounded-limit` and `catalog-unscoped-limit`. As for a declaration
+article, an alias is read as the declaration it reaches. The message counts the
+affected declarations against all those the catalog's resolved names reach (an
+alias listed beside its target counts once), names the options involved, and
+locates the `set_option` of the first by name, for
 example `2 of 40 catalogued declarations have no maxHeartbeats limit
-(Inv.alpha at Inv.lean:1 and 1 more); set a finite limit`. A name that does not
-resolve is a `lean-target-not-found` finding and is not counted.
+(Inv.alpha at Inv.lean:1 and 1 more); existing code: change it only on request,
+and a finite limit must pass a rebuild`. A name that does not resolve is a
+`lean-target-not-found` finding and is not counted.
 
 ATLAS v1, built with Autoform, shows what accumulates without this check: 901
 raised `maxHeartbeats` settings, 497 of them file- or section-wide and 9 of them
@@ -1359,14 +1410,16 @@ than answered with no hits.
 each a list), `limit`, `total_matches`, and
 `hits`, with no timestamp and no path outside the project. A hit carries
 `node_id`, `article_id`, `article_path`, `article_revision`, `title`,
-`declaration`, `state`, `statement_text` (the authored Markdown),
+`declaration`, `catalog` (`module` for a module inventory), `state`,
+`statement_text` (the authored Markdown),
 `lean_targets` (all of them), `mathlib`, `mathlib_declarations`,
 `mathlib_file`, `source_targets` (as the article writes them, once each, minus
 any that is neither an http(s) link nor a path inside the blueprint), `used_by`,
 `used_by_count`, `shared_title`, and `matched_fields`; `article_id`,
-`declaration`, and `mathlib_file` may be null. A Lean target has `declaration`,
-`source_file` (relative to `--lean-root`), and `line`; the last two are null
-without `--lean-root` or when the lexical scan does not find the name.
+`declaration`, `catalog`, and `mathlib_file` may be null. A Lean target has
+`declaration`, `source_file` (relative to `--lean-root`), and `line`; the last
+two are null without `--lean-root` or when the lexical scan does not find the
+name.
 `used_by` holds the first ten dependents by node ID, through statement or
 proof; `used_by_count` counts all. `shared_title` marks a title another article
 repeats and is advisory. `matched_fields` lists, best first and once each, the
@@ -1962,10 +2015,9 @@ inventories. It retains v3's optional durable `article_id` metadata beside the
 graph's path-derived `id`, project `open_statements` policy,
 `statement_retracted` assertions, and each status's `assumes` and `waiting_on`
 fields. Temporary claims and local dashboard hooks may fall back to the path ID,
-but durable queues, reviews, recovery records, PR markers, execution records,
-routes, providers, and logs must require `article_id` until path-move migration
-is complete. Operational state remains private and excluded from runtime
-snapshots and publication.
+but durable execution records and routes must require `article_id` until the
+path-move migration is complete. Operational state remains private and excluded
+from runtime snapshots and publication.
 
 Projection fails when an article's bytes no longer match the digest recorded
 when the graph was loaded, so a source revision never labels node data parsed
@@ -1988,7 +2040,9 @@ from one render writes (`SUMMARY.md`, `dependencies.json`, `dependencies.md`,
 `structure.md`, `publication.json`, `assets/`, `dependencies/`, `javascripts/`,
 `stylesheets/`, and the generated stylesheet, scripts and logo inside them) is
 refused, as are two blueprint paths that differ only in case or Unicode form,
-because they would collide on a case-insensitive filesystem.
+because they would collide on a case-insensitive filesystem. A blueprint file at
+exactly `dependencies.json` or `javascripts/blueprint-dag.js` is left out of the
+site with a warning, because the explorer writes its own file there.
 
 Every render writes `publication.json` with blueprint and Lean-source hashes
 (the Lean-source hash is empty when render reads no Lean sources, as on native

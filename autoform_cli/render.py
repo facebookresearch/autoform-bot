@@ -48,7 +48,8 @@ from .coverage import (
     load_coverage,
     validate_coverage_roles,
 )
-from .graph import Graph, GraphValidationError, Node, _implementation_note_issues, load_graph
+from .graph import Graph, GraphValidationError, Node, _implementation_note_issues, atlas_omissions, load_graph
+from .graph_views import _containers, _countable, _is_countable, _module_inventories
 from .lean import (
     _REPLACEABLE_SCHEMAS,
     PUBLICATION_MANIFEST,
@@ -66,21 +67,28 @@ from .lean import (
     snapshot_project_sources,
     verify_repository_snapshot,
 )
-from .markdown import article_parts, site_converter
-from .markdown import mask_fences_and_comments
+from .markdown import (
+    INLINE_CODE,
+    _BRACKET_ESCAPE,
+    _INLINE_MATH,
+    _blank,
+    article_parts,
+    mask_fences_and_comments,
+    site_converter,
+)
 from .status import is_definition
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 _FENCE = re.compile(r"^ {0,3}(`{3,}(?=[^`]*$)|~{3,})")
-# A link label may itself contain a closing bracket, most commonly inside
-# inline mathematical code such as ``[0,1]^n``.  Only ``](`` closes the label.
-_LINK_LABEL_PART = r"(?:[^\]]|\](?!\())"
+# Brackets in code and math are blanked by _link_mask. Any remaining bracket
+# in a label must be paired, so an earlier citation on the line stays text.
+_LINK_LABEL = r"(?:[^\[\]]|\[[^\[\]]*\])*"
 #: An inline link. A bare destination or a title may hold one level of
 #: balanced parentheses, a quoted title may leave a `(` open, and an escaped
 #: parenthesis is text, as in Python-Markdown. `replace` drops the title of a
 #: link it moves, so a match that ran past the link's own `)` would drop text.
 _MARKDOWN_LINK = re.compile(
-    rf"(?<!!)\[(?P<label>{_LINK_LABEL_PART}*)\]\(\s*"
+    rf"(?<!!)\[(?P<label>{_LINK_LABEL})\]\(\s*"
     r"(?P<target><[^>]+>|(?:\\.|[^\\()\s]|\((?:\\.|[^\\()\s])*\))+)"
     r"""(?:\s+(?:"[^")]*"\s*|'[^')]*'\s*|(?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*))?\)"""
 )
@@ -92,7 +100,7 @@ _LINK_DEFINITION = re.compile(
     r'(?P<target><[^>\r\n]+>|[^\s]+)(?P<rest>[ \t]+.*)?$'
 )
 _ARTICLE_SLOT = re.compile(
-    rf"^(?P<indent>[ \t]*)[-*+]\s+\[{_LINK_LABEL_PART}+\]"
+    rf"^(?P<indent>[ \t]*)[-*+]\s+\[(?=[^\]]){_LINK_LABEL}\]"
     r"\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)\s*$"
 )
 _DEPENDENCY_SECTIONS = frozenset({"depends on", "proof depends on"})
@@ -118,7 +126,7 @@ _GENERATED_FILES = frozenset(
     {
         "dependencies.md",
         "dependencies.html",
-        "dependencies.json",
+        graph_pages.PROJECT_PAYLOAD,
         "graph.html",
         "progress.md",
         # The vault keeps its own Obsidian-readable copy; the site builds one.
@@ -140,7 +148,7 @@ _LOCAL_ONLY_NAMES = frozenset(
 )
 #: Root entries every site holds; an authored root entry differing only in case would collide.
 _GENERATED_ROOT_ENTRIES = frozenset(
-    {"SUMMARY.md", "dependencies.json", "dependencies.md", "structure.md", PUBLICATION_MANIFEST}
+    {"SUMMARY.md", graph_pages.PROJECT_PAYLOAD, "dependencies.md", "structure.md", PUBLICATION_MANIFEST}
     | {"assets", "dependencies", "javascripts", "stylesheets"}
 )
 #: Render reads no hidden, local-only, or root generated file. Omitted entries are
@@ -173,10 +181,12 @@ DECLARATION_LABELS = {
 STYLESHEET = "stylesheets/blueprint.css"
 MERMAID_SCRIPT = "javascripts/blueprint-mermaid.js"
 LIVE_SCRIPT = "javascripts/blueprint-live.js"
-DAG_SCRIPT = "javascripts/blueprint-dag.js"
+DAG_SCRIPT = dag_viewer.SCRIPT_PATH
 LOGO = "assets/autoform.svg"
 #: Paths render writes at fixed places; an authored path differing only in case would collide.
 _GENERATED_PATHS = _GENERATED_ROOT_ENTRIES | {STYLESHEET, MERMAID_SCRIPT, LIVE_SCRIPT, DAG_SCRIPT, LOGO}
+#: The explorer's files at paths a blueprint may already use for files of its own.
+_EXPLORER_PATHS = (graph_pages.PROJECT_PAYLOAD, DAG_SCRIPT)
 _ASSET_DIR = Path(__file__).resolve().parent / "assets"
 
 
@@ -226,15 +236,17 @@ gradientUnits="userSpaceOnUse">
 
 
 def _mermaid_script() -> str:
-    """Render the graph, and re-render it whenever the colour scheme changes.
+    """Draw authored diagrams, and redraw them whenever the colour scheme changes.
 
-    Mermaid injects its own styles with ``!important`` scoped to the SVG id, so
-    a stylesheet cannot recolour a diagram after the fact. The palette has to
-    go in as ``classDef`` at render time, which means owning the render call
-    and repeating it on a theme switch.
+    The site's dependency maps are the explorer, so every diagram this script
+    sees is a fence an author wrote. Mermaid injects its own styles with
+    ``!important`` scoped to the SVG id, so a stylesheet cannot recolour a
+    diagram after the fact. The palette has to go in as ``classDef`` at render
+    time, which means owning the render call and repeating it on a theme switch.
 
-    Loose security is what enables the ``click`` links; the diagram is
-    generated from the project's own blueprint, so nothing third-party is in it.
+    Loose security is what enables ``click`` links in the project's own
+    diagrams. It and the palette stay as they are until authored diagrams get
+    a rule of their own.
     """
     classdefs = json.dumps(
         {scheme: mermaid.classdef_lines(dark=scheme == "dark") for scheme in ("light", "dark")},
@@ -386,13 +398,7 @@ def render_site(
         expected = _destination_state(destination)
         # The names select which files are scanned for declarations; every Lean
         # file is still read, hashed and checked against the commit.
-        lean_names = tuple(
-            dict.fromkeys(
-                name
-                for node in graph.nodes.values()
-                for name in declaration_names(node.lean or "")
-            )
-        )
+        lean_names = graph.lean_names()
         # Without descriptor capture every Lean capture fails closed. The implicit
         # root is then not read and the site has no code links; an explicit Lean
         # root asks for links, so it still fails. Like every Lean capture, this one
@@ -466,6 +472,12 @@ def render_site(
             ),
         )
     report.warnings[:0] = recovered
+    authored = {*dict(snapshot.files), *dict(snapshot.omitted)}
+    report.warnings.extend(
+        f"{path} is not published: the dependency explorer writes its own file there"
+        for path in _EXPLORER_PATHS
+        if path in authored
+    )
     if repository_url and ref and commit is None:
         report.warnings.append(
             "repository links were omitted because the captured Lean inputs "
@@ -492,15 +504,17 @@ def _render_pages(
     lean_source_revision: str,
 ) -> RenderReport:
     """Write the site into *destination* from the private copy at *blueprint*."""
-    # Coverage-role issues are audit findings. A valid contract still
-    # publishes with them, as it does with MAPPED rows. An issue without a
-    # line already names the contract in its reason, so it gets no prefix.
+    # Audit reports coverage-role issues and the atlas.json entries the loader
+    # ignored. A valid contract still publishes with them, as it does with
+    # MAPPED rows. An issue without a line already names the contract in its
+    # reason, so it gets no prefix.
     coverage_warnings = [
         f"coverage contract line {issue.line}: {issue.reason}"
         if issue.line
         else issue.reason
         for issue in validate_coverage_roles(graph, coverage)
     ]
+    coverage_warnings += (f"atlas.json: {omission}" for omission in atlas_omissions(graph))
     statuses = status.derive(graph)
     numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
@@ -532,11 +546,6 @@ def _render_pages(
                 "sources safely (directory-descriptor traversal is unavailable); "
                 "render on Linux or macOS to link declarations"
             )
-    # An inventory-only chapter still needs its authored landing page decorated
-    # with the neutral inventory metric, even though it has no theorem
-    # environments to consolidate.
-    for node_id in _module_inventories(graph, containers=containers):
-        groups.setdefault(graph.nodes[node_id].parent or "roadmap", [])
     anchors = {
         node_id: _anchor(node_id, group)
         for group, node_ids in groups.items()
@@ -572,8 +581,8 @@ def _render_pages(
         # nothing but absorbed nodes leaves no empty shell behind.
         if source.is_dir():
             continue
-        # Narrative articles remain book pages. Only formalizable leaves are
-        # consolidated into their containing article with stable anchors.
+        # Narrative articles remain book pages. Formalizable leaves and module
+        # catalogs are consolidated into their containing article with stable anchors.
         article = node_paths.get(source.resolve())
         if (
             article is not None
@@ -799,8 +808,8 @@ def load_publication_source(blueprint_dir: str | Path) -> tuple[str, Graph]:
     """Read the blueprint once; return its publication revision and the graph of those bytes."""
     blueprint = Path(blueprint_dir).expanduser().resolve()
     snapshot = _capture_blueprint(blueprint)
-    # The graph reads the articles, the ledgers that catalogs link, and the atlas.
-    with _private_copy(snapshot, prefix=("roadmap/", f"{SOURCES_DIR}/", "atlas.json")) as (_root, copy):
+    # The graph reads the articles and the atlas.
+    with _private_copy(snapshot, prefix=("roadmap/", "atlas.json")) as (_root, copy):
         return _source_revision(snapshot), _load_graph(copy, blueprint)
 
 
@@ -853,7 +862,8 @@ def _destination_state(path: Path) -> _State | None:
                 "inventory to check before deleting it; delete it once by hand and render again"
             ]
         )
-    if not isinstance(manifest, dict) or manifest.get("schema") not in _REPLACEABLE_SCHEMAS:
+    schema = manifest.get("schema") if isinstance(manifest, dict) else None
+    if not (isinstance(schema, str) and schema in _REPLACEABLE_SCHEMAS):
         raise PublicationError(
             [
                 "refusing to overwrite a non-Autoform output directory or legacy "
@@ -1248,7 +1258,7 @@ def _write_publication_manifest(
         "lean_source_revision": lean_source_revision,
         "nodes": len(graph.nodes),
         "dependencies": graph.edge_count,
-        "views": ["book", "progress", "project", "chapter", "focus", "full"],
+        "views": ["book", "progress", "project", "chapter", "full"],
     }
     encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
     if len(encoded) > PUBLICATION_MANIFEST_MAX_BYTES:  # the next render could not read it
@@ -1269,7 +1279,7 @@ def _write_publication_manifest(
 
 
 def _group_nodes(graph: Graph) -> dict[str, list[str]]:
-    """Group formalizable leaves under their nearest containing article.
+    """Group formalizable leaves and module catalogs under their nearest containing article.
 
     Graph views deliberately roll a subtree up to its top-level scope. Book
     publication is different: a statement belongs where the author placed its
@@ -1284,11 +1294,6 @@ def _group_nodes(graph: Graph) -> dict[str, list[str]]:
         group = node.parent or "roadmap"
         grouped.setdefault(group, []).append(node_id)
     return grouped
-
-
-def _containers(graph: Graph) -> frozenset[str]:
-    """Index which articles contain others, so loops need not rescan the graph."""
-    return frozenset(node.parent for node in graph.nodes.values() if node.parent is not None)
 
 
 def _group_page(group: str) -> Path:
@@ -1328,8 +1333,8 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
         linked_sources: list[Path] = []
 
         def collect(line: str) -> str:
-            for match in _MARKDOWN_LINK.finditer(line):
-                raw = match.group("target")
+            for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
+                raw = line[match.start("target") : match.end("target")]
                 bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
                 path = bare.partition("#")[0].partition("?")[0]
                 try:
@@ -1470,7 +1475,7 @@ def _next_target(
         if statement is None and chapter_page is not None:
             anchor = node.id.split("/", 1)[1].replace("/", "-") if "/" in node.id else node.id
             statement = f"{mermaid.relative_link(chapter_page, page, '.html')}#{anchor}"
-        graph_href = graph_pages.focus_page_href(destination, node.id, page, parent=node.parent)
+        graph_href = graph_pages.scope_page_href(destination, node.id, page, parent=node.parent)
 
         title = html.escape(node.title)
         heading = (
@@ -1652,43 +1657,44 @@ def _render_landing_page(
     # The legend sits under the map, so it counts what the map's rings count,
     # deferred work and module inventories included, rather than the hero's
     # declaration targets.
-    containers = _containers(graph)
-    target_statuses = {
-        node_id: statuses[node_id]
-        for node_id, node in graph.nodes.items()
-        if node_id not in containers and graph_views.is_scope_target(node)
-    }
-    breakdown = mermaid.render_legend(target_statuses, graph_views.inventory_counts(graph, statuses))
+    breakdown = mermaid.render_legend(
+        graph_views.scope_target_statuses(graph, statuses),
+        graph_views.inventory_counts(graph, statuses),
+    )
     # dependencies.json is the project projection written by graph_pages. The
     # landing page deliberately mounts that exact payload and host instead of
-    # maintaining a second, Mermaid-only preview of the same graph.
-    parts.extend(
-        [
-            "",
-            '<div class="bp-map" markdown="1">',
-            '<div class="bp-map-head">',
-            '<span class="bp-map-title">Mathematics atlas</span>',
-            '<span class="bp-map-hint">Explore mathematical regions, topics, and dependencies · '
-            '<a href="dependencies.html">open full-page</a></span>',
-            "</div>",
-            "",
-            dag_viewer.render_container(
-                "dependencies.json",
-                script_href=mermaid.relative_link(destination / DAG_SCRIPT, page, ".js"),
-                fallback_links=(
-                    ("Open the dependency explorer", "dependencies.html"),
+    # maintaining a second, Mermaid-only preview of the same graph. A roadmap
+    # without articles has nothing to explore, so it gets no map.
+    if graph_views.group_nodes(graph):
+        parts.extend(
+            [
+                "",
+                '<div class="bp-map" markdown="1">',
+                '<div class="bp-map-head">',
+                f'<span class="bp-map-title">{html.escape(graph_views.group_title(graph, "roadmap"))}</span>',
+                '<span class="bp-map-hint">Explore mathematical regions, topics, and dependencies · '
+                '<a href="dependencies.html">open full-page</a></span>',
+                "</div>",
+                "",
+                dag_viewer.render_container(
+                    graph_pages.PROJECT_PAYLOAD,
+                    script_href=mermaid.relative_link(destination / DAG_SCRIPT, page, ".js"),
+                    fallback_links=(
+                        ("Open the dependency explorer", "dependencies.html"),
+                    ),
+                    fallback_total=1,
+                    layout="embedded",
+                    search_href=graph_pages.SEARCH_INDEX,
                 ),
-                fallback_total=1,
-                layout="embedded",
-                search_href="dependencies/index.json",
-            ),
-            "",
-            f'<div class="bp-map-legend" markdown="1">\n\n{breakdown}\n\n</div>'
-            if breakdown
-            else "",
-            "</div>",
-        ]
-    )
+                "",
+                f'<div class="bp-map-legend" markdown="1">\n\n{breakdown}\n\n</div>'
+                if breakdown
+                else "",
+                "</div>",
+            ]
+        )
+    elif breakdown:
+        parts.extend(["", "## Status breakdown", "", breakdown])
     # The authored body is a contents list and links to the roadmap, coverage
     # contract and dependency view. The hero retains a compact coverage summary;
     # repeating the full list here would only push the explorer down the page. Its
@@ -1705,38 +1711,6 @@ _ACTIONABLE_STATES = frozenset({"can_prove", "can_state"})
 _COVERAGE_SUMMARY_ORDER = tuple(
     sorted(COVERAGE_DISPOSITIONS, key=lambda disposition: disposition != "DECOMPOSED")
 )
-
-
-def _is_countable(graph: Graph, node_id: str, containers: frozenset[str]) -> bool:
-    """Whether *node_id* is a formalization target the dashboards should count.
-
-    Declaration leaves are targets. Module catalogs are inventory evidence,
-    not mathematical formalization targets. Bare navigation and prose leaves
-    do not count either.
-    """
-    node = graph.nodes[node_id]
-    return node_id not in containers and node.formalizable
-
-
-def _countable(graph: Graph) -> list[str]:
-    containers = _containers(graph)
-    return [node_id for node_id in graph.nodes if _is_countable(graph, node_id, containers)]
-
-
-def _module_inventories(
-    graph: Graph,
-    *,
-    containers: frozenset[str] | None = None,
-    node_ids: Iterable[str] | None = None,
-) -> list[str]:
-    """Return inventory leaves separately from mathematical targets."""
-    containers = _containers(graph) if containers is None else containers
-    candidates = graph.nodes if node_ids is None else node_ids
-    return [
-        node_id
-        for node_id in candidates
-        if node_id not in containers and graph.nodes[node_id].catalog == "module"
-    ]
 
 
 def _completion_percentage(done: int, total: int) -> int:
@@ -1782,15 +1756,8 @@ def _render_hero(
     # ``proved`` alone covers its own proof, definition body, or authored
     # Mathlib marker; ``fully_proved`` also closes the dependency chain.
     done = sum(node_status.fully_proved for node_status in selected.values())
-    dispatchable = {
-        node_id: statuses[node_id]
-        for node_id in leaves
-        if graph.nodes[node_id].formalizable
-    }
     actionable = sum(
-        count
-        for state, count in status.summarize(dispatchable)
-        if state.key in _ACTIONABLE_STATES
+        count for state, count in status.summarize(selected) if state.key in _ACTIONABLE_STATES
     )
     total = len(leaves)
     inventory_count = len(_module_inventories(graph))
@@ -1953,64 +1920,8 @@ def _anchor(node_id: str, group: str) -> str:
     return remainder.replace("/", "-")
 
 
-class _AnchoredLinks(Mapping[str, str]):
-    """Resolve published article links on demand for one output page.
-
-    Most article bodies mention no other article, while a repository-wide wiki
-    can contain tens of thousands of targets. Materializing the complete map
-    for every body therefore made link rewriting quadratic in the roadmap size.
-    """
-
-    def __init__(
-        self,
-        targets: Mapping[str, tuple[Path, str]],
-        page: Path,
-        *,
-        extension: str,
-        node_ids: Iterable[str] | None,
-    ) -> None:
-        self._targets = targets
-        self._page = page
-        self._resolved_page = page.resolve()
-        self._node_ids = targets.keys() if node_ids is None else tuple(dict.fromkeys(node_ids))
-        self._allowed = None if node_ids is None else frozenset(self._node_ids)
-        self._extension = extension
-        self._cache: dict[str, str] = {}
-        self._hrefs: dict[Path, str] = {}
-
-    def __getitem__(self, node_id: str) -> str:
-        if self._allowed is not None and node_id not in self._allowed:
-            raise KeyError(node_id)
-        cached = self._cache.get(node_id)
-        if cached is not None:
-            return cached
-        target, anchor = self._targets[node_id]
-        if target in self._hrefs:
-            href = self._hrefs[target]
-        elif target.resolve() == self._resolved_page:
-            href = ""
-            self._hrefs[target] = href
-        else:
-            href = mermaid.relative_link(target, self._page, self._extension)
-            if self._extension == ".html":
-                href = _as_published(href)
-            self._hrefs[target] = href
-        if href:
-            anchored = f"{href}#{anchor}" if anchor else href
-        else:
-            anchored = f"#{anchor}" if anchor else "#"
-        self._cache[node_id] = anchored
-        return anchored
-
-    def __iter__(self):
-        return iter(self._node_ids)
-
-    def __len__(self) -> int:
-        return len(self._node_ids)
-
-
 def _anchored_links(
-    targets: Mapping[str, tuple[Path, str]],
+    targets: dict[str, tuple[Path, str]],
     page: Path,
     *,
     extension: str = ".html",
@@ -2020,15 +1931,63 @@ def _anchored_links(
 
     Use ``.md`` for links MkDocs will parse -- it validates and rewrites those
     itself -- and ``.html`` for raw HTML and Mermaid, which it never sees. A
-    statement on the current page is just a fragment. Link construction is
-    lazy, and nodes on the same target page share its cached base href.
+    statement on the current page is just a fragment. *node_ids*, when given,
+    limits the map to those nodes.
     """
-    return _AnchoredLinks(
-        targets,
-        page,
-        extension=extension,
-        node_ids=node_ids,
-    )
+    return _PageLinks(targets, page, extension, node_ids)
+
+
+class _PageLinks(Mapping[str, str]):
+    """The links from one page to every node, each built when first read.
+
+    A page names a few nodes but *targets* holds the whole graph, and a site
+    has a page per node, so building every link up front made rendering
+    quadratic in the size of the graph.
+    """
+
+    def __init__(
+        self, targets: dict[str, tuple[Path, str]], page: Path, extension: str, node_ids: Iterable[str] | None
+    ):
+        self._targets = targets
+        self._page = page
+        self._resolved_page = page.resolve()
+        self._extension = extension
+        self._hrefs: dict[Path, str] = {}
+        self._links: dict[str, str] = {}
+        self._node_ids = targets.keys() if node_ids is None else tuple(dict.fromkeys(node_ids))
+        self._allowed = None if node_ids is None else frozenset(self._node_ids)
+
+    def __getitem__(self, node_id: str) -> str:
+        if self._allowed is not None and node_id not in self._allowed:
+            raise KeyError(node_id)
+        link = self._links.get(node_id)
+        if link is not None:
+            return link
+        target, anchor = self._targets[node_id]
+        # Many nodes share a chapter page, and resolving a path walks the disk,
+        # so each target page is linked once. The current page is cached as ""
+        # and links as a bare fragment.
+        href = self._hrefs.get(target)
+        if href is None:
+            if target.resolve() == self._resolved_page:
+                href = ""
+            else:
+                href = mermaid.relative_link(target, self._page, self._extension)
+                if self._extension == ".html":
+                    href = _as_published(href)
+            self._hrefs[target] = href
+        if href:
+            link = f"{href}#{anchor}" if anchor else href
+        else:
+            link = f"#{anchor}" if anchor else "#"
+        self._links[node_id] = link
+        return link
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._node_ids)
+
+    def __len__(self) -> int:
+        return len(self._node_ids)
 
 
 def _as_published(href: str) -> str:
@@ -2041,6 +2000,16 @@ def _as_published(href: str) -> str:
     if path.name.lower() in {"readme.html", "index.html"}:
         return (path.parent / "index.html").as_posix()
     return href
+
+
+def _link_mask(line: str) -> str:
+    """*line* with its code spans, inline math and bracket escapes blanked.
+
+    The site reads code and math before links and an escaped bracket as text,
+    as ``markdown.link_targets`` does for check. Blanking keeps every offset,
+    so a link matched in the mask reads its label and target back from *line*.
+    """
+    return _BRACKET_ESCAPE.sub(_blank, _INLINE_MATH.sub(_blank, INLINE_CODE.sub(_blank, line)))
 
 
 def _rewrite_links(
@@ -2121,27 +2090,6 @@ def _rewrite_links(
         # destination, and Python-Markdown needs its parentheses balanced.
         return f"<{href}>" if re.search(r"[\s()]", href) else href
 
-    def replace(match: re.Match[str]) -> str:
-        raw = match.group("target")
-        href = moved_target(raw)
-        if href is None or raw in (href, f"<{href}>"):  # nothing moved: keep the link as written
-            return match.group(0)
-        label = match.group("label")
-        if href:
-            return f"[{label}]({bracketed(href)})"
-        # The label pattern lets a match start at an earlier "[" on the line,
-        # such as the one in "$[0,1]$", so drop only the bracket that opens
-        # this link and keep the earlier text as it was.
-        depth = 0
-        for index in range(len(label) - 1, -1, -1):
-            if label[index] == "]":
-                depth += 1
-            elif label[index] == "[":
-                if depth == 0:
-                    return f"[{label[:index]}{label[index + 1:]}"
-                depth -= 1
-        return label
-
     def rewrite(line: str) -> str:
         # A reference definition carries the destination for every `[x][label]`
         # on the page. Rewriting only inline links leaves it pointing at the
@@ -2156,7 +2104,16 @@ def _rewrite_links(
                 href = re.sub(r"\s", lambda space: quote(space.group()), href)
                 return f"{indent}[{label}]: {href}{definition.group('rest') or ''}"
             return line
-        return _MARKDOWN_LINK.sub(replace, line)
+        pieces: list[str] = []
+        end = 0
+        for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
+            raw = line[match.start("target") : match.end("target")]
+            href = moved_target(raw)
+            if href is not None and raw not in (href, f"<{href}>"):
+                label = line[match.start("label") : match.end("label")]
+                pieces += [line[end : match.start()], f"[{label}]({bracketed(href)})" if href else label]
+                end = match.end()
+        return "".join(pieces) + line[end:]
 
     return _outside_fences(text, rewrite)
 
@@ -2289,23 +2246,11 @@ def _render_chapter(
         linked += node_linked
         unresolved.extend(node_unresolved)
 
-    summary_node_ids = list(
-        dict.fromkeys(
-            (
-                *node_ids,
-                *(
-                    node_id
-                    for node_id, node in graph.nodes.items()
-                    if node.catalog == "module" and (node.parent or "roadmap") == group
-                ),
-            )
-        )
-    )
     chapter_summary = _render_overview_summary(
         graph,
         statuses,
         containers=containers,
-        node_ids=summary_node_ids,
+        node_ids=node_ids,
     )
     if narrative is None:
         title = graph.nodes[group].title if group in graph.nodes else group.replace("-", " ").capitalize()
@@ -2318,9 +2263,12 @@ def _render_chapter(
         environments=environments,
         targets=targets,
     )
-    remaining = [environments[node_id] for node_id in node_ids if node_id not in placed]
-    if remaining:
-        chapter = chapter.rstrip() + "\n\n## Additional formalization targets\n\n" + "\n\n".join(remaining)
+    remaining = [node_id for node_id in node_ids if node_id not in placed]
+    # A catalog inventories Lean that already exists, so it is no formalization target.
+    for heading, catalog in (("Additional formalization targets", None), ("Module inventories", "module")):
+        section = [environments[node_id] for node_id in remaining if graph.nodes[node_id].catalog == catalog]
+        if section:
+            chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(section)
     return chapter.rstrip() + "\n", linked, unresolved
 
 
@@ -2349,11 +2297,11 @@ def _place_environments(
                 fence = None
             output.append(line)
             continue
-        slot = _ARTICLE_SLOT.match(line) if fence is None else None
+        slot = _ARTICLE_SLOT.match(_link_mask(line)) if fence is None else None
         if slot is None:
             output.append(line)
             continue
-        target = slot.group("target")
+        target = line[slot.start("target") : slot.end("target")]
         path, separator, fragment = target.partition("#")
         try:
             if not path and separator:
@@ -2580,9 +2528,8 @@ def _render_environment(
 
     # amsthm distinguishes the two: a proposition is set in italics, a
     # definition upright. leanblueprint keeps that distinction on the web.
-    inventory = graph_views.inventory_state(node, node_status)
-    display_key = "planned" if inventory else node_status.key
-    display_label = inventory.label if inventory else node_status.label
+    display_key = graph_views.display_status_key(node, node_status)
+    display_label = graph_views.display_state(node, node_status).label
     style = (
         "theorem-style-definition"
         if node.catalog == "module" or is_definition(node)
@@ -2626,7 +2573,12 @@ def _lean_presentation(
     node: Node,
     linker: SourceLinker,
 ) -> tuple[str, list[tuple[str, str]], int, list[str]]:
-    """Render direct source icons, falling back to quiet diagnostic metadata."""
+    """Render direct source icons, falling back to quiet diagnostic metadata.
+
+    A catalog can list hundreds of names, so it gets no icons: its Lean row
+    links the first few by name, as its explorer node shows them, and counts
+    the rest, which its declaration ledger lists.
+    """
     icons: list[str] = []
     fallback: list[str] = []
     linked = 0
@@ -2641,6 +2593,9 @@ def _lean_presentation(
         if not linker.indexed:
             # The sources were not read, so "not found" would be false.
             fallback.append(code)
+        elif url and node.catalog == "module":
+            fallback.append(f'<a href="{html.escape(url, quote=True)}">{code}</a>')
+            linked += 1
         elif url:
             label = html.escape(f"View {name} in Lean source", quote=True)
             icons.append(
@@ -2656,7 +2611,10 @@ def _lean_presentation(
             unresolved.append(f"{node.id}: {name}")
 
     code_links = f'<span class="bp-code-links">{"".join(icons)}</span>' if icons else ""
-    rows = [("Lean", " · ".join(fallback))] if fallback else []
+    shown = fallback[: dag_viewer._CATALOG_LEAN_NAMES] if node.catalog == "module" else fallback
+    rest = len(fallback) - len(shown)
+    more = f" and {rest} more, listed in its declaration ledger" if rest else ""
+    rows = [("Lean", " · ".join(shown) + more)] if fallback else []
     return code_links, rows, linked, unresolved
 
 
@@ -2700,7 +2658,7 @@ def _vault_source_link(node: Node, *, repo_root: Path, linker) -> str:
 
 def _graph_context_link(node: Node, *, page: Path, destination: Path) -> str:
     """Link a textbook statement to its hash-focused dependency explorer."""
-    href = graph_pages.focus_page_href(destination, node.id, page, parent=node.parent)
+    href = graph_pages.scope_page_href(destination, node.id, page, parent=node.parent)
     label = html.escape(f"Open dependency explorer for {node.title}", quote=True)
     icon = (
         '<svg class="bp-context-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
@@ -2759,7 +2717,7 @@ def _node_references(
     for other_id in node_ids:
         other = graph.nodes[other_id]
         label = html.escape(f"{numbers[other_id]} ({other.title})")
-        key = "planned" if graph_views.inventory_state(other, statuses[other_id]) else statuses[other_id].key
+        key = graph_views.display_status_key(other, statuses[other_id])
         rendered.append(
             f'<a class="bp-ref bp-ref-{key}" '
             f'href="{html.escape(links[other_id], quote=True)}">{label}</a>'
@@ -3057,7 +3015,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-map-title {{ font-size: 0.82rem; font-weight: 700; letter-spacing: -0.01em; }}
 .bp-map-hint {{ font-size: 0.7rem; color: var(--bp-muted); }}
-.bp-map .mermaid {{ margin: 0; padding: 1.75rem 1.25rem; text-align: center; }}
 .bp-map-legend {{
   padding: 1rem 1.25rem;
   border-top: 1px solid var(--bp-rule);
@@ -3302,7 +3259,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-source-link:hover {{ color: var(--bp-link-hover); text-decoration: none; }}
 .bp-source-icon {{ width: 0.95em; height: 0.95em; fill: none; stroke: currentColor;
   stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.12em; }}
-.bp-code-links {{ display: inline-flex; align-items: center; gap: 0.2rem; margin-left: 0.45rem; }}
+.bp-code-links {{ display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.2rem; margin-left: 0.45rem; }}
 .bp-code-link {{
   display: inline-flex;
   align-items: center;
@@ -3440,74 +3397,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   border-radius: 3px;
   vertical-align: middle;
 }}
-
-.bp-dag-viewer {{
-  border: 1px solid var(--bp-rule);
-  border-radius: 12px;
-  background: var(--bp-surface);
-  overflow: hidden;
-  min-height: 34rem;
-}}
-.bp-dag-toolbar {{
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.55rem 0.8rem;
-  padding: 0.75rem;
-  border-bottom: 1px solid var(--bp-rule);
-  font-family: {sans};
-  font-size: 0.78rem;
-}}
-.bp-dag-search {{
-  width: min(22rem, 48vw);
-  padding: 0.4rem 0.55rem;
-  border: 1px solid var(--bp-rule);
-  border-radius: 7px;
-  color: var(--bp-fg);
-  background: var(--bp-surface);
-}}
-.bp-dag-status, .bp-dag-button {{
-  padding: 0.38rem 0.55rem;
-  border: 1px solid var(--bp-rule);
-  border-radius: 7px;
-  color: var(--bp-fg);
-  background: var(--bp-surface);
-}}
-.bp-dag-button {{ cursor: pointer; font-weight: 700; }}
-.bp-dag-button:hover {{ border-color: var(--bp-link); color: var(--bp-link); }}
-.bp-dag-stats {{ margin-left: auto; color: var(--bp-muted); }}
-.bp-dag-canvas {{
-  display: block;
-  width: 100%;
-  height: min(72vh, 780px);
-  min-height: 30rem;
-  cursor: grab;
-  touch-action: none;
-  background: var(--bp-surface);
-}}
-.bp-dag-canvas:active {{ cursor: grabbing; }}
-.bp-dag-canvas:focus-visible {{ outline: 3px solid var(--bp-link); outline-offset: -3px; }}
-.bp-dag-detail {{
-  min-height: 2.5rem;
-  padding: 0.7rem 0.85rem;
-  border-top: 1px solid var(--bp-rule);
-  color: var(--bp-muted);
-  overflow-wrap: anywhere;
-}}
-.bp-dag-open {{ margin-left: 0.2rem; }}
-.bp-dag-relations {{ margin-top: 0.45rem; color: var(--bp-fg); }}
-.bp-dag-relations summary {{ cursor: pointer; color: var(--bp-link); }}
-.bp-dag-results {{ display: grid; gap: 0.25rem; margin: 0.5rem 0 0; padding: 0; list-style: none; }}
-.bp-dag-result {{
-  border: 0;
-  padding: 0.15rem 0;
-  color: var(--bp-link);
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-}}
-.bp-dag-result:hover {{ text-decoration: underline; }}
-.bp-dag-loading, .bp-dag-error {{ padding: 1rem; }}
 
 {light}
 

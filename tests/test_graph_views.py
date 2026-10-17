@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer, graph_views
+from autoform_cli import dag_viewer
 from autoform_cli.graph import Graph, Node
-from autoform_cli.graph_pages import _selected_statuses
-from autoform_cli.graph_views import chapter_view, focus_view, focus_views, full_view, project_view, scope_view
+from autoform_cli.graph_pages import _selected_statuses, write_graph_pages
+from autoform_cli.graph_views import chapter_view, full_view, project_view, scope_view
 from autoform_cli.status import derive
 
 
@@ -79,6 +79,47 @@ def test_project_view_collapses_chapters_without_flattening_statuses(tmp_path: P
         ("scope:a", "scope:b", 1, 1),
         ("scope:b", "scope:c", 1, 0),
     ]
+
+
+def test_root_articles_beside_a_chapter_count_only_their_own_links(tmp_path: Path) -> None:
+    """The root scope holds the articles directly under roadmap/, not every relation below it.
+
+    It took the root container's count, so a project whose one relation sits
+    inside a chapter reported two internal links, and the root chapter's lead
+    counted only the root's own articles although its map draws the chapter too.
+    """
+    roadmap = tmp_path / "blueprint/roadmap"
+
+    def node(node_id: str, parent: str, *dependencies: str) -> Node:
+        return Node(
+            node_id,
+            node_id.title(),
+            roadmap / f"{node_id}.md",
+            dependencies,
+            statement_dependencies=dependencies,
+            parent=parent,
+            declaration="theorem",
+        )
+
+    graph = Graph(
+        tmp_path / "blueprint",
+        {
+            "roadmap": Node("roadmap", "Roadmap", roadmap / "README.md", ()),
+            "intro": node("intro", "roadmap"),
+            "chapter": Node("chapter", "Chapter", roadmap / "chapter/README.md", (), parent="roadmap"),
+            "chapter/a": node("chapter/a", "chapter"),
+            "chapter/b": node("chapter/b", "chapter", "chapter/a"),
+        },
+    )
+    statuses = derive(graph)
+    project = project_view(graph, statuses)
+
+    internal = {view_node.id: view_node.internal_dependency_count for view_node in project.nodes}
+    assert internal == {"scope:roadmap": 0, "scope:chapter": 1}
+    assert sum(internal.values()) + sum(edge.dependency_count for edge in project.edges) == graph.edge_count
+    write_graph_pages(graph, statuses, tmp_path / "site", node_links=lambda page, ids: dict.fromkeys(ids, "book.html"))
+    lead = (tmp_path / "site/dependencies/chapters/roadmap.md").read_text(encoding="utf-8")
+    assert "This map covers 3 items in this chapter." in lead
 
 
 def test_checked_catalog_has_a_neutral_inventory_presentation_status(tmp_path: Path) -> None:
@@ -198,12 +239,8 @@ def test_a_scope_header_counts_the_items_its_status_rows_list(tmp_path: Path) ->
     scope = json.loads(payload.read_text(encoding="utf-8"))["nodes"][0]
 
     assert scope["id"] == "scope:mixed"
-    assert scope["status_counts"] == {"can_state": 1, "inventory_checked": 1}
-    assert scope["member_count"] == sum(scope["status_counts"].values()) == 2
-    # The inspector titles the rows with member_count and lists status_counts.
-    script = dag_viewer.viewer_script()
-    assert '(node.member_count || 1) + " items in this scope"' in script
-    assert "var counts = node.status_counts || {};" in script
+    assert scope["status_counts"] == [["can_state", 1], ["inventory_checked", 1]]
+    assert scope["member_count"] == sum(count for _, count in scope["status_counts"]) == 2
 
 
 def test_chapter_view_keeps_external_relations_as_boundaries(tmp_path: Path) -> None:
@@ -336,43 +373,6 @@ def test_scope_view_collapses_nested_articles_and_rolls_up_dependencies(tmp_path
         ("result", "node", ("result",)),
     ]
     assert [(edge.source, edge.target) for edge in view.edges] == [("scope:section", "result")]
-
-
-def test_focus_view_uses_graph_distance_independently_of_chapter_scope(tmp_path: Path) -> None:
-    graph = _graph(tmp_path)
-    statuses = derive(graph)
-
-    focused = focus_view(graph, statuses, "b/top", radius=1)
-    assert focused.focus == "b/top"
-    assert focused.radius == 1
-    assert set(focused.member_ids) == {"a/base", "b/bridge", "b/top", "c/use"}
-    assert [node.id for node in focused.nodes if node.focus] == ["b/top"]
-
-    node_only = focus_view(graph, statuses, "b/top", radius=0)
-    assert node_only.member_ids == ("b/top",)
-    assert node_only.edges == ()
-
-    with pytest.raises(ValueError, match="non-negative"):
-        focus_view(graph, statuses, "b/top", radius=-1)
-
-
-def test_bulk_focus_views_share_graph_wide_indexes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    graph = _graph(tmp_path)
-    statuses = derive(graph)
-    original = graph_views.topological_order
-    calls = 0
-
-    def counted(candidate: Graph) -> list[str]:
-        nonlocal calls
-        calls += 1
-        return original(candidate)
-
-    monkeypatch.setattr(graph_views, "topological_order", counted)
-    views = focus_views(graph, statuses)
-
-    assert calls == 1
-    assert set(views) == set(graph.nodes)
-    assert views["b/top"] == focus_view(graph, statuses, "b/top")
 
 
 def test_full_view_preserves_every_fine_node_and_edge(tmp_path: Path) -> None:

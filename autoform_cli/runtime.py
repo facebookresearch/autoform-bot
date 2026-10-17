@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import MISSING, dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
@@ -149,30 +149,6 @@ class RuntimeNode:
             "status": self.status.as_dict(),
             "title": self.title,
         }
-
-
-def _runtime_node_getstate(node: RuntimeNode) -> list[object]:
-    """Keep the appended catalog field compatible with the previous shape."""
-
-    return [getattr(node, item.name) for item in fields(node)]
-
-
-def _runtime_node_setstate(node: RuntimeNode, state: list[object]) -> None:
-    node_fields = fields(node)
-    if len(state) > len(node_fields):
-        raise ValueError("RuntimeNode pickle has unsupported fields")
-    for item, value in zip(node_fields, state, strict=False):
-        object.__setattr__(node, item.name, value)
-    for item in node_fields[len(state) :]:
-        if item.default is MISSING:
-            raise ValueError(
-                f"RuntimeNode pickle is missing required field {item.name!r}"
-            )
-        object.__setattr__(node, item.name, item.default)
-
-
-RuntimeNode.__getstate__ = _runtime_node_getstate  # type: ignore[method-assign]
-RuntimeNode.__setstate__ = _runtime_node_setstate  # type: ignore[method-assign]
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,16 +318,6 @@ def build_runtime_graph(
         revision_paths[node.id] = relative_blueprint.as_posix()
         article_bytes[node.id] = content
 
-        if node.catalog not in {None, "module"}:
-            issues.append(f"{node.id}: unsupported catalog kind")
-        if node.catalog is not None and (
-            node.declaration is not None
-            or node.mathlib
-            or node.mathlib_declaration is not None
-            or node.mathlib_file is not None
-        ):
-            issues.append(f"{node.id}: catalog node carries declaration-specific metadata")
-
     _validate_depths(graph, issues)
     if issues:
         raise RuntimeProjectionError(issues)
@@ -363,15 +329,8 @@ def build_runtime_graph(
             root = resolve_lean_root(lean_root)
         except LeanSourceError as error:
             raise RuntimeProjectionError([str(error)]) from error
-        lean_names = tuple(
-            dict.fromkeys(
-                name
-                for node in graph.nodes.values()
-                for name in declaration_names(node.lean or "")
-            )
-        )
         try:
-            lean_index = index_project(root, names=lean_names)
+            lean_index = index_project(root, names=graph.lean_names())
         except OSError as error:
             raise RuntimeProjectionError([index_failure_message(error)]) from error
 

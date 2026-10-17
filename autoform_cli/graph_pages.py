@@ -2,9 +2,10 @@
 
 One Markdown DAG supports several reading scales: chapters collapsed into a
 project overview, declarations within one chapter with external chapters
-collapsed to boundaries, nested scopes, and the full graph. Every projection
-uses the same explorer, links back to the same book anchors, and never becomes
-another source of graph state.
+collapsed to boundaries, and nested scopes. A search index over every article
+jumps to the smallest scope that holds it. Every projection uses the same
+explorer, links back to the same book anchors, and never becomes another
+source of graph state.
 """
 
 from __future__ import annotations
@@ -18,10 +19,12 @@ from . import dag_viewer, mermaid
 from .graph import Graph
 from .graph_views import (
     INVENTORY_STATUSES,
+    ROOT_GROUP_TITLE,
     GraphView,
     chapter_view,
     full_view,
     group_nodes,
+    group_title,
     is_scope_target,
     project_view,
     scope_views,
@@ -29,6 +32,9 @@ from .graph_views import (
 from .status import NodeStatus
 
 NodeLinks = Callable[[Path, Iterable[str]], Mapping[str, str]]
+#: The project explorer's payload and the search index, relative to the site root.
+PROJECT_PAYLOAD = "dependencies.json"
+SEARCH_INDEX = "dependencies/index.json"
 
 
 def write_graph_pages(
@@ -46,9 +52,15 @@ def write_graph_pages(
     """
     destination = Path(destination).resolve()
     groups = group_nodes(graph)
-    project_page = destination / "dependencies.md"
+    root_title = group_title(graph, "roadmap")
+    # _write_page writes each payload beside its page.
+    project_page = (destination / PROJECT_PAYLOAD).with_suffix(".md")
     full_page = destination / "dependencies/full.md"
-    search_index = destination / "dependencies/index.json"
+    # The book's contents, which the Book tab opens; every explorer trail starts
+    # there. A roadmap with neither a root article nor root leaves has no such
+    # page, so its trails start at home.
+    book_root = destination / ("roadmap/README.md" if "roadmap" in graph.nodes or "roadmap" in groups else "README.md")
+    search_index = destination / SEARCH_INDEX
     chapter_pages = {group: destination / "dependencies/chapters" / f"{group or 'roadmap'}.md" for group in groups}
     scope_maps = scope_views(graph, statuses)
     containers = scope_maps.keys()
@@ -68,50 +80,40 @@ def write_graph_pages(
     complete = full_view(graph, statuses)
     context_links: dict[str, str] = {}
     for node in complete.nodes:
-        target = (
-            chapter_pages["roadmap"]
-            if node.id == "roadmap" and "roadmap" in chapter_pages
-            else scope_pages.get(node.id)
-        )
-        if target is None:
-            parent = graph.nodes[node.id].parent or "roadmap"
-            target = (
-                chapter_pages["roadmap"]
-                if parent == "roadmap" and "roadmap" in chapter_pages
-                else scope_pages.get(parent, project_page)
-            )
-        context = _published_link(target, search_index)
         if node.id not in scope_pages:
-            context += f"#node={quote(node.id, safe='')}"
-        context_links[node.id] = context
+            # The book's statement links the same page, so search and the book agree.
+            context_links[node.id] = scope_page_href(
+                destination, node.id, search_index, parent=graph.nodes[node.id].parent
+            )
+            continue
+        context_links[node.id] = _published_link(scope_pages[node.id], search_index)
     dag_viewer.write_search_index(search_index, complete, context_links=context_links)
 
     project = project_view(graph, statuses)
     project_item_count = sum(node.item_count for node in project.nodes)
-    # Like the project lead, chapter leads count formalization targets, so notes are left out.
+    # Chapter leads count what the rings count: scope targets plus module inventories.
     chapter_item_counts = {node.id: node.item_count for node in project.nodes}
-    project_book_links = node_links(project_page, _article_link_ids(project))
-    project_links = {
-        view_node.id: (
-            _published_link(
-                chapter_pages.get(
-                    view_node.id.removeprefix("scope:"),
-                    scope_pages[view_node.id.removeprefix("scope:")],
-                ),
-                project_page,
+
+    def project_links(page: Path) -> dict[str, str]:
+        """Link the project view from *page*: chapters to their explorers, articles to the book."""
+        book_links = node_links(page, _article_link_ids(project))
+        links = {}
+        for view_node in project.nodes:
+            scope = view_node.id.removeprefix("scope:")
+            links[view_node.id] = (
+                _published_link(chapter_pages.get(scope) or scope_pages[scope], page)
+                if view_node.kind == "scope"
+                else book_links[view_node.id]
             )
-            if view_node.kind == "scope"
-            else project_book_links[view_node.id]
-        )
-        for view_node in project.nodes
-    }
+        return links
+
     written.append(
         _write_page(
             project_page,
             view=project,
             statuses=_selected_statuses(graph, statuses, project, containers),
-            links=project_links,
-            heading="Mathematics atlas",
+            links=project_links(project_page),
+            heading=root_title,
             lead=(
                 f"{project_item_count} item{'s' if project_item_count != 1 else ''} across "
                 f"{len(groups)} chapter{'s' if len(groups) != 1 else ''}."
@@ -120,8 +122,8 @@ def write_graph_pages(
             site_root=destination,
             search_href=_search_index_link(search_index, project_page),
             breadcrumbs=(
-                ("Book", _published_link(destination / "README.md", project_page)),
-                ("All mathematics", None),
+                ("Book", _published_link(book_root, project_page)),
+                (root_title, None),
             ),
         )
     )
@@ -138,7 +140,7 @@ def write_graph_pages(
                 links[node.id] = _published_link(scope_pages[nested], chapter_page)
 
         book_page = (
-            destination / "roadmap/README.md"
+            book_root
             if group in {"", "roadmap"}
             else destination / "roadmap" / group / "README.md"
         )
@@ -146,14 +148,21 @@ def write_graph_pages(
             ("Dependency explorer", _markdown_link(project_page, chapter_page)),
             ("Open textbook chapter", _markdown_link(book_page, chapter_page)),
         )
-        item_count = chapter_item_counts[f"scope:{group or 'roadmap'}"]
+        # The root's map draws every chapter beside the root's own articles.
+        item_count = (
+            project_item_count
+            if group == "roadmap" and group in scope_maps
+            else chapter_item_counts[f"scope:{group or 'roadmap'}"]
+        )
         written.append(
             _write_page(
                 chapter_page,
                 view=view,
+                # Script hides the navigation that carries this link, so the explorer carries it.
+                book=_published_link(book_page, chapter_page),
                 statuses=_selected_statuses(graph, statuses, view, containers),
                 links=links,
-                heading=_dependency_heading(view),
+                heading=_dependency_heading(view, ROOT_GROUP_TITLE if group in {"", "roadmap"} else None),
                 lead=(
                     f"This map covers {item_count} item{'s' if item_count != 1 else ''} in this chapter. "
                     "Collapsed chapter nodes stand for external prerequisites or dependents."
@@ -167,6 +176,7 @@ def write_graph_pages(
                     page=chapter_page,
                     scope_pages=scope_pages,
                     project_page=project_page,
+                    book_root=book_root,
                 ),
             )
         )
@@ -190,6 +200,7 @@ def write_graph_pages(
             _write_page(
                 scope_page,
                 view=view,
+                book=_published_link(destination / "roadmap" / scope / "README.md", scope_page),
                 statuses=_selected_statuses(graph, statuses, view, containers),
                 links=links,
                 heading=_dependency_heading(view),
@@ -209,37 +220,23 @@ def write_graph_pages(
                     page=scope_page,
                     scope_pages=scope_pages,
                     project_page=project_page,
+                    book_root=book_root,
                 ),
             )
         )
     # Keep the old full route as a compatibility shell, but never fit every
     # leaf into one unreadable canvas. Its global index redirects legacy
     # ``#node=`` links into the nearest hierarchical scope.
-    full_project_book_links = node_links(full_page, _article_link_ids(project))
-    full_project_links = {
-        view_node.id: (
-            _published_link(
-                chapter_pages.get(
-                    view_node.id.removeprefix("scope:"),
-                    scope_pages[view_node.id.removeprefix("scope:")],
-                ),
-                full_page,
-            )
-            if view_node.kind == "scope"
-            else full_project_book_links[view_node.id]
-        )
-        for view_node in project.nodes
-    }
     written.append(
         _write_page(
             full_page,
             view=project,
             statuses=_selected_statuses(graph, statuses, project, containers),
-            links=full_project_links,
-            heading="Mathematics atlas",
+            links=project_links(full_page),
+            heading=root_title,
             lead=(
-                f"Browse {len(graph.nodes)} roadmap entries without flattening them into one canvas. "
-                "Search jumps directly to the relevant chapter or nested scope."
+                f"Search {len(graph.nodes)} roadmap entries without flattening them into one canvas; "
+                "a result opens its chapter or nested scope."
             ),
             navigation=_navigation(
                 ("Dependency explorer", _markdown_link(project_page, full_page)),
@@ -247,9 +244,11 @@ def write_graph_pages(
             ),
             site_root=destination,
             search_href=_search_index_link(search_index, full_page),
+            # It repeats the project page's title, so site search would list both.
+            searchable=False,
             breadcrumbs=(
-                ("Book", _published_link(destination / "README.md", full_page)),
-                ("All mathematics", _published_link(project_page, full_page)),
+                ("Book", _published_link(book_root, full_page)),
+                (root_title, _published_link(project_page, full_page)),
                 ("Explorer", None),
             ),
         )
@@ -258,12 +257,13 @@ def write_graph_pages(
     return tuple(written)
 
 
-def focus_page_path(destination: str | Path, node_id: str, *, parent: str | None = None) -> Path:
-    """Return the smallest published explorer scope that contains a node."""
+def scope_page_path(destination: str | Path, node_id: str, *, parent: str | None = None) -> Path:
+    """Return the smallest published explorer scope that contains a node.
+
+    A node without a parent sits at the root, so the root chapter holds it.
+    """
     destination = Path(destination).resolve()
-    scope = parent if parent is not None else node_id.rpartition("/")[0]
-    if scope == "":
-        return destination / "dependencies.md"
+    scope = parent if parent is not None else (node_id.rpartition("/")[0] or "roadmap")
     if scope == "roadmap":
         return destination / "dependencies/chapters/roadmap.md"
     if "/" not in scope:
@@ -271,15 +271,15 @@ def focus_page_path(destination: str | Path, node_id: str, *, parent: str | None
     return destination / "dependencies/scopes" / f"{scope}.md"
 
 
-def focus_page_href(
+def scope_page_href(
     destination: str | Path,
     node_id: str,
     page: str | Path,
     *,
     parent: str | None = None,
 ) -> str:
-    """Return a published explorer link with durable node focus in the hash."""
-    target = focus_page_path(destination, node_id, parent=parent)
+    """Link a node's scope page from *page*, selecting the node in the hash."""
+    target = scope_page_path(destination, node_id, parent=parent)
     return f"{mermaid.relative_link(target, Path(page), '.html')}#node={quote(node_id, safe='')}"
 
 
@@ -287,6 +287,7 @@ def _write_page(
     page: Path,
     *,
     view: GraphView,
+    book: str | None = None,
     statuses: dict[str, NodeStatus],
     links: Mapping[str, str],
     heading: str,
@@ -296,19 +297,20 @@ def _write_page(
     breadcrumbs: tuple[tuple[str, str | None], ...],
     navigation: str = "",
     extra: str = "",
+    searchable: bool = True,
 ) -> Path:
-    # Size used to pick between a Mermaid diagram and the Canvas explorer.
-    # Keeping every projection on one payload-and-host path gives readers one
-    # interaction model and prevents the two renderers from drifting apart.
+    # Every projection is one payload and one explorer host, so readers get one
+    # interaction model and no second renderer can drift from it.
     payload = page.with_suffix(".json")
     dag_viewer.write_payload(
         payload,
         replace(view, title=heading),
         links=links,
         breadcrumbs=breadcrumbs,
+        book=book,
     )
     explorer = dag_viewer.render_container(
-        payload.name,
+        quote(payload.name),
         script_href=_viewer_script_link(page, site_root),
         fallback_links=(
             (node.title, links[node.id])
@@ -322,6 +324,7 @@ def _write_page(
         "---",
         "kind: graph",
         f"graph_view: {view.kind}",
+        *(() if searchable else ("search:", "  exclude: true")),
         "hide:",
         "  - navigation",
         "  - toc",
@@ -373,10 +376,13 @@ def _view_inventories(view: GraphView) -> dict[str, int]:
     return counts
 
 
-def _dependency_heading(view: GraphView) -> str:
-    """Name a projected explorer view without carrying over Mermaid-era copy."""
-    subject = view.title.removesuffix(" dependency map")
-    return f"{subject} {'dependencies' if view.edges else 'knowledge map'}"
+def _dependency_heading(view: GraphView, subject: str | None = None) -> str:
+    """Name an explorer page for *subject*, by default the view's scope, and for what it draws.
+
+    The views keep their Mermaid-era "<scope> dependency map" titles, so that suffix goes.
+    """
+    subject = subject or view.title.removesuffix(" dependency map")
+    return f"{subject} {'knowledge map' if dag_viewer.uses_atlas(view) else 'dependencies'}"
 
 
 def _article_link_ids(view: GraphView) -> tuple[str, ...]:
@@ -409,7 +415,7 @@ def _viewer_script_link(page: Path, site_root: Path) -> str:
     """Link the viewer asset from an explicit publication root."""
 
     return mermaid.relative_link(
-        site_root / "javascripts/blueprint-dag.js",
+        site_root / dag_viewer.SCRIPT_PATH,
         page,
         ".js",
     )
@@ -426,6 +432,7 @@ def _scope_breadcrumbs(
     page: Path,
     scope_pages: Mapping[str, Path],
     project_page: Path,
+    book_root: Path,
 ) -> tuple[tuple[str, str | None], ...]:
     lineage: list[str] = []
     current: str | None = scope
@@ -433,17 +440,17 @@ def _scope_breadcrumbs(
         lineage.append(current)
         current = graph.nodes[current].parent if current in graph.nodes else None
     items: list[tuple[str, str | None]] = [
-        ("Book", _published_link(project_page.parent / "README.md", page)),
-        ("All mathematics", _published_link(project_page, page)),
+        ("Book", _published_link(book_root, page)),
+        (group_title(graph, "roadmap"), _published_link(project_page, page)),
     ]
     for node_id in reversed(lineage):
         target = scope_pages.get(node_id)
         label = graph.nodes[node_id].title if node_id in graph.nodes else node_id
         items.append((label, _published_link(target, page) if target and target != page else None))
     if not lineage:
-        label = graph.nodes[scope].title if scope in graph.nodes else scope.replace("-", " ").title()
-        items.append((label, None))
+        # The crumb before already carries the roadmap's title.
+        items.append((ROOT_GROUP_TITLE, None))
     return tuple(items)
 
 
-__all__ = ["focus_page_href", "focus_page_path", "write_graph_pages"]
+__all__ = ["PROJECT_PAYLOAD", "SEARCH_INDEX", "scope_page_href", "scope_page_path", "write_graph_pages"]

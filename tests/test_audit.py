@@ -326,6 +326,39 @@ def test_a_container_note_counts_a_leaf_marked_not_ready_as_the_site_does(tmp_pa
     assert findings == (set() if layout == "deferred-leaf" else stale)
 
 
+@pytest.mark.parametrize("proved", [False, True])
+def test_a_container_note_never_counts_a_catalog_marked_not_ready(tmp_path: Path, proved: bool) -> None:
+    # The site counts no catalog as a target, so a catalog neither holds a note nor makes it stale.
+    blueprint = tmp_path / "blueprint"
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        "| Inventory | INVENTORIED | [Chapter](../roadmap/chapter/README.md) |",
+    )
+    (blueprint / "sources").mkdir()
+    (blueprint / "sources/ledger.md").write_text("# Ledger\n", encoding="utf-8")
+    container_id = "af_0123456789abcdef01234567"
+    _article(blueprint, "chapter/README.md", article_id=container_id)
+    checked = {"statement": "formalized", "proof": "formalized"}
+    _article(
+        blueprint,
+        "chapter/inventory.md",
+        sources=("../../sources/ledger.md",),
+        catalog="module",
+        not_ready="true",
+        **({"lean": "Project.inventory", **checked} if proved else {}),
+    )
+    if not proved:
+        _article(blueprint, "chapter/done.md", declaration="theorem", lean="Project.done", **checked)
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    (notes / f"{container_id}.md").write_text("chapter route\n", encoding="utf-8")
+
+    findings = {(finding.article_path, finding.code) for finding in audit_blueprint(blueprint).findings}
+
+    assert findings == (set() if proved else {("roadmap/chapter/README.md", "stale-implementation-note")})
+
+
 def test_container_note_without_formalizable_descendants_is_not_stale(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
@@ -531,7 +564,8 @@ def test_audit_requires_module_catalog_lean_targets_to_resolve(tmp_path: Path) -
     assert findings["roadmap/existing-module.md"] == [
         (
             "lean-target-not-found",
-            "Lean declaration target was not found: Missing.noSuchDeclaration",
+            "Lean declaration target was not found: Missing.noSuchDeclaration; "
+            "a name Lean generates is not indexed and belongs in the catalog's ledger",
         )
     ]
 
@@ -553,8 +587,20 @@ def test_audit_surfaces_invalid_module_catalog_evidence(
 
     assert {code for code, _reason in findings} == {"invalid-graph"}
     reasons = {reason for _code, reason in findings}
-    assert any("must list exact compiled names" in reason for reason in reasons)
-    assert any("must link a declaration ledger" in reason for reason in reasons)
+    assert any("needs the lean: names of the public declarations it inventories" in reason for reason in reasons)
+
+
+def test_audit_reports_a_catalog_that_links_no_ledger_under_sources(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "existing-module.md", catalog="module", sources=("https://example.com/ledger.md",))
+
+    assert _finding_map(blueprint)["roadmap/existing-module.md"] == [
+        (
+            "catalog-missing-ledger",
+            "module catalog links no declaration ledger under blueprint/sources/ from '## Sources'",
+        )
+    ]
 
 
 def test_audit_reports_a_catalog_container_once(tmp_path: Path) -> None:
@@ -1066,6 +1112,44 @@ def test_audit_measures_an_alias_by_its_target_s_span(tmp_path: Path) -> None:
     }
 
 
+def test_a_source_span_does_not_depend_on_the_names_a_filter_admits(tmp_path: Path) -> None:
+    # X.foo bounds X.bar in B.lean even when A.lean, whose X.foo the index keeps, is also read.
+    root = tmp_path / "lean"
+    root.mkdir()
+    (root / "A.lean").write_text("theorem X.foo : True := trivial\ntheorem A.other : True := trivial\n", encoding="utf-8")
+    (root / "B.lean").write_text(
+        "theorem X.bar : True := trivial\n" + "\n" * 8 + "theorem X.foo : True := trivial\n" + "\n" * 9
+        + "theorem X.baz : True := trivial\n",
+        encoding="utf-8",
+    )
+
+    for names in (("X.bar",), ("X.bar", "A.other"), None):
+        assert audit_module._source_spans(index_project(root, names=names))["X.bar"] == 9, names
+
+
+def test_an_alias_s_limits_do_not_depend_on_the_names_other_articles_request(tmp_path: Path) -> None:
+    # Unfiltered, the index keeps A.lean's `N.aux` and cannot place B.lean's
+    # alias, so it reads no limit for it; an article naming `N.helper` must
+    # not change that.
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "good.md", declaration="theorem", statement="formalized", proof="formalized", lean="N.good")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "A.lean").write_text(
+        "namespace N\nprivate theorem aux : True := trivial\ntheorem helper : True := trivial\nend N\n",
+        encoding="utf-8",
+    )
+    (lean_root / "B.lean").write_text(
+        "namespace N\nset_option maxHeartbeats 0 in\nprivate theorem aux : True := trivial\nalias good := aux\nend N\n",
+        encoding="utf-8",
+    )
+
+    assert audit_blueprint(blueprint, lean_root=lean_root).findings == ()
+    _article(blueprint, "helper.md", declaration="theorem", statement="formalized", proof="formalized", lean="N.helper")
+    assert audit_blueprint(blueprint, lean_root=lean_root).findings == ()
+
+
 def test_an_alias_ends_the_source_span_of_the_declaration_above_it(tmp_path: Path) -> None:
     lean_root = tmp_path / "lean"
     lean_root.mkdir()
@@ -1287,14 +1371,16 @@ def test_audit_warns_once_per_catalog_and_code_about_elaboration_limits(tmp_path
             "roadmap/inventory-extra.md",
             "catalog-unscoped-limit",
             "1 of 2 catalogued declarations inherits a file- or section-wide raised maxHeartbeats limit "
-            "(Inv.alpha at Inv.lean:1); put `set_option maxHeartbeats N in` on the declarations that need it",
+            "(Inv.alpha at Inv.lean:1); existing code: change it only on request, and "
+            "`set_option maxHeartbeats N in` on the declarations that need it must pass a rebuild",
             (limit("alpha", *file_wide),),
         ),
         AuditWarning(
             "roadmap/inventory.md",
             "catalog-unbounded-limit",
             "2 of 4 catalogued declarations have no maxHeartbeats limit or no synthInstance.maxHeartbeats "
-            "limit (Inv.beta at Inv.lean:4 and 1 more); set a finite limit",
+            "limit (Inv.beta at Inv.lean:4 and 1 more); existing code: change it only on request, and "
+            "a finite limit must pass a rebuild",
             (
                 limit("beta", "synthInstance.maxHeartbeats", 0, 4, "declaration"),
                 limit("delta", "maxHeartbeats", 0, 11, "proof"),
@@ -1304,7 +1390,8 @@ def test_audit_warns_once_per_catalog_and_code_about_elaboration_limits(tmp_path
             "roadmap/inventory.md",
             "catalog-unscoped-limit",
             f"3 of 4 {inherit} maxHeartbeats or maxRecDepth limit (Inv.alpha at Inv.lean:1 and 2 more); "
-            "put `set_option maxHeartbeats N in` or `set_option maxRecDepth N in` on the declarations that need it",
+            "existing code: change it only on request, and `set_option maxHeartbeats N in` or "
+            "`set_option maxRecDepth N in` on the declarations that need it must pass a rebuild",
             (
                 limit("alpha", *file_wide),
                 limit("beta", *file_wide),
@@ -1312,6 +1399,31 @@ def test_audit_warns_once_per_catalog_and_code_about_elaboration_limits(tmp_path
                 limit("delta", "maxRecDepth", 4096, 9, "section"),
             ),
         ),
+    )
+    assert json.loads(result.to_json()) == result.as_dict()
+
+
+def test_a_catalog_reads_an_alias_s_limits_from_its_target(tmp_path: Path) -> None:
+    """An alias has its target's limits, and an alias listed beside its target counts once."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "alias.md", catalog="module", lean="P.small")
+    _article(blueprint, "both.md", catalog="module", lean="P.small P.big")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Big.lean").write_text(
+        "namespace P\nset_option maxHeartbeats 0 in\ntheorem big : True := trivial\nalias small := big\nend P\n",
+        encoding="utf-8",
+    )
+    message = (
+        "1 of 1 catalogued declaration has no maxHeartbeats limit (P.big at Big.lean:2); "
+        "existing code: change it only on request, and a finite limit must pass a rebuild"
+    )
+    limit = (DeclarationLimit("P.big", "maxHeartbeats", 0, "Big.lean:2", "declaration"),)
+
+    assert audit_blueprint(blueprint, lean_root=lean_root).warnings == (
+        AuditWarning("roadmap/alias.md", "catalog-unbounded-limit", message, limit),
+        AuditWarning("roadmap/both.md", "catalog-unbounded-limit", message, limit),
     )
 
 
@@ -1335,8 +1447,10 @@ def test_audit_reads_deprecation_from_the_captured_source_generation(
         encoding="utf-8",
     )
     real_snapshot_project_sources = audit_module.snapshot_project_sources
+    requested = []
 
     def snapshot_then_rewrite(root: Path, **kwargs):
+        requested.append(kwargs)
         snapshot = real_snapshot_project_sources(root, **kwargs)
         source.write_text("theorem Project.result : True := trivial\n", encoding="utf-8")
         return snapshot
@@ -1351,6 +1465,8 @@ def test_audit_reads_deprecation_from_the_captured_source_generation(
             "lean target Project.result is deprecated; point lean: at its replacement",
         )
     ]
+    # Only the names the audit looks up are indexed.
+    assert requested == [{"names": ("Project.result",)}]
 
 
 def test_audit_checks_irreducible_def_kinds(tmp_path: Path) -> None:
@@ -1589,22 +1705,34 @@ def test_audit_allows_a_wide_repository_subject_index(tmp_path: Path) -> None:
     assert audit_blueprint(blueprint).clean
 
 
-def test_audit_keeps_the_normal_limit_for_flat_root_articles(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("chapters", "leaves", "limit"),
+    [
+        pytest.param(0, 25, 24, id="flat-root"),
+        pytest.param(30, 1, 24, id="subject-index-with-a-leaf"),
+        pytest.param(65, 0, 64, id="wide-subject-index"),
+    ],
+)
+def test_audit_limits_the_root_as_a_subject_index_only_when_every_child_is_a_chapter(
+    tmp_path: Path, chapters: int, leaves: int, limit: int
+) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     _article(blueprint, "README.md", depends=False)
-    for index in range(25):
-        _article(blueprint, f"chapter/unit-{index:02d}.md", declaration="theorem")
+    for index in range(chapters):
+        _article(blueprint, f"subject-{index:02d}/README.md", depends=False)
+    for index in range(leaves):
+        _article(blueprint, f"unit-{index:02d}.md", declaration="theorem")
 
-    findings = _finding_map(blueprint)["roadmap/chapter/README.md"]
-
-    assert findings == [
+    assert _finding_map(blueprint)["roadmap/README.md"] == [
         (
             "overfull-container",
-            "article directly contains 25 articles, more than the 24-article limit; "
+            f"article directly contains {chapters + leaves} articles, more than the {limit}-article limit; "
             "group them into chapters",
         )
     ]
+
+
 def test_audit_reports_nodes_that_are_large_outliers_for_their_project(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)

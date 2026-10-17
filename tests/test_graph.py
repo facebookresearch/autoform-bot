@@ -12,6 +12,8 @@ from autoform_cli.__main__ import main
 from autoform_cli.graph import (
     GraphValidationError,
     _containment_cycles,
+    atlas_omissions,
+    catalogs_without_ledger,
     load_graph,
 )
 from autoform_cli.graph_views import project_view
@@ -137,6 +139,29 @@ def test_summary_skips_a_block_the_page_shows_as_indented_code(tmp_path: Path) -
     )
 
 
+def test_summary_reads_reference_links_and_definitions_as_the_page_does(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "topic.md",
+        "# T\n\n[paper]: ../sources/paper.md\n\n"
+        "The statement cites [the paper][paper], [Smith][] and [[1] Jones](../sources/jones.md).\n"
+        "[smith]: ../sources/smith.md\nThe page starts a new paragraph here.\n",
+    )
+
+    assert load_graph(blueprint).nodes["topic"].summary == "The statement cites the paper, Smith and [1] Jones."
+
+
+def test_summary_clips_a_long_paragraph_at_a_word(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    words = " ".join(f"word{index}" for index in range(200))
+    _node(blueprint, "topic.md", f"# Topic\n\n{words}\n")
+
+    summary = load_graph(blueprint).nodes["topic"].summary
+
+    assert summary == " ".join(f"word{index}" for index in range(61)) + "…"
+
+
 def test_authored_atlas_manifest_groups_nodes_independently_of_paths(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "algebra.md", "# Algebra\n")
@@ -160,7 +185,7 @@ def test_authored_atlas_manifest_groups_nodes_independently_of_paths(tmp_path: P
     assert graph.nodes["topology"].area == "Geometry & Topology"
 
 
-def test_atlas_manifest_rejects_unknown_and_duplicate_assignments(tmp_path: Path) -> None:
+def test_atlas_manifest_keeps_the_first_area_and_names_what_it_ignores(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "algebra.md", "# Algebra\n")
     (blueprint / "atlas.json").write_text(
@@ -176,11 +201,13 @@ def test_atlas_manifest_rejects_unknown_and_duplicate_assignments(tmp_path: Path
         encoding="utf-8",
     )
 
-    with pytest.raises(GraphValidationError) as error:
-        load_graph(blueprint)
+    graph = load_graph(blueprint)
 
-    assert "unknown roadmap node 'missing'" in str(error.value)
-    assert "belongs to both 'One' and 'Two'" in str(error.value)
+    assert graph.nodes["algebra"].area == "One"
+    assert atlas_omissions(graph) == [
+        "'missing' under 'One' is ignored, since no roadmap node has that id",
+        "'algebra' under 'Two' is ignored, since 'One' already holds it",
+    ]
 
 
 def test_dangling_atlas_manifest_link_is_not_treated_as_absent(tmp_path: Path) -> None:
@@ -191,12 +218,50 @@ def test_dangling_atlas_manifest_link_is_not_treated_as_absent(tmp_path: Path) -
     except OSError:
         pytest.skip("the test filesystem cannot create symbolic links")
 
-    with pytest.raises(GraphValidationError) as error:
-        load_graph(blueprint)
+    assert atlas_omissions(load_graph(blueprint)) == [
+        "ignored, since it is not a regular file inside the blueprint"
+    ]
 
-    assert error.value.issues == (
-        "atlas.json: taxonomy must be a regular file inside the blueprint",
-    )
+
+@pytest.mark.parametrize(
+    ("atlas", "omission"),
+    [
+        pytest.param(b" " * 1_000_001, "ignored, since it exceeds 1000000 bytes", id="oversize"),
+        pytest.param(b"{", "ignored, since it is not valid JSON: ", id="invalid-json"),
+        pytest.param(b"[" * 200_000, "ignored, since it is not valid JSON: ", id="too-deep"),
+        pytest.param(
+            b'{"name": "unrelated tool data", "regions": []}',
+            "ignored, since its schema is not 'autoform-atlas/v1'",
+            id="other-schema",
+        ),
+        pytest.param(
+            b'{"schema": "autoform-atlas/v1", "areas": ["topic"]}',
+            "ignored, since its 'areas' is not an object",
+            id="areas-not-an-object",
+        ),
+        pytest.param(
+            b'{"schema": "autoform-atlas/v1", "areas": {"Algebra": "topic"}}',
+            "area 'Algebra' is ignored; it needs a name and an array of roadmap node ids",
+            id="area-without-an-array",
+        ),
+        pytest.param(
+            b'{"schema": "autoform-atlas/v1", "areas": {"Algebra": ["topic"]}}',
+            "'topic' under 'Algebra' is ignored, since its frontmatter area is 'Topology'",
+            id="frontmatter-wins",
+        ),
+    ],
+)
+def test_atlas_manifest_problems_are_check_warnings(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], atlas: bytes, omission: str
+) -> None:
+    """Earlier versions ignored blueprint/atlas.json, so nothing in it may stop a command."""
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "topic.md", "# Topic\n", area="Topology")
+    (blueprint / "atlas.json").write_bytes(atlas)
+
+    assert load_graph(blueprint).nodes["topic"].area == "Topology"
+    assert main(["check", str(blueprint)]) == 0
+    assert capsys.readouterr().out.splitlines()[-1].startswith(f"warning: atlas.json: {omission}")
 
 
 def test_loads_a_non_dispatchable_module_catalog_status(tmp_path: Path) -> None:
@@ -221,45 +286,67 @@ def test_loads_a_non_dispatchable_module_catalog_status(tmp_path: Path) -> None:
     assert node.proof_formalized
 
 
-def test_module_catalog_requires_exact_names_and_a_local_ledger(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("link", "status", "last_line"),
+    [
+        pytest.param("../sources/module.md", 0, "    1 module inventory", id="ledger"),
+        pytest.param(
+            "../notes/ledger.md",
+            0,
+            "warning: module: module catalog links no declaration ledger under blueprint/sources/ from '## Sources'",
+            id="outside-sources",
+        ),
+        pytest.param(
+            "https://example.com/ledger.md",
+            0,
+            "warning: module: module catalog links no declaration ledger under blueprint/sources/ from '## Sources'",
+            id="external",
+        ),
+        pytest.param(
+            "../sources/missing.md",
+            1,
+            "error: module: source target does not resolve to a file: '../sources/missing.md'",
+            id="missing",
+        ),
+    ],
+)
+def test_check_warns_about_a_catalog_that_links_no_ledger_under_sources(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], link: str, status: int, last_line: str
+) -> None:
+    """A catalog's ledger is a source link: only a dead one fails check, as for any article."""
     blueprint = tmp_path / "blueprint"
-    _node(
-        blueprint,
-        "module.md",
-        "# Existing module\n",
-        catalog="module",
-        statement="formalized",
-        proof="formalized",
-    )
+    for ledger in ("sources/module.md", "notes/ledger.md"):
+        (blueprint / ledger).parent.mkdir(parents=True)
+        (blueprint / ledger).write_text("# Module declarations\n", encoding="utf-8")
+    _node(blueprint, "module.md", f"# Existing module\n\n## Sources\n\n- [Ledger]({link})\n", catalog="module")
 
-    with pytest.raises(GraphValidationError) as error:
-        load_graph(blueprint)
-
-    assert "must list exact compiled names" in str(error.value)
-    assert "must link a declaration ledger" in str(error.value)
+    assert main(["check", str(blueprint)]) == status
+    assert capsys.readouterr().out.splitlines()[-1] == last_line
 
 
 @pytest.mark.parametrize(
     "link",
     [
         pytest.param("http://[oops/paper.md", id="invalid-url"),
-        pytest.param("../sources/" + "a" * 300 + ".md", id="long-name"),
-        pytest.param("../sources/loop.md", id="symlink-loop"),
+        pytest.param("../notes/" + "a" * 300 + ".md", id="long-name"),
+        pytest.param("../notes/loop.md", id="symlink-loop"),
     ],
 )
-def test_a_catalog_ledger_listed_after_a_link_that_cannot_be_resolved_still_loads(
+def test_a_catalog_ledger_listed_after_a_link_that_cannot_be_resolved_still_counts(
     tmp_path: Path, link: str
 ) -> None:
-    # Without #337's guards each link stops the load: urlsplit rejects the first,
-    # Path.is_file raises on the long name before Python 3.14, and resolve raises on
-    # the loop before 3.13. Skipped, they leave the ledger after them to be found.
+    # Each link once crashed the ledger rule: urlsplit rejects the first, Path.is_file
+    # raises on the long name before Python 3.14, and resolve raises on the loop
+    # before 3.13. The rule now reads links without touching files, and none of
+    # these is under sources/, so it must read past each one to the ledger.
     blueprint = tmp_path / "blueprint"
     ledger = blueprint / "sources/module.md"
     ledger.parent.mkdir(parents=True)
     ledger.write_text("# Module declarations\n", encoding="utf-8")
     if link.endswith("loop.md"):
+        (blueprint / "notes").mkdir()
         try:
-            (blueprint / "sources/loop.md").symlink_to("loop.md")
+            (blueprint / "notes/loop.md").symlink_to("loop.md")
         except OSError:
             pytest.skip("symlinks are unavailable")
     _node(
@@ -269,7 +356,7 @@ def test_a_catalog_ledger_listed_after_a_link_that_cannot_be_resolved_still_load
         catalog="module",
     )
 
-    assert load_graph(blueprint).nodes["module"].catalog == "module"
+    assert catalogs_without_ledger(load_graph(blueprint)) == []
 
 
 def test_formalized_module_catalog_rejects_an_empty_lean_name_list(tmp_path: Path) -> None:
@@ -287,7 +374,7 @@ def test_formalized_module_catalog_rejects_an_empty_lean_name_list(tmp_path: Pat
         proof="formalized",
     )
 
-    with pytest.raises(GraphValidationError, match="must list exact compiled names"):
+    with pytest.raises(GraphValidationError, match="needs the lean: names of the public declarations it inventories"):
         load_graph(blueprint)
 
 
@@ -815,6 +902,44 @@ def test_check_cli_separates_module_inventories_from_target_statuses(tmp_path: P
     assert "fully proved" not in result.stdout
 
 
+def test_check_counts_declaration_targets_and_every_lean_name_it_resolves(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A chapter page and a prose leaf are no targets, and a catalog's names each count."""
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "chapter/result.md", "# Result\n", declaration="theorem")
+    _node(blueprint, "chapter/notes.md", "# Notes\n")
+    (blueprint / "sources").mkdir()
+    (blueprint / "sources/catalog.md").write_text("# Catalog declarations\n", encoding="utf-8")
+    catalog = _node(
+        blueprint,
+        "catalog.md",
+        "# Existing module\n\n## Sources\n\n- [Ledger](../sources/catalog.md)\n",
+        catalog="module",
+        lean="Inv.a Inv.b Inv.c",
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Inv.lean").write_text(
+        "".join(f"theorem Inv.{name} : True := trivial\n" for name in "abc"), encoding="utf-8"
+    )
+
+    assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "OK: 4 articles, 0 dependencies",
+        "    1 ready to state",
+        "    1 module inventory",
+        "    3 declaration name(s) resolved in the Lean sources",
+    ]
+    # A catalog's unresolved name may be one Lean generates, which no index records.
+    catalog.write_text(catalog.read_text(encoding="utf-8").replace("Inv.c", "Inv.c Inv.mk"), encoding="utf-8")
+    assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 1
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        f"error: catalog: declaration not found in {lean_root}: Inv.mk; "
+        "a name Lean generates is not indexed and belongs in the catalog's ledger"
+    )
+
+
 def test_check_cli_reports_validation_errors(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "bad.md", "no heading\n")
@@ -981,7 +1106,7 @@ def test_check_prints_its_warnings_after_the_whole_summary(
     lines = capsys.readouterr().out.splitlines()
     assert sum(line.startswith("warning:") for line in lines) == 1
     assert lines[-2:] == [
-        "    1 declaration(s) resolved in the Lean sources",
+        "    1 declaration name(s) resolved in the Lean sources",
         "warning: base: work and search omit this source target, which is neither an http(s) link "
         "nor a path inside the blueprint: 'mailto:author@example.org'",
     ]
@@ -1102,17 +1227,21 @@ def test_check_cli_reports_source_index_io_failure_before_success(
 ) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "base.md", "# Base\n", lean="Project.base")
+    requested = []
 
-    def fail_linker(root: Path, **_kwargs):
+    def fail_index(root: Path, **kwargs):
+        requested.append(kwargs)
         raise OSError(f"private host detail: {root}")
 
-    monkeypatch.setattr("autoform_cli.__main__.build_linker", fail_linker)
+    monkeypatch.setattr("autoform_cli.__main__.index_project", fail_index)
 
     assert main(["check", str(blueprint), "--lean-root", str(tmp_path)]) == 1
     captured = capsys.readouterr()
     assert captured.out == "error: Lean sources could not be indexed\n"
     assert captured.err == ""
     assert str(tmp_path) not in captured.out
+    # Only the names check looks up are indexed.
+    assert requested == [{"names": ("Project.base",)}]
 
 
 def test_check_cli_names_an_unsafe_lean_source_without_host_paths(

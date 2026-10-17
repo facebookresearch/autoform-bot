@@ -662,7 +662,8 @@ def test_coverage_loading_does_not_infer_article_roles(tmp_path: Path) -> None:
             5,
             "coverage-role-mismatch",
             "coverage area 'Existing modules' is INVENTORIED, but each roadmap link must "
-            "resolve to a catalog leaf or a container with catalog descendants",
+            "resolve to a catalog leaf or a container with catalog descendants; "
+            "roadmap/theorem.md reaches no catalog leaf",
         ),
     )
 
@@ -683,26 +684,101 @@ def test_validate_coverage_roles_accepts_direct_role_leaves(tmp_path: Path) -> N
     assert validate_coverage_roles(load_graph(blueprint), summary) == ()
 
 
-def test_validate_coverage_roles_bounds_contract_findings(tmp_path: Path) -> None:
+def test_a_link_with_the_role_does_not_excuse_one_without_it(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
-    _role_article(blueprint, "module-one.md", catalog="module")
-    _role_article(blueprint, "module-two.md", catalog="module")
+    _role_article(blueprint, "result.md", declaration="theorem")
+    _role_article(blueprint, "module.md", catalog="module")
     _contract(
         blueprint,
-        "| Wrong exposition | DECOMPOSED | [One](../roadmap/module-one.md), "
-        "[two](../roadmap/module-two.md) |\n",
+        "| Existing module | INVENTORIED | [Module](../roadmap/module.md), [Result](../roadmap/result.md) |\n",
     )
     summary, syntax_issues = load_coverage(blueprint)
 
     assert syntax_issues == ()
     assert summary is not None
-    role_issues = validate_coverage_roles(load_graph(blueprint), summary)
-    assert [issue.code for issue in role_issues] == [
-        "coverage-role-mismatch",
-        "unclassified-inventory",
-    ]
-    assert sum(issue.code == "coverage-role-mismatch" for issue in role_issues) == 1
-    assert sum(issue.code == "unclassified-inventory" for issue in role_issues) == 1
+    assert validate_coverage_roles(load_graph(blueprint), summary) == (
+        CoverageRoleIssue(
+            5,
+            "coverage-role-mismatch",
+            "coverage area 'Existing module' is INVENTORIED, but each roadmap link must "
+            "resolve to a catalog leaf or a container with catalog descendants; "
+            "roadmap/result.md reaches no catalog leaf",
+        ),
+    )
+
+
+def test_validate_coverage_roles_bounds_contract_findings(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    for index in range(5):
+        _role_article(blueprint, f"module-{index}.md", catalog="module")
+    _contract(
+        blueprint,
+        "| Wrong exposition | DECOMPOSED | [One](../roadmap/module-0.md), "
+        "[two](../roadmap/module-1.md) |\n",
+    )
+    summary, syntax_issues = load_coverage(blueprint)
+
+    assert syntax_issues == ()
+    assert summary is not None
+    assert validate_coverage_roles(load_graph(blueprint), summary) == (
+        CoverageRoleIssue(
+            5,
+            "coverage-role-mismatch",
+            "coverage area 'Wrong exposition' is DECOMPOSED, but each roadmap link must "
+            "resolve to a declaration leaf or a container with declaration descendants; "
+            "roadmap/module-0.md and 1 more reach no declaration leaf",
+        ),
+        CoverageRoleIssue(
+            0,
+            "unclassified-inventory",
+            "coverage contract leaves 5 catalog articles outside INVENTORIED evidence "
+            "(roadmap/module-0.md, roadmap/module-1.md, roadmap/module-2.md and 2 more); "
+            "link each inventory area directly or through a containing roadmap article",
+        ),
+    )
+
+
+def test_a_decomposed_row_short_of_declarations_warns_unless_it_reaches_only_catalogs(
+    tmp_path: Path,
+) -> None:
+    """Earlier audits passed a DECOMPOSED row whatever it linked; only catalog-only evidence is new."""
+    blueprint = tmp_path / "blueprint"
+    _role_article(blueprint, "lemma.md", declaration="lemma")
+    _role_article(blueprint, "notation.md")
+    _role_article(blueprint, "draft.md", not_ready="true")
+    _role_article(blueprint, "module.md", catalog="module")
+    _contract(
+        blueprint,
+        "| Section 1 | DECOMPOSED | [Notation](../roadmap/notation.md), [Lemma](../roadmap/lemma.md), "
+        "[Draft](../roadmap/draft.md) |\n"
+        "| Section 2 | DECOMPOSED | [Module](../roadmap/module.md) |\n"
+        "| Section 3 | DECOMPOSED | [Lemma](../roadmap/lemma.md), [Module](../roadmap/module.md) |\n"
+        "| Inventory | INVENTORIED | [Module](../roadmap/module.md) |\n",
+    )
+    summary, syntax_issues = load_coverage(blueprint)
+
+    assert syntax_issues == ()
+    assert summary is not None
+    assert validate_coverage_roles(load_graph(blueprint), summary) == (
+        CoverageRoleIssue(
+            5,
+            "decomposed-without-declaration",
+            "coverage area 'Section 1' is DECOMPOSED, but roadmap/notation.md, roadmap/draft.md "
+            "reach no declaration leaf",
+        ),
+        CoverageRoleIssue(
+            6,
+            "coverage-role-mismatch",
+            "coverage area 'Section 2' is DECOMPOSED, but each roadmap link must resolve to "
+            "a declaration leaf or a container with declaration descendants; "
+            "roadmap/module.md reaches no declaration leaf",
+        ),
+        CoverageRoleIssue(
+            7,
+            "decomposed-without-declaration",
+            "coverage area 'Section 3' is DECOMPOSED, but roadmap/module.md reaches no declaration leaf",
+        ),
+    )
 
 
 def test_inventoried_evidence_requires_a_roadmap_link(tmp_path: Path) -> None:

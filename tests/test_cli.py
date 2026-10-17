@@ -145,7 +145,7 @@ def test_audit_cli_passes_with_only_warnings_and_prints_them(tmp_path: Path, cap
     command = ["audit", str(blueprint), "--lean-root", str(lean_root)]
     message = (
         "2 of 2 catalogued declarations have no maxHeartbeats limit (Inv.a at Inv.lean:1 and 1 more); "
-        "set a finite limit"
+        "existing code: change it only on request, and a finite limit must pass a rebuild"
     )
 
     assert main(command) == 0
@@ -178,17 +178,17 @@ def test_audit_cli_passes_with_only_warnings_and_prints_them(tmp_path: Path, cap
     assert main(command) == 1
     assert capsys.readouterr().out.splitlines() == [
         "    coverage: 0 mapped · 0 decomposed · 1 inventoried · 0 deferred · 0 out",
-        "error: roadmap/inventory.md: lean-target-not-found: Lean declaration target was not found: Inv.missing",
+        "error: roadmap/inventory.md: lean-target-not-found: Lean declaration target was not found: Inv.missing; "
+        "a name Lean generates is not indexed and belongs in the catalog's ledger",
         f"warning: roadmap/inventory.md: catalog-unbounded-limit: {message}",
     ]
 
 
-def test_coverage_role_mismatch_warns_in_render_and_fails_audit(tmp_path: Path, capsys) -> None:
-    """Role mismatches are audit findings while a blueprint migrates.
+def test_a_decomposed_link_that_declares_nothing_warns_in_render_and_audit(tmp_path: Path, capsys) -> None:
+    """Earlier audits passed a DECOMPOSED row whatever it linked, so a drafted leaf only warns.
 
-    Render publishes them as warnings, the way it publishes ``MAPPED`` rows;
-    only an invalid contract stops it. A drafted leaf that declares nothing
-    yet is enough to trip the role check under a ``DECOMPOSED`` row.
+    Render publishes the warning, the way it publishes ``MAPPED`` rows; only an
+    invalid contract stops it.
     """
     blueprint = tmp_path / "blueprint"
     (blueprint / "roadmap").mkdir(parents=True)
@@ -204,12 +204,78 @@ def test_coverage_role_mismatch_warns_in_render_and_fails_audit(tmp_path: Path, 
         "| Section 1 | DECOMPOSED | [Lemma](../roadmap/lemma.md) |\n",
         encoding="utf-8",
     )
+    reason = "coverage area 'Section 1' is DECOMPOSED, but roadmap/lemma.md reaches no declaration leaf"
 
     assert main(["check", str(blueprint)]) == 0
     capsys.readouterr()
     assert main(["render", str(blueprint), "--output", str(tmp_path / "site")]) == 0
-    rendered = capsys.readouterr().out
-    assert "warning: coverage contract line 5: coverage area 'Section 1' is DECOMPOSED" in rendered
+    assert f"warning: coverage contract line 5: {reason}" in capsys.readouterr().out.splitlines()
     assert (tmp_path / "site" / "publication.json").is_file()
+    assert main(["audit", str(blueprint)]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        f"warning: coverage/README.md: decomposed-without-declaration: {reason} (line 5)"
+    )
+
+
+def test_a_coverage_role_mismatch_fails_the_audit(tmp_path: Path, capsys) -> None:
+    """A DECOMPOSED row reaching only catalogs and an INVENTORIED row reaching no catalog both fail.
+
+    Earlier audits could express neither.
+    """
+    blueprint = tmp_path / "blueprint"
+    (blueprint / "roadmap").mkdir(parents=True)
+    (blueprint / "sources").mkdir()
+    (blueprint / "coverage").mkdir()
+    (blueprint / "roadmap" / "module.md").write_text(
+        "---\ncatalog: module\n---\n\n# Module\n\nAn existing module.\n\n"
+        "## Sources\n\n- [Ledger](../sources/ledger.md)\n",
+        encoding="utf-8",
+    )
+    (blueprint / "sources" / "ledger.md").write_text("# Ledger\n", encoding="utf-8")
+    (blueprint / "roadmap" / "lemma.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Lemma\n\nA precise statement.\n\n## Depends on\n\nNo prerequisites.\n",
+        encoding="utf-8",
+    )
+    (blueprint / "coverage" / "README.md").write_text(
+        "# Coverage\n\n"
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Section 1 | INVENTORIED | [Module](../roadmap/module.md) |\n"
+        "| Section 2 | DECOMPOSED | [Module](../roadmap/module.md) |\n"
+        "| Section 3 | INVENTORIED | [Lemma](../roadmap/lemma.md) |\n",
+        encoding="utf-8",
+    )
+    reasons = [
+        "coverage area 'Section 2' is DECOMPOSED, but each roadmap link must resolve to a declaration leaf or a "
+        "container with declaration descendants; roadmap/module.md reaches no declaration leaf (line 6)",
+        "coverage area 'Section 3' is INVENTORIED, but each roadmap link must resolve to a catalog leaf or a "
+        "container with catalog descendants; roadmap/lemma.md reaches no catalog leaf (line 7)",
+    ]
+
     assert main(["audit", str(blueprint)]) == 1
-    assert "error: coverage/README.md: coverage-role-mismatch:" in capsys.readouterr().out
+    assert capsys.readouterr().out.splitlines() == [
+        "    coverage: 0 mapped · 1 decomposed · 2 inventoried · 0 deferred · 0 out",
+        *(f"error: coverage/README.md: coverage-role-mismatch: {reason}" for reason in reasons),
+    ]
+    assert main(["audit", str(blueprint), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert (payload["clean"], payload["findings"], payload["warnings"]) == (
+        False,
+        [
+            {"article_path": "coverage/README.md", "code": "coverage-role-mismatch", "reason": reason}
+            for reason in reasons
+        ],
+        [],
+    )
+
+
+def test_an_unrelated_atlas_json_warns_in_render_and_audit(tmp_path: Path, capsys) -> None:
+    """Earlier versions ignored blueprint/atlas.json, so a file another tool wrote there fails nothing."""
+    blueprint = _clean_blueprint(tmp_path)
+    (blueprint / "atlas.json").write_text('{"name": "unrelated tool data", "regions": []}', encoding="utf-8")
+    omission = "ignored, since its schema is not 'autoform-atlas/v1'"
+
+    assert main(["render", str(blueprint), "--output", str(tmp_path / "site")]) == 0
+    assert f"warning: atlas.json: {omission}" in capsys.readouterr().out.splitlines()
+    assert main(["audit", str(blueprint)]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == f"warning: atlas.json: atlas-omission: {omission}"

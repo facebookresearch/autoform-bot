@@ -179,6 +179,10 @@ class SourceIndex:
     #: For a name more than one file declares, the files after the one
     #: ``find`` returns.
     elsewhere: dict[str, tuple[Path, ...]] = field(default_factory=dict)
+    #: The sorted lines of every declaration each scanned file holds, a name
+    #: another file also declares included, so a source span ends at the next
+    #: one whichever files a name filter admitted.
+    declaration_lines: dict[Path, tuple[int, ...]] = field(default_factory=dict)
 
     def find(self, name: str) -> Declaration | None:
         return self.declarations.get(name)
@@ -244,6 +248,7 @@ class BoundProjectSources:
         *,
         names: Iterable[str] | None = None,
     ) -> IndexedSourceSnapshot:
+        """Capture the bound sources; *names* filters the index as for :func:`index_project`."""
         snapshot = self.tree.capture()
         return _indexed_source_snapshot(self.root, snapshot, names=names)
 
@@ -309,6 +314,13 @@ def index_project(
     names: Iterable[str] | None = None,
 ) -> SourceIndex:
     """Scan ``*.lean`` beneath *root* and index declarations by full name.
+
+    With *names*, only files that may declare one of their last components, or
+    that of a name an alias's target can mean, are indexed, so
+    :meth:`SourceIndex.find` answers for the requested names and aliases
+    resolve as in an unfiltered index. Each such file is indexed whole. The
+    digest still covers every file, and so do the line counts unless the
+    request is empty: an empty request scans and counts no file.
 
     Raises :class:`LeanSourceError` when the root cannot be used or its
     sources cannot be read.
@@ -399,7 +411,8 @@ def snapshot_project_sources(
     """Read each Lean source once and derive its index and revision together.
 
     A bind or capture that races a concurrent edit is retried a bounded number
-    of times.
+    of times. *names* filters the index as for :func:`index_project`; the
+    source files and both revisions still cover every file.
     """
 
     requested_names = None if names is None else tuple(names)
@@ -680,6 +693,7 @@ def _indexed_source_snapshot(
     declarations: dict[str, Declaration] = {}
     elsewhere: dict[str, tuple[Path, ...]] = {}
     line_counts: dict[Path, int] = {}
+    declaration_lines: dict[Path, tuple[int, ...]] = {}
     source_files: list[tuple[Path, bytes]] = []
     digest = hashlib.sha256(b"autoform-lean-source-index/v1\0")
     wanted_short = (
@@ -687,20 +701,49 @@ def _indexed_source_snapshot(
         if names is None
         else frozenset(_short_name(name) for name in names)
     )
+    # An alias resolves through the first file that declares a name its target
+    # can mean, so a filter also admits every file that may declare one. Files
+    # holding an alias are stripped and scanned once, here, to learn those names.
+    scanned: dict[str, tuple[list[str], tuple[list[Declaration], int]]] = {}
+    if wanted_short:
+        for relative_text, data in snapshot.files:
+            if b"alias" not in data:
+                continue
+            try:
+                lines = _without_lean_comments(data.decode("utf-8"), mask_literals=True).splitlines()
+            except UnicodeError:
+                continue
+            scan = _scan(lines, Path(relative_text))
+            scanned[relative_text] = lines, scan
+            wanted_short |= {
+                _short_name(candidate)
+                for declaration in scan[0]
+                if declaration.alias is not None
+                for candidate in declaration.alias.candidates
+            }
     for relative_text, data in snapshot.files:
         relative_path = Path(relative_text)
         _update_source_digest(digest, relative_path, data)
         source_files.append((relative_path, data))
-        try:
-            text = data.decode("utf-8")
-        except UnicodeError:
+        if wanted_short is not None and not wanted_short:
             continue
-        if wanted_short is not None and not _may_declare(text, wanted_short):
-            # Nothing in this file is indexed, so no declaration is sized
-            # against this count.
-            line_counts[relative_path] = len(text.splitlines())
+        if relative_text in scanned:
+            lines, scan = scanned[relative_text]
+        else:
+            try:
+                text = data.decode("utf-8")
+            except UnicodeError:
+                continue
+            # The stripper keeps newlines, so both passes number lines as the file does.
+            lines, scan = _without_lean_comments(text, mask_literals=True).splitlines(), None
+        if wanted_short is not None and not _may_declare(lines, wanted_short):
+            # Nothing in this file is indexed, but its count still stops where Lean stops reading.
+            line_counts[relative_path] = next(
+                (number for number, line in enumerate(lines) if _EXIT.match(line)), len(lines)
+            )
             continue
-        found, line_counts[relative_path] = _scan(text, relative_path)
+        found, line_counts[relative_path] = _scan(lines, relative_path) if scan is None else scan
+        declaration_lines[relative_path] = tuple(sorted({declaration.line for declaration in found}))
         for declaration in found:
             first = declarations.setdefault(declaration.name, declaration)
             if first.path != relative_path and relative_path not in elsewhere.get(declaration.name, ()):
@@ -713,6 +756,7 @@ def _indexed_source_snapshot(
             source_digest=source_digest,
             line_counts=line_counts,
             elsewhere=elsewhere,
+            declaration_lines=declaration_lines,
         ),
         source_digest,
         snapshot.generation_revision,
@@ -720,12 +764,13 @@ def _indexed_source_snapshot(
     )
 
 
-def _may_declare(text: str, wanted_short: frozenset[str]) -> bool:
-    """Reject files that cannot contain a requested declaration."""
+def _may_declare(lines: list[str], wanted_short: frozenset[str]) -> bool:
+    """Reject files that cannot contain a requested declaration.
 
-    if not wanted_short:
-        return False
-    for line in _without_lean_comments(text).splitlines():
+    ``lines`` are the file's lines with comments blanked, as :func:`_scan` reads them.
+    """
+
+    for line in lines:
         match = _DECLARATION.match(line)
         if match is None:
             continue
@@ -789,13 +834,12 @@ def _update_source_digest(digest, relative: Path, data: bytes) -> None:
     digest.update(data)
 
 
-def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
-    """The declarations in ``text`` and the number of its lines Lean reads."""
+def _scan(lines: list[str], relative: Path) -> tuple[list[Declaration], int]:
+    """The declarations in a file's comment-blanked ``lines`` and the number of them Lean reads."""
     found: list[Declaration] = []
     namespaces: list[str] = []
     scopes: list[str | None] = []
 
-    lines = _without_lean_comments(text, mask_literals=True).splitlines()
     for number, line in enumerate(lines, start=1):
         if not line.strip():
             continue
@@ -859,7 +903,7 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
                 continue
             # `_name_token` stops before the `{` in an explicit universe
             # binder, leaving the syntactic separator behind.
-            name = re.sub(r"\.\{[^}\n]+\}$", "", name).removesuffix(".")
+            name = name.removesuffix(".")
             found.append(Declaration(_qualified(namespaces, name), relative, number, keyword, protected))
     return found, len(lines)
 
@@ -1177,17 +1221,10 @@ class SourceLinker:
         return f"{self.repository_url}/blob/{encoded_ref}/{path}#L{declaration.line}"
 
 
-def build_linker(
-    lean_root: str | Path,
-    *,
-    names: Iterable[str] | None = None,
-) -> SourceLinker:
+def build_linker(lean_root: str | Path) -> SourceLinker:
     """Index *lean_root* and resolve repository coordinates."""
     resolved_root = resolve_lean_root(lean_root)
-    snapshot, repository_url, ref, linkable_paths = _capture_link_state(
-        resolved_root,
-        names=names,
-    )
+    snapshot, repository_url, ref, linkable_paths = _capture_link_state(resolved_root)
     if repository_url is None:
         repository_url = detect_repository_url(resolved_root)
     return SourceLinker(
@@ -1200,8 +1237,6 @@ def build_linker(
 
 def _capture_link_state(
     root: Path,
-    *,
-    names: Iterable[str] | None = None,
 ) -> tuple[
     IndexedSourceSnapshot,
     str | None,
@@ -1210,7 +1245,6 @@ def _capture_link_state(
 ]:
     """Capture source bytes and prove which ones belong to one stable commit."""
 
-    requested_names = None if names is None else tuple(names)
     last_snapshot: IndexedSourceSnapshot | None = None
     last_url: str | None = None
     for attempt in range(_SNAPSHOT_ATTEMPTS):
@@ -1218,7 +1252,7 @@ def _capture_link_state(
             time.sleep(_SNAPSHOT_RETRY_DELAY_SECONDS * attempt)
         before_url = detect_repository_url(root)
         before_ref = detect_ref(root)
-        snapshot = snapshot_project_sources(root, names=requested_names)
+        snapshot = snapshot_project_sources(root)
         last_snapshot = snapshot
         last_url = before_url
         after_url = detect_repository_url(root)

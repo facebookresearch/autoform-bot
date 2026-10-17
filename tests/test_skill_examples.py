@@ -47,12 +47,13 @@ def test_human_review_distinguishes_roadmap_progress_from_source_scope(
     repo_root: Path,
 ) -> None:
     skill = (repo_root / "skills/human-review/SKILL.md").read_text(encoding="utf-8")
+    normalized = " ".join(skill.split())
 
     assert "`Scoped roadmap` percentage" in skill
-    assert "formalizable leaf targets only" in skill
-    assert "Module catalogs are non-dispatchable source" in skill
-    assert "separate neutral metric" in skill
-    assert "Completion includes every\ndependency recursively" in skill
+    assert "formalizable leaf targets only" in normalized
+    assert "Module catalogs are non-dispatchable source" in normalized
+    assert "separate neutral metric" in normalized
+    assert "Completion includes every dependency recursively" in normalized
     assert "bodies for definitions" in skill
     assert "`mathlib: true` follows the authored status contract" in skill
     assert "not audit verification" in skill
@@ -63,34 +64,48 @@ def test_human_review_distinguishes_roadmap_progress_from_source_scope(
     assert "autoform dashboard <PROJECT> --site-dir site" in skill
     assert "same site deployed to\nGitHub Pages" in skill
     assert "local-only live claim badges" in skill
-    assert "full-page route" in skill
-    assert "Never begin with a\nfitted all-repository node cloud" in skill
-    assert "smallest\nuseful scope" in skill
-    assert "mathematical knowledge map, not navigation chrome" in skill
-    assert "provenance, and pagination folders remain facets" in skill
-    assert "Containment\nuses regions or hulls, dependency uses typed arrows" in skill
-    assert "no authored\ndependency edges says so" in skill
+    assert "full-page route" in normalized
+    assert "move from the project's topics to a chapter" in normalized
+    assert "smallest useful scope" in normalized
+    assert "mathematical knowledge map, not navigation chrome" in normalized
+    assert "Regions come only from authored `area:` or `blueprint/atlas.json`" in normalized
+    assert "folders that only file or paginate pages never become regions" in normalized
+    assert "Areas show as regions, containment as topics you open, and dependency as arrows" in normalized
+    assert "no authored dependency edges says so" in normalized
     assert "overview, progress, project graph" not in skill
 
 
 def test_generated_site_docs_describe_one_multiscale_explorer(repo_root: Path) -> None:
-    cli = (repo_root / "autoform_cli/README.md").read_text(encoding="utf-8")
-    review = (repo_root / "skills/human-review/SKILL.md").read_text(encoding="utf-8")
-    example = (repo_root / _EXAMPLE / "README.md").read_text(encoding="utf-8")
-    workflow = (
-        repo_root
-        / _EXAMPLE
-        / ".github/workflows/blueprint-pages.yml"
-    ).read_text(encoding="utf-8")
+    cli, review = (
+        " ".join((repo_root / relative).read_text(encoding="utf-8").split())
+        for relative in ("autoform_cli/README.md", "skills/human-review/SKILL.md")
+    )
 
-    assert "Every generated\nsite projection uses the same" in cli
-    assert "Authored Mermaid remains\nsupported in the vault and book" in cli
-    assert "Project, chapter, and small\nlocal maps remain compact Mermaid" not in cli
-    assert "Every generated site route\nuses the same" in review
-    assert "The authored vault graph remains Mermaid" in review
-    assert "Canvas plus semantic-DOM explorer across project" in example
-    assert "one interactive\n      # dependency explorer" in workflow
-    assert "scoped Mermaid maps" not in example
+    assert "Every generated site projection uses the same" in cli
+    assert "Authored Mermaid remains supported in the vault and book" in cli
+    assert "`dependencies/index.json`, is internal to the bundled viewer, and its schema may change" in cli
+    assert "Every generated site route uses the same" in review
+
+
+def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -> None:
+    """The example's CI runs its pinned AUTOFORM_REF, c994d83f, which predates catalogs.
+
+    That check rejects `catalog:` and `area:` and that render rejects
+    INVENTORIED, while it ignores atlas.json, and its render draws Mermaid maps.
+    Move the pin, here and in the workflow equivalence test, before relaxing this.
+    """
+    example = repo_root / _EXAMPLE
+    for page in (example / "blueprint/roadmap").rglob("*.md"):
+        text = page.read_text(encoding="utf-8")
+        frontmatter = text[4:].split("\n---", 1)[0] if text.startswith("---\n") else ""
+        assert not re.search(r"^(?:area|catalog):", frontmatter, re.MULTILINE), page
+    assert "INVENTORIED" not in (example / "blueprint/coverage/README.md").read_text(encoding="utf-8")
+    assert "dependency maps of the project and each chapter" in " ".join(
+        (example / "README.md").read_text(encoding="utf-8").split()
+    )
+    assert "derived statuses, dependency maps," in (example / ".github/workflows/blueprint-pages.yml").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_formalize_replaces_custom_orchestration_with_the_markdown_frontier(
@@ -309,7 +324,7 @@ def test_implementation_notes_are_hidden_and_keyed_by_article_id(repo_root: Path
     assert "Delete it when the article is proved or marked `mathlib: true`" in roadmap
     assert (
         "delete a container's note when every formalizable descendant, and every leaf marked `not_ready` "
-        "beneath it, is proved and there is at least one"
+        "beneath it, is proved and there is at least one; a module catalog never counts"
         in roadmap
     )
     assert "an orphaned note blocks every command that loads the graph" in roadmap
@@ -328,7 +343,7 @@ def test_implementation_notes_are_hidden_and_keyed_by_article_id(repo_root: Path
     assert "Versioned implementation notes live outside the mathematical roadmap" in reference
     assert (
         "delete it once every formalizable descendant, and every leaf marked `not_ready` beneath it, "
-        "is proved and there is at least one" in reference
+        "is proved and there is at least one; a module catalog never counts" in reference
     )
     assert "Record what happened in the revision commit and report" in reference
     assert (
@@ -372,8 +387,9 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     assert "Full-viewport knowledge maps" in contract_text
     assert "authored mathematical areas and prose to drive regions and reading panels" in contract_text
     assert "containment and dependency distinct" in contract_text
-    assert "provenance folders as facets, never geometry" in contract_text
+    assert "regions come only from authored areas, never from folders or paths" in contract_text
     assert "Never fit the whole repository" in contract_text
+    assert "Run `make test-browser` for any explorer change" in contract_text
 
 
 def test_development_guidance_uses_progressive_command_reference(repo_root: Path) -> None:
@@ -400,6 +416,7 @@ def test_development_guidance_routes_repository_contracts(repo_root: Path) -> No
     skill = skill_path.read_text(encoding="utf-8")
 
     assert "[repository contracts](references/repository-contracts.md)" in skill
+    assert "pins/releases/explorers, read" in skill
     assert contracts_path.is_file()
 
 
@@ -885,7 +902,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'class="bp-dag-viewer"' in full_graph
     assert "```mermaid" not in full_graph
     payload = json.loads((site / "dependencies/full.json").read_text(encoding="utf-8"))
-    assert payload["node_count"] < len(graph.nodes)
+    assert len(payload["nodes"]) < len(graph.nodes)
     search_index = json.loads((site / "dependencies/index.json").read_text(encoding="utf-8"))
     assert {node["id"] for node in search_index["nodes"]} == set(graph.nodes)
     statement_page = (site / "roadmap/infimum-loss/README.md").read_text(encoding="utf-8")
@@ -931,8 +948,6 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "literate-nav" in mkdocs
     assert "navigation.tabs" in mkdocs
     assert "  - search\n" in mkdocs
-    assert "Material does not implement MkDocs' `indexing: titles`" in mkdocs
-    assert "- hooks/title_only_search.py" in mkdocs
     summary = (site / "SUMMARY.md").read_text(encoding="utf-8")
     assert summary.startswith("---\nsearch:\n  exclude: true\n---\n")
     assert "- [Home](README.md)" in summary
@@ -1007,9 +1022,6 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
         "verified canonical URL",
         "references/zulip.md",
         "separate opt-in outward-facing action",
-        "search index title-only",
-        "one record per content page",
-        "runtime memory",
     ):
         assert required in setup
     for required in (
@@ -1029,7 +1041,7 @@ def test_each_skill_points_to_its_thesis_example(repo_root: Path) -> None:
     assert "stale-build refusal" in agent_review
     assert "drift checksum" in agent_review
     assert "autoform-visualize" in human_review
-    assert "`approve`,\n`revise`, or `block`" in human_review
+    assert "`approve`, `revise`, or\n`block`" in human_review
     for required in (
         "example-based plugin",
         "independent formalization",
@@ -1171,6 +1183,7 @@ def test_roadmap_skill_commits_the_final_checked_pass(repo_root: Path) -> None:
         "After the final edit",
         "`autoform check`",
         "`autoform audit`",
+        "Fix the other `warning:` lines inside the adopted boundary as you would a finding",
         "Commit the vault and refreshed graph only after this final validation",
         "no `MAPPED` rows",
         "latest commit contains every change from the pass",
@@ -1381,6 +1394,17 @@ def test_skills_search_the_blueprint_before_adding_a_result(repo_root: Path) -> 
     assert "duplicate" in rubric and "not proof" in rubric
 
 
+def test_agent_review_judges_a_catalog_as_an_inventory(repo_root: Path) -> None:
+    """A catalog lists peer declarations by design, which the rubric scored as a defect."""
+    rubric = " ".join(
+        (repo_root / "skills/agent-review/references/roadmap-quality.md").read_text(encoding="utf-8").split()
+    )
+
+    assert "`DECOMPOSED`, `INVENTORIED`, `DEFERRED`, and `OUT`" in rubric
+    assert "not a duplicate of the article that expounds it" in rubric
+    assert "The pull-request-unit and unique-main-result rules do not apply to it" in rubric
+
+
 def test_roadmap_states_the_library_search_without_the_link(repo_root: Path) -> None:
     """Roadmap carries the library flags itself, not only behind the link to the rules.
 
@@ -1534,8 +1558,20 @@ def test_roadmap_reconciles_the_pages_setup_wrote(repo_root: Path) -> None:
         assert required in roadmap, f"Roadmap never reconciles {required}"
 
 
+def test_roadmap_retracts_against_the_branch_formalize_works_from(repo_root: Path) -> None:
+    """A Formalize run without claims never sees Roadmap's claim.
+
+    If Roadmap looks for `lean:` only on its own branch, an article Formalize
+    formalized meanwhile keeps `statement: formalized` through a clean rebase
+    although the revision changed its statement, and check and audit both pass.
+    """
+
+    roadmap = " ".join((repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8").split())
+    assert "whose article has `lean:` once rebased onto the branch Formalize works from, retract it" in roadmap
+
+
 def test_roadmap_repository_scope_inventories_existing_lean(repo_root: Path) -> None:
-    """A global blueprint is a catalog, not merely a future-work backlog.
+    """A global blueprint is an inventory, not merely a future-work backlog.
 
     A consumer asked for one wiki covering all mathematics in an established
     Lean repository. The old workflow treated local implementations as prior
@@ -1554,11 +1590,15 @@ def test_roadmap_repository_scope_inventories_existing_lean(repo_root: Path) -> 
     ).read_text(encoding="utf-8")
 
     for required in (
-        "repository-wide catalog",
+        "repository-wide library, global wiki, or other existing codebase",
         "project-owned Lean is a primary mathematical source",
         "inventory every in-scope tracked module and public mathematical declaration",
         "future-work slice cannot stand in for a repository-wide inventory",
-        "`DECOMPOSED` means represented by roadmap articles, not unfinished",
+        # A docstring describes code; a paper-based pass still works from its source.
+        "Work from exact source passages. When the boundary includes existing Lean",
+        "never replace the adopted source",
+        "a repository inventory also needs every in-scope declaration reconciled",
+        "`DECOMPOSED` means represented by declaration articles, not unfinished",
         "record exact compiled names in `lean`",
         "`proof: formalized` for a theorem or lemma only after checking that its proof is complete",
         "An axiom or wanted placeholder does not justify a formalized proof",
@@ -1567,9 +1607,16 @@ def test_roadmap_repository_scope_inventories_existing_lean(repo_root: Path) -> 
     ):
         assert required in normalized
 
-    assert "internal/runbooks/planning.md" not in roadmap
-    assert "existing formalized Lean" in metadata
+    assert "inventorying existing formalized Lean when the boundary is an existing repository or library" in metadata
     assert "Existing and planned mathematics coexist in one book" in example
+
+
+def test_roadmap_and_formalize_leave_code_an_audit_warns_about_to_the_user(repo_root: Path) -> None:
+    """A catalog's limit warning describes code that builds today; a guessed limit can break it."""
+    for skill in ("roadmap", "formalize"):
+        text = " ".join((repo_root / f"skills/{skill}/SKILL.md").read_text(encoding="utf-8").split())
+        assert "`catalog-unscoped-limit` warning describes existing Lean code and never fails the audit" in text, skill
+        assert "change that code only when the user asks" in text, skill
 
 
 def test_roadmap_commits_so_the_published_site_can_catch_up(repo_root: Path) -> None:
@@ -1637,9 +1684,3 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
     ).read_text(encoding="utf-8")
 
     assert significant(example) == significant(template)
-    assert (
-        repo_root / "autoform_cli/templates/hooks/title_only_search.py"
-    ).read_bytes() == (
-        repo_root
-        / "skills/setup/assets/cabannes-thesis-project/hooks/title_only_search.py"
-    ).read_bytes()

@@ -99,13 +99,35 @@ _BY_KEY = {state.key: state for state in STATES}
 
 #: Neutral statuses for module catalogs, which record inspection of existing
 #: Lean rather than formalization targets: checked once fully proved, pending
-#: until then. A checked inventory takes the planned colours and a pending one
-#: a darker grey, so the two stay apart in a status ring.
+#: until then. Each takes a grey stroke of its own, apart from planned's, so
+#: planned targets and both kinds of inventory stay apart in a status ring.
 INVENTORY_STATES: tuple[State, ...] = (
-    replace(_BY_KEY["planned"], key="inventory_checked", label="inventory checked"),
+    replace(
+        _BY_KEY["planned"],
+        key="inventory_checked",
+        label="inventory checked",
+        stroke="#65676B",
+        dark_stroke="#B0B3B8",
+    ),
     State("inventory_pending", "inventory pending", "#F0F2F5", "#8A8D91", "#65676B",
           "#242526", "#8A8D91", "#B0B3B8"),
 )
+
+#: What each state means, for the legends and the explorer's swatches.
+MEANINGS = {
+    "mathlib": "Upstreamed into Mathlib.",
+    "fully_proved": "Proved, and every prerequisite is fully proved too.",
+    "proved": "Proof compiles, but something it rests on is not finished.",
+    "defined": "Definition is written in Lean.",
+    "conditional": "Proof compiles, but rests on an open statement without a recorded Lean proof.",
+    "can_prove": "Statement is in Lean and nothing it needs is blocked, so the proof can start.",
+    "stated": "Statement is in Lean; the proof is not.",
+    "can_state": "Nothing it needs is blocked, so the statement can be written in Lean.",
+    "not_ready": "Needs more blueprint work before it can be attempted.",
+    "planned": "Described in the blueprint only.",
+    "inventory_checked": "Module inventory checked in full; it records inspection, not a mathematical proof.",
+    "inventory_pending": "Module inventory not yet checked in full; it records inspection, not a mathematical proof.",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,6 +332,7 @@ def summarize(statuses: dict[str, NodeStatus]) -> list[tuple[State, int]]:
 __all__ = [
     "DEFINITION_DECLARATIONS",
     "INVENTORY_STATES",
+    "MEANINGS",
     "STATES",
     "NodeStatus",
     "State",

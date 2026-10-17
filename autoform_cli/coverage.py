@@ -164,9 +164,10 @@ def validate_coverage_roles(
 
     :func:`load_coverage` remains a syntax-only operation. Callers that already
     have a validated graph use this second phase to distinguish declaration
-    exposition from module inventory. Audit reports each issue as a finding.
-    Render prints it as a warning and still publishes, as it publishes a
-    contract with ``MAPPED`` rows, so a blueprint keeps its site while its
+    exposition from module inventory. Audit reports each issue as a finding,
+    except ``decomposed-without-declaration``, which it reports as a warning.
+    Render prints every issue as a warning and still publishes, as it publishes
+    a contract with ``MAPPED`` rows, so a blueprint keeps its site while its
     rows migrate.
     """
 
@@ -180,6 +181,9 @@ def validate_coverage_roles(
     catalog_nodes = {node_id for node_id, node in graph.nodes.items() if node.catalog}
     by_path = {node.path.resolve(): node_id for node_id, node in graph.nodes.items()}
 
+    def article_path(node_id: str) -> str:
+        return graph.nodes[node_id].path.relative_to(graph.blueprint_dir).as_posix()
+
     for entry in coverage.entries:
         role = {
             "DECOMPOSED": "declaration",
@@ -189,18 +193,32 @@ def validate_coverage_roles(
             continue
 
         targets = _coverage_target_nodes(graph, coverage, entry.evidence, by_path=by_path)
-        role_scopes = [
-            _leaf_role_nodes(graph, contained, node_id, role=role) for node_id in targets
+        reached = {node_id: _leaves(contained, node_id) for node_id in targets}
+        failing = [
+            article_path(node_id)
+            for node_id, leaves in reached.items()
+            if not any(getattr(graph.nodes[leaf], role) is not None for leaf in leaves)
         ]
-        if not targets or any(not scope for scope in role_scopes):
-            issues.append(
-                CoverageRoleIssue(
-                    entry.line,
-                    "coverage-role-mismatch",
+        if not targets or failing:
+            offenders = _first(failing, 1) if failing else "its evidence"
+            verb = "reach" if len(failing) > 1 else "reaches"
+            leaves = set().union(*reached.values())
+            if role == "declaration" and not (leaves and all(graph.nodes[leaf].catalog for leaf in leaves)):
+                # Earlier versions accepted a DECOMPOSED row whatever its links
+                # reached, so a link that reaches no declaration leaf only warns,
+                # and the warning names every such link. A row that reaches
+                # nothing but catalogs, which they could not express, fails.
+                code = "decomposed-without-declaration"
+                offenders = ", ".join(failing) or offenders
+                reason = f"coverage area {entry.area!r} is DECOMPOSED, but {offenders} {verb} no declaration leaf"
+            else:
+                code = "coverage-role-mismatch"
+                reason = (
                     f"coverage area {entry.area!r} is {entry.disposition}, but each roadmap "
-                    f"link must resolve to a {role} leaf or a container with {role} descendants",
+                    f"link must resolve to a {role} leaf or a container with {role} descendants; "
+                    f"{offenders} {verb} no {role} leaf"
                 )
-            )
+            issues.append(CoverageRoleIssue(entry.line, code, reason))
 
         if entry.disposition == "INVENTORIED":
             # Classify everything the row reaches. The role walk stops at
@@ -213,7 +231,7 @@ def validate_coverage_roles(
                     inventoried.add(node_id)
                     pending.extend(contained.get(node_id, ()))
 
-    unclassified = catalog_nodes - inventoried
+    unclassified = sorted(article_path(node_id) for node_id in catalog_nodes - inventoried)
     if unclassified:
         noun = "article" if len(unclassified) == 1 else "articles"
         issues.append(
@@ -221,11 +239,18 @@ def validate_coverage_roles(
                 0,
                 "unclassified-inventory",
                 f"coverage contract leaves {len(unclassified)} catalog {noun} outside "
-                "INVENTORIED evidence; link each inventory area directly or through a "
-                "containing roadmap article",
+                f"INVENTORIED evidence ({_first(unclassified, 3)}); link each inventory "
+                "area directly or through a containing roadmap article",
             )
         )
     return tuple(issues)
+
+
+def _first(paths: list[str], shown: int) -> str:
+    """Name the first *shown* paths, then count the rest."""
+
+    rest = len(paths) - shown
+    return ", ".join(paths[:shown]) + (f" and {rest} more" if rest > 0 else "")
 
 
 def _coverage_target_nodes(
@@ -261,14 +286,8 @@ def _coverage_target_nodes(
     return tuple(resolved)
 
 
-def _leaf_role_nodes(
-    graph: Graph,
-    contained: dict[str, list[str]],
-    root_id: str,
-    *,
-    role: str,
-) -> set[str]:
-    """Return role-bearing leaves at or beneath one coverage target."""
+def _leaves(contained: dict[str, list[str]], root_id: str) -> set[str]:
+    """Return the leaves at or beneath one coverage target."""
 
     found: set[str] = set()
     pending = [root_id]
@@ -281,7 +300,7 @@ def _leaf_role_nodes(
         children = contained.get(node_id, ())
         if children:
             pending.extend(children)
-        elif getattr(graph.nodes[node_id], role) is not None:
+        else:
             found.add(node_id)
     return found
 

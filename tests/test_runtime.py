@@ -13,6 +13,7 @@ from autoform_cli.runtime import (
     RUNTIME_AUTHORITY,
     RUNTIME_SCHEMA,
     RuntimeProjectionError,
+    _validate_runtime,
     build_runtime_graph,
     load_runtime_graph,
     resolve_runtime_paths,
@@ -158,17 +159,6 @@ def test_runtime_exposes_a_settled_module_catalog_without_dispatching_it(tmp_pat
     assert not catalog.formalizable
     assert not catalog.dispatchable
     assert catalog.status.state == "fully_proved"
-
-
-def test_runtime_node_loads_the_previous_v3_pickle_shape(tmp_path: Path) -> None:
-    node = load_runtime_graph(_project(tmp_path)).nodes[0]
-    previous_state = node.__getstate__()[:-1]
-    restored = object.__new__(type(node))
-
-    restored.__setstate__(previous_state)
-
-    assert restored == node
-    assert restored.catalog is None
 
 
 @pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
@@ -362,8 +352,10 @@ def test_runtime_translates_source_index_io_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str | None, message: str
 ) -> None:
     project = _project(tmp_path)
+    requested = []
 
-    def fail_index(root: Path, **_kwargs):
+    def fail_index(root: Path, **kwargs):
+        requested.append(kwargs)
         if reason is not None:
             raise LeanSourceError(reason)
         raise OSError(f"private host detail: {root}")
@@ -375,6 +367,8 @@ def test_runtime_translates_source_index_io_failure(
 
     assert error.value.issues == (message,)
     assert str(tmp_path) not in str(error.value)
+    # Only the names the projection looks up are indexed.
+    assert requested == [{"names": ("Project.base", "Project.result", "Project.result_aux")}]
 
 
 def test_adapter_rejects_inconsistent_hand_built_graph_without_host_paths(tmp_path: Path) -> None:
@@ -402,15 +396,26 @@ def test_adapter_rejects_inconsistent_hand_built_graph_without_host_paths(tmp_pa
     assert str(tmp_path) not in str(error.value)
 
 
-def test_adapter_rejects_a_hand_built_dispatchable_catalog(tmp_path: Path) -> None:
+def test_adapter_never_dispatches_a_hand_built_catalog_with_a_declaration(tmp_path: Path) -> None:
     project = _project(tmp_path)
     canonical = load_graph(project / "blueprint")
     nodes = dict(canonical.nodes)
     base = nodes["chapter/section/base"]
     nodes[base.id] = replace(base, catalog="module")
 
-    with pytest.raises(RuntimeProjectionError, match="catalog node carries"):
-        build_runtime_graph(Graph(canonical.blueprint_dir, nodes), project_root=project)
+    runtime = build_runtime_graph(Graph(canonical.blueprint_dir, nodes), project_root=project)
+
+    assert not runtime.get(base.id).dispatchable
+
+
+def test_runtime_validation_rejects_a_dispatchable_catalog(tmp_path: Path) -> None:
+    runtime = load_runtime_graph(_project(tmp_path))
+    nodes = tuple(
+        replace(node, catalog="module") if node.id == "chapter/section/base" else node for node in runtime.nodes
+    )
+
+    with pytest.raises(RuntimeProjectionError, match="catalog node is dispatchable"):
+        _validate_runtime(replace(runtime, nodes=nodes))
 
 
 def test_adapter_rejects_a_hand_built_unknown_catalog_kind(tmp_path: Path) -> None:
@@ -420,7 +425,7 @@ def test_adapter_rejects_a_hand_built_unknown_catalog_kind(tmp_path: Path) -> No
     roadmap = nodes["roadmap"]
     nodes[roadmap.id] = replace(roadmap, catalog="book")
 
-    with pytest.raises(RuntimeProjectionError, match="unsupported catalog kind"):
+    with pytest.raises(RuntimeProjectionError, match="runtime catalog kind is unsupported"):
         build_runtime_graph(Graph(canonical.blueprint_dir, nodes), project_root=project)
 
 

@@ -74,6 +74,7 @@ make setup
 make lint
 make test
 make check-example
+make test-browser  # the dependency explorer in WebKit
 ```
 
 Lean server architecture and operations are documented in

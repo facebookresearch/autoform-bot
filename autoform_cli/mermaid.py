@@ -1,9 +1,10 @@
 """Render a blueprint DAG as Mermaid inside a Markdown page.
 
 Mermaid was chosen over a bespoke SVG because the same fenced block renders in
-Obsidian, on GitHub, and on the published site. Colours follow
-:mod:`autoform_cli.status`: fill tracks proof progress, stroke tracks statement
-progress, exactly as ``leanblueprint`` draws its dependency graph.
+Obsidian and on GitHub; the published site draws the dependency explorer
+instead. Colours follow :mod:`autoform_cli.status`: fill tracks proof progress,
+stroke tracks statement progress, exactly as ``leanblueprint`` draws its
+dependency graph.
 """
 
 from __future__ import annotations
@@ -15,12 +16,12 @@ from pathlib import Path
 from urllib.parse import quote
 from typing import TYPE_CHECKING
 
-from .graph_views import container_nodes, inventory_counts, inventory_state, is_scope_target
-from .status import INVENTORY_STATES, STATES, State, is_definition
+from .graph_views import container_nodes, display_state, display_status_key, inventory_counts
+from .status import INVENTORY_STATES, MEANINGS, STATES, State, is_definition
 
 if TYPE_CHECKING:
     from .graph import Graph, Node
-    from .graph_views import GraphView, ViewEdge, ViewNode
+    from .graph_views import ViewNode
     from .status import NodeStatus
 
 
@@ -91,9 +92,7 @@ def render_diagram(
             continue
         # Rectangles introduce data, rounded boxes assert something.
         shape = f'["{label}"]' if is_definition(node) else f'("{label}")'
-        # A catalog takes the neutral planned colours, checked or not.
-        state_key = "planned" if inventory_state(node, statuses[node.id]) else statuses[node.id].key
-        lines.append(f"  {handle}{shape}:::{state_key}")
+        lines.append(f"  {handle}{shape}:::{display_status_key(node, statuses[node.id])}")
 
     for node in ordered:
         for dependency in node.statement_dependencies:
@@ -107,7 +106,7 @@ def render_diagram(
         if node.id in boxes:
             state_label = _view_summary(boxes[node.id])
         else:
-            state_label = (inventory_state(node, statuses[node.id]) or statuses[node.id].state).label
+            state_label = display_state(node, statuses[node.id]).label
         tooltip = _escape(f"{node.title} — {state_label}")
         lines.append(f'  click {handles[node.id]} "{links[node.id]}" "{tooltip}"')
 
@@ -117,54 +116,8 @@ def render_diagram(
     return "\n".join(lines)
 
 
-def render_view_diagram(
-    view: GraphView,
-    *,
-    links: dict[str, str] | None = None,
-    include_classdefs: bool = True,
-) -> str:
-    """Return a Mermaid diagram for a project, chapter, focus, or full view."""
-    if not view.nodes:
-        return '```mermaid\ngraph LR\n  empty["No nodes in this view"]\n```'
-    links = links or {}
-    handles = {node.id: f"n{index}" for index, node in enumerate(view.nodes)}
-    lines = ["```mermaid", "graph LR"]
-
-    for node in view.nodes:
-        handle = handles[node.id]
-        label = _view_label(node)
-        if node.kind == "node":
-            shape = f'["{label}"]' if is_definition(node) else f'("{label}")'
-            class_name = node.status_key or "planned"
-        else:
-            shape = f'["{label}"]'
-            class_name = _scope_class(node.complete) if node.kind == "scope" else "boundary"
-        lines.append(f"  {handle}{shape}:::{class_name}")
-
-    for edge in view.edges:
-        lines.extend(_view_edge_lines(edge, handles))
-
-    for node in view.nodes:
-        handle = handles[node.id]
-        if node.focus:
-            lines.append(f"  class {handle} focus")
-        href = links.get(node.id)
-        if href is not None:
-            tooltip = _escape(f"{node.title} — {_view_summary(node)}")
-            lines.append(f'  click {handle} "{href}" "{tooltip}"')
-
-    if include_classdefs:
-        lines.extend(f"  {line}" for line in classdef_lines())
-    lines.append("```")
-    return "\n".join(lines)
-
-
 def _view_label(node: ViewNode) -> str:
-    title = _escape(node.title)
-    if node.kind == "node":
-        return title
-    prefix = "External chapter: " if node.kind == "boundary" else ""
-    return f"{prefix}{title}<br/><small>{_escape(_view_summary(node))}</small>"
+    return f"{_escape(node.title)}<br/><small>{_escape(_view_summary(node))}</small>"
 
 
 def _view_summary(node: ViewNode) -> str:
@@ -174,21 +127,6 @@ def _view_summary(node: ViewNode) -> str:
         for key, count in node.status_counts
     )
     return f"{node.item_count} {item}" + (f" · {counts}" if counts else "")
-
-
-def _view_edge_lines(edge: ViewEdge, handles: dict[str, str]) -> list[str]:
-    source = handles[edge.source]
-    target = handles[edge.target]
-    lines = []
-    if edge.statement_count:
-        label = f"|{edge.statement_count}|" if edge.statement_count > 1 else ""
-        lines.append(f"  {source} -->{label} {target}")
-    if edge.proof_count:
-        if edge.proof_count > 1:
-            lines.append(f"  {source} -. {edge.proof_count} .-> {target}")
-        else:
-            lines.append(f"  {source} -.-> {target}")
-    return lines
 
 
 def _scope_class(complete: bool) -> str:
@@ -205,10 +143,12 @@ def classdef_lines(*, dark: bool = False) -> list[str]:
         )
 
     states = [classdef(state.key, state) for state in STATES]
-    # Chapter and boundary boxes are the project map, which is the first thing
-    # on the landing page, so they take the same greys and blues as the rest of
-    # the site rather than the GitHub palette the states used to sit in. A
-    # finished scope takes the fully proved green, so completion reads at a glance.
+    # Scope boxes are the vault map's containers. They take the same greys and
+    # blues as the rest of the site rather than the GitHub palette the states
+    # used to sit in, and a finished scope takes the fully proved green, so
+    # completion reads at a glance. No generated map draws boundary or focus
+    # boxes any more; those classes stay until authored diagrams on the site
+    # get a rule of their own.
     complete = classdef("scope_complete", next(state for state in STATES if state.key == "fully_proved"))
     if dark:
         views = [
@@ -259,7 +199,7 @@ def render_legend(
             f'<span class="bp-swatch bp-swatch-{state.key}"></span>'
             f'<span class="bp-legend-label">{html.escape(state.label)}</span>'
             f'<span class="bp-legend-count">{counts[state.key]}</span>'
-            f'<span class="bp-legend-meaning">{html.escape(_MEANINGS[state.key])}</span>'
+            f'<span class="bp-legend-meaning">{html.escape(MEANINGS[state.key])}</span>'
         )
     return f'<div class="bp-legend-grid">{"".join(cells)}</div>'
 
@@ -299,21 +239,6 @@ def render_legend_tip(
     )
 
 
-_MEANINGS = {
-    "mathlib": "Upstreamed into Mathlib.",
-    "fully_proved": "Proved, and every prerequisite is fully proved too.",
-    "proved": "Proof compiles, but something it rests on is not finished.",
-    "defined": "Definition is written in Lean.",
-    "conditional": "Proof compiles, but rests on an open statement without a recorded Lean proof.",
-    "can_prove": "Statement is in Lean and nothing it needs is blocked, so the proof can start.",
-    "stated": "Statement is in Lean; the proof is not.",
-    "can_state": "Nothing it needs is blocked, so the statement can be written in Lean.",
-    "not_ready": "Needs more blueprint work before it can be attempted.",
-    "planned": "Described in the blueprint only.",
-    "inventory_checked": "Module inventory checked in full; it records inspection, not a mathematical proof.",
-    "inventory_pending": "Module inventory not yet checked in full; it records inspection, not a mathematical proof.",
-}
-
 _STATE_LABELS = {state.key: state.label for state in (*STATES, *INVENTORY_STATES)}
 
 
@@ -338,14 +263,13 @@ def render_page(
         include_classdefs=include_classdefs,
     )
     # Containers are drawn as scope boxes, so they have no row in the legend,
-    # and a leaf has one only if the boxes count it, as a target by state or as
-    # a catalog by inventory status.
+    # and a catalog counts apart as an inventory.
     boxes = container_nodes(graph, statuses)
     legend = render_legend(
         {
             node_id: state
             for node_id, state in statuses.items()
-            if node_id not in boxes and is_scope_target(graph.nodes[node_id])
+            if node_id not in boxes and graph.nodes[node_id].catalog is None
         },
         inventory_counts(graph, statuses),
     )
@@ -374,6 +298,5 @@ __all__ = [
     "render_legend",
     "render_legend_tip",
     "render_page",
-    "render_view_diagram",
     "source_links",
 ]

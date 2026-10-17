@@ -27,7 +27,7 @@ reads are not a generation boundary (Windows render omits code links).
 Read bounded outputs before descendants, keep each marker schema in its owning
 feature, and require links to match the blob at the stable detected commit.
 
-For claims/views/mirrors/pins/releases, read
+For claims/views/mirrors/pins/releases/explorers, read
 [repository contracts](references/repository-contracts.md).
 
 Run:

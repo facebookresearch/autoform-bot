@@ -484,7 +484,8 @@ def test_targeted_index_prefilters_files_but_preserves_file_context_and_digest(
 ) -> None:
     _index(tmp_path)
     other = tmp_path / "Project/Other.lean"
-    other.write_text("def unrelated : Nat := 0\n", encoding="utf-8")
+    # A skipped file still counts only the lines Lean reads, up to its `#exit`.
+    other.write_text("def unrelated : Nat := 0\n#exit\ndef dead : Nat := 1\n\n\n", encoding="utf-8")
     full = index_project(tmp_path)
 
     targeted = index_project(tmp_path, names=("Outer.alpha",))
@@ -493,7 +494,8 @@ def test_targeted_index_prefilters_files_but_preserves_file_context_and_digest(
     assert targeted.find("Outer.beta") is not None
     assert targeted.find("unrelated") is None
     assert targeted.source_digest == full.source_digest
-    assert set(targeted.line_counts) == set(full.line_counts)
+    assert targeted.line_counts == full.line_counts
+    assert index_project(tmp_path, names=()).line_counts == {}
 
 
 def test_targeted_index_treats_inline_comments_as_lean_whitespace(
@@ -510,6 +512,43 @@ def test_targeted_index_reads_each_name_of_an_iff_alias(tmp_path: Path) -> None:
     _index(tmp_path, "theorem t_iff : True ↔ True := Iff.rfl\nalias ⟨mp, mpr⟩ := t_iff\n")
 
     for name in ("mp", "mpr"):
+        assert index_project(tmp_path, names=(name,)).find(name) is not None, name
+
+
+def test_the_name_prefilter_admits_every_name_the_scan_indexes(tmp_path: Path) -> None:
+    """Each filtered capture (check, audit, render, runtime) loses a name the prefilter misreads."""
+    source = [
+        "universe u v w",
+        "namespace Outer",
+        "def polymorphic.{u} (α : Type u) := α",
+        "theorem «dotted.name» : True := trivial",
+        "theorem _root_.rootLevel.{v} : True := trivial",
+        "protected def guarded.{w} : Nat := 0",
+        "theorem base_iff : True ↔ True := Iff.rfl",
+        "alias ⟨forward, _⟩ := base_iff",
+        "alias later :=",
+        "  base_iff",
+        "@[simp]",
+        "theorem attributed : True := trivial",
+        "/-- A docstring on the declaration's own line. -/ theorem documented : True := trivial",
+        "theorem_wanted wish : True",
+        "proof_wanted proofWish : True",
+        "def_wanted defWish : Nat",
+        "instance_wanted instWish : Inhabited Nat",
+        "@[simp]",
+        "private",
+        "noncomputable def split : Nat := 0",
+        "end Outer",
+    ]
+    index = _index(tmp_path, "\n".join(source) + "\n")
+
+    assert sorted(index.declarations) == [
+        *(f"Outer.{name}" for name in ("attributed", "base_iff", "defWish", "documented", "forward", "guarded")),
+        *(f"Outer.{name}" for name in ("instWish", "later", "polymorphic", "proofWish", "split", "wish")),
+        "Outer.«dotted.name»",
+        "rootLevel",
+    ]
+    for name in index.declarations:
         assert index_project(tmp_path, names=(name,)).find(name) is not None, name
 
 
@@ -3402,6 +3441,22 @@ def test_an_alias_is_followed_only_to_an_earlier_declaration_of_its_file(tmp_pat
     # is outside the index leads nowhere sure.
     for name in ("X.remote", "X.skips", "X.skipsAbove", "X.partway"):
         assert index.reached(index.find(name)) is None, name
+
+
+def test_a_name_filter_resolves_an_alias_as_the_unfiltered_index_does(tmp_path: Path) -> None:
+    # The unfiltered index keeps A.lean's `N.aux`, so B.lean's alias has no sure
+    # target, whether or not a request also names A.lean's `N.helper`.
+    (tmp_path / "A.lean").write_text(
+        "namespace N\nprivate theorem aux : True := trivial\ntheorem helper : True := trivial\nend N\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "B.lean").write_text(
+        "namespace N\nprivate theorem aux : True := trivial\nalias good := aux\nend N\n", encoding="utf-8"
+    )
+
+    for names in (None, ("N.good",), ("N.good", "N.helper")):
+        index = index_project(tmp_path, names=names)
+        assert index.reached(index.find("N.good")) is None, names
 
 
 def test_anonymous_instances_are_not_mistaken_for_names(tmp_path: Path) -> None:

@@ -53,6 +53,8 @@ jobs:
         run: uv run --frozen --extra browser playwright install --with-deps webkit
       - name: Run dependency explorer browser regressions
         run: uv run --frozen --extra dev --extra browser pytest -q tests/test_dag_viewer_browser.py
+        env:
+          AUTOFORM_REQUIRE_BROWSER_TESTS: "1"
 
   real-lean:
     name: real Lean (fixture toolchain)
@@ -218,7 +220,7 @@ jobs:
           AUTOFORM_RUN_REAL_REPL_TESTS: "1"
 
   windows-hardening:
-    name: Windows capability, inspection, subprocess, and publication hardening
+    name: Windows inspection, subprocess, and publication hardening
     runs-on: windows-latest
     timeout-minutes: 15
     steps:

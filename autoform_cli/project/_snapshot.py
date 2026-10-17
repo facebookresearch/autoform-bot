@@ -351,91 +351,11 @@ def _directory_generation(path: Path) -> tuple[str, tuple[int, ...] | None]:
         metadata = os.stat(path)
         if not stat.S_ISDIR(metadata.st_mode):
             return "other", _node_identity(os.stat(path, follow_symlinks=False))
-        identity = _node_identity(metadata) + _directory_change_token(path)
     except FileNotFoundError:
         return "missing", None
     except (OSError, TypeError, ValueError):
         return "unreadable", None
-    return "directory", identity
-
-
-def _directory_change_token(path: Path) -> tuple[int, ...]:
-    """Return the native directory change generation omitted by Windows ``stat``.
-
-    On Windows, pathname ``st_ctime_ns`` is the creation time rather than the
-    filesystem change time.  Querying ``FILE_BASIC_INFO`` through a directory
-    handle retains the change time needed to detect a child rename-out/rename-in
-    ABA while the decision files are being captured.  The handle follows links,
-    as ``os.stat(path)`` does, so the token and the rest of the identity
-    describe the same directory.
-    """
-
-    if os.name != "nt":
-        return ()
-
-    import ctypes
-    from ctypes import wintypes
-
-    class _FileBasicInfo(ctypes.Structure):
-        _fields_ = (
-            ("creation_time", ctypes.c_longlong),
-            ("last_access_time", ctypes.c_longlong),
-            ("last_write_time", ctypes.c_longlong),
-            ("change_time", ctypes.c_longlong),
-            ("file_attributes", wintypes.DWORD),
-        )
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    create_file = kernel32.CreateFileW
-    create_file.argtypes = (
-        wintypes.LPCWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.HANDLE,
-    )
-    create_file.restype = wintypes.HANDLE
-    get_information = kernel32.GetFileInformationByHandleEx
-    get_information.argtypes = (
-        wintypes.HANDLE,
-        ctypes.c_int,
-        wintypes.LPVOID,
-        wintypes.DWORD,
-    )
-    get_information.restype = wintypes.BOOL
-    close_handle = kernel32.CloseHandle
-    close_handle.argtypes = (wintypes.HANDLE,)
-    close_handle.restype = wintypes.BOOL
-
-    share_read_write_delete = 0x00000001 | 0x00000002 | 0x00000004
-    open_existing = 3
-    backup_semantics = 0x02000000
-    handle = create_file(
-        str(path),
-        0,
-        share_read_write_delete,
-        None,
-        open_existing,
-        backup_semantics,
-        None,
-    )
-    invalid_handle = ctypes.c_void_p(-1).value
-    if handle == invalid_handle:
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        information = _FileBasicInfo()
-        if not get_information(
-            handle,
-            0,  # FILE_INFO_BY_HANDLE_CLASS.FileBasicInfo
-            ctypes.byref(information),
-            ctypes.sizeof(information),
-        ):
-            raise ctypes.WinError(ctypes.get_last_error())
-        return (int(information.change_time),)
-    finally:
-        close_handle(handle)
+    return "directory", _node_identity(metadata)
 
 
 def _path_present(path: Path) -> bool:

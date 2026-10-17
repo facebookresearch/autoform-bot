@@ -17,9 +17,13 @@ make check-example  # validate, render, and build the bundled example site
 CI (`.github/workflows/tests.yml`) runs the same four steps on Python 3.10 and
 3.13 for every pull request, for pushes to `main`, and for pushes to `scratch/`
 branches, which run CI on a branch with no pull request; a newer commit on a
-pull request cancels the older run. Four more jobs run beside it. `real Lean
-(fixture toolchain)` builds and audits a project from the bundled Mathlib
-release and runs
+pull request cancels the older run. Five more jobs run beside it. `WebKit
+dependency explorer regressions` installs the `browser` extra and WebKit and
+runs `tests/test_dag_viewer_browser.py` with `AUTOFORM_REQUIRE_BROWSER_TESTS=1`,
+so a missing browser fails the job instead of skipping its tests; locally they
+skip without the extra, and `make test-browser` installs both and runs them as
+CI does. `real Lean
+(fixture toolchain)` builds a project from the bundled Mathlib release and runs
 the real-Lean suites other than the skeleton suite, which `real Lean skeleton
 suite` runs with one `tests/test_project_inspect.py` test. Another job runs the
 inspection, bounded-subprocess, and transactional-output tests on Windows, and

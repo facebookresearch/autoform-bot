@@ -14,14 +14,19 @@ import json
 import os
 import re
 import stat
-from dataclasses import MISSING, dataclass, fields, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .lean import declaration_names
 from .markdown import link_definitions, link_targets, mask_code_and_comments, visible_prose
 
+
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
+#: An inline link or image; its label may hold bracket pairs, as the page reads it.
+_MARKDOWN_LINK_TEXT = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\([^)]*\)")
+#: A full, collapsed or shortcut reference link: ``[text][label]``, ``[label][]`` or ``[label]``.
+_REFERENCE_LINK_TEXT = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])+)\](?:\[([^\[\]]*)\])?")
 ARTICLE_ID_PATTERN = re.compile(r"af_[0-9a-f]{24}\Z")
 _FRONTMATTER_KEYS = frozenset(
     {
@@ -114,32 +119,6 @@ class Node:
         return self.declaration is not None
 
 
-
-def _node_getstate(node: Node) -> list[object]:
-    """Keep the public slotted record append-compatible for old pickles."""
-
-    return [getattr(node, item.name) for item in fields(node)]
-
-
-def _node_setstate(node: Node, state: list[object]) -> None:
-    node_fields = fields(node)
-    if len(state) > len(node_fields):
-        raise ValueError("Node pickle has unsupported fields")
-    for item, value in zip(node_fields, state, strict=False):
-        object.__setattr__(node, item.name, value)
-    for item in node_fields[len(state) :]:
-        if item.default is MISSING:
-            raise ValueError(f"Node pickle is missing required field {item.name!r}")
-        object.__setattr__(node, item.name, item.default)
-
-
-# Python 3.10's frozen+slots dataclass transformation overwrites methods defined
-# in the class body. Assign after decoration so every supported Python uses the
-# same append-compatible state contract.
-Node.__getstate__ = _node_getstate  # type: ignore[method-assign]
-Node.__setstate__ = _node_setstate  # type: ignore[method-assign]
-
-
 @dataclass(frozen=True, slots=True)
 class Graph:
     """A validated blueprint graph, keyed by stable node id."""
@@ -158,6 +137,14 @@ class Graph:
     def children(self, node_id: str) -> tuple[str, ...]:
         """Return the direct contained articles of *node_id*."""
         return tuple(node.id for node in self.nodes.values() if node.parent == node_id)
+
+    def lean_names(self) -> tuple[str, ...]:
+        """Return the distinct ``lean:`` names, in node order.
+
+        An index captured with ``names=`` answers only for the names requested,
+        so a consumer that looks names up requests exactly these.
+        """
+        return tuple(dict.fromkeys(name for node in self.nodes.values() for name in declaration_names(node.lean or "")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,20 +252,6 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             dependency for dependency in proof_dependencies if dependency not in dependencies
         )
         metadata = parsed_node.metadata
-        if metadata.get("catalog") is not None:
-            if (
-                metadata.get("statement") == _FORMALIZED
-                or metadata.get("proof") == _FORMALIZED
-            ) and not declaration_names(metadata.get("lean", "")):
-                issues.append(
-                    f"{parsed_node.id}: formalized module catalog must list exact "
-                    "compiled names in 'lean'"
-                )
-            if not _catalog_has_local_ledger(parsed_node, blueprint):
-                issues.append(
-                    f"{parsed_node.id}: module catalog must link a declaration ledger "
-                    "under blueprint/sources from its '## Sources' section"
-                )
         nodes[parsed_node.id] = Node(
             id=parsed_node.id,
             title=parsed_node.title,
@@ -308,7 +281,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             area=metadata.get("area"),
         )
 
-    _apply_atlas_manifest(blueprint, nodes, issues)
+    for node_id, area in _atlas_assignments(blueprint, nodes)[0].items():
+        nodes[node_id] = replace(nodes[node_id], area=area)
     if not issues:
         issues.extend(_find_cycles(nodes))
     if issues:
@@ -316,87 +290,83 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     return Graph(blueprint_dir=blueprint, nodes=nodes, open_statements=open_statements)
 
 
-def _apply_atlas_manifest(
-    blueprint: Path,
-    nodes: dict[str, Node],
-    issues: list[str],
-) -> None:
-    """Apply an optional authored taxonomy without coupling it to file layout."""
+def atlas_omissions(graph: Graph) -> list[str]:
+    """Say what ``blueprint/atlas.json`` asks for that loading ignored, for check, render and audit to warn about."""
+    return _atlas_assignments(graph.blueprint_dir, graph.nodes)[1]
+
+
+def _atlas_assignments(blueprint: Path, nodes: dict[str, Node]) -> tuple[dict[str, str], list[str]]:
+    """Read the optional authored taxonomy: the areas it assigns, and what it leaves out.
+
+    The file only assigns areas, so nothing in it stops a command. An article's
+    own ``area:`` wins, the first area listing a node wins, and a file that is
+    not readable ``autoform-atlas/v1`` JSON is ignored whole.
+    """
     path = blueprint / "atlas.json"
-    if path.is_symlink():
-        issues.append("atlas.json: taxonomy must be a regular file inside the blueprint")
-        return
-    if not path.exists():
-        return
-    if not path.is_file():
-        issues.append("atlas.json: taxonomy must be a regular file inside the blueprint")
-        return
     try:
-        raw = path.read_bytes()
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return {}, ["ignored, since it is not a regular file inside the blueprint"]
+        with path.open("rb") as handle:
+            raw = handle.read(_MAX_ATLAS_BYTES + 1)
+    except FileNotFoundError:
+        return {}, []
     except OSError as error:
-        issues.append(f"atlas.json: cannot read taxonomy: {error}")
-        return
+        return {}, [f"ignored, since it cannot be read: {error.strerror}"]
     if len(raw) > _MAX_ATLAS_BYTES:
-        issues.append(f"atlas.json: exceeds {_MAX_ATLAS_BYTES} bytes")
-        return
+        return {}, [f"ignored, since it exceeds {_MAX_ATLAS_BYTES} bytes"]
     try:
         payload = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        issues.append(f"atlas.json: invalid JSON: {error}")
-        return
+    except (ValueError, RecursionError) as error:
+        return {}, [f"ignored, since it is not valid JSON: {error}"]
     if not isinstance(payload, dict) or payload.get("schema") != ATLAS_SCHEMA:
-        issues.append(f"atlas.json: schema must be {ATLAS_SCHEMA!r}")
-        return
+        return {}, [f"ignored, since its schema is not {ATLAS_SCHEMA!r}"]
     areas = payload.get("areas")
     if not isinstance(areas, dict):
-        issues.append("atlas.json: 'areas' must be an object")
-        return
+        return {}, ["ignored, since its 'areas' is not an object"]
     assigned: dict[str, str] = {}
+    omissions: list[str] = []
     for area, node_ids in areas.items():
-        if not isinstance(area, str) or not area.strip() or not isinstance(node_ids, list):
-            issues.append("atlas.json: each area must be a non-empty string mapped to an array")
+        if not area.strip() or not isinstance(node_ids, list):
+            omissions.append(f"area {area!r} is ignored; it needs a name and an array of roadmap node ids")
             continue
         for node_id in node_ids:
             if not isinstance(node_id, str) or node_id not in nodes:
-                issues.append(f"atlas.json: unknown roadmap node {node_id!r}")
-                continue
-            previous = assigned.get(node_id)
-            if previous is not None:
-                issues.append(f"atlas.json: node {node_id!r} belongs to both {previous!r} and {area!r}")
-                continue
-            authored = nodes[node_id].area
-            if authored is not None and authored != area:
-                issues.append(
-                    f"atlas.json: node {node_id!r} conflicts with its frontmatter area {authored!r}"
+                omissions.append(f"{node_id!r} under {area!r} is ignored, since no roadmap node has that id")
+            elif node_id in assigned:
+                omissions.append(f"{node_id!r} under {area!r} is ignored, since {assigned[node_id]!r} already holds it")
+            elif nodes[node_id].area not in {None, area}:
+                omissions.append(
+                    f"{node_id!r} under {area!r} is ignored, since its frontmatter area is {nodes[node_id].area!r}"
                 )
-                continue
-            assigned[node_id] = area
-    for node_id, area in assigned.items():
-        nodes[node_id] = replace(nodes[node_id], area=area)
+            else:
+                assigned[node_id] = area
+    return assigned, omissions
 
 
-def _catalog_has_local_ledger(node: _ParsedNode, blueprint: Path) -> bool:
-    sources = (blueprint / "sources").resolve()
-    for target in node.source_targets:
-        try:
-            split = urlsplit(target)
-        except ValueError:
-            continue
-        if split.scheme or split.netloc or split.query or not split.path:
-            continue
-        path = Path(unquote(split.path))
-        if path.is_absolute():
-            continue
-        try:
-            candidate = (node.path.parent / path).resolve()
-            candidate.relative_to(sources)
-        except (OSError, RuntimeError, ValueError):
-            # Before Python 3.13 a symlink loop raises RuntimeError here; a loop is never a ledger.
-            continue
-        # Before Python 3.14, `Path.is_file` raises under an unreadable directory.
-        if os.path.isfile(candidate):
-            return True
-    return False
+def catalogs_without_ledger(graph: Graph) -> list[str]:
+    """Name each module catalog with no ``## Sources`` link into ``blueprint/sources/``.
+
+    The catalog contract asks for a declaration ledger there. A link that points
+    there at no file, or at a hidden path, is a source link that check and audit
+    report for every article, so this reads the links alone and touches no file.
+    """
+    sources = graph.blueprint_dir / "sources"
+    return [
+        node.id
+        for node in graph.nodes.values()
+        if node.catalog is not None and not any(_links_into(node.path, target, sources) for target in node.sources)
+    ]
+
+
+def _links_into(article: Path, target: str, directory: Path) -> bool:
+    """Whether the local link ``target`` in ``article`` points beneath ``directory``."""
+    try:
+        split = urlsplit(target)
+    except ValueError:
+        return False
+    if split.scheme or split.netloc or not split.path:
+        return False
+    return directory in Path(os.path.normpath(article.parent / unquote(split.path))).parents
 
 
 def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
@@ -697,17 +667,24 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         tuple(targets[_PROOF_SECTION]),
         tuple(targets[_SOURCES_SECTION]),
         metadata,
-        _extract_summary(body),
+        _extract_summary(body, references),
     )
     return parsed, []
 
 
-def _extract_summary(body: list[str], *, limit: int = 420) -> str | None:
+def _extract_summary(body: list[str], references: dict[str, str], *, limit: int = 420) -> str | None:
     """Return the first reader-facing prose paragraph from a roadmap article.
 
     ``body`` is the article below its frontmatter with fences, comments and
-    indented code already masked, so the summary reads what the page shows.
+    indented code already masked, and ``references`` its link definitions, so
+    the summary reads what the page shows.
     """
+
+    def unwrap(link: re.Match[str]) -> str:
+        # Without a definition, the page shows a reference link's brackets as written.
+        label = " ".join((link.group(2) or link.group(1)).lower().split())
+        return link.group(1) if label in references else link.group(0)
+
     paragraph: list[str] = []
     excluded = False
     for raw in body:
@@ -722,12 +699,15 @@ def _extract_summary(body: list[str], *, limit: int = 420) -> str | None:
             }
             continue
         text = raw.strip()
-        if not text:
+        # The page ends a paragraph at a reference definition, as at a blank line.
+        if not text or link_definitions([raw]):
             if paragraph:
                 break
             continue
         if excluded or text.startswith(("- ", "* ", "+ ", "> ", "|", "$$", "\\[", "<div")):
             continue
+        text = _MARKDOWN_LINK_TEXT.sub(r"\1", text)
+        text = _REFERENCE_LINK_TEXT.sub(unwrap, text)
         text = visible_prose(text)
         if text:
             paragraph.append(text)
@@ -798,12 +778,14 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
     if metadata.get("proof") == _FORMALIZED and metadata.get("statement") not in {_FORMALIZED, _RETRACTED}:
         issues.append(f"{node_id}: proof: formalized needs statement: formalized")
     formalized = [key for key in ("statement", "proof") if metadata.get(key) == _FORMALIZED]
-    if (
-        formalized
-        and metadata.get("catalog") is None
-        and not declaration_names(metadata.get("lean", ""))
-    ):
-        issues.append(f"{node_id}: {formalized[0]}: formalized needs the lean: declaration that formalizes it")
+    if formalized and not declaration_names(metadata.get("lean", "")):
+        if metadata.get("catalog") is not None:
+            issues.append(
+                f"{node_id}: {formalized[0]}: formalized on a module catalog needs the lean: names "
+                "of the public declarations it inventories"
+            )
+        else:
+            issues.append(f"{node_id}: {formalized[0]}: formalized needs the lean: declaration that formalizes it")
     return metadata, end + 1, issues
 
 
@@ -942,5 +924,7 @@ __all__ = [
     "Graph",
     "GraphValidationError",
     "Node",
+    "atlas_omissions",
+    "catalogs_without_ledger",
     "load_graph",
 ]

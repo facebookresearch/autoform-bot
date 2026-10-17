@@ -21,7 +21,8 @@ from .audit import audit_blueprint
 from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_key
 from .doctor import diagnose_project
 from .dashboard import publication_bound_live_state, serve_dashboard
-from .graph import Graph, GraphValidationError, load_graph
+from .graph import Graph, GraphValidationError, atlas_omissions, catalogs_without_ledger, load_graph
+from .graph_views import _countable, _module_inventories
 from .impact import (
     ImpactError,
     format_impact,
@@ -29,7 +30,7 @@ from .impact import (
     module_import_impact,
     revision_impact,
 )
-from .lean import build_linker, declaration_names, index_failure_message
+from .lean import declaration_names, index_failure_message, index_project
 from .library.generate import GenerateError, check_index, generate_index, write_index
 from .library.index import INDEX_FILE
 from .library.listing import indexed_packages, list_libraries
@@ -591,34 +592,20 @@ def _check(args: argparse.Namespace) -> int:
             print(f"error: {issue}")
         return 1
 
-    linker = None
+    # Check reads only where each name is declared, never a permalink, so it
+    # skips the Git work a linker does.
+    index = None
     if args.lean_root is not None:
-        lean_names = tuple(
-            dict.fromkeys(
-                name
-                for node in graph.nodes.values()
-                for name in declaration_names(node.lean or "")
-            )
-        )
         try:
-            linker = build_linker(args.lean_root, names=lean_names)
+            index = index_project(args.lean_root, names=graph.lean_names())
         except OSError as error:
             print(f"error: {index_failure_message(error)}")
             return 1
 
+    # The book's hero counts the same targets and inventories.
     statuses = status.derive(graph)
-    containers = frozenset(
-        node.parent for node in graph.nodes.values() if node.parent is not None
-    )
-    target_statuses = {
-        node_id: statuses[node_id]
-        for node_id, node in graph.nodes.items()
-        if node_id not in containers and node.formalizable
-    }
-    inventories = sum(
-        node_id not in containers and node.catalog == "module"
-        for node_id, node in graph.nodes.items()
-    )
+    target_statuses = {node_id: statuses[node_id] for node_id in _countable(graph)}
+    inventories = len(_module_inventories(graph))
     summary = " · ".join(
         f"{count} {state.label}" for state, count in status.summarize(target_statuses)
     )
@@ -629,21 +616,27 @@ def _check(args: argparse.Namespace) -> int:
         label = "module inventory" if inventories == 1 else "module inventories"
         print(f"    {inventories} {label}")
 
-    if linker is not None:
+    if index is not None:
         missing = [
             f"{node.id}: declaration not found in {args.lean_root}: {name}"
+            + ("; a name Lean generates is not indexed and belongs in the catalog's ledger" if node.catalog else "")
             for node in graph.nodes.values()
             for name in declaration_names(node.lean or "")
-            if linker.location(name) is None
+            if index.find(name) is None
         ]
         for issue in missing:
             print(f"error: {issue}")
         if missing:
             return 1
-        declared = sum(1 for node in graph.nodes.values() if node.lean)
-        print(f"    {declared} declaration(s) resolved in the Lean sources")
+        print(f"    {len(graph.lean_names())} declaration name(s) resolved in the Lean sources")
     for omission in projection_omissions(graph):
         print(f"warning: {omission}")
+    for omission in atlas_omissions(graph):
+        print(f"warning: atlas.json: {omission}")
+    for node_id in catalogs_without_ledger(graph):
+        print(
+            f"warning: {node_id}: module catalog links no declaration ledger under blueprint/sources/ from '## Sources'"
+        )
     for warning in _byte_order_mark_warnings(graph) + _formalizable_container_warnings(graph) + source_warnings:
         print(f"warning: {warning}")
     return 0

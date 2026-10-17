@@ -75,6 +75,8 @@ class SearchHit:
     article_revision: str
     title: str
     declaration: str | None
+    #: ``module`` for a module inventory, which is never a duplicate of an exposition article.
+    catalog: str | None
     state: str
     #: The statement as authored, so mathematics arrives as the LaTeX it was written in.
     statement_text: str
@@ -94,6 +96,7 @@ class SearchHit:
             "article_id": self.article_id,
             "article_path": self.article_path,
             "article_revision": self.article_revision,
+            "catalog": self.catalog,
             "declaration": self.declaration,
             "lean_targets": [target.as_dict() for target in self.lean_targets],
             "matched_fields": list(self.matched_fields),
@@ -213,6 +216,7 @@ def search_blueprint(
             article_revision=revision,
             title=node.title,
             declaration=node.declaration,
+            catalog=node.catalog,
             state=node.status.state,
             statement_text=parts.statement,
             lean_targets=tuple(_lean_target(target.declaration, lean_index) for target in node.lean_targets),
