@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prove2Me Missions"
+  short_description: "Prove and submit Prove2Me mission theorems"
+  default_prompt: "Use $prove2me to pick an open frontier theorem in my Prove2Me mission, prove it locally, and show me a dry run before submitting."

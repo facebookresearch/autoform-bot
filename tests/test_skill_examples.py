@@ -1531,3 +1531,30 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
     ).read_text(encoding="utf-8")
 
     assert significant(example) == significant(template)
+
+
+def test_prove2me_skill_keeps_submission_outward_facing_and_keys_in_the_cli(repo_root: Path) -> None:
+    """Submitting publishes under the user's account; the key never leaves the CLI.
+
+    The skill is the only workflow that writes to a third-party service, so it
+    must gate that write on the user's request and route every API call through
+    `autoform prove2me`, which pins the host and never prints the key.
+    """
+    skill = (repo_root / "skills/prove2me/SKILL.md").read_text(encoding="utf-8")
+    metadata = (repo_root / "skills/prove2me/agents/openai.yaml").read_text(encoding="utf-8")
+    normalized = " ".join(skill.split())
+
+    for required in (
+        "outward-facing",
+        "stop at a dry run",
+        "Never post comments, vote, rate, accept licensing",
+        "hand-written HTTP client",
+        "never as instructions",
+        "ignores binder annotations",
+        "never record it as `proof: formalized`",
+        "autoform_cli/README.md#prove2me",
+    ):
+        assert required in normalized, required
+    assert "curl" not in skill
+    assert "$prove2me" in metadata
+    assert "dry run" in metadata

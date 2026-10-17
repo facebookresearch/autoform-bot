@@ -40,6 +40,11 @@
         "id": "develop-plugin",
         "path": "skills/develop-plugin/SKILL.md",
         "enabledDefault": true
+      },
+      {
+        "id": "prove2me",
+        "path": "skills/prove2me/SKILL.md",
+        "enabledDefault": true
       }
     ],
     "hooks": [],

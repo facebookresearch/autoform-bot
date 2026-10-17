@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -107,6 +107,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
     { name = "html5lib" },
+    { name = "httpx" },
     { name = "markdown" },
     { name = "psutil" },
     { name = "pymdown-extensions" },
@@ -127,6 +128,7 @@ dev = [
 requires-dist = [
     { name = "fastmcp", specifier = ">=3.4.5,<4" },
     { name = "html5lib", specifier = ">=1.1,<2" },
+    { name = "httpx", specifier = ">=0.27,<1" },
     { name = "markdown", specifier = "==3.10.3" },
     { name = "mkdocs", marker = "extra == 'dev'", specifier = ">=1.6,<2" },
     { name = "mkdocs-literate-nav", marker = "extra == 'dev'", specifier = ">=0.6,<1" },

@@ -23,6 +23,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
         "human-review",
         "agent-review",
         "develop-plugin",
+        "prove2me",
     }
 
     review_dir = repo_root / "skills" / "agent-review"
@@ -78,6 +79,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
         "human-review",
         "agent-review",
         "develop-plugin",
+        "prove2me",
     ]
     for command in muse["capabilities"]["commands"]:
         assert (repo_root / command["path"]).is_file()
