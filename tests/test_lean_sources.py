@@ -479,6 +479,40 @@ def test_sections_do_not_add_to_the_namespace(tmp_path: Path) -> None:
     assert index.find("Outer.Helpers.beta") is None
 
 
+def test_targeted_index_prefilters_files_but_preserves_file_context_and_digest(
+    tmp_path: Path,
+) -> None:
+    _index(tmp_path)
+    other = tmp_path / "Project/Other.lean"
+    other.write_text("def unrelated : Nat := 0\n", encoding="utf-8")
+    full = index_project(tmp_path)
+
+    targeted = index_project(tmp_path, names=("Outer.alpha",))
+
+    assert targeted.find("Outer.alpha") is not None
+    assert targeted.find("Outer.beta") is not None
+    assert targeted.find("unrelated") is None
+    assert targeted.source_digest == full.source_digest
+    assert set(targeted.line_counts) == set(full.line_counts)
+
+
+def test_targeted_index_treats_inline_comments_as_lean_whitespace(
+    tmp_path: Path,
+) -> None:
+    _index(tmp_path, "theorem /- separator -/ target : True := by trivial\n")
+
+    targeted = index_project(tmp_path, names=("target",))
+
+    assert targeted.find("target") is not None
+
+
+def test_targeted_index_reads_each_name_of_an_iff_alias(tmp_path: Path) -> None:
+    _index(tmp_path, "theorem t_iff : True ↔ True := Iff.rfl\nalias ⟨mp, mpr⟩ := t_iff\n")
+
+    for name in ("mp", "mpr"):
+        assert index_project(tmp_path, names=(name,)).find(name) is not None, name
+
+
 def test_every_scope_closes_at_its_own_end(tmp_path: Path) -> None:
     source = "\n".join(
         [
@@ -512,6 +546,28 @@ def test_every_scope_closes_at_its_own_end(tmp_path: Path) -> None:
 
 def test_attributes_and_modifiers_do_not_hide_a_declaration(tmp_path: Path) -> None:
     assert _index(tmp_path).find("Outer.Inner.gamma") is not None
+
+
+def test_public_sections_and_declarations_are_indexed_without_losing_namespace(
+    tmp_path: Path,
+) -> None:
+    index = _index(
+        tmp_path,
+        "namespace Outer\npublic section\npublic theorem visible : True := trivial\n"
+        "end\ntheorem after : True := trivial\nend Outer\n",
+    )
+
+    assert index.find("Outer.visible") is not None
+    assert index.find("Outer.after") is not None
+
+
+def test_universe_binders_are_not_part_of_the_indexed_declaration_name(
+    tmp_path: Path,
+) -> None:
+    index = _index(tmp_path, "universe u\ndef polymorphic.{u} (α : Type u) := α\n")
+
+    assert index.find("polymorphic") is not None
+    assert index.find("polymorphic.{u}") is None
 
 
 def test_commented_out_code_is_not_indexed(tmp_path: Path) -> None:
@@ -3410,6 +3466,24 @@ def test_permalink_pins_the_commit(tmp_path: Path) -> None:
         "https://github.com/owner/repo/blob/deadbeef/Project/Basic.lean#L6"
     )
     assert linker.url("Outer.missing") is None
+
+
+def test_permalink_encodes_ref_and_source_path_segments(tmp_path: Path) -> None:
+    index = _index(
+        tmp_path,
+        "theorem target : True := by trivial\n",
+        name="Project/Hash#File.lean",
+    )
+    linker = SourceLinker(
+        index=index,
+        repository_url="https://github.com/owner/repo",
+        ref="feature/topic",
+    )
+
+    assert linker.url("target") == (
+        "https://github.com/owner/repo/blob/feature%2Ftopic/"
+        "Project/Hash%23File.lean#L1"
+    )
 
 
 def test_permalink_percent_encodes_source_path_components(tmp_path: Path) -> None:

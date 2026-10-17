@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from autoform_cli import graph_views
+from autoform_cli import dag_viewer, graph_views
 from autoform_cli.graph import Graph, Node
+from autoform_cli.graph_pages import _selected_statuses
 from autoform_cli.graph_views import chapter_view, focus_view, focus_views, full_view, project_view, scope_view
 from autoform_cli.status import derive
 
@@ -72,10 +74,136 @@ def test_project_view_collapses_chapters_without_flattening_statuses(tmp_path: P
     ]
     main = view.nodes[1]
     assert main.status_counts == (("can_state", 1), ("planned", 1))
+    assert main.internal_dependency_count == 1
     assert [(edge.source, edge.target, edge.statement_count, edge.proof_count) for edge in view.edges] == [
         ("scope:a", "scope:b", 1, 1),
         ("scope:b", "scope:c", 1, 0),
     ]
+
+
+def test_checked_catalog_has_a_neutral_inventory_presentation_status(tmp_path: Path) -> None:
+    roadmap = tmp_path / "blueprint/roadmap"
+    graph = Graph(
+        tmp_path / "blueprint",
+        {
+            "result": Node(
+                "result",
+                "Result",
+                roadmap / "result.md",
+                (),
+                declaration="theorem",
+            ),
+            "catalog": Node(
+                "catalog",
+                "Existing module",
+                roadmap / "catalog.md",
+                (),
+                catalog="module",
+                statement_formalized=True,
+                proof_formalized=True,
+            ),
+        },
+    )
+    statuses = derive(graph)
+
+    assert statuses["catalog"].key == "fully_proved"
+    project = project_view(graph, statuses)
+    assert project.nodes[0].status_counts == (
+        ("can_state", 1),
+        ("inventory_checked", 1),
+    )
+    assert project.nodes[0].status_key == "can_state"
+
+    complete = full_view(graph, statuses)
+    inventory = next(node for node in complete.nodes if node.id == "catalog")
+    assert inventory.catalog == "module"
+    assert inventory.status_counts == (("inventory_checked", 1),)
+    assert inventory.status_key == "planned"
+
+
+def test_status_rings_count_only_leaves_that_declare_something(tmp_path: Path) -> None:
+    """Rings agree with the legend beside them.
+
+    A prose leaf is not a formalization target, so it colours no ring. An
+    unverified catalog is inventory, not work in its target state, so it fills
+    a pending-inventory segment and leaves the scope's status alone.
+    """
+    roadmap = tmp_path / "blueprint/roadmap"
+
+    def node(node_id: str, parent: str | None, **kwargs) -> Node:
+        return Node(node_id, node_id.title(), roadmap / f"{node_id}.md", (), parent=parent, **kwargs)
+
+    graph = Graph(
+        tmp_path / "blueprint",
+        {
+            "roadmap": node("roadmap", None),
+            "mixed": node("mixed", "roadmap"),
+            "mixed/result": node("mixed/result", "mixed", declaration="theorem"),
+            "mixed/note": node("mixed/note", "mixed"),
+            "mixed/catalog": node("mixed/catalog", "mixed", catalog="module", statement_formalized=True),
+            "prose": node("prose", "roadmap"),
+            "prose/essay": node("prose/essay", "prose"),
+        },
+    )
+    statuses = derive(graph)
+    assert statuses["mixed/note"].key == "can_state"
+    assert statuses["mixed/catalog"].key == "can_prove"
+
+    project = project_view(graph, statuses)
+    scopes = {view_node.id: view_node for view_node in project.nodes}
+    assert scopes["scope:mixed"].status_counts == (("can_state", 1), ("inventory_pending", 1))
+    assert scopes["scope:mixed"].status_key == "can_state"
+    assert scopes["scope:prose"].status_counts == ()
+    assert scopes["scope:prose"].status_key == "planned"
+    legend = _selected_statuses(graph, statuses, project, {"roadmap", "mixed", "prose"})
+    assert {node_id: status.key for node_id, status in legend.items()} == {"mixed/result": "can_state"}
+
+    complete = {view_node.id: view_node for view_node in full_view(graph, statuses).nodes}
+    assert complete["mixed"].status_counts == (("can_state", 1), ("inventory_pending", 1))
+    assert complete["mixed/catalog"].status_counts == (("inventory_pending", 1),)
+    assert complete["mixed/catalog"].status_key == "planned"
+    assert complete["prose"].status_counts == ()
+    assert complete["prose"].status_key == "planned"
+
+
+def test_a_scope_header_counts_the_items_its_status_rows_list(tmp_path: Path) -> None:
+    """The explorer heads a scope's status rows with "N items in this scope".
+
+    N is the payload's member_count, so it is the sum of those rows: a prose
+    leaf is in neither, and a checked catalog is one item in its inventory row.
+    """
+    roadmap = tmp_path / "blueprint/roadmap"
+
+    def node(node_id: str, parent: str | None, **kwargs) -> Node:
+        return Node(node_id, node_id.title(), roadmap / f"{node_id}.md", (), parent=parent, **kwargs)
+
+    graph = Graph(
+        tmp_path / "blueprint",
+        {
+            "roadmap": node("roadmap", None),
+            "mixed": node("mixed", "roadmap"),
+            "mixed/result": node("mixed/result", "mixed", declaration="theorem"),
+            "mixed/essay": node("mixed/essay", "mixed"),
+            "mixed/catalog": node(
+                "mixed/catalog",
+                "mixed",
+                catalog="module",
+                statement_formalized=True,
+                proof_formalized=True,
+            ),
+        },
+    )
+    payload = tmp_path / "dependencies.json"
+    dag_viewer.write_payload(payload, project_view(graph, derive(graph)), links={})
+    scope = json.loads(payload.read_text(encoding="utf-8"))["nodes"][0]
+
+    assert scope["id"] == "scope:mixed"
+    assert scope["status_counts"] == {"can_state": 1, "inventory_checked": 1}
+    assert scope["member_count"] == sum(scope["status_counts"].values()) == 2
+    # The inspector titles the rows with member_count and lists status_counts.
+    script = dag_viewer.viewer_script()
+    assert '(node.member_count || 1) + " items in this scope"' in script
+    assert "var counts = node.status_counts || {};" in script
 
 
 def test_chapter_view_keeps_external_relations_as_boundaries(tmp_path: Path) -> None:
@@ -167,6 +295,10 @@ def test_roadmap_root_dependencies_have_nodes_in_every_view(
     complete = full_view(graph, statuses)
     assert set(complete.member_ids) == set(graph.nodes)
     assert {(edge.source, edge.target) for edge in complete.edges} == {(source, target)}
+    chapter_node = next(node for node in complete.nodes if node.id == "chapter")
+    assert chapter_node.kind == "scope"
+    assert chapter_node.members == ("chapter",)
+    assert chapter_node.status_key == statuses["chapter/result"].key
 
 
 def test_scope_view_collapses_nested_articles_and_rolls_up_dependencies(tmp_path: Path) -> None:

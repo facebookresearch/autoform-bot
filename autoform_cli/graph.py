@@ -10,22 +10,24 @@ a second graph file that could drift from the book.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import stat
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, fields, replace
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .lean import declaration_names
-from .markdown import link_definitions, link_targets, mask_code_and_comments
-
+from .markdown import link_definitions, link_targets, mask_code_and_comments, visible_prose
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 ARTICLE_ID_PATTERN = re.compile(r"af_[0-9a-f]{24}\Z")
 _FRONTMATTER_KEYS = frozenset(
     {
         "article_id",
+        "area",
+        "catalog",
         "declaration",
         "lean",
         "statement",
@@ -43,6 +45,9 @@ _FORMALIZED = "formalized"
 _RETRACTED = "retracted"
 _TRUE = frozenset({"true", "yes"})
 _FALSE = frozenset({"false", "no"})
+_CATALOG_DECLARATION_KEYS = frozenset(
+    {"declaration", "mathlib", "mathlib_declaration", "mathlib_file"}
+)
 
 #: ``## Depends on`` carries the prerequisites needed to *state* a node;
 #: ``## Proof depends on`` carries the extra prerequisites its *proof* needs.
@@ -50,6 +55,8 @@ _FALSE = frozenset({"false", "no"})
 _STATEMENT_SECTION = "depends on"
 _PROOF_SECTION = "proof depends on"
 _SOURCES_SECTION = "sources"
+ATLAS_SCHEMA = "autoform-atlas/v1"
+_MAX_ATLAS_BYTES = 1_000_000
 IMPLEMENTATION_NOTES_DIR = ".implementation-notes"
 
 
@@ -97,11 +104,40 @@ class Node:
     depth: int = 0
     article_id: str | None = None
     source_sha256: str | None = None
+    catalog: str | None = None
+    summary: str | None = None
+    area: str | None = None
 
     @property
     def formalizable(self) -> bool:
         """Whether this article names a concrete Lean declaration."""
         return self.declaration is not None
+
+
+
+def _node_getstate(node: Node) -> list[object]:
+    """Keep the public slotted record append-compatible for old pickles."""
+
+    return [getattr(node, item.name) for item in fields(node)]
+
+
+def _node_setstate(node: Node, state: list[object]) -> None:
+    node_fields = fields(node)
+    if len(state) > len(node_fields):
+        raise ValueError("Node pickle has unsupported fields")
+    for item, value in zip(node_fields, state, strict=False):
+        object.__setattr__(node, item.name, value)
+    for item in node_fields[len(state) :]:
+        if item.default is MISSING:
+            raise ValueError(f"Node pickle is missing required field {item.name!r}")
+        object.__setattr__(node, item.name, item.default)
+
+
+# Python 3.10's frozen+slots dataclass transformation overwrites methods defined
+# in the class body. Assign after decoration so every supported Python uses the
+# same append-compatible state contract.
+Node.__getstate__ = _node_getstate  # type: ignore[method-assign]
+Node.__setstate__ = _node_setstate  # type: ignore[method-assign]
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +169,7 @@ class _ParsedNode:
     proof_targets: tuple[str, ...]
     source_targets: tuple[str, ...]
     metadata: dict[str, str]
+    summary: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +265,20 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             dependency for dependency in proof_dependencies if dependency not in dependencies
         )
         metadata = parsed_node.metadata
+        if metadata.get("catalog") is not None:
+            if (
+                metadata.get("statement") == _FORMALIZED
+                or metadata.get("proof") == _FORMALIZED
+            ) and not declaration_names(metadata.get("lean", "")):
+                issues.append(
+                    f"{parsed_node.id}: formalized module catalog must list exact "
+                    "compiled names in 'lean'"
+                )
+            if not _catalog_has_local_ledger(parsed_node, blueprint):
+                issues.append(
+                    f"{parsed_node.id}: module catalog must link a declaration ledger "
+                    "under blueprint/sources from its '## Sources' section"
+                )
         nodes[parsed_node.id] = Node(
             id=parsed_node.id,
             title=parsed_node.title,
@@ -237,6 +288,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             proof_dependencies=tuple(proof_dependencies),
             kind="article",
             declaration=metadata.get("declaration"),
+            catalog=metadata.get("catalog"),
             lean=metadata.get("lean"),
             statement_formalized=metadata.get("statement") == _FORMALIZED,
             statement_retracted=metadata.get("statement") == _RETRACTED,
@@ -252,15 +304,99 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             depth=_article_depth(parsed_node.id, parents),
             article_id=metadata.get("article_id"),
             source_sha256=source_hashes[parsed_node.id],
+            summary=parsed_node.summary,
+            area=metadata.get("area"),
         )
 
+    _apply_atlas_manifest(blueprint, nodes, issues)
     if not issues:
         issues.extend(_find_cycles(nodes))
-    if not issues:
-        issues.extend(_find_rollup_cycles(nodes))
     if issues:
         raise GraphValidationError(issues)
     return Graph(blueprint_dir=blueprint, nodes=nodes, open_statements=open_statements)
+
+
+def _apply_atlas_manifest(
+    blueprint: Path,
+    nodes: dict[str, Node],
+    issues: list[str],
+) -> None:
+    """Apply an optional authored taxonomy without coupling it to file layout."""
+    path = blueprint / "atlas.json"
+    if path.is_symlink():
+        issues.append("atlas.json: taxonomy must be a regular file inside the blueprint")
+        return
+    if not path.exists():
+        return
+    if not path.is_file():
+        issues.append("atlas.json: taxonomy must be a regular file inside the blueprint")
+        return
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        issues.append(f"atlas.json: cannot read taxonomy: {error}")
+        return
+    if len(raw) > _MAX_ATLAS_BYTES:
+        issues.append(f"atlas.json: exceeds {_MAX_ATLAS_BYTES} bytes")
+        return
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        issues.append(f"atlas.json: invalid JSON: {error}")
+        return
+    if not isinstance(payload, dict) or payload.get("schema") != ATLAS_SCHEMA:
+        issues.append(f"atlas.json: schema must be {ATLAS_SCHEMA!r}")
+        return
+    areas = payload.get("areas")
+    if not isinstance(areas, dict):
+        issues.append("atlas.json: 'areas' must be an object")
+        return
+    assigned: dict[str, str] = {}
+    for area, node_ids in areas.items():
+        if not isinstance(area, str) or not area.strip() or not isinstance(node_ids, list):
+            issues.append("atlas.json: each area must be a non-empty string mapped to an array")
+            continue
+        for node_id in node_ids:
+            if not isinstance(node_id, str) or node_id not in nodes:
+                issues.append(f"atlas.json: unknown roadmap node {node_id!r}")
+                continue
+            previous = assigned.get(node_id)
+            if previous is not None:
+                issues.append(f"atlas.json: node {node_id!r} belongs to both {previous!r} and {area!r}")
+                continue
+            authored = nodes[node_id].area
+            if authored is not None and authored != area:
+                issues.append(
+                    f"atlas.json: node {node_id!r} conflicts with its frontmatter area {authored!r}"
+                )
+                continue
+            assigned[node_id] = area
+    for node_id, area in assigned.items():
+        nodes[node_id] = replace(nodes[node_id], area=area)
+
+
+def _catalog_has_local_ledger(node: _ParsedNode, blueprint: Path) -> bool:
+    sources = (blueprint / "sources").resolve()
+    for target in node.source_targets:
+        try:
+            split = urlsplit(target)
+        except ValueError:
+            continue
+        if split.scheme or split.netloc or split.query or not split.path:
+            continue
+        path = Path(unquote(split.path))
+        if path.is_absolute():
+            continue
+        try:
+            candidate = (node.path.parent / path).resolve()
+            candidate.relative_to(sources)
+        except (OSError, RuntimeError, ValueError):
+            # Before Python 3.13 a symlink loop raises RuntimeError here; a loop is never a ledger.
+            continue
+        # Before Python 3.14, `Path.is_file` raises under an unreadable directory.
+        if os.path.isfile(candidate):
+            return True
+    return False
 
 
 def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
@@ -561,8 +697,47 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         tuple(targets[_PROOF_SECTION]),
         tuple(targets[_SOURCES_SECTION]),
         metadata,
+        _extract_summary(body),
     )
     return parsed, []
+
+
+def _extract_summary(body: list[str], *, limit: int = 420) -> str | None:
+    """Return the first reader-facing prose paragraph from a roadmap article.
+
+    ``body`` is the article below its frontmatter with fences, comments and
+    indented code already masked, so the summary reads what the page shows.
+    """
+    paragraph: list[str] = []
+    excluded = False
+    for raw in body:
+        heading = _HEADING.match(raw)
+        if heading:
+            if paragraph:
+                break
+            excluded = len(heading.group(1)) == 2 and heading.group(2).strip().casefold() in {
+                _STATEMENT_SECTION,
+                _PROOF_SECTION,
+                _SOURCES_SECTION,
+            }
+            continue
+        text = raw.strip()
+        if not text:
+            if paragraph:
+                break
+            continue
+        if excluded or text.startswith(("- ", "* ", "+ ", "> ", "|", "$$", "\\[", "<div")):
+            continue
+        text = visible_prose(text)
+        if text:
+            paragraph.append(text)
+    if not paragraph:
+        return None
+    summary = " ".join(" ".join(paragraph).split())
+    if len(summary) <= limit:
+        return summary
+    clipped = summary[: limit - 1].rsplit(" ", 1)[0]
+    return (clipped or summary[: limit - 1]).rstrip() + "…"
 
 
 def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], int, list[str]]:
@@ -600,6 +775,13 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
             continue
         metadata[key] = value
 
+    if "catalog" in metadata:
+        for key in sorted(_CATALOG_DECLARATION_KEYS.intersection(metadata)):
+            issues.append(
+                f"{node_id}: 'catalog' cannot be combined with declaration-specific "
+                f"frontmatter key {key!r}"
+            )
+
     if metadata.get("statement") == _RETRACTED:
         if "lean" not in metadata:
             issues.append(
@@ -616,7 +798,11 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
     if metadata.get("proof") == _FORMALIZED and metadata.get("statement") not in {_FORMALIZED, _RETRACTED}:
         issues.append(f"{node_id}: proof: formalized needs statement: formalized")
     formalized = [key for key in ("statement", "proof") if metadata.get(key) == _FORMALIZED]
-    if formalized and not declaration_names(metadata.get("lean", "")):
+    if (
+        formalized
+        and metadata.get("catalog") is None
+        and not declaration_names(metadata.get("lean", ""))
+    ):
         issues.append(f"{node_id}: {formalized[0]}: formalized needs the lean: declaration that formalizes it")
     return metadata, end + 1, issues
 
@@ -629,6 +815,10 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
         if not ARTICLE_ID_PATTERN.fullmatch(value):
             return value, f"{location}: malformed article_id {value!r}"
         return value, None
+    if key == "catalog":
+        if folded != "module":
+            return value, f"{location}: 'catalog' accepts only 'module'"
+        return folded, None
     if key == "statement":
         if folded not in {_FORMALIZED, _RETRACTED}:
             return value, (
@@ -737,138 +927,6 @@ def _find_cycles(nodes: dict[str, Node]) -> list[str]:
                 if message not in seen_issues:
                     seen_issues.add(message)
                     issues.append(message)
-    return issues
-
-
-def _find_rollup_cycles(nodes: dict[str, Node]) -> list[str]:
-    """Reject cycles introduced by contracting articles at any hierarchy level."""
-    children: dict[str | None, list[str]] = {}
-    parents: dict[str, str | None] = {}
-    for node in nodes.values():
-        children.setdefault(node.parent, []).append(node.id)
-        parents[node.id] = node.parent
-
-    depths: dict[str, int] = {}
-    roots: dict[str, str] = {}
-    for node_id in nodes:
-        if node_id in depths:
-            continue
-        trail: list[str] = []
-        seen: set[str] = set()
-        current: str | None = node_id
-        while current is not None and current not in depths:
-            if current in seen or current not in parents:
-                raise ValueError("article containment is not a forest")
-            seen.add(current)
-            trail.append(current)
-            current = parents[current]
-        depth = depths[current] if current is not None else -1
-        root = roots[current] if current is not None else trail[-1]
-        for descendant in reversed(trail):
-            depth += 1
-            depths[descendant] = depth
-            roots[descendant] = root
-
-    ancestors: list[dict[str, str | None]] = [parents]
-    maximum_depth = max(depths.values(), default=0)
-    while 1 << len(ancestors) <= maximum_depth:
-        previous = ancestors[-1]
-        ancestors.append(
-            {node_id: previous[parent] if parent is not None else None for node_id, parent in previous.items()}
-        )
-
-    def lift(node_id: str, distance: int) -> str:
-        level = 0
-        while distance:
-            if distance & 1:
-                parent = ancestors[level][node_id]
-                if parent is None:
-                    raise ValueError("article containment depth is inconsistent")
-                node_id = parent
-            distance >>= 1
-            level += 1
-        return node_id
-
-    def lowest_common_ancestor(first: str, second: str) -> str | None:
-        if roots[first] != roots[second]:
-            return None
-        if depths[first] < depths[second]:
-            first, second = second, first
-        first = lift(first, depths[first] - depths[second])
-        if first == second:
-            return first
-        for level in range(len(ancestors) - 1, -1, -1):
-            first_parent = ancestors[level][first]
-            second_parent = ancestors[level][second]
-            if first_parent != second_parent:
-                if first_parent is None or second_parent is None:
-                    continue
-                first = first_parent
-                second = second_parent
-        return parents[first]
-
-    def direct_child(scope: str | None, node_id: str) -> str:
-        scope_depth = depths[scope] if scope is not None else -1
-        return lift(node_id, depths[node_id] - scope_depth - 1)
-
-    projections: dict[str | None, dict[str, set[str]]] = {}
-    for target in nodes.values():
-        for dependency in target.dependencies:
-            scope = lowest_common_ancestor(target.id, dependency)
-            if scope == target.id or scope == dependency:
-                continue
-            target_child = direct_child(scope, target.id)
-            source_child = direct_child(scope, dependency)
-            projections.setdefault(scope, {}).setdefault(target_child, set()).add(source_child)
-
-    issues: list[str] = []
-    seen_issues: set[str] = set()
-    for scope, siblings in children.items():
-        if len(siblings) < 2:
-            continue
-        projected = projections.get(scope)
-        if not projected:
-            continue
-        dependencies = {sibling: projected.get(sibling, set()) for sibling in siblings}
-        state: dict[str, int] = {}
-        stack: list[str] = []
-        stack_indexes: dict[str, int] = {}
-        ordered_dependencies = {
-            article_id: tuple(sorted(prerequisites)) for article_id, prerequisites in dependencies.items()
-        }
-
-        for root_id in sorted(dependencies):
-            if state.get(root_id, 0) != 0:
-                continue
-            state[root_id] = 1
-            stack_indexes[root_id] = len(stack)
-            stack.append(root_id)
-            frames = [(root_id, 0)]
-            while frames:
-                article_id, dependency_index = frames[-1]
-                prerequisites = ordered_dependencies[article_id]
-                if dependency_index == len(prerequisites):
-                    frames.pop()
-                    stack.pop()
-                    stack_indexes.pop(article_id)
-                    state[article_id] = 2
-                    continue
-
-                prerequisite = prerequisites[dependency_index]
-                frames[-1] = (article_id, dependency_index + 1)
-                prerequisite_state = state.get(prerequisite, 0)
-                if prerequisite_state == 0:
-                    state[prerequisite] = 1
-                    stack_indexes[prerequisite] = len(stack)
-                    stack.append(prerequisite)
-                    frames.append((prerequisite, 0))
-                elif prerequisite_state == 1:
-                    cycle = stack[stack_indexes[prerequisite] :] + [prerequisite]
-                    label = scope or "root"
-                    message = f"rolled-up dependency cycle in {label}: {' -> '.join(cycle)}"
-                    if message not in seen_issues:
-                        seen_issues.add(message)
-                        issues.append(message)
     return issues
 
 

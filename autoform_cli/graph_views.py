@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, Literal
 
 from .graph import Graph, Node
-from .status import STATES, NodeStatus, topological_order
+from .status import INVENTORY_STATES, STATES, NodeStatus, State, topological_order
 
 
 ViewKind = Literal["project", "chapter", "focus", "full"]
@@ -24,6 +24,7 @@ NodeKind = Literal["scope", "boundary", "node"]
 _ScopedRelation = tuple[str, str, bool, str | None, str | None]
 
 _H1 = re.compile(r"^ {0,3}#[ \t]+(.+?)[ \t]*#*[ \t]*$")
+INVENTORY_STATUSES = tuple(state.key for state in INVENTORY_STATES)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +40,11 @@ class ViewNode:
     status_key: str | None = None
     focus: bool = False
     complete: bool = False
+    catalog: str | None = None
+    summary: str | None = None
+    lean: str | None = None
+    area: str | None = None
+    internal_dependency_count: int = 0
 
     @property
     def item_count(self) -> int:
@@ -70,6 +76,7 @@ class GraphView:
     scope: str | None = None
     focus: str | None = None
     radius: int | None = None
+    summary: str | None = None
 
     @property
     def member_ids(self) -> tuple[str, ...]:
@@ -120,15 +127,35 @@ def group_title(graph: Graph, group: str) -> str:
 def project_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
     """Collapse every publication chapter to one project-map node."""
     children = _containment_children(graph)
+    internal_counts = _internal_dependency_counts(graph, children)
     grouped = _group_nodes(graph, children)
     edges = _project_edges(graph, children)
     required_scopes = {endpoint.removeprefix("scope:") for edge in edges for endpoint in (edge.source, edge.target)}
     scopes = [*grouped, *(scope for scope in sorted(required_scopes) if scope not in grouped)]
     nodes = tuple(
-        _scope_node(graph, statuses, _scope_node_id(group), group_title(graph, group), grouped.get(group, ()))
+        _scope_node(
+            graph,
+            statuses,
+            _scope_node_id(group),
+            group_title(graph, group),
+            grouped.get(group, ()),
+            summary=graph.nodes[group].summary if group in graph.nodes else None,
+            area=graph.nodes[group].area if group in graph.nodes else None,
+            internal_dependency_count=(
+                internal_counts[group]
+                if group in internal_counts
+                else _dependency_count_within(graph, grouped.get(group, ()))
+            ),
+        )
         for group in scopes
     )
-    return GraphView(kind="project", title="Project dependency map", nodes=nodes, edges=edges)
+    return GraphView(
+        kind="project",
+        title="Project dependency map",
+        nodes=nodes,
+        edges=edges,
+        summary=graph.nodes["roadmap"].summary if "roadmap" in graph.nodes else None,
+    )
 
 
 def chapter_view(graph: Graph, statuses: dict[str, NodeStatus], group: str) -> GraphView:
@@ -163,7 +190,8 @@ def chapter_view(graph: Graph, statuses: dict[str, NodeStatus], group: str) -> G
             title=group_title(graph, external),
             kind="boundary",
             members=tuple(sorted(external_members)),
-            status_counts=_status_counts(external_members, statuses),
+            status_counts=_status_counts(graph, external_members, statuses),
+            status_key=_rollup_status_key(graph, external_members, statuses),
         )
         for external, external_members in sorted(boundaries.items())
     )
@@ -173,6 +201,7 @@ def chapter_view(graph: Graph, statuses: dict[str, NodeStatus], group: str) -> G
         nodes=tuple(nodes),
         edges=_edges(edge_counts),
         scope=group,
+        summary=graph.nodes[group].summary if group in graph.nodes else None,
     )
 
 
@@ -190,6 +219,7 @@ def scope_view(
     containment hierarchy without creating another graph representation.
     """
     children = _containment_children(graph)
+    internal_counts = _internal_dependency_counts(graph, children)
     if scope not in graph.nodes or scope not in children:
         raise KeyError(f"unknown blueprint scope: {scope}")
     relations = (
@@ -201,6 +231,7 @@ def scope_view(
         statuses,
         scope,
         children=children,
+        internal_counts=internal_counts,
         relations=relations,
         top_scope=lambda node_id: _top_scope(graph, node_id, children),
         include_external=include_external,
@@ -221,6 +252,7 @@ def scope_views(
     files each relation under only the containers that enclose an endpoint.
     """
     children = _containment_children(graph)
+    internal_counts = _internal_dependency_counts(graph, children)
     enclosing: dict[str, dict[str, str]] = {}
     top_scopes: dict[str, str] = {}
 
@@ -252,6 +284,7 @@ def scope_views(
             statuses,
             scope,
             children=children,
+            internal_counts=internal_counts,
             relations=relations.get(scope, ()),
             top_scope=top_scope,
             include_external=include_external,
@@ -267,6 +300,7 @@ def _scope_view(
     scope: str,
     *,
     children: dict[str, tuple[str, ...]],
+    internal_counts: dict[str, int],
     relations: Iterable[_ScopedRelation],
     top_scope: Callable[[str], str],
     include_external: bool,
@@ -277,7 +311,18 @@ def _scope_view(
     for child in direct:
         article = graph.nodes[child]
         if child in children:
-            nodes.append(_scope_node(graph, statuses, _scope_node_id(child), article.title, members[child]))
+            nodes.append(
+                _scope_node(
+                    graph,
+                    statuses,
+                    _scope_node_id(child),
+                    article.title,
+                    members[child],
+                    summary=article.summary,
+                    area=article.area,
+                    internal_dependency_count=internal_counts.get(child, 0),
+                )
+            )
         else:
             nodes.append(_theorem_node(article, statuses[child]))
 
@@ -305,7 +350,8 @@ def _scope_view(
                 title=group_title(graph, external),
                 kind="boundary",
                 members=tuple(sorted(external_members)),
-                status_counts=_status_counts(external_members, statuses),
+                status_counts=_status_counts(graph, external_members, statuses),
+                status_key=_rollup_status_key(graph, external_members, statuses),
             )
         )
     return GraphView(
@@ -314,6 +360,7 @@ def _scope_view(
         nodes=tuple(nodes),
         edges=_edges(edge_counts),
         scope=scope,
+        summary=graph.nodes[scope].summary,
     )
 
 
@@ -349,10 +396,9 @@ def focus_views(
 ) -> dict[str, GraphView]:
     """Build every local view while sharing the graph-wide indexes.
 
-    Static publication writes one focus page per theorem. Recomputing adjacency
-    and topological order for every page becomes quadratic on a large book, so
-    the bulk path constructs both once and keeps each page proportional to its
-    local neighborhood.
+    Programmatic consumers that need all local views can avoid recomputing
+    adjacency and topological order for every node. Static publication uses the
+    shared hash-addressable explorer instead of emitting one HTML page per node.
     """
     if radius < 0:
         raise ValueError("focus radius must be non-negative")
@@ -407,9 +453,14 @@ def _focus_view(
             members=node.members,
             status_counts=node.status_counts,
             declaration=node.declaration,
+            catalog=node.catalog,
             status_key=node.status_key,
             focus=node.id == node_id,
             complete=node.complete,
+            summary=node.summary,
+            lean=node.lean,
+            area=node.area,
+            internal_dependency_count=node.internal_dependency_count,
         )
         for node in view.nodes
     )
@@ -420,6 +471,7 @@ def _focus_view(
         edges=view.edges,
         focus=node_id,
         radius=radius,
+        summary=graph.nodes[node_id].summary,
     )
 
 
@@ -429,11 +481,17 @@ def full_view(
     *,
     containers: dict[str, ViewNode] | None = None,
 ) -> GraphView:
-    """Present the complete fine-grained theorem DAG through the view API."""
+    """Present every article and dependency, with container status rolled up."""
     if containers is None:
         containers = container_nodes(graph, statuses)
     view = _node_view(graph, statuses, graph.nodes, containers=containers)
-    return GraphView(kind="full", title="Full theorem dependency graph", nodes=view.nodes, edges=view.edges)
+    return GraphView(
+        kind="full",
+        title="Full dependency graph",
+        nodes=view.nodes,
+        edges=view.edges,
+        summary=graph.nodes["roadmap"].summary if "roadmap" in graph.nodes else None,
+    )
 
 
 def _node_view(
@@ -507,15 +565,46 @@ def _edges(counts: dict[tuple[str, str], list[int]]) -> tuple[ViewEdge, ...]:
 
 
 def _theorem_node(node: Node, node_status: NodeStatus) -> ViewNode:
+    inventory = inventory_state(node, node_status)
+    display_status = inventory.key if inventory else node_status.key
     return ViewNode(
         id=node.id,
         title=node.title,
         kind="node",
         members=(node.id,),
-        status_counts=((node_status.key, 1),),
+        status_counts=((display_status, 1),),
         declaration=node.declaration,
-        status_key=node_status.key,
+        catalog=node.catalog,
+        # An inventory is deliberately neutral, checked or not: it records
+        # source accounting, not progress on a mathematical target.
+        status_key="planned" if inventory else display_status,
+        summary=node.summary,
+        lean=node.lean,
+        area=node.area,
     )
+
+
+def is_scope_target(node: Node) -> bool:
+    """Whether a scope counts *node* as formalization work.
+
+    Only leaves that declare something or are marked not ready count, so a
+    note cannot hold a finished chapter open but deferred work does. A module
+    catalog is inventory evidence, never a target.
+    """
+    return node.catalog is None and (node.formalizable or node.not_ready)
+
+
+def inventory_state(node: Node, node_status: NodeStatus) -> State | None:
+    """Return a module catalog's neutral inventory state, or None for any other node.
+
+    A catalog is checked once it is fully proved and pending until then. Every
+    view names a catalog by this state rather than by its derived one, which
+    would present an inventory as mathematical work.
+    """
+    if node.catalog != "module":
+        return None
+    checked, pending = INVENTORY_STATES
+    return checked if node_status.fully_proved else pending
 
 
 def _scope_node(
@@ -526,38 +615,54 @@ def _scope_node(
     leaves: Iterable[str],
     *,
     members: tuple[str, ...] | None = None,
+    summary: str | None = None,
+    area: str | None = None,
+    internal_dependency_count: int = 0,
 ) -> ViewNode:
     """Summarize a container by the formalization targets beneath it.
 
-    Only leaves that declare something or are marked not ready count, so a
-    note cannot hold a finished chapter open but deferred work does. In a
-    node-level view the box stands for the container itself, so *members* is
-    the container, while its counts still describe what lies beneath it.
+    The targets are the scope's members. Its status counts, and so its items,
+    are those targets by state plus every catalog beneath it, which counts
+    apart as a module inventory. In a node-level view the box stands for
+    the container itself, so *members* is the container, while its counts
+    still describe what lies beneath it.
     """
-    targets = tuple(
-        node_id for node_id in leaves if graph.nodes[node_id].formalizable or graph.nodes[node_id].not_ready
-    )
+    leaves = tuple(leaves)
+    targets = tuple(node_id for node_id in leaves if is_scope_target(graph.nodes[node_id]))
     return ViewNode(
         id=view_id,
         title=title,
         kind="scope",
         members=targets if members is None else members,
-        status_counts=_status_counts(targets, statuses),
+        status_counts=_status_counts(graph, leaves, statuses),
+        status_key=_rollup_status_key(graph, leaves, statuses),
         complete=bool(targets) and all(statuses[node_id].fully_proved for node_id in targets),
+        summary=summary,
+        area=area,
+        internal_dependency_count=internal_dependency_count,
     )
 
 
 def container_nodes(graph: Graph, statuses: dict[str, NodeStatus]) -> dict[str, ViewNode]:
     """Every container as it appears in a node-level view.
 
-    Bulk publication builds this once and passes it to ``focus_views`` and
-    ``full_view``, so the containment index is not rebuilt per page.
+    A caller that builds several node-level views can build this once and pass
+    it to ``focus_views`` and ``full_view``, so the containment index is not
+    rebuilt per view.
     """
     children = _containment_children(graph)
+    internal_counts = _internal_dependency_counts(graph, children)
     return {
         node_id: _scope_node(
-            graph, statuses, node_id, graph.nodes[node_id].title, _leaf_descendants(children, node_id),
+            graph,
+            statuses,
+            node_id,
+            graph.nodes[node_id].title,
+            _leaf_descendants(children, node_id),
             members=(node_id,),
+            summary=graph.nodes[node_id].summary,
+            area=graph.nodes[node_id].area,
+            internal_dependency_count=internal_counts.get(node_id, 0),
         )
         for node_id in children
         if node_id in graph.nodes
@@ -565,13 +670,82 @@ def container_nodes(graph: Graph, statuses: dict[str, NodeStatus]) -> dict[str, 
 
 
 def _status_counts(
+    graph: Graph,
     node_ids: Iterable[str],
     statuses: dict[str, NodeStatus],
 ) -> tuple[tuple[str, int], ...]:
+    """Count scope targets by state, and module inventories apart.
+
+    Only a scope target colours a ring by state, so a prose or note leaf
+    colours none. A catalog counts as a checked or pending inventory, never
+    under its target state.
+    """
     counts = {state.key: 0 for state in STATES}
+    inventories = dict.fromkeys(INVENTORY_STATUSES, 0)
     for node_id in node_ids:
-        counts[statuses[node_id].key] += 1
-    return tuple((state.key, counts[state.key]) for state in STATES if counts[state.key])
+        node = graph.nodes[node_id]
+        node_status = statuses[node_id]
+        inventory = inventory_state(node, node_status)
+        if inventory is not None:
+            inventories[inventory.key] += 1
+        elif is_scope_target(node):
+            counts[node_status.key] += 1
+    state_counts = tuple(
+        (state.key, counts[state.key]) for state in STATES if counts[state.key]
+    )
+    return (*state_counts, *((key, count) for key, count in inventories.items() if count))
+
+
+def inventory_counts(graph: Graph, statuses: dict[str, NodeStatus]) -> dict[str, int]:
+    """Count every catalog leaf by inventory status.
+
+    These are the inventories the project view's rings count, for a legend
+    beside a map of the whole project.
+    """
+    children = _containment_children(graph)
+    leaves = (node_id for node_id in graph.nodes if node_id not in children)
+    return {
+        key: count
+        for key, count in _status_counts(graph, leaves, statuses)
+        if key in INVENTORY_STATUSES
+    }
+
+
+def _internal_dependency_counts(
+    graph: Graph,
+    children: dict[str, tuple[str, ...]],
+) -> dict[str, int]:
+    """Count typed relations inside every container in one graph-wide pass."""
+    counts = {scope: 0 for scope in children}
+    enclosing = {node_id: set(_enclosing_scopes(graph, node_id)) for node_id in graph.nodes}
+    for node_id in children:
+        enclosing[node_id].add(node_id)
+    for source, target, _proof_only in _relations(graph):
+        for scope in enclosing[source].intersection(enclosing[target]):
+            counts[scope] += 1
+    return counts
+
+
+def _dependency_count_within(graph: Graph, node_ids: Iterable[str]) -> int:
+    selected = frozenset(node_ids)
+    return sum(
+        dependency in selected
+        for node_id in selected
+        for dependency in graph.nodes[node_id].dependencies
+    )
+
+
+def _rollup_status_key(
+    graph: Graph,
+    node_ids: Iterable[str],
+    statuses: dict[str, NodeStatus],
+) -> str:
+    """Use the least-complete descendant as a container's honest status."""
+    counts = _status_counts(graph, node_ids, statuses)
+    target_counts = tuple(
+        (key, count) for key, count in counts if key not in INVENTORY_STATUSES
+    )
+    return target_counts[-1][0] if target_counts else "planned"
 
 
 def _scope_node_id(group: str) -> str:
@@ -665,6 +839,9 @@ __all__ = [
     "group_id",
     "group_nodes",
     "group_title",
+    "inventory_counts",
+    "inventory_state",
+    "is_scope_target",
     "project_view",
     "scope_view",
     "scope_views",

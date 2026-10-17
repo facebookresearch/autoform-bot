@@ -16,8 +16,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import status
-from .coverage import CoverageSummary, load_coverage
-from .elaboration_limits import limits_in_force
+from .coverage import CoverageSummary, load_coverage, validate_coverage_roles
+from .elaboration_limits import LimitSetting, limits_by_line, limits_in_force
 from .graph import (
     IMPLEMENTATION_NOTES_DIR,
     Graph,
@@ -49,6 +49,9 @@ from .markdown import visible_prose as _visible_prose
 
 #: More siblings than this at one level is a table of contents, not a chapter.
 _MAX_DIRECT_CHILDREN = 24
+#: A repository-wide subject index is itself a table of contents and can be
+#: wider than a readable mathematical chapter while remaining navigable.
+_MAX_ROOT_CHILDREN = 64
 
 #: A node is reported as oversized only once its finished Lean work clears both
 #: an absolute floor and a large multiple of this project's own median. The
@@ -111,16 +114,39 @@ class AuditFinding:
     reason: str
 
 
+@dataclass(frozen=True, order=True, slots=True)
+class DeclarationLimit:
+    """One elaboration-limit setting a catalogued declaration is elaborated under."""
+
+    name: str
+    option: str
+    value: int
+    #: The ``set_option``'s ``path:line``, relative to the Lean root.
+    location: str
+    scope: str
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class AuditWarning:
+    """Information about an article that the audit reports but never fails on."""
+
+    article_path: str
+    code: str
+    message: str
+    declarations: tuple[DeclarationLimit, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class AuditResult:
     """The complete, canonically ordered result of one audit."""
 
     findings: tuple[AuditFinding, ...] = ()
     coverage: CoverageSummary | None = None
+    warnings: tuple[AuditWarning, ...] = ()
 
     @property
     def clean(self) -> bool:
-        """Whether the audit found no roadmap problems."""
+        """Whether the audit found no roadmap problems; warnings do not count."""
 
         return not self.findings
 
@@ -131,6 +157,7 @@ class AuditResult:
             "clean": self.clean,
             "coverage": self.coverage.as_dict() if self.coverage is not None else None,
             "findings": [asdict(finding) for finding in self.findings],
+            "warnings": [asdict(warning) for warning in self.warnings],
         }
 
     def to_json(self) -> str:
@@ -271,13 +298,29 @@ def audit_graph(
                     )
                 )
 
-        if len(children) > _MAX_DIRECT_CHILDREN:
+        if node.catalog and children:
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "catalog-container",
+                    "catalog article has contained articles; a module catalog must be a leaf",
+                )
+            )
+
+        repository_subject_index = (
+            node.id == "roadmap"
+            and node.parent is None
+            and bool(children)
+            and all(graph.nodes[child].path.name == "README.md" for child in children)
+        )
+        child_limit = _MAX_ROOT_CHILDREN if repository_subject_index else _MAX_DIRECT_CHILDREN
+        if len(children) > child_limit:
             findings.append(
                 AuditFinding(
                     article_path,
                     "overfull-container",
                     f"article directly contains {len(children)} articles, more than the "
-                    f"{_MAX_DIRECT_CHILDREN}-article limit; group them into chapters",
+                    f"{child_limit}-article limit; group them into chapters",
                 )
             )
 
@@ -299,12 +342,12 @@ def audit_graph(
             or bool(node.mathlib_file)
             or derived[node_id].proved
         )
-        if not children and formalization_evidence and not node.declaration:
+        if not children and formalization_evidence and not (node.declaration or node.catalog):
             findings.append(
                 AuditFinding(
                     article_path,
                     "missing-declaration-intent",
-                    "formalization-bearing leaf has no declaration intent metadata",
+                    "formalization-bearing leaf has neither declaration nor catalog intent metadata",
                 )
             )
 
@@ -313,9 +356,12 @@ def audit_graph(
     if coverage_findings is None:
         coverage, coverage_findings = _coverage_findings(graph.blueprint_dir)
     findings.extend(coverage_findings)
+    if coverage is not None:
+        findings.extend(_coverage_role_findings(graph, coverage))
+    warnings: list[AuditWarning] = []
     if lean_root is not None:
-        findings.extend(_lean_findings(graph, lean_root))
-    return _result(findings, coverage=coverage)
+        findings.extend(_lean_findings(graph, lean_root, warnings=warnings))
+    return _result(findings, coverage=coverage, warnings=warnings)
 
 
 @dataclass(frozen=True, slots=True)
@@ -432,15 +478,45 @@ def _coverage_findings(
     return coverage, findings
 
 
-def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
+def _coverage_role_findings(
+    graph: Graph,
+    coverage: CoverageSummary,
+) -> list[AuditFinding]:
+    """Project public coverage-role issues into the audit result model."""
+
+    return [
+        AuditFinding(
+            "coverage/README.md",
+            issue.code,
+            f"{issue.reason}{f' (line {issue.line})' if issue.line else ''}",
+        )
+        for issue in validate_coverage_roles(graph, coverage)
+    ]
+
+
+def _lean_findings(
+    graph: Graph,
+    lean_root: str | Path,
+    *,
+    warnings: list[AuditWarning] | None = None,
+) -> list[AuditFinding]:
+    """Check every article's Lean targets, adding catalog warnings to *warnings* if given."""
+
     try:
         root = resolve_lean_root(lean_root)
     except LeanSourceError as error:
         return [AuditFinding(".", "invalid-lean-root", str(error))]
 
     findings: list[AuditFinding] = []
+    names_to_resolve = tuple(
+        dict.fromkeys(
+            name
+            for node in graph.nodes.values()
+            for name in declaration_names(node.lean or "")
+        )
+    )
     try:
-        snapshot = snapshot_project_sources(root)
+        snapshot = snapshot_project_sources(root, names=names_to_resolve)
     except OSError as error:
         return [
             AuditFinding(
@@ -453,6 +529,7 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
     spans = _source_spans(index)
     sizes: dict[str, int] = {}
     sources = _captured_source_lines(snapshot.source_files)
+    catalogs: dict[str, tuple[Declaration, ...]] = {}
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
@@ -471,41 +548,12 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
             else:
                 resolved.append(declaration)
 
-        for declaration in resolved:
-            if _declared_deprecated(declaration, sources):
-                findings.append(
-                    AuditFinding(
-                        article_path,
-                        "lean-target-deprecated",
-                        f"lean target {declaration.name} is deprecated; point lean: at its replacement",
-                    )
-                )
-
-        # An alias's proof is its target's, so the limits and size are the
-        # target's too. An alias whose target the index cannot place is
-        # measured like any other declaration.
-        bodies = list(dict.fromkeys(index.reached(declaration) or declaration for declaration in resolved))
-        for body in bodies:
-            findings.extend(_limit_findings(article_path, body, sources))
-
-        expected = _DECLARATION_KEYWORDS.get((node.declaration or "").casefold())
         kinds = [_kind(declaration, index) for declaration in resolved]
-        # An alias whose target the index cannot place may have any kind.
-        if expected and resolved and not any(kind is None or kind in expected for kind in kinds):
-            described = {
-                f"alias of {kind}" if declaration.alias else str(kind) for declaration, kind in zip(resolved, kinds)
-            }
-            actual = ", ".join(sorted(described))
-            findings.append(
-                AuditFinding(
-                    article_path,
-                    "lean-target-kind-mismatch",
-                    f"Lean target kind {actual} does not match declaration intent {node.declaration}",
-                )
-            )
 
         # A wanted target states its result and nothing more. Without a body it
         # elaborates to a placeholder without sorry, so no sorry check catches it.
+        # A catalog recording proof: formalized counts as proved too, so this
+        # check runs before catalogs leave the loop below.
         if node.proof_formalized:
             claim = "proof: formalized"
         elif node.statement_formalized and status.is_definition(node):
@@ -525,10 +573,52 @@ def _lean_findings(graph: Graph, lean_root: str | Path) -> list[AuditFinding]:
                         )
                     )
 
-        if resolved:
+        # Catalog declarations must resolve like every other asserted Lean
+        # target. A catalog inventories code that already exists, so its
+        # limits are only warnings, and declaration-specific policy is
+        # inapplicable to a non-dispatchable inventory container.
+        if node.catalog is not None:
+            catalogs[article_path] = tuple(dict.fromkeys(resolved))
+            continue
+
+        for declaration in resolved:
+            if _declared_deprecated(declaration, sources):
+                findings.append(
+                    AuditFinding(
+                        article_path,
+                        "lean-target-deprecated",
+                        f"lean target {declaration.name} is deprecated; point lean: at its replacement",
+                    )
+                )
+
+        # An alias's proof is its target's, so the limits and size are the
+        # target's too. An alias whose target the index cannot place is
+        # measured like any other declaration.
+        bodies = list(dict.fromkeys(index.reached(declaration) or declaration for declaration in resolved))
+        for body in bodies:
+            findings.extend(_limit_findings(article_path, body, sources))
+
+        expected = _DECLARATION_KEYWORDS.get((node.declaration or "").casefold())
+        # An alias whose target the index cannot place may have any kind.
+        if expected and resolved and not any(kind is None or kind in expected for kind in kinds):
+            described = {
+                f"alias of {kind}" if declaration.alias else str(kind) for declaration, kind in zip(resolved, kinds)
+            }
+            actual = ", ".join(sorted(described))
+            findings.append(
+                AuditFinding(
+                    article_path,
+                    "lean-target-kind-mismatch",
+                    f"Lean target kind {actual} does not match declaration intent {node.declaration}",
+                )
+            )
+
+        if resolved and node.catalog is None:
             sizes[node_id] = sum(spans[body.name] for body in bodies)
 
     findings.extend(_size_findings(graph, sizes))
+    if warnings is not None:
+        warnings.extend(_catalog_limit_warnings(catalogs, sources))
     return findings
 
 
@@ -612,7 +702,8 @@ def _limit_findings(
     findings: list[AuditFinding] = []
     for setting in limits_in_force(lines, declaration.line):
         option = f"set_option {setting.option} {setting.value}"
-        if setting.unbounded:
+        problem = _limit_problem(setting)
+        if problem == "unbounded":
             findings.append(
                 AuditFinding(
                     article_path,
@@ -621,7 +712,7 @@ def _limit_findings(
                     f"`{option}` at {location}:{setting.line}; set a finite limit",
                 )
             )
-        elif setting.raised and setting.scope in {"file", "section"}:
+        elif problem == "unscoped":
             findings.append(
                 AuditFinding(
                     article_path,
@@ -632,6 +723,65 @@ def _limit_findings(
                 )
             )
     return findings
+
+
+def _limit_problem(setting: LimitSetting) -> str | None:
+    """Classify a limit setting as ``unbounded``, ``unscoped``, or ``None`` when it is accepted.
+
+    Declaration findings and catalog warnings share this one rule.
+    """
+
+    if setting.unbounded:
+        return "unbounded"
+    if setting.raised and setting.scope in {"file", "section"}:
+        return "unscoped"
+    return None
+
+
+def _catalog_limit_warnings(
+    catalogs: dict[str, tuple[Declaration, ...]],
+    sources: dict[Path, list[str] | None],
+) -> list[AuditWarning]:
+    """Aggregate what :func:`_limit_findings` reports into one warning per catalog and code.
+
+    A catalog can name thousands of declarations, so each file is read once.
+    """
+
+    starts: dict[Path, set[int]] = {}
+    for declarations in catalogs.values():
+        for declaration in declarations:
+            starts.setdefault(declaration.path, set()).add(declaration.line)
+    in_force = {path: limits_by_line(sources.get(path) or [], numbers) for path, numbers in starts.items()}
+    warnings: list[AuditWarning] = []
+    for article_path, declarations in catalogs.items():
+        affected: dict[str, list[DeclarationLimit]] = {}
+        for declaration in declarations:
+            for setting in in_force[declaration.path].get(declaration.line, ()):
+                problem = _limit_problem(setting)
+                if problem is None:
+                    continue
+                location = f"{declaration.path.as_posix()}:{setting.line}"
+                affected.setdefault(problem, []).append(
+                    DeclarationLimit(declaration.name, setting.option, setting.value, location, setting.scope)
+                )
+        noun = "declaration" if len(declarations) == 1 else "declarations"
+        for problem, entries in affected.items():
+            entries.sort(key=lambda entry: entry.name)
+            count = len({entry.name for entry in entries})
+            options = sorted({entry.option for entry in entries})
+            example = f"{entries[0].name} at {entries[0].location}" + (f" and {count - 1} more" if count > 1 else "")
+            if problem == "unbounded":
+                verb = "has" if count == 1 else "have"
+                summary = f"{verb} " + " or ".join(f"no {option} limit" for option in options)
+                action = "set a finite limit"
+            else:
+                verb = "inherits" if count == 1 else "inherit"
+                summary = f"{verb} a file- or section-wide raised {' or '.join(options)} limit"
+                wrappers = " or ".join(f"`set_option {option} N in`" for option in options)
+                action = f"put {wrappers} on the declarations that need it"
+            message = f"{count} of {len(declarations)} catalogued {noun} {summary} ({example}); {action}"
+            warnings.append(AuditWarning(article_path, f"catalog-{problem}-limit", message, tuple(entries)))
+    return warnings
 
 
 def _source_spans(index: SourceIndex) -> dict[str, int]:
@@ -691,7 +841,7 @@ def _validation_article_path(blueprint: Path, issue: str) -> str:
                 return issue[:boundary]
 
     node_id = issue.split(":", 1)[0]
-    if not node_id or " " in node_id or node_id in {"dependency cycle", "rolled-up dependency cycle"}:
+    if not node_id or " " in node_id or node_id == "dependency cycle":
         return "."
 
     roadmap = blueprint / "roadmap"
@@ -719,8 +869,9 @@ def _result(
     findings: list[AuditFinding],
     *,
     coverage: CoverageSummary | None = None,
+    warnings: list[AuditWarning] | None = None,
 ) -> AuditResult:
-    return AuditResult(tuple(sorted(set(findings))), coverage)
+    return AuditResult(tuple(sorted(set(findings))), coverage, tuple(sorted(warnings or ())))
 
 
-__all__ = ["AuditFinding", "AuditResult", "audit_blueprint", "audit_graph"]
+__all__ = ["AuditFinding", "AuditResult", "AuditWarning", "DeclarationLimit", "audit_blueprint", "audit_graph"]

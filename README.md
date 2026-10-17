@@ -61,6 +61,10 @@ Autoform keeps the roadmap and dependency graph as Markdown under
 format and command contracts, or browse the
 [Cabannes thesis example](skills/setup/assets/cabannes-thesis-project/README.md).
 
+The browser publication presents large roadmaps as a full-page mathematics
+atlas: authored areas and bounded hierarchy preserve readable context, while
+dependency edges remain distinct from containment and repository provenance.
+
 ## Development
 
 ```bash

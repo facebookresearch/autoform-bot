@@ -12,7 +12,7 @@ progress, stroke encodes statement progress.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -96,6 +96,16 @@ STATES: tuple[State, ...] = (
 )
 
 _BY_KEY = {state.key: state for state in STATES}
+
+#: Neutral statuses for module catalogs, which record inspection of existing
+#: Lean rather than formalization targets: checked once fully proved, pending
+#: until then. A checked inventory takes the planned colours and a pending one
+#: a darker grey, so the two stay apart in a status ring.
+INVENTORY_STATES: tuple[State, ...] = (
+    replace(_BY_KEY["planned"], key="inventory_checked", label="inventory checked"),
+    State("inventory_pending", "inventory pending", "#F0F2F5", "#8A8D91", "#65676B",
+          "#242526", "#8A8D91", "#B0B3B8"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,6 +309,7 @@ def summarize(statuses: dict[str, NodeStatus]) -> list[tuple[State, int]]:
 
 __all__ = [
     "DEFINITION_DECLARATIONS",
+    "INVENTORY_STATES",
     "STATES",
     "NodeStatus",
     "State",

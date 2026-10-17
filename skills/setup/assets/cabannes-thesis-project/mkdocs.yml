@@ -8,6 +8,11 @@ docs_dir: site-src
 site_dir: site
 use_directory_urls: false
 
+hooks:
+  # Material does not implement MkDocs' `indexing: titles`, so
+  # enforce the title-only artifact after its search plugin writes the index.
+  - hooks/title_only_search.py
+
 # The nav is not listed here. `autoform render` writes it to SUMMARY.md from
 # the vault's own page order, which mkdocs-literate-nav reads, so a project's
 # chapters cannot drift out of step with a second list kept in this file.
@@ -32,6 +37,7 @@ theme:
     # The chapter tree stays visible, which is what makes a blueprint readable
     # as a book rather than as a pile of pages.
     - navigation.sections
+    - navigation.prune
     - navigation.indexes
     - navigation.top
     - toc.follow
@@ -40,6 +46,8 @@ theme:
     scheme: slate
 
 plugins:
+  # Material does not implement MkDocs' `indexing: titles`; the build hook
+  # above enforces that artifact without passing Material an invalid option.
   - search
   # The nav is generated from the vault into SUMMARY.md; mkdocs.yml cannot
   # know a project's chapters and a hand-written list would drift.

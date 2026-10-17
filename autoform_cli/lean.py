@@ -132,7 +132,11 @@ MANAGED_OUTPUT_SCHEMAS = frozenset(
 #: Render marks each finished site with this manifest. ``mkdocs`` copies it
 #: into its own output, so both folders hold rendered copies, never sources.
 PUBLICATION_MANIFEST = "publication.json"
-PUBLICATION_SCHEMA = "autoform-publication/v2"
+#: v3 adds the shared dependency explorer to v2's inventoried site and hashes
+#: the blueprint under a label of its own.
+PUBLICATION_SCHEMA = "autoform-publication/v3"
+#: Sites render may replace: each records a file inventory to check first.
+_REPLACEABLE_SCHEMAS = frozenset({"autoform-publication/v2", PUBLICATION_SCHEMA})
 #: Render never writes a larger manifest, so the next render can always read it.
 PUBLICATION_MANIFEST_MAX_BYTES = 8 * 1024 * 1024
 
@@ -235,9 +239,13 @@ class BoundProjectSources:
     root: Path
     tree: BoundDirectoryTree
 
-    def capture(self) -> IndexedSourceSnapshot:
+    def capture(
+        self,
+        *,
+        names: Iterable[str] | None = None,
+    ) -> IndexedSourceSnapshot:
         snapshot = self.tree.capture()
-        return _indexed_source_snapshot(self.root, snapshot)
+        return _indexed_source_snapshot(self.root, snapshot, names=names)
 
     def verify(self) -> None:
         self.tree.verify()
@@ -295,7 +303,10 @@ def resolve_lean_root(lean_root: str | Path) -> Path:
 
 
 def index_project(
-    root: str | Path, *, exclude_roots: Iterable[str | Path] = ()
+    root: str | Path,
+    *,
+    exclude_roots: Iterable[str | Path] = (),
+    names: Iterable[str] | None = None,
 ) -> SourceIndex:
     """Scan ``*.lean`` beneath *root* and index declarations by full name.
 
@@ -311,6 +322,7 @@ def index_project(
     return snapshot_project_sources(
         root_path,
         exclude_roots=remapped_exclusions,
+        names=names,
     ).index
 
 
@@ -382,6 +394,7 @@ def snapshot_project_sources(
     *,
     exclude_roots: Iterable[str | Path] = (),
     limits: TreeCaptureLimits = TreeCaptureLimits(),
+    names: Iterable[str] | None = None,
 ) -> IndexedSourceSnapshot:
     """Read each Lean source once and derive its index and revision together.
 
@@ -389,10 +402,12 @@ def snapshot_project_sources(
     of times.
     """
 
+    requested_names = None if names is None else tuple(names)
     bound, snapshot = _open_stable_project_sources(
         root,
         exclude_roots=tuple(exclude_roots),
         limits=limits,
+        names=requested_names,
     )
     bound.close()
     return snapshot
@@ -403,6 +418,7 @@ def _open_stable_project_sources(
     *,
     exclude_roots: tuple[str | Path, ...],
     limits: TreeCaptureLimits,
+    names: tuple[str, ...] | None = None,
 ) -> tuple[BoundProjectSources, IndexedSourceSnapshot]:
     """Open and capture a Lean root, retrying a bounded number of changed attempts.
 
@@ -422,7 +438,7 @@ def _open_stable_project_sources(
                 exclude_roots=exclude_roots,
                 limits=limits,
             )
-            return bound, bound.capture()
+            return bound, bound.capture(names=names)
         except BaseException as error:
             if bound is not None:
                 bound.close()
@@ -647,7 +663,12 @@ def _folded_path(path: PurePosixPath) -> tuple[str, ...]:
     return tuple(unicodedata.normalize("NFC", part).casefold() for part in path.parts)
 
 
-def _indexed_source_snapshot(root: Path, snapshot: TreeSnapshot) -> IndexedSourceSnapshot:
+def _indexed_source_snapshot(
+    root: Path,
+    snapshot: TreeSnapshot,
+    *,
+    names: Iterable[str] | None = None,
+) -> IndexedSourceSnapshot:
     # The Lean selection captures only .lean entries outside excluded folders,
     # so every captured entry is a source and the snapshot's own revisions
     # cover exactly the Lean inputs and the folders holding them.
@@ -661,6 +682,11 @@ def _indexed_source_snapshot(root: Path, snapshot: TreeSnapshot) -> IndexedSourc
     line_counts: dict[Path, int] = {}
     source_files: list[tuple[Path, bytes]] = []
     digest = hashlib.sha256(b"autoform-lean-source-index/v1\0")
+    wanted_short = (
+        None
+        if names is None
+        else frozenset(_short_name(name) for name in names)
+    )
     for relative_text, data in snapshot.files:
         relative_path = Path(relative_text)
         _update_source_digest(digest, relative_path, data)
@@ -668,6 +694,11 @@ def _indexed_source_snapshot(root: Path, snapshot: TreeSnapshot) -> IndexedSourc
         try:
             text = data.decode("utf-8")
         except UnicodeError:
+            continue
+        if wanted_short is not None and not _may_declare(text, wanted_short):
+            # Nothing in this file is indexed, so no declaration is sized
+            # against this count.
+            line_counts[relative_path] = len(text.splitlines())
             continue
         found, line_counts[relative_path] = _scan(text, relative_path)
         for declaration in found:
@@ -687,6 +718,34 @@ def _indexed_source_snapshot(root: Path, snapshot: TreeSnapshot) -> IndexedSourc
         snapshot.generation_revision,
         tuple(source_files),
     )
+
+
+def _may_declare(text: str, wanted_short: frozenset[str]) -> bool:
+    """Reject files that cannot contain a requested declaration."""
+
+    if not wanted_short:
+        return False
+    for line in _without_lean_comments(text).splitlines():
+        match = _DECLARATION.match(line)
+        if match is None:
+            continue
+        if match.group(1) == "alias":
+            # As `_aliases` reads it: one name, or both names of `⟨mp, mpr⟩`.
+            alias = _ALIAS.match(match.group(2))
+            names = () if alias is None else (alias["name"], alias["mp"], alias["mpr"])
+        else:
+            names = (_name_token(match.group(2)),)
+        if any(name is not None and _short_name(name.removesuffix(".")) in wanted_short for name in names):
+            return True
+    return False
+
+
+def _short_name(name: str) -> str:
+    """Return the last Lean name component without splitting quoted dots."""
+
+    if name.endswith("»") and "«" in name:
+        return name[name.rfind("«") :]
+    return name.rsplit(".", 1)[-1]
 
 
 def _is_managed_output_manifest_bytes(data: bytes) -> bool:
@@ -713,10 +772,11 @@ def _is_complete_publication(data: bytes) -> bool:
         value = json.loads(data)
     except (ValueError, RecursionError):
         return False
+    schema = value.get("schema") if isinstance(value, dict) else None
     return (
         isinstance(value, dict)
-        and isinstance(value.get("schema"), str)
-        and value.get("schema") in {"autoform-publication/v1", PUBLICATION_SCHEMA}
+        and isinstance(schema, str)
+        and schema in {"autoform-publication/v1", *_REPLACEABLE_SCHEMAS}
         and value.get("complete") is True
     )
 
@@ -797,6 +857,9 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
             name = name or _name_token(body)
             if name is None:
                 continue
+            # `_name_token` stops before the `{` in an explicit universe
+            # binder, leaving the syntactic separator behind.
+            name = re.sub(r"\.\{[^}\n]+\}$", "", name).removesuffix(".")
             found.append(Declaration(_qualified(namespaces, name), relative, number, keyword, protected))
     return found, len(lines)
 
@@ -1105,18 +1168,26 @@ class SourceLinker:
             )
         ):
             return None
+        encoded_ref = quote_from_bytes(os.fsencode(self.ref), safe="")
         relative = declaration.path.as_posix()
         path = "/".join(
             quote_from_bytes(os.fsencode(part), safe="")
             for part in self.spellings.get(relative, relative).split("/")
         )
-        return f"{self.repository_url}/blob/{self.ref}/{path}#L{declaration.line}"
+        return f"{self.repository_url}/blob/{encoded_ref}/{path}#L{declaration.line}"
 
 
-def build_linker(lean_root: str | Path) -> SourceLinker:
+def build_linker(
+    lean_root: str | Path,
+    *,
+    names: Iterable[str] | None = None,
+) -> SourceLinker:
     """Index *lean_root* and resolve repository coordinates."""
     resolved_root = resolve_lean_root(lean_root)
-    snapshot, repository_url, ref, linkable_paths = _capture_link_state(resolved_root)
+    snapshot, repository_url, ref, linkable_paths = _capture_link_state(
+        resolved_root,
+        names=names,
+    )
     if repository_url is None:
         repository_url = detect_repository_url(resolved_root)
     return SourceLinker(
@@ -1129,6 +1200,8 @@ def build_linker(lean_root: str | Path) -> SourceLinker:
 
 def _capture_link_state(
     root: Path,
+    *,
+    names: Iterable[str] | None = None,
 ) -> tuple[
     IndexedSourceSnapshot,
     str | None,
@@ -1137,6 +1210,7 @@ def _capture_link_state(
 ]:
     """Capture source bytes and prove which ones belong to one stable commit."""
 
+    requested_names = None if names is None else tuple(names)
     last_snapshot: IndexedSourceSnapshot | None = None
     last_url: str | None = None
     for attempt in range(_SNAPSHOT_ATTEMPTS):
@@ -1144,7 +1218,7 @@ def _capture_link_state(
             time.sleep(_SNAPSHOT_RETRY_DELAY_SECONDS * attempt)
         before_url = detect_repository_url(root)
         before_ref = detect_ref(root)
-        snapshot = snapshot_project_sources(root)
+        snapshot = snapshot_project_sources(root, names=requested_names)
         last_snapshot = snapshot
         last_url = before_url
         after_url = detect_repository_url(root)

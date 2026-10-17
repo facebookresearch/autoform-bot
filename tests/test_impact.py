@@ -2207,12 +2207,12 @@ def test_revision_impact_retries_an_initial_source_capture_race(
     original_capture = lean_module.BoundProjectSources.capture
     captures = 0
 
-    def changing_once(bound):
+    def changing_once(bound, **kwargs):
         nonlocal captures
         captures += 1
         if captures == 1:
             raise TreeChangedError("directory tree changed while it was captured")
-        return original_capture(bound)
+        return original_capture(bound, **kwargs)
 
     monkeypatch.setattr(lean_module.BoundProjectSources, "capture", changing_once)
     monkeypatch.setattr(lean_module, "_SNAPSHOT_RETRY_DELAY_SECONDS", 0)

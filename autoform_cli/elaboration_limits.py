@@ -17,7 +17,7 @@ code written in the ordinary way, and it reports nothing it cannot see.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 #: Lean's defaults for the limits this module reads.
@@ -75,20 +75,40 @@ def limits_in_force(lines: Sequence[str], line: int) -> tuple[LimitSetting, ...]
     declaration is returned, followed by every setting inside its proof.
     """
 
-    if not 0 < line <= len(lines):
-        return ()
+    return limits_by_line(lines, (line,)).get(line, ())
+
+
+def limits_by_line(lines: Sequence[str], starts: Iterable[int]) -> dict[int, tuple[LimitSetting, ...]]:
+    """Return :func:`limits_in_force` for each line in ``starts``.
+
+    The file is read once per indentation those lines start at, not once per
+    line, so the cost stays linear in the file however many declarations it holds.
+    """
+
     # Commands start at the declaration's indentation, so a file that indents
     # its commands inside a namespace is read the same way as one that does not.
-    target = lines[line - 1]
-    indent = len(target) - len(target.lstrip())
+    by_indent: dict[int, set[int]] = {}
+    for line in starts:
+        if 0 < line <= len(lines):
+            target = lines[line - 1]
+            by_indent.setdefault(len(target) - len(target.lstrip()), set()).add(line)
+    return {line: found for indent, group in by_indent.items() for line, found in _scan(lines, indent, group).items()}
+
+
+def _scan(lines: Sequence[str], indent: int, starts: set[int]) -> dict[int, tuple[LimitSetting, ...]]:
+    """Read the limits for the declarations on ``starts``, which all start at ``indent``."""
 
     def is_command(text: str) -> bool:
         stripped = text.strip()
         return bool(stripped) and len(text) - len(text.lstrip()) <= indent and not _CONTINUATION.match(stripped)
 
+    found: dict[int, list[LimitSetting]] = {}
     scopes: list[dict[str, LimitSetting]] = [{}]
     pending: dict[str, LimitSetting] = {}
-    for number, text in enumerate(lines[: line - 1], start=1):
+    for number, text in enumerate(lines[: max(starts)], start=1):
+        if number in starts:
+            in_force = {**scopes[-1], **pending}
+            found[number] = [in_force[option] for option in sorted(in_force)]
         if not is_command(text):
             continue
         stripped = text.strip()
@@ -111,18 +131,17 @@ def limits_in_force(lines: Sequence[str], line: int) -> tuple[LimitSetting, ...]
             scopes.pop()
         pending = {}
 
-    in_force = {**scopes[-1], **pending}
-    found = [in_force[option] for option in sorted(in_force)]
-    for number in range(line, len(lines) + 1):
-        text = lines[number - 1]
-        if number > line and is_command(text):
-            break
-        found.extend(_setting(limit, number, "proof") for limit in _LIMIT.finditer(text))
-    return tuple(found)
+    for line, settings in found.items():
+        for number in range(line, len(lines) + 1):
+            text = lines[number - 1]
+            if number > line and is_command(text):
+                break
+            settings.extend(_setting(limit, number, "proof") for limit in _LIMIT.finditer(text))
+    return {line: tuple(settings) for line, settings in found.items()}
 
 
 def _setting(limit: re.Match[str], line: int, scope: str) -> LimitSetting:
     return LimitSetting(limit.group(1), int(limit.group(2).replace("_", "")), line, scope)
 
 
-__all__ = ["LIMIT_DEFAULTS", "LimitSetting", "limits_in_force"]
+__all__ = ["LIMIT_DEFAULTS", "LimitSetting", "limits_by_line", "limits_in_force"]

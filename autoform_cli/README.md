@@ -33,6 +33,7 @@ Frontmatter records checked facts:
 ```markdown
 ---
 article_id: af_5b0e4d3c2a1f09e8d7c6b5a4
+area: Analysis & Probability
 declaration: theorem
 origin: cited
 statement: formalized
@@ -102,6 +103,44 @@ target, `bridged` for a result introduced between source targets, and
 Frontmatter is optional. A container article that only supplies prose and
 placement needs none at all; only checked facts are recorded.
 
+The optional `area` field assigns a container to an authored mathematical
+region in the knowledge atlas. Use mathematical areas such as `Foundations` or
+`Geometry & Topology`, never repository or workflow buckets such as
+`MathlibExt` or `catalog-01`. Autoform does not guess areas from paths, imports,
+or titles.
+
+For a taxonomy maintained separately from article files, `blueprint/atlas.json`
+may assign the same areas without moving pages:
+
+```json
+{"schema":"autoform-atlas/v1","areas":{"Geometry & Topology":["topology","geometry"]}}
+```
+
+Every listed value is a roadmap node id, each node may appear once, and a
+manifest assignment must agree with any `area:` already authored on that node.
+
+A repository-wide inventory may use a narrative leaf to summarize an existing
+Lean module containing several declarations. Such a leaf sets
+`catalog: module` and omits `declaration`, so it is never dispatched as one
+proof task. A completed catalog records every exact compiled public name in
+`lean:` and links a declaration ledger under `blueprint/sources/` from its exact
+`## Sources` section; it may assert
+`statement: formalized` and `proof: formalized` when the complete module has
+been checked. It contributes to the neutral inventory metric and graph status
+while remaining a readable catalog page, but stays outside the mathematical
+`Scoped roadmap` completion percentage.
+
+`check --lean-root` and `audit --lean-root` resolve every compiled name the
+catalog lists, and every command that loads the blueprint validates the local
+ledger link. They cannot prove that the list omitted no newly added public
+declaration; completeness remains an authored assertion pending
+repository-inventory reconciliation. `audit --lean-root` also reads the
+[elaboration limits](#elaboration-limits) of the declarations a catalog
+resolves and reports them as warnings, which never fail the audit. A catalog
+that records `proof: formalized` also gets `lean-target-wanted` for a wanted
+target it names; the deprecation, declaration-kind, and node-size checks apply
+only to declaration articles.
+
 Versioned implementation notes live outside the mathematical roadmap at
 `blueprint/.implementation-notes/<article_id>.md`, one file per article. The
 durable ID survives article moves. Claims keep independent workers from editing
@@ -127,6 +166,8 @@ An article asserts only facts a human or agent verified:
 
 | Key | Meaning |
 | --- | --- |
+| `area: Geometry & Topology` | Authored mathematical region for atlas grouping. |
+| `catalog: module` | A non-dispatchable leaf cataloging one existing Lean module. |
 | `statement: formalized` | The Lean statement exists and compiles. Requires `lean:`. |
 | `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. CI's `autoform check` at an older `AUTOFORM_REF` rejects the marker, so move the pin first; until then, retract by removing `statement` and `proof` and keeping `lean:`. |
 | `proof: formalized` | The Lean proof compiles. Requires `statement: formalized` and `lean:`. Under the open policy it may rest on open statements, and the article is then conditional; only the derived `fully_proved` means complete and `sorry`-free. |
@@ -357,14 +398,26 @@ autoform audit blueprint --lean-root .
 `check` validates the graph contract. `audit` adds deterministic completeness,
 provenance, coverage, checked-fact, and optional Lean-target checks. It is local
 and read-only: it neither contacts network services nor writes findings back
-into the blueprint. Pass `--json` for stable machine-readable output; a nonzero
-exit status means the audit found at least one issue. The machine-checkable
+into the blueprint. Pass `--json` for stable machine-readable output. A nonzero
+exit status means the audit found at least one finding; [warnings](#warnings)
+never change it. The machine-checkable
 `coverage/README.md` contract contains one `Area | Coverage | Evidence` table
-with `MAPPED`, `DECOMPOSED`, `DEFERRED`, or `OUT` dispositions. `MAPPED` is
-nonterminal; the other three explicitly disposition an area. Audit JSON includes
-canonical rows, counts, and the exact coverage source hash, while
-`publication.json` records aggregate counts without duplicating the authored
-rows.
+with `MAPPED`, `INVENTORIED`, `DECOMPOSED`, `DEFERRED`, or `OUT` dispositions.
+`MAPPED` is nonterminal. `INVENTORIED` is the terminal disposition for exact
+source accounting and must link to a `catalog: module` record, directly or
+through a containing roadmap scope. `DECOMPOSED` is reserved for
+source-grounded declaration articles and must link to one, directly or through
+a containing roadmap scope. `DEFERRED` and `OUT` record an explicit later
+milestone or exclusion. Audit JSON includes canonical rows, counts, and the
+exact coverage source hash, while `publication.json` records aggregate counts
+without duplicating the authored rows.
+
+One row carries one disposition, so represent both axes with distinct,
+axis-qualified `Area` labels. For example, `Repository inventory / MathlibExt`
+may be `INVENTORIED` while `Mathematical exposition / MathlibExt` remains
+`MAPPED` and later becomes `DECOMPOSED`; duplicate exact area labels are
+invalid. A broad inventory row may link a container and classify every catalog
+below it while finer exposition rows evolve independently.
 
 The contract is read as published Markdown and fails closed. A table inside an
 HTML comment, a fenced block, or a four-space-indented block is documentation
@@ -438,11 +491,14 @@ its second paragraph, since that one implicitly closes the first. `title="hidden
 hides nothing at all. So is evidence that is nothing but `TODO`, `TBD`, `pending`,
 `placeholder`, or `unknown`, or that opens with one of those as a marker such as
 `TODO: choose a milestone`. A status word that merely begins a sentence is fine:
-"Pending Mathlib PR 1234" names something a reader can check. `DECOMPOSED`
-evidence must contain at least one complete inline link to an existing roadmap
-article, and *every* link it offers must resolve, fragments included, under the
-same rules the audit applies. A link missing its closing parenthesis does not
-render and does not count.
+"Pending Mathlib PR 1234" names something a reader can check. `INVENTORIED` and
+`DECOMPOSED` evidence must contain at least one complete inline link to an
+existing roadmap article. Every linked roadmap scope must contain the role the
+row claims: a module inventory for `INVENTORIED`, or a declaration-bearing leaf
+for `DECOMPOSED`; audit reports a row that does not, and `render` warns. Every
+local link it offers must resolve, fragments included, under the same rules the
+audit applies. A link missing its closing parenthesis does not render and does
+not count.
 
 Fragment checking uses the renderer rather than predicting it. Anchors come from
 running Python-Markdown with the extensions the generated `mkdocs.yml` enables
@@ -459,7 +515,9 @@ a heading-affecting extension cannot silently invalidate the audit.
 `coverage.complete` in audit and `publication.json` means exactly one thing:
 every row the author declared has reached a terminal disposition, so no row is
 still `MAPPED`. It is a statement about the contract, not a measurement of the
-project.
+project. Terminal dispositions close different questions: `INVENTORIED` closes
+exact source accounting, while `DECOMPOSED` says the area has source-grounded
+declaration articles. One does not imply the other.
 
 It does **not** claim that the declared rows cover the source exhaustively, and
 it says nothing about whether the linked roadmap articles are formalized or
@@ -467,14 +525,49 @@ proved. A project that declares one narrow area and disposes of it reports
 `complete` while most of its source remains undeclared. Exhaustiveness is an
 authoring judgement that no local check can make.
 
+Module inventory counts are reported separately from formalization-target
+completion. The target denominator, readiness count, declaration-kind totals,
+and the progress-state breakdowns in the book and in `autoform check` use
+non-container articles carrying `declaration`; a `catalog: module` record
+counts toward none of them. A scope's status ring and item count, and the
+legend beside each dependency map, also count a leaf marked `not_ready` that
+declares nothing yet, so deferred work holds its scope open. All three also
+count every catalog, under a neutral status: `inventory checked` once the
+catalog is fully proved, `inventory pending` until then. Neither status changes
+a scope's rolled-up status or completion.
+The coverage `counts` object always includes an integer
+`INVENTORIED` key, including zero when no row uses it. Status assertions on a
+catalog remain accepted. The presentation calls a fully checked catalog
+`inventory checked`, not a completed definition or result, and any other
+catalog `inventory pending`, whatever its derived state. The rendered site and
+`autoform check` show the module-inventory count separately from those target
+metrics.
+
+For an existing blueprint, migrate a catalog-only `DECOMPOSED` row to
+`INVENTORIED`. If the same source also has declaration articles, keep that
+inventory row and add distinct, axis-qualified `DECOMPOSED` rows for the
+mathematical scopes; do not overwrite the inventory claim. Existing coverage
+Markdown remains readable, but emitted audit and publication coverage uses
+`autoform-coverage/v2`: `INVENTORIED` is a new disposition, terminal meaning,
+and counts key. The shared-explorer publication manifest uses
+`autoform-publication/v3`, as described below. Until migrated, a catalog-only
+`DECOMPOSED` row
+remains syntactically accepted: `render` warns and still publishes, while audit
+reports `coverage-role-mismatch`. A catalog not reached by any `INVENTORIED`
+evidence is treated the same way and reported as `unclassified-inventory`.
+Target-completion percentages may change because catalog records are no longer
+included in their denominator.
+
 Publication and audit are deliberately different gates. The generated
 `blueprint-pages.yml` runs `check` and `render`; it does not run `audit`. An
 invalid coverage contract fails `render` before any output is written, but a
 valid contract with `MAPPED` rows publishes normally even though `audit` reports
 each one as a `declared-coverage-gap`. That is intended: a roadmap is published
 while it is still being decomposed, and the published `coverage.complete: false`
-is how a reader sees that. Run `autoform audit` in CI when you want mapped rows
-to block a merge.
+is how a reader sees that. Coverage-role findings take the same path: `render`
+prints each one as a warning and publishes, and `audit` reports it. Run
+`autoform audit` in CI when you want mapped rows or role findings to block a
+merge.
 
 Extract what a reader must trust for each formalized statement:
 
@@ -847,7 +940,7 @@ line of the article that lacks one, or as a frontmatter block of its own, and
 changes nothing else. It writes an article only while its bytes still have
 the planned hash, checks every article before writing the first, and refuses
 an article that changed or became a symlink after planning; after such a
-refusal, running it again completes the plan. Runtime v3 and
+refusal, running it again completes the plan. The runtime and
 `autoform work` expose assigned IDs immediately; preserving publication routes
 across path moves remains a follow-up change.
 
@@ -896,30 +989,49 @@ autoform-visualize blueprint
 ```
 
 Build the publishable site source — a book overview, aggregate progress,
-statement boxes with collapsed dependency details, multi-scale dependency
-maps, and direct links to Lean declarations at the current commit:
+statement boxes with collapsed dependency details, a multi-scale dependency
+explorer, and direct links to Lean declarations at the current commit:
 
 ```bash
 autoform render blueprint --output site-src --lean-root . --require-declarations
 ```
 
 `render` never writes into the vault. It leads the landing page with the project
-map over a summary of what is formalized and what is unblocked, places a compact
+explorer over a summary of what is formalized and what is unblocked, places a compact
 progress summary after each chapter's opening prose, writes `structure.md` so a
 vault's layout can be checked against the book it produces, and shows a source
 icon when a `lean:` declaration resolves to a repository permalink. Its
-`dependencies.md` entry point rolls dependencies through the article hierarchy,
-with links to declaration maps, one-hop local contexts, and the complete DAG.
-Every graph article returns to the book, and every formal statement links to
-its local context. Point `mkdocs.yml` at `docs_dir: site-src` and enable
-`md_in_html` plus a `pymdownx.superfences` mermaid fence; see the [repository
+`dependencies.md` opens a full-viewport application and rolls dependencies
+through the article hierarchy, with bounded project, chapter, and nested-scope
+projections. Global search loads a layout-free index and jumps to the smallest
+useful scope; the compatibility `dependencies/full.md` route renders only the
+project shell and never fits the whole repository into one canvas. Every generated
+site projection uses the same deterministic JSON-derived Canvas and semantic-DOM
+explorer with search, filters, pan/zoom, and hash-routed node neighborhoods, so
+none inherits Mermaid's text, edge, or SVG-size ceilings. Authored Mermaid remains
+supported in the vault and book, including the bounded graph produced by
+`autoform-visualize`. A persistent hierarchy rail keeps the current ancestry and
+immediate contents visible. The project overview groups readable topic cards by
+authored mathematical area and reveals only a selected topic's direct dependency
+neighborhood; its detail drawer overlays the map instead of shrinking it.
+Breadcrumbs return through the explorer hierarchy to the book, and every formal
+statement links to the smallest explorer scope containing that item. Point
+`mkdocs.yml` at `docs_dir: site-src` and enable `md_in_html` plus a
+`pymdownx.superfences` mermaid fence; see the [repository
 example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
+
+This shared-explorer layout is recorded as `autoform-publication/v3`; it
+replaces the `dependencies/nodes/*.html` focus pages of earlier sites. Legacy
+`dependencies/full.html#node=<id>` links use the global index to redirect to the
+smallest bounded scope containing that node. Render replaces a v2 site as it
+replaces a v3 one, while a v1 output must be deleted once by hand; the
+[publication contract](#publication-contract) gives the rules.
 
 ## Validation
 
-`autoform check` rejects cycles, missing targets, escaping paths, symbolic
-links anywhere under `roadmap/`, self-dependencies, cycles introduced at any
-rolled-up containment level,
+`autoform check` rejects cycles between authored articles or introduced at any
+rolled-up containment level, missing targets, escaping paths, symbolic links
+anywhere under `roadmap/`, and self-dependencies,
 missing or multiple H1 titles, unsupported frontmatter keys, assertion values
 it does not recognize, and assertions the Lean cannot back: `proof: formalized`
 without `statement: formalized`, or either without a `lean:` name, even beside
@@ -947,6 +1059,11 @@ also fails on a `lean:` name
 absent from the sources, as `leanblueprint checkdecls` does for LaTeX
 blueprints. It validates structure and leaves mathematical correctness to the
 agent and the Lean kernel.
+
+Contracting that acyclic article graph into chapters or nested scopes can put
+an edge in both directions between two containers. Generated views retain and
+draw both relations: an authored dependency is not deleted merely to make a
+coarser projection acyclic.
 
 Source-aware `--lean-root` inspection requires directory-descriptor traversal.
 Platforms without that capability, including Windows, fail closed instead of
@@ -1065,6 +1182,21 @@ workflow does not resolve wanted targets yet: Batteries declares every
 placeholder `private`, so that audit reports a `lean:` name naming one as not a
 declaration of the Lean build, as it does for any `private` declaration.
 
+### Warnings
+
+A finding is a problem the audit fails on. A warning tells the agent about code
+it may decide to leave alone, and never fails the audit: `clean` and the exit
+status depend on findings alone, so a repository that passes keeps passing when
+a warning appears. The text output prints a
+`warning: <path>: <code>: <message>` line for each, after the error lines.
+`--json` lists them after `findings` as `warnings`, sorted by `article_path`
+and `code`. Each also carries a `message` and `declarations`, one object per
+affected declaration and setting with its `name`, `option`, `value`,
+`location` (the `set_option` as `path:line` relative to the Lean root), and
+`scope` (`file`, `section`, `declaration`, or `proof`), sorted by name. The
+catalog limit warnings under [Elaboration limits](#elaboration-limits) are the
+only warnings so far.
+
 ### Structure
 
 Containment is inferred from nested `README.md` articles, so a chapter
@@ -1073,7 +1205,8 @@ roadmap root and the book loses a level. `missing-chapter-article` reports a
 directory directly under `roadmap/` that holds articles but names no chapter.
 Deeper directories (the `definitions/` and `theorems/` buckets the bundled
 example uses) are a filing convention inside a chapter and are not checked.
-`overfull-container` reports an article with more than 24 direct children,
+`overfull-container` reports a mathematical article with more than 24 direct
+children, or a repository-wide root subject index with more than 64,
 which is a table of contents rather than a chapter. Both defects leave a valid
 graph, which is why they need their own checks rather than falling out of
 `autoform check`.
@@ -1101,8 +1234,9 @@ rejected on that evidence.
 
 With `--lean-root`, the audit reads the `maxHeartbeats`,
 `synthInstance.maxHeartbeats`, and `maxRecDepth` settings each resolved `lean:`
-target is elaborated under. `lean-target-unbounded-limit` reports a target with
-no heartbeat limit: a `set_option maxHeartbeats 0` or
+target is elaborated under, including a catalog's. For a declaration article,
+`lean-target-unbounded-limit` reports a target with no heartbeat limit: a
+`set_option maxHeartbeats 0` or
 `set_option synthInstance.maxHeartbeats 0` in force at the declaration or inside
 its proof, which lets elaboration run indefinitely instead of failing.
 `lean-target-unscoped-limit` reports a target whose raised limit comes from a
@@ -1114,6 +1248,15 @@ not reported. The pass is lexical: it follows `namespace`, `mutual`, `end`, and
 `section` nesting, including `noncomputable section` and the module system's
 `@[expose] public section`, and treats an indented `set_option` as part of the
 proof above it.
+
+A catalog inventories code that already exists, so its declarations get the
+same two checks as [warnings](#warnings), at most one per catalog and code:
+`catalog-unbounded-limit` and `catalog-unscoped-limit`. The message counts the
+affected declarations against all the resolved ones the catalog names, names
+the options involved, and locates the `set_option` of the first by name, for
+example `2 of 40 catalogued declarations have no maxHeartbeats limit
+(Inv.alpha at Inv.lean:1 and 1 more); set a finite limit`. A name that does not
+resolve is a `lean-target-not-found` finding and is not counted.
 
 ATLAS v1, built with Autoform, shows what accumulates without this check: 901
 raised `maxHeartbeats` settings, 497 of them file- or section-wide and 9 of them
@@ -1746,14 +1889,14 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
    other article's `lean:` names it, and drop it from R's `lean:` in the same
    commit. `contained` is not enough: it ignores R's own declarations, such as
    an X' built from X.
-5. `autoform audit --lean-root` reports `lean-target-deprecated` for an article
-   whose `lean:` names a declaration with `deprecated` in its own `@[...]`
-   attribute list; point it at the replacement. The check is lexical, so it
-   misses a later `attribute [deprecated] X`, which the deprecated list of
-   `work impact` does see. Under the open policy the finding is expected for a
-   superseded X that step 2 keeps in R's `lean:` until step 4, so `autoform
-   audit --lean-root` and `autoform doctor --lean-root` fail in that window by
-   design, while CI, which runs neither, passes.
+5. `autoform audit --lean-root` reports `lean-target-deprecated` for a
+   declaration article whose `lean:` names a declaration with `deprecated` in
+   its own `@[...]` attribute list; point it at the replacement. The check is
+   lexical, so it misses a later `attribute [deprecated] X`, which the
+   deprecated list of `work impact` does see. Under the open policy the finding
+   is expected for a superseded X that step 2 keeps in R's `lean:` until step 4,
+   so `autoform audit --lean-root` and `autoform doctor --lean-root` fail in
+   that window by design, while CI, which runs neither, passes.
 6. When Roadmap revises an article, its statement text or only its Lean, it
    records the decision and retracts the article: it replaces `statement:
    formalized` with `statement: retracted`, removes `proof: formalized`, and
@@ -1793,7 +1936,7 @@ doctor, separate from any future worker fleet or machine-capability preflight.
 ## Runtime contract
 
 `autoform_cli.runtime` projects the canonical Markdown graph into the versioned,
-deeply immutable in-memory schema `autoform-runtime/v3`. Its declared authority
+deeply immutable in-memory schema `autoform-runtime/v4`. Its declared authority
 is `markdown-articles`: the adapter copies hierarchy, typed statement and proof
 dependencies, authored assertions, derived progress, provenance, and optional
 local Lean source locations, but it provides no persistence or write API. A
@@ -1808,18 +1951,21 @@ creates, synchronizes, or treats `graph.json` as an authority.
 Every article remains in the runtime view so consumers can preserve the book's
 arbitrary containment hierarchy. A node is dispatchable only when it is both a
 formalizable article and a leaf; narrative containers and prose-only leaves are
-never proof work units. The source revision hashes exact roadmap article paths
-and bytes, excluding timestamps, absolute paths, Git state, and operational
-state. Optional Lean locations come from a local lexical scan and do not by
-themselves establish compilation or proof correctness.
+never proof work units. Module inventories are likewise non-formalizable,
+non-dispatchable source records. The source revision hashes exact roadmap
+article paths and bytes, excluding timestamps, absolute paths, Git state, and
+operational state. Optional Lean locations come from a local lexical scan and do
+not by themselves establish compilation or proof correctness.
 
-Schema v3 retains optional durable `article_id` metadata beside the graph's
-path-derived `id` and adds the project `open_statements` policy,
+Schema v4 adds a nullable catalog discriminator for non-dispatchable module
+inventories. It retains v3's optional durable `article_id` metadata beside the
+graph's path-derived `id`, project `open_statements` policy,
 `statement_retracted` assertions, and each status's `assumes` and `waiting_on`
 fields. Temporary claims and local dashboard hooks may fall back to the path ID,
-but durable execution records and routes must require `article_id` until the
-path-move migration is complete. Operational state remains private and excluded
-from runtime snapshots and publication.
+but durable queues, reviews, recovery records, PR markers, execution records,
+routes, providers, and logs must require `article_id` until path-move migration
+is complete. Operational state remains private and excluded from runtime
+snapshots and publication.
 
 Projection fails when an article's bytes no longer match the digest recorded
 when the graph was loaded, so a source revision never labels node data parsed
@@ -1829,18 +1975,20 @@ article holds at projection time.
 
 ## Publication contract
 
-`autoform render` publishes the book, derived progress, and dependency maps at
-project, chapter, nested-scope, local, and full-graph scales. It never reads a
+`autoform render` publishes the book, derived progress, and one dependency
+explorer as bounded project, chapter, and nested-scope projections. The legacy
+full route is a project-scale compatibility shell backed by a layout-free global
+search index, never an all-repository node cloud. Rendering never reads a
 `graph.json` or an operational queue. Hidden files and directories, including
 `.implementation-notes`, are omitted, while a `.autoform` directory and
 symlinks, credentials, logs, provider state, and agent/task state outside hidden
 directories cause the render to fail rather than silently leak them. Source and
 output directories must be disjoint. A blueprint path that differs only in case
-from one render writes (`SUMMARY.md`, `dependencies.md`, `structure.md`,
-`publication.json`, `assets/`, `dependencies/`, `javascripts/`, `stylesheets/`,
-and the generated stylesheet, scripts and logo inside them) is refused, as are
-two blueprint paths that differ only in case or Unicode form, because they would
-collide on a case-insensitive filesystem.
+from one render writes (`SUMMARY.md`, `dependencies.json`, `dependencies.md`,
+`structure.md`, `publication.json`, `assets/`, `dependencies/`, `javascripts/`,
+`stylesheets/`, and the generated stylesheet, scripts and logo inside them) is
+refused, as are two blueprint paths that differ only in case or Unicode form,
+because they would collide on a case-insensitive filesystem.
 
 Every render writes `publication.json` with blueprint and Lean-source hashes
 (the Lean-source hash is empty when render reads no Lean sources, as on native
@@ -1848,18 +1996,26 @@ Windows), Git ref, article and dependency counts, the site's file inventory, and
 available views. It contains no timestamp or absolute path, so identical inputs
 produce identical output files. Render reads the blueprint and the Lean sources
 once each and derives every page, link and hash from those bytes; an edit saved
-during a render waits for the next one. Repository links appear only when the
-Lean bytes match one locally available Git commit, recorded by its full object
-ID; a clean checkout that Git converts on checkout still matches. Otherwise the
-render stays local, keeps source notes in the site, records no Git ref, and
-warns with the first mismatch. Links into the blueprint (an article's Markdown
-source, a source note) also need the blueprint's bytes in that commit. When
-they differ, render keeps the code links, keeps source notes in the site
-instead of linking to them, and warns with the first mismatch; a blueprint
-outside the repository, or in a submodule or other checkout nested in it, gets
-the same result without a warning. When render reads no Lean file (native
-Windows, or a project with no `.lean` file yet), it records the Git ref only if
-the blueprint matches it.
+during a render waits for the next one, and until then the dashboard reports the
+built site as stale. The vault's hidden implementation notes are read in place
+only to validate them. Repository links appear only when the Lean bytes match
+one locally available Git commit, recorded by its full object ID; a clean
+checkout that Git converts on checkout still matches. Otherwise the render stays
+local, keeps source notes in the site, records no Git ref, and warns with the
+first mismatch. Links into the blueprint (an article's Markdown source, a source
+note) also need the blueprint's bytes in that commit. When they differ, render
+keeps the code links, keeps source notes in the site instead of linking to them,
+and warns with the first mismatch; a blueprint outside the repository, or in a
+submodule or other checkout nested in it, gets the same result without a
+warning. When render reads no Lean file (native Windows, or a project with no
+`.lean` file yet), it records the Git ref only if the blueprint matches it.
+
+The manifest's schema is `autoform-publication/v3`. It records what v2
+records, but the site holds the shared explorer's JSON projections and script
+in place of v2's Mermaid dependency maps, and the blueprint hash is taken under
+a label of its own, so no v2 `source_revision` equals a v3 one. The dashboard
+accepts only a v3 site and reports an older one as stale until render replaces
+it.
 
 The site is built and synced in a hidden `.autoform-publication-*` directory
 beside the output, then swapped in with one atomic exchange (`renamex_np` on
@@ -1868,9 +2024,9 @@ take turns when it can be locked. On filesystems without the exchange (NFS, SMB,
 9p or WSL2 `/mnt/c`, exFAT, sshfs) the previous site is first renamed to
 `.autoform-publication-backup-<name>`; if render dies between the two renames,
 the next render moves it back before anything else. Render replaces only an
-empty directory or a complete `autoform-publication/v2` site whose files match
-its inventory (macOS metadata files, `.DS_Store` and `._*`, are ignored in
-both), and refuses anything else, including a legacy v1 output, which you
+empty directory or a complete `autoform-publication/v2` or v3 site whose files
+match its inventory (macOS metadata files, `.DS_Store` and `._*`, are ignored
+in both), and refuses anything else, including a legacy v1 output, which you
 remove once by hand. A failed or refused render leaves the output as it was. A
 render killed mid-way can leave a `.autoform-publication-*` directory beside the
 output (the repository root for `--output site-src`); render never indexes it

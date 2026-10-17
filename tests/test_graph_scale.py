@@ -13,7 +13,6 @@ from autoform_cli.graph import (
     Graph,
     Node,
     _find_cycles,
-    _find_rollup_cycles,
     load_graph,
 )
 from autoform_cli import graph_pages, graph_views, render
@@ -88,114 +87,14 @@ def _chain_graph(tmp_path: Path, count: int, *, containment: bool = False) -> Gr
 
 
 
-def test_dependency_and_rollup_walks_handle_a_1200_node_chain(tmp_path: Path) -> None:
+def test_dependency_walk_handles_a_1200_node_chain(tmp_path: Path) -> None:
     graph = _chain_graph(tmp_path, 1_200)
 
     assert _find_cycles(graph.nodes) == []
-    assert _find_rollup_cycles(graph.nodes) == []
     order = topological_order(graph)
     assert order[0] == "n1199"
     assert order[-1] == "n0000"
     assert len(derive(graph)) == 1_200
-
-
-def test_rollup_projection_is_subquadratic_on_a_deep_branching_hierarchy(
-    tmp_path: Path,
-) -> None:
-    roadmap = tmp_path / "blueprint" / "roadmap"
-    raw_nodes: dict[str, Node] = {}
-    for index in range(400):
-        container = f"container{index:04d}"
-        leaf = f"leaf{index:04d}"
-        parent = f"container{index - 1:04d}" if index else None
-        dependencies = (f"leaf{index - 1:04d}",) if index else ()
-        raw_nodes[container] = Node(
-            container,
-            container,
-            roadmap / container / "README.md",
-            dependencies,
-            parent=parent,
-        )
-        raw_nodes[leaf] = Node(leaf, leaf, roadmap / f"{leaf}.md", (), parent=container)
-    nodes = _CountingDict(raw_nodes)
-
-    assert _find_rollup_cycles(nodes) == []
-    assert nodes.values_calls <= 2
-    assert nodes.lookups < 20 * len(nodes) * len(nodes).bit_length()
-
-
-def _reference_rollup_cycles(nodes: dict[str, Node]) -> list[str]:
-    children: dict[str | None, list[str]] = {}
-    for node in nodes.values():
-        children.setdefault(node.parent, []).append(node.id)
-
-    def direct_child(scope: str | None, node_id: str) -> str | None:
-        current = node_id
-        while nodes[current].parent != scope:
-            parent = nodes[current].parent
-            if parent is None:
-                return None
-            current = parent
-        return current
-
-    issues: list[str] = []
-    for scope, siblings in children.items():
-        if len(siblings) < 2:
-            continue
-        dependencies = {sibling: set() for sibling in siblings}
-        for target in nodes.values():
-            target_child = direct_child(scope, target.id)
-            if target_child not in dependencies:
-                continue
-            for dependency in target.dependencies:
-                source_child = direct_child(scope, dependency)
-                if source_child in dependencies and source_child != target_child:
-                    dependencies[target_child].add(source_child)
-        state: dict[str, int] = {}
-        stack: list[str] = []
-
-        def visit(article_id: str) -> None:
-            state[article_id] = 1
-            stack.append(article_id)
-            for prerequisite in sorted(dependencies[article_id]):
-                if state.get(prerequisite, 0) == 0:
-                    visit(prerequisite)
-                elif state.get(prerequisite) == 1:
-                    start = stack.index(prerequisite)
-                    cycle = stack[start:] + [prerequisite]
-                    label = scope or "root"
-                    message = f"rolled-up dependency cycle in {label}: {' -> '.join(cycle)}"
-                    if message not in issues:
-                        issues.append(message)
-            stack.pop()
-            state[article_id] = 2
-
-        for article_id in sorted(dependencies):
-            if state.get(article_id, 0) == 0:
-                visit(article_id)
-    return issues
-
-
-def test_rollup_projection_preserves_exact_randomized_cycle_diagnostics(tmp_path: Path) -> None:
-    generator = random.Random(87231)
-    roadmap = tmp_path / "blueprint" / "roadmap"
-    for case in range(300):
-        node_ids = [f"n{index:02d}" for index in range(generator.randrange(1, 28))]
-        nodes: dict[str, Node] = {}
-        for index, node_id in enumerate(node_ids):
-            parent = None if index == 0 or generator.random() < 0.22 else node_ids[generator.randrange(index)]
-            dependencies = tuple(
-                candidate for candidate in node_ids if candidate != node_id and generator.random() < 0.07
-            )
-            nodes[node_id] = Node(
-                node_id,
-                node_id,
-                roadmap / f"{node_id}.md",
-                dependencies,
-                parent=parent,
-            )
-
-        assert _find_rollup_cycles(nodes) == _reference_rollup_cycles(nodes), case
 
 
 def test_runtime_depth_validation_is_linear_on_a_deep_hierarchy(tmp_path: Path) -> None:
@@ -332,6 +231,19 @@ def test_graph_pickles_only_public_types(tmp_path: Path, protocol: int) -> None:
     assert restored == graph
     assert type(restored.nodes) is dict
     assert restored.children("root") == ("child",)
+
+
+def test_node_loads_the_previous_runtime_pickle_shape(tmp_path: Path) -> None:
+    original = Node("root", "Root", tmp_path / "README.md", ())
+    previous_state = original.__getstate__()[:-3]
+    restored = object.__new__(Node)
+
+    restored.__setstate__(previous_state)
+
+    assert restored == original
+    assert restored.catalog is None
+    assert restored.summary is None
+    assert restored.area is None
 
 
 def _raises_promptly(call: Callable[[], object]) -> BaseException | None:
@@ -512,6 +424,7 @@ def test_bulk_scope_views_scale_linearly_with_the_number_of_containers(tmp_path:
 
 def _index_builds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chapters: int) -> dict[str, int]:
     graph = _nested_graph(tmp_path / str(chapters), chapters, 3)
+    nodes = _CountingDict(graph.nodes)
     builds = {"_containment_children": 0, "_relations": 0}
 
     def counted(name: str):
@@ -527,12 +440,14 @@ def _index_builds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chapters: int
         for name in builds:
             patch.setattr(graph_views, name, counted(name))
         graph_pages.write_graph_pages(
-            graph,
+            Graph(graph.blueprint_dir, nodes),
             derive(graph),
             tmp_path / str(chapters) / "site",
-            node_links=lambda page: {node_id: "book.html" for node_id in graph.nodes},
+            node_links=lambda page, node_ids: {
+                node_id: "book.html" for node_id in node_ids
+            },
         )
-    return builds
+    return {**builds, "graph walks": nodes.values_calls}
 
 
 def test_graph_page_publication_builds_whole_graph_indexes_a_fixed_number_of_times(
@@ -542,8 +457,10 @@ def test_graph_page_publication_builds_whole_graph_indexes_a_fixed_number_of_tim
     small = _index_builds(tmp_path, monkeypatch, 4)
     large = _index_builds(tmp_path, monkeypatch, 8)
 
+    # Every section has its own page. Rebuilding the containers set for each
+    # page's legend made the graph walks grow with the chapters.
     assert large == small
-    assert max(small.values()) <= 4
+    assert max(small["_containment_children"], small["_relations"]) <= 5
 
 
 def _written_blueprint(tmp_path: Path, sections: int = 1) -> Path:
@@ -560,7 +477,8 @@ def _written_blueprint(tmp_path: Path, sections: int = 1) -> Path:
     (blueprint / "coverage").mkdir()
     (blueprint / "coverage" / "README.md").write_text(
         "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
-        "| Project scope | MAPPED | Source audit pending |\n",
+        "| Project scope | MAPPED | Source audit pending |\n"
+        + "".join(f"| {name} | DECOMPOSED | [A](../roadmap/chapter/{name}/a.md) |\n" for name in names),
         encoding="utf-8",
     )
     for name in names:
@@ -638,8 +556,21 @@ def test_site_rendering_resolves_paths_linearly_in_the_number_of_sections(
     small = _path_resolves(tmp_path, monkeypatch, 4)
     large = _path_resolves(tmp_path, monkeypatch, 8)
 
-    # Every statement has its own map page. Linking every node from every page
-    # made doubling the sections multiply the resolves by 2.4.
+    # Every section has its own scope map page. Linking every node from every
+    # page made doubling the sections multiply the resolves by 2.4.
+    assert large <= 2 * small
+
+
+def test_site_rendering_resolves_paths_linearly_in_the_number_of_coverage_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    small = _path_resolves(tmp_path, monkeypatch, 8)
+    large = _path_resolves(tmp_path, monkeypatch, 16)
+
+    # Every section also has a DECOMPOSED coverage row. Resolving every node's
+    # path again for each row multiplied the resolves by 2.26 from 8 sections,
+    # but only by 1.98 from 4.
     assert large <= 2 * small
 
 

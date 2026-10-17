@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import html
 import os
+from collections.abc import Mapping
 from pathlib import Path
+from urllib.parse import quote
 from typing import TYPE_CHECKING
 
-from .graph_views import container_nodes
-from .status import STATES, State, is_definition
+from .graph_views import container_nodes, inventory_counts, inventory_state, is_scope_target
+from .status import INVENTORY_STATES, STATES, State, is_definition
 
 if TYPE_CHECKING:
     from .graph import Graph, Node
@@ -32,8 +34,8 @@ def relative_link(target: Path, output: Path, link_extension: str) -> str:
     relative = Path(os.path.relpath(target.resolve(), output.resolve().parent))
     if not relative.name:
         # The page's own directory is ``.``, which has no name to take a suffix.
-        return relative.as_posix()
-    return relative.with_suffix(link_extension).as_posix()
+        return quote(relative.as_posix(), safe="/")
+    return quote(relative.with_suffix(link_extension).as_posix(), safe="/")
 
 
 def source_links(graph: Graph, output: Path, link_extension: str) -> dict[str, str]:
@@ -89,7 +91,9 @@ def render_diagram(
             continue
         # Rectangles introduce data, rounded boxes assert something.
         shape = f'["{label}"]' if is_definition(node) else f'("{label}")'
-        lines.append(f"  {handle}{shape}:::{statuses[node.id].key}")
+        # A catalog takes the neutral planned colours, checked or not.
+        state_key = "planned" if inventory_state(node, statuses[node.id]) else statuses[node.id].key
+        lines.append(f"  {handle}{shape}:::{state_key}")
 
     for node in ordered:
         for dependency in node.statement_dependencies:
@@ -100,8 +104,11 @@ def render_diagram(
                 lines.append(f"  {handles[dependency]} -.-> {handles[node.id]}")
 
     for node in ordered:
-        state = _view_summary(boxes[node.id]) if node.id in boxes else statuses[node.id].label
-        tooltip = _escape(f"{node.title} — {state}")
+        if node.id in boxes:
+            state_label = _view_summary(boxes[node.id])
+        else:
+            state_label = (inventory_state(node, statuses[node.id]) or statuses[node.id].state).label
+        tooltip = _escape(f"{node.title} — {state_label}")
         lines.append(f'  click {handles[node.id]} "{links[node.id]}" "{tooltip}"')
 
     if include_classdefs:
@@ -220,7 +227,10 @@ def classdef_lines(*, dark: bool = False) -> list[str]:
     return [*states, *views]
 
 
-def render_legend(statuses: dict[str, NodeStatus]) -> str:
+def render_legend(
+    statuses: dict[str, NodeStatus],
+    inventories: Mapping[str, int] | None = None,
+) -> str:
     """Return a legend covering the states actually in use.
 
     A Markdown table put this in a bordered box with a blank first heading over
@@ -228,14 +238,20 @@ def render_legend(statuses: dict[str, NodeStatus]) -> str:
     cell, so the swatch, the label and the count landed in a different place in
     every row. This is one grid instead: the cells are emitted in reading order
     and the columns line up because the grid, not the content, sets them.
+
+    *inventories* counts module catalogs by inventory status. A legend beside
+    counts that include catalogs lists those statuses after the states.
     """
+    inventories = inventories or {}
     used = {status.key for status in statuses.values()}
     rows = [state for state in STATES if state.key in used]
+    rows.extend(state for state in INVENTORY_STATES if inventories.get(state.key))
     if not rows:
         return ""
     counts = {state.key: 0 for state in STATES}
     for status in statuses.values():
         counts[status.key] += 1
+    counts.update(inventories)
     cells = []
     for state in rows:
         # Colour comes from the stylesheet, so the legend follows the theme.
@@ -248,7 +264,10 @@ def render_legend(statuses: dict[str, NodeStatus]) -> str:
     return f'<div class="bp-legend-grid">{"".join(cells)}</div>'
 
 
-def render_legend_tip(statuses: dict[str, NodeStatus]) -> str:
+def render_legend_tip(
+    statuses: dict[str, NodeStatus],
+    inventories: Mapping[str, int] | None = None,
+) -> str:
     """The legend behind a hover icon, for pages that only occasionally need it.
 
     A graph page carried the legend in a disclosure captioned "What the colours
@@ -261,7 +280,7 @@ def render_legend_tip(statuses: dict[str, NodeStatus]) -> str:
     used in the vault copy, which is read in Obsidian where this stylesheet
     does not exist and the note would simply never be reachable.
     """
-    legend = render_legend(statuses)
+    legend = render_legend(statuses, inventories)
     if not legend:
         return ""
     icon = (
@@ -291,9 +310,11 @@ _MEANINGS = {
     "can_state": "Nothing it needs is blocked, so the statement can be written in Lean.",
     "not_ready": "Needs more blueprint work before it can be attempted.",
     "planned": "Described in the blueprint only.",
+    "inventory_checked": "Module inventory checked in full; it records inspection, not a mathematical proof.",
+    "inventory_pending": "Module inventory not yet checked in full; it records inspection, not a mathematical proof.",
 }
 
-_STATE_LABELS = {state.key: state.label for state in STATES}
+_STATE_LABELS = {state.key: state.label for state in (*STATES, *INVENTORY_STATES)}
 
 
 def render_page(
@@ -316,9 +337,18 @@ def render_page(
         links=links,
         include_classdefs=include_classdefs,
     )
-    # Containers are drawn as scope boxes, so they have no row in the legend.
+    # Containers are drawn as scope boxes, so they have no row in the legend,
+    # and a leaf has one only if the boxes count it, as a target by state or as
+    # a catalog by inventory status.
     boxes = container_nodes(graph, statuses)
-    legend = render_legend({node_id: state for node_id, state in statuses.items() if node_id not in boxes})
+    legend = render_legend(
+        {
+            node_id: state
+            for node_id, state in statuses.items()
+            if node_id not in boxes and is_scope_target(graph.nodes[node_id])
+        },
+        inventory_counts(graph, statuses),
+    )
     sections = [
         "---",
         "kind: graph",
