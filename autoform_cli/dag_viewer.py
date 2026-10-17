@@ -640,6 +640,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-sheet-handle { display: none; }
 .bp-dag-inspector-header { display: flex; align-items: flex-start; gap: .5rem; }
 .bp-dag-viewer.bp-dag-viewer .bp-dag-inspector-header h2 { flex: 1; margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: normal; line-height: 1.25; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-inspector-inner > h2 { margin: 0 0 .5rem; font-size: 1rem; font-weight: 700; letter-spacing: normal; line-height: 1.25; }
 .bp-dag-close { min-width: 2rem; min-height: 2rem; padding: .2rem; border: 0; background: transparent; color: var(--dag-muted); cursor: pointer; }
 .bp-dag-kicker { margin: 0 0 .35rem; color: var(--dag-muted); font-size: .64rem; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
 .bp-dag-viewer.bp-dag-viewer .bp-dag-node-id { display: block; margin: .45rem 0; padding: 0; overflow-wrap: anywhere; border-radius: 0; background: none; color: var(--dag-muted); font: .66rem ui-monospace, SFMono-Regular, Consolas, monospace; }
