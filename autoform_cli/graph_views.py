@@ -153,6 +153,7 @@ def project_view(graph: Graph, statuses: dict[str, NodeStatus]) -> GraphView:
         nodes=nodes,
         edges=edges,
         summary=graph.nodes["roadmap"].summary if "roadmap" in graph.nodes else None,
+        total_count=sum(node.item_count for node in nodes),
     )
 
 

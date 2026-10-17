@@ -57,6 +57,10 @@
     host.textContent = "";
     host.classList.remove("bp-dag-enhancing");
     var view = data.view || {};
+    if (host.getAttribute("data-layout") === "app") {
+      var article = host.closest("article") || host.parentElement, originalHeading = article && article.querySelector("h1");
+      if (originalHeading && !host.contains(originalHeading)) originalHeading.hidden = true;
+    }
     var atlas = view.presentation === "atlas"; host.classList.toggle("bp-dag-atlas", atlas);
     var resultsAvailable = Boolean(host.getAttribute("data-catalog-src")) && (view.overview || atlas);
     var originalNodes = data.nodes.slice(), originalEdges = data.edges.slice();
@@ -394,7 +398,7 @@
       refs.scopeHead.textContent = "";
       var trail = view.breadcrumbs || [], label = trail.length ? trail[trail.length - 1].label : data.title;
       var text = state.area || label || "Mathematics";
-      var heading = element("h2", "bp-dag-scope-title", text);
+      var heading = element(host.getAttribute("data-layout") === "app" ? "h1" : "h2", "bp-dag-scope-title", text);
       refs.scopeHead.appendChild(heading);
       if (state.area) {
         var back = button("bp-dag-region-back", "← " + label);
@@ -690,7 +694,8 @@
     function center(node, minimumScale) {
       if (!node) return; var box = world(node); state.transform.scale = Math.max(state.transform.scale, minimumScale || .82);
       var band = refs.stage.clientHeight, width = refs.stage.clientWidth;
-      if (sheetLayout() && host.classList.contains("bp-dag-sheet-open")) band = Math.max(NODE_H, Math.min(band, refs.inspector.offsetTop));
+      if (sheetLayout() && host.classList.contains("bp-dag-sheet-open")) band = Math.max(NODE_H,
+        Math.min(band, refs.inspector.getBoundingClientRect().top - refs.stage.getBoundingClientRect().top - 16));
       else if (host.classList.contains("bp-dag-sheet-open")) width = Math.max(NODE_W, width - refs.inspector.offsetWidth - 32);
       state.transform.x = width / 2 - (box.x + box.w / 2) * state.transform.scale;
       state.transform.y = band / 2 - (box.y + box.h / 2) * state.transform.scale; schedule();
@@ -852,6 +857,7 @@
       control.addEventListener("pointerleave", function () { if (state.hovered === node) { state.hovered = null; schedule(); } });
       var primary = navigable ? element("a", "bp-dag-node-link") : composite ? button("bp-dag-node-link", "") : control;
       if (navigable) primary.href = href;
+      primary.draggable = false;
       if (composite) control.appendChild(primary);
       var scopeMeta = node.kind === "scope" ? plural(node.member_count || 0, "item", "items") + " · " +
         plural(node.internal_dependency_count || 0, "internal link", "internal links") :
@@ -1167,26 +1173,27 @@
         refs.inspectorInner.appendChild(element("p", "bp-dag-kicker", atlas ? "Mathematics knowledge map" : "Dependency explorer"));
         refs.inspectorInner.appendChild(element("h2", "", data.title || "Dependencies"));
         if (view.summary) refs.inspectorInner.appendChild(element("p", "bp-dag-summary", view.summary));
-        var overview = element("p", "bp-dag-overview"); overview.appendChild(element("strong", "", plural(data.nodes.length, atlas ? "topic" : "node", atlas ? "topics" : "nodes")));
+        var overview = element("p", "bp-dag-overview"); overview.appendChild(element("strong", "", plural(state.active.length,
+          regionNodes.length && !state.area ? "region" : atlas ? "topic" : "node", regionNodes.length && !state.area ? "regions" : atlas ? "topics" : "nodes")));
         overview.appendChild(document.createTextNode(" · " + plural(data.edge_count || data.edges.length,
           "authored dependency", "authored dependencies") + ".")); refs.inspectorInner.appendChild(overview);
-        var internalDependencies = data.nodes.reduce(function (total, node) {
+        var internalDependencies = state.active.reduce(function (total, node) {
           return total + (node.internal_dependency_count || 0);
         }, 0);
         if (internalDependencies) refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
           plural(internalDependencies, "additional authored dependency lies", "additional authored dependencies lie") + " inside the visible topics."));
         if (atlas && !data.edges.length) refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
-          "No cross-topic dependency links are authored at this level. Bubble size shows scope; rings show formalization status. Select a topic to read its mathematical overview."));
+          "No cross-topic dependency links are authored at this level. Open a topic to explore its mathematics; its status border records formalization progress."));
         if (atlas && (data.regions || []).length) {
           distribution("Mathematical regions", data.regions.map(function (region) { return [region.label, region.count]; }));
         }
-        distribution(atlas ? "Topics by least-complete status" : "Nodes by status", presentStatuses.map(function (key) {
+        distribution("Results by status", presentStatuses.map(function (key) {
           return [statusLabel(key), statusCounts.get(key), key];
         }));
         if (statusCounts.has("inventory_checked") || statusCounts.has("inventory_pending")) refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
           "Inventory statuses are neutral: an inventory records inspection, not a mathematical proof."));
         refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
-          atlas ? "Click a topic to read it; click it again or use Explore topic to dive in. Contents exposes the same map as a complete accessible list." :
+          atlas ? "Open a region, then a topic. Connections exposes its authored prerequisites and dependents; All results includes the source-book results too." :
           "The map carries dependency topology; Map and Contents expose the same nodes as keyboard-accessible controls.")); return;
       }
       var node = state.selected, header = element("div", "bp-dag-inspector-header"), titleWrap = element("div");
@@ -1194,7 +1201,9 @@
         node.kind === "boundary" ? "External scope" : node.declaration || "Roadmap item") + (node.area ? " · " + node.area : "")));
       titleWrap.appendChild(element("h2", "", node.title)); header.appendChild(titleWrap);
       var close = button("bp-dag-close", "×", "Close details"); close.addEventListener("click", function () { setSheet(false); });
-      header.appendChild(close); refs.inspectorInner.appendChild(header); refs.inspectorInner.appendChild(element("code", "bp-dag-node-id", node.id));
+      header.appendChild(close); refs.inspectorInner.appendChild(header);
+      var identifier = element("details", "bp-dag-technical"); identifier.appendChild(element("summary", "", "Technical identifier"));
+      identifier.appendChild(element("code", "bp-dag-node-id", node.id)); refs.inspectorInner.appendChild(identifier);
       var inventoryOnly = node.kind === "scope" && (node.status_counts || []).length > 0 && node.status_counts.every(function (entry) {
         return palette[entry[0]] && palette[entry[0]].neutral;
       });
@@ -1308,6 +1317,7 @@
       refs.inventoryTitle.textContent = state.mode === "sources" ? "Books and libraries" : resultsAvailable ? "Mathematical results" : "Contents of this scope";
       refs.inventorySummary.textContent = visible.length + " of " + nodes.length + " listed" +
         (state.mode === "list" && state.searchLoading ? " · loading all results…" : state.searchError && (view.overview || atlas) ? " · index unavailable; showing local results" :
+          state.mode === "list" && !state.mapAllowed ? " · map unavailable above " + MAX_MAP_NODES + " items" :
           state.mode === "list" && !view.overview && !atlas ? " · items without edges included" : "");
       if (state.query && host.getAttribute("data-catalog-src")) {
         refs.inventorySummary.appendChild(document.createTextNode(" · ")); refs.inventorySummary.appendChild(refs.wholeSearch);

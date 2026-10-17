@@ -175,6 +175,9 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-clear:hover, .bp-dag-clear:focus-visible { color: var(--dag-link); text-decoration: underline; }
 .bp-dag-kicker { margin: 0 0 .35rem; color: var(--dag-muted); font-size: .64rem; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
 .bp-dag-viewer.bp-dag-viewer .bp-dag-node-id { display: block; margin: .45rem 0; padding: 0; overflow-wrap: anywhere; border-radius: 0; background: none; color: var(--dag-muted); font: .66rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-technical { margin: 8px 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-technical summary { margin: 0; padding: 4px 0; color: var(--dag-muted); font-size: 11px; cursor: pointer; }
+.bp-dag-technical summary::before, .bp-dag-technical summary::after { display: none; }
 .bp-dag-status-pill { display: inline-flex; align-items: center; gap: .35rem; margin: .3rem 0 .65rem; color: var(--dag-muted); font-size: .7rem; }
 .bp-dag-status-pill::before { content: ""; width: .58rem; height: .58rem; border: 2px solid var(--dag-pill-stroke); border-radius: 50%; background: var(--dag-pill-fill); }
 .bp-dag-open { display: inline-flex; align-items: center; justify-content: center; min-height: 2.2rem; padding: .4rem .65rem; border-radius: 8px; background: var(--dag-link); color: #fff !important; font-size: .74rem; font-weight: 700; text-decoration: none !important; }
@@ -215,8 +218,10 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
   .bp-dag-context { flex-wrap: wrap; row-gap: .25rem; padding-inline: .55rem; }
   .bp-dag-breadcrumb { flex-basis: 100%; }
   .bp-dag-toolbar { gap: .35rem; padding: .35rem .5rem .5rem; }
+  .bp-dag-toolbar { position: relative; }
+  .bp-dag-filters { position: static; }
   .bp-dag-search-wrap { flex-basis: calc(100% - .4rem); order: -2; }
-  .bp-dag-filter-popover { left: 0; right: auto; max-width: calc(100vw - 1rem); }
+  .bp-dag-filter-popover { left: .5rem; right: auto; max-width: calc(100vw - 1rem); }
   .bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-mode-button { min-height: 2.75rem; }
   .bp-dag-isolated { min-height: 2.75rem; }
   .bp-dag-body { display: block; }

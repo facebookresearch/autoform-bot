@@ -710,7 +710,7 @@ def test_a_view_of_topics_and_results_draws_readable_result_cards(desktop_page: 
     assert not page.locator(".bp-dag-viewer").evaluate("element => element.classList.contains('bp-dag-atlas')")
     assert title.evaluate("element => element.scrollWidth <= element.clientWidth")
     meta = page.locator('[data-autoform-node-id="topics/compactness"] .bp-dag-node-meta')
-    playwright.expect(meta).to_have_text("1 item")
+    playwright.expect(meta).to_have_text("1 result")
     # A drawn DAG counts its nodes by status; only an atlas counts topics by their least-complete item.
     playwright.expect(page.locator(".bp-dag-inspector h3")).to_have_text("Nodes by status")
     page.locator('[data-autoform-node-id="topics/library"]').click()
@@ -1432,7 +1432,8 @@ def test_a_published_chapter_explorer_links_its_textbook_chapter_and_keeps_its_h
     playwright.expect(page.locator(".bp-dag-book")).to_be_visible()
     # A section's explorer carries the same link to its own page, so it names no chapter.
     playwright.expect(page.locator(".bp-dag-book")).to_have_text("Open the textbook page")
-    playwright.expect(page.get_by_role("heading", level=1)).to_have_text("Algebra dependencies")
+    playwright.expect(page.get_by_role("heading", level=1)).to_have_count(1)
+    playwright.expect(page.get_by_role("heading", level=1)).to_have_text("Algebra")
 
 
 def test_slash_on_the_published_landing_page_opens_site_search(desktop_page: object, site_url: str) -> None:
