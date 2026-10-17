@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import threading
 from collections.abc import Iterator
+from contextlib import contextmanager
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -10,6 +11,8 @@ import pytest
 
 from autoform_cli import dag_viewer
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
+from autoform_cli.render import render_site
+from autoform_cli.scaffold import scaffold_project
 
 playwright = pytest.importorskip(
     "playwright.sync_api",
@@ -645,4 +648,95 @@ def test_duplicate_script_include_mounts_one_explorer(
     page.goto(f"{explorer_url}/duplicate.html")
     page.locator(".bp-dag-stage").wait_for()
     playwright.expect(page.locator(".bp-dag-head")).to_have_count(1)
+    page.close()
+
+
+@contextmanager
+def _served(directory: Path) -> Iterator[str]:
+    handler = functools.partial(_QuietHandler, directory=str(directory))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    try:
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+@pytest.fixture(scope="module")
+def site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """Serve a blueprint as render and MkDocs publish it, under Material's styles and scripts."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("site") / "project"
+    scaffold_project(project, title="Explorer fixture")
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text(
+        "# Fixture roadmap\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n",
+        encoding="utf-8",
+    )
+    for chapter in ("Algebra", "Topology"):
+        folder = roadmap / chapter.lower()
+        folder.mkdir()
+        (folder / "README.md").write_text(
+            f"# {chapter}\n\n- [Base](base.md)\n- [Result](result.md)\n",
+            encoding="utf-8",
+        )
+        (folder / "base.md").write_text(
+            "---\ndeclaration: def\n---\n\n# Base\n\nThe base object.\n\n## Depends on\n\nNo prerequisites.\n",
+            encoding="utf-8",
+        )
+        (folder / "result.md").write_text(
+            "---\ndeclaration: theorem\n---\n\n# Result\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n",
+            encoding="utf-8",
+        )
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml")))
+    with _served(project / "site") as url:
+        yield url
+
+
+def test_published_explorer_controls_keep_their_own_styles_under_material(
+    webkit_browser: object, site_url: str
+) -> None:
+    """Material's typeset rules stacked the breadcrumb, drew the status filter as an admonition, and restyled
+    the explorer's lists, hierarchy rail and headings."""
+    page = webkit_browser.new_page(viewport={"width": 1280, "height": 900})
+    # The built site's CDN scripts and web fonts stay off the network.
+    page.route(lambda url: not url.startswith(site_url), lambda route: route.abort())
+    page.goto(f"{site_url}/dependencies/chapters/algebra.html")
+    page.locator(".bp-dag-node").first.wait_for()
+
+    crumbs = page.locator(".bp-dag-breadcrumb li")
+    playwright.expect(crumbs).to_have_count(3)
+    assert len({round(crumbs.nth(index).bounding_box()["y"]) for index in range(3)}) == 1
+    summary = page.locator(".bp-dag-filter-summary")
+    background = page.locator(".bp-dag-viewer").evaluate("element => getComputedStyle(element).backgroundColor")
+    assert summary.evaluate("element => getComputedStyle(element).backgroundColor") == background
+    assert summary.evaluate("element => getComputedStyle(element).borderLeftStyle") == "solid"
+    page.locator(".bp-dag-search").fill("Result")
+    results = page.locator(".bp-dag-results")
+    results.wait_for()
+    assert results.evaluate("element => getComputedStyle(element).listStyleType") == "none"
+    assert results.locator("li").first.evaluate("element => getComputedStyle(element).marginLeft") == "0px"
+    for rail_list in (page.locator(".bp-dag-navigation-path"), page.locator(".bp-dag-navigation-list").first):
+        assert rail_list.evaluate("element => getComputedStyle(element).listStyleType") == "none"
+        assert rail_list.evaluate("element => getComputedStyle(element).display") == "grid"
+        assert rail_list.locator("li").first.evaluate("element => getComputedStyle(element).marginLeft") == "0px"
+    title = page.locator(".bp-dag-navigation-title")
+    assert title.evaluate("element => getComputedStyle(element).fontWeight") == "650"
+
+    # The atlas overview's heading, in the details drawer, took Material's large, light h2 and its margin.
+    page.goto(f"{site_url}/dependencies.html")
+    heading = page.locator(".bp-dag-inspector-inner > h2").evaluate(
+        """heading => {
+          const style = getComputedStyle(heading), root = getComputedStyle(document.documentElement);
+          return [style.fontWeight, parseFloat(style.marginTop) < parseFloat(root.fontSize)];
+        }"""
+    )
+    assert heading == ["700", True]
     page.close()

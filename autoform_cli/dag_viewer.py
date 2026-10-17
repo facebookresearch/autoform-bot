@@ -570,21 +570,22 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-body { position: relative; display: grid; grid-template-columns: var(--dag-navigation-width) minmax(0, 1fr); min-height: 0; }
 .bp-dag-navigation { z-index: 6; min-width: 0; min-height: 0; overflow: auto; border-right: 1px solid var(--dag-border); background: var(--dag-panel); }
 .bp-dag-navigation-inner { display: grid; align-content: start; min-height: 100%; padding: 1.05rem .8rem 1.5rem; }
-.bp-dag-navigation-home { display: inline-flex; align-items: center; gap: .45rem; margin: 0 .35rem .9rem; color: var(--dag-link); font-size: .72rem; font-weight: 720; text-decoration: none !important; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-home { display: inline-flex; align-items: center; gap: .45rem; margin: 0 .35rem .9rem; color: var(--dag-link); font-size: .72rem; font-weight: 720; text-decoration: none !important; }
 .bp-dag-navigation-home::before { content: "←"; }
 .bp-dag-navigation-kicker { margin: 0 .35rem .35rem; color: var(--dag-muted); font-size: .62rem; font-weight: 760; letter-spacing: .08em; text-transform: uppercase; }
-.bp-dag-navigation-title { margin: 0 .35rem; color: var(--dag-fg); font-family: Georgia, "Iowan Old Style", serif; font-size: 1.35rem; font-weight: 650; line-height: 1.15; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-title { margin: 0 .35rem; color: var(--dag-fg); font-family: Georgia, "Iowan Old Style", serif; font-size: 1.35rem; font-weight: 650; letter-spacing: normal; line-height: 1.15; }
 .bp-dag-navigation-summary { display: -webkit-box; margin: .55rem .35rem .95rem; overflow: hidden; color: var(--dag-muted); font-family: Georgia, "Iowan Old Style", serif; font-size: .78rem; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
-.bp-dag-navigation-path { display: grid; gap: .18rem; margin: .65rem .35rem .85rem; padding: 0; list-style: none; }
-.bp-dag-navigation-path li { position: relative; min-width: 0; padding-left: .85rem; color: var(--dag-muted); font-size: .68rem; line-height: 1.35; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-path { display: grid; gap: .18rem; margin: .65rem .35rem .85rem; padding: 0; list-style: none; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-path li { position: relative; min-width: 0; margin: 0; padding-left: .85rem; color: var(--dag-muted); font-size: .68rem; line-height: 1.35; }
 .bp-dag-navigation-path li::before { content: ""; position: absolute; top: .45rem; left: .1rem; width: .32rem; height: .32rem; border: 1.5px solid var(--dag-border); border-radius: 50%; background: var(--dag-panel); }
 .bp-dag-navigation-path li:not(:last-child)::after { content: ""; position: absolute; top: .78rem; bottom: -.35rem; left: .245rem; border-left: 1px solid var(--dag-border); }
-.bp-dag-navigation-path a { color: inherit; text-decoration: none; }
-.bp-dag-navigation-path [aria-current=page] { color: var(--dag-fg); font-weight: 680; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-path a { color: inherit; text-decoration: none; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-path [aria-current=page] { color: var(--dag-fg); font-weight: 680; }
 .bp-dag-navigation-counts { margin: 0 .35rem 1rem; color: var(--dag-muted); font-size: .68rem; font-variant-numeric: tabular-nums; }
 .bp-dag-navigation-group { margin-top: .75rem; }
 .bp-dag-navigation-group h2 { margin: 0 .35rem .32rem; color: var(--dag-muted); font-size: .63rem; font-weight: 760; letter-spacing: .055em; text-transform: uppercase; }
-.bp-dag-navigation-list { display: grid; gap: .16rem; margin: 0; padding: 0; list-style: none; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-list { display: grid; gap: .16rem; margin: 0; padding: 0; list-style: none; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-list > li { margin: 0; }
 .bp-dag-navigation-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; width: 100%; gap: .55rem; min-height: 2.45rem; padding: .43rem .52rem; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--dag-fg) !important; font: inherit; font-size: .75rem; line-height: 1.25; text-align: left; text-decoration: none !important; cursor: pointer; }
 .bp-dag-navigation-link > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-navigation-link:hover, .bp-dag-navigation-link:focus-visible { border-color: var(--dag-border); background: var(--dag-bg); }
