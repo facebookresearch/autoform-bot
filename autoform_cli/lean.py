@@ -703,16 +703,21 @@ def _may_declare(text: str, wanted_short: frozenset[str]) -> bool:
 
     if not wanted_short:
         return False
-    for line in _without_lean_comments(text).splitlines():
+    lines = _without_lean_comments(text).splitlines()
+    for number, line in enumerate(lines):
         match = _DECLARATION.match(line)
         if match is None:
             continue
+        written = match.group(2) or next(
+            (lines[later].lstrip() for later in range(number + 1, len(lines)) if lines[later].strip()),
+            "",
+        )
         if match.group(1) == "alias":
             # As `_aliases` reads it: one name, or both names of `⟨mp, mpr⟩`.
-            alias = _ALIAS.match(match.group(2))
+            alias = _ALIAS.match(written)
             names = () if alias is None else (alias["name"], alias["mp"], alias["mpr"])
         else:
-            names = (_name_token(match.group(2)),)
+            names = (_name_token(written),)
         if any(name is not None and _short_name(name.removesuffix(".")) in wanted_short for name in names):
             return True
     return False

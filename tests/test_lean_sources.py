@@ -290,6 +290,8 @@ def test_a_declaration_name_may_start_on_the_next_nonblank_line(tmp_path: Path) 
         ("Demo.split_wanted", 4, "def_wanted"),
         ("Demo.SplitStructure", 7, "structure"),
     ]
+    for name in ("Demo.split_theorem", "Demo.split_wanted", "Demo.SplitStructure"):
+        assert index_project(tmp_path, names=(name,)).find(name) is not None
 
 
 def test_commented_out_code_is_not_indexed(tmp_path: Path) -> None:
