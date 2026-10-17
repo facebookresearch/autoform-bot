@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
+import signal
 import subprocess
 import threading
 import time
@@ -22,6 +24,8 @@ from fastmcp.server import FastMCP
 
 from servers.lean_client import LeanRuntimeClient
 from servers.repl.core import (
+    REPL_ABORT_KILL_SECONDS,
+    REPL_ABORT_TERM_SECONDS,
     _process_group_has_live_members,
     _reap_process,
     _terminate_process_group,
@@ -41,6 +45,10 @@ MAX_LSP_MESSAGE_BYTES = 16 * 1024 * 1024
 LSP_EOF_GRACE_SECONDS = 2.0
 # How long close() waits for Lean to leave after shutdown and exit.
 LSP_SHUTDOWN_GRACE_SECONDS = 5.0
+# Names the random token start() puts in the Lean server's environment. Every
+# process the server starts inherits it, in any process group, orphaned or not,
+# unless a process between them starts it without the variable.
+_SESSION_TOKEN_ENV = "_AUTOFORM_LSP_SESSION_TOKEN"
 
 
 class LspProtocolError(RuntimeError):
@@ -69,38 +77,56 @@ class LspConfig:
     timeout: float = DEFAULT_LSP_TIMEOUT
 
 
-def _descendant_process_groups(process_group_id: int) -> dict[int, list[Any]]:
-    """Return the descendants of a group's members that run in other groups, by group."""
-    import psutil
+def _processes_with_token(token: str) -> list[Any]:
+    """Return the processes whose environment carries a session's token.
 
-    groups: dict[int, list[Any]] = {}
-    for member in psutil.process_iter():
-        try:
-            if os.getpgid(member.pid) != process_group_id:
-                continue
-            descendants = member.children(recursive=True)
-        except (OSError, psutil.Error):
-            continue
-        for descendant in descendants:
-            try:
-                descendant_group_id = os.getpgid(descendant.pid)
-            except OSError:
-                continue
-            if descendant_group_id != process_group_id:
-                groups.setdefault(descendant_group_id, []).append(descendant)
-    return groups
-
-
-def _still_in_process_group(process: Any, process_group_id: int) -> bool:
-    """Whether a recorded process, not a later one reusing its PID, is in a group."""
+    A process whose environment cannot be read is left out, so it is never
+    signalled: nothing shows that it is the session's. Lean and Lake run as
+    the user, who can read their environments; setuid programs the user runs,
+    such as ``login``, are unreadable at all times, so counting them would
+    fail every close. A process table that cannot be read fails the scan.
+    """
+    if not token:
+        # A missing token would match every process without the variable.
+        raise ValueError("a Lean LSP session token must be a nonempty string")
     import psutil
 
     try:
-        # Look the group up first: a process still running afterwards is the
-        # one that was looked up.
-        return os.getpgid(process.pid) == process_group_id and process.is_running()
-    except (OSError, psutil.Error):
-        return False
+        pids = psutil.pids()
+    except (OSError, psutil.Error) as error:
+        raise RuntimeError("cannot read the process table to find the Lean LSP session's processes") from error
+    found = []
+    for pid in pids:
+        if pid == os.getpid():
+            continue
+        try:
+            # The handle records the creation time before the environment is
+            # read, so it can only name the process that was read or an
+            # earlier one, which psutil then refuses to signal.
+            candidate = psutil.Process(pid)
+            environment = candidate.environ()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            # Exited or unreadable; a zombie reads as exited or empty.
+            continue
+        if environment.get(_SESSION_TOKEN_ENV) == token:
+            found.append(candidate)
+    return found
+
+
+def _wait_for_exit(processes: list[Any], deadline: float) -> None:
+    """Wait until every process has exited or become a zombie, or the deadline passes."""
+    import psutil
+
+    def running(process: Any) -> bool:
+        try:
+            return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return False
+        except psutil.Error:
+            return True
+
+    while any(running(process) for process in processes) and time.monotonic() < deadline:
+        time.sleep(0.01)
 
 
 class LeanLspSession:
@@ -110,9 +136,8 @@ class LeanLspSession:
         self.config = config
         self.process: subprocess.Popen | None = None
         self._process_group_id: int | None = None
-        # Lean's file workers and their builds, by the process groups they
-        # run in, recorded while the watchdog still parents them.
-        self._worker_groups: dict[int, list[Any]] = {}
+        # Set by start(); every process the server starts carries it.
+        self._token: str | None = None
         self._group_retired = False
         self._retire_pending = False
         self._request_id = 0
@@ -129,6 +154,8 @@ class LeanLspSession:
             raise RuntimeError("Lean LSP transport requires a POSIX platform")
         env = os.environ.copy()
         env.pop("PYTHONPATH", None)
+        self._token = secrets.token_hex(16)
+        env[_SESSION_TOKEN_ENV] = self._token
         process: subprocess.Popen | None = None
         try:
             process = subprocess.Popen(
@@ -196,7 +223,6 @@ class LeanLspSession:
                 # during that shutdown and handles a closed pipe, but would
                 # block on a full one. The leader stays unreaped while the
                 # watchdog exits, so the PGID cannot be reused meanwhile.
-                self._record_worker_groups()
                 for stream in (process.stdin, process.stdout):
                     if stream is not None:
                         try:
@@ -211,7 +237,7 @@ class LeanLspSession:
             # retry must never signal a reused numeric PGID.
             self._group_retired = True
             self._process_group_id = None
-        self._stop_worker_groups()
+        self._stop_processes_with_token()
         _reap_process(process)
         for stream in (process.stdin, process.stdout):
             if stream is not None:
@@ -220,27 +246,38 @@ class LeanLspSession:
         self._group_retired = False
         self._retire_pending = False
 
-    def _record_worker_groups(self) -> None:
-        """Record the groups of the server's descendants outside its own group.
+    def _stop_processes_with_token(self) -> None:
+        """Terminate every live process that carries this session's token.
 
-        When Lean's watchdog shuts down, it skips a worker that has already
-        exited, and that worker's builds keep running in the worker's group.
-        Once the watchdog exits, nothing ties them to this session. Call only
-        while the leader is unreaped, so the server's group ID is still ours.
+        Lean's watchdog starts each file worker in its own session. As it
+        shuts down it skips a worker that has already exited, whose builds
+        keep running, and a watchdog that dies first orphans every worker.
+        None of them is in the server's group, but each carries the token.
+        Raise while any is left, so the caller retries before reaping the
+        leader.
         """
-        if self._process_group_id is None:
+        token = self._token
+        if token is None:
             return
-        for process_group_id, members in _descendant_process_groups(self._process_group_id).items():
-            self._worker_groups.setdefault(process_group_id, []).extend(members)
+        import psutil
 
-    def _stop_worker_groups(self) -> None:
-        """Terminate the recorded worker groups that are still running."""
-        for process_group_id, members in self._worker_groups.items():
-            # A recorded descendant still in the group proves that its ID was
-            # never reused; a process started after the recording cannot.
-            if any(_still_in_process_group(member, process_group_id) for member in members):
-                _terminate_process_group(process_group_id)
-        self._worker_groups.clear()
+        for signal_number, seconds in (
+            (signal.SIGTERM, REPL_ABORT_TERM_SECONDS),
+            (signal.SIGKILL, REPL_ABORT_KILL_SECONDS),
+        ):
+            processes = _processes_with_token(token)
+            if not processes:
+                return
+            for process in processes:
+                # psutil checks the PID's creation time before signalling, so a
+                # process that took over the PID after the scan is spared.
+                try:
+                    process.send_signal(signal_number)
+                except (OSError, psutil.Error):
+                    pass
+            _wait_for_exit(processes, time.monotonic() + seconds)
+        if _processes_with_token(token):
+            raise RuntimeError("processes started by the Lean LSP server are still running")
 
     def _abort_process(self) -> None:
         """Retry verified retirement without ever surrendering ownership."""
@@ -258,8 +295,6 @@ class LeanLspSession:
         with self._lifecycle_lock:
             if self.is_alive():
                 try:
-                    # A shutdown request stops Lean's workers as an EOF does.
-                    self._record_worker_groups()
                     self._send_request("shutdown", {})
                     # Lean leaves after shutdown only on an exit without params.
                     self._send_notification("exit", None)
@@ -504,7 +539,7 @@ class LeanLspSession:
     def _read_message(self, timeout: float = 5) -> dict | None:
         """Read one bounded JSON-RPC frame within one absolute deadline."""
         if not self.process or not self.process.stdout:
-            return None
+            raise RuntimeError("LSP process not running")
 
         import select as _select
 
@@ -632,7 +667,7 @@ def create_lsp_server(runtime: LeanRuntimeClient) -> FastMCP:
         The runtime's LEAN_LSP_TIMEOUT (60 seconds by default) bounds the call,
         including any wait for a free Lean slot; a file that needs longer fails
         instead of returning partial diagnostics. Unbuilt imports are reported,
-        not built: build the listed modules and call again.
+        not built: build the file's imports and call again.
 
         Args:
             project_dir: Absolute path to the Lake project root.

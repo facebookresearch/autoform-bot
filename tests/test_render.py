@@ -4,27 +4,33 @@ import dataclasses
 import errno
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
 import stat
 import subprocess
 import threading
+import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import html5lib
 
 import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
 import autoform_cli.render as render_module
+from autoform_cli import _directory_binding as directory_binding_module
+from autoform_cli.__main__ import main
 from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS
 from autoform_cli.graph import GraphValidationError, load_graph
 from autoform_cli.lean import LeanSourceError, _normalize_remote
+from autoform_cli.markdown import site_converter
 from autoform_cli.render import (
     PUBLICATION_MANIFEST,
     PublicationError,
@@ -32,6 +38,7 @@ from autoform_cli.render import (
     _completion_percentage,
     _document_body,
     _first_h1,
+    _protect_markdown_in_html,
     load_publication_source,
     publication_source_revision,
     render_site,
@@ -679,6 +686,28 @@ def test_malformed_link_targets_are_published_as_written(tmp_path: Path) -> None
     assert f"- [Reprint]({ipv6})\n- [Notes]({nul})" in chapter
 
 
+def test_a_protected_article_preserves_malformed_link_targets(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    ipv6, nul = "https://[2001:db8::1/paper", "../sources/a%00.md"
+    article = project / "blueprint/roadmap/top.md"
+    _edit(article, "The main result.", f"For r<n, see [the paper]({ipv6}) and [the note]({nul}).")
+    original = article.read_bytes()
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    tree = html5lib.parse(site_converter().convert(chapter), treebuilder="etree", namespaceHTMLElements=False)
+    card = next(el for el in tree.iter() if el.get("id") == "top")
+    statement = next(el for el in card.iter() if "bp-thmcontent" in el.get("class", "").split())
+    assert [(el.text, el.get("href")) for el in _authored_body_elements(statement) if el.tag == "a"] == [
+        ("the paper", ipv6), ("the note", nul),
+    ]
+    witnesses = [el for el in statement.iter() if "bp-body-link-validation" in el.get("class", "").split()]
+    assert len(witnesses) == 1 and "hidden" in witnesses[0].attrib
+    assert [el.get("href") for el in witnesses[0].iter("a")] == [ipv6, nul]
+    assert " ".join("".join(statement.itertext()).split()) == "For r<n, see the paper and the note."
+    assert article.read_bytes() == original
+
+
 def test_unresolved_declarations_are_reported_not_linked(tmp_path: Path) -> None:
     project = _project(tmp_path)
     (project / "blueprint/roadmap/top.md").write_text(
@@ -688,9 +717,40 @@ def test_unresolved_declarations_are_reported_not_linked(tmp_path: Path) -> None
     )
     report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
-    assert report.unresolved == ["top: Project.absent"]
+    assert report.unresolved == ["declaration not found in the Lean sources: top: Project.absent"]
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert "not found in the Lean sources" in page
+
+
+def test_a_declaration_beside_an_earlier_private_twin_is_located_at_the_public_one(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    (project / "Project" / "A.lean").write_text("private theorem Project.top : True := trivial\n", encoding="utf-8")
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert report.unresolved == []
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert '<code>Project.top</code> <span class="bp-where">Project/Basic.lean</span>' in page
+
+
+def test_a_declaration_defined_twice_is_reported_not_located(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project = _project(tmp_path)
+    (project / "Project" / "A.lean").write_text("theorem Project.top : True := trivial\n", encoding="utf-8")
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    message = (
+        "declaration defined more than once in the Lean sources: top: Project.top "
+        "(Project/A.lean:1, Project/Basic.lean:5)"
+    )
+    assert report.unresolved == [message]
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert '<code>Project.top</code> <span class="bp-missing">defined more than once in the Lean sources</span>' in page
+    arguments = ["render", str(project / "blueprint"), "--output", str(tmp_path / "again"), "--require-declarations"]
+    assert main([*arguments, "--lean-root", str(project)]) == 1
+    assert f"warning: {message}" in capsys.readouterr().out.splitlines()
 
 
 def test_stale_generated_files_are_not_republished(tmp_path: Path) -> None:
@@ -1446,7 +1506,15 @@ def test_a_site_relative_link_with_a_decoded_space_or_parenthesis_is_bracketed(t
     links = "[Smith](../sources/Smith%202019.pdf) and [x](../sources/a%28b.md)"
     chapter, _ = _render_statement_link(tmp_path, links, committed=False)
 
-    assert "See [Smith](<../sources/Smith 2019.pdf>) and [x](<../sources/a(b.md>)." in chapter
+    tree = html5lib.parse(site_converter().convert(chapter), treebuilder="etree", namespaceHTMLElements=False)
+    card = next(el for el in tree.iter() if el.get("id") == "top")
+    statement = next(el for el in card.iter() if "bp-thmcontent" in el.get("class", "").split())
+    # Exact destinations and the whole visible sentence guard against decoding
+    # '(' as a bare-link delimiter and swallowing the following text.
+    assert [(el.text, el.get("href")) for el in _authored_body_elements(statement) if el.tag == "a"] == [
+        ("Smith", "../sources/Smith 2019.pdf"), ("x", "../sources/a(b.html"),
+    ]
+    assert " ".join("".join(statement.itertext()).split()) == "The main result. See Smith and x."
 
 
 def test_math_that_reads_like_an_unmoved_link_is_left_alone(tmp_path: Path) -> None:
@@ -1521,6 +1589,15 @@ def test_a_missing_source_note_keeps_the_link_a_strict_build_rejects(tmp_path: P
     chapter, _ = _render_statement_link(tmp_path, "[lemma 3](../sources/lemma-3.md)")
 
     assert "[lemma 3](../sources/lemma-3.md)" in chapter
+
+
+def test_a_hidden_source_note_keeps_its_repository_link(tmp_path: Path) -> None:
+    """The capture skips hidden files, so the existence check kept a committed
+    hidden note's link on the site, which does not publish the note, and the
+    strict build failed on a link that resolved in the repository."""
+    chapter, commit = _render_statement_link(tmp_path, "[the draft](../sources/.draft.md)", notes=(".draft.md",))
+
+    assert f"[the draft]({_REPOSITORY}/blob/{commit}/blueprint/sources/.draft.md)" in chapter
 
 
 def test_a_link_to_the_sources_directory_names_its_repository_tree(tmp_path: Path) -> None:
@@ -1629,12 +1706,18 @@ def test_node_links_resolve_each_target_page_once(tmp_path: Path, monkeypatch: p
 
     links = _anchored_links(targets, page)
 
-    # A page reads only the nodes it shows, so nothing is linked before then.
-    assert calls == []
+    # A page reads only the nodes it shows, so nothing is linked before then,
+    # and reading one node links only its own target page.
+    assert calls == resolved == []
     assert links["a/7"] == "a.html#n7"
+    assert calls == [chapter]
     assert links["b"] == "b/index.html"
     assert links["here"] == "#self"
-    assert len(dict(links)) == len(targets)
+    assert dict(links) == {
+        **{f"a/{index}": f"a.html#n{index}" for index in range(20)},
+        "b": "b/index.html",
+        "here": "#self",
+    }
     assert sorted(calls) == [chapter, other]
     # Once to compare it with the current page, once inside relative_link.
     assert resolved.count(chapter) <= 2
@@ -1679,8 +1762,9 @@ def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypa
 
 
 def test_a_focus_page_asks_for_its_node_links_once(tmp_path: Path) -> None:
-    """Each request builds a link for every node, so asking twice per focus
-    page doubled the cost of the largest group of generated pages."""
+    """Each request resolves the page, and every target page it reads, afresh,
+    so asking twice per focus page repeated that work on the largest group of
+    generated pages."""
     from autoform_cli.graph_pages import focus_page_path, write_graph_pages
 
     project = _project(tmp_path)
@@ -1805,6 +1889,253 @@ def test_next_up_explains_readiness_without_naming_a_policy(tmp_path: Path, drop
 def _statement_box(page: str, node_id: str) -> str:
     start = page.index('<div class="bp-thmcontent"', page.index(f'data-autoform-node-id="{node_id}"'))
     return page[start : page.index("</div>", start)]
+
+
+def _authored_body_elements(element):
+    pending = [element]
+    while pending:
+        current = pending.pop()
+        if "bp-body-link-validation" in current.get("class", "").split():
+            assert "hidden" in current.attrib
+            continue
+        yield current
+        pending.extend(reversed(list(current)))
+
+
+def test_compact_comparisons_keep_later_statements_and_proof_notes(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    base = project / "blueprint/roadmap/base.md"
+    top = project / "blueprint/roadmap/top.md"
+    base.write_text(base.read_text().replace(
+        "The base object.", "For $a<b>c$, use [the result][ref].\n\n## Sources\n\n[ref]: <top.md>"
+    ))
+    top.write_text(top.read_text().replace(
+        "The main result.", "Use only r<n.\n\n## Proof sketch\n\nFor $i<ell$, continue the proof."
+    ))
+    authored = {path: path.read_bytes() for path in (base, top)}
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text()
+    # Use the real configured Markdown converter. Merely finding the cards in
+    # generated Markdown misses the silent loss during md_in_html extraction.
+    rendered = site_converter().convert(page + '\n<nav id="following-chapter">Next</nav>\n')
+    tree = html5lib.parse(rendered, treebuilder="etree", namespaceHTMLElements=False)
+    assert [el.get("id") for el in tree.iter() if "bp-thmwrapper" in el.get("class", "").split()] == ["base", "top"]
+    assert any(el.get("id") == "following-chapter" for el in tree.iter())
+    assert ["".join(el.itertext()) for el in tree.iter() if "arithmatex" in el.get("class", "").split()] == [
+        r"\(a<b>c\)", r"\(i<ell\)",
+    ]
+    assert "Use only r<n." in "".join(tree.itertext())
+    assert any(el.tag == "a" and el.get("href") == "#top" and el.text == "the result" for el in tree.iter())
+    assert all(path.read_bytes() == original for path, original in authored.items())
+
+
+@pytest.mark.parametrize(("affected", "defined_in"), [
+    ("statement", "notes"), ("notes", "notes"),
+    ("statement", "statement"), ("notes", "statement"), ("neither", "notes"),
+])
+def test_body_protection_shares_references_in_both_directions(
+    tmp_path: Path, affected: str, defined_in: str,
+) -> None:
+    project = _project(tmp_path)
+    top = project / "blueprint/roadmap/top.md"
+    statement = "See [paper][ref] and ![diagram][figure]."
+    notes = "A proof using [support][aux] and ![diagram][figure]."
+    if affected == "statement":
+        statement = "For r<n, " + statement
+    elif affected == "notes":
+        notes = "For r < n, continue. " + notes
+    definitions = (
+        '[ref]: https://example.invalid/paper "Paper title"\n'
+        '[figure]: https://example.invalid/figure.svg "Figure title"\n'
+        '[aux]: https://example.invalid/support "Support title"'
+    )
+    source = top.read_text().replace(
+        "The main result.", statement + ("\n\n" + definitions if defined_in == "statement" else "")
+    ).replace(
+        "## Sources\n\n- [Paper](../sources.md)",
+        "## Proof sketch\n\n" + notes + "\n\n## Sources\n\n"
+        + (definitions if defined_in == "notes" else "Definitions are recorded with the statement."),
+    )
+    top.write_text(source)
+    original = top.read_bytes()
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    chapter = (tmp_path / "out/roadmap/README.md").read_text()
+    if affected == "neither":
+        # An unaffected article still leaves its ordinary Markdown/definitions
+        # for the final site conversion rather than preconverting its chunks.
+        assert statement in chapter and '[ref]: https://example.invalid/paper "Paper title"' in chapter
+    tree = html5lib.parse(site_converter().convert(chapter), treebuilder="etree", namespaceHTMLElements=False)
+    card = next(el for el in tree.iter() if el.get("id") == "top")
+    content = next(el for el in card.iter() if "bp-thmcontent" in el.get("class", "").split())
+    proof = next(el for el in card.iter() if "bp-thmnotes" in el.get("class", "").split())
+    assert [(el.text, el.get("href"), el.get("title")) for el in content.iter("a")] == [
+        ("paper", "https://example.invalid/paper", "Paper title"),
+    ]
+    assert [(el.get("alt"), el.get("src"), el.get("title")) for el in content.iter("img")] == [
+        ("diagram", "https://example.invalid/figure.svg", "Figure title"),
+    ]
+    assert [(el.text, el.get("href"), el.get("title")) for el in proof.iter("a")] == [
+        ("support", "https://example.invalid/support", "Support title"),
+    ]
+    assert [(el.get("alt"), el.get("src"), el.get("title")) for el in proof.iter("img")] == [
+        ("diagram", "https://example.invalid/figure.svg", "Figure title"),
+    ]
+    assert "[paper][ref]" not in "".join(content.itertext())
+    assert "[support][aux]" not in "".join(proof.itertext())
+    assert top.read_bytes() == original
+
+
+@pytest.mark.parametrize("authored", [
+    "A `r<n` code span and ``a`<b`` followed by prose r<n.",
+    "```text\n$a<b$\n<!-- unclosed comment inside code\n```\n\nThen r<n.",
+    "~~~~text\na<b\n```\n~~~~~\n\nThen r<n.",
+    "An example:\n\n    a<b\n    c<d\n\nThen r<n.",
+    "- An example:\n\n        a<b\n        c<d\n\nThen r<n.",
+    "> An example:\n>\n>     a<b\n>     c<d\n\nThen r<n.",
+    "- A list item.\n\n    A continuation uses $a<b$.\n\nThen r<n.",
+    '<span title="a<b" data-example="`">HTML</span> and <!-- r<n --> prose r<n.',
+    '<!DOCTYPE html>\n\nThen r<n.',
+    '<?processing <!-- inside a processing instruction ?>\n\nThen r<n.',
+    '<script>if (a<b) { console.log("<span>"); }</script>\n\nThen r<n.',
+    '<https://example.invalid> and <reader@example.invalid>; [paper](<relative.md>).\n\nThen r<n.',
+    '<a href="raw.md">Raw HTML link</a> and [paper](<relative.md>); then r<n.',
+    '[paper][ref].\n\n[ref]: <relative.md>\n\nThen r<n.',
+    r'For \(a<b\), compare r&lt;n and r < n.' + '\n\n$$a<b>c$$\n',
+])
+def test_body_protection_preserves_code_html_links_and_math(authored: str) -> None:
+    protected = _protect_markdown_in_html(authored)
+    # Duplicate the body: two comparisons can leave more than one unclosed
+    # div, so the parser loses the entire suffix rather than repairing one.
+    cards = "".join(
+        f'<div class="bp-thmwrapper" id="card-{index}" markdown="1">\n'
+        f'<div class="bp-thmcontent" markdown="1">\n\n{protected}\n\n</div>\n</div>\n'
+        for index in range(2)
+    )
+    actual = html5lib.parse(site_converter().convert(cards), treebuilder="etree", namespaceHTMLElements=False)
+    bodies = [el for el in actual.iter() if "bp-thmcontent" in el.get("class", "").split()]
+    assert len(bodies) == 2
+    # MkDocs rewrites parsed Markdown page links; raw HTML links keep their
+    # authored destination. These fixtures exercise both on the same page.
+    expected = authored.replace(
+        "](<relative.md>)", "](<relative.html>)"
+    ).replace("[ref]: <relative.md>", "[ref]: <relative.html>")
+    reference_body = html5lib.parseFragment(
+        site_converter().convert(expected), treebuilder="etree", namespaceHTMLElements=False
+    )
+
+    def signature(element):
+        # HTML whitespace collapses outside code. Preserve exact code and TeX,
+        # as well as actual tag/attribute structure and link destinations.
+        return [(el.tag, dict(el.attrib),
+                 "".join(el.itertext()) if el.tag in {"code", "pre", "script"}
+                 or "arithmatex" in el.get("class", "").split()
+                 else " ".join("".join(el.itertext()).split()))
+                for el in _authored_body_elements(element) if el is not element]
+
+    for body in bodies:
+        assert signature(body) == signature(reference_body)
+
+
+def test_body_protection_keeps_page_wide_heading_ids() -> None:
+    fragment = _protect_markdown_in_html("###### Sources\n\nFor $a<b$, cite the source.")
+    explicit = _protect_markdown_in_html("###### Setting {#chosen}\n\nFor $a<b$, continue.")
+    # Inner conversion keeps explicit IDs and lets the final converter assign
+    # each generated heading ID in its actual chapter-wide namespace.
+    assert 'id="sources"' not in fragment
+    assert 'id="chosen"' in explicit
+    page = "# Sources\n\n" + "".join(
+        f'<div class="bp-thmwrapper" markdown="1">\n{body}\n</div>\n'
+        for body in (fragment, fragment, explicit)
+    )
+    tree = html5lib.parse(site_converter().convert(page), treebuilder="etree", namespaceHTMLElements=False)
+    assert [el.get("id") for el in tree.iter() if el.tag in {"h1", "h6"}] == [
+        "sources", "sources_1", "sources_2", "chosen",
+    ]
+
+
+def test_body_protection_preserves_original_validation_urls_and_link_kinds() -> None:
+    body = (
+        "For r < n, see [paper](<notes A(b.md?print=1#chosen>) "
+        "and ![diagram](<fig A(b.svg?print=1#symbol>). "
+        '<a href="raw.md#raw">Raw HTML</a>.'
+    )
+    protected = _protect_markdown_in_html(body)
+    tree = html5lib.parseFragment(
+        site_converter().convert(f'<div markdown="1">\n\n{protected}\n\n</div>'),
+        namespaceHTMLElements=False,
+    )
+    witness = next(el for el in tree.iter() if "bp-body-link-validation" in el.get("class", "").split())
+    assert "hidden" in witness.attrib
+    assert [(el.tag, el.get("href", el.get("src"))) for el in witness.iter() if el.tag in {"a", "img"}] == [
+        ("a", "notes A(b.md?print=1#chosen"), ("img", "fig A(b.svg?print=1#symbol"),
+    ]
+    assert [(el.tag, el.get("href", el.get("src")))
+            for el in _authored_body_elements(tree) if el.tag in {"a", "img"}] == [
+        ("a", "notes A(b.html?print=1#chosen"), ("img", "fig A(b.svg?print=1#symbol"),
+        ("a", "raw.md#raw"),
+    ]
+
+
+@pytest.mark.parametrize(("body", "files", "warning"), [
+    ("For r < n, see [missing](missing.md).", {}, "not found among documentation files"),
+    ("For r < n, see [malformed](../sources/a%00.md).", {}, "not found among documentation files"),
+    ("For r < n, see [target](target.md#missing).", {"target.md": "# Actual\n"}, "anchor '#missing'"),
+    ("For r < n, see [self](#missing).", {}, "no such anchor on this page"),
+    ("For r < n, see ![image](missing.svg).", {}, "not found among documentation files"),
+    (
+        "For r < n, see [target](<Some (field).md?print=1#actual>).",
+        {"Some (field).md": "# Actual\n"}, None,
+    ),
+    ("For r < n, see ![image](asset.svg).", {"asset.svg": '<svg xmlns="http://www.w3.org/2000/svg"/>'}, None),
+    ('For r < n, see <a href="missing.md">raw HTML</a>.', {}, None),
+])
+def test_body_protection_retains_native_strict_link_validation(tmp_path: Path, caplog, body, files, warning) -> None:
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+    from mkdocs.exceptions import Abort
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    protected = _protect_markdown_in_html(body)
+    wrapper = (
+        '# Review\n\n<div class="bp-thmwrapper" id="card" markdown="1">\n'
+        '<div class="bp-thmcontent" markdown="1">\n\n'
+        + protected + '\n\n</div>\n</div>\n'
+    )
+    (docs / "index.md").write_text(wrapper)
+    for name, contents in files.items():
+        (docs / name).write_text(contents)
+    config = tmp_path / "mkdocs.yml"
+    config.write_text(
+        "site_name: Review\nstrict: true\nuse_directory_urls: false\nplugins: []\n"
+        "markdown_extensions:\n  - md_in_html\n"
+        "validation:\n  links:\n    anchors: warn\n"
+    )
+    caplog.set_level(logging.WARNING, logger="mkdocs")
+    if warning:
+        with pytest.raises(Abort, match="strict mode"):
+            build(load_config(config_file=str(config)))
+        assert any(warning in record.message for record in caplog.records)
+    else:
+        build(load_config(config_file=str(config)))
+
+    tree = html5lib.parse(site_converter().convert(wrapper), treebuilder="etree", namespaceHTMLElements=False)
+    content = next(el for el in tree.iter() if "bp-thmcontent" in el.get("class", "").split())
+    expected = html5lib.parseFragment(site_converter().convert(body), namespaceHTMLElements=False)
+    # Native validation records do not add visible text, headings, layout or
+    # keyboard destinations. Raw HTML links do not get Markdown witnesses.
+    assert " ".join("".join(content.itertext()).split()) == " ".join("".join(expected.itertext()).split())
+    witnesses = [el for el in content.iter() if "bp-body-link-validation" in el.get("class", "").split()]
+    for witness in witnesses:
+        assert "hidden" in witness.attrib
+        assert " ".join("".join(witness.itertext()).split()) == ""
+        assert all(el.get("id") is None for el in witness.iter())
+    assert [el.get("id") for el in tree.iter() if el.get("id")] == ["review", "card"]
+    if "raw HTML" in body:
+        assert witnesses == []
+    else:
+        assert len(witnesses) == 1
 
 
 def test_a_statement_keeps_its_subheadings_inside_the_theorem(tmp_path: Path) -> None:
@@ -1953,6 +2284,31 @@ def test_render_installs_into_an_existing_empty_directory(tmp_path: Path, finder
     assert json.loads((output / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["complete"]
     assert not (output / ".DS_Store").exists()
     assert not _debris(tmp_path)
+
+
+@pytest.mark.parametrize("portable", [False, True])
+def test_checking_the_output_site_hashes_its_files_without_holding_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, portable: bool
+) -> None:
+    project = _project(tmp_path)
+    (project / "blueprint/media").mkdir()
+    (project / "blueprint/media/plate.bin").write_bytes(os.urandom(8 * 1024 * 1024))
+    output = tmp_path / "out"
+    render_site(project / "blueprint", output, lean_root=project)
+    assert (output / "media/plate.bin").is_file()
+    if portable:
+        monkeypatch.setattr(directory_binding_module, "DIRECTORY_BINDING_SUPPORTED", False)
+
+    tracemalloc.start()
+    try:
+        render_module._destination_state(output)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    # Read whole, the 8 MiB file would be held at once, as would read(n)'s 8 MiB
+    # manifest buffer; chunked reads hold at most two read chunks at a time.
+    assert peak < 4 * 1024 * 1024
 
 
 def test_a_failed_render_leaves_the_previous_site_and_no_debris(
@@ -2616,6 +2972,19 @@ def test_markdown_source_permalink_quotes_the_original_repository_path(tmp_path:
     assert ".autoform-publication" not in page and "autoform-blueprint-" not in page
 
 
+def _print_composed_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make `git ls-tree` print e + U+0301 composed, as macOS Git does; elsewhere Git keeps names as written."""
+    run = subprocess.run
+
+    def ls_tree(command, *args, **kwargs):
+        completed = run(command, *args, **kwargs)
+        if command[:2] == ["git", "ls-tree"]:
+            completed.stdout = completed.stdout.replace("e\u0301".encode(), "\u00e9".encode())
+        return completed
+
+    monkeypatch.setattr(lean_module.subprocess, "run", ls_tree)
+
+
 def test_decomposed_file_names_link_to_the_spelling_git_committed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2633,16 +3002,7 @@ def test_decomposed_file_names_link_to_the_spelling_git_committed(
     subprocess.run(["git", "config", "core.precomposeunicode", "true"], cwd=project, check=True)
     commit = _git_commit(project, "fixture")
     output = tmp_path / "out"
-    run = subprocess.run
-
-    def precomposed_ls_tree(command, *args, **kwargs):
-        # macOS Git prints the composed spelling it committed; elsewhere Git keeps names as written.
-        completed = run(command, *args, **kwargs)
-        if command[:2] == ["git", "ls-tree"]:
-            completed.stdout = completed.stdout.replace("e\u0301".encode(), "\u00e9".encode())
-        return completed
-
-    monkeypatch.setattr(lean_module.subprocess, "run", precomposed_ls_tree)
+    _print_composed_names(monkeypatch)
 
     report = render_site(project / "blueprint", output, lean_root=project, repository_url=_REPOSITORY, ref=commit)
 
@@ -2651,6 +3011,36 @@ def test_decomposed_file_names_link_to_the_spelling_git_committed(
     assert f"/blob/{commit}/Project/{committed}.lean#L5" in chapter
     assert f"/blob/{commit}/blueprint/roadmap/{committed}.md" in chapter
     assert f"/blob/{commit}/blueprint/sources/{committed}.md" in chapter
+    assert report.warnings == []
+
+
+def test_a_link_to_a_folder_names_the_spelling_git_committed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _project(tmp_path)
+    blueprint = project / "Poincare\u0301" / "blueprint"  # a folder name decomposed on disk, as Finder writes it
+    blueprint.parent.mkdir()
+    (project / "blueprint").rename(blueprint)
+    (blueprint / "sources").mkdir()
+    (blueprint / "sources/paper.md").write_text("# Paper\n", encoding="utf-8")
+    (blueprint / "sources/drafts").mkdir()
+    (blueprint / "sources/drafts/.gitkeep").write_text("", encoding="utf-8")  # committed, but never captured
+    _edit(
+        blueprint / "roadmap/README.md",
+        "# Roadmap",
+        "# Roadmap\n\nSee [the notes](../sources/), [the paper](../sources/paper.md) and [drafts](../sources/drafts/).",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    subprocess.run(["git", "config", "core.precomposeunicode", "true"], cwd=project, check=True)
+    commit = _git_commit(project, "fixture")
+    _print_composed_names(monkeypatch)
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=commit)
+
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert f"/tree/{commit}/Poincar%C3%A9/blueprint/sources" in chapter
+    assert f"/blob/{commit}/Poincar%C3%A9/blueprint/sources/paper.md" in chapter
+    assert f"/blob/{commit}/Poincar%C3%A9/blueprint/roadmap/top.md" in chapter
+    assert f"/{commit}/Poincar%C3%A9/blueprint/sources/drafts" in chapter
+    assert "Poincare%CC%81" not in chapter
     assert report.warnings == []
 
 

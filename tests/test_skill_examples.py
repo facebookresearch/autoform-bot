@@ -1332,11 +1332,33 @@ def test_roadmap_states_the_library_search_without_the_link(repo_root: Path) -> 
     assert "Search the pinned Mathlib checkout and every usable shared library before planning a replacement" in flat
 
 
+def test_roadmap_leaves_lean_unset_for_a_library_declaration(repo_root: Path) -> None:
+    """A library declaration goes in the implementation note, and `lean:` waits for the project's declaration.
+
+    `autoform check --lean-root` resolves `lean:` only in the project's own Lean files. In a trial (#349),
+    Roadmap set `lean:` to the library declarations it found; check could not find them, so it imported the
+    modules and rebuilt, then moved the names into the articles' prose instead of their implementation notes
+    (a comment on #346 records this).
+    """
+
+    blocks = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8").split("\n\n")
+    search = next(" ".join(block.split()) for block in blocks if "`autoform search`" in block)
+    sentences = re.split(r"(?<=\.) ", search)
+    # These check that each instruction is present, in one sentence of the search rule, not how it is worded.
+    assert any("implementation note" in s and "unset" in s and "Formalize" in s for s in sentences), sentences
+    assert any("`lean:`" in s and "project" in s and "--lean-root" in s for s in sentences), sentences
+    # The rules Roadmap defers to have Formalize record `lean:` once the project's declaration exists.
+    reference = (repo_root / "skills/formalize/references/library-search.md").read_text(encoding="utf-8")
+    own = next(p for p in (" ".join(b.split()) for b in reference.split("\n\n")) if "own result" in p)
+    assert "`lean:` records its name on acceptance" in own
+
+
 def test_skills_search_shared_libraries_and_say_what_to_do_with_a_hit(repo_root: Path) -> None:
     """A library hit prevents a second proof only if the agent searches the library and knows what to do.
 
     The rules live once, in Formalize's reference page; the three search paragraphs link to it and carry
     only what changes how they read: search the libraries too, and a library refusal is not a blocker.
+    Roadmap's also says how a hit is reused, since its agents did not open the link in trials.
     """
 
     reference_path = repo_root / "skills/formalize/references/library-search.md"
@@ -1484,7 +1506,7 @@ def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None
 
     substitutions = {
         "{{AUTOFORM_SOURCE_YAML}}": '"https://github.com/facebookresearch/autoform-bot.git"',
-        "{{AUTOFORM_REF_YAML}}": '"c994d83f9fab1f40d69b2f279d4c62ca937a0186"',
+        "{{AUTOFORM_REF_YAML}}": '"0288506b87e2e2f70b7446bf0cf7145006138d74"',
     }
     template_dir = repo_root / "autoform_cli/templates/github/workflows"
     example_dir = repo_root / _EXAMPLE / ".github/workflows"

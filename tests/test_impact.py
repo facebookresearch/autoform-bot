@@ -1212,6 +1212,8 @@ _UNCAPTURED = (
         ),
         # The project is built, so these refusals come alone, without the rebuild hint.
         *((f"Probe.lean:131:0: error: {refusal}\nnext line", refusal) for refusal in _UNCAPTURED),
+        # Even after more output than a failure reason keeps.
+        ("warning: unused\n" * 200 + f"error: {_UNCAPTURED[0]}", _UNCAPTURED[0]),
     ],
 )
 def test_probe_failures_name_the_impact_probe(
@@ -2261,6 +2263,45 @@ def test_helpers_are_located_by_source_name_in_their_module_s_file(tmp_path: Pat
         ("Demo.made", "Scratch.lean", 3),
         ("Demo.twin", "Demo.lean", None),
         ("_private.Demo.Extra.0.Demo.secret", "Demo/Extra.lean", 3),
+    ]
+
+
+def test_helpers_sharing_a_source_name_are_located_in_their_own_module_s_file(tmp_path: Path, monkeypatch) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    with (lean_root / "Demo.lean").open("a", encoding="utf-8") as demo:
+        demo.write("\ntheorem Demo.dup : True := trivial\n")
+    # A private twin in a file that sorts first, and one private name in two modules.
+    (lean_root / "A.lean").write_text("private theorem Demo.dup : True := trivial\n", encoding="utf-8")
+    (lean_root / "Demo").mkdir()
+    for module, line in (("Extra", 2), ("More", 4)):
+        (lean_root / "Demo" / f"{module}.lean").write_text(
+            "namespace Demo\n" + "\n" * (line - 2) + "private theorem aux : True := trivial\nend Demo\n",
+            encoding="utf-8",
+        )
+    _stub_probe(
+        monkeypatch,
+        [
+            *_STUB_RECORDS,
+            _payload("Demo.dup", type_uses=["Demo.base"]),
+            _payload("_private.A.0.Demo.dup", module="A", type_uses=["Demo.base"], user_name="Demo.dup"),
+            _payload(
+                "_private.Demo.Extra.0.Demo.aux", module="Demo.Extra", type_uses=["Demo.base"], user_name="Demo.aux"
+            ),
+            _payload(
+                "_private.Demo.More.0.Demo.aux", module="Demo.More", type_uses=["Demo.base"], user_name="Demo.aux"
+            ),
+        ],
+    )
+
+    report = revision_impact(project, "chapter/base", lean_root=lean_root)
+
+    assert [(helper.name, helper.path, helper.line) for helper in report.helpers] == [
+        ("Demo.base_eq", "Demo.lean", 5),
+        ("Demo.dup", "Demo.lean", 9),
+        ("_private.A.0.Demo.dup", "A.lean", 1),
+        ("_private.Demo.Extra.0.Demo.aux", "Demo/Extra.lean", 2),
+        ("_private.Demo.More.0.Demo.aux", "Demo/More.lean", 4),
     ]
 
 

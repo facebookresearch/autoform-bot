@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
+import os
 import shutil
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -36,3 +38,37 @@ def runtime_dir() -> Iterator[Path]:
         yield directory
     finally:
         shutil.rmtree(directory, ignore_errors=True)
+
+
+@pytest.fixture
+def unreadable_link(monkeypatch: pytest.MonkeyPatch) -> Callable[[Path, Path | str], None]:
+    """Make a symbolic link that the system follows but will not let anyone read.
+
+    macOS refuses `readlink` on a link whose own mode is 000 and still follows
+    it. Where a link's mode does not bind, as on Linux or for root,
+    `os.readlink` is made to refuse the link instead.
+    """
+    refused: set[str] = set()
+    readlink = os.readlink
+
+    def refusing(path: str | os.PathLike[str], **kwargs: object) -> str:
+        if os.fspath(path) in refused:
+            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), os.fspath(path))
+        return readlink(path, **kwargs)
+
+    monkeypatch.setattr(os, "readlink", refusing)
+
+    def make(link: Path, target: Path | str) -> None:
+        try:
+            link.symlink_to(target)
+        except OSError:
+            pytest.skip("symlinks are unavailable")
+        if hasattr(os, "lchmod"):
+            os.lchmod(link, 0)
+        try:
+            readlink(link)
+        except OSError:
+            return
+        refused.update({os.fspath(link), os.path.join(os.path.realpath(link.parent), link.name)})
+
+    return make

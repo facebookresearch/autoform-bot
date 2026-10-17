@@ -463,6 +463,8 @@ def test_audit_validates_local_source_links_without_network_access(tmp_path: Pat
     source.write_text("# Paper\n\n## Theorem\n", encoding="utf-8")
     (blueprint / ".drafts").mkdir()
     (blueprint / ".drafts" / "notes.md").write_text("# Notes\n", encoding="utf-8")
+    (blueprint / "sources" / ".private").mkdir()
+    (blueprint / "sources" / ".private" / "paper.md").write_text("# Paper\n", encoding="utf-8")
     _article(
         blueprint,
         "chapter/result.md",
@@ -473,6 +475,8 @@ def test_audit_validates_local_source_links_without_network_access(tmp_path: Pat
             "../../sources/missing.md",
             "../../../outside.md",
             "../../.drafts/notes.md",
+            # Check only warns about this one; audit, the stricter gate, still reports it.
+            "../../sources/.private/paper.md",
             "https://example.invalid/paper",
             "ftp://example.invalid/paper",
             "//example.invalid/paper",
@@ -489,8 +493,12 @@ def test_audit_validates_local_source_links_without_network_access(tmp_path: Pat
 
     assert findings == [
         ("hidden-source-target", "source link names a hidden path, which render omits: '../../.drafts/notes.md'"),
+        (
+            "hidden-source-target",
+            "source link names a hidden path, which render omits: '../../sources/.private/paper.md'",
+        ),
         ("malformed-source-link", "source link contains an invalid path: '%00'"),
-        ("malformed-source-link", "source link is not a valid URL: 'http://[oops/paper'"),
+        ("malformed-source-url", "source link is not a valid URL: 'http://[oops/paper'"),
         ("source-escapes-blueprint", "source link escapes the blueprint: '../../../outside.md'"),
         ("source-not-found", "source link does not resolve to a file: '../../sources/missing.md'"),
         ("unsupported-source-link", "source link uses a network location: '//example.invalid/paper'"),
@@ -503,16 +511,32 @@ def test_audit_reports_a_source_link_through_a_symlink_loop_alike_on_every_pytho
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     (blueprint / "sources").mkdir()
+    (tmp_path / "away").mkdir()
+    (tmp_path / "away" / "note.txt").write_text("outside\n", encoding="utf-8")
     try:
         (blueprint / "sources" / "loop.md").symlink_to("loop.md")
         (tmp_path / "outer.md").symlink_to("outer.md")
+        # A loop behind a symbolic link that leaves the blueprint, and one before it.
+        (blueprint / "sources" / "away").symlink_to(tmp_path / "away")
+        (tmp_path / "away" / "loop.md").symlink_to("loop.md")
+        # A loop and `..` 45 times over, then out of the blueprint, and a chain past the recursion limit.
+        for n in range(45):
+            (blueprint / "sources" / f"hop{n}.txt").symlink_to(f"loop.md/../hop{n + 1}.txt")
+        (blueprint / "sources" / "hop45.txt").symlink_to("away/note.txt")
+        for n in range(1000):
+            (blueprint / "sources" / f"chain{n}.txt").symlink_to(f"chain{n + 1}.txt")
     except OSError:
         pytest.skip("symlinks are unavailable")
-    sources = ("../sources/loop.md", "../../outer.md")
+    sources = ("../sources/loop.md", "../../outer.md", "../sources/away/loop.md", "../sources/loop.md/../away/note.txt")
+    sources += ("../sources/hop0.txt", "../sources/chain0.txt")
     _article(blueprint, "result.md", declaration="theorem", origin="cited", sources=sources)
 
     assert _finding_map(blueprint)["roadmap/result.md"] == [
         ("source-escapes-blueprint", "source link escapes the blueprint: '../../outer.md'"),
+        ("source-escapes-blueprint", "source link escapes the blueprint: '../sources/away/loop.md'"),
+        ("source-escapes-blueprint", "source link escapes the blueprint: '../sources/hop0.txt'"),
+        ("source-escapes-blueprint", "source link escapes the blueprint: '../sources/loop.md/../away/note.txt'"),
+        ("source-not-found", "source link does not resolve to a file: '../sources/chain0.txt'"),
         ("source-not-found", "source link does not resolve to a file: '../sources/loop.md'"),
     ]
 
@@ -587,6 +611,36 @@ def test_audit_validates_lean_targets_only_when_root_is_supplied(tmp_path: Path)
     ]
     assert with_lean["roadmap/wrong-kind.md"] == [
         ("lean-target-kind-mismatch", "Lean target kind def does not match declaration intent theorem")
+    ]
+
+
+def test_audit_checks_the_public_declaration_beside_an_earlier_private_twin(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "result.md", declaration="theorem", statement="formalized", lean="Project.result")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "A.lean").write_text("private def Project.result : Nat := 1\n", encoding="utf-8")
+    (lean_root / "B.lean").write_text("theorem Project.result : True := trivial\n", encoding="utf-8")
+
+    assert "roadmap/result.md" not in _finding_map(blueprint, lean_root=lean_root)
+
+
+def test_audit_reports_a_target_defined_more_than_once_and_checks_nothing_else_of_it(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "result.md", declaration="theorem", statement="formalized", lean="Project.result")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "A.lean").write_text("def Project.result : Nat := 1\n", encoding="utf-8")
+    (lean_root / "B.lean").write_text("private def Project.result : Nat := 1\n", encoding="utf-8")
+    (lean_root / "C.lean").write_text("\ndef Project.result : Nat := 1\n", encoding="utf-8")
+
+    assert _finding_map(blueprint, lean_root=lean_root)["roadmap/result.md"] == [
+        (
+            "lean-target-ambiguous",
+            "Lean declaration target is defined more than once: Project.result (A.lean:1, B.lean:1, C.lean:2)",
+        )
     ]
 
 
@@ -886,7 +940,25 @@ def test_an_alias_ends_the_source_span_of_the_declaration_above_it(tmp_path: Pat
         "theorem big : True := by\n  trivial\nalias small := big\n\n", encoding="utf-8"
     )
 
-    assert audit_module._source_spans(index_project(lean_root)) == {"big": 2, "small": 2}
+    spans = audit_module._source_spans(index_project(lean_root))
+    assert {declaration.name: span for declaration, span in spans.items()} == {"big": 2, "small": 2}
+
+
+def test_a_private_twin_ends_the_source_span_of_the_declaration_above_it(tmp_path: Path) -> None:
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    # The public twin sorts before Big.lean.
+    (lean_root / "A.lean").write_text("theorem helper : True := trivial\n", encoding="utf-8")
+    (lean_root / "Big.lean").write_text(
+        "theorem big : True := by\n  trivial\nprivate theorem helper : True := by\n  trivial\n", encoding="utf-8"
+    )
+
+    spans = audit_module._source_spans(index_project(lean_root))
+    assert sorted((key.path.as_posix(), key.line, span) for key, span in spans.items()) == [
+        ("A.lean", 1, 1),
+        ("Big.lean", 1, 2),
+        ("Big.lean", 3, 2),
+    ]
 
 
 def test_audit_reports_unbounded_and_inherited_elaboration_limits(tmp_path: Path) -> None:
