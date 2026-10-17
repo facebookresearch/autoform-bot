@@ -77,8 +77,8 @@ details.
 If a library already proves a result, reuse that proof instead of proving the
 result again: the result keeps its article. If a proof needs a library result
 that has no article yet, add an article for it, proved from the library, and
-link it under `## Proof depends on`. Whenever an article reuses a library
-declaration, name it in the article's implementation note, not in the article,
+link it under `## Proof depends on`. Whenever an article reuses a shared
+library declaration, name it in its implementation note, not in the article,
 and leave `lean:` unset until the project declares the result, which Formalize
 does from the library declaration. `lean:` names only a declaration in the
 project's own Lean files, since `autoform check --lean-root` resolves no other.
