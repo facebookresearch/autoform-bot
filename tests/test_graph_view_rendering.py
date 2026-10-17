@@ -358,6 +358,7 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
     assert 'data.schema !== "autoform-dag-view/v2"' in script
     assert 'ctx.fillText("×" + count' in script
     assert "Title prefix" in script and "Id prefix" in script and "Word prefix" in script
+    assert "Exact Lean name" in script and "Statement match" in script and "All terms match" in script
 
     node = shutil.which("node")
     if node:
@@ -387,6 +388,8 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
             members=(f"chapter/node-{index}",),
             status_counts=(("planned", 1),),
             status_key="planned",
+            lean="Project.NodeZero" if index == 0 else None,
+            summary="A spectral gap statement." if index == 0 else None,
         )
         for index in range(500)
     )
@@ -411,6 +414,10 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
     search_payload = json.loads(search.read_text(encoding="utf-8"))
     assert search_payload["schema"] == "autoform-dag-search/v1"
     assert "layout" not in search_payload["nodes"][0]
+    assert search_payload["nodes"][0]["lean"] == "Project.NodeZero"
+    assert search_payload["nodes"][0]["summary"] == "A spectral gap statement."
+    assert "lean" not in search_payload["nodes"][1]
+    assert "summary" not in search_payload["nodes"][1]
 
 
 def test_large_views_fail_over_before_mermaid_hard_limits() -> None:

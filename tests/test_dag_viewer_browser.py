@@ -97,6 +97,8 @@ def explorer_url(tmp_path: Path) -> Iterator[str]:
         status_counts=(("planned", 1),),
         declaration="theorem",
         status_key="planned",
+        lean="Remote.Namespace.deepTheorem",
+        summary="A spectral gap statement for the remote fixture.",
     )
     dag_viewer.write_search_index(
         tmp_path / "search.json",
@@ -476,6 +478,10 @@ def test_global_search_jumps_to_the_smallest_context(webkit_browser: object, exp
     page = webkit_browser.new_page(viewport={"width": 1280, "height": 900})
     _open_ready(page, explorer_url)
     search = page.locator(".bp-dag-search")
+    search.fill("Remote.Namespace.deepTheorem")
+    playwright.expect(page.locator(".bp-dag-result-reason").first).to_have_text("Exact Lean name")
+    search.fill("spectral gap")
+    playwright.expect(page.locator(".bp-dag-result", has_text="Remote theorem")).to_be_visible()
     search.fill("Remote theorem")
     result = page.locator(".bp-dag-result", has_text="Remote theorem")
     result.wait_for()
