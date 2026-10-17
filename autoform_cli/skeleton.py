@@ -29,7 +29,7 @@ import tempfile
 import threading
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -51,7 +51,7 @@ from .lean import (
     resolve_lean_root,
 )
 
-SKELETON_SCHEMA = "autoform-skeleton/v4"
+SKELETON_SCHEMA = "autoform-skeleton/v5"
 SEMANTIC_SCHEMA = "autoform-lean-expr/v4"
 
 #: Every line the probe wants read back starts with this marker, so Lean's own
@@ -59,6 +59,9 @@ SEMANTIC_SCHEMA = "autoform-lean-expr/v4"
 PROBE_MARKER = "AUTOFORM_SKELETON "
 # Names the file the probe writes its records to; see run_probe.
 PROBE_OUTPUT_ENV = "AUTOFORM_SKELETON_OUTPUT"
+#: The module the probe's helpers are compiled into. A hyphen cannot appear in
+#: an unquoted Lean module name, so no ordinary project module is called this.
+_PROBE_HELPER_MODULE = "autoform-skeleton-helper"
 
 #: Module roots whose declarations are never listed as assumptions: they are
 #: the language itself, not mathematics a reader might want to double-check.
@@ -76,13 +79,15 @@ _SHADOWED_CORE_MODULE = re.compile(
 #: inventory lacks; the project is built, so the refusal gets no `lake build` hint.
 _UNCAPTURED_ROOT_MODULE = re.compile(r"the impact probe (?:loaded|found) root-package module .*")
 
+#: Bounds each probe process; extraction runs one per root module.
 DEFAULT_PROBE_TIMEOUT = 600.0
+
 #: The Lake freshness check hashes every imported input, which on a Mathlib
 #: project can take minutes on its own, so it does not share the probe's budget.
 DEFAULT_FRESHNESS_TIMEOUT = 600.0
 DEFAULT_PROBE_OUTPUT_LIMIT = 64 * 1024 * 1024
 #: The probe states shared subterms once; this bounds the characters of
-#: semantic material they may expand to in one run.
+#: semantic material they may expand to in one probe.
 _PROBE_MATERIAL_LIMIT = 512 * 1024 * 1024
 _PROCESS_TERMINATION_GRACE = 2.0
 #: Lake's exit status when ``--no-build`` finds a target that needs rebuilding.
@@ -171,6 +176,10 @@ class DeclarationSkeleton(TrustedDeclaration):
     boundary_modules: tuple[tuple[str, str, str], ...]
     axioms: tuple[str, ...]
     axiom_semantics: tuple[tuple[str, str], ...]
+    #: The part of ``assumed`` the statement reaches, and the modules that bind
+    #: it; what only the proof's axioms reach is in the full fields alone.
+    statement_assumed: tuple[str, ...]
+    statement_boundary_modules: tuple[str, ...]
     #: The statement as written in the source, cut before its value. The
     #: elaborated signature is authoritative; this is what the author typed,
     #: shown beside it so neither form can hide what the other shows.
@@ -193,30 +202,69 @@ class DeclarationSkeleton(TrustedDeclaration):
 
     @property
     def skeleton_lines(self) -> int:
-        """Lines a reader has to read: the signature plus every trusted span."""
+        """Lines of the trust surface: the signature plus every trusted span,
+        including those only the proof's axioms reach, which the packet omits."""
         return self.lines + sum(item.lines for item in self.trusted)
+
+    def __post_init__(self) -> None:
+        modules = {module for module, _, _ in self.boundary_modules}
+        if (
+            not set(self.statement_assumed) <= set(self.assumed)
+            or not set(self.statement_boundary_modules) <= modules
+            or (self.statement_assumed and not self.statement_boundary_modules)
+        ):
+            raise SkeletonError([f"mismatched statement closure for {self.name}"])
+
+    @property
+    def statement_trusted(self) -> tuple[TrustedDeclaration, ...]:
+        """The trusted declarations the statement reaches through ``depends``;
+        the others only the proof's axioms reach."""
+
+        by_name = {item.name: item for item in self.trusted}
+        reached: set[str] = set()
+        work = list(self.depends)
+        while work:
+            name = work.pop()
+            if name in by_name and name not in reached:
+                reached.add(name)
+                work += by_name[name].depends
+        return tuple(item for item in self.trusted if item.name in reached)
 
     @property
     def hash(self) -> str:
         """Fingerprint the probe's canonical elaborated meaning and trust boundary."""
 
+        modules = {module for module, _, _ in self.boundary_modules}
+        return self._fingerprint(self.trusted, self.assumed, modules, axioms=True)
+
+    @property
+    def statement_hash(self) -> str:
+        """Fingerprint what the statement means: :attr:`hash` without the axioms
+        and what only they reach. Unlike :attr:`hash`, editing only a theorem's
+        proof, ``sorry`` to a proof included, leaves it unchanged."""
+
+        return self._fingerprint(
+            self.statement_trusted, self.statement_assumed, set(self.statement_boundary_modules), axioms=False
+        )
+
+    def _fingerprint(
+        self, trusted: tuple[TrustedDeclaration, ...], assumed: tuple[str, ...], modules: set[str], *, axioms: bool
+    ) -> str:
+        names = set(assumed)
         material = {
-            "axioms": list(self.axioms),
-            "axiom_semantics": [list(item) for item in self.axiom_semantics],
-            "assumed": list(self.assumed),
-            "assumed_semantics": [list(item) for item in self.assumed_semantics],
-            "boundary_modules": [list(item) for item in self.boundary_modules],
+            "assumed": list(assumed),
+            "assumed_semantics": [list(item) for item in self.assumed_semantics if item[0] in names],
+            "boundary_modules": [list(item) for item in self.boundary_modules if item[0] in modules],
             "depends": list(self.depends),
             "kind": self.kind,
             "lean_version": self.lean_version,
             "name": self.name,
             "semantic": self.semantic,
             "semantic_schema": SEMANTIC_SCHEMA,
-            "trusted": [
-                [item.name, item.kind, item.semantic, list(item.depends)]
-                for item in self.trusted
-            ],
+            "trusted": [[item.name, item.kind, item.semantic, list(item.depends)] for item in trusted],
         }
+        if axioms:
+            material |= {"axioms": list(self.axioms), "axiom_semantics": [list(item) for item in self.axiom_semantics]}
         return _sha256_id(json.dumps(material, sort_keys=True, ensure_ascii=False).encode())
 
     @property
@@ -232,12 +280,15 @@ class DeclarationSkeleton(TrustedDeclaration):
         its author did not know what the code was meant to say. Docstrings say
         exactly that, so they are stripped along with every other comment.
         Names stay: they are part of the code.
+
+        It shows what the statement rests on, never what only the proof's
+        axioms reach, so editing a theorem's proof leaves the packet unchanged
+        unless it decides whether an equation-style statement can be cut at all.
         """
 
         lines = [
             f"-- {self.kind} {self.name}",
-            f"-- assumed from libraries: {', '.join(self.assumed) if self.assumed else 'none'}",
-            f"-- axioms: {', '.join(self.axioms) if self.axioms else 'none'}",
+            f"-- assumed from libraries: {', '.join(self.statement_assumed) or 'none'}",
             "",
             self.signature,
             "-- raw signature:",
@@ -253,7 +304,7 @@ class DeclarationSkeleton(TrustedDeclaration):
                 lines += ["-- as written:", written]
         if self.source_withheld or not (own or self.statement):
             lines.append(_NOT_SHOWN)
-        for item in self.trusted:
+        for item in self.statement_trusted:
             body = _without_comments(item.source or "", item.source_comments).strip("\n")
             # The elaborated signature restores what `variable` binders and
             # `open` leave implicit in the source, such as the type of `S`.
@@ -281,6 +332,8 @@ class DeclarationSkeleton(TrustedDeclaration):
         shown.update(
             {
                 "assumed": list(self.assumed),
+                "statement_assumed": list(self.statement_assumed),
+                "statement_boundary_modules": list(self.statement_boundary_modules),
                 "axioms": list(self.axioms),
                 "depends": list(self.depends),
                 "source_comments": [list(item) for item in self.source_comments],
@@ -293,6 +346,7 @@ class DeclarationSkeleton(TrustedDeclaration):
             "evidence_hash": self.evidence_hash,
             "hash": self.hash,
             "skeleton_lines": self.skeleton_lines,
+            "statement_hash": self.statement_hash,
             "trusted": [item.name for item in self.trusted],
         }
 
@@ -421,23 +475,92 @@ class SkeletonReport:
         node = self.node(node_id)
         return () if node is None else node.declarations
 
-    def as_dict(self) -> dict[str, object]:
-        # Roots in one project share most of what they trust; each shared
-        # item is stated once here and named by every declaration that uses it.
-        trusted: dict[str, object] = {}
-        semantics: dict[str, object] = {}
+    def __post_init__(self) -> None:
+        issue = self._incoherence()
+        if issue is not None:
+            raise SkeletonError([f"skeleton report {issue}"])
+        self._shared_tables()
+
+    def _incoherence(self) -> str | None:
+        """Why the selection, articles, and unresolved targets disagree, if they do.
+
+        Every report, however built, names its complete target set, selects
+        articles from it, holds exactly those articles, and lists as
+        unresolved exactly the selected targets it holds no skeleton for.
+        """
+
+        if self.selection not in ("all", "filtered"):
+            return "has an invalid selection mode"
+        target_ids = tuple(node_id for node_id, _ in self.targets)
+        if tuple(sorted(set(target_ids))) != target_ids or not all(
+            declarations and len(set(declarations)) == len(declarations) for _, declarations in self.targets
+        ):
+            return "contains an invalid target set"
+        selected = self.selected_nodes
+        if tuple(sorted(selected)) != selected or not set(selected) <= set(target_ids):
+            return "contains an invalid skeleton article selection"
+        if self.selection == "all" and self.selected_nodes != target_ids:
+            return "contains an incomplete all-article selection"
+        if self.selection == "filtered" and not self.selected_nodes:
+            return "contains an empty filtered article selection"
+        node_ids = tuple(node.node_id for node in self.nodes)
+        if len(set(node_ids)) != len(node_ids):
+            return "contains duplicate skeleton article ids"
+        if node_ids != self.selected_nodes:
+            return "does not contain exactly its selected articles"
+        declarations_by_node = dict(self.targets)
+        actual: set[tuple[str, str]] = set()
+        for node in self.nodes:
+            names = {declaration.name for declaration in node.declarations}
+            if not names <= set(declarations_by_node[node.node_id]):
+                return f"contains an untargeted declaration for {node.node_id}"
+            actual.update((node.node_id, name) for name in names)
+        expected = {(node_id, name) for node_id in self.selected_nodes for name in declarations_by_node[node_id]}
+        unresolved = [(issue.node_id, issue.declaration) for issue in self.unresolved]
+        if len(set(unresolved)) != len(unresolved) or set(unresolved) != expected - actual:
+            return "contains mismatched unresolved declarations"
+        return None
+
+    def _shared_tables(
+        self,
+    ) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]], dict[str, object]]:
+        """The ``trusted``, ``semantics``, and ``boundary_modules`` tables.
+
+        Each shared item is stated once and named by every declaration that
+        uses it. Two root modules may print one trusted declaration differently,
+        or see different constants under one name, so those two tables are keyed
+        by root module first. A module identity is the digest of its compiled
+        files, the same under every root, so it is keyed by module name alone.
+        """
+
+        trusted: dict[str, dict[str, object]] = {}
+        semantics: dict[str, dict[str, object]] = {}
         modules: dict[str, object] = {}
         for node in self.nodes:
             for declaration in node.declarations:
                 for item in declaration.trusted:
-                    _share(trusted, item.name, item.as_dict(), table_name="trusted declaration")
+                    _share(
+                        trusted.setdefault(declaration.module, {}),
+                        item.name,
+                        item.as_dict(),
+                        table_name=f"trusted declaration under root module {declaration.module}",
+                    )
                 for name, semantic in (*declaration.assumed_semantics, *declaration.axiom_semantics):
-                    _share(semantics, name, semantic, table_name="semantic material")
+                    _share(
+                        semantics.setdefault(declaration.module, {}),
+                        name,
+                        semantic,
+                        table_name=f"semantic material under root module {declaration.module}",
+                    )
                 files: dict[str, list[list[str]]] = {}
                 for module, kind, digest in declaration.boundary_modules:
                     files.setdefault(module, []).append([kind, digest])
                 for module, identity in files.items():
                     _share(modules, module, identity, table_name="module identity")
+        return trusted, semantics, modules
+
+    def as_dict(self) -> dict[str, object]:
+        trusted, semantics, modules = self._shared_tables()
         return {
             "blueprint_hash": self.blueprint_hash,
             "boundary_modules": modules,
@@ -465,7 +588,7 @@ class SkeletonReport:
 
 def _share(table: dict[str, object], name: str, value: object, *, table_name: str) -> None:
     if table.setdefault(name, value) != value:
-        raise ValueError(f"conflicting {table_name} for {name} in one skeleton report")
+        raise SkeletonError([f"conflicting {table_name} for {name} in one skeleton report"])
 
 
 def load_skeleton_report(path: str | Path) -> SkeletonReport:
@@ -477,6 +600,11 @@ def load_skeleton_report(path: str | Path) -> SkeletonReport:
         json.dumps(data, ensure_ascii=False).encode("utf-8")
     except (OSError, RecursionError, ValueError) as exc:
         raise SkeletonError([f"cannot read skeleton report {path}: {exc}"]) from exc
+    schema = data.get("schema") if isinstance(data, dict) else None
+    if isinstance(schema, str) and schema.startswith("autoform-skeleton/") and schema != SKELETON_SCHEMA:
+        raise SkeletonError(
+            [f"{path} is an {schema} report; this version reads only {SKELETON_SCHEMA} reports, so extract it again"]
+        )
     if (
         not isinstance(data, dict)
         or data.get("schema") != SKELETON_SCHEMA
@@ -496,13 +624,6 @@ def load_skeleton_report(path: str | Path) -> SkeletonReport:
     if mode not in ("all", "filtered"):
         raise SkeletonError([f"{path} contains an invalid skeleton selection mode"])
     selected_nodes = _report_string_tuple(selection.get("nodes"), "selected articles")
-    target_ids = tuple(node_id for node_id, _ in targets)
-    if tuple(sorted(selected_nodes)) != selected_nodes or not set(selected_nodes) <= set(target_ids):
-        raise SkeletonError([f"{path} contains an invalid skeleton article selection"])
-    if mode == "all" and selected_nodes != target_ids:
-        raise SkeletonError([f"{path} contains an incomplete all-article selection"])
-    if mode == "filtered" and not selected_nodes:
-        raise SkeletonError([f"{path} contains an empty filtered article selection"])
     raw_nodes = data.get("nodes")
     unresolved = _report_unresolved(data.get("unresolved"))
     if not isinstance(raw_nodes, list):
@@ -510,22 +631,17 @@ def load_skeleton_report(path: str | Path) -> SkeletonReport:
     declarations_by_node = dict(targets)
     tables = _report_tables(data)
     nodes = tuple(_node_from_dict(node, targets=declarations_by_node, tables=tables) for node in raw_nodes)
-    if tuple(node.node_id for node in nodes) != selected_nodes:
-        raise SkeletonError([f"{path} does not contain exactly its selected articles"])
-    expected = {(node_id, name) for node_id in selected_nodes for name in declarations_by_node[node_id]}
-    actual = {(node.node_id, declaration.name) for node in nodes for declaration in node.declarations}
-    if not actual <= expected:
-        raise SkeletonError([f"{path} contains an untargeted declaration"])
-    if {(issue.node_id, issue.declaration) for issue in unresolved} != expected - actual:
-        raise SkeletonError([f"{path} contains mismatched unresolved declarations"])
-    report = SkeletonReport(
-        blueprint_hash=blueprint_hash,
-        targets=targets,
-        selection=mode,
-        selected_nodes=selected_nodes,
-        nodes=nodes,
-        unresolved=unresolved,
-    )
+    try:
+        report = SkeletonReport(
+            blueprint_hash=blueprint_hash,
+            targets=targets,
+            selection=mode,
+            selected_nodes=selected_nodes,
+            nodes=nodes,
+            unresolved=unresolved,
+        )
+    except SkeletonError as exc:
+        raise SkeletonError([f"{path}: {issue}" for issue in exc.issues]) from exc
     if report.to_json() != json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False):
         raise SkeletonError([f"{path} is not a canonical {SKELETON_SCHEMA} report"])
     return report
@@ -571,24 +687,39 @@ def _report_unresolved(value: object) -> tuple[UnresolvedTarget, ...]:
     return tuple(unresolved)
 
 
-def _report_tables(data: dict[str, object]) -> dict[str, dict[str, object]]:
-    """Read the shared tables that report declarations refer to by name."""
+def _report_tables(data: dict[str, object]) -> dict[str, dict[object, object]]:
+    """Read the shared tables that report declarations refer to by name.
 
-    tables: dict[str, dict[str, object]] = {}
+    Trusted entries and semantic material are nested under the root module
+    whose environment they were read in and come back keyed by
+    ``(root module, name)``.
+    """
+
+    tables: dict[str, dict[object, object]] = {}
     for table in ("boundary_modules", "semantics", "trusted"):
         value = data.get(table)
         if not isinstance(value, dict):
             raise SkeletonError([f"malformed shared {table} table in skeleton report"])
         tables[table] = value
-    tables["trusted"] = {
-        name: _trusted_from_dict(item, root=name) for name, item in tables["trusted"].items()
-    }
-    for name, trusted in tables["trusted"].items():
-        if not isinstance(trusted, TrustedDeclaration) or trusted.name != name:
-            raise SkeletonError([f"mismatched shared trusted declaration {name} in skeleton report"])
-    for name, semantic in tables["semantics"].items():
-        _validate_semantic_material(_report_value(semantic, f"semantic material for {name}"), context=name)
-    modules: dict[str, object] = {}
+    for table in ("semantics", "trusted"):
+        for module, entries in tables[table].items():
+            if not isinstance(entries, dict) or not entries:
+                raise SkeletonError([f"malformed shared {table} table for root module {module} in skeleton report"])
+    trusted: dict[object, object] = {}
+    for module, entries in tables["trusted"].items():
+        for name, item in entries.items():
+            entry = _trusted_from_dict(item, root=name)
+            if entry.name != name:
+                raise SkeletonError([f"mismatched shared trusted declaration {name} in skeleton report"])
+            trusted[(module, name)] = entry
+    tables["trusted"] = trusted
+    semantics: dict[object, object] = {}
+    for module, entries in tables["semantics"].items():
+        for name, semantic in entries.items():
+            _validate_semantic_material(_report_value(semantic, f"semantic material for {name}"), context=name)
+            semantics[(module, name)] = semantic
+    tables["semantics"] = semantics
+    modules: dict[object, object] = {}
     for module, files in tables["boundary_modules"].items():
         if not isinstance(files, list) or not files:
             raise SkeletonError([f"invalid shared module identity for {module} in skeleton report"])
@@ -604,7 +735,7 @@ def _node_from_dict(
     item: object,
     *,
     targets: dict[str, tuple[str, ...]],
-    tables: dict[str, dict[str, object]],
+    tables: dict[str, dict[object, object]],
 ) -> NodeSkeleton:
     if not isinstance(item, dict):
         raise SkeletonError(["malformed article in skeleton report"])
@@ -630,7 +761,7 @@ def _node_from_dict(
     )
 
 
-def _declaration_from_dict(item: object, *, tables: dict[str, dict[str, object]]) -> DeclarationSkeleton:
+def _declaration_from_dict(item: object, *, tables: dict[str, dict[object, object]]) -> DeclarationSkeleton:
     if not isinstance(item, dict):
         raise SkeletonError(["malformed declaration in skeleton report"])
     name = _report_value(item.get("name"), "declaration name")
@@ -638,9 +769,14 @@ def _declaration_from_dict(item: object, *, tables: dict[str, dict[str, object]]
 
     def shared(field: str, table: str, what: str) -> list[tuple[str, object]]:
         names = _report_string_tuple(item.get(field), f"{field} for {name}")
-        if not set(names) <= tables[table].keys():
+        # A declaration may only name trusted entries and semantic material
+        # read in its own module's environment.
+        keys: list[object] = (
+            [(own.module, key) for key in names] if table in {"trusted", "semantics"} else list(names)
+        )
+        if not set(keys) <= tables[table].keys():
             raise SkeletonError([f"mismatched {what} for {name}"])
-        return [(key, tables[table][key]) for key in names]
+        return [(entry, tables[table][key]) for entry, key in zip(names, keys, strict=True)]
 
     assumed_semantics = tuple((key, str(value)) for key, value in shared("assumed", "semantics", "assumption semantics"))
     assumed = tuple(key for key, _ in assumed_semantics)
@@ -667,6 +803,10 @@ def _declaration_from_dict(item: object, *, tables: dict[str, dict[str, object]]
         boundary_modules=boundary_modules,
         axioms=axioms,
         axiom_semantics=axiom_semantics,
+        statement_assumed=_report_string_tuple(item.get("statement_assumed"), f"statement assumptions for {name}"),
+        statement_boundary_modules=_report_string_tuple(
+            item.get("statement_boundary_modules"), f"statement boundary modules for {name}"
+        ),
         statement=statement,
         statement_comments=_comment_ranges(
             item.get("statement_comments"), statement, context=f"the statement of {name}"
@@ -1353,7 +1493,7 @@ def _translate_lakefile(root: Path) -> bytes:
     lake = shutil.which("lake")
     if lake is None:
         raise SkeletonError(["lake is not on PATH, so lakefile.lean cannot be evaluated"])
-    with tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
+    with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
         target = Path(scratch) / "lakefile.toml"
         result = _run_bounded_command(
             [lake, "translate-config", "toml", str(target)],
@@ -1432,9 +1572,20 @@ def path_of(module: str, libraries: tuple[LeanLibrary, ...], lean_root: Path) ->
 # --------------------------------------------------------------------------- #
 
 def _probe_template() -> str:
-    """The Lean probe source, kept under probes/ beside this module."""
+    """The probe's Lean helpers, kept under probes/ beside this module."""
 
     return (Path(__file__).parent / "probes" / "skeleton_probe.lean").read_text(encoding="utf-8")
+
+
+def _render_probe_helper() -> str:
+    """Render the helper module every probe imports; see ``_build_probe_helper``."""
+
+    return _probe_template().format(
+        core_roots=", ".join(_lean_name(name) for name in _CORE_MODULE_ROOTS),
+        marker=PROBE_MARKER,
+        output_env=PROBE_OUTPUT_ENV,
+        output_limit=DEFAULT_PROBE_OUTPUT_LIMIT,
+    )
 
 
 def render_probe(
@@ -1443,21 +1594,23 @@ def render_probe(
     roots: tuple[str, ...],
     project_roots: tuple[str, ...],
 ) -> str:
-    """Render the Lean program that extracts the skeleton of every root."""
+    """Render the Lean program that extracts the skeleton of every root.
+
+    The program imports ``imports`` and the compiled helper module and makes one
+    fully qualified call, with no ``open`` or ``set_option``: the helpers were
+    elaborated without the project in scope, and signatures print as they do
+    to a file with only those imports.
+    """
 
     if not roots:
         raise SkeletonError(["refusing to render a probe with no declarations"])
     if not imports:
         raise SkeletonError(["refusing to render a probe with no imports"])
-    return _probe_template().format(
-        core_roots=", ".join(_lean_name(name) for name in _CORE_MODULE_ROOTS),
-        imports="\n".join(f"import {module}" for module in sorted(set(imports))),
-        marker=PROBE_MARKER,
-        output_env=PROBE_OUTPUT_ENV,
-        output_limit=DEFAULT_PROBE_OUTPUT_LIMIT,
-        project_roots=_lean_requests(tuple(sorted(set(project_roots)))),
-        roots=_lean_requests(roots),
-    )
+    lines = [f"import {module}" for module in sorted(set(imports))]
+    lines.append(f"import «{_PROBE_HELPER_MODULE}»")
+    project = _lean_requests(tuple(sorted(set(project_roots))))
+    lines.append(f"run_cmd AutoformSkeleton.main {project} {_lean_requests(roots)}")
+    return "\n".join(lines) + "\n"
 
 
 def _lean_name(name: str) -> str:
@@ -1510,7 +1663,7 @@ def _lean_name_parts(name: str) -> tuple[tuple[str, bool], ...]:
 
 
 def _probe_modules(probe: str) -> tuple[str, ...]:
-    """Read the generated probe's leading project imports."""
+    """Read the generated probe's leading project imports, without its helper."""
 
     modules: list[str] = []
     for line in probe.splitlines():
@@ -1522,7 +1675,8 @@ def _probe_modules(probe: str) -> tuple[str, ...]:
         module = stripped.removeprefix("import ").strip()
         if not module or any(character.isspace() for character in module):
             raise SkeletonError(["the generated skeleton probe contains an invalid import"])
-        modules.append(module)
+        if module != f"«{_PROBE_HELPER_MODULE}»":
+            modules.append(module)
     if not modules:
         raise SkeletonError(["the generated skeleton probe contains no project imports"])
     return tuple(dict.fromkeys(modules))
@@ -1569,20 +1723,8 @@ def _check_artifacts_fresh(
         )
 
 
-def run_probe(
-    probe: str,
-    lean_root: Path,
-    *,
-    timeout: float = DEFAULT_PROBE_TIMEOUT,
-    freshness_timeout: float = DEFAULT_FRESHNESS_TIMEOUT,
-    label: str = "skeleton probe",
-) -> str:
-    """Run ``probe`` with ``lake env lean`` inside the built project.
-
-    ``freshness_timeout`` bounds the Lake freshness check that runs first and
-    ``timeout`` the probe itself; neither spends the other's budget. ``label``
-    names the probe in failure messages.
-    """
+def _lake_executable(lean_root: Path, label: str = "skeleton probe") -> str:
+    """Find Lake, and refuse a project Lake has never resolved."""
 
     lake = shutil.which("lake")
     if lake is None:
@@ -1591,12 +1733,109 @@ def run_probe(
         raise SkeletonError(
             [f"lake-manifest.json is missing; run `lake build` before {_probe_purpose(label)}"]
         )
-    modules = _probe_modules(probe)
-    _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout, label=label)
-    deadline = time.monotonic() + timeout
+    return lake
+
+
+def _check_build_freshness(
+    lean_root: Path, modules: tuple[str, ...], *, timeout: float = DEFAULT_FRESHNESS_TIMEOUT
+) -> None:
+    """Run the Lake freshness check once over every module about to be probed."""
+
+    _check_artifacts_fresh(_lake_executable(lean_root), lean_root, modules, timeout=timeout)
+
+
+def _probe_environment() -> dict[str, str]:
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
+    return env
+
+
+def _build_probe_helper(lean_root: Path, directory: Path, *, timeout: float) -> Path:
+    """Compile the probe's helpers into ``directory`` and return it.
+
+    The helpers are elaborated with the project's toolchain and no project
+    module imported, so no project name, notation, or option reaches them; each
+    probe finds the module through ``LEAN_PATH``. A failure here concerns every
+    probe.
+    """
+
+    lake = _lake_executable(lean_root)
+    olean = directory / f"{_PROBE_HELPER_MODULE}.olean"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        source = directory / f"{_PROBE_HELPER_MODULE}.lean"
+        source.write_text(_render_probe_helper(), encoding="utf-8")
+        result = _run_bounded_command(
+            [lake, "env", "lean", f"--root={directory}", "-o", str(olean), str(source)],
+            cwd=lean_root,
+            timeout=timeout,
+            context="building the skeleton probe helpers",
+            env=_probe_environment(),
+        )
+    except _CommandTimedOut as exc:
+        raise SkeletonError(
+            [f"{exc.issues[0]} after {timeout:g} seconds; rerun with --timeout <seconds> for large projects"]
+        ) from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        _raise_if_core_module_shadowed(detail)
+        raise SkeletonError([f"cannot build the skeleton probe helpers\n{detail}"])
+    return directory
+
+
+def _raise_if_core_module_shadowed(detail: str, label: str = "skeleton probe") -> None:
+    """Name the dependency library at fault when Lean could not load a toolchain module."""
+
+    shadowed = _SHADOWED_CORE_MODULE.search(detail)
+    if shadowed:
+        root = shadowed.group(1).split(".", 1)[0]
+        raise SkeletonError(
+            [
+                f"the {label} cannot load toolchain module {shadowed.group(1)}: a dependency "
+                f"library probably provides modules under `{root}`, which hides the toolchain's own `{root}`; "
+                f"rename that library's modules\n{detail}"
+            ]
+        )
+
+
+def run_probe(
+    probe: str,
+    lean_root: Path,
+    *,
+    timeout: float = DEFAULT_PROBE_TIMEOUT,
+    freshness_timeout: float = DEFAULT_FRESHNESS_TIMEOUT,
+    check_freshness: bool = True,
+    helper: Path | None = None,
+    label: str = "skeleton probe",
+) -> str:
+    """Run ``probe`` with ``lake env lean`` inside the built project.
+
+    ``freshness_timeout`` bounds the Lake freshness check that runs first and
+    ``timeout`` the probe itself; neither spends the other's budget. Extraction
+    checks freshness once for all its probes and passes ``check_freshness=False``.
+    ``helper`` is the directory ``_build_probe_helper`` put the helpers in;
+    without one, a probe that imports them gets its own within ``timeout``.
+    ``label`` names the probe in failure messages.
+    """
+
+    lake = _lake_executable(lean_root, label)
+    modules = _probe_modules(probe)
+    if check_freshness:
+        _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout, label=label)
+    deadline = time.monotonic() + timeout
+    env = _probe_environment()
     with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
+        if f"import «{_PROBE_HELPER_MODULE}»" in probe.splitlines():
+            if helper is None:
+                helper = _build_probe_helper(
+                    lean_root, Path(scratch) / "helper", timeout=max(0.0, deadline - time.monotonic())
+                )
+            if not (helper / f"{_PROBE_HELPER_MODULE}.olean").is_file():
+                raise SkeletonError([f"the skeleton probe helpers are missing from {helper}"])
+            # Lake puts the project's own directories first, so the helper cannot
+            # hide a project module; one with the helper's name hides the helper,
+            # and the probe fails.
+            env["LEAN_PATH"] = os.pathsep.join(filter(None, (env.get("LEAN_PATH"), str(helper))))
         source = Path(scratch) / "AutoformSkeletonProbe.lean"
         source.write_text(probe, encoding="utf-8")
         # Records go to their own file: on stdout any other write could split one.
@@ -1620,16 +1859,7 @@ def run_probe(
         output = _read_probe_records(records, label) if result.returncode == 0 else ""
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
-        shadowed = _SHADOWED_CORE_MODULE.search(detail)
-        if shadowed:
-            root = shadowed.group(1).split(".", 1)[0]
-            raise SkeletonError(
-                [
-                    f"the {label} cannot load toolchain module {shadowed.group(1)}: a dependency "
-                    f"library probably provides modules under `{root}`, which hides the toolchain's own `{root}`; "
-                    f"rename that library's modules\n{detail}"
-                ]
-            )
+        _raise_if_core_module_shadowed(detail, label)
         uncaptured = _UNCAPTURED_ROOT_MODULE.search(detail)
         if uncaptured:
             raise SkeletonError([uncaptured.group()])
@@ -1675,6 +1905,8 @@ _FOUND_RECORD_FIELDS = frozenset(
         "signature",
         "source",
         "source_comments",
+        "statement_assumed",
+        "statement_boundary_modules",
         "statement_comments",
         "statement_source",
         "trusted",
@@ -1748,7 +1980,7 @@ def _expand_probe_material(tables: dict[str, dict[str, object]]) -> Callable[[ob
     """Replace the semantic material in ``tables`` with its text; return the expander.
 
     A fragment refers only to earlier fragments, so expansion terminates; the
-    characters it produces across the run are bounded.
+    characters it produces across the probe's output are bounded.
     """
 
     fragments: dict[int, list[object]] = {}
@@ -1875,7 +2107,7 @@ def _validate_probe_record(record: dict[str, object], *, root: str, checked: set
     if statement is not None and not isinstance(statement, str):
         raise SkeletonError([f"the skeleton probe emitted an invalid statement_source field for {root}"])
     _require_probe_comments(record, "statement_source", "statement_comments", context=root)
-    for field in ("depends", "assumed", "axioms"):
+    for field in ("depends", "assumed", "axioms", "statement_assumed", "statement_boundary_modules"):
         _require_string_list(record.get(field), field=field, context=root)
     for name, semantic in record["assumed_semantics"]:  # type: ignore[attr-defined]
         _validate_semantic_material(semantic, context=name)
@@ -2177,14 +2409,23 @@ def extract_skeletons(
     lean_root: str | Path,
     runner: ProbeRunner | None = None,
     node_ids: tuple[str, ...] | None = None,
+    timeout: float | None = None,
 ) -> SkeletonReport:
     """Extract the skeleton of every ``lean:`` declaration the blueprint names.
 
-    ``runner`` executes the rendered probe and returns Lean's standard output.
-    A declaration the lexical index cannot place is reported as unresolved
-    without running Lean, exactly as ``autoform check --lean-root`` reports it.
+    Each root module gets its own probe, whose only project import is that
+    module, so ``node_ids``, which narrows the report to those articles, never
+    changes a declaration's evidence. ``runner`` executes one rendered probe and
+    returns Lean's standard output; the default runs ``lake env lean`` after one
+    Lake freshness check and one build of the probe's helpers, and ``timeout``
+    bounds that build and each probe. A custom ``runner`` bounds its own probes,
+    so it cannot be combined with ``timeout``. A declaration the lexical index
+    cannot place is reported as unresolved without running Lean, exactly as
+    ``autoform check --lean-root`` reports it.
     """
 
+    if runner is not None and timeout is not None:
+        raise ValueError("timeout bounds the default runner's probes; a custom runner bounds its own")
     try:
         graph = load_graph(blueprint_dir)
     except GraphValidationError as exc:
@@ -2201,13 +2442,27 @@ def extract_skeletons(
         index = index_project(root)
     except OSError as error:
         raise SkeletonError([index_failure_message(error)]) from error
+    probing: Callable[[tuple[str, ...]], contextlib.AbstractContextManager[object]] | None = None
+    if runner is None:
+        probe_timeout = DEFAULT_PROBE_TIMEOUT if timeout is None else timeout
+        helper: Path | None = None
+
+        @contextlib.contextmanager
+        def probing(modules: tuple[str, ...]) -> Iterator[None]:
+            nonlocal helper
+            # The guard encloses the scratch directory, so the commands inside
+            # reuse it and a termination signal is re-delivered once the directory
+            # is gone, before any boundary module is hashed.
+            with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
+                _check_build_freshness(root, modules)
+                helper = _build_probe_helper(root, Path(scratch), timeout=probe_timeout)
+                yield
+
+        def runner(probe: str, lean_root: Path) -> str:
+            return run_probe(probe, lean_root, timeout=probe_timeout, check_freshness=False, helper=helper)
+
     report = extract_graph_skeletons(
-        graph,
-        lean_root=root,
-        libraries=libraries,
-        index=index,
-        runner=runner or run_probe,
-        node_ids=node_ids,
+        graph, lean_root=root, libraries=libraries, index=index, runner=runner, node_ids=node_ids, probing=probing
     )
     current_graph = check_inputs_unchanged(graph, root, index, inputs, activity=activity)
     for node in report.nodes:
@@ -2340,8 +2595,14 @@ def extract_graph_skeletons(
     index: SourceIndex,
     runner: ProbeRunner,
     node_ids: tuple[str, ...] | None = None,
+    probing: Callable[[tuple[str, ...]], contextlib.AbstractContextManager[object]] | None = None,
 ) -> SkeletonReport:
-    """Extract skeletons for an already loaded graph."""
+    """Extract skeletons for an already loaded graph.
+
+    ``probing``, when given, is entered with every module about to be probed and
+    held while the probes run, and only then; the default runner's freshness
+    check, helper build, scratch directory and signal guard live there.
+    """
 
     targets, selected, selection = select_lean_targets(graph, node_ids)
     passages: dict[str, tuple[str | None, str | None]] = {}
@@ -2354,10 +2615,11 @@ def extract_graph_skeletons(
         if passage_issues:
             broken_passages[node.id] = "; ".join(passage_issues)
 
+    # Lean prints signatures, and parses sources, with the notation, tokens,
+    # and attributes its imports bring into scope, so each root module gets its
+    # own probe whose only project import is that module.
     unresolved: list[UnresolvedTarget] = []
-    imports: set[str] = set()
-    roots: list[str] = []
-    root_modules: dict[str, str] = {}
+    roots: dict[str, str] = {}
     for node, names in selected:
         for name in names:
             module, reason = locate_declaration(name, index=index, libraries=libraries, lean_root=lean_root)
@@ -2369,21 +2631,23 @@ def extract_graph_skeletons(
             if module is None:
                 unresolved.append(UnresolvedTarget(node.id, name, reason or ""))
                 continue
-            imports.add(module)
-            if name not in roots:
-                roots.append(name)
-                root_modules[name] = module
+            roots.setdefault(name, module)
+    groups: dict[str, list[str]] = {}
+    for name, module in roots.items():
+        groups.setdefault(module, []).append(name)
 
     records: dict[str, dict[str, object]] = {}
     snapshot_started_ns: int | None = None
-    if roots:
-        program = render_probe(
-            imports=tuple(sorted(imports)),
-            roots=tuple(roots),
-            project_roots=tuple(root for library in libraries for root in library.roots),
-        )
+    if groups:
+        project_roots = tuple(root for library in libraries for root in library.roots)
+        jobs = [
+            (module, render_probe(imports=(module,), roots=tuple(groups[module]), project_roots=project_roots))
+            for module in sorted(groups)
+        ]
         snapshot_started_ns = time.time_ns()
-        records = parse_probe_output(runner(program, lean_root), expected_roots=tuple(roots))
+        with contextlib.nullcontext() if probing is None else probing(tuple(sorted(groups))):
+            for module, program in jobs:
+                records.update(parse_probe_output(runner(program, lean_root), expected_roots=tuple(groups[module])))
 
     nodes: list[NodeSkeleton] = []
     module_hashes: dict[tuple[str, str], str] = {}
@@ -2392,6 +2656,7 @@ def extract_graph_skeletons(
         for name in names:
             if name not in roots or node.id in broken_passages:
                 continue
+            module = roots[name]
             record = records.get(name)
             if record is None:
                 unresolved.append(UnresolvedTarget(node.id, name, "the probe returned no record"))
@@ -2402,9 +2667,15 @@ def extract_graph_skeletons(
                         node.id,
                         name,
                         "not in the built environment after importing "
-                        f"{root_modules[name]}; check the `lean:` target and declaring source",
+                        f"{module}; check the `lean:` target and declaring source",
                     )
                 )
+                continue
+            if record.get("module") != module:
+                # The packet was printed in the environment of the module its
+                # source was found in, which is not the one Lean declares it in.
+                reason = f"Lean declares it in module {record.get('module')}, not in {module} where its source was found"
+                unresolved.append(UnresolvedTarget(node.id, name, reason))
                 continue
             issue = _probe_record_issue(record)
             if issue is not None:
@@ -2582,6 +2853,8 @@ def _declaration(
         ),
         axioms=tuple(record["axioms"]),
         axiom_semantics=_semantic_pairs(record.get("axiom_semantics")),
+        statement_assumed=tuple(record["statement_assumed"]),
+        statement_boundary_modules=tuple(record["statement_boundary_modules"]),
         source=source,
         statement=statement,
         source_comments=source_comments,

@@ -1,20 +1,15 @@
-{imports}
--- Autoform skeleton probe. This file is a Python-format template: `{{`/`}}` are
--- literal braces and single-brace fields are filled by autoform_cli.skeleton.
--- It is written to a temporary file and run with `lake env lean` inside the
--- built project; it never modifies the project.
+-- Autoform skeleton probe helpers. This file is a Python-format template: `{{`/`}}`
+-- are literal braces and single-brace fields are filled by autoform_cli.skeleton.
+-- Autoform compiles it with `lake env lean -o` into a module outside the project,
+-- which it never modifies. Each probe imports one root module and this module and
+-- only calls `AutoformSkeleton.main`, so no project name, notation, or option is
+-- in scope while these helpers elaborate.
 import Lean.Util.CollectAxioms
 import Lean.Util.Path
 import Lean.Elab.Command
 import Lean.Data.Json
 
 open Lean Elab Command Meta Term
-
--- A reader must see what is quantified over: `∃ n : ℕ, …`, not `∃ n, …`.
-set_option pp.funBinderTypes true
--- and where a cast lands: `(↑n : ℚ)`, not `↑n`, since `1 / ↑n` means something
--- else in `ℕ`.
-set_option pp.coercions.types true
 
 namespace AutoformSkeleton
 
@@ -282,12 +277,20 @@ def kindOf (env : Environment) (c : Name) : String :=
   | some (.quotInfo _)   => "quot"
   | none                 => "unknown"
 
+/-- The options signatures print under, on top of the probe's defaults. -/
+def packetOptions (opts : Options) : Options :=
+  -- A reader must see what is quantified over: `∃ n : ℕ, …`, not `∃ n, …`,
+  -- and where a cast lands: `(↑n : ℚ)`, not `↑n`, since `1 / ↑n` means
+  -- something else in `ℕ`.
+  (opts.setBool `pp.funBinderTypes true).setBool `pp.coercions.types true
+
 /-- With `raw`, the signature bypasses project notation, unexpanders, and custom
 delaborators. Project syntax can print `HMul.hMul a b` as `a + b`; this form
 cannot. -/
 def signatureOf (c : Name) (raw := false) : CommandElabM String := do
-  let sig ← liftTermElabM <| withOptions (·.setBool `pp.raw raw) (PrettyPrinter.ppSignature c)
-  return sig.fmt.pretty 100
+  let sig ← liftTermElabM <|
+    withOptions (fun opts => (packetOptions opts).setBool `pp.raw raw) (PrettyPrinter.ppSignature c)
+  return sig.fmt.pretty' (← getOptions)
 
 /-- The namespace names in the words of one `open` line, and whether the
 command can go on: its names continue on more-indented lines, as in
@@ -336,8 +339,8 @@ def sourceSlice (text : String) (r : DeclarationRange) : String :=
 
 /-! Comment ranges. Lean's parser, not a lexer guess, decides what is a comment:
 a project token such as `=--` or `+/-` is code, and `/--/ … -/` is a docstring.
-Arithmetic below is spelled `Nat.succ`/`Nat.add` because project notation that
-redefines `+` is imported above this file and would apply here too. -/
+Arithmetic below is spelled `Nat.succ`/`Nat.add`, which no notation can
+reinterpret. -/
 
 /-- End of a line comment starting at `i`: the next newline, kept as layout. -/
 partial def lineCommentEnd (bytes : ByteArray) (i stop : Nat) : Nat :=
@@ -392,15 +395,11 @@ def commentsJson (bytes : ByteArray) (stx : Syntax) (cut : Nat) : Json :=
     if Nat.ble cut s || acc.contains r then acc else acc.push r
   Json.arr <| (ranges.qsort (fun a b => Nat.blt a.1 b.1)).map fun (s, e) => Json.arr #[s, e]
 
-/-- The global tokens declared by imports of `mod`. Tokens declared in `mod`
-itself are not safe here: the final environment does not record whether their
-declaration came before or after the source being inspected. Nor does it record
-where scoped tokens were opened. A `local` token is not recorded at all. -/
-def importedGlobalTokens (env : Environment) (mod : Name) : Std.HashSet String := Id.run do
+/-- The global tokens declared by `mods` and by everything they import. -/
+def globalTokens (env : Environment) (mods : Array Name) : Std.HashSet String := Id.run do
   let mut tokens : Std.HashSet String := {{}}
   let mut seen : Std.HashSet Name := {{}}
-  let some rootIdx := env.getModuleIdx? mod | return tokens
-  let mut work : Array Name := env.header.moduleData[rootIdx.toNat]!.imports.map (·.module)
+  let mut work := mods
   while h : work.size > 0 do
     let m := work[work.size - 1]
     work := work.pop
@@ -415,11 +414,20 @@ def importedGlobalTokens (env : Environment) (mod : Name) : Std.HashSet String :
       work := work.push i.module
   return tokens
 
+/-- The global tokens declared by imports of `mod`. Tokens declared in `mod`
+itself are not safe here: the final environment does not record whether their
+declaration came before or after the source being inspected. Nor does it record
+where scoped tokens were opened. A `local` token is not recorded at all. -/
+def importedGlobalTokens (env : Environment) (mod : Name) : Std.HashSet String :=
+  match env.getModuleIdx? mod with
+  | some idx => globalTokens env (env.header.moduleData[idx.toNat]!.imports.map (·.module))
+  | none => {{}}
+
 /-- Whether `text` holds a non-builtin token containing `--` or a block-comment
-opener that was not globally active through an import. The probe's combined
-imports, a later declaration, or a reconstructed scoped `open` may activate it
-here even when the source did not, so the probe then cannot safely distinguish
-that token from a comment. -/
+opener that was not globally active through an import. Imports of the root
+module that the source's module lacks, a later declaration, or a reconstructed
+scoped `open` may activate it here even when the source did not, so the probe
+then cannot safely distinguish that token from a comment. -/
 def commentLikeToken (penv : Environment) (mod : Name) (text : String) : IO Bool := do
   let builtin ← Parser.builtinTokenTable.get
   let holds (s t : String) := Nat.blt 1 (s.splitOn t).length
@@ -428,6 +436,19 @@ def commentLikeToken (penv : Environment) (mod : Name) (text : String) : IO Bool
   if found.isEmpty then return false
   let global := importedGlobalTokens penv mod
   return found.any fun t => !global.contains t
+
+/-- `env` with the token table of a file whose imports are this probe's, less
+this helper: the builtin tokens and the global tokens of those modules and of
+everything they import. There a name prints as `«…»` exactly where `#check` in
+that file escapes it, and no token that only the helper's imports declare
+changes how a source parses. -/
+def importerEnv (env : Environment) : IO Environment := do
+  -- This helper's module, found through one of its constants.
+  let helper := (env.getModuleIdxFor? ``semanticSchema).map fun idx => env.header.moduleNames[idx.toNat]!
+  let imports := (env.header.imports.map (·.module)).filter (some · != helper)
+  let builtin ← Parser.builtinTokenTable.get
+  let tokens := (globalTokens env imports).fold (fun table tk => table.insert tk tk) builtin
+  return Parser.parserExtension.modifyState env fun s => {{ s with tokens := tokens }}
 
 /-- Capture a declaration from the same source snapshot the probe inspects,
 and parse it with Lean's own parser. The surrounding source-tree guard rejects
@@ -441,7 +462,8 @@ def declarationSnippet (c : Name) :
   let mod := env.header.moduleNames[idx.toNat]!
   let sp ← getSrcSearchPath
   let some path ← sp.findWithExt "lean" mod | return none
-  let text ← IO.FS.readFile path
+  -- Lean reads CRLF line ends as LF; its positions, and the parses below, count them so.
+  let text := (← IO.FS.readFile path).crlfToLf
   let lines := text.splitOn "\n"
   let snippet := sourceSlice text r.range
   -- The declaration sits inside the namespaces its name lives in, and `open X`
@@ -526,18 +548,23 @@ def statementPrefix? (penv : Environment) (snippet : String) :
 
 /-- The declaration's source up to its value: the statement as written, without
 the proof, with its comment ranges. Parsed with Lean's own parser rather than
-cut by pattern matching. -/
+cut by pattern matching. The comments are those of the statement parsed alone,
+with `:= sorry` as its value, so no proof text changes them. -/
 def statementSource (root : Name) : CommandElabM (Option (String × Json)) := do
   let env ← getEnv
   let some (snippet, stx?, penv, mod) ← declarationSnippet root | return none
   let shown := shownSource penv mod
+  -- Comments are read from the statement alone, never from the proof.
+  let alone (written : String) : IO (Option (String × Json)) :=
+    let parsed := written ++ ":= sorry"
+    shown written.trimAsciiEnd.toString parsed (Parser.runParserCategory penv `command parsed).toOption
   let kind := kindOf env root
   -- A type declaration has no value to strip: all of it is the statement.
   if kind == "structure" || kind == "class" || kind == "inductive" then
     return ← shown snippet.trimAsciiEnd.toString snippet stx?
   let some stx := stx? | do
-    let some (written, stx) := statementPrefix? penv snippet | return none
-    shown written.trimAsciiEnd.toString (written ++ ":= sorry") (some stx)
+    let some (written, _) := statementPrefix? penv snippet | return none
+    alone written
   let some v := valueNode? stx | do
     if kind == "axiom" || kind == "opaque" then
       return ← shown snippet.trimAsciiEnd.toString snippet (some stx)
@@ -545,8 +572,7 @@ def statementSource (root : Name) : CommandElabM (Option (String × Json)) := do
   let some pos := v.getPos? | return none
   -- `pos` is a byte position: cut by bytes, not by characters, or every `∀`
   -- before the value pushes the cut past it.
-  let bytes := snippet.toUTF8.extract 0 pos.byteIdx
-  shown (String.fromUTF8! bytes).trimAsciiEnd.toString snippet (some stx)
+  alone (String.fromUTF8! (snippet.toUTF8.extract 0 pos.byteIdx))
 
 def rangeJson (c : Name) : CommandElabM Json := do
   match ← findDeclarationRanges? c with
@@ -628,10 +654,13 @@ def skeleton
   let mut edges : Array (Name × Array Name) := #[]
   let mut assumed : Array Name := #[]
   let axioms ← collectAxioms root
-  -- Axioms are part of the trust boundary even when reached only through a
-  -- theorem proof. Their types can name project definitions or external
+  -- The statement's closure comes first, and what it assumes is kept for the
+  -- statement hash, which no edit to a theorem's proof changes. Then the
+  -- axioms: they are part of the trust boundary even when reached only through
+  -- a theorem proof. Their types can name project definitions or external
   -- notions whose meaning must be bound just like statement dependencies.
-  let mut work : Array Name := axioms.push root
+  let mut statementAssumed : Option (Array Name) := none
+  let mut work : Array Name := #[root]
   while h : work.size > 0 do
     let c := work[work.size - 1]
     work := work.pop
@@ -645,37 +674,38 @@ def skeleton
       else if !isCore d && !assumed.contains d then
         assumed := assumed.push d
     edges := edges.push (c, localDeps.qsort Name.lt)
+    if work.isEmpty && statementAssumed.isNone then
+      statementAssumed := some assumed
+      work := axioms
   let sortedAssumed := assumed.qsort Name.lt
   let sortedAxioms := axioms.qsort Name.lt
-  let mut boundaryClosure := sortedAssumed
-  -- Membership beside the array: a closure can hold thousands of constants.
-  let mut inBoundaryClosure : Std.HashSet Name := Std.HashSet.ofArray sortedAssumed
-  for axiomName in sortedAxioms do
-    if !isCore axiomName && !inBoundaryClosure.contains axiomName then
-      boundaryClosure := boundaryClosure.push axiomName
-      inBoundaryClosure := inBoundaryClosure.insert axiomName
-  let mut boundaryWork := boundaryClosure
-  while h : boundaryWork.size > 0 do
-    let c := boundaryWork[boundaryWork.size - 1]
-    boundaryWork := boundaryWork.pop
-    for d in ← expand c do
-      if !isLocal d && !isCore d && !inBoundaryClosure.contains d then
-        boundaryClosure := boundaryClosure.push d
-        inBoundaryClosure := inBoundaryClosure.insert d
-        boundaryWork := boundaryWork.push d
-  let sortedBoundaryClosure := boundaryClosure.qsort Name.lt
-  let mut boundaryModules : Array Name := #[]
-  for c in sortedBoundaryClosure do
-    if let some mod := moduleOf c then
-      if !boundaryModules.contains mod then boundaryModules := boundaryModules.push mod
-  let mut boundaryModuleNames : Array Json := #[]
+  let sortedStatementAssumed := (statementAssumed.getD #[]).qsort Name.lt
+  -- The modules of `seeds` and of every external constant their meaning
+  -- reaches. Membership is a set: a closure can hold thousands of constants.
+  let boundaryOf (seeds : Array Name) : CommandElabM (Array Name) := do
+    let mut closure : Std.HashSet Name := Std.HashSet.ofArray seeds
+    let mut work := seeds
+    while h : work.size > 0 do
+      let c := work[work.size - 1]
+      work := work.pop
+      for d in ← expand c do
+        if !isLocal d && !isCore d && !closure.contains d then
+          closure := closure.insert d
+          work := work.push d
+    let mut modules : Array Name := #[]
+    for c in closure do
+      if let some mod := moduleOf c then
+        if !modules.contains mod then modules := modules.push mod
+    return modules.qsort Name.lt
+  let boundaryModules ← boundaryOf (assumed ++ axioms.filter (!isCore ·))
+  let statementModules ← boundaryOf sortedStatementAssumed
   -- Compiled artifacts, not source bytes, identify a boundary module: macros,
   -- options, and instances from outside its source change its elaborated
   -- meaning. Lean serializes module names rather than checkout paths, so the
   -- bytes are path-independent for ordinary code. Module-system builds split
   -- the artifact into `.olean`, `.olean.server`, and `.olean.private` (which
   -- holds private bodies and proofs); bind every part that exists.
-  for mod in boundaryModules.qsort Name.lt do
+  for mod in boundaryModules do
     emitShared semanticCache "module" mod do
       let olean ← findOLean mod
       unless ← olean.pathExists do
@@ -686,7 +716,6 @@ def skeleton
         if kind == "olean" || (← path.pathExists) then
           files := files.push <| Json.arr #[Json.str kind, Json.str path.toString]
       return Json.arr files
-    boundaryModuleNames := boundaryModuleNames.push (Json.str (toString mod))
   let mut items : Array Json := #[]
   -- Fields shared by root and trusted records; only a trusted one may borrow a parent's source.
   let fields (c : Name) (companion : Bool) : CommandElabM (List (String × Json)) := do
@@ -725,15 +754,21 @@ def skeleton
     ("lean_version", Json.str Lean.versionString),
     ("trusted", Json.arr items),
     ("assumed", Json.arr (sortedAssumed.map fun d => Json.str (toString d))),
-    ("boundary_modules", Json.arr boundaryModuleNames),
+    ("statement_assumed", Json.arr (sortedStatementAssumed.map fun d => Json.str (toString d))),
+    ("boundary_modules", Json.arr (boundaryModules.map fun m => Json.str (toString m))),
+    ("statement_boundary_modules", Json.arr (statementModules.map fun m => Json.str (toString m))),
     ("axioms", Json.arr (sortedAxioms.map fun d => Json.str (toString d)))] ++ (← fields root false)
 
-end AutoformSkeleton
-
-set_option maxHeartbeats 0 in
-run_cmd do
+/-- The probe's entry point: the skeleton of each requested root, keyed by the
+name as the CLI spelled it. It runs in the probe's command scope, which has no
+`open` and no option set, and with `importerEnv`'s token table, so signatures
+print as in a file with the probe's imports, with only `packetOptions` added. -/
+def main (projectRoots roots : String) : CommandElabM Unit :=
+  -- Elaborated proofs can be large; reading them has no heartbeat budget.
+  withScope (fun scope => {{ scope with opts := maxHeartbeats.set scope.opts 0 }}) do
+  withEnv (← importerEnv (← getEnv)) do
   -- The library roots come as JSON too: the code generator gives up on a long list literal.
-  let projectRoots := (← AutoformSkeleton.requestedRoots {project_roots}).toList.map (·.2)
+  let projectRoots := (← requestedRoots projectRoots).toList.map (·.2)
   let coreModules ← AutoformSkeleton.toolchainModules (← getEnv)
   -- A command's `IO.println` output is captured and printed as one message when
   -- the command ends, at a cost quadratic in its size: on a Mathlib project that
@@ -743,7 +778,9 @@ run_cmd do
   let out ← IO.FS.Handle.mk path .write
   let semanticCache : IO.Ref AutoformSkeleton.SemanticCache ← IO.mkRef {{ output := out }}
   try
-    for (request, root) in (← AutoformSkeleton.requestedRoots {roots}) do
+    for (request, root) in (← requestedRoots roots) do
       AutoformSkeleton.skeleton projectRoots coreModules semanticCache request root
   finally
     out.flush
+
+end AutoformSkeleton

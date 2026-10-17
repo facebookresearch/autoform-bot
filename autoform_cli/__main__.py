@@ -46,7 +46,6 @@ from .skeleton import (
     SkeletonError,
     extract_skeletons,
     format_report,
-    run_probe,
     write_packets,
     write_skeleton_report,
 )
@@ -393,8 +392,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--timeout",
         type=_positive_seconds,
         metavar="SECONDS",
-        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g}); "
-        "the Lake freshness check before it has its own budget",
+        help="seconds the probe helper's build, and each Lean probe, may each run "
+        f"(default {DEFAULT_PROBE_TIMEOUT:g}); "
+        "one probe runs per root module, and the budget is per probe, not a deadline "
+        "for the whole extraction; the Lake freshness check before them has its own budget",
     )
 
     render = subparsers.add_parser("render", help="build the publishable blueprint")
@@ -1361,9 +1362,7 @@ def _skeleton(args: argparse.Namespace) -> int:
         report = extract_skeletons(
             args.blueprint_dir,
             lean_root=args.lean_root,
-            runner=None
-            if args.timeout is None
-            else lambda probe, root: run_probe(probe, root, timeout=args.timeout),
+            timeout=args.timeout,
             node_ids=tuple(args.nodes) if args.nodes else None,
         )
         if args.packets is not None and not report.clean:
