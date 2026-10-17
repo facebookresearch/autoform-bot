@@ -456,6 +456,7 @@ def test_every_explorer_breadcrumb_reaches_a_published_page(tmp_path: Path) -> N
         """Check that every explorer's crumbs are published, and say where its Book crumb leads."""
         payloads = [out / "dependencies.json", *(out / "dependencies").rglob("*.json")]
         payloads.remove(out / "dependencies/index.json")
+        payloads.remove(out / "dependencies/navigation.json")
         assert out / "dependencies/scopes/algebra/groups.json" in payloads
         crumbs = [
             (payload, crumb["label"], crumb["url"])
@@ -1035,8 +1036,13 @@ def test_the_landing_page_is_the_hero_and_project_explorer_and_nothing_else(
     assert 'data-graph-src="dependencies.json"' in overview
     # The card frames the explorer and names its map, so the explorer draws neither.
     assert 'data-layout="embedded"' in overview
-    assert ".bp-dag-viewer[data-layout=embedded] { border: 0; border-radius: 0; box-shadow: none; }" in overview
-    assert ".bp-dag-viewer[data-layout=embedded] .bp-dag-context { display: none; }" in overview
+    assert '<link rel="stylesheet" href="stylesheets/blueprint-dag.css">' in overview
+    assert ".bp-dag-viewer[data-layout=embedded] { border: 0; border-radius: 0; box-shadow: none; }" in (
+        tmp_path / "out/stylesheets/blueprint-dag.css"
+    ).read_text(encoding="utf-8")
+    assert ".bp-dag-viewer[data-layout=embedded] .bp-dag-context { display: none; }" in (
+        tmp_path / "out/stylesheets/blueprint-dag.css"
+    ).read_text(encoding="utf-8")
     assert '<a href="dependencies.html">open full-page</a>' in overview
     assert "```mermaid" not in overview
     assert overview.count("blueprint-dag.js") == 1

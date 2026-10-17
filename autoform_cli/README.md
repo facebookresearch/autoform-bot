@@ -109,6 +109,31 @@ mathematical areas such as `Foundations` or `Geometry & Topology`, never
 repository or workflow buckets such as `MathlibExt` or `catalog-01`. Autoform
 does not guess areas from paths, imports, or titles.
 
+Mathematical topics and repository organization are different hierarchies.
+An optional container-only `navigation` role makes that distinction explicit:
+
+- `topic` (the default): a mathematical subject or coherent group of results.
+- `collection`: a library or organizational collection. Its mathematical
+  children are exposed in the parent's overview; the collection remains in
+  **Sources** with its own route.
+- `transparent`: a generated pagination/range container. It is flattened in
+  topic navigation and omitted from the outline and ancestor breadcrumbs.
+- `source`: a book or other source corpus, available through **Sources** rather
+  than presented as a peer mathematical concept.
+
+These roles never change article identity, containment, proof readiness, or
+dependency edges. A relation mentioning a collection itself stays attached to
+that collection; it is not attributed to a child without evidence. Source-book
+results and direct leaves remain in **All results**, including items with no
+edges. The global outline is a shared derived index, not another authored graph.
+Older pins reject the new frontmatter: move `AUTOFORM_REF` before adding it.
+
+An overview with more than twelve topics and multiple authored `area` labels
+opens at region scale. Open a region, then a topic in one click; a separate
+**Connections** control exposes its genuine prerequisites and dependents.
+Browser Back restores these scales. Regions roll up the actual topic edges;
+no geometric relation is inferred from a directory or a shared title.
+
 For a taxonomy maintained separately from article files, `blueprint/atlas.json`
 may assign the same areas without moving pages:
 
@@ -185,6 +210,7 @@ An article asserts only facts a human or agent verified:
 | Key | Meaning |
 | --- | --- |
 | `area: Geometry & Topology` | Authored mathematical region for atlas grouping. CI's `autoform check` at an older `AUTOFORM_REF` rejects the key, so move the pin first, or assign the area in `blueprint/atlas.json`, which older refs ignore. |
+| `navigation: collection` | Presentation-only container role: `topic`, `collection`, `transparent`, or `source`. Collections and pagination are transparent in mathematical navigation; books/libraries remain source facets. Older pins reject this key. |
 | `catalog: module` | A non-dispatchable leaf cataloging one existing Lean module. Its `lean:` lists the module's public keyword-declared names, and it links its declaration ledger under `blueprint/sources/` from `## Sources`; cannot be combined with `declaration` or the `mathlib*` keys. CI's `autoform check` at an older `AUTOFORM_REF` rejects the key, so move the pin first. |
 | `statement: formalized` | The Lean statement exists and compiles. Requires `lean:`. |
 | `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. CI's `autoform check` at an older `AUTOFORM_REF` rejects the marker, so move the pin first; until then, retract by removing `statement` and `proof` and keeping `lean:`. |

@@ -12,6 +12,7 @@ import html
 import json
 import math
 from collections import defaultdict
+from dataclasses import replace
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -149,6 +150,8 @@ def uses_atlas(view: GraphView) -> bool:
     chapter with module catalogs beside its sections, is a DAG.
     """
     return (
+        (view.overview and any(node.kind == "scope" and node.navigation not in {"collection", "source", "transparent"} for node in view.nodes))
+        or
         bool(view.nodes)
         and all(node.kind == "scope" for node in view.nodes)
         and (not view.edges or any(node.area for node in view.nodes))
@@ -163,11 +166,13 @@ def _atlas_positions(view: GraphView) -> dict[str, dict[str, int]]:
     variation still communicates relative scope without turning text into
     labels inside tiny bubbles.
     """
-    card_width = 232
+    card_width = 280 if view.overview else 232
     gap = 16
     region_header = 42
 
     def card_height(node: ViewNode) -> int:
+        if view.overview:
+            return 172
         if node.kind == "boundary":
             return 88
         count = max(1, node.item_count)
@@ -179,7 +184,8 @@ def _atlas_positions(view: GraphView) -> dict[str, dict[str, int]]:
 
     blocks: list[tuple[str, dict[str, dict[str, int]], int, int]] = []
     for area, members in sorted(by_area.items(), key=lambda item: (not item[0], item[0].casefold())):
-        members.sort(key=lambda node: (-node.item_count, node.title.casefold(), node.id))
+        # The view carries the source's reading order. Size and title are not
+        # reasons to reorder a chapter or its mathematical topic sequence.
         heights = {node.id: card_height(node) for node in members}
         columns = min(3, max(1, math.ceil(math.sqrt(len(members)))))
         local: dict[str, dict[str, int]] = {}
@@ -287,7 +293,20 @@ def write_payload(
 
     *book* links a chapter's or section's explorer to its textbook page.
     """
-    positions = _positions(view) if len(view.nodes) <= MAX_MAP_NODES else {}
+    known = frozenset(node.id for node in view.nodes)
+    if len(known) != len(view.nodes):
+        raise ValueError("dependency view has duplicate node ids")
+    if any(edge.source not in known or edge.target not in known for edge in view.edges):
+        raise ValueError("dependency view edge names an unknown node")
+    map_nodes = tuple(
+        node for node in view.nodes
+        if not view.overview or (node.kind == "scope" and node.navigation not in {"collection", "source", "transparent"})
+    )
+    map_ids = frozenset(node.id for node in map_nodes)
+    map_view = replace(view, nodes=map_nodes, edges=tuple(
+        edge for edge in view.edges if edge.source in map_ids and edge.target in map_ids
+    ))
+    positions = _positions(map_view) if len(map_nodes) <= MAX_MAP_NODES else {}
     degrees: dict[str, int] = {node.id: 0 for node in view.nodes}
     for edge in view.edges:
         if edge.source in degrees and edge.target in degrees:
@@ -299,6 +318,7 @@ def write_payload(
     for node in view.nodes:
         status_key = _display_status(node)
         present_statuses.add(status_key)
+        present_statuses.update(key for key, count in node.status_counts if count)
         entry: dict[str, object] = {
             "area": node.area,
             "declaration": node.declaration,
@@ -306,7 +326,7 @@ def write_payload(
             "internal_dependency_count": node.internal_dependency_count,
             "isolated": degrees[node.id] == 0,
             "kind": node.kind,
-            **({"layout": positions[node.id]} if positions else {}),
+            **({"layout": positions[node.id]} if node.id in positions else {}),
             "lean": node.lean,
             # The items the status counts add up to, so a scope's
             # "N items" header agrees with the rows beneath it.
@@ -318,6 +338,12 @@ def write_payload(
             "title": node.title,
             "url": links.get(node.id),
         }
+        if view.overview:
+            entry["map"] = node.id in map_ids
+        if node.navigation:
+            entry["navigation"] = node.navigation
+        if node.examples:
+            entry["examples"] = node.examples
         if node.catalog == "module" and node.lean:
             names = declaration_names(node.lean)
             shown = names[:_CATALOG_LEAN_NAMES]
@@ -337,7 +363,7 @@ def write_payload(
         "nodes": nodes,
         "palette": _palette(),
         "present_statuses": ordered_statuses,
-        "regions": _atlas_regions(view, positions) if uses_atlas(view) else [],
+        "regions": _atlas_regions(map_view, positions) if uses_atlas(map_view) else [],
         "schema": SCHEMA,
         "title": view.title,
         "view": {
@@ -349,6 +375,9 @@ def write_payload(
             "kind": view.kind,
             "presentation": "atlas" if uses_atlas(view) else "dag",
             "summary": view.summary,
+            **({"scope": view.scope} if view.scope is not None else {}),
+            **({"overview": True} if view.overview else {}),
+            **({"total_count": view.total_count} if view.total_count is not None else {}),
         },
     }
     return _write_json(path, payload)
@@ -369,6 +398,7 @@ def write_search_index(
             "status": _display_status(node),
             "title": node.title,
             "url": context_links.get(node.id),
+            "result": node.kind == "node" and bool(node.declaration or node.catalog),
         }
         if node.lean:
             entry["lean"] = node.lean
@@ -387,6 +417,7 @@ def render_container(
     fallback_total: int | None = None,
     layout: str = "app",
     search_href: str | None = None,
+    navigation_href: str | None = None,
 ) -> str:
     """Return a self-contained, progressively enhanced explorer host."""
     if layout not in {"app", "embedded"}:
@@ -394,6 +425,8 @@ def render_container(
     href = html.escape(quote(data_href, safe="/%"), quote=True)
     search = html.escape(quote(search_href, safe="/%"), quote=True) if search_href else ""
     search_attr = f' data-catalog-src="{search}"' if search else ""
+    navigation = html.escape(quote(navigation_href, safe="/%"), quote=True) if navigation_href else ""
+    navigation_attr = f' data-navigation-src="{navigation}"' if navigation else ""
     script = (
         f'\n<script defer src="{html.escape(quote(script_href, safe="/%"), quote=True)}"></script>'
         if script_href
@@ -431,7 +464,7 @@ def render_container(
     )
     return (
         style +
-        f'<div class="bp-dag-viewer" data-graph-src="{href}" data-layout="{layout}"{search_attr}>\n'
+        f'<div class="bp-dag-viewer" data-graph-src="{href}" data-layout="{layout}"{search_attr}{navigation_attr}>\n'
         '  <p class="bp-dag-loading" role="status" hidden>Loading dependency explorer…</p>\n'
         f"{inventory}"
         f"</div>{script}"

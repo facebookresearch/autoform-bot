@@ -32,6 +32,7 @@ _FRONTMATTER_KEYS = frozenset(
     {
         "article_id",
         "area",
+        "navigation",
         "catalog",
         "declaration",
         "lean",
@@ -112,6 +113,9 @@ class Node:
     catalog: str | None = None
     summary: str | None = None
     area: str | None = None
+    #: Presentation only: a collection is transparent in a mathematical
+    #: overview; a source is a book or other provenance, not a peer topic.
+    navigation: str | None = None
 
     @property
     def formalizable(self) -> bool:
@@ -278,6 +282,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             article_id=metadata.get("article_id"),
             source_sha256=source_hashes[parsed_node.id],
             summary=parsed_node.summary,
+            navigation=metadata.get("navigation"),
             area=metadata.get("area"),
         )
 
@@ -762,6 +767,9 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
                 f"frontmatter key {key!r}"
             )
 
+    if metadata.get("navigation") in {"collection", "source", "transparent"} and "declaration" in metadata:
+        issues.append(f"{node_id}: 'navigation' describes containers, not declaration articles")
+
     if metadata.get("statement") == _RETRACTED:
         if "lean" not in metadata:
             issues.append(
@@ -800,6 +808,10 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
     if key == "catalog":
         if folded != "module":
             return value, f"{location}: 'catalog' accepts only 'module'"
+        return folded, None
+    if key == "navigation":
+        if folded not in {"topic", "collection", "source", "transparent"}:
+            return value, f"{location}: 'navigation' accepts topic, collection, source, or transparent"
         return folded, None
     if key == "statement":
         if folded not in {_FORMALIZED, _RETRACTED}:

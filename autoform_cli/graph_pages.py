@@ -10,6 +10,7 @@ source of graph state.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -35,6 +36,7 @@ NodeLinks = Callable[[Path, Iterable[str]], Mapping[str, str]]
 #: The project explorer's payload and the search index, relative to the site root.
 PROJECT_PAYLOAD = "dependencies.json"
 SEARCH_INDEX = "dependencies/index.json"
+NAVIGATION_INDEX = "dependencies/navigation.json"
 
 
 def write_graph_pages(
@@ -88,6 +90,31 @@ def write_graph_pages(
             continue
         context_links[node.id] = _published_link(scope_pages[node.id], search_index)
     dag_viewer.write_search_index(search_index, complete, context_links=context_links)
+    navigation_index = destination / NAVIGATION_INDEX
+    navigation_nodes = []
+    for node in complete.nodes:
+        if node.id not in containers or node.navigation == "transparent":
+            continue
+        parent = graph.nodes[node.id].parent
+        while parent and graph.nodes[parent].navigation in {"collection", "transparent"}:
+            parent = graph.nodes[parent].parent
+        current: str | None = node.id
+        source_branch = False
+        while current:
+            if graph.nodes[current].navigation == "source":
+                source_branch = True
+                break
+            current = graph.nodes[current].parent
+        navigation_nodes.append({
+            "id": node.id, "title": node.title, "parent": parent,
+            "url": context_links[node.id], "count": node.item_count,
+            "source": source_branch,
+            "navigation": node.navigation or "topic",
+        })
+    navigation_index.write_text(json.dumps(
+        {"schema": "autoform-dag-navigation/v1", "nodes": navigation_nodes},
+        ensure_ascii=False, separators=(",", ":"),
+    ) + "\n", encoding="utf-8")
 
     project = project_view(graph, statuses)
     project_item_count = sum(node.item_count for node in project.nodes)
@@ -320,6 +347,7 @@ def _write_page(
         ),
         fallback_total=len(view.nodes),
         search_href=search_href,
+        navigation_href=_search_index_link(site_root / NAVIGATION_INDEX, page),
     )
     sections = [
         "---",
@@ -445,6 +473,8 @@ def _scope_breadcrumbs(
         (group_title(graph, "roadmap"), _published_link(project_page, page)),
     ]
     for node_id in reversed(lineage):
+        if node_id != scope and graph.nodes[node_id].navigation in {"collection", "transparent"}:
+            continue
         target = scope_pages.get(node_id)
         label = graph.nodes[node_id].title if node_id in graph.nodes else node_id
         items.append((label, _published_link(target, page) if target and target != page else None))

@@ -434,6 +434,51 @@ def site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
         yield url
 
 
+@pytest.fixture(scope="module")
+def mathematical_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """Publish an Atlas-shaped wiki, including its transparent source adapter roles."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("mathematical-site") / "project"
+    scaffold_project(project, title="Mathematical wiki fixture")
+    roadmap = project / "blueprint/roadmap"
+
+    def article(path: str, title: str, text: str = "", metadata: str = "") -> None:
+        target = roadmap / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(("---\n" + metadata + "\n---\n\n" if metadata else "") + "# " + title + "\n\n" + text, encoding="utf-8")
+
+    article("README.md", "All mathematics", "- [Geometry](geometry/README.md)\n- [Analysis](analysis/README.md)\n")
+    article("geometry/README.md", "Geometry", "Geometry studies shapes, distances, and smooth spaces.\n\n"
+        "- [Library](references/README.md)\n- [Book](lecture-notes/README.md)\n- [A result](result.md)\n")
+    article("geometry/references/README.md", "Reusable collection", "- [Range](display-range/README.md)\n", "navigation: collection")
+    topics = [("distance", "Distance geometry", "Metric geometry")] + [
+        (f"topic-{index}", f"Geometric topic {index}", "Metric geometry" if index < 5 else "Manifolds" if index < 9 else "Classical geometry")
+        for index in range(1, 14)
+    ]
+    article("geometry/references/display-range/README.md", "A pagination range", "\n".join(
+        f"- [{title}]({slug}/README.md)" for slug, title, _area in topics), "navigation: transparent")
+    for slug, title, area in topics:
+        prefix = "geometry/references/display-range/" + slug
+        article(prefix + "/README.md", title, "The mathematical concepts and results in this topic.\n\n"
+            "- [Distance](base.md)\n- [Triangle inequality](result.md)\n", "area: " + area)
+        article(prefix + "/base.md", "Point distance" if slug == "distance" else title + " definition",
+            "The distance between two points is the metric quantity studied here.\n", "declaration: def")
+        article(prefix + "/result.md", "Triangle inequality" if slug == "distance" else title + " result",
+            "The distance between two points is at most the sum along an intermediate point.\n\n"
+            "## Depends on\n\n- [Distance](base.md)\n", "declaration: theorem")
+    article("geometry/lecture-notes/README.md", "Geometry lecture notes", "- [Curvature](curvature.md)\n", "navigation: source")
+    article("geometry/lecture-notes/curvature.md", "Curvature result", "A source-book mathematical statement.\n", "declaration: theorem")
+    article("geometry/result.md", "A direct geometric result", "A result outside the library containers.\n", "declaration: theorem")
+    article("analysis/README.md", "Analysis", "- [Base](base.md)\n")
+    article("analysis/base.md", "Analytic base", "An analytic definition.\n", "declaration: def")
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml")))
+    with _served(project / "site") as url:
+        yield url
+
+
 def _offline(page: object, site_url: str) -> object:
     """Keep a built site's CDN scripts and web fonts off the network."""
     page.route(lambda url: not url.startswith(site_url), lambda route: route.abort())
@@ -461,6 +506,75 @@ def _load_search_index(page: object, entries: int = 64) -> object:
     search.focus()
     playwright.expect(search).to_have_attribute("placeholder", f"Search {entries} roadmap entries")
     return search
+
+
+def test_mathematical_regions_drill_to_topics_and_results_with_a_correct_back_trail(
+    desktop_page: object, mathematical_site_url: str,
+) -> None:
+    page = _open_site(desktop_page, mathematical_site_url, "dependencies/chapters/geometry.html")
+    playwright.expect(page.locator(".bp-dag-node[data-region=true]")).to_have_count(3)
+    playwright.expect(page.locator(".bp-dag-node-layer")).not_to_contain_text("Reusable collection")
+    playwright.expect(page.locator(".bp-dag-node-layer")).not_to_contain_text("pagination range")
+    playwright.expect(page.locator(".bp-dag-node-layer")).not_to_contain_text("Geometry lecture notes")
+    page.get_by_role("button", name="Open Metric geometry", exact=True).click()
+    playwright.expect(page.locator(".bp-dag-scope-title")).to_have_text("Metric geometry")
+    page.get_by_role("link", name="Open Distance geometry", exact=True).click()
+    page.wait_for_url("**/dependencies/scopes/geometry/references/display-range/distance.html")
+    playwright.expect(page.locator(".bp-dag-breadcrumb")).to_contain_text("Geometry")
+    playwright.expect(page.locator(".bp-dag-breadcrumb")).not_to_contain_text("Reusable collection")
+    playwright.expect(page.locator(".bp-dag-breadcrumb")).not_to_contain_text("pagination range")
+    playwright.expect(page.locator(".bp-dag-node-layer")).to_contain_text("Point distance")
+    page.locator('[data-autoform-node-id$="/distance/result"]').click()
+    playwright.expect(page.locator(".bp-dag-inspector")).to_contain_text("at most the sum")
+    # Selection has its own history entry, then Back restores both scope scales.
+    page.go_back()
+    page.go_back()
+    playwright.expect(page.locator(".bp-dag-scope-title")).to_have_text("Metric geometry")
+    page.go_back()
+    playwright.expect(page.locator(".bp-dag-scope-title")).to_have_text("Geometry")
+    playwright.expect(page.locator(".bp-dag-node[data-region=true]")).to_have_count(3)
+    outline = page.locator(".bp-dag-navigation")
+    playwright.expect(outline.locator('[aria-current="page"]')).to_have_text("Geometry")
+    outline.get_by_role("link", name="Analysis", exact=True).click()
+    page.wait_for_url("**/dependencies/chapters/analysis.html")
+
+
+def test_all_results_include_source_book_and_direct_leaves_while_sources_remain_a_separate_facet(
+    desktop_page: object, mathematical_site_url: str,
+) -> None:
+    page = _open_site(desktop_page, mathematical_site_url, "dependencies/chapters/geometry.html")
+    page.get_by_role("button", name="Sources", exact=True).click()
+    playwright.expect(page.locator(".bp-dag-inventory-row")).to_have_count(2)
+    playwright.expect(page.locator(".bp-dag-inventory-list")).to_contain_text("Geometry lecture notes")
+    playwright.expect(page.locator(".bp-dag-inventory-list")).not_to_contain_text("pagination range")
+    page.get_by_role("button", name="All results", exact=True).click()
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("30 of 30 listed")
+    playwright.expect(page.locator(".bp-dag-inventory-list")).to_contain_text("Curvature result")
+    playwright.expect(page.locator(".bp-dag-inventory-list")).to_contain_text("A direct geometric result")
+    playwright.expect(page.locator(".bp-dag-inventory-list")).to_contain_text("Triangle inequality")
+    # Links are real navigation controls, including keyboard activation.
+    result = page.get_by_role("link", name="Curvature result", exact=False)
+    result.focus()
+    result.press("Enter")
+    page.wait_for_url("**/dependencies/scopes/geometry/lecture-notes.html#node=geometry%2Flecture-notes%2Fcurvature")
+
+
+def test_phone_outline_is_accessible_without_losing_global_navigation(
+    mobile_page: object, mathematical_site_url: str,
+) -> None:
+    page = _open_site(mobile_page, mathematical_site_url, "dependencies/chapters/geometry.html")
+    toggle = page.get_by_role("button", name="Open wiki outline", exact=True)
+    toggle.tap()
+    outline = page.locator(".bp-dag-navigation")
+    playwright.expect(outline).to_be_visible()
+    playwright.expect(outline.locator('[aria-current="page"]')).to_have_text("Geometry")
+    outline.get_by_role("link", name="Analysis", exact=True).focus()
+    page.keyboard.press("Escape")
+    playwright.expect(outline).to_be_hidden()
+    playwright.expect(toggle).to_be_focused()
+    toggle.tap()
+    outline.get_by_role("link", name="Analysis", exact=True).tap()
+    page.wait_for_url("**/dependencies/chapters/analysis.html")
 
 
 def test_mobile_node_interaction_and_selected_sheet_collapse(mobile_page: object, explorer_url: str) -> None:
@@ -532,6 +646,8 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     page = desktop_page
     page.set_viewport_size({"width": 1440, "height": 900})
     page.goto(f"{explorer_url}/atlas.html")
+    playwright.expect(page.locator(".bp-dag-scope-title")).to_have_text("Knowledge atlas")
+    page.get_by_role("button", name="Open Geometry & Topology", exact=True).click()
     topic = page.locator('[data-autoform-node-id="atlas/topology"]')
     topic.wait_for()
     assert page.locator(".bp-dag-viewer").evaluate(
@@ -539,8 +655,8 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     )
     navigation = page.locator(".bp-dag-navigation")
     playwright.expect(navigation).to_be_visible()
-    playwright.expect(navigation).to_contain_text("Knowledge atlas")
-    playwright.expect(navigation).to_contain_text("Geometry & Topology")
+    playwright.expect(navigation).to_contain_text("Wiki outline")
+    playwright.expect(page.locator(".bp-dag-scope-title")).to_have_text("Geometry & Topology")
     playwright.expect(page.locator(".bp-dag-inspector")).to_be_hidden()
     stage_width = page.locator(".bp-dag-stage").bounding_box()["width"]
     topic_box = topic.bounding_box()
@@ -557,7 +673,7 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     assert ring.startswith("conic-gradient")
     assert ring.index("rgb(34, 119, 58)") < ring.index("rgb(0, 100, 224)")
     assert "Geometry & Topology" in (topic.get_attribute("aria-label") or "")
-    topic.click()
+    topic.get_by_role("button", name="Connections for Topology", exact=True).click()
     playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text("Topology")
     playwright.expect(page.locator(".bp-dag-inspector .bp-dag-kicker")).to_have_text("Scope · Geometry & Topology")
     playwright.expect(page.locator(".bp-dag-inspector h3", has_text="in this scope")).to_have_text(
@@ -567,9 +683,7 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
         "continuity, deformation, and invariants"
     )
     playwright.expect(page.get_by_role("link", name="Explore topic")).to_be_visible()
-    playwright.expect(page.locator('[data-autoform-node-id="atlas/algebra"]')).to_have_attribute(
-        "data-relation", "prerequisite"
-    )
+    playwright.expect(page.locator(".bp-dag-inspector")).to_contain_text("Algebra")
     selected_stage_width = page.locator(".bp-dag-stage").bounding_box()["width"]
     assert abs(selected_stage_width - stage_width) < 2
     playwright.expect(navigation.locator('[data-navigation-node-id="atlas/topology"]')).to_have_attribute(
@@ -577,7 +691,9 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     )
     # A topic made only of module inventories says so instead of its rolled-up planned status.
     page.get_by_role("button", name="Close details").click()
-    page.locator('[data-autoform-node-id="atlas/library"]').click()
+    page.get_by_role("button", name="← Knowledge atlas", exact=True).click()
+    page.get_by_role("button", name="Open Algebra", exact=True).click()
+    page.get_by_role("button", name="Connections for Library", exact=True).click()
     playwright.expect(page.locator(".bp-dag-status-pill")).to_have_text("inventory only")
     # Contents names each topic's region, which the map paints only on the canvas.
     page.get_by_role("button", name="Contents").click()
@@ -790,6 +906,7 @@ def test_a_plain_wheel_pans_the_full_page_explorer(desktop_page: object, explore
 def test_dragging_a_topic_card_pans_without_opening_it(desktop_page: object, explorer_url: str) -> None:
     page = desktop_page
     page.goto(f"{explorer_url}/atlas.html")
+    page.get_by_role("button", name="Open Algebra", exact=True).click()
     node = page.locator('[data-autoform-node-id="atlas/algebra"]')
     node.wait_for()
     before = node.bounding_box()
@@ -809,7 +926,10 @@ def test_dragging_a_topic_card_pans_without_opening_it(desktop_page: object, exp
     assert abs(after["width"] - before["width"]) < 1
     assert "node=" not in page.url
     playwright.expect(page.locator(".bp-dag-inspector")).to_be_hidden()
-    node.click()
+    node.get_by_role("link", name="Open Algebra", exact=True).click()
+    page.wait_for_url(f"{explorer_url}/other.html#node=atlas/algebra")
+    page.go_back()
+    node.get_by_role("button", name="Connections for Algebra", exact=True).click()
     playwright.expect(node).to_have_attribute("data-selected", "true")
     playwright.expect(page.get_by_role("link", name="Explore topic")).to_be_visible()
 

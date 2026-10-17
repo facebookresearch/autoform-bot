@@ -1688,6 +1688,7 @@ def _render_landing_page(
                     fallback_total=1,
                     layout="embedded",
                     search_href=graph_pages.SEARCH_INDEX,
+                    navigation_href=graph_pages.NAVIGATION_INDEX,
                 ),
                 "",
                 f'<div class="bp-map-legend" markdown="1">\n\n{breakdown}\n\n</div>'

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 
@@ -334,7 +335,7 @@ def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_pa
     assert "MIN_ATLAS_SCALE = .68" in script
     assert "fitted < readableFloor" in script
     assert 'params.get("view") === "list" || !state.mapAllowed' in script
-    assert '" of " + data.nodes.length + " shown"' in script
+    assert '" of " + available.length + " shown"' in script
     assert '"+" + hidden + " hidden"' in script
 
 
@@ -381,8 +382,8 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert 'w: node.width, h: node.height' in script
     assert 'spotlight.before.has(edge.source) && spotlight.before.has(edge.target)' in script
     assert 'spotlight.after.has(edge.source) && spotlight.after.has(edge.target)' in script
-    assert "if (atlas && !state.selected) edgeIndexes.clear()" in script
-    assert "(incident.get(state.selected.id) || []).forEach" in script
+    assert "if (atlas && !focus && !state.showConnections) edgeIndexes.clear()" in script
+    assert "(incident.get(focus.id) || []).forEach" in script
     assert "if (!state.activeDirty) return" in script
     assert "if (query === state.searchCacheQuery) return state.searchCache" in script
     assert 'data.schema !== "autoform-dag-view/v2"' in script
@@ -431,9 +432,11 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
         context_links={node.id: f"chapters/chapter.html#node={node.id}" for node in nodes},
     )
 
-    # The hierarchy rail is part of the shared runtime, but the dependency-free
-    # application still stays below one small uncompressed network response.
-    assert len(dag_viewer.viewer_script().encode()) < 68_000
+    # Region drill-down, the global outline and source/result facets share one
+    # dependency-free runtime. Bound both its parsing cost and transfer size.
+    runtime = dag_viewer.viewer_script().encode()
+    assert len(runtime) < 90_000
+    assert len(gzip.compress(runtime)) < 23_000
     assert output.stat().st_size < 300_000
     assert search.stat().st_size < 100_000
     search_payload = json.loads(search.read_text(encoding="utf-8"))

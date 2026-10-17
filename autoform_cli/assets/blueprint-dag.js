@@ -58,6 +58,49 @@
     host.classList.remove("bp-dag-enhancing");
     var view = data.view || {};
     var atlas = view.presentation === "atlas"; host.classList.toggle("bp-dag-atlas", atlas);
+    var resultsAvailable = Boolean(host.getAttribute("data-catalog-src")) && (view.overview || atlas);
+    var originalNodes = data.nodes.slice(), originalEdges = data.edges.slice();
+    var topicNodes = originalNodes.filter(function (node) { return node.map !== false; });
+    var regionGroups = new Map(), regionNodes = [];
+    if (atlas && topicNodes.length > 12) {
+      topicNodes.forEach(function (node) {
+        var area = node.area || "Further topics";
+        if (!regionGroups.has(area)) regionGroups.set(area, []);
+        regionGroups.get(area).push(node);
+      });
+      if (regionGroups.size < 2) regionGroups.clear();
+    }
+    if (regionGroups.size) {
+      var regionOwners = new Map(), regionCounts = new Map();
+      regionGroups.forEach(function (nodes, area) {
+        var counts = new Map(), items = 0, internal = 0;
+        nodes.forEach(function (node) {
+          regionOwners.set(node.id, "region:" + area); items += node.member_count || 0;
+          internal += node.internal_dependency_count || 0;
+          (node.status_counts || []).forEach(function (pair) { counts.set(pair[0], (counts.get(pair[0]) || 0) + pair[1]); });
+        });
+        var index = regionNodes.length, columns = regionGroups.size > 4 ? 3 : 2;
+        regionNodes.push({id: "region:" + area, title: area, kind: "scope", _region: area,
+          member_count: items, topic_count: nodes.length, internal_dependency_count: internal,
+          status_counts: Array.from(counts), status: (data.present_statuses || []).find(function (key) { return counts.get(key) > 0; }) || nodes[0].status,
+          summary: "Topics in this region: " + nodes.map(function (node) { return node.title; }).join(", ") + ".",
+          examples: nodes.slice(0, 4).map(function (node) { return node.title; }),
+          layout: {column: index % columns, row: Math.floor(index / columns),
+            x: index % columns * 340, y: Math.floor(index / columns) * 190, width: 310, height: 160}});
+      });
+      originalEdges.forEach(function (edge) {
+        var source = regionOwners.get(edge.source), target = regionOwners.get(edge.target);
+        if (!source || !target) return;
+        if (source === target) {
+          var region = regionNodes.find(function (node) { return node.id === source; });
+          region.internal_dependency_count += (edge.statement || 0) + (edge.proof || 0); return;
+        }
+        var key = source + "\n" + target, aggregate = regionCounts.get(key);
+        if (!aggregate) { aggregate = {source: source, target: target, statement: 0, proof: 0}; regionCounts.set(key, aggregate); }
+        aggregate.statement += edge.statement || 0; aggregate.proof += edge.proof || 0;
+      });
+      data.nodes = originalNodes.concat(regionNodes); data.edges = originalEdges.concat(Array.from(regionCounts.values()));
+    }
     var palette = data.palette || {};
     var byId = new Map(), prerequisites = new Map(), dependents = new Map(), incident = new Map();
     var statusCounts = new Map(), presentStatuses = [];
@@ -66,12 +109,17 @@
       node._index = index; node.column = layout.column; node.row = layout.row;
       node.x = Number.isFinite(layout.x) ? layout.x : (node.column || 0) * 312;
       node.y = Number.isFinite(layout.y) ? layout.y : (node.row || 0) * 66;
-      node.width = Number.isFinite(layout.width) ? layout.width : NODE_W;
-      node.height = Number.isFinite(layout.height) ? layout.height : NODE_H;
+      node.width = Number.isFinite(layout.width) ? layout.width : atlas && node.kind === "scope" ? (view.overview ? 280 : 232) : NODE_W;
+      node.height = Number.isFinite(layout.height) ? layout.height : atlas && node.kind === "scope" ? (view.overview ? 172 : 116) : NODE_H;
       node.isolated = node.isolated === true;
       byId.set(node.id, node);
       prerequisites.set(node.id, []); dependents.set(node.id, []); incident.set(node.id, []);
-      statusCounts.set(node.status, (statusCounts.get(node.status) || 0) + 1);
+      if (!statusCounts.has(node.status)) statusCounts.set(node.status, 0);
+      if (!node._region && node.kind !== "boundary" && !/^(collection|transparent)$/.test(node.navigation || "")) {
+        (node.status_counts || [[node.status, 1]]).forEach(function (pair) {
+          statusCounts.set(pair[0], (statusCounts.get(pair[0]) || 0) + pair[1]);
+        });
+      }
     });
     data.edges.forEach(function (edge, index) {
       if (prerequisites.has(edge.target) && byId.has(edge.source)) prerequisites.get(edge.target).push(edge.source);
@@ -94,13 +142,15 @@
       if (presentStatuses.indexOf(key) < 0) presentStatuses.push(key);
     });
 
-    var mapAllowed = data.nodes.length <= MAX_MAP_NODES;
+    var mapAllowed = (regionNodes.length || topicNodes.length) <= MAX_MAP_NODES;
     var state = {
       active: [], activeDirty: true, activeIds: new Set(), direction: "both", listLimit: LIST_PAGE, mode: "graph", moved: false,
       orientation: "lr", pointers: new Map(), pinch: null, query: "", searchLimit: 12, selected: null, suppressClick: false,
       searchCache: [], searchCacheQuery: null, searchError: null, searchLoading: false,
       searchNodes: data.nodes, searchPromise: null, spotlight: null, navigationLimit: atlas ? 120 : 50,
       mapAllowed: mapAllowed, readableCrop: false,
+      area: null, navigationData: null, navigationError: null, expandedNavigation: new Set(),
+      showConnections: Boolean(regionNodes.length), hovered: null,
       selectedStatuses: new Set(presentStatuses), showIsolated: true,
       transform: {x: 20, y: 20, scale: 1}
     };
@@ -112,6 +162,7 @@
     applyLocation();
     resize();
     redirectLegacyFocus();
+    loadNavigation();
 
     function buildShell() {
       var head = element("header", "bp-dag-head");
@@ -135,6 +186,8 @@
 
       var toolbar = element("div", "bp-dag-toolbar");
       toolbar.setAttribute("role", "group"); toolbar.setAttribute("aria-label", "Dependency explorer controls");
+      refs.outlineToggle = button("bp-dag-button bp-dag-outline-toggle", "Outline", "Open wiki outline");
+      refs.outlineToggle.setAttribute("aria-expanded", "false"); toolbar.appendChild(refs.outlineToggle);
       var searchWrap = refs.searchWrap = element("div", "bp-dag-search-wrap");
       refs.search = element("input", "bp-dag-search");
       refs.search.type = "search"; refs.search.placeholder = "Search the whole roadmap ( / )";
@@ -168,9 +221,15 @@
         data.nodes.every(function (node) { return node.isolated; }); toolbar.appendChild(refs.isolatedLabel);
 
       var modes = element("div", "bp-dag-modes"); modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "Explorer view");
-      refs.graphMode = button("bp-dag-mode-button", mapAllowed ? "Map" : "Map · too many items");
-      refs.graphMode.disabled = !mapAllowed; refs.listMode = button("bp-dag-mode-button", "Contents");
+      refs.graphMode = button("bp-dag-mode-button", mapAllowed ? (atlas ? "Topics" : "Map") : "Map · too many items");
+      refs.graphMode.disabled = !mapAllowed; refs.listMode = button("bp-dag-mode-button", resultsAvailable ? "All results" : "Contents");
       modes.appendChild(refs.graphMode); modes.appendChild(refs.listMode); toolbar.appendChild(modes);
+      refs.sourcesMode = button("bp-dag-mode-button", "Sources");
+      refs.sourcesMode.hidden = !((view.overview || atlas) && (host.getAttribute("data-navigation-src") || originalNodes.some(function (node) {
+        return /^(collection|source)$/.test(node.navigation || "");
+      }))); modes.appendChild(refs.sourcesMode);
+      refs.connectionsToggle = button("bp-dag-button", "Connections", "Show all connections");
+      refs.connectionsToggle.hidden = !atlas; toolbar.appendChild(refs.connectionsToggle);
 
       var zoomGroup = element("div", "bp-dag-zoom"); zoomGroup.setAttribute("role", "group"); zoomGroup.setAttribute("aria-label", "Zoom controls");
       refs.zoomOut = button("bp-dag-button", "−", "Zoom out"); refs.zoomIn = button("bp-dag-button", "+", "Zoom in");
@@ -182,11 +241,15 @@
       head.appendChild(toolbar); host.appendChild(head);
 
       var body = element("div", "bp-dag-body"), main = element("div", "bp-dag-main");
+      refs.main = main;
       refs.navigation = element("aside", "bp-dag-navigation");
+      refs.navigation.id = "bp-dag-navigation-" + instance; refs.outlineToggle.setAttribute("aria-controls", refs.navigation.id);
       refs.navigation.setAttribute("aria-label", "Wiki hierarchy");
       refs.navigationInner = element("div", "bp-dag-navigation-inner");
       refs.navigation.appendChild(refs.navigationInner); body.appendChild(refs.navigation);
       renderNavigation();
+      refs.scopeHead = element("section", "bp-dag-scope-head"); main.appendChild(refs.scopeHead);
+      renderScopeHeading();
       refs.stage = element("section", "bp-dag-stage"); refs.stage.setAttribute("role", "region");
       refs.stage.setAttribute("aria-label", "Dependency graph. " + (host.getAttribute("data-layout") === "app" ? "Drag or scroll" : "Drag with a mouse") +
         " to pan, use Control or Command plus scroll to zoom, and use arrow keys between node buttons.");
@@ -201,7 +264,8 @@
 
       refs.inventory = element("section", "bp-dag-inventory"); refs.inventory.hidden = true;
       refs.inventory.setAttribute("aria-label", "Complete node inventory");
-      var inventoryHead = element("div", "bp-dag-inventory-head"); inventoryHead.appendChild(element("h2", "", "Contents of this scope"));
+      var inventoryHead = element("div", "bp-dag-inventory-head"); refs.inventoryTitle = element("h2", "", "Contents of this scope");
+      inventoryHead.appendChild(refs.inventoryTitle);
       refs.inventorySummary = element("span", "bp-dag-inventory-summary"); inventoryHead.appendChild(refs.inventorySummary);
       refs.wholeSearch = button("bp-dag-whole-search", "search the whole roadmap");
       refs.inventoryScroll = element("div", "bp-dag-inventory-scroll"); refs.inventoryList = element("ul", "bp-dag-inventory-list");
@@ -224,30 +288,32 @@
     function renderNavigation() {
       if (!refs.navigationInner) return;
       refs.navigationInner.textContent = ""; refs.navigationNodes = new Map();
+      var close = button("bp-dag-outline-close", "Close outline");
+      close.addEventListener("click", function () { toggleOutline(false); }); refs.navigationInner.appendChild(close);
       var trail = Array.isArray(view.breadcrumbs) && view.breadcrumbs.length ? view.breadcrumbs : [];
-      var home = trail.map(function (entry) { return {label: entry.label, href: safeHref(entry.url)}; })
+      var home = trail.slice(1).map(function (entry) { return {label: entry.label, href: safeHref(entry.url)}; })
         .find(function (entry) { return entry.href; });
+      if (!home && trail.length) home = {label: trail[0].label, href: safeHref(trail[0].url)};
       if (home) {
-        var homeLink = element("a", "bp-dag-navigation-home", home.label || "Back to book");
+        var homeLink = element("a", "bp-dag-navigation-home", home.label || "All mathematics");
         homeLink.href = home.href; refs.navigationInner.appendChild(homeLink);
       }
-      refs.navigationInner.appendChild(element("p", "bp-dag-navigation-kicker", atlas ? "Library atlas" : "Current scope"));
-      refs.navigationInner.appendChild(element(document.querySelector("h1") ? "h2" : "h1",
-        "bp-dag-navigation-title", data.title || "Mathematics"));
-      if (trail.length) {
-        var path = element("ol", "bp-dag-navigation-path");
-        trail.forEach(function (entry, index) {
-          var item = element("li"), href = safeHref(entry.url);
-          if (href) { var link = element("a", "", entry.label); link.href = href; item.appendChild(link); }
-          else { item.textContent = entry.label; if (index === trail.length - 1) item.setAttribute("aria-current", "page"); }
-          path.appendChild(item);
+      refs.navigationInner.appendChild(element("h2", "bp-dag-navigation-kicker", "Wiki outline"));
+      if (state.navigationData) renderOutline();
+      else {
+        var available = originalNodes.filter(function (node) { return node.map !== false && node.kind !== "boundary"; });
+        var list = element("ul", "bp-dag-navigation-list");
+        available.slice(0, state.navigationLimit).forEach(function (node) {
+          var item = element("li"), href = safeHref(node.url), control;
+          if (href) { control = element("a", "bp-dag-navigation-link", node.title); control.href = href; }
+          else { control = button("bp-dag-navigation-link", node.title); control.addEventListener("click", function () { activateNode(node, true); }); }
+          control.dataset.navigationNodeId = node.id; refs.navigationNodes.set(node.id, control);
+          item.appendChild(control); list.appendChild(item);
         });
-        refs.navigationInner.appendChild(path);
+        refs.navigationInner.appendChild(list);
+        if (state.navigationError) refs.navigationInner.appendChild(element("p", "bp-dag-navigation-key-note",
+          "The global outline could not be loaded. Current-scope links remain available."));
       }
-      if (view.summary) refs.navigationInner.appendChild(element("p", "bp-dag-navigation-summary", view.summary));
-      refs.navigationInner.appendChild(element("p", "bp-dag-navigation-counts",
-        data.nodes.length.toLocaleString() + (atlas ? " topics" : " items") + " · " +
-        (data.edge_count || data.edges.length).toLocaleString() + " dependencies"));
       var key = element("details", "bp-dag-navigation-key");
       key.appendChild(element("summary", "", "Progress & map key"));
       presentStatuses.forEach(function (status) {
@@ -260,50 +326,115 @@
       key.appendChild(element("p", "bp-dag-navigation-key-note",
         "Arrows point from a prerequisite to a result. Solid links are used in its statement; dashed links are used in its proof."));
       refs.navigationInner.appendChild(key);
-
-      var visible = data.nodes.slice(0, state.navigationLimit), groups = new Map();
-      visible.forEach(function (node) {
-        var label = node.area || (atlas ? "Other mathematics" : "Inside this scope");
-        if (!groups.has(label)) groups.set(label, []); groups.get(label).push(node);
-      });
-      groups.forEach(function (nodes, label) {
-        var section = element("section", "bp-dag-navigation-group");
-        section.appendChild(element("h2", "", label));
-        var list = element("ul", "bp-dag-navigation-list");
-        nodes.forEach(function (node) {
-          var item = element("li"), href = safeHref(node.url), control;
-          if (href) { control = element("a", "bp-dag-navigation-link"); control.href = href; }
-          else {
-            control = button("bp-dag-navigation-link", "");
-            control.addEventListener("click", function () { activateNode(node, true); });
-          }
-          control.dataset.navigationNodeId = node.id;
-          control.appendChild(element("span", "", node.title));
-          control.appendChild(element("span", "bp-dag-navigation-meta",
-            node.kind === "scope" ? (node.member_count || 0).toLocaleString() : statusLabel(node.status)));
-          item.appendChild(control); list.appendChild(item); refs.navigationNodes.set(node.id, control);
-        });
-        section.appendChild(list); refs.navigationInner.appendChild(section);
-      });
-      if (visible.length < data.nodes.length) {
-        var more = button("bp-dag-navigation-more", "Show " + Math.min(50, data.nodes.length - visible.length) + " more");
-        more.addEventListener("click", function () { state.navigationLimit += 50; renderNavigation(); });
-        refs.navigationInner.appendChild(more);
-      }
       refs.navigationInner.appendChild(element("p", "bp-dag-navigation-key-note",
-        "Open a topic to see its contents. Select a card to read its overview and reveal related results."));
+        "Open a topic to explore its mathematics. Use a card’s connections button to inspect dependencies."));
       syncNavigationSelection();
+    }
+
+    function loadNavigation() {
+      var source = host.getAttribute("data-navigation-src"); if (!source) return;
+      fetch(source, {credentials: "same-origin"}).then(function (response) {
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        return response.json().then(function (index) { return {index: index, url: response.url}; });
+      }).then(function (loaded) {
+        if (!loaded.index || loaded.index.schema !== "autoform-dag-navigation/v1" || !Array.isArray(loaded.index.nodes))
+          throw new Error("unsupported navigation index");
+        loaded.index.nodes.forEach(function (node) { if (node.url) node.url = new URL(node.url, loaded.url).href; });
+        state.navigationData = loaded.index.nodes;
+        var indexed = new Map(state.navigationData.map(function (node) { return [node.id, node]; }));
+        var current = view.scope || "roadmap";
+        while (current && indexed.has(current)) {
+          state.expandedNavigation.add(current); current = indexed.get(current).parent;
+        }
+        renderNavigation(); renderInventory(false);
+        requestAnimationFrame(function () {
+          var active = refs.navigationInner.querySelector('[aria-current="page"]');
+          if (active) active.scrollIntoView({block: "nearest"});
+        });
+      }).catch(function (error) { state.navigationError = error.message; renderNavigation(); });
+    }
+
+    function renderOutline() {
+      var nodes = state.navigationData.filter(function (node) { return !node.source && node.navigation !== "collection"; });
+      var ids = new Set(nodes.map(function (node) { return node.id; })), children = new Map();
+      nodes.forEach(function (node) {
+        var parent = ids.has(node.parent) ? node.parent : null;
+        if (!children.has(parent)) children.set(parent, []); children.get(parent).push(node);
+      });
+      function branch(parent, depth) {
+        var list = element("ul", "bp-dag-outline-list");
+        (children.get(parent) || []).forEach(function (node) {
+          var item = element("li"), row = element("div", "bp-dag-outline-row");
+          if (children.has(node.id)) {
+            var expand = button("bp-dag-outline-expand", state.expandedNavigation.has(node.id) ? "▾" : "▸",
+              (state.expandedNavigation.has(node.id) ? "Collapse " : "Expand ") + node.title);
+            expand.setAttribute("aria-expanded", String(state.expandedNavigation.has(node.id)));
+            expand.addEventListener("click", function () {
+              if (state.expandedNavigation.has(node.id)) state.expandedNavigation.delete(node.id);
+              else state.expandedNavigation.add(node.id); renderNavigation();
+              var next = refs.navigationInner.querySelector('[data-expand-id="' + CSS.escape(node.id) + '"]'); if (next) next.focus();
+            });
+            expand.dataset.expandId = node.id; row.appendChild(expand);
+          } else row.appendChild(element("span", "bp-dag-outline-spacer"));
+          var link = element("a", "bp-dag-navigation-link", node.title), href = safeHref(node.url);
+          if (href) link.href = href;
+          link.addEventListener("click", function () { if (host.classList.contains("bp-dag-outline-open")) toggleOutline(false); });
+          if (node.id === (view.scope || "roadmap")) link.setAttribute("aria-current", "page");
+          link.dataset.navigationNodeId = "scope:" + node.id; refs.navigationNodes.set("scope:" + node.id, link);
+          row.appendChild(link); item.appendChild(row); list.appendChild(item);
+          if (depth < 16 && state.expandedNavigation.has(node.id)) item.appendChild(branch(node.id, depth + 1));
+        });
+        return list;
+      }
+      refs.navigationInner.appendChild(branch(null, 0));
+    }
+
+    function renderScopeHeading() {
+      if (!refs.scopeHead) return;
+      refs.scopeHead.textContent = "";
+      var trail = view.breadcrumbs || [], label = trail.length ? trail[trail.length - 1].label : data.title;
+      var text = state.area || label || "Mathematics";
+      var heading = element("h2", "bp-dag-scope-title", text);
+      refs.scopeHead.appendChild(heading);
+      if (state.area) {
+        var back = button("bp-dag-region-back", "← " + label);
+        back.addEventListener("click", function () { setArea(null, true); }); refs.scopeHead.insertBefore(back, heading);
+      }
+      var description = state.area ? "Explore a topic below. Its connections button reveals authored prerequisites and dependents." : view.summary;
+      if (description) refs.scopeHead.appendChild(element("p", "bp-dag-scope-description", description));
+      var count = state.area ? (regionGroups.get(state.area) || []).length : topicNodes.length;
+      refs.scopeHead.appendChild(element("p", "bp-dag-scope-count",
+        plural(state.area || !regionNodes.length ? count : regionNodes.length, state.area || !regionNodes.length ? "topic" : "region",
+          state.area || !regionNodes.length ? "topics" : "regions") +
+        (view.total_count !== null && view.total_count !== undefined ? " · " + view.total_count.toLocaleString() + " results in this scope" : "")));
+      refs.main.style.setProperty("--dag-scope-head-height", refs.scopeHead.offsetHeight + "px");
+    }
+
+    function setArea(area, updateHistory) {
+      state.area = regionGroups.has(area) ? area : null;
+      state.hovered = null;
+      clearSelection(false); state.activeDirty = true;
+      state.mapAllowed = (state.area ? regionGroups.get(state.area).length : regionNodes.length || topicNodes.length) <= MAX_MAP_NODES;
+      refs.graphMode.disabled = !state.mapAllowed;
+      if (!state.mapAllowed) state.mode = "list";
+      renderScopeHeading(); refresh(true); fit();
+      if (updateHistory) writeLocation("push");
     }
 
     function syncNavigationSelection() {
       if (!refs.navigationNodes) return;
       refs.navigationNodes.forEach(function (control, id) {
         if (state.selected && state.selected.id === id) control.setAttribute("aria-current", "true");
+        else if (id === "scope:" + (view.scope || "roadmap")) control.setAttribute("aria-current", "page");
         else control.removeAttribute("aria-current");
       });
     }
 
     function bindEvents() {
+      refs.outlineToggle.addEventListener("click", function () { toggleOutline(!host.classList.contains("bp-dag-outline-open")); });
+      refs.navigation.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && host.classList.contains("bp-dag-outline-open")) { event.preventDefault(); toggleOutline(false); }
+      });
       refs.search.addEventListener("focus", ensureGlobalSearch);
       refs.search.addEventListener("input", function () {
         state.query = refs.search.value.trim(); state.searchLimit = 12; state.listLimit = LIST_PAGE;
@@ -335,6 +466,10 @@
       });
       refs.graphMode.addEventListener("click", function () { setMode("graph", true); });
       refs.listMode.addEventListener("click", function () { setMode("list", true); });
+      refs.sourcesMode.addEventListener("click", function () { setMode("sources", true); });
+      refs.connectionsToggle.addEventListener("click", function () {
+        state.showConnections = !state.showConnections; writeLocation("push"); syncControls(); schedule();
+      });
       refs.zoomIn.addEventListener("click", function () { zoomAt(1.24, refs.stage.clientWidth / 2, refs.stage.clientHeight / 2); });
       refs.zoomOut.addEventListener("click", function () { zoomAt(.8, refs.stage.clientWidth / 2, refs.stage.clientHeight / 2); });
       refs.fit.addEventListener("click", fit); refs.hiddenButton.addEventListener("click", revealAll);
@@ -415,6 +550,16 @@
       return stops.length ? "conic-gradient(" + stops.join(",") + ")" : "var(--dag-node-stroke)";
     }
     function world(node) {
+      if (atlas && state.area && state.orientation !== "tb") {
+        var members = regionGroups.get(state.area) || [], slot = Math.max(0, members.indexOf(node));
+        var columns = Math.min(3, Math.max(1, Math.ceil(Math.sqrt(members.length))));
+        return {x: slot % columns * (node.width + 16), y: Math.floor(slot / columns) * (node.height + 16), w: node.width, h: node.height};
+      }
+      if (state.orientation === "tb" && atlas) {
+        var ordered = state.area ? regionGroups.get(state.area) || [] : regionNodes.length ? regionNodes : topicNodes;
+        var index = ordered.indexOf(node);
+        return {x: 0, y: Math.max(0, index) * (node.height + 20), w: node.width, h: node.height};
+      }
       if (state.orientation === "tb" && !atlas) {
         if (node.isolated) {
           var mobileColumns = refs.stage.clientWidth < 540 ? 2 : 3;
@@ -432,6 +577,12 @@
       var box = world(node), scale = state.transform.scale;
       return {x: box.x * scale + state.transform.x, y: box.y * scale + state.transform.y, w: box.w * scale, h: box.h * scale};
     }
+    function toggleOutline(open) {
+      host.classList.toggle("bp-dag-outline-open", open); refs.outlineToggle.setAttribute("aria-expanded", String(open));
+      refs.main.inert = open && sheetLayout(); refs.inspector.inert = open && sheetLayout();
+      if (open) (refs.navigationInner.querySelector('[aria-current="page"]') || refs.navigationInner.querySelector("a, button")).focus();
+      else refs.outlineToggle.focus();
+    }
     function inViewport(box, pad) {
       return box.x + box.w >= -pad && box.y + box.h >= -pad && box.x <= refs.stage.clientWidth + pad && box.y <= refs.stage.clientHeight + pad;
     }
@@ -448,10 +599,13 @@
       refs.filterSummary.textContent = enabled === presentStatuses.length ? "Status" : "Status · " + enabled;
       refs.graphMode.setAttribute("aria-pressed", String(state.mode === "graph"));
       refs.listMode.setAttribute("aria-pressed", String(state.mode === "list"));
-      refs.stage.hidden = state.mode !== "graph"; refs.inventory.hidden = state.mode !== "list";
+      refs.sourcesMode.setAttribute("aria-pressed", String(state.mode === "sources"));
+      refs.stage.hidden = state.mode !== "graph"; refs.inventory.hidden = state.mode === "graph";
+      refs.connectionsToggle.hidden = !atlas || state.mode !== "graph";
+      refs.connectionsToggle.setAttribute("aria-pressed", String(state.showConnections));
       if (atlas) refs.guide.textContent = state.selected ?
         "Showing the direct dependency neighborhood of " + state.selected.title :
-        "Select a topic to reveal its dependency neighborhood";
+        "Open a topic to explore it · Connections reveals its dependency neighborhood";
     }
 
     function collect(start, adjacency) {
@@ -464,7 +618,7 @@
       return found;
     }
     function pathSpotlight() {
-      if (!state.selected) return null;
+      if (!state.selected) return atlas && state.hovered ? atlasSpotlight(state.hovered) : null;
       if (atlas) return atlasSpotlight();
       if (state.spotlight) return state.spotlight;
       var before = collect(state.selected.id, prerequisites), after = collect(state.selected.id, dependents);
@@ -476,16 +630,23 @@
       var directional = null;
       if (state.selected && state.direction === "prerequisites") directional = pathSpotlight().before;
       if (state.selected && state.direction === "dependents") directional = pathSpotlight().after;
-      state.active = data.nodes.filter(function (node) {
-        return state.selectedStatuses.has(node.status) && (state.showIsolated || !node.isolated || node === state.selected) &&
+      var available = regionNodes.length && !state.area ? regionNodes :
+        state.area ? regionGroups.get(state.area) || [] : topicNodes;
+      state.active = available.filter(function (node) {
+        return matchesStatus(node) && (state.showIsolated || !node.isolated || node === state.selected) &&
           (!directional || directional.has(node.id));
       });
       state.activeIds = new Set(state.active.map(function (node) { return node.id; }));
-      var hidden = data.nodes.length - state.active.length;
-      refs.statsText.textContent = state.active.length + " of " + data.nodes.length + " shown" + (hidden ? " / " : "");
+      var hidden = available.length - state.active.length;
+      refs.statsText.textContent = state.active.length + " of " + available.length + " shown" + (hidden ? " / " : "");
       refs.hiddenButton.textContent = hidden ? "+" + hidden + " hidden" : ""; refs.hiddenButton.hidden = hidden === 0;
       refs.empty.hidden = state.active.length !== 0;
       state.activeDirty = false;
+    }
+    function matchesStatus(node) {
+      return node.kind === "scope" && (node.status_counts || []).length ? node.status_counts.some(function (pair) {
+        return pair[1] > 0 && state.selectedStatuses.has(pair[0]);
+      }) : state.selectedStatuses.has(node.status);
     }
 
     function schedule() {
@@ -494,6 +655,7 @@
     }
     function resize() {
       syncSheetAccessibility();
+      renderScopeHeading();
       if (!refs.canvas || !refs.stage.clientWidth || !refs.stage.clientHeight) return;
       var ratio = Math.min(2, window.devicePixelRatio || 1);
       refs.canvas.width = Math.max(1, Math.round(refs.stage.clientWidth * ratio));
@@ -503,13 +665,13 @@
       if (firstResize || changed) { firstResize = false; fit(); } else schedule();
     }
     function fit() {
-      calculateActive(); var nodes = state.active.length ? state.active : data.nodes; if (!nodes.length) return;
+      calculateActive(); var nodes = state.active; if (!nodes.length) return;
       var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       nodes.forEach(function (node) {
         var box = world(node); minX = Math.min(minX, box.x); minY = Math.min(minY, box.y);
         maxX = Math.max(maxX, box.x + box.w); maxY = Math.max(maxY, box.y + box.h);
       });
-      if (atlas) (data.regions || []).forEach(function (region) {
+      if (atlas && !regionNodes.length) (data.regions || []).forEach(function (region) {
         minX = Math.min(minX, region.x); minY = Math.min(minY, region.y);
         maxX = Math.max(maxX, region.x + region.width); maxY = Math.max(maxY, region.y + region.height);
       });
@@ -546,12 +708,13 @@
       if (atlas) drawRegions(ctx);
       var visible = state.active.filter(function (node) { return inViewport(screen(node), 80); });
       var edgeIndexes = new Set();
-      if (atlas && state.selected) {
-        (incident.get(state.selected.id) || []).forEach(function (index) { edgeIndexes.add(index); });
+      var focus = state.selected || state.hovered;
+      if (atlas && focus && !state.showConnections) {
+        (incident.get(focus.id) || []).forEach(function (index) { edgeIndexes.add(index); });
       } else {
         visible.forEach(function (node) { (incident.get(node.id) || []).forEach(function (index) { edgeIndexes.add(index); }); });
       }
-      if (atlas && !state.selected) edgeIndexes.clear();
+      if (atlas && !focus && !state.showConnections) edgeIndexes.clear();
       var spotlight = pathSpotlight();
       edgeIndexes.forEach(function (index) {
         var edge = data.edges[index]; if (!state.activeIds.has(edge.source) || !state.activeIds.has(edge.target)) return;
@@ -569,10 +732,12 @@
       updateOverlays(visible, spotlight);
     }
     function drawRegions(ctx) {
+      if (regionNodes.length) return;
       var regionColors = isDark() ?
         ["#17233a", "#24203b", "#16312d", "#332719", "#2d1f2a", "#1d2d3a", "#2c2b20"] :
         ["#eaf1fb", "#f0ebfb", "#e8f5f0", "#fbf2df", "#f8eaf0", "#e8f3f8", "#f4f2df"];
       (data.regions || []).forEach(function (region, index) {
+        if (state.area && region.label !== state.area) return;
         var box = {x: region.x * state.transform.scale + state.transform.x,
           y: region.y * state.transform.scale + state.transform.y,
           w: region.width * state.transform.scale, h: region.height * state.transform.scale};
@@ -585,10 +750,11 @@
         ctx.restore();
       });
     }
-    function atlasSpotlight() {
-      var before = new Set([state.selected.id]), after = new Set([state.selected.id]);
-      (prerequisites.get(state.selected.id) || []).forEach(function (id) { before.add(id); });
-      (dependents.get(state.selected.id) || []).forEach(function (id) { after.add(id); });
+    function atlasSpotlight(focus) {
+      focus = focus || state.selected;
+      var before = new Set([focus.id]), after = new Set([focus.id]);
+      (prerequisites.get(focus.id) || []).forEach(function (id) { before.add(id); });
+      (dependents.get(focus.id) || []).forEach(function (id) { after.add(id); });
       var nodes = new Set(before); after.forEach(function (id) { nodes.add(id); });
       return {after: after, before: before, nodes: nodes};
     }
@@ -668,32 +834,52 @@
         var relationLabel = control.querySelector(".bp-dag-node-relation");
         if (relationLabel) relationLabel.textContent = relation === "prerequisite" ? "Prerequisite" : relation === "dependent" ? "Dependent" : "";
         control.dataset.subdued = String(Boolean(spotlight && !spotlight.nodes.has(node.id)));
-        control.tabIndex = node === state.selected || (!state.selected && index === 0) ? 0 : -1;
+        var primary = control.querySelector(".bp-dag-node-link") || control;
+        primary.tabIndex = node === state.selected || (!state.selected && index === 0) ? 0 : -1;
+        var info = control.querySelector(".bp-dag-node-info"); if (info) info.tabIndex = primary.tabIndex;
       });
       refs.density.hidden = !state.readableCrop && !(visible.length && state.transform.scale < .34);
       refs.density.textContent = state.readableCrop ? "Readable window · pan or Contents to see all " + state.active.length + " items" :
         (visible.length && state.transform.scale < .34 ? "Zoom in to reveal " + visible.length + " node labels" : "");
     }
     function makeNodeControl(node) {
-      var control = button("bp-dag-node", ""); control.dataset.autoformNodeId = node.id; control.dataset.kind = node.kind || "node";
+      var href = safeHref(node.url), navigable = href && (node.kind === "scope" || node.kind === "boundary");
+      var composite = node.kind === "scope" || navigable;
+      var control = composite ? element("div", "bp-dag-node") : button("bp-dag-node", "");
+      control.dataset.autoformNodeId = node.id; control.dataset.kind = node.kind || "node";
+      control.dataset.region = String(Boolean(node._region));
+      control.addEventListener("pointerenter", function () { if (atlas) { state.hovered = node; schedule(); } });
+      control.addEventListener("pointerleave", function () { if (state.hovered === node) { state.hovered = null; schedule(); } });
+      var primary = navigable ? element("a", "bp-dag-node-link") : composite ? button("bp-dag-node-link", "") : control;
+      if (navigable) primary.href = href;
+      if (composite) control.appendChild(primary);
       var scopeMeta = node.kind === "scope" ? plural(node.member_count || 0, "item", "items") + " · " +
         plural(node.internal_dependency_count || 0, "internal link", "internal links") :
         node.kind === "boundary" ? "External scope · open" : null;
       control.setAttribute("aria-label", node.title + (node.area ? ", " + node.area : "") + ", " +
         (scopeMeta || statusLabel(node.status)) + (node.isolated ? ", no dependency edges in this view" : ""));
-      var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : control;
+      var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : primary;
       content.appendChild(element("span", "bp-dag-node-title", node.title));
       content.appendChild(element("span", "bp-dag-node-meta", node.kind === "scope" ?
-        plural(node.member_count || 0, "item", "items") :
+        (node._region ? plural(node.topic_count, "topic", "topics") + " · " : "") + plural(node.member_count || 0, "result", "results") :
         node.kind === "boundary" ? "Related topic" : statusLabel(node.status)));
+      if ((view.overview || node._region) && node.examples && node.examples.length) content.appendChild(element("span", "bp-dag-node-examples",
+        node._region ? node.examples.join(" · ") : node.summary || "Includes: " + node.examples.join(" · ")));
       content.appendChild(element("span", "bp-dag-node-relation", ""));
-      if (content !== control) control.appendChild(content);
-      control.addEventListener("click", function (event) {
+      if (content !== primary) primary.appendChild(content);
+      primary.setAttribute("aria-label", (navigable || node._region ? "Open " : "") + node.title);
+      primary.addEventListener("click", function (event) {
         event.stopPropagation();
         if (state.suppressClick && event.detail) { event.preventDefault(); return; }
-        activateNode(node, false);
+        if (!navigable) activateNode(node, false);
       });
-      control.addEventListener("dblclick", function () { var href = safeHref(node.url); if (href) window.location.href = href; });
+      if (node.kind === "scope") {
+        var info = button("bp-dag-node-info", "Connections", "Connections for " + node.title);
+        info.addEventListener("click", function (event) {
+          event.stopPropagation(); if (state.suppressClick && event.detail) { event.preventDefault(); return; }
+          chooseNode(node, false);
+        }); control.appendChild(info);
+      }
       control.addEventListener("keydown", function (event) {
         if (/^Arrow(Left|Right|Up|Down)$/.test(event.key)) {
           var next = nearest(node, event.key);
@@ -806,6 +992,7 @@
         state.searchError = error.message;
       }).then(function () {
         state.searchLoading = false;
+        renderInventory(false);
         if (refs.searchResults.hidden) return;
         var focused = document.activeElement, inside = refs.searchResults.contains(focused);
         var key = inside && (focused.dataset.resultId || "more");
@@ -887,9 +1074,10 @@
     function activateNode(node, moveCamera) {
       var local = byId.get(node.id); if (local) node = local;
       var href = safeHref(node.url);
+      if (node._region) { setArea(node._region, true); return; }
       if (!local) { if (href) window.location.href = href; return; }
       if (node.kind === "boundary" && href) { window.location.href = href; return; }
-      if (node.kind === "scope" && state.selected === node && href) { window.location.href = href; return; }
+      if ((node.kind === "scope" || node.map === false) && href) { window.location.href = href; return; }
       chooseNode(node, moveCamera);
     }
     function chooseNode(node, moveCamera) {
@@ -905,7 +1093,7 @@
     }
     function focusNodeControl(node) {
       requestAnimationFrame(function () { requestAnimationFrame(function () {
-        var control = overlays.get(node.id); if (control) control.focus(); else refs.sheetHandle.focus();
+        var control = overlays.get(node.id); if (control) (control.querySelector(".bp-dag-node-link") || control).focus(); else refs.sheetHandle.focus();
       }); });
     }
 
@@ -959,7 +1147,7 @@
     function onStatusChange() {
       state.selectedStatuses = new Set();
       refs.statusInputs.forEach(function (input, key) { if (input.checked) state.selectedStatuses.add(key); });
-      if (state.selected && !state.selectedStatuses.has(state.selected.status)) {
+      if (state.selected && !matchesStatus(state.selected)) {
         state.selected = null; state.direction = "both"; state.spotlight = null;
         host.classList.remove("bp-dag-has-selection"); setSheet(false);
         refs.announcement.textContent = "Selection cleared because its status is hidden.";
@@ -968,8 +1156,9 @@
     }
     function setMode(mode, updateHistory) {
       if (mode === "graph" && !state.mapAllowed) return;
-      state.mode = mode; syncControls(); if (mode === "list") renderInventory(true); else schedule();
-      if (updateHistory) writeLocation("replace");
+      state.mode = mode; syncControls(); if (mode !== "graph") renderInventory(true); else schedule();
+      if (mode === "list" && resultsAvailable) ensureGlobalSearch();
+      if (updateHistory) writeLocation("push");
     }
 
     function renderInspector() {
@@ -1071,25 +1260,55 @@
 
     function inventoryNodes() {
       var query = state.query.toLocaleLowerCase();
-      var nodes = query ? rankMatches(data.nodes, query).map(function (match) { return match.node; }) : data.nodes;
-      return nodes.filter(function (node) { return state.selectedStatuses.has(node.status); });
+      var nodes;
+      if (state.mode === "sources") {
+        nodes = originalNodes.filter(function (node) { return /^(source|collection)$/.test(node.navigation || ""); });
+        if (state.navigationData) {
+          var included = new Set(nodes.map(function (node) { return node.id.replace(/^scope:/, ""); }));
+          state.navigationData.forEach(function (node) {
+            if (/^(source|collection)$/.test(node.navigation) && !included.has(node.id) && inScope(node.id)) {
+              nodes.push({id: node.id, title: node.title, url: node.url, kind: "scope", navigation: node.navigation,
+                member_count: node.count});
+            }
+          });
+        }
+      } else if (resultsAvailable) {
+        nodes = state.searchNodes.filter(function (node) {
+          return (node.result === true || (node.result === undefined && node.kind === "node")) && inScope(node.id) &&
+            (!state.area || (regionGroups.get(state.area) || []).some(function (topic) {
+              var prefix = topic.id.replace(/^scope:/, ""); return node.id === prefix || node.id.startsWith(prefix + "/");
+            }));
+        });
+      } else nodes = originalNodes;
+      if (query) nodes = rankMatches(nodes, query).map(function (match) { return match.node; });
+      return nodes.filter(function (node) { return state.mode === "sources" || matchesStatus(node); });
+    }
+    function inScope(id) {
+      var scope = view.scope; return !scope || scope === "roadmap" || id === scope || id.startsWith(scope + "/");
     }
     function renderInventory(resetScroll) {
       if (!refs.inventoryList) return;
       var nodes = inventoryNodes(), visible = nodes.slice(0, state.listLimit); refs.inventoryList.textContent = "";
       refs.inventoryRows = new Map();
       visible.forEach(function (node) {
-        var item = element("li"), row = button("bp-dag-inventory-row", "");
+        var item = element("li"), href = safeHref(node.url);
+        var linkRow = (resultsAvailable || node.kind === "scope" || state.mode === "sources") && href;
+        var row = linkRow ? element("a", "bp-dag-inventory-row") : button("bp-dag-inventory-row", "");
+        if (linkRow) row.href = href;
         if (node === state.selected) row.setAttribute("aria-current", "true");
         refs.inventoryRows.set(node.id, row);
         row.appendChild(element("span", "bp-dag-inventory-title", node.title));
-        row.appendChild(element("span", "bp-dag-inventory-id", node.id));
+        if (node.summary) row.appendChild(element("span", "bp-dag-inventory-description", node.summary));
+        else if (node.lean) row.appendChild(element("span", "bp-dag-inventory-id", node.lean));
         row.appendChild(element("span", "bp-dag-inventory-meta",
-          statusLabel(node.status) + (node.area ? " · " + node.area : "") + (node.isolated ? " · isolated" : "")));
-        row.addEventListener("click", function () { activateNode(node, true); }); item.appendChild(row); refs.inventoryList.appendChild(item);
+          state.mode === "sources" ? (node.navigation === "source" ? "Source book" : "Library collection") + " · " + (node.member_count || 0) + " results" :
+          statusLabel(node.status) + (node.area ? " · " + node.area : "")));
+        if (!linkRow) row.addEventListener("click", function () { activateNode(node, true); }); item.appendChild(row); refs.inventoryList.appendChild(item);
       });
+      refs.inventoryTitle.textContent = state.mode === "sources" ? "Books and libraries" : resultsAvailable ? "Mathematical results" : "Contents of this scope";
       refs.inventorySummary.textContent = visible.length + " of " + nodes.length + " listed" +
-        (state.mapAllowed ? " · items without edges included" : " · map unavailable above " + MAX_MAP_NODES + " items");
+        (state.mode === "list" && state.searchLoading ? " · loading all results…" : state.searchError && (view.overview || atlas) ? " · index unavailable; showing local results" :
+          state.mode === "list" && !view.overview && !atlas ? " · items without edges included" : "");
       if (state.query && host.getAttribute("data-catalog-src")) {
         refs.inventorySummary.appendChild(document.createTextNode(" · ")); refs.inventorySummary.appendChild(refs.wholeSearch);
       }
@@ -1104,6 +1323,13 @@
     function locationParams() { return new URLSearchParams(window.location.hash.replace(/^#/, "")); }
     function applyLocation() {
       var params = locationParams(), node = byId.get(params.get("node")) || null, direction = params.get("direction");
+      var previousArea = state.area;
+      var area = params.get("area") || (node && !node._region && node.area);
+      state.area = regionGroups.has(area) ? area : null;
+      state.showConnections = params.get("links") === "1" || (params.get("links") !== "0" && Boolean(regionNodes.length));
+      state.hovered = null;
+      state.mapAllowed = (state.area ? regionGroups.get(state.area).length : regionNodes.length || topicNodes.length) <= MAX_MAP_NODES;
+      refs.graphMode.disabled = !state.mapAllowed;
       var listed = inventoryKey();
       state.selected = node;
       state.direction = node && /^(prerequisites|dependents|both)$/.test(direction || "") ? direction : "both";
@@ -1114,23 +1340,28 @@
       }));
       else state.selectedStatuses = new Set(presentStatuses);
       state.showIsolated = params.get("isolates") !== "0";
-      state.mode = params.get("view") === "list" || !state.mapAllowed ? "list" : "graph";
+      state.mode = params.get("view") === "sources" && !refs.sourcesMode.hidden ? "sources" :
+        params.get("view") === "list" || !state.mapAllowed ? "list" : "graph";
       state.activeDirty = true; state.spotlight = null;
       if (node) {
         state.selectedStatuses.add(node.status);
         host.classList.add("bp-dag-has-selection"); setSheet(true);
       } else { host.classList.remove("bp-dag-has-selection"); setSheet(false); }
-      syncControls(); renderInspector(); renderInventory(inventoryKey() !== listed); schedule();
+      renderScopeHeading(); syncControls(); renderInspector(); renderInventory(inventoryKey() !== listed); schedule();
+      if (state.mode === "list" && resultsAvailable) ensureGlobalSearch();
       if (node) setTimeout(function () { center(node, .82); }, 0);
+      else if (previousArea !== state.area) requestAnimationFrame(fit);
     }
     function writeLocation(method) {
       var params = new URLSearchParams();
+      if (state.area) params.set("area", state.area);
+      if (state.showConnections !== Boolean(regionNodes.length)) params.set("links", state.showConnections ? "1" : "0");
       if (state.selected) params.set("node", state.selected.id);
       if (state.selected && state.direction !== "both") params.set("direction", state.direction);
       if (state.selectedStatuses.size !== presentStatuses.length) params.set("status",
         state.selectedStatuses.size ? Array.from(state.selectedStatuses).join(",") : "-");
       if (!state.showIsolated) params.set("isolates", "0");
-      if (state.mode === "list") params.set("view", "list");
+      if (state.mode !== "graph") params.set("view", state.mode);
       var hash = params.toString();
       var target = window.location.pathname + window.location.search + (hash ? "#" + hash : "");
       var current = window.location.pathname + window.location.search + window.location.hash;
