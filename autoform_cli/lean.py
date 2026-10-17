@@ -814,23 +814,18 @@ _ONE_COMPONENT = re.compile(r"(?:«[^«»]*»|[^.«»])+")
 
 _RAW_OPEN = re.compile(r'r(#*)"')
 _CHAR_LITERAL = re.compile(r"'(?:\\.|[^'\\\n])*'")
-# Where a comment, literal, or interpolation brace can start. The text between
-# two of these positions is copied as one slice, not character by character.
-_CODE_EVENT = re.compile(r"""--|/-|r#*"|["«']""")
-_INTERPOLATION_EVENT = re.compile(r"""--|/-|r#*"|["«'{}]""")
+# _without_lean_comments copies the text between two matches of these patterns
+# unread, so each must match every position its branch of the loop reacts to:
+# a branch whose trigger is missing never runs, while an extra match only
+# copies one character. In code, a comment, literal or interpolation brace can
+# start there; inside a literal, its closer (which starts with ", » or '), an
+# escape, or an interpolation.
+_CODE_EVENT = re.compile(rf"""--|/-|{_RAW_OPEN.pattern}|["«']""")
+_INTERPOLATION_EVENT = re.compile(rf"""--|/-|{_RAW_OPEN.pattern}|["«'{{}}]""")
+_LITERAL_EVENT = re.compile(r"""["»'\\{]""")
+# Inside a block comment: where a nested comment opens or the current one closes.
+# Every match changes the depth, so this pattern can't match anything extra.
 _COMMENT_EVENT = re.compile(r"-/|/-")
-_LITERAL_EVENTS: dict[tuple[str, bool, bool], re.Pattern[str]] = {}
-
-
-def _literal_event(close: str, interpolated: bool) -> re.Pattern[str]:
-    """Where a literal ended by *close* can next close, escape, or interpolate."""
-
-    key = (close[0], close in {'"', "'"}, interpolated)
-    pattern = _LITERAL_EVENTS.get(key)
-    if pattern is None:
-        chars = close[0] + ("\\" if key[1] else "") + ("{" if interpolated else "")
-        pattern = _LITERAL_EVENTS[key] = re.compile(f"[{re.escape(chars)}]")
-    return pattern
 
 
 def _without_lean_comments(text: str) -> str:
@@ -841,16 +836,17 @@ def _without_lean_comments(text: str) -> str:
     index = 0
     while index < len(text):
         top = stack[-1] if stack else None
-        if top is not None and top[0] is not None:
+        literal = top is not None and top[0] is not None
+        events = _LITERAL_EVENT if literal else _CODE_EVENT if top is None else _INTERPOLATION_EVENT
+        event = events.search(text, index)
+        if event is None:
+            out.append(text[index:])
+            break
+        out.append(text[index : event.start()])
+        index = event.start()
+        char = text[index]
+        if literal:
             close, interpolated = top
-            event = _literal_event(close, interpolated).search(text, index)
-            if event is None:
-                out.append(text[index:])
-                break
-            if event.start() > index:
-                out.append(text[index : event.start()])
-                index = event.start()
-            char = text[index]
             if text.startswith(close, index):
                 out.append(close)
                 index += len(close)
@@ -865,14 +861,6 @@ def _without_lean_comments(text: str) -> str:
             out.append(char)
             index += 1
             continue
-        event = (_CODE_EVENT if top is None else _INTERPOLATION_EVENT).search(text, index)
-        if event is None:
-            out.append(text[index:])
-            break
-        if event.start() > index:
-            out.append(text[index : event.start()])
-            index = event.start()
-        char = text[index]
         if text.startswith("--", index):
             newline = text.find("\n", index + 2)
             if newline < 0:
@@ -882,25 +870,24 @@ def _without_lean_comments(text: str) -> str:
             continue
         if text.startswith("/-", index):
             # `/--` and `/-!` open a docstring whose body starts after the marker.
-            depth, index = 1, index + (3 if text[index + 2 : index + 3] in {"-", "!"} else 2)
-            out.append(" ")
-            while index < len(text) and depth:
-                pair = _COMMENT_EVENT.search(text, index)
-                end = len(text) if pair is None else pair.start()
-                out.append("\n" * text.count("\n", index, end))
-                if pair is None:
-                    index = end
-                    break
+            depth, start = 1, index + (3 if text[index + 2 : index + 3] in {"-", "!"} else 2)
+            index = len(text)
+            for pair in _COMMENT_EVENT.finditer(text, start):
                 depth += 1 if pair.group() == "/-" else -1
-                index = pair.end()
-            continue
-        raw = _RAW_OPEN.match(text, index)
-        if raw:
-            out.append(raw.group())
-            index = raw.end()
-            stack.append(['"' + raw.group(1), False])
+                if not depth:
+                    index = pair.end()
+                    break
+            out.append(" " + "\n" * text.count("\n", start, index))
             continue
         previous = text[index - 1] if index else " "
+        # An `r` inside a name is part of it. Lean reads no escapes in a raw
+        # string, so it ends at the first closer: `r"\"` is one backslash.
+        raw = None if previous.isalnum() or previous in "_'!?.«" else _RAW_OPEN.match(text, index)
+        if raw:
+            close = text.find('"' + raw.group(1), raw.end())
+            index = len(text) if close < 0 else close + 1 + len(raw.group(1))
+            out.append(text[raw.start() : index])
+            continue
         if char == '"':
             interpolated = previous == "!" and index >= 2 and (text[index - 2].isalnum() or text[index - 2] == "_")
             stack.append(['"', interpolated])
