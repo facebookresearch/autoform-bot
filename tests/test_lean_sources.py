@@ -215,6 +215,27 @@ def test_attributes_and_modifiers_do_not_hide_a_declaration(tmp_path: Path) -> N
     assert _index(tmp_path).find("Outer.Inner.gamma") is not None
 
 
+def test_a_declaration_name_may_start_on_the_next_nonblank_line(tmp_path: Path) -> None:
+    index = _index(
+        tmp_path,
+        "namespace Demo\n"
+        "public theorem\n"
+        "    split_theorem : True := trivial\n"
+        "public def_wanted\n\n"
+        "    split_wanted : Nat\n"
+        "public structure\n"
+        "    SplitStructure where\n"
+        "  value : Nat\n"
+        "end Demo\n",
+    )
+
+    assert [(name, declaration.line, declaration.keyword) for name, declaration in index.declarations.items()] == [
+        ("Demo.split_theorem", 2, "theorem"),
+        ("Demo.split_wanted", 4, "def_wanted"),
+        ("Demo.SplitStructure", 7, "structure"),
+    ]
+
+
 def test_commented_out_code_is_not_indexed(tmp_path: Path) -> None:
     index = _index(tmp_path)
 
