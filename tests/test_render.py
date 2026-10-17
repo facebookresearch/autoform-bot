@@ -1662,12 +1662,18 @@ def test_node_links_resolve_each_target_page_once(tmp_path: Path, monkeypatch: p
 
     links = _anchored_links(targets, page)
 
-    # A page reads only the nodes it shows, so nothing is linked before then.
+    # A page reads only the nodes it shows, so nothing is linked before then,
+    # and reading one node links only its own target page.
     assert calls == []
     assert links["a/7"] == "a.html#n7"
+    assert calls == [chapter]
     assert links["b"] == "b/index.html"
     assert links["here"] == "#self"
-    assert len(dict(links)) == len(targets)
+    assert dict(links) == {
+        **{f"a/{index}": f"a.html#n{index}" for index in range(20)},
+        "b": "b/index.html",
+        "here": "#self",
+    }
     assert sorted(calls) == [chapter, other]
     # Once to compare it with the current page, once inside relative_link.
     assert resolved.count(chapter) <= 2
@@ -1712,8 +1718,9 @@ def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypa
 
 
 def test_a_focus_page_asks_for_its_node_links_once(tmp_path: Path) -> None:
-    """Each request builds a link for every node, so asking twice per focus
-    page doubled the cost of the largest group of generated pages."""
+    """Each request resolves the page, and every target page it reads, afresh,
+    so asking twice per focus page repeated that work on the largest group of
+    generated pages."""
     from autoform_cli.graph_pages import focus_page_path, write_graph_pages
 
     project = _project(tmp_path)

@@ -1946,45 +1946,43 @@ def _anchored_links(
     page: Path,
     *,
     extension: str = ".html",
-    hrefs: dict[Path, str] | None = None,
 ) -> Mapping[str, str]:
     """Link every node to its statement on the published chapter page.
 
     Use ``.md`` for links MkDocs will parse -- it validates and rewrites those
     itself -- and ``.html`` for raw HTML and Mermaid, which it never sees. A
-    statement on the current page is just a fragment. Calls for the same page
-    and extension can share *hrefs*, so each target page is linked once across
-    all of them.
+    statement on the current page is just a fragment. The mapping covers every
+    node but builds a link only when it is read, so read just the nodes the page
+    shows: iterating or copying it builds them all, and with a page per node
+    that makes rendering quadratic again.
     """
-    return _PageLinks(targets, page, extension, {} if hrefs is None else hrefs)
+    return _PageLinks(targets, page, extension)
 
 
 class _PageLinks(Mapping[str, str]):
-    """The links from one page to every node, each built when first read.
+    """The links from one page to every node, each built when read.
 
     A page names a few nodes but *targets* holds the whole graph, and a site
     has a page per node, so building every link up front made rendering
     quadratic in the size of the graph.
     """
 
-    def __init__(self, targets: dict[str, tuple[Path, str]], page: Path, extension: str, hrefs: dict[Path, str]):
+    def __init__(self, targets: dict[str, tuple[Path, str]], page: Path, extension: str) -> None:
         self._targets = targets
         self._page = page
-        self._resolved_page = page.resolve()
+        self._resolved_page: Path | None = None
         self._extension = extension
-        self._hrefs = hrefs
-        self._links: dict[str, str] = {}
+        self._hrefs: dict[Path, str] = {}
 
     def __getitem__(self, node_id: str) -> str:
-        link = self._links.get(node_id)
-        if link is not None:
-            return link
         target, anchor = self._targets[node_id]
         # Many nodes share a chapter page, and resolving a path walks the disk,
         # so each target page is linked once. The current page is cached as ""
         # and links as a bare fragment.
         href = self._hrefs.get(target)
         if href is None:
+            if self._resolved_page is None:
+                self._resolved_page = self._page.resolve()
             if target.resolve() == self._resolved_page:
                 href = ""
             else:
@@ -1993,11 +1991,11 @@ class _PageLinks(Mapping[str, str]):
                     href = _as_published(href)
             self._hrefs[target] = href
         if href:
-            link = f"{href}#{anchor}" if anchor else href
-        else:
-            link = f"#{anchor}" if anchor else "#"
-        self._links[node_id] = link
-        return link
+            return f"{href}#{anchor}" if anchor else href
+        return f"#{anchor}" if anchor else "#"
+
+    def __contains__(self, node_id: object) -> bool:
+        return node_id in self._targets
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._targets)
@@ -2041,10 +2039,9 @@ def _rewrite_links(
     such as a source note's evidence link to a Lean file, keeps its text and
     loses its target instead of dangling.
     """
-    # Most pages name a few nodes, so each node link is built where it is used.
-    # A coverage page can name most of the graph, so one cache serves the whole
-    # text and each target page it reaches is linked once.
-    page_hrefs: dict[Path, str] = {}
+    # A coverage page can name most of the graph, so one mapping serves the
+    # whole text and links each target page it reaches once.
+    links = _anchored_links(targets, page, extension=".md")
 
     def moved_target(raw: str) -> str | None:
         """Where *raw* should point once published, or None to leave it alone."""
@@ -2063,7 +2060,7 @@ def _rewrite_links(
             return None
         node_id = node_sources.get(candidate)
         if node_id is not None:
-            href = _anchored_links({node_id: targets[node_id]}, page, extension=".md", hrefs=page_hrefs)[node_id]
+            href = links[node_id]
             if not targets[node_id][1] and separator:
                 href = f"{'' if href == '#' else href}#{fragment}"
             before, hashed, anchor = href.partition("#")  # the query goes before the anchor
