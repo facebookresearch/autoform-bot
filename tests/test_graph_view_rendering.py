@@ -375,7 +375,6 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert "control.dataset.autoformNodeId = node.id" in script
     assert "new ResizeObserver(resize)" in script
     assert "state.pointers.size === 2" in script
-    assert "event.type === \"pointerup\" && wasSingle && !state.moved" in script
     assert "touch-action: pan-y" in container
     assert '.bp-dag-viewer[data-layout=app] .bp-dag-stage { touch-action: none; }' in container
     assert 'url.origin === window.location.origin' in script

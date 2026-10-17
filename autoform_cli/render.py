@@ -182,11 +182,12 @@ STYLESHEET = "stylesheets/blueprint.css"
 MERMAID_SCRIPT = "javascripts/blueprint-mermaid.js"
 LIVE_SCRIPT = "javascripts/blueprint-live.js"
 DAG_SCRIPT = dag_viewer.SCRIPT_PATH
+DAG_STYLESHEET = dag_viewer.STYLE_PATH
 LOGO = "assets/autoform.svg"
 #: Paths render writes at fixed places; an authored path differing only in case would collide.
-_GENERATED_PATHS = _GENERATED_ROOT_ENTRIES | {STYLESHEET, MERMAID_SCRIPT, LIVE_SCRIPT, DAG_SCRIPT, LOGO}
+_GENERATED_PATHS = _GENERATED_ROOT_ENTRIES | {STYLESHEET, MERMAID_SCRIPT, LIVE_SCRIPT, DAG_SCRIPT, DAG_STYLESHEET, LOGO}
 #: The explorer's files at paths a blueprint may already use for files of its own.
-_EXPLORER_PATHS = (graph_pages.PROJECT_PAYLOAD, DAG_SCRIPT)
+_EXPLORER_PATHS = (graph_pages.PROJECT_PAYLOAD, DAG_SCRIPT, DAG_STYLESHEET)
 _ASSET_DIR = Path(__file__).resolve().parent / "assets"
 
 
@@ -688,6 +689,7 @@ def _render_pages(
         (MERMAID_SCRIPT, _mermaid_script()),
         (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
         (DAG_SCRIPT, dag_viewer.viewer_script()),
+        (DAG_STYLESHEET, dag_viewer.viewer_styles()),
         (LOGO, _logo()),
     ):
         asset = destination / relative
@@ -1679,6 +1681,7 @@ def _render_landing_page(
                 dag_viewer.render_container(
                     graph_pages.PROJECT_PAYLOAD,
                     script_href=mermaid.relative_link(destination / DAG_SCRIPT, page, ".js"),
+                    style_href=mermaid.relative_link(destination / DAG_STYLESHEET, page, ".css"),
                     fallback_links=(
                         ("Open the dependency explorer", "dependencies.html"),
                     ),

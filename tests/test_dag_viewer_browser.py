@@ -675,7 +675,7 @@ def test_choosing_from_browse_keeps_the_readers_place_and_focus(desktop_page: ob
     row.click()
     playwright.expect(row).to_have_attribute("aria-current", "true")
     assert scroll.evaluate("element => element.scrollTop") == offset
-    close = page.get_by_role("button", name="Clear node selection")
+    close = page.get_by_role("button", name="Clear selection")
     close.press("Enter")
     playwright.expect(row).to_be_focused()
     assert scroll.evaluate("element => element.scrollTop") == offset
@@ -781,6 +781,33 @@ def test_a_plain_wheel_pans_the_full_page_explorer(desktop_page: object, explore
     assert 1.0 < node.evaluate(scale) / unzoomed < 1.1
 
 
+def test_dragging_a_topic_card_pans_without_opening_it(desktop_page: object, explorer_url: str) -> None:
+    page = desktop_page
+    page.goto(f"{explorer_url}/atlas.html")
+    node = page.locator('[data-autoform-node-id="atlas/algebra"]')
+    node.wait_for()
+    before = node.bounding_box()
+    assert before is not None
+    start_x, start_y = before["x"] + before["width"] / 2, before["y"] + before["height"] / 2
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.move(start_x + 75, start_y + 45, steps=12)
+    page.mouse.up()
+    page.wait_for_function(
+        "before => document.querySelector('[data-autoform-node-id=\"atlas/algebra\"]').getBoundingClientRect().x > before + 70",
+        arg=before["x"],
+    )
+    after = node.bounding_box()
+    assert after is not None
+    assert abs(after["y"] - before["y"] - 45) < 1
+    assert abs(after["width"] - before["width"]) < 1
+    assert "node=" not in page.url
+    playwright.expect(page.locator(".bp-dag-inspector")).to_be_hidden()
+    node.click()
+    playwright.expect(node).to_have_attribute("data-selected", "true")
+    playwright.expect(page.get_by_role("link", name="Explore topic")).to_be_visible()
+
+
 def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_url: str) -> None:
     page = desktop_page
     _open_ready(page, explorer_url)
@@ -804,7 +831,7 @@ def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_url
     # Focus moving from the results to a control outside them closes them too.
     search.press("ArrowDown")
     playwright.expect(result).to_be_focused()
-    page.get_by_role("button", name="Browse").focus()
+    page.get_by_role("button", name="Contents").focus()
     playwright.expect(results).to_be_hidden()
 
     search.fill("target")
@@ -872,7 +899,7 @@ def test_a_browse_query_lists_only_this_scope(desktop_page: object, explorer_url
     page = desktop_page
     _open_ready(page, explorer_url)
     search = _load_search_index(page)
-    page.get_by_role("button", name="Browse").click()
+    page.get_by_role("button", name="Contents").click()
     search.fill("theorem")
     playwright.expect(page.locator(".bp-dag-inventory-title")).to_have_text(["Target theorem"])
     results = page.locator(".bp-dag-search-results")

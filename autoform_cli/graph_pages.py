@@ -312,6 +312,7 @@ def _write_page(
     explorer = dag_viewer.render_container(
         quote(payload.name),
         script_href=_viewer_script_link(page, site_root),
+        style_href=mermaid.relative_link(site_root / dag_viewer.STYLE_PATH, page, ".css"),
         fallback_links=(
             (node.title, links[node.id])
             for node in view.nodes[:50]

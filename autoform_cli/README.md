@@ -1024,6 +1024,8 @@ A persistent hierarchy rail keeps the current ancestry and immediate contents
 visible. The project overview groups readable topic cards by authored
 mathematical area and reveals only a selected topic's direct dependency
 neighborhood; its detail drawer overlays the map instead of shrinking it.
+The viewer's JavaScript and stylesheet are shared assets served once per site.
+Dragging a topic card pans the map; clicking it selects the topic.
 Breadcrumbs return through the explorer hierarchy to the book (to the home page
 for a roadmap with neither a root article nor root leaves), and every formal
 statement links to the smallest explorer scope containing that item. Point

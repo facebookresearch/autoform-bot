@@ -132,6 +132,7 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert (out / "javascripts/blueprint-mermaid.js").is_file()
     assert (out / "javascripts/blueprint-live.js").is_file()
     assert (out / "javascripts/blueprint-dag.js").is_file()
+    assert (out / "stylesheets/blueprint-dag.css").is_file()
     assert (out / PUBLICATION_MANIFEST).is_file()
     # Nodes are absorbed into their chapter, not published one page each.
     assert not (out / "roadmap/base.md").exists()
@@ -147,6 +148,11 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
         assert "```mermaid" not in document
         assert "blueprint-mermaid.js" not in document
         assert document.count("blueprint-dag.js") == 1
+        assert document.count("blueprint-dag.css") == 1
+        assert "data-autoform-dag-style" not in document
+        links = html5lib.parseFragment(document, namespaceHTMLElements=False).iter("link")
+        stylesheet = next(link.attrib["href"] for link in links if link.attrib.get("rel") == "stylesheet")
+        assert (graph_page.parent / unquote(stylesheet)).resolve() == (out / "stylesheets/blueprint-dag.css").resolve()
         assert graph_page.with_suffix(".json").is_file()
 
     project_page = (out / "dependencies.md").read_text(encoding="utf-8")
