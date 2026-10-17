@@ -173,6 +173,305 @@ def test_records_the_declaring_line(tmp_path: Path) -> None:
     assert index.find("Outer.alpha").keyword == "def"
 
 
+@pytest.mark.parametrize(
+    ("keyword", "body"),
+    [
+        ("theorem", ": True := trivial"),
+        ("lemma", ": True := trivial"),
+        ("def", ": Nat := 7"),
+        ("abbrev", ": Nat := 7"),
+        ("opaque", ": Nat := 7"),
+        ("axiom", ": True"),
+        ("instance", ": Inhabited Nat := ⟨7⟩"),
+        ("structure", "where\n  value : Nat"),
+    ],
+)
+def test_declaration_identifier_can_follow_its_keyword_on_the_next_line(
+    tmp_path: Path, keyword: str, body: str
+) -> None:
+    source = f"import Mathlib\nnamespace Outer\n{keyword}\n  result {body}\nend Outer\n"
+    index = _index(tmp_path, source)
+
+    assert set(index.declarations) == {"Outer.result"}
+    declaration = index.find("Outer.result")
+    assert declaration.line == 3
+    assert declaration.keyword == keyword
+    assert index.line_counts == {Path("Project/Basic.lean"): len(source.splitlines())}
+
+
+def test_comments_between_keyword_and_quoted_name_preserve_namespace_and_modifiers(tmp_path: Path) -> None:
+    source = "\n".join(
+        [
+            "namespace Outer.Inner",
+            "@[simp] protected",
+            "theorem -- its identifier follows the comment",
+            "/- namespace Ghost",
+            "   /- theorem hidden : True := trivial -/",
+            "   #exit",
+            "end Ghost -/",
+            "  «with -- and /- and .» : True := trivial",
+            "end Outer.Inner",
+            "theorem afterwards : True := trivial",
+        ]
+    )
+    index = _index(tmp_path, source)
+
+    assert set(index.declarations) == {"Outer.Inner.«with -- and /- and .»", "afterwards"}
+    declaration = index.find("Outer.Inner.«with -- and /- and .»")
+    assert declaration.line == 3
+    assert declaration.protected
+
+
+def test_multiline_literals_do_not_supply_declaration_names_or_namespaces(tmp_path: Path) -> None:
+    source = '\n'.join(
+        [
+            'def message : String := r#"',
+            'namespace Ghost',
+            'theorem',
+            '  imaginary : True := trivial',
+            'end Ghost',
+            '"#',
+            'namespace Real',
+            'theorem',
+            '  actual : True := trivial',
+            'end Real',
+        ]
+    )
+    index = _index(tmp_path, source)
+
+    assert set(index.declarations) == {"message", "Real.actual"}
+    assert index.find("Real.actual").line == 8
+
+
+def test_declaration_scan_view_preserves_coordinates_and_original_literal_bytes(tmp_path: Path) -> None:
+    source = 'def «name -- /-» : String := r#"α\nnamespace Ghost\ntheorem\n  imaginary : True"#\n'
+    stripped = lean_module._without_lean_comments(source)
+    scan_view = lean_module._without_lean_comments(source, mask_literals=True)
+    snapshot = snapshot_project_sources(_index(tmp_path, source).root)
+
+    assert stripped == source
+    assert len(scan_view) == len(stripped)
+    assert [i for i, char in enumerate(scan_view) if char == "\n"] == [
+        i for i, char in enumerate(stripped) if char == "\n"
+    ]
+    assert "«name -- /-»" in scan_view
+    assert "namespace Ghost" not in scan_view
+    assert snapshot.source_files == ((Path("Project/Basic.lean"), source.encode("utf-8")),)
+
+
+def test_alias_identifier_and_target_can_each_follow_on_the_next_line(tmp_path: Path) -> None:
+    source = "\n".join(
+        [
+            "import Batteries.Tactic.Alias",
+            "namespace Outer",
+            "theorem base : True := trivial",
+            "protected",
+            "alias",
+            "  renamed :=",
+            "    base",
+            "end Outer",
+        ]
+    )
+    index = _index(tmp_path, source)
+
+    declaration = index.find("Outer.renamed")
+    assert declaration.line == 5
+    assert declaration.protected
+    assert declaration.alias == Alias(("Outer.base", "base"), atomic=True, iff=False)
+    assert index.reached(declaration) == index.find("Outer.base")
+
+
+def test_iff_alias_pair_can_follow_its_keyword_on_the_next_line(tmp_path: Path) -> None:
+    source = (
+        "import Batteries.Tactic.Alias\nnamespace Outer\ntheorem base : True ↔ True := Iff.rfl\n"
+        "protected\nalias\n  ⟨forward, backward⟩ :=\n    base\nend Outer\n"
+    )
+    index = _index(tmp_path, source)
+
+    assert set(index.declarations) == {"Outer.base", "Outer.forward", "Outer.backward"}
+    for name in ("Outer.forward", "Outer.backward"):
+        declaration = index.find(name)
+        assert declaration.line == 5
+        assert declaration.protected
+        assert declaration.alias == Alias(("Outer.base", "base"), atomic=True, iff=True)
+
+
+def test_unfinished_keyword_does_not_take_the_next_command_as_its_name(tmp_path: Path) -> None:
+    index = _index(tmp_path, "namespace Outer\ntheorem\ndef actual : Nat := 7\nend Outer\n")
+
+    assert set(index.declarations) == {"Outer.actual"}
+
+    stopped = _index(tmp_path, "theorem\n#exit\ndef unread : Nat := 7\n")
+    assert stopped.declarations == {}
+    assert stopped.line_counts == {Path("Project/Basic.lean"): 1}
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "#check Nat",
+        "#print Nat",
+        "#unrecognized_command",
+        "open Nat",
+        "variable (x : Nat)",
+        "set_option pp.universes true",
+        "attribute [simp] Nat.add_zero",
+        "export Nat (succ)",
+        "universe u",
+        "include x",
+        "omit x",
+        "syntax \"custom\" : command",
+        "example : True := trivial",
+        "initialize value : Nat ← pure 7",
+        "run_cmd pure ()",
+        "run_elab do pure ()",
+        "run_meta pure ()",
+        'local notation "X" => Nat',
+        'scoped notation "X" => Nat',
+        "public import Mathlib",
+        "public meta import Mathlib",
+        "@[deprecated] initialize value : Nat ← pure 7",
+        "private unsafe initialize value : Nat ← pure 7",
+        '@[simp] scoped postfix:70 "!" => Nat.succ',
+        'local prefix:70 "!" => Nat.succ',
+        'macro_rules | `(custom) => `(Nat)',
+        'elab_rules : command | `(custom) => pure ()',
+        "assert_not_exists absent",
+        "assert_not_imported Mathlib",
+        "deprecated_module",
+        "deprecated_syntax syntaxName",
+        "docs_to_verso Nat",
+        "init_quot",
+        "unlock_limits",
+        'register_tactic_tag tag "description"',
+        "tactic_extension tag",
+        'recommended_spelling "and" for "∧" in [And]',
+        "gen_injective_theorems% Nat",
+        "with_weak_namespace Nat #check Nat",
+        "register_error_explanation code explanation",
+        "set_library_suggestions ()",
+        "seal Nat.add",
+        "unseal Nat.add",
+        'binder_predicate x " > " y:term => `($x > $y)',
+        "aux_def value : Nat := 7",
+        "norm_cast_add_elim Nat.add_zero",
+        "register_linter_set checks := linter.unusedVariables",
+        "register_label_attr label",
+        "register_sym_simp_attr rules",
+        "ensure_eval_term_instance Nat",
+        "declare_core_config_elab elabName Config",
+        "simproc_decl simplify (Nat.succ _) := fun _ => pure .continue",
+        "cbv_simproc_decl simplify (Nat.succ _) := fun _ => pure .continue",
+        "unif_hint (x : Nat) where ⊢ x ≟ x",
+        "register_sym_simp simpVariant where\n  maxSteps := 100",
+        "grind_pattern lemmaName => Nat.succ",
+    ],
+)
+def test_unfinished_keyword_does_not_take_a_nondeclaration_command_name(tmp_path: Path, command: str) -> None:
+    source = f"namespace Outer\ntheorem\n{command}\ndef actual : Nat := 7\nend Outer\n"
+    index = _index(tmp_path, source)
+
+    assert set(index.declarations) == {"Outer.actual"}
+    assert index.find("Outer.actual").line == 3 + len(command.splitlines())
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "open'", "open!", "public?", "variable₁", "variable'", "attribute'", "set_option'", "run_cmd'", "run_elab'",
+        "local'", "scoped'", "public'", "initialize'", "requires", "ensures",
+        "«open»", "«#check»", "«run_cmd»", "«local»", "«@[deprecated]»",
+        "Qualified.open", "Qualified.local", "Qualified.run_elab", "«Qualified.open».value",
+        "α₁", "ℕ_value", "𝒜_value",
+    ],
+)
+def test_multiline_names_are_not_rejected_by_a_command_token_prefix(tmp_path: Path, name: str) -> None:
+    source = f"namespace Outer\ndef\n  {name} : Nat := 7\ntheorem actual : True := trivial\nend Outer\n"
+    index = _index(tmp_path, source)
+
+    assert set(index.declarations) == {f"Outer.{name}", "Outer.actual"}
+    assert index.find(f"Outer.{name}").line == 2
+
+
+@pytest.mark.parametrize(
+    "following",
+    [
+        "@decoration",
+        "not_a_name/part : Nat := 7",
+        "not_a_name+part : Nat := 7",
+        "123 : Nat := 7",
+        "custom => Nat",
+        "custom do pure ()",
+        "custom binders => Nat",
+        "custom (x : Nat) => Nat",
+        "custom (x : Nat] : Nat := 7",
+    ],
+)
+def test_multiline_continuation_requires_identifier_and_signature_syntax(tmp_path: Path, following: str) -> None:
+    source = f"namespace Outer\ntheorem\n{following}\ndef actual : Nat := 7\nend Outer\n"
+    index = _index(tmp_path, source)
+
+    assert set(index.declarations) == {"Outer.actual"}
+    assert index.find("Outer.actual").line == 4
+
+
+@pytest.mark.parametrize(
+    ("keyword", "name", "signature"),
+    [
+        ("def", "identity", "x : Nat := x"),
+        ("def", "identity", "{α : Type u} (x : α) : α := x"),
+        ("def", "identity", "{α : Type u}\n    (x : α) : α := x"),
+        ("def", "identity", "{α : Type u}\n    [Inhabited α] : α := default"),
+        ("theorem", "self_eq", "(x : Nat\n    ) : x = x := rfl"),
+        ("theorem", "self_eq", "(«x)» : Nat) : «x)» = «x)» := rfl"),
+        ("def", "identity", ".{u} {α : Type u} (x : α) := x"),
+        ("def", "zero", ":= 0"),
+        ("def", "zero", "\n    : Nat := 0"),
+        ("def", "isZero", "| 0 => true\n    | _ => false"),
+        ("structure", "Child", "extends Parent where\n    value : Nat"),
+    ],
+)
+def test_multiline_declaration_names_keep_legal_signature_continuations(
+    tmp_path: Path, keyword: str, name: str, signature: str
+) -> None:
+    separator = "" if signature.startswith(".{") else " "
+    source = (
+        f"namespace Outer\n@[simp] protected\n{keyword}\n  {name}{separator}{signature}\n"
+        "theorem actual : True := trivial\nend Outer\n"
+    )
+    index = _index(tmp_path, source)
+
+    assert set(index.declarations) == {f"Outer.{name}", "Outer.actual"}
+    declaration = index.find(f"Outer.{name}")
+    assert declaration.line == 3
+    assert declaration.keyword == keyword
+    assert declaration.protected
+
+
+def test_decorated_declaration_after_unfinished_keyword_keeps_its_own_line(tmp_path: Path) -> None:
+    source = (
+        "namespace Outer\ntheorem\n@[simp] protected def actual : Nat := 7\n"
+        "@[simp] protected\ntheorem\n  next : True := trivial\nend Outer\n"
+    )
+    index = _index(tmp_path, source)
+
+    assert set(index.declarations) == {"Outer.actual", "Outer.next"}
+    assert index.find("Outer.actual").line == 3
+    assert index.find("Outer.actual").keyword == "def"
+    assert index.find("Outer.actual").protected
+    assert index.find("Outer.next").line == 5
+    assert index.find("Outer.next").keyword == "theorem"
+    assert index.find("Outer.next").protected
+
+
+def test_anonymous_multiline_instance_does_not_become_a_named_declaration(tmp_path: Path) -> None:
+    source = "instance\n  : Inhabited Nat := ⟨7⟩\ntheorem\n  actual : True := trivial\n"
+    index = _index(tmp_path, source)
+
+    assert set(index.declarations) == {"actual"}
+    assert index.find("actual").line == 3
+
+
 def test_sections_do_not_add_to_the_namespace(tmp_path: Path) -> None:
     index = _index(tmp_path)
 
