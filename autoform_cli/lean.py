@@ -54,7 +54,7 @@ _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
     r"(?:(?:public|private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
     r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom|irreducible_def"
-    r"|theorem_wanted|proof_wanted|def_wanted|instance_wanted|alias)\s+(.+)$"
+    r"|theorem_wanted|proof_wanted|def_wanted|instance_wanted|alias)(?:\s+(.+))?$"
 )
 #: The wanted commands. Batteries makes each a private placeholder, so none of
 #: them binds its name outside its own module.
@@ -765,13 +765,21 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
             modifiers = _ATTRIBUTE_LIST.sub(" ", " ".join(header)).split()
             protected = "protected" in modifiers
             private = "private" in modifiers
+            written = declaration_match.group(2) or ""
+            following_start = number
+            if not written:
+                for later in range(number, len(lines)):
+                    if lines[later].strip():
+                        written = lines[later].lstrip()
+                        following_start = later + 1
+                        break
             if keyword == "alias":
-                following = next((lines[later] for later in range(number, len(lines)) if lines[later].strip()), "")
-                found.extend(
-                    _aliases(declaration_match.group(2), following, namespaces, relative, number, protected, private)
+                following = next(
+                    (lines[later] for later in range(following_start, len(lines)) if lines[later].strip()), ""
                 )
+                found.extend(_aliases(written, following, namespaces, relative, number, protected, private))
                 continue
-            name = _name_token(declaration_match.group(2))
+            name = _name_token(written)
             if name is None:
                 continue
             found.append(Declaration(_qualified(namespaces, name), relative, number, keyword, protected, private))
