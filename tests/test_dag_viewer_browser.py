@@ -518,6 +518,7 @@ def test_mathematical_regions_drill_to_topics_and_results_with_a_correct_back_tr
     playwright.expect(page.locator(".bp-dag-node-layer")).not_to_contain_text("Geometry lecture notes")
     page.get_by_role("button", name="Open Metric geometry", exact=True).click()
     playwright.expect(page.locator(".bp-dag-scope-title")).to_have_text("Metric geometry")
+    playwright.expect(page.locator(".bp-dag-scope-count")).to_have_text("5 topics · 10 results in this region")
     page.get_by_role("link", name="Open Distance geometry", exact=True).click()
     page.wait_for_url("**/dependencies/scopes/geometry/references/display-range/distance.html")
     playwright.expect(page.locator(".bp-dag-breadcrumb")).to_contain_text("Geometry")

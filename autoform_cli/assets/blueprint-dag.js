@@ -407,10 +407,14 @@
       var description = state.area ? "Explore a topic below. Its connections button reveals authored prerequisites and dependents." : view.summary;
       if (description) refs.scopeHead.appendChild(element("p", "bp-dag-scope-description", description));
       var count = state.area ? (regionGroups.get(state.area) || []).length : topicNodes.length;
+      var unit = regionNodes.length && !state.area ? "region" : atlas || view.overview ? "topic" : "node";
+      var results = state.area ? (regionGroups.get(state.area) || []).reduce(function (total, node) {
+        return total + (node.member_count || 0);
+      }, 0) : view.total_count;
       refs.scopeHead.appendChild(element("p", "bp-dag-scope-count",
-        plural(state.area || !regionNodes.length ? count : regionNodes.length, state.area || !regionNodes.length ? "topic" : "region",
-          state.area || !regionNodes.length ? "topics" : "regions") +
-        (view.total_count !== null && view.total_count !== undefined ? " · " + view.total_count.toLocaleString() + " results in this scope" : "")));
+        plural(state.area || !regionNodes.length ? count : regionNodes.length, unit, unit + "s") +
+        (results !== null && results !== undefined ? " · " + results.toLocaleString() +
+          (state.area ? " results in this region" : " results in this scope") : "")));
       refs.main.style.setProperty("--dag-scope-head-height", refs.scopeHead.offsetHeight + "px");
     }
 
