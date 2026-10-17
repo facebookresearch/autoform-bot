@@ -13,7 +13,9 @@ from autoform_cli.graph import (
     _containment_cycles,
     load_graph,
 )
+from autoform_cli.graph_views import project_view
 from autoform_cli.runtime import RuntimeProjectionError, load_runtime_graph
+from autoform_cli.status import derive
 
 
 def _node_text(body: str, **metadata: str) -> str:
@@ -203,7 +205,7 @@ def test_rejects_cycle(tmp_path: Path) -> None:
         load_graph(blueprint)
 
 
-def test_rejects_cycle_created_only_by_chapter_contraction(tmp_path: Path) -> None:
+def test_keeps_acyclic_edges_that_form_a_cycle_only_after_chapter_contraction(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _roadmap_page(blueprint, "a/README.md", "# A\n")
     _roadmap_page(blueprint, "b/README.md", "# B\n")
@@ -219,8 +221,14 @@ def test_rejects_cycle_created_only_by_chapter_contraction(tmp_path: Path) -> No
         "# A last\n## Depends on\n[B middle](../b/middle.md)\n",
     )
 
-    with pytest.raises(GraphValidationError, match=r"rolled-up dependency cycle in root: a -> b -> a"):
-        load_graph(blueprint)
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["b/middle"].dependencies == ("a/first",)
+    assert graph.nodes["a/last"].dependencies == ("b/middle",)
+    assert {(edge.source, edge.target) for edge in project_view(graph, derive(graph)).edges} == {
+        ("scope:a", "scope:b"),
+        ("scope:b", "scope:a"),
+    }
 
 
 def test_ignores_links_in_code_fences_and_other_sections(tmp_path: Path) -> None:

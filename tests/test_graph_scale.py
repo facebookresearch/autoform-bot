@@ -13,7 +13,6 @@ from autoform_cli.graph import (
     Graph,
     Node,
     _find_cycles,
-    _find_rollup_cycles,
     load_graph,
 )
 from autoform_cli import graph_pages, graph_views, render
@@ -88,114 +87,14 @@ def _chain_graph(tmp_path: Path, count: int, *, containment: bool = False) -> Gr
 
 
 
-def test_dependency_and_rollup_walks_handle_a_1200_node_chain(tmp_path: Path) -> None:
+def test_dependency_walk_handles_a_1200_node_chain(tmp_path: Path) -> None:
     graph = _chain_graph(tmp_path, 1_200)
 
     assert _find_cycles(graph.nodes) == []
-    assert _find_rollup_cycles(graph.nodes) == []
     order = topological_order(graph)
     assert order[0] == "n1199"
     assert order[-1] == "n0000"
     assert len(derive(graph)) == 1_200
-
-
-def test_rollup_projection_is_subquadratic_on_a_deep_branching_hierarchy(
-    tmp_path: Path,
-) -> None:
-    roadmap = tmp_path / "blueprint" / "roadmap"
-    raw_nodes: dict[str, Node] = {}
-    for index in range(400):
-        container = f"container{index:04d}"
-        leaf = f"leaf{index:04d}"
-        parent = f"container{index - 1:04d}" if index else None
-        dependencies = (f"leaf{index - 1:04d}",) if index else ()
-        raw_nodes[container] = Node(
-            container,
-            container,
-            roadmap / container / "README.md",
-            dependencies,
-            parent=parent,
-        )
-        raw_nodes[leaf] = Node(leaf, leaf, roadmap / f"{leaf}.md", (), parent=container)
-    nodes = _CountingDict(raw_nodes)
-
-    assert _find_rollup_cycles(nodes) == []
-    assert nodes.values_calls <= 2
-    assert nodes.lookups < 20 * len(nodes) * len(nodes).bit_length()
-
-
-def _reference_rollup_cycles(nodes: dict[str, Node]) -> list[str]:
-    children: dict[str | None, list[str]] = {}
-    for node in nodes.values():
-        children.setdefault(node.parent, []).append(node.id)
-
-    def direct_child(scope: str | None, node_id: str) -> str | None:
-        current = node_id
-        while nodes[current].parent != scope:
-            parent = nodes[current].parent
-            if parent is None:
-                return None
-            current = parent
-        return current
-
-    issues: list[str] = []
-    for scope, siblings in children.items():
-        if len(siblings) < 2:
-            continue
-        dependencies = {sibling: set() for sibling in siblings}
-        for target in nodes.values():
-            target_child = direct_child(scope, target.id)
-            if target_child not in dependencies:
-                continue
-            for dependency in target.dependencies:
-                source_child = direct_child(scope, dependency)
-                if source_child in dependencies and source_child != target_child:
-                    dependencies[target_child].add(source_child)
-        state: dict[str, int] = {}
-        stack: list[str] = []
-
-        def visit(article_id: str) -> None:
-            state[article_id] = 1
-            stack.append(article_id)
-            for prerequisite in sorted(dependencies[article_id]):
-                if state.get(prerequisite, 0) == 0:
-                    visit(prerequisite)
-                elif state.get(prerequisite) == 1:
-                    start = stack.index(prerequisite)
-                    cycle = stack[start:] + [prerequisite]
-                    label = scope or "root"
-                    message = f"rolled-up dependency cycle in {label}: {' -> '.join(cycle)}"
-                    if message not in issues:
-                        issues.append(message)
-            stack.pop()
-            state[article_id] = 2
-
-        for article_id in sorted(dependencies):
-            if state.get(article_id, 0) == 0:
-                visit(article_id)
-    return issues
-
-
-def test_rollup_projection_preserves_exact_randomized_cycle_diagnostics(tmp_path: Path) -> None:
-    generator = random.Random(87231)
-    roadmap = tmp_path / "blueprint" / "roadmap"
-    for case in range(300):
-        node_ids = [f"n{index:02d}" for index in range(generator.randrange(1, 28))]
-        nodes: dict[str, Node] = {}
-        for index, node_id in enumerate(node_ids):
-            parent = None if index == 0 or generator.random() < 0.22 else node_ids[generator.randrange(index)]
-            dependencies = tuple(
-                candidate for candidate in node_ids if candidate != node_id and generator.random() < 0.07
-            )
-            nodes[node_id] = Node(
-                node_id,
-                node_id,
-                roadmap / f"{node_id}.md",
-                dependencies,
-                parent=parent,
-            )
-
-        assert _find_rollup_cycles(nodes) == _reference_rollup_cycles(nodes), case
 
 
 def test_runtime_depth_validation_is_linear_on_a_deep_hierarchy(tmp_path: Path) -> None:

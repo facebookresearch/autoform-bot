@@ -691,7 +691,7 @@ def _validation_article_path(blueprint: Path, issue: str) -> str:
                 return issue[:boundary]
 
     node_id = issue.split(":", 1)[0]
-    if not node_id or " " in node_id or node_id in {"dependency cycle", "rolled-up dependency cycle"}:
+    if not node_id or " " in node_id or node_id == "dependency cycle":
         return "."
 
     roadmap = blueprint / "roadmap"

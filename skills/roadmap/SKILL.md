@@ -101,6 +101,10 @@ Write milestone pages under `blueprint/roadmap/` by mathematical significance,
 then one fine article per coherent unit with one unique main result. Ground each
 statement and proof sketch in the source. Put genuine statement prerequisites
 under `## Depends on` and proof-only prerequisites under `## Proof depends on`.
+Never delete or reverse a genuine article edge to make a chapter-level or
+scope-level projection acyclic. The authored leaf DAG is the mathematical
+record; a coarser view may have relations in both directions and must present
+them honestly.
 Assign durable `article_id` metadata to new articles; run
 `autoform migrate article-ids blueprint --write` after creating the pages to
 add deterministic IDs.
