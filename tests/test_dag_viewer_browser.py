@@ -711,8 +711,8 @@ def test_a_view_of_topics_and_results_draws_readable_result_cards(desktop_page: 
     assert title.evaluate("element => element.scrollWidth <= element.clientWidth")
     meta = page.locator('[data-autoform-node-id="topics/compactness"] .bp-dag-node-meta')
     playwright.expect(meta).to_have_text("1 result")
-    # A drawn DAG counts its nodes by status; only an atlas counts topics by their least-complete item.
-    playwright.expect(page.locator(".bp-dag-inspector h3")).to_have_text("Nodes by status")
+    # The overview counts the represented results, including results inside a scope.
+    playwright.expect(page.locator(".bp-dag-inspector h3")).to_have_text("Results by status")
     page.locator('[data-autoform-node-id="topics/library"]').click()
     playwright.expect(page.locator(".bp-dag-lean")).to_contain_text("Topology.lemma8 and 2 more")
 
