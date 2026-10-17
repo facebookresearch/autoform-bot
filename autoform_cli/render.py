@@ -1514,11 +1514,11 @@ def _render_structure_page(
     *,
     page: Path,
 ) -> str:
-    """Keep the old structure route as a bounded doorway into Browse mode.
+    """Keep the old structure route as a bounded doorway into the explorer.
 
     The explorer owns hierarchy now. Republishing every source path as one raw
     HTML tree made this compatibility page larger than the rest of a small
-    site, duplicated Browse, and became unusable on repository-scale books.
+    site, duplicated the explorer, and became unusable on repository-scale books.
     """
     explorer = mermaid.relative_link(page.parent / "dependencies/full.md", page, ".md")
     return "\n".join(
@@ -1536,7 +1536,7 @@ def _render_structure_page(
             "The dependency explorer presents the authored hierarchy and its mathematical",
             "relations without flattening the repository into a file listing.",
             "",
-            f"[Open every roadmap entry in Browse mode]({explorer}#view=list)",
+            f"[Open the roadmap explorer]({explorer})",
             "",
         ]
     )
@@ -1585,7 +1585,7 @@ def _render_summary_nav(
         [
             "- Graph",
             "    - [Dependency explorer](dependencies.md)",
-            "    - [Browse all mathematics](dependencies/full.md#view=list)",
+            "    - [Browse all mathematics](dependencies/full.md)",
         ]
     )
     return "\n".join(lines) + "\n"
