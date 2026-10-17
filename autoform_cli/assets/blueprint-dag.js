@@ -232,7 +232,8 @@
         homeLink.href = home.href; refs.navigationInner.appendChild(homeLink);
       }
       refs.navigationInner.appendChild(element("p", "bp-dag-navigation-kicker", atlas ? "Library atlas" : "Current scope"));
-      refs.navigationInner.appendChild(element("h1", "bp-dag-navigation-title", data.title || "Mathematics"));
+      refs.navigationInner.appendChild(element(document.querySelector("h1") ? "h2" : "h1",
+        "bp-dag-navigation-title", data.title || "Mathematics"));
       if (trail.length) {
         var path = element("ol", "bp-dag-navigation-path");
         trail.forEach(function (entry, index) {

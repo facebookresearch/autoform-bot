@@ -641,7 +641,8 @@ def test_a_click_on_empty_map_space_keeps_the_readers_zoom(desktop_page: object,
 
     # Clearing a selection keeps the zoom too; only clearing a path filter re-fits the map.
     node = page.locator('[data-autoform-node-id="mixed/b"]')
-    node.click()
+    # The hierarchy brings a cropped node into view without resetting the zoom.
+    page.locator('[data-navigation-node-id="mixed/b"]').click()
     playwright.expect(node).to_have_attribute("data-selected", "true")
     page.get_by_role("button", name="Zoom in").click()
     page.evaluate(frames)
@@ -825,7 +826,8 @@ def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_url
     playwright.expect(announcement).to_have_text("No results")
     search.fill("middle")
     playwright.expect(results).to_be_visible()
-    playwright.expect(announcement).to_have_text("1 result")
+    # The target's mathematical summary also mentions the middle lemma.
+    playwright.expect(announcement).to_have_text("2 results")
 
     search.press("ArrowDown")
     result = page.locator(".bp-dag-result").first
