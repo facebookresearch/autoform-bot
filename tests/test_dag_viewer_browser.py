@@ -545,6 +545,11 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     stage_width = page.locator(".bp-dag-stage").bounding_box()["width"]
     topic_box = topic.bounding_box()
     assert topic_box is not None and topic_box["height"] >= 62 and topic_box["width"] >= 150
+    visible_font_size = topic.evaluate("""element => {
+      const scale = new DOMMatrix(getComputedStyle(element).transform).a;
+      return parseFloat(getComputedStyle(element.querySelector('.bp-dag-node-title')).fontSize) * scale;
+    }""")
+    assert visible_font_size >= 13.8
     assert "50%" not in topic.evaluate("element => getComputedStyle(element).borderRadius")
     # An atlas always includes its topics, so an isolate filter would only obscure the hierarchy.
     playwright.expect(page.locator(".bp-dag-isolated")).to_be_hidden()
