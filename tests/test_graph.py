@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -144,10 +145,23 @@ def test_rejects_invalid_nodes(tmp_path: Path, body: str, message: str) -> None:
 def test_a_dependency_through_a_symlink_loop_is_reported_alike_on_every_python(tmp_path: Path) -> None:
     # Before Python 3.13 resolving a loop raises; from 3.13 it returns the looping path.
     blueprint = tmp_path / "blueprint"
-    _node(blueprint, "result.md", "# Result\n## Depends on\n[x](../loop.md)\n[y](../../outer.md)\n")
+    links = "[x](../loop.md)\n[y](../../outer.md)\n[z](../away/loop.md)\n[w](../loop.md/../away/note.md)\n"
+    links += "[v](../hop0.md)\n[u](../chain0.md)\n"
+    _node(blueprint, "result.md", f"# Result\n## Depends on\n{links}")
+    (tmp_path / "away").mkdir()
+    (tmp_path / "away" / "note.md").write_text("# Note\n", encoding="utf-8")
     try:
         (blueprint / "loop.md").symlink_to("loop.md")
         (tmp_path / "outer.md").symlink_to("outer.md")
+        # A loop behind a symbolic link that leaves the blueprint, and one before it.
+        (blueprint / "away").symlink_to(tmp_path / "away")
+        (tmp_path / "away" / "loop.md").symlink_to("loop.md")
+        # A loop and `..` 45 times over, then out of the blueprint, and a chain past the recursion limit.
+        for n in range(45):
+            (blueprint / f"hop{n}.md").symlink_to(f"loop.md/../hop{n + 1}.md")
+        (blueprint / "hop45.md").symlink_to("away/note.md")
+        for n in range(1000):
+            (blueprint / f"chain{n}.md").symlink_to(f"chain{n + 1}.md")
     except OSError:
         pytest.skip("symlinks are unavailable")
 
@@ -157,7 +171,59 @@ def test_a_dependency_through_a_symlink_loop_is_reported_alike_on_every_python(t
     assert caught.value.issues == (
         "result: dependency target does not exist: '../loop.md'",
         "result: dependency target escapes the blueprint directory: '../../outer.md'",
+        "result: dependency target escapes the blueprint directory: '../away/loop.md'",
+        "result: dependency target escapes the blueprint directory: '../loop.md/../away/note.md'",
+        "result: dependency target escapes the blueprint directory: '../hop0.md'",
+        "result: dependency target does not exist: '../chain0.md'",
     )
+
+
+def test_check_passes_a_sources_link_that_reaches_its_file_through_loops(tmp_path: Path) -> None:
+    # Each `loop.md/..` resolves past the loop, as on Python 3.13. Before 3.13
+    # the runtime's own resolution of the link then raised.
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", "# Result\n\n## Sources\n\n- [Paper](../sources/s1.md)\n")
+    sources = blueprint / "sources"
+    sources.mkdir()
+    (sources / "paper.md").write_text("# Paper\n", encoding="utf-8")
+    try:
+        (sources / "loop.md").symlink_to("loop.md")
+        (sources / "s1.md").symlink_to("loop.md/../s2.md")
+        (sources / "s2.md").symlink_to("loop.md/../paper.md")
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    assert main(["check", str(blueprint)]) == 0
+
+
+def test_a_dependency_through_a_link_that_cannot_be_read_does_not_exist(
+    tmp_path: Path, unreadable_link: Callable[[Path, Path | str], None]
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", "# Result\n## Depends on\n[x](../locked/a.md)\n")
+    (tmp_path / "away").mkdir()
+    (tmp_path / "away" / "a.md").write_text("# A\n", encoding="utf-8")
+    unreadable_link(blueprint / "locked", tmp_path / "away")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues == ("result: dependency target does not exist: '../locked/a.md'",)
+
+
+def test_a_blueprint_behind_a_link_that_cannot_be_read_fails_once(
+    tmp_path: Path, unreadable_link: Callable[[Path, Path | str], None]
+) -> None:
+    # Every link in it would fail to resolve, so the blueprint fails instead.
+    _node(tmp_path / "real" / "blueprint", "result.md", "# Result\n## Depends on\n[x](other.md)\n")
+    _node(tmp_path / "real" / "blueprint", "other.md", "# Other\n")
+    unreadable_link(tmp_path / "via", tmp_path / "real")
+    blueprint = tmp_path / "via" / "blueprint"
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues == (f"blueprint directory cannot be resolved: {blueprint}",)
 
 
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
@@ -658,7 +724,7 @@ def test_check_rejects_sources_links_that_name_no_file_in_the_blueprint(
         "error: result: source target does not resolve to a file: '../sources/'\n"
         "error: result: source target escapes the blueprint directory: '../../slides.pdf'\n"
         "error: result: source target contains an invalid path: '../sources/%00.md'\n"
-        "error: result: source target contains an invalid path: 'http://[oops/paper.md'\n"
+        "error: result: source target is not a valid URL: 'http://[oops/paper.md'\n"
     )
 
 

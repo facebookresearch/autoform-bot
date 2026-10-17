@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import errno
 import html
+import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -23,6 +26,7 @@ from autoform_cli.markdown import (
     published_tables,
     render_html,
     rendered_visible_text,
+    resolved_path,
     visible_prose,
 )
 
@@ -473,6 +477,86 @@ def test_a_link_through_a_hidden_symlink_is_hidden(tmp_path: Path) -> None:
 
     assert issue("../sources/paper.md") is None
     assert issue("../.link/paper.md") == "hidden-source-target"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows applies `..` as written, before any link")
+def test_resolved_path_follows_links_as_python_3_13_does(tmp_path: Path) -> None:
+    # Before 3.13, `os.path.realpath` recurses once per link and stops at a loop.
+    root = tmp_path.resolve()
+    (root / "away").mkdir()
+    (root / "here" / "sub").mkdir(parents=True)
+    links = {"loop": "loop", "grow": "grow/more", "away": str(root / "away"), "sub/back": "../away"}
+    links |= {"sub/up": "../", "sub/dot": "./../.."}
+    links |= {f"hop{n}": f"loop/../hop{n + 1}" for n in range(45)} | {"hop45": "away/file.tex"}
+    links |= {f"chain{n}": f"chain{n + 1}" for n in range(1000)}
+    try:
+        for name, target in links.items():
+            (root / "here" / name).symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    def resolved(path: str) -> str:
+        return resolved_path(root / "here" / path).relative_to(root).as_posix()
+
+    assert resolved("loop/x") == "here/loop/x"
+    assert resolved("loop/../away/file.tex") == "away/file.tex"
+    # A later `..` steps out of the link it follows, not out of the name as written.
+    assert resolved("loop/../sub/back/../file.tex") == "file.tex"
+    assert resolved("grow/x") == "here/grow/more/x"
+    assert resolved("hop0") == "away/file.tex"
+    assert resolved("chain0") == "here/chain1000"
+    # An empty part and `.` in a link's target, and a link met again once it is resolved.
+    assert resolved("sub/up/../file.tex") == "file.tex"
+    assert resolved("sub/dot/file.tex") == "file.tex"
+    assert resolved("sub/back/../here/sub/back/file.tex") == "away/file.tex"
+
+
+def test_a_link_that_cannot_be_read_does_not_resolve(
+    tmp_path: Path, unreadable_link: Callable[[Path, Path | str], None]
+) -> None:
+    # macOS follows a link whose mode forbids reading it, so keeping it as
+    # written would hide where it leads.
+    root = tmp_path.resolve()
+    (root / "away").mkdir()
+    (root / "away" / "paper.md").write_text("# Paper\n", encoding="utf-8")
+    (root / "blueprint" / "roadmap").mkdir(parents=True)
+    unreadable_link(root / "blueprint" / "locked", root / "away")
+
+    assert resolved_path(root / "blueprint" / "locked" / "paper.md") is None
+    issue = local_target_issue(root / "blueprint" / "roadmap" / "result.md", "../locked/paper.md", root / "blueprint", label="source")
+    assert issue == ("source-not-found", "source link does not resolve to a file: '../locked/paper.md'")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows resolves with os.path.realpath")
+def test_resolved_path_gives_up_past_its_link_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # On a case-insensitive file system each level of links can double the
+    # spellings of a link, so the reads are capped.
+    root = tmp_path.resolve()
+    try:
+        for n in range(5):
+            (root / f"chain{n}").symlink_to(f"chain{n + 1}")
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+    monkeypatch.setattr("autoform_cli.markdown._MAX_LINKS", 4)
+
+    assert resolved_path(root / "chain1") == root / "chain5"
+    assert resolved_path(root / "chain0") is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows resolves with os.path.realpath")
+def test_a_path_that_fails_to_resolve_does_not_resolve_to_a_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Resolving can fail, as `ntpath.realpath` does for a path over Windows'
+    # length limit.
+    (tmp_path / "paper.md").write_text("# Paper\n", encoding="utf-8")
+
+    def refuse(path: str) -> str:
+        raise OSError(errno.ENAMETOOLONG, os.strerror(errno.ENAMETOOLONG), path)
+
+    monkeypatch.setattr("autoform_cli.markdown._realpath_posix", refuse)
+
+    assert resolved_path(tmp_path / "paper.md") is None
+    issue = local_target_issue(tmp_path / "result.md", "paper.md", tmp_path, label="source")
+    assert issue == ("source-not-found", "source link does not resolve to a file: 'paper.md'")
 
 
 def test_a_statement_runs_from_the_title_to_the_first_h2() -> None:

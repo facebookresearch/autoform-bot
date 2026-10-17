@@ -490,7 +490,7 @@ def test_audit_validates_local_source_links_without_network_access(tmp_path: Pat
     assert findings == [
         ("hidden-source-target", "source link names a hidden path, which render omits: '../../.drafts/notes.md'"),
         ("malformed-source-link", "source link contains an invalid path: '%00'"),
-        ("malformed-source-link", "source link is not a valid URL: 'http://[oops/paper'"),
+        ("malformed-source-url", "source link is not a valid URL: 'http://[oops/paper'"),
         ("source-escapes-blueprint", "source link escapes the blueprint: '../../../outside.md'"),
         ("source-not-found", "source link does not resolve to a file: '../../sources/missing.md'"),
         ("unsupported-source-link", "source link uses a network location: '//example.invalid/paper'"),
@@ -503,16 +503,32 @@ def test_audit_reports_a_source_link_through_a_symlink_loop_alike_on_every_pytho
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     (blueprint / "sources").mkdir()
+    (tmp_path / "away").mkdir()
+    (tmp_path / "away" / "note.txt").write_text("outside\n", encoding="utf-8")
     try:
         (blueprint / "sources" / "loop.md").symlink_to("loop.md")
         (tmp_path / "outer.md").symlink_to("outer.md")
+        # A loop behind a symbolic link that leaves the blueprint, and one before it.
+        (blueprint / "sources" / "away").symlink_to(tmp_path / "away")
+        (tmp_path / "away" / "loop.md").symlink_to("loop.md")
+        # A loop and `..` 45 times over, then out of the blueprint, and a chain past the recursion limit.
+        for n in range(45):
+            (blueprint / "sources" / f"hop{n}.txt").symlink_to(f"loop.md/../hop{n + 1}.txt")
+        (blueprint / "sources" / "hop45.txt").symlink_to("away/note.txt")
+        for n in range(1000):
+            (blueprint / "sources" / f"chain{n}.txt").symlink_to(f"chain{n + 1}.txt")
     except OSError:
         pytest.skip("symlinks are unavailable")
-    sources = ("../sources/loop.md", "../../outer.md")
+    sources = ("../sources/loop.md", "../../outer.md", "../sources/away/loop.md", "../sources/loop.md/../away/note.txt")
+    sources += ("../sources/hop0.txt", "../sources/chain0.txt")
     _article(blueprint, "result.md", declaration="theorem", origin="cited", sources=sources)
 
     assert _finding_map(blueprint)["roadmap/result.md"] == [
         ("source-escapes-blueprint", "source link escapes the blueprint: '../../outer.md'"),
+        ("source-escapes-blueprint", "source link escapes the blueprint: '../sources/away/loop.md'"),
+        ("source-escapes-blueprint", "source link escapes the blueprint: '../sources/hop0.txt'"),
+        ("source-escapes-blueprint", "source link escapes the blueprint: '../sources/loop.md/../away/note.txt'"),
+        ("source-not-found", "source link does not resolve to a file: '../sources/chain0.txt'"),
         ("source-not-found", "source link does not resolve to a file: '../sources/loop.md'"),
     ]
 

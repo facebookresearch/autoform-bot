@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -25,6 +26,7 @@ from .markdown import (
     local_target_issue,
     published_tables,
     rendered_visible_text,
+    resolved_path,
 )
 from .markdown import has_substance as _has_substance
 from .markdown import is_placeholder as _is_placeholder
@@ -527,15 +529,14 @@ def _is_roadmap_article(target: str, *, coverage_path: Path, roadmap: Path) -> b
     parsed = urlsplit(target)
     if parsed.scheme or parsed.netloc:
         return False
-    try:
-        raw_path = unquote(parsed.path)
-        if not raw_path or "\x00" in raw_path:
-            return False
-        candidate = (coverage_path.parent / raw_path).resolve()
-        candidate.relative_to(roadmap)
-        return candidate.is_file() and candidate.suffix.casefold() == ".md"
-    except (OSError, RuntimeError, ValueError):
+    raw_path = unquote(parsed.path)
+    if not raw_path or "\x00" in raw_path:
         return False
+    candidate = resolved_path(coverage_path.parent / raw_path)
+    if candidate is None:
+        # load_coverage reports such a link first, through local_target_issue.
+        return False
+    return candidate.is_relative_to(roadmap) and os.path.isfile(candidate) and candidate.suffix.casefold() == ".md"
 
 
 def _cells(line: str) -> tuple[str, ...]:

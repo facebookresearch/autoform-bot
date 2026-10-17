@@ -635,17 +635,21 @@ that cannot be parsed outside their file are marked `-- source not shown`.
 A statement's source passage can travel with it. A `## Sources` link to a
 non-Markdown file inside the blueprint with a `#L<start>-L<end>` fragment, for
 example `../../../sources/lebl-ra/ch-real-nums.tex#L693-L714`, names the exact
-text the statement came from. External URLs are skipped. A first local locator
-that names no text, because it points outside the blueprint, names an invalid
-path, a symlink loop, a missing file or non-UTF-8 text, or names no lines of
-it, leaves the article's declarations unresolved. `--passages DIR` writes those
-passages beside the packets, one per article, in a separate, disjoint managed
-directory. It requires `--packets`. Each article directory also holds
-`article.lean`, the joint packet of every declaration the article
-names, because a source theorem is often formalized by several declarations
-together and each alone is honestly incomplete. A judge of faithfulness is
-given the article packet and its passage; an auditor asked what one
-declaration asserts is given that declaration's packet alone.
+text the statement came from. External URLs are skipped, and so is a link with
+such a fragment to a Markdown file, in any letter case, which is a note; one
+that names no regular file in the blueprint counts as a locator whatever its
+suffix. A first local locator that names no text, because it points outside
+the blueprint, names an invalid path, a symlink loop, a link that cannot be
+read, a missing, unreadable or oversized file, something other than a regular
+file, or non-UTF-8 text, or names no lines of it, leaves the article's
+declarations unresolved while the other articles still extract.
+`--passages DIR` writes those passages beside the packets, one per article, in
+a separate, disjoint managed directory. It requires `--packets`. Each article
+directory also holds `article.lean`, the joint packet of every declaration the
+article names, because a source theorem is often formalized by several
+declarations together and each alone is honestly incomplete. A judge of
+faithfulness is given the article packet and its passage; an auditor asked what
+one declaration asserts is given that declaration's packet alone.
 
 When `--output`, `--packets`, and `--passages` are combined, all three outputs
 are staged before publication and a failed commit restores the previous set.
@@ -925,8 +929,8 @@ it does not recognize, and assertions the Lean cannot back: `proof: formalized`
 without `statement: formalized`, or either without a `lean:` name, even beside
 `mathlib: true`. A `## Sources` link to a local path must name a file
 inside the blueprint, as `audit` also requires: a missing file, a directory, an
-invalid path, or a target outside the blueprint fails. So does a target whose
-path as written, once its `..` steps are applied, has a part below the
+invalid path or URL, or a target outside the blueprint fails. So does a target
+whose path as written, once its `..` steps are applied, has a part below the
 blueprint starting with `.`, unless the article citing it is hidden too,
 because render omits hidden files and directories. `audit` alone checks
 fragments and fails links with other schemes or a network location. Such a link
