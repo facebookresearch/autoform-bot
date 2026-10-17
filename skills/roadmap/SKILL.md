@@ -75,12 +75,13 @@ empty, since a library may already prove the result. The
 [library search rules](../formalize/references/library-search.md) give the
 details.
 If a library already proves a result, reuse that proof instead of proving the
-result again: the result keeps its article, and its proof cites the library
-declaration. If a proof needs a library result that has no article yet, add an
-article for it, proved from the library, and link it under `## Proof depends
-on`. `lean:` names a project declaration, never a library one: leave it unset
-on an article a library proves or defines, and Formalize declares the result in
-the project from the library declaration, as the library search rules say.
+result again: the result keeps its article. If a proof needs a library result
+that has no article yet, add an article for it, proved from the library, and
+link it under `## Proof depends on`. Whenever an article reuses a library
+declaration, name it in the article's implementation note, not in the article,
+and leave `lean:` unset until the project declares the result, which Formalize
+does from the library declaration. `lean:` names only a declaration in the
+project's own Lean files, since `autoform check --lean-root` resolves no other.
 A refusal (exit 2) is not an empty result: resolve what it reports without
 adding the article, and search again, except that a refusal naming a library is
 handled as the library search rules say. A dependency link to a page not yet
