@@ -237,33 +237,20 @@ def test_small_and_large_chapters_use_the_same_json_explorer(
     assert payload["edge_count"] == node_count - 1
 
 
-def test_the_structure_page_shows_the_tree_not_the_content(tmp_path: Path) -> None:
-    """Auditing layout needs directories; every chapter's file is `README.md`.
-
-    Listing filenames alone puts three indistinguishable `README.md` rows on
-    the page, which is exactly the question the reader came to answer.
-    """
+def test_the_structure_compatibility_page_opens_the_explorer_in_browse_mode(tmp_path: Path) -> None:
+    """Hierarchy has one public UI, rather than a second repository-sized tree."""
     _render(tmp_path)
     page = (tmp_path / "out/structure.md").read_text(encoding="utf-8")
+    summary = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
 
-    assert "<strong>roadmap/</strong>" in page
-    assert "<strong>blueprint/</strong>" in page
-    # Files carry their title and status, and link to the statement itself.
-    assert "top.md" in page and "bp-tree-title'>Top<" in page
-    assert "roadmap/index.html#top" in page
-    assert "roadmap/README.md#top" not in page
-    assert 'bp-swatch-fully_proved"' in page
-    # Prose that was never meant to be a node is not an anomaly.
-    assert "not in the graph" not in page
-    assert "bp-tree-warn" not in page
+    assert "# Browse the roadmap" in page
+    assert "[Open every roadmap entry in Browse mode](dependencies/full.md#view=list)" in page
+    assert "bp-tree" not in page and "data-autoform-node-id" not in page
+    assert "[Browse all mathematics](dependencies/full.md#view=list)" in summary
+    assert "Vault structure" not in summary
 
 
-def test_the_structure_page_names_a_vault_with_no_chapters(tmp_path: Path) -> None:
-    """The fault this page exists for: articles heaped directly under roadmap/.
-
-    It parses, `autoform check` passes, and the book publishes as one
-    undivided list, so no rendered view of the content reveals it.
-    """
+def test_a_flat_roadmap_gets_the_same_bounded_browse_doorway(tmp_path: Path) -> None:
     project = tmp_path / "flat"
     roadmap = project / "blueprint" / "roadmap"
     roadmap.mkdir(parents=True)
@@ -284,8 +271,8 @@ def test_the_structure_page_names_a_vault_with_no_chapters(tmp_path: Path) -> No
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     page = (tmp_path / "out/structure.md").read_text(encoding="utf-8")
-    assert "bp-tree-warn" in page
-    assert "publishes as one undivided list" in page
+    assert "dependencies/full.md#view=list" in page
+    assert "Result a" not in page
 
 
 def test_the_site_publishes_no_second_copy_of_the_vault(tmp_path: Path) -> None:
@@ -888,10 +875,8 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
     assert '<a class="bp-ref bp-ref-planned" href="#a">Module 1 (Module A)</a>' in book
     assert "ready to state" not in book
     structure = (out / "structure.md").read_text(encoding="utf-8")
-    assert structure.count(
-        '<span class="bp-swatch bp-swatch-inventory_pending"></span>'
-        '<span class="bp-tree-state">inventory pending</span>'
-    ) == 3
+    assert "dependencies/full.md#view=list" in structure
+    assert "Module A" not in structure
 
 
 def test_the_landing_page_is_the_hero_and_project_explorer_and_nothing_else(
@@ -1225,8 +1210,8 @@ def test_a_nested_article_named_like_a_generated_view_is_published(tmp_path: Pat
     assert 'id="progress"' in (out / "roadmap/ch/README.md").read_text(encoding="utf-8")
     assert "Prose named like a generated page." in (out / "roadmap/ch/structure.md").read_text(encoding="utf-8")
     vault_structure = (out / "structure.md").read_text(encoding="utf-8")
-    assert 'data-autoform-node-id="ch/progress"' in vault_structure
-    assert 'data-autoform-node-id="ch/structure"' in vault_structure
+    assert "dependencies/full.md#view=list" in vault_structure
+    assert 'data-autoform-node-id="ch/progress"' not in vault_structure
 
 
 def test_authored_mermaid_survives_while_generated_graph_pages_use_the_explorer(

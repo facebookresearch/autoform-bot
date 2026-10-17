@@ -650,14 +650,7 @@ def _render_pages(
     _append_book_navigation([p for p in book_pages if p != overview])
     structure = destination / STRUCTURE_PAGE
     structure.write_text(
-        _render_structure_page(
-            blueprint,
-            graph,
-            statuses,
-            page=structure,
-            targets=targets,
-            sources_base=sources_base,
-        ),
+        _render_structure_page(page=structure),
         encoding="utf-8",
     )
     report.pages += 1
@@ -1518,118 +1511,32 @@ STRUCTURE_PAGE = "structure.md"
 
 
 def _render_structure_page(
-    blueprint: Path,
-    graph: Graph,
-    statuses: dict[str, status.NodeStatus],
     *,
     page: Path,
-    targets: dict[str, tuple[Path, str]],
-    sources_base: "_SourceBase | None",
 ) -> str:
-    """List the vault as a file tree, so its shape can be checked at a glance.
+    """Keep the old structure route as a bounded doorway into Browse mode.
 
-    The book answers what the project says; nothing answered how it is laid
-    out. A real project came back with 71 of 72 articles sitting directly under
-    `roadmap/`, which parses cleanly, passes `autoform check`, and publishes a
-    book with no chapters -- a fault invisible in every rendered view, because
-    every rendered view shows content rather than paths.
-
-    So this shows paths: the directory tree itself, with what the graph made of
-    each file beside it. Directories are rows too, because they are what a
-    chapter is; without them every `README.md` looks like every other one.
+    The explorer owns hierarchy now. Republishing every source path as one raw
+    HTML tree made this compatibility page larger than the rest of a small
+    site, duplicated Browse, and became unusable on repository-scale books.
     """
-    # These links sit inside raw HTML, so MkDocs never rewrites their source
-    # ``.md`` paths to the files it publishes. Name the published routes here,
-    # just as statement boxes and Mermaid links do.
-    links = _anchored_links(targets, page, extension=".html")
-    by_path = {node.path.resolve(): node for node in graph.nodes.values()}
-
-    def keep(relative: Path) -> bool:
-        if _SKIPPED_DIRECTORIES.intersection(relative.parts) or _is_hidden(relative):
-            return False
-        return not (sources_base is not None and relative.parts[:1] == (SOURCES_DIR,))
-
-    files = [p for p in sorted(blueprint.rglob("*.md")) if keep(p.relative_to(blueprint))]
-    directories = {p.relative_to(blueprint).parent for p in files}
-    directories.discard(Path("."))
-    for directory in list(directories):
-        for parent in directory.parents:
-            if parent != Path("."):
-                directories.add(parent)
-
-    def row(
-        indent: int,
-        label: str,
-        kind: str,
-        mark: str,
-        extra: str = "",
-        node_id: str | None = None,
-    ) -> str:
-        identity = (
-            f' data-autoform-node-id="{html.escape(node_id, quote=True)}"'
-            if node_id is not None
-            else ""
-        )
-        return (
-            f'<span class="bp-tree-path{extra}"{identity} '
-            f'style="padding-left: {indent * 1.1:.1f}rem">{label}</span>'
-            f'<span class="bp-tree-kind">{kind}</span>'
-            f'<span class="bp-tree-mark">{mark}</span>'
-        )
-
-    rows = [row(0, "<strong>blueprint/</strong>", "vault root", "")]
-    for entry in sorted(directories | {p.relative_to(blueprint) for p in files}):
-        depth = len(entry.parts)
-        if entry in directories:
-            rows.append(row(depth, f"<strong>{html.escape(entry.name)}/</strong>", "", ""))
-            continue
-        source = blueprint / entry
-        node = by_path.get(source.resolve())
-        name = html.escape(entry.name)
-        if node is None:
-            # Everything under `roadmap/` is a node or the graph refuses to
-            # load, so a file with no node here is prose by construction: the
-            # blueprint landing page or the coverage contract.
-            rows.append(row(depth, name, "prose", ""))
-            continue
-        href = links.get(node.id)
-        label = f'<a href="{html.escape(href, quote=True)}">{name}</a>' if href else name
-        state = graph_views.inventory_state(node, statuses[node.id]) or statuses[node.id].state
-        kind = "module inventory" if node.catalog == "module" else node.declaration or node.kind
-        rows.append(
-            row(
-                depth,
-                f"{label} <span class='bp-tree-title'>{html.escape(node.title)}</span>",
-                html.escape(kind),
-                f'<span class="bp-swatch bp-swatch-{state.key}"></span>'
-                f'<span class="bp-tree-state">{html.escape(state.label)}</span>',
-                node_id=node.id,
-            )
-        )
-
-    article_depths = {len(p.relative_to(blueprint).parts) - 1 for p in by_path}
-    warnings = []
-    if len(by_path) > 3 and article_depths <= {1}:
-        warnings.append(
-            "Every article sits directly under <code>roadmap/</code>. Chapters come "
-            "from directories, so this vault publishes as one undivided list."
-        )
+    explorer = mermaid.relative_link(page.parent / "dependencies/full.md", page, ".md")
     return "\n".join(
         [
             "---",
-            "title: Vault structure",
+            "title: Browse the roadmap",
+            "search:",
+            "  exclude: true",
             "hide:",
             "  - toc",
             "---",
             "",
-            "# Vault structure",
+            "# Browse the roadmap",
             "",
-            "Every Markdown file in the blueprint, as the vault holds them. Chapters "
-            "come from directories, so the shape of this tree is the shape of the book.",
+            "The dependency explorer presents the authored hierarchy and its mathematical",
+            "relations without flattening the repository into a file listing.",
             "",
-            *(f'<div class="bp-tree-warn">{text}</div>' for text in warnings),
-            "",
-            f'<div class="bp-tree">{"".join(rows)}</div>',
+            f"[Open every roadmap entry in Browse mode]({explorer}#view=list)",
             "",
         ]
     )
@@ -1678,7 +1585,7 @@ def _render_summary_nav(
         [
             "- Graph",
             "    - [Dependency explorer](dependencies.md)",
-            f"    - [Vault structure]({STRUCTURE_PAGE})",
+            "    - [Browse all mathematics](dependencies/full.md#view=list)",
         ]
     )
     return "\n".join(lines) + "\n"
