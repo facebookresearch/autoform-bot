@@ -131,7 +131,8 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-node[data-kind=boundary] { border-style: dashed; }
 .bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] { display: block; padding: 3px; border: 0; border-radius: 14px; background: var(--dag-status-ring, var(--dag-node-stroke)); text-align: left; }
 .bp-dag-node-core { display: grid; align-content: center; width: 100%; height: 100%; padding: .8rem 1rem; border-radius: 11px; background: var(--dag-node-fill); color: var(--dag-node-text); }
-.bp-dag-node-link { display: grid; align-content: center; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; color: inherit !important; font: inherit; text-align: left; text-decoration: none !important; cursor: pointer; }
+.bp-dag-node-link { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; color: inherit !important; font: inherit; text-align: left; text-decoration: none !important; cursor: pointer; }
+.bp-dag-viewer:not(.bp-dag-atlas) .bp-dag-node-link { display: grid; align-content: center; }
 .bp-dag-node-link:focus-visible { outline: 3px solid var(--dag-link); outline-offset: -4px; border-radius: 11px; }
 .bp-dag-viewer.bp-dag-atlas .bp-dag-node-core { align-content: start; padding: 16px 18px 38px; background: var(--dag-panel); color: var(--dag-fg); }
 .bp-dag-node-info { position: absolute; right: 10px; bottom: 8px; min-height: 26px; padding: 4px 8px; border: 1px solid var(--dag-border); border-radius: 6px; background: var(--dag-bg); color: var(--dag-link); font: 650 calc(11px / var(--dag-scale, 1))/1.2 ui-sans-serif, system-ui, sans-serif; cursor: pointer; }

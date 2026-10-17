@@ -662,6 +662,8 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     stage_width = page.locator(".bp-dag-stage").bounding_box()["width"]
     topic_box = topic.bounding_box()
     assert topic_box is not None and topic_box["height"] >= 62 and topic_box["width"] >= 150
+    core_box = topic.locator(".bp-dag-node-core").bounding_box()
+    assert core_box is not None and core_box["height"] >= topic_box["height"] * .9
     visible_font_size = topic.evaluate("""element => {
       const scale = new DOMMatrix(getComputedStyle(element).transform).a;
       return parseFloat(getComputedStyle(element.querySelector('.bp-dag-node-title')).fontSize) * scale;
