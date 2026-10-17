@@ -1939,9 +1939,8 @@ def test_report_distinguishes_full_and_filtered_blueprint_scope(tmp_path: Path) 
 
 @pytest.mark.parametrize("passage", ["found", "broken"])
 def test_a_root_several_files_declare_fails_closed_naming_every_file(tmp_path: Path, passage: str) -> None:
-    # Lean accepts a private declaration beside a public one of the same name
-    # in another module, and two unrelated modules may each declare it; the
-    # lexical index cannot tell which one a probe would bind.
+    # Two unrelated modules may each declare a public name; the lexical index
+    # cannot tell which one a probe would bind.
     project = _project(tmp_path)
     for module, prefix, value in (("Cdup", "", "2 = 2"), ("Adup", "private ", "True"), ("Bdup", "", "1 = 1")):
         (project / "Skel" / f"{module}.lean").write_text(
@@ -1963,8 +1962,31 @@ def test_a_root_several_files_declare_fails_closed_naming_every_file(tmp_path: P
 
     assert report.nodes[0].declarations == ()
     (issue,) = report.unresolved
-    assert issue.reason.endswith("several source files declare it: Skel/Adup.lean, Skel/Bdup.lean, Skel/Cdup.lean")
+    assert issue.reason.endswith(
+        "declaration defined more than once in the Lean sources: Skel/Adup.lean:2, Skel/Bdup.lean:2, Skel/Cdup.lean:2"
+    )
     assert issue.reason.startswith("source locator ") == (passage == "broken")
+
+
+def test_a_root_beside_a_private_twin_is_probed_in_its_public_module(tmp_path: Path) -> None:
+    # A private declaration is local to its file, so every other module binds the public one.
+    project = _project(tmp_path)
+    for module, prefix in (("Adup", "private "), ("Bdup", "")):
+        (project / "Skel" / f"{module}.lean").write_text(
+            f"namespace Skel\n{prefix}theorem dup : True := sorry\nend Skel\n", encoding="utf-8"
+        )
+    blueprint = _blueprint(tmp_path, lean={"dup": "Skel.dup"})
+    probes: list[str] = []
+
+    def runner(probe: str, root: Path) -> str:
+        probes.append(probe)
+        return ""
+
+    extract_skeletons(blueprint, lean_root=project, runner=runner)
+
+    (probe,) = probes
+    assert "import Skel.Bdup\n" in probe
+    assert "import Skel.Adup" not in probe
 
 
 def test_report_is_identical_across_checkout_roots(tmp_path: Path) -> None:

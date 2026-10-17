@@ -167,6 +167,11 @@ def test_optional_lean_targets_report_success_missing_and_kind_mismatch(tmp_path
     mismatch = diagnose_project(project, lean_root=lean_root)
     assert _checks(mismatch)["lean targets"] == (False, "1 finding(s): lean-target-kind-mismatch")
 
+    source.write_text("theorem Project.result : True := trivial\n", encoding="utf-8")
+    (lean_root / "Twin.lean").write_text("theorem Project.result : True := trivial\n", encoding="utf-8")
+    ambiguous = diagnose_project(project, lean_root=lean_root)
+    assert _checks(ambiguous)["lean targets"] == (False, "1 finding(s): lean-target-ambiguous")
+
 
 def test_module_catalog_targets_must_resolve(tmp_path: Path) -> None:
     project = _clean_project(

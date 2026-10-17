@@ -948,6 +948,32 @@ def test_check_warns_about_an_article_whose_byte_order_mark_hides_its_frontmatte
     ]
 
 
+@pytest.mark.parametrize(
+    ("other", "errors"),
+    [
+        ("private theorem Project.base : True := trivial\n", []),
+        ("proof_wanted Project.base : True\n", []),
+        (
+            "theorem Project.base : True := trivial\n",
+            ["error: base: declaration defined more than once in {root}: Project.base (A.lean:1, B.lean:2)"],
+        ),
+    ],
+)
+def test_check_resolves_a_name_beside_a_private_twin_and_rejects_two_public_ones(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], other: str, errors: list[str]
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n", lean="Project.base")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "A.lean").write_text(other, encoding="utf-8")
+    (lean_root / "B.lean").write_text("\ndef Project.base : Nat := 0\n", encoding="utf-8")
+
+    assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == (1 if errors else 0)
+    lines = capsys.readouterr().out.splitlines()
+    assert [line for line in lines if line.startswith("error:")] == [error.format(root=lean_root) for error in errors]
+
+
 def test_check_prints_its_warnings_after_the_whole_summary(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -1494,14 +1494,22 @@ def _locator(
     libraries: tuple[LeanLibrary, ...],
     snapshot: IndexedSourceSnapshot,
 ) -> Locator:
-    """Locate a constant through one captured index, else by its captured module path."""
+    """Locate a constant through one captured index, else by its captured module path.
+
+    The compiled module says which of a name's declarations a record is, so a
+    private one beside a public twin is still located.
+    """
 
     def locate(record: ConstantRecord) -> tuple[str | None, int | None]:
         module_path = module_paths.get(_name_key(record.module))
-        declaration = snapshot.index.find(record.user_name or record.name)
-        if declaration is not None and module_path in (None, declaration.path.as_posix()):
-            return declaration.path.as_posix(), declaration.line
-        return module_path, None
+        name = record.user_name or record.name
+        if module_path is None:
+            declaration = snapshot.index.find(name)
+            return (None, None) if declaration is None else (declaration.path.as_posix(), declaration.line)
+        line = next(
+            (item.line for item in snapshot.index.occurrences(name) if item.path.as_posix() == module_path), None
+        )
+        return module_path, line
 
     module_paths = {_name_key(module): path for module, path in _module_source_paths(libraries, snapshot).items()}
     return locate

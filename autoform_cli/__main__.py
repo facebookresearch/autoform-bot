@@ -409,7 +409,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     render.add_argument(
         "--require-declarations",
         action="store_true",
-        help="fail when a 'lean:' declaration is not found in the Lean sources "
+        help="fail when a 'lean:' declaration is not found in the Lean sources, is defined more than once in them, "
         "or cannot be looked up because the sources cannot be read",
     )
 
@@ -610,7 +610,9 @@ def _check(args: argparse.Namespace) -> int:
 
     if linker is not None:
         missing = [
-            f"{node.id}: declaration not found in {args.lean_root}: {name}"
+            f"{node.id}: declaration defined more than once in {args.lean_root}: {name} ({ambiguous})"
+            if (ambiguous := linker.index.ambiguity(name))
+            else f"{node.id}: declaration not found in {args.lean_root}: {name}"
             for node in graph.nodes.values()
             for name in declaration_names(node.lean or "")
             if linker.location(name) is None
@@ -1456,9 +1458,7 @@ def _render(args: argparse.Namespace) -> int:
         return 1
 
     print(f"{report.output_dir}: {report.pages} pages, {report.nodes} nodes, {report.linked} code links")
-    for issue in report.unresolved:
-        print(f"warning: declaration not found in the Lean sources: {issue}")
-    for issue in report.warnings:
+    for issue in (*report.unresolved, *report.warnings):
         print(f"warning: {issue}")
     # A declaration that was never looked up is not known to exist.
     if (report.unresolved or report.unchecked) and args.require_declarations:

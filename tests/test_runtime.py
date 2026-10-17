@@ -207,6 +207,27 @@ def test_exposes_provenance_mathlib_and_optional_lean_locations(tmp_path: Path) 
     assert result.mathlib_file == "Mathlib/Result.lean"
 
 
+def test_lean_locations_skip_a_private_twin_and_leave_an_ambiguous_name_unlocated(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "A.lean").write_text(
+        "private theorem Project.result : True := trivial\nlemma Project.result_aux : True := trivial\n",
+        encoding="utf-8",
+    )
+    (lean_root / "B.lean").write_text(
+        "theorem Project.result : True := trivial\nlemma Project.result_aux : True := trivial\n", encoding="utf-8"
+    )
+
+    result = load_runtime_graph(project, lean_root=lean_root).get("chapter/section/result")
+
+    assert result is not None
+    assert [(target.declaration, target.source_file) for target in result.lean_targets] == [
+        ("Project.result", "B.lean"),
+        ("Project.result_aux", None),
+    ]
+
+
 def test_serialization_is_deterministic_relative_and_deeply_immutable(tmp_path: Path) -> None:
     project = _project(tmp_path)
     runtime = load_runtime_graph(project)

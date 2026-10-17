@@ -271,6 +271,27 @@ def test_universe_binders_are_not_part_of_the_indexed_declaration_name(
     assert index.find("polymorphic.{u}") is None
 
 
+def test_a_declaration_name_may_start_on_the_next_nonblank_line(tmp_path: Path) -> None:
+    index = _index(
+        tmp_path,
+        "namespace Demo\n"
+        "public theorem\n"
+        "    split_theorem : True := trivial\n"
+        "public def_wanted\n\n"
+        "    split_wanted : Nat\n"
+        "public structure\n"
+        "    SplitStructure where\n"
+        "  value : Nat\n"
+        "end Demo\n",
+    )
+
+    assert [(name, declaration.line, declaration.keyword) for name, declaration in index.declarations.items()] == [
+        ("Demo.split_theorem", 2, "theorem"),
+        ("Demo.split_wanted", 4, "def_wanted"),
+        ("Demo.SplitStructure", 7, "structure"),
+    ]
+
+
 def test_commented_out_code_is_not_indexed(tmp_path: Path) -> None:
     index = _index(tmp_path)
 
@@ -1150,7 +1171,8 @@ def test_lean_file_edited_while_it_is_read_is_named(
 
     assert edited
     assert len(binds) == 2
-    assert snapshot.index.find("edited") is not None
+    # Each capture appended one more declaration.
+    assert len(snapshot.index.occurrences("edited")) == 2
 
 
 
@@ -3103,6 +3125,105 @@ def test_an_alias_is_followed_only_to_an_earlier_declaration_of_its_file(tmp_pat
     # is outside the index leads nowhere sure.
     for name in ("X.remote", "X.skips", "X.skipsAbove", "X.partway"):
         assert index.reached(index.find(name)) is None, name
+
+
+def _index_files(tmp_path: Path, files: dict[str, str]):
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return index_project(tmp_path)
+
+
+def _where(declarations) -> list[tuple[str, int]]:
+    return [(declaration.path.as_posix(), declaration.line) for declaration in declarations]
+
+
+_PUBLIC_MAIN = "namespace Demo\ntheorem main : True := trivial\nend Demo\n"
+_PRIVATE_MAIN = "private theorem Demo.main : True := trivial\n"
+
+
+@pytest.mark.parametrize(
+    ("files", "occurrences", "selected"),
+    [
+        (
+            {"A.lean": f"@[simp] {_PRIVATE_MAIN}", "B.lean": _PUBLIC_MAIN},
+            [("A.lean", 1), ("B.lean", 2)],
+            [("B.lean", 2)],
+        ),
+        (
+            {"A.lean": "@[simp]\nprivate\ntheorem Demo.main : True := trivial\n", "B.lean": _PUBLIC_MAIN},
+            [("A.lean", 3), ("B.lean", 2)],
+            [("B.lean", 2)],
+        ),
+        ({"A.lean": _PUBLIC_MAIN, "B.lean": _PRIVATE_MAIN}, [("A.lean", 2), ("B.lean", 1)], [("A.lean", 2)]),
+        # Batteries makes a wanted command a private placeholder, so the
+        # theorem that fills it may stand beside it.
+        (
+            {"A.lean": "theorem_wanted Demo.main : True\n", "B.lean": _PUBLIC_MAIN},
+            [("A.lean", 1), ("B.lean", 2)],
+            [("B.lean", 2)],
+        ),
+        ({"A.lean": "\n" + _PRIVATE_MAIN}, [("A.lean", 2)], [("A.lean", 2)]),
+        (
+            {"A.lean": "theorem Demo.main : True := trivial\n", "B.lean": _PRIVATE_MAIN, "C.lean": _PUBLIC_MAIN},
+            [("A.lean", 1), ("B.lean", 1), ("C.lean", 2)],
+            [],
+        ),
+        (
+            {"A.lean": _PRIVATE_MAIN, "B.lean": "\nprivate def Demo.main : Nat := 0\n"},
+            [("A.lean", 1), ("B.lean", 2)],
+            [],
+        ),
+        ({"A.lean": _PRIVATE_MAIN, "B.lean": "\nproof_wanted Demo.main : True\n"}, [("A.lean", 1), ("B.lean", 2)], []),
+    ],
+    ids=[
+        "earlier-private", "private-above", "later-private", "wanted",
+        "lone-private", "two-public", "two-private", "private-wanted",
+    ],
+)
+def test_a_name_selects_its_one_public_declaration_or_is_ambiguous(
+    tmp_path: Path, files: dict[str, str], occurrences: list[tuple[str, int]], selected: list[tuple[str, int]]
+) -> None:
+    index = _index_files(tmp_path, files)
+
+    assert _where(filter(None, [index.find("Demo.main")])) == selected
+    assert _where(index.occurrences("Demo.main")) == occurrences
+    # A name that selects nothing lists every declaration.
+    ambiguity = "" if selected else ", ".join(f"{path}:{line}" for path, line in occurrences)
+    assert index.ambiguity("Demo.main") == ambiguity
+
+
+def test_one_short_name_in_distinct_namespaces_is_no_duplicate(tmp_path: Path) -> None:
+    index = _index_files(
+        tmp_path,
+        {
+            "A.lean": "namespace A\ndef x : Nat := 0\nend A\n",
+            "B.lean": "theorem B.x : True := trivial\nnamespace C\nprivate theorem x : True := trivial\nend C\n",
+        },
+    )
+
+    assert [_where([index.find(name)]) for name in ("A.x", "B.x", "C.x")] == [
+        [("A.lean", 2)],
+        [("B.lean", 1)],
+        [("B.lean", 3)],
+    ]
+    assert index.duplicates == {}
+
+
+def test_an_alias_of_a_private_declaration_names_its_own_file_one(tmp_path: Path) -> None:
+    # Inside B.lean, `foo` is the private one above the alias: importing A.lean
+    # there would clash with it.
+    index = _index_files(
+        tmp_path,
+        {
+            "A.lean": "theorem foo : True := trivial\n",
+            "B.lean": "private def foo : Nat := 0\nalias bar := foo\n",
+        },
+    )
+
+    assert _where([index.find("foo")]) == [("A.lean", 1)]
+    assert _where([index.alias_target(index.find("bar"))]) == [("B.lean", 1)]
 
 
 def test_anonymous_instances_are_not_mistaken_for_names(tmp_path: Path) -> None:
