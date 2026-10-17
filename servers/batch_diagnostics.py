@@ -97,8 +97,9 @@ def batch_diagnostics(
     if returncode == NO_BUILD_EXIT_CODE:
         raise BatchDiagnosticsError(
             f"Lean did not check {path.name}: some of its imports are not built or are out "
-            "of date. Build the modules Lake lists below, for example with `lake build "
-            f"<module>`, and run again.{ending}"
+            f"of date. Build the modules that {path.name} imports, for example with `lake build "
+            "<module>`, and run again: Lake lists only the first modules to build, not the ones "
+            f"that import them.{ending}"
         )
     raise BatchDiagnosticsError(
         f"{shown} stopped with status {returncode} before Lean finished checking "

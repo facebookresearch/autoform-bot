@@ -104,7 +104,7 @@ def test_stale_imports_are_reported_instead_of_built(tmp_path):
     with pytest.raises(batch.BatchDiagnosticsError, match="imports are not built") as raised:
         batch.batch_diagnostics(tmp_path, _lean_file(tmp_path), command=command, timeout=30)
 
-    assert "Build the modules Lake lists below" in str(raised.value)
+    assert "Build the modules that Probe.lean imports" in str(raised.value)
     assert str(raised.value).endswith("- Skel.Defs")
 
 
