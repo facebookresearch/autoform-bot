@@ -960,7 +960,8 @@ def _process_group_is_alive(pid: int) -> bool:
 def _process_group_has_live_members(pid: int) -> bool:
     """Whether the group ``pid`` leads holds a process that is not a zombie.
 
-    Its leader stays unreaped, and so a member, until the group is retired.
+    The leader counts while it is unreaped; the runner leaves it so until the
+    group is retired, unless something else reaps it first.
     """
 
     if not _process_group_is_alive(pid):
@@ -974,6 +975,30 @@ def _process_group_has_live_members(pid: int) -> bool:
                 continue
     except (OSError, psutil.Error, SystemError):
         return True  # a table that cannot be read proves nothing gone
+    return False
+
+
+def _process_group_is_ours(process: subprocess.Popen[bytes]) -> bool:
+    """Whether the command's process group id can still belong only to it, so it may be signalled.
+
+    The unreaped leader keeps the id. Once something else reaps it, as the
+    kernel does when SIGCHLD is ignored, the group's live members keep it, and
+    no process can then hold the leader's pid: Linux and macOS give out no pid
+    that is still a group's id. A process at that pid shows the id was given out
+    again. A new group at that id whose leader already exited looks the same as
+    the command's, but only if pids come round again within the run.
+    """
+
+    if os.name != "posix":
+        return False
+    if process.returncode is None:
+        return True
+    try:
+        os.getpgid(process.pid)
+    except ProcessLookupError:
+        return _process_group_has_live_members(process.pid)
+    except OSError:
+        pass
     return False
 
 
@@ -994,7 +1019,7 @@ def _leader_has_exited(process: subprocess.Popen[bytes]) -> bool:
     except psutil.ZombieProcess:
         return True
     except (ChildProcessError, psutil.NoSuchProcess):
-        # Reaped elsewhere: poll records it, so nothing signals the group again.
+        # Reaped elsewhere: poll records it, and _process_group_is_ours stops trusting the pid.
         return process.poll() is not None
     except (OSError, psutil.Error, SystemError):
         return False
@@ -1019,8 +1044,8 @@ def _terminate_process_tree(
 ) -> None:
     """Best-effort termination of a command and every descendant observed.
 
-    The leader is reaped last, so the group is only signalled while its id
-    cannot belong to another group.
+    The leader is reaped last, and the group is only signalled while
+    _process_group_is_ours finds its id still the command's.
     """
 
     started, available = time.perf_counter(), _remaining(deadline)
@@ -1033,7 +1058,7 @@ def _terminate_process_tree(
             strict=False,
         )
         live = [child for child in descendants.values() if child.pid != process.pid and _process_is_alive(child)]
-        if os.name == "posix" and process.returncode is None:
+        if _process_group_is_ours(process):
             with contextlib.suppress(OSError):
                 os.killpg(process.pid, getattr(signal, group_signal))
         # On POSIX killpg already reached the leader; Popen.terminate would poll, and so reap, it.
@@ -1222,8 +1247,9 @@ def _run_registered_command(
                 raise _CommandTimedOut([f"{context} timed out after {timeout:g} seconds"])
             overflow.wait(min(0.05, remaining))
         _remember_descendants(process, descendants)
-        # A reap recorded elsewhere frees the group id, so it is not checked again.
-        group_alive = process.returncode is None and _process_group_has_live_members(process.pid)
+        group_alive = (
+            _process_group_has_live_members(process.pid) if process.returncode is None else _process_group_is_ours(process)
+        )
         _remember_tagged_processes(token, descendants, root_pid=process.pid)
         if group_alive or any(map(_process_is_alive, descendants.values())):
             raise SkeletonError([f"{context} left descendant processes running"])
