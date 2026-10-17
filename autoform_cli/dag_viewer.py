@@ -161,16 +161,22 @@ def _uses_atlas(view: GraphView) -> bool:
 
 
 def _atlas_positions(view: GraphView) -> dict[str, dict[str, int]]:
-    """Pack weighted topic bubbles inside authored mathematical regions."""
-    gap = 14
+    """Pack readable topic cards inside authored mathematical regions.
 
-    def diameter(node: ViewNode) -> int:
-        count = max(1, node.item_count)
-        if node.kind == "scope":
-            return max(92, min(164, round(72 + 11 * math.log2(count + 1))))
+    The project view is an information architecture before it is a dependency
+    diagram.  A stable card width keeps titles readable, while a small height
+    variation still communicates relative scope without turning text into
+    labels inside tiny bubbles.
+    """
+    card_width = 232
+    gap = 16
+    region_header = 42
+
+    def card_height(node: ViewNode) -> int:
         if node.kind == "boundary":
-            return 104
-        return 76
+            return 88
+        count = max(1, node.item_count)
+        return max(88, min(116, round(84 + 4 * math.log2(count + 1))))
 
     by_area: dict[str, list[tuple[int, ViewNode]]] = defaultdict(list)
     for index, node in enumerate(view.nodes):
@@ -178,43 +184,35 @@ def _atlas_positions(view: GraphView) -> dict[str, dict[str, int]]:
 
     blocks: list[tuple[str, dict[str, dict[str, int]], int, int]] = []
     for area, indexed in sorted(by_area.items(), key=lambda item: (not item[0], item[0].casefold())):
-        indexed.sort(key=lambda item: (-diameter(item[1]), item[1].title.casefold(), item[1].id))
-        dimensions = {node.id: diameter(node) for _, node in indexed}
-        total_area = sum((dimensions[node.id] + gap) ** 2 for _, node in indexed)
-        target_width = max(
-            max(dimensions.values(), default=_NODE_WIDTH),
-            round(math.sqrt(total_area * 1.1)),
+        indexed.sort(
+            key=lambda item: (-item[1].item_count, item[1].title.casefold(), item[1].id)
         )
+        heights = {node.id: card_height(node) for _, node in indexed}
+        columns = min(3, max(1, math.ceil(math.sqrt(len(indexed)))))
         local: dict[str, dict[str, int]] = {}
-        x = 0
-        y = 34 if area else 0
-        row_height = 0
-        row = 0
-        widest = 0
-        for order, node in indexed:
-            size = dimensions[node.id]
-            if x and x + size > target_width:
-                x = 0
-                y += row_height + gap
-                row += 1
-                row_height = 0
-            local[node.id] = {
-                "column": x,
-                "height": size,
-                "order": order,
-                "rank": 0,
-                "row": row,
-                "width": size,
-                "x": x,
-                "y": y,
-            }
-            x += size + gap
-            widest = max(widest, x - gap)
-            row_height = max(row_height, size)
-        blocks.append((area, local, widest, y + row_height))
+        y = region_header if area else 0
+        rows = [indexed[offset : offset + columns] for offset in range(0, len(indexed), columns)]
+        for row, entries in enumerate(rows):
+            row_height = max((heights[node.id] for _, node in entries), default=88)
+            for column, (order, node) in enumerate(entries):
+                height = heights[node.id]
+                x = column * (card_width + gap)
+                local[node.id] = {
+                    "column": column,
+                    "height": height,
+                    "order": order,
+                    "rank": 0,
+                    "row": row,
+                    "width": card_width,
+                    "x": x,
+                    "y": y + (row_height - height) // 2,
+                }
+            y += row_height + gap
+        widest = columns * card_width + max(0, columns - 1) * gap
+        blocks.append((area, local, widest, max(region_header + 88, y - gap)))
 
     total_block_area = sum((width + gap * 2) * (height + gap * 2) for _, _, width, height in blocks)
-    atlas_width = max(1, round(math.sqrt(total_block_area * 1.1)))
+    atlas_width = max(1_500, round(math.sqrt(total_block_area * 3.2)))
     result: dict[str, dict[str, int]] = {}
     block_x = block_y = block_row_height = 0
     for _area, local, width, height in blocks:
@@ -499,6 +497,7 @@ _STYLE = r"""
   --dag-border: var(--bp-rule, #d8dade); --dag-bg: var(--bp-surface, #fff);
   --dag-panel: color-mix(in srgb, var(--dag-bg) 94%, #64748b 6%);
   --dag-fg: var(--bp-fg, #1c1e21); --dag-muted: var(--bp-muted, #65676b); --dag-link: var(--bp-link, #0064e0);
+  --dag-navigation-width: 18.5rem;
   position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); width: 100%;
   height: clamp(38rem, calc(100svh - 7rem), 64rem); min-height: 38rem; overflow: hidden;
   border: 1px solid var(--dag-border); border-radius: 14px; background: var(--dag-bg); color: var(--dag-fg);
@@ -520,15 +519,15 @@ body.bp-dag-app-page .md-content__inner > h1,
 body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-viewer *, .bp-dag-viewer *::before, .bp-dag-viewer *::after { box-sizing: border-box; }
 .bp-dag-head { z-index: 8; border-bottom: 1px solid var(--dag-border); background: var(--dag-bg); }
-.bp-dag-context { display: flex; align-items: center; gap: .7rem; min-height: 2.65rem; padding: .45rem .75rem .2rem; }
+.bp-dag-context { display: flex; align-items: center; gap: .7rem; min-height: 2.45rem; padding: .42rem 1rem .08rem; }
 .bp-dag-breadcrumb { min-width: 0; flex: 1; color: var(--dag-muted); font-size: .72rem; }
 .bp-dag-breadcrumb ol { display: flex; align-items: center; gap: .35rem; margin: 0; padding: 0; list-style: none; }
 .bp-dag-breadcrumb li { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-breadcrumb li + li::before { content: "/"; margin-right: .35rem; color: var(--dag-border); }
 .bp-dag-breadcrumb [aria-current=page] { color: var(--dag-fg); font-weight: 650; }
 .bp-dag-view-kind { flex: none; padding: .18rem .45rem; border: 1px solid var(--dag-border); border-radius: 999px; color: var(--dag-muted); font-size: .64rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
-.bp-dag-toolbar { display: flex; align-items: center; gap: .42rem; min-height: 3.35rem; padding: .35rem .65rem .6rem; font-size: .76rem; }
-.bp-dag-search-wrap { position: relative; flex: 1 1 17rem; min-width: 10rem; max-width: 31rem; }
+.bp-dag-toolbar { display: flex; align-items: center; gap: .42rem; min-height: 3.35rem; padding: .32rem 1rem .7rem; font-size: .76rem; }
+.bp-dag-search-wrap { position: relative; flex: 1 1 24rem; min-width: 10rem; max-width: 42rem; }
 .bp-dag-search { width: 100%; min-height: 2.35rem; margin: 0; padding: .48rem .7rem .48rem 2rem; border: 1px solid var(--dag-border); border-radius: 9px; outline: 0; background: var(--dag-panel); color: var(--dag-fg); font: inherit; }
 .bp-dag-search-wrap::before { content: "⌕"; position: absolute; z-index: 2; left: .7rem; top: .36rem; color: var(--dag-muted); font-size: 1rem; pointer-events: none; }
 .bp-dag-search:focus { border-color: var(--dag-link); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dag-link) 18%, transparent); }
@@ -563,9 +562,30 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-isolated { display: inline-flex; align-items: center; gap: .3rem; flex: none; white-space: nowrap; color: var(--dag-muted); }
 .bp-dag-stats { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 9.5rem; margin-left: auto; color: var(--dag-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .bp-dag-hidden-button { min-height: 1.6rem; margin: 0; padding: .08rem .2rem; border: 0; background: transparent; color: var(--dag-link); }
-.bp-dag-body { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 0; min-height: 0; }
-.bp-dag-viewer.bp-dag-has-selection .bp-dag-body { grid-template-columns: minmax(0, 1fr) 22rem; }
-.bp-dag-viewer.bp-dag-atlas .bp-dag-body { grid-template-columns: minmax(0, 62fr) minmax(22rem, 38fr); }
+.bp-dag-body { position: relative; display: grid; grid-template-columns: var(--dag-navigation-width) minmax(0, 1fr); min-height: 0; }
+.bp-dag-navigation { z-index: 6; min-width: 0; min-height: 0; overflow: auto; border-right: 1px solid var(--dag-border); background: var(--dag-panel); }
+.bp-dag-navigation-inner { display: grid; align-content: start; min-height: 100%; padding: 1.05rem .8rem 1.5rem; }
+.bp-dag-navigation-home { display: inline-flex; align-items: center; gap: .45rem; margin: 0 .35rem .9rem; color: var(--dag-link); font-size: .72rem; font-weight: 720; text-decoration: none !important; }
+.bp-dag-navigation-home::before { content: "←"; }
+.bp-dag-navigation-kicker { margin: 0 .35rem .35rem; color: var(--dag-muted); font-size: .62rem; font-weight: 760; letter-spacing: .08em; text-transform: uppercase; }
+.bp-dag-navigation-title { margin: 0 .35rem; color: var(--dag-fg); font-family: Georgia, "Iowan Old Style", serif; font-size: 1.35rem; font-weight: 650; line-height: 1.15; }
+.bp-dag-navigation-summary { display: -webkit-box; margin: .55rem .35rem .95rem; overflow: hidden; color: var(--dag-muted); font-family: Georgia, "Iowan Old Style", serif; font-size: .78rem; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
+.bp-dag-navigation-path { display: grid; gap: .18rem; margin: .65rem .35rem .85rem; padding: 0; list-style: none; }
+.bp-dag-navigation-path li { position: relative; min-width: 0; padding-left: .85rem; color: var(--dag-muted); font-size: .68rem; line-height: 1.35; }
+.bp-dag-navigation-path li::before { content: ""; position: absolute; top: .45rem; left: .1rem; width: .32rem; height: .32rem; border: 1.5px solid var(--dag-border); border-radius: 50%; background: var(--dag-panel); }
+.bp-dag-navigation-path li:not(:last-child)::after { content: ""; position: absolute; top: .78rem; bottom: -.35rem; left: .245rem; border-left: 1px solid var(--dag-border); }
+.bp-dag-navigation-path a { color: inherit; text-decoration: none; }
+.bp-dag-navigation-path [aria-current=page] { color: var(--dag-fg); font-weight: 680; }
+.bp-dag-navigation-counts { margin: 0 .35rem 1rem; color: var(--dag-muted); font-size: .68rem; font-variant-numeric: tabular-nums; }
+.bp-dag-navigation-group { margin-top: .75rem; }
+.bp-dag-navigation-group h2 { margin: 0 .35rem .32rem; color: var(--dag-muted); font-size: .63rem; font-weight: 760; letter-spacing: .055em; text-transform: uppercase; }
+.bp-dag-navigation-list { display: grid; gap: .16rem; margin: 0; padding: 0; list-style: none; }
+.bp-dag-navigation-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; width: 100%; gap: .55rem; min-height: 2.45rem; padding: .43rem .52rem; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--dag-fg) !important; font: inherit; font-size: .75rem; line-height: 1.25; text-align: left; text-decoration: none !important; cursor: pointer; }
+.bp-dag-navigation-link > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dag-navigation-link:hover, .bp-dag-navigation-link:focus-visible { border-color: var(--dag-border); background: var(--dag-bg); }
+.bp-dag-navigation-link[aria-current=true] { border-color: color-mix(in srgb, var(--dag-link) 38%, var(--dag-border)); background: color-mix(in srgb, var(--dag-link) 9%, var(--dag-bg)); color: var(--dag-link) !important; }
+.bp-dag-navigation-meta { color: var(--dag-muted); font-size: .62rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bp-dag-navigation-more { width: 100%; margin-top: .45rem; border: 0; background: transparent; color: var(--dag-link); font: inherit; font-size: .7rem; text-align: left; cursor: pointer; }
 .bp-dag-main { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--dag-bg); }
 .bp-dag-stage { position: absolute; inset: 0; overflow: hidden; touch-action: pan-y; cursor: grab; overscroll-behavior-x: contain; }
 .bp-dag-viewer[data-layout=app] .bp-dag-stage { touch-action: none; }
@@ -577,16 +597,22 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-node-title { overflow: hidden; font-size: 14px; font-weight: 680; line-height: 1.18; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-node-meta { overflow: hidden; opacity: .75; font-size: 10px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-node[data-selected=true] { border-width: 3px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--dag-link) 24%, transparent), 0 5px 13px rgba(15, 23, 42, .18); }
-.bp-dag-node[data-subdued=true] { opacity: .23; }
+.bp-dag-node[data-subdued=true] { opacity: .42; }
 .bp-dag-node[data-kind=scope] { border-radius: 13px; }
 .bp-dag-node[data-kind=boundary] { border-style: dashed; }
-.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] { display: block; padding: 6px; border: 0; border-radius: 50%; background: var(--dag-status-ring, var(--dag-node-stroke)); text-align: center; }
-.bp-dag-node-core { display: grid; place-content: center; width: 100%; height: 100%; padding: .8rem; border-radius: 50%; background: var(--dag-node-fill); color: var(--dag-node-text); }
-.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] .bp-dag-node-title { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
-.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: .35rem; white-space: normal; }
-.bp-dag-viewer.bp-dag-atlas .bp-dag-node-title { font-size: 18px; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] { display: block; padding: 3px; border: 0; border-radius: 14px; background: var(--dag-status-ring, var(--dag-node-stroke)); text-align: left; }
+.bp-dag-node-core { display: grid; align-content: center; width: 100%; height: 100%; padding: .8rem 1rem; border-radius: 11px; background: var(--dag-node-fill); color: var(--dag-node-text); }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] .bp-dag-node-title { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: .42rem; white-space: normal; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node-title { font-size: 16px; }
 .bp-dag-viewer.bp-dag-atlas .bp-dag-node-meta { font-size: 11px; }
+.bp-dag-node-relation { display: none; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=prerequisite],
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=dependent] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--dag-link) 18%, transparent), 0 7px 18px rgba(15, 23, 42, .14); }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=prerequisite] .bp-dag-node-relation,
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=dependent] .bp-dag-node-relation { display: block; margin-top: .35rem; color: var(--dag-link); font-size: 10px; font-weight: 760; letter-spacing: .045em; text-transform: uppercase; }
 .bp-dag-density, .bp-dag-empty { position: absolute; z-index: 4; left: 50%; border: 1px solid var(--dag-border); border-radius: 999px; background: color-mix(in srgb, var(--dag-bg) 92%, transparent); color: var(--dag-muted); box-shadow: 0 3px 12px rgba(15, 23, 42, .08); pointer-events: none; }
+.bp-dag-guide { position: absolute; z-index: 4; top: .75rem; left: 50%; max-width: min(36rem, calc(100% - 2rem)); padding: .36rem .7rem; border: 1px solid var(--dag-border); border-radius: 999px; background: color-mix(in srgb, var(--dag-bg) 92%, transparent); color: var(--dag-muted); box-shadow: 0 3px 12px rgba(15, 23, 42, .08); font-size: .68rem; text-align: center; transform: translateX(-50%); pointer-events: none; backdrop-filter: blur(10px); }
 .bp-dag-density { bottom: .7rem; padding: .25rem .55rem; transform: translateX(-50%); font-size: .66rem; }
 .bp-dag-empty { top: 50%; padding: .55rem .8rem; transform: translate(-50%, -50%); font-size: .74rem; }
 .bp-dag-density[hidden], .bp-dag-empty[hidden] { display: none; }
@@ -603,10 +629,9 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-inventory-meta { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: var(--dag-muted); font-size: .68rem; }
 .bp-dag-load-more { justify-self: center; margin: .55rem; }
 .bp-dag-load-more[hidden] { display: none; }
-.bp-dag-inspector { z-index: 7; width: 0; min-width: 0; overflow: hidden; border-left: 0; background: var(--dag-panel); visibility: hidden; }
-.bp-dag-viewer.bp-dag-has-selection .bp-dag-inspector { width: auto; overflow: auto; border-left: 1px solid var(--dag-border); visibility: visible; }
-.bp-dag-viewer.bp-dag-atlas .bp-dag-inspector { width: auto; overflow: auto; border-left: 1px solid var(--dag-border); visibility: visible; }
-.bp-dag-inspector-inner { padding: .9rem; }
+.bp-dag-inspector { position: absolute; z-index: 10; top: .8rem; right: .8rem; bottom: .8rem; width: min(24rem, calc(100% - 1.6rem)); min-width: 0; overflow: auto; border: 1px solid var(--dag-border); border-radius: 14px; background: color-mix(in srgb, var(--dag-panel) 96%, transparent); box-shadow: 0 18px 50px rgba(15, 23, 42, .22); visibility: hidden; opacity: 0; transform: translateX(calc(100% + 1.4rem)); transition: opacity .16s ease, transform .2s ease, visibility 0s linear .2s; backdrop-filter: blur(14px); }
+.bp-dag-viewer.bp-dag-has-selection.bp-dag-sheet-open .bp-dag-inspector { visibility: visible; opacity: 1; transform: translateX(0); transition-delay: 0s; }
+.bp-dag-inspector-inner { padding: 1rem; }
 .bp-dag-sheet-handle { display: none; }
 .bp-dag-inspector-header { display: flex; align-items: flex-start; gap: .5rem; }
 .bp-dag-inspector-header h2 { flex: 1; margin: 0; font-size: 1rem; line-height: 1.25; }
@@ -635,10 +660,12 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-fallback-list { display: grid; gap: .3rem; margin: .8rem 0; padding-left: 1.4rem; }
 .bp-dag-viewer.bp-dag-enhancing .bp-dag-fallback { display: none; }
 .bp-dag-sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+@media (max-width: 1100px) {
+  .bp-dag-viewer { --dag-navigation-width: 15.5rem; }
+}
 @media (max-width: 900px) {
   .bp-dag-viewer:not([data-layout=app]) { height: max(40rem, calc(100svh - 4.5rem)); }
-  .bp-dag-viewer.bp-dag-has-selection .bp-dag-body { grid-template-columns: minmax(0, 1fr) 17rem; }
-  .bp-dag-viewer.bp-dag-atlas .bp-dag-body { grid-template-columns: minmax(0, 1fr) 19rem; }
+  .bp-dag-viewer { --dag-navigation-width: 13.5rem; }
   .bp-dag-toolbar { flex-wrap: wrap; }
   .bp-dag-search-wrap { max-width: none; }
   .bp-dag-stats { order: 8; width: 100%; min-height: 1.4rem; margin: 0; justify-content: flex-start; }
@@ -652,9 +679,10 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
   .bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-mode-button { min-height: 2.75rem; }
   .bp-dag-isolated { min-height: 2.75rem; }
   .bp-dag-body { display: block; }
+  .bp-dag-navigation { display: none; }
   .bp-dag-main { position: absolute; inset: 0; }
   .bp-dag-inventory { padding-bottom: 3.65rem; }
-  .bp-dag-inspector { position: absolute; z-index: 12; right: .45rem; bottom: .45rem; left: .45rem; width: auto; max-height: min(58%, 30rem); overflow: auto; border: 1px solid var(--dag-border); border-radius: 13px; box-shadow: 0 -8px 30px rgba(15, 23, 42, .2); visibility: visible; transform: translateY(calc(100% - 3.2rem)); transition: transform .2s ease; }
+  .bp-dag-inspector { position: absolute; z-index: 12; top: auto; right: .45rem; bottom: .45rem; left: .45rem; width: auto; max-height: min(58%, 30rem); overflow: auto; border: 1px solid var(--dag-border); border-radius: 13px; box-shadow: 0 -8px 30px rgba(15, 23, 42, .2); visibility: visible; opacity: 1; transform: translateY(calc(100% - 3.2rem)); transition: transform .2s ease; }
   .bp-dag-viewer.bp-dag-sheet-open .bp-dag-inspector { transform: translateY(0); }
   .bp-dag-sheet-handle { display: block; position: sticky; z-index: 2; top: 0; width: 100%; min-height: 3.1rem; padding: .6rem 2.2rem .45rem .7rem; overflow: hidden; border: 0; border-bottom: 1px solid var(--dag-border); background: var(--dag-panel); color: var(--dag-fg); font: inherit; font-size: .75rem; font-weight: 700; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
   .bp-dag-sheet-handle::before { content: ""; position: absolute; top: .35rem; left: 50%; width: 2rem; height: 3px; border-radius: 2px; background: var(--dag-border); transform: translateX(-50%); }
@@ -675,7 +703,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
   window.__AUTOFORM_DAG_VIEWER_V2__ = true;
 
   var NODE_W = 196, NODE_H = 56, MAX_DOM_NODES = 180, MAX_MAP_NODES = 120, LIST_PAGE = 100;
-  var SEARCH_PAGE = 50, RELATION_PAGE = 50, MIN_SCALE = .002, MIN_READABLE_SCALE = .8, MIN_ATLAS_SCALE = .55, hostSequence = 0;
+  var SEARCH_PAGE = 50, RELATION_PAGE = 50, MIN_SCALE = .002, MIN_READABLE_SCALE = .8, MIN_ATLAS_SCALE = .68, hostSequence = 0;
   var clamp = function (value, low, high) { return Math.max(low, Math.min(high, value)); };
 
   function element(tag, className, text) {
@@ -777,7 +805,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       active: [], activeDirty: true, activeIds: new Set(), direction: "both", listLimit: LIST_PAGE, mode: "graph", moved: false,
       orientation: "lr", pointers: new Map(), pinch: null, query: "", searchLimit: 12, selected: null,
       searchCache: [], searchCacheQuery: null, searchError: null, searchLoading: false,
-      searchNodes: data.nodes, searchPromise: null, spotlight: null,
+      searchNodes: data.nodes, searchPromise: null, spotlight: null, navigationLimit: atlas ? 120 : 50,
       mapAllowed: mapAllowed, readableCrop: false,
       selectedStatuses: new Set(presentStatuses), showIsolated: view.kind !== "full",
       transform: {x: 20, y: 20, scale: 1}
@@ -844,8 +872,8 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         data.nodes.every(function (node) { return node.isolated; }); toolbar.appendChild(refs.isolatedLabel);
 
       var modes = element("div", "bp-dag-modes"); modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "Explorer view");
-      refs.graphMode = button("bp-dag-mode-button", mapAllowed ? (atlas ? "Atlas" : "Relations") : "Map · too many items");
-      refs.graphMode.disabled = !mapAllowed; refs.listMode = button("bp-dag-mode-button", "Browse");
+      refs.graphMode = button("bp-dag-mode-button", mapAllowed ? "Map" : "Map · too many items");
+      refs.graphMode.disabled = !mapAllowed; refs.listMode = button("bp-dag-mode-button", "Contents");
       modes.appendChild(refs.graphMode); modes.appendChild(refs.listMode); toolbar.appendChild(modes);
 
       var zoomGroup = element("div", "bp-dag-zoom"); zoomGroup.setAttribute("role", "group"); zoomGroup.setAttribute("aria-label", "Zoom controls");
@@ -858,17 +886,24 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       head.appendChild(toolbar); host.appendChild(head);
 
       var body = element("div", "bp-dag-body"), main = element("div", "bp-dag-main");
+      refs.navigation = element("aside", "bp-dag-navigation");
+      refs.navigation.setAttribute("aria-label", "Wiki hierarchy");
+      refs.navigationInner = element("div", "bp-dag-navigation-inner");
+      refs.navigation.appendChild(refs.navigationInner); body.appendChild(refs.navigation);
+      renderNavigation();
       refs.stage = element("section", "bp-dag-stage"); refs.stage.setAttribute("role", "region");
       refs.stage.setAttribute("aria-label", "Dependency graph. Drag with a mouse to pan, use Control or Command plus scroll to zoom, and use arrow keys between node buttons.");
       refs.canvas = element("canvas", "bp-dag-canvas"); refs.canvas.setAttribute("aria-hidden", "true");
       refs.nodeLayer = element("div", "bp-dag-node-layer"); refs.density = element("div", "bp-dag-density"); refs.density.hidden = true;
+      refs.guide = element("div", "bp-dag-guide"); refs.guide.hidden = !atlas;
       refs.empty = element("div", "bp-dag-empty", "No nodes match these controls."); refs.empty.hidden = true;
-      refs.stage.appendChild(refs.canvas); refs.stage.appendChild(refs.nodeLayer); refs.stage.appendChild(refs.density); refs.stage.appendChild(refs.empty);
+      refs.stage.appendChild(refs.canvas); refs.stage.appendChild(refs.nodeLayer); refs.stage.appendChild(refs.guide);
+      refs.stage.appendChild(refs.density); refs.stage.appendChild(refs.empty);
       main.appendChild(refs.stage);
 
       refs.inventory = element("section", "bp-dag-inventory"); refs.inventory.hidden = true;
       refs.inventory.setAttribute("aria-label", "Complete node inventory");
-      var inventoryHead = element("div", "bp-dag-inventory-head"); inventoryHead.appendChild(element("h2", "", "Browse this scope"));
+      var inventoryHead = element("div", "bp-dag-inventory-head"); inventoryHead.appendChild(element("h2", "", "Contents of this scope"));
       refs.inventorySummary = element("span", "bp-dag-inventory-summary"); inventoryHead.appendChild(refs.inventorySummary);
       refs.inventoryScroll = element("div", "bp-dag-inventory-scroll"); refs.inventoryList = element("ul", "bp-dag-inventory-list");
       refs.inventoryScroll.appendChild(refs.inventoryList); refs.loadMore = button("bp-dag-load-more", "Show more nodes");
@@ -885,6 +920,73 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       refs.inspector.appendChild(refs.inspectorInner); body.appendChild(refs.inspector); host.appendChild(body);
       refs.announcement = element("p", "bp-dag-sr-only"); refs.announcement.setAttribute("aria-live", "polite"); host.appendChild(refs.announcement);
       refs.ctx = refs.canvas.getContext("2d");
+    }
+
+    function renderNavigation() {
+      if (!refs.navigationInner) return;
+      refs.navigationInner.textContent = ""; refs.navigationNodes = new Map();
+      var trail = Array.isArray(view.breadcrumbs) && view.breadcrumbs.length ? view.breadcrumbs : [];
+      var home = trail.map(function (entry) { return {label: entry.label, href: safeHref(entry.url)}; })
+        .find(function (entry) { return entry.href; });
+      if (home) {
+        var homeLink = element("a", "bp-dag-navigation-home", home.label || "Back to book");
+        homeLink.href = home.href; refs.navigationInner.appendChild(homeLink);
+      }
+      refs.navigationInner.appendChild(element("p", "bp-dag-navigation-kicker", atlas ? "Library atlas" : "Current scope"));
+      refs.navigationInner.appendChild(element("h1", "bp-dag-navigation-title", data.title || "Mathematics"));
+      if (trail.length) {
+        var path = element("ol", "bp-dag-navigation-path");
+        trail.forEach(function (entry, index) {
+          var item = element("li"), href = safeHref(entry.url);
+          if (href) { var link = element("a", "", entry.label); link.href = href; item.appendChild(link); }
+          else { item.textContent = entry.label; if (index === trail.length - 1) item.setAttribute("aria-current", "page"); }
+          path.appendChild(item);
+        });
+        refs.navigationInner.appendChild(path);
+      }
+      if (view.summary) refs.navigationInner.appendChild(element("p", "bp-dag-navigation-summary", view.summary));
+      refs.navigationInner.appendChild(element("p", "bp-dag-navigation-counts",
+        data.nodes.length.toLocaleString() + (atlas ? " topics" : " items") + " · " +
+        (data.edge_count || data.edges.length).toLocaleString() + " dependencies"));
+
+      var visible = data.nodes.slice(0, state.navigationLimit), groups = new Map();
+      visible.forEach(function (node) {
+        var label = node.area || (atlas ? "Other mathematics" : "Inside this scope");
+        if (!groups.has(label)) groups.set(label, []); groups.get(label).push(node);
+      });
+      groups.forEach(function (nodes, label) {
+        var section = element("section", "bp-dag-navigation-group");
+        section.appendChild(element("h2", "", label));
+        var list = element("ul", "bp-dag-navigation-list");
+        nodes.forEach(function (node) {
+          var item = element("li"), href = safeHref(node.url), control;
+          if (href) { control = element("a", "bp-dag-navigation-link"); control.href = href; }
+          else {
+            control = button("bp-dag-navigation-link", "");
+            control.addEventListener("click", function () { activateNode(node, true); });
+          }
+          control.dataset.navigationNodeId = node.id;
+          control.appendChild(element("span", "", node.title));
+          control.appendChild(element("span", "bp-dag-navigation-meta",
+            node.kind === "scope" ? (node.member_count || 0).toLocaleString() : statusLabel(node.status)));
+          item.appendChild(control); list.appendChild(item); refs.navigationNodes.set(node.id, control);
+        });
+        section.appendChild(list); refs.navigationInner.appendChild(section);
+      });
+      if (visible.length < data.nodes.length) {
+        var more = button("bp-dag-navigation-more", "Show " + Math.min(50, data.nodes.length - visible.length) + " more");
+        more.addEventListener("click", function () { state.navigationLimit += 50; renderNavigation(); });
+        refs.navigationInner.appendChild(more);
+      }
+      syncNavigationSelection();
+    }
+
+    function syncNavigationSelection() {
+      if (!refs.navigationNodes) return;
+      refs.navigationNodes.forEach(function (control, id) {
+        if (state.selected && state.selected.id === id) control.setAttribute("aria-current", "true");
+        else control.removeAttribute("aria-current");
+      });
     }
 
     function bindEvents() {
@@ -984,6 +1086,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
     }
     function syncControls() {
       calculateActive();
+      syncNavigationSelection();
       refs.isolated.checked = state.showIsolated;
       refs.statusInputs.forEach(function (input, key) { input.checked = state.selectedStatuses.has(key); });
       var enabled = state.selectedStatuses.size;
@@ -991,6 +1094,9 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       refs.graphMode.setAttribute("aria-pressed", String(state.mode === "graph"));
       refs.listMode.setAttribute("aria-pressed", String(state.mode === "list"));
       refs.stage.hidden = state.mode !== "graph"; refs.inventory.hidden = state.mode !== "list";
+      if (atlas) refs.guide.textContent = state.selected ?
+        "Showing the direct dependency neighborhood of " + state.selected.title :
+        "Select a topic to reveal its dependency neighborhood";
     }
 
     function collect(start, adjacency) {
@@ -1081,8 +1187,13 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       if (atlas) drawRegions(ctx);
       var visible = state.active.filter(function (node) { return inViewport(screen(node), 80); });
       var edgeIndexes = new Set();
-      visible.forEach(function (node) { (incident.get(node.id) || []).forEach(function (index) { edgeIndexes.add(index); }); });
-      var spotlight = pathSpotlight();
+      if (atlas && state.selected) {
+        (incident.get(state.selected.id) || []).forEach(function (index) { edgeIndexes.add(index); });
+      } else {
+        visible.forEach(function (node) { (incident.get(node.id) || []).forEach(function (index) { edgeIndexes.add(index); }); });
+      }
+      if (atlas && !state.selected) edgeIndexes.clear();
+      var spotlight = atlas && state.selected ? atlasSpotlight() : pathSpotlight();
       edgeIndexes.forEach(function (index) {
         var edge = data.edges[index]; if (!state.activeIds.has(edge.source) || !state.activeIds.has(edge.target)) return;
         var source = byId.get(edge.source), target = byId.get(edge.target); if (!source || !target) return;
@@ -1115,6 +1226,13 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         ctx.restore();
       });
     }
+    function atlasSpotlight() {
+      var before = new Set([state.selected.id]), after = new Set([state.selected.id]);
+      (prerequisites.get(state.selected.id) || []).forEach(function (id) { before.add(id); });
+      (dependents.get(state.selected.id) || []).forEach(function (id) { after.add(id); });
+      var nodes = new Set(before); after.forEach(function (id) { nodes.add(id); });
+      return {after: after, before: before, nodes: nodes};
+    }
     function drawGrid(ctx, width, height) {
       ctx.save(); ctx.fillStyle = isDark() ? "rgba(255,255,255,.055)" : "rgba(15,23,42,.055)";
       var step = 32, offsetX = ((state.transform.x % step) + step) % step, offsetY = ((state.transform.y % step) + step) % step;
@@ -1132,8 +1250,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       ctx.save(); ctx.globalAlpha = highlighted ? (tiny ? .82 : .24) : .07; ctx.fillStyle = color.fill;
       ctx.strokeStyle = color.stroke; ctx.lineWidth = tiny ? 1 : 1.25;
       if (atlas && node.kind === "scope") {
-        ctx.beginPath(); ctx.arc(box.x + box.w / 2, box.y + box.h / 2, Math.min(box.w, box.h) / 2, 0, Math.PI * 2);
-        ctx.fill(); ctx.stroke(); ctx.restore(); return;
+        rounded(ctx, box.x, box.y, box.w, box.h, 14 * state.transform.scale); ctx.fill(); ctx.stroke(); ctx.restore(); return;
       }
       if (tiny) ctx.fillRect(box.x, box.y, Math.max(3, box.w), Math.max(3, box.h));
       else { rounded(ctx, box.x, box.y, box.w, box.h, 7 * state.transform.scale); ctx.fill(); ctx.stroke(); }
@@ -1183,11 +1300,19 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         control.style.setProperty("--dag-node-fill", color.fill); control.style.setProperty("--dag-node-stroke", color.stroke);
         control.style.setProperty("--dag-node-text", color.text); control.dataset.selected = String(node === state.selected);
         if (atlas && node.kind === "scope") control.style.setProperty("--dag-status-ring", statusRing(node));
+        var relation = "";
+        if (atlas && state.selected && node !== state.selected) {
+          if ((prerequisites.get(state.selected.id) || []).indexOf(node.id) >= 0) relation = "prerequisite";
+          else if ((dependents.get(state.selected.id) || []).indexOf(node.id) >= 0) relation = "dependent";
+        }
+        control.dataset.relation = relation;
+        var relationLabel = control.querySelector(".bp-dag-node-relation");
+        if (relationLabel) relationLabel.textContent = relation === "prerequisite" ? "Prerequisite" : relation === "dependent" ? "Dependent" : "";
         control.dataset.subdued = String(Boolean(spotlight && !spotlight.nodes.has(node.id)));
         control.tabIndex = node === state.selected || (!state.selected && index === 0) ? 0 : -1;
       });
       refs.density.hidden = !state.readableCrop && omitted === 0 && !(visible.length && state.transform.scale < .34);
-      refs.density.textContent = state.readableCrop ? "Readable window · pan or Browse to see all " + state.active.length + " items" :
+      refs.density.textContent = state.readableCrop ? "Readable window · pan or Contents to see all " + state.active.length + " items" :
         omitted ? "+" + omitted + " node labels hidden at this zoom" :
         (visible.length && state.transform.scale < .34 ? "Zoom in to reveal " + visible.length + " node labels" : "");
     }
@@ -1201,6 +1326,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : control;
       content.appendChild(element("span", "bp-dag-node-title", node.title));
       content.appendChild(element("span", "bp-dag-node-meta", scopeMeta || statusLabel(node.status) + " · " + node.id));
+      content.appendChild(element("span", "bp-dag-node-relation", ""));
       if (content !== control) control.appendChild(content);
       control.addEventListener("click", function (event) { event.stopPropagation(); activateNode(node, false); });
       control.addEventListener("dblclick", function () { var href = safeHref(node.url); if (href) window.location.href = href; });
@@ -1403,7 +1529,8 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
       state.selected = null; state.direction = "both"; state.activeDirty = true; state.spotlight = null;
       host.classList.remove("bp-dag-has-selection");
       setSheet(false);
-      renderInspector(); renderInventory(true); requestAnimationFrame(fit); if (updateHistory) writeLocation("push");
+      syncNavigationSelection(); renderInspector(); renderInventory(true); schedule();
+      if (updateHistory) writeLocation("push");
     }
     function setSheet(open) {
       host.classList.toggle("bp-dag-sheet-open", Boolean(open));
@@ -1412,8 +1539,7 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
     }
     function syncSheetAccessibility() {
       if (!refs.inspectorInner || !refs.sheetHandle) return;
-      var mobile = window.matchMedia && window.matchMedia("(max-width: 680px)").matches;
-      var collapsed = mobile && !host.classList.contains("bp-dag-sheet-open");
+      var collapsed = !host.classList.contains("bp-dag-sheet-open");
       if (collapsed) {
         if (refs.inspectorInner.contains(document.activeElement)) refs.sheetHandle.focus();
         refs.inspectorInner.setAttribute("inert", ""); refs.inspectorInner.setAttribute("aria-hidden", "true");
@@ -1479,14 +1605,14 @@ _SCRIPT = r"""/* Generated by autoform render. Edits are overwritten. */
         if (statusCounts.has("inventory_checked") || statusCounts.has("inventory_pending")) refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
           "Inventory statuses are neutral: an inventory records inspection, not a mathematical proof."));
         refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
-          atlas ? "Click a topic to read it; click it again or use Explore topic to dive in. Browse exposes the same map as a complete accessible list." :
-          "The map carries dependency topology; Relations and Browse expose the same nodes as keyboard-accessible controls.")); return;
+          atlas ? "Click a topic to read it; click it again or use Explore topic to dive in. Contents exposes the same map as a complete accessible list." :
+          "The map carries dependency topology; Map and Contents expose the same nodes as keyboard-accessible controls.")); return;
       }
       var node = state.selected, header = element("div", "bp-dag-inspector-header"), titleWrap = element("div");
       titleWrap.appendChild(element("p", "bp-dag-kicker", node.kind === "scope" ? "Scope" :
         node.kind === "boundary" ? "External scope" : (node.declaration || "Roadmap item")));
       titleWrap.appendChild(element("h2", "", node.title)); header.appendChild(titleWrap);
-      var close = button("bp-dag-close", "×", "Clear node selection"); close.addEventListener("click", function () { clearSelection(true); });
+      var close = button("bp-dag-close", "×", "Close details"); close.addEventListener("click", function () { setSheet(false); });
       header.appendChild(close); refs.inspectorInner.appendChild(header); refs.inspectorInner.appendChild(element("code", "bp-dag-node-id", node.id));
       var pill = element("span", "bp-dag-status-pill", statusLabel(node.status)), color = colors(node);
       pill.style.setProperty("--dag-pill-fill", color.fill); pill.style.setProperty("--dag-pill-stroke", color.stroke);

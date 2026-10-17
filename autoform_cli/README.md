@@ -1010,9 +1010,13 @@ site projection uses the same deterministic JSON-derived Canvas and semantic-DOM
 explorer with search, filters, pan/zoom, and hash-routed node neighborhoods, so
 none inherits Mermaid's text, edge, or SVG-size ceilings. Authored Mermaid remains
 supported in the vault and book, including the bounded graph produced by
-`autoform-visualize`. Breadcrumbs return through the explorer hierarchy to the
-book, and every formal statement links to the smallest explorer scope containing
-that item. Point `mkdocs.yml` at `docs_dir: site-src` and enable `md_in_html` plus a
+`autoform-visualize`. A persistent hierarchy rail keeps the current ancestry and
+immediate contents visible. The project overview groups readable topic cards by
+authored mathematical area and reveals only a selected topic's direct dependency
+neighborhood; its detail drawer overlays the map instead of shrinking it.
+Breadcrumbs return through the explorer hierarchy to the book, and every formal
+statement links to the smallest explorer scope containing that item. Point
+`mkdocs.yml` at `docs_dir: site-src` and enable `md_in_html` plus a
 `pymdownx.superfences` mermaid fence; see the [repository
 example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 
@@ -1025,9 +1029,9 @@ replaces a v3 one, while a v1 output must be deleted once by hand; the
 
 ## Validation
 
-`autoform check` rejects cycles between authored articles, missing targets,
-escaping paths, symbolic links anywhere under `roadmap/`, self-dependencies,
-a `declaration` on a container article,
+`autoform check` rejects cycles between authored articles or introduced at any
+rolled-up containment level, missing targets, escaping paths, symbolic links
+anywhere under `roadmap/`, and self-dependencies,
 missing or multiple H1 titles, unsupported frontmatter keys, assertion values
 it does not recognize, and assertions the Lean cannot back: `proof: formalized`
 without `statement: formalized`, or either without a `lean:` name, even beside
@@ -1036,7 +1040,10 @@ inside the blueprint, as `audit` also requires: a missing file, a directory, an
 invalid path, or a target outside the blueprint fails. So does a target whose
 path as written, once its `..` steps are applied, has a part below the
 blueprint starting with `.`, unless the article citing it is hidden too,
-because render omits hidden files and directories. `audit` alone checks
+because render omits hidden files and directories. Under `sources/`, such a
+target passes `check` with a warning instead, and `audit` still reports it:
+only a repository link reaches the note, and render writes one when it links
+the other source notes there, so the note must be committed. `audit` alone checks
 fragments and fails links with other schemes or a network location. Such a link
 passes `check` with a warning, because work and search leave it out; so does a
 `mathlib_file` that is not a portable relative path, which search reports as
@@ -1044,6 +1051,9 @@ null. A byte-order mark at the start of an article hides whatever opens its
 first line: frontmatter there is read as text, so its keys are ignored, and
 `check` warns about the mark when the article otherwise loads; an H1 title
 there is missed, and `check` fails the article as missing one.
+A `declaration` on a container article passes `check` with a warning, because
+nothing counts or schedules a container's own declaration; `audit` reports it
+as `formalizable-container`.
 With `--lean-root`, `check`
 also fails on a `lean:` name that is absent from the sources (as
 `leanblueprint checkdecls` does for LaTeX blueprints) or defined more than

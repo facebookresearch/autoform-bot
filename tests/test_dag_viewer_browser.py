@@ -260,7 +260,34 @@ def explorer_url(tmp_path: Path) -> Iterator[str]:
             area="Analysis & Probability",
         ),
     )
-    dense_views["atlas"] = GraphView(kind="project", title="Knowledge atlas", nodes=atlas_nodes, edges=())
+    atlas_areas = (
+        "Algebra & Number Theory",
+        "Analysis & Probability",
+        "Discrete Mathematics & Computation",
+        "Foundations & Logic",
+        "Geometry & Topology",
+    )
+    atlas_nodes += tuple(
+        ViewNode(
+            id=f"atlas/auxiliary-{index}",
+            title=f"Auxiliary topic {index}",
+            kind="scope",
+            members=tuple(f"atlas/auxiliary-{index}/item-{item}" for item in range(10 + index * 7)),
+            status_counts=(("planned", 10 + index * 7),),
+            status_key="planned",
+            area=atlas_areas[index % len(atlas_areas)],
+        )
+        for index in range(26)
+    )
+    dense_views["atlas"] = GraphView(
+        kind="project",
+        title="Knowledge atlas",
+        nodes=atlas_nodes,
+        edges=(
+            ViewEdge("atlas/algebra", "atlas/topology", statement_count=3),
+            ViewEdge("atlas/analysis", "atlas/topology", statement_count=2),
+        ),
+    )
     app_shell = (
         page_shell.replace('<div class="page-spacer" data-page-spacer="before"></div>', "")
         .replace('<div class="page-spacer" data-page-spacer="after"></div>', "")
@@ -364,7 +391,7 @@ def test_connected_project_maps_open_at_readable_scale(
     page.close()
 
 
-def test_atlas_bubbles_open_authored_mathematical_context(
+def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     webkit_browser: object, explorer_url: str
 ) -> None:
     page = webkit_browser.new_page(viewport={"width": 1440, "height": 900})
@@ -374,12 +401,15 @@ def test_atlas_bubbles_open_authored_mathematical_context(
     assert page.locator(".bp-dag-viewer").evaluate(
         "element => element.classList.contains('bp-dag-atlas')"
     )
-    playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text("Knowledge atlas")
-    playwright.expect(page.locator(".bp-dag-inspector")).to_contain_text("Geometry & Topology")
-    playwright.expect(page.locator(".bp-dag-inspector")).to_contain_text(
-        "No cross-topic dependency links are authored"
-    )
-    assert "50%" in topic.evaluate("element => getComputedStyle(element).borderRadius")
+    navigation = page.locator(".bp-dag-navigation")
+    playwright.expect(navigation).to_be_visible()
+    playwright.expect(navigation).to_contain_text("Knowledge atlas")
+    playwright.expect(navigation).to_contain_text("Geometry & Topology")
+    playwright.expect(page.locator(".bp-dag-inspector")).to_be_hidden()
+    stage_width = page.locator(".bp-dag-stage").bounding_box()["width"]
+    topic_box = topic.bounding_box()
+    assert topic_box is not None and topic_box["height"] >= 62 and topic_box["width"] >= 150
+    assert "50%" not in topic.evaluate("element => getComputedStyle(element).borderRadius")
     assert "conic-gradient" in topic.evaluate("element => getComputedStyle(element).backgroundImage")
     topic.click()
     playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text("Topology")
@@ -387,6 +417,14 @@ def test_atlas_bubbles_open_authored_mathematical_context(
         "continuity, deformation, and invariants"
     )
     playwright.expect(page.get_by_role("link", name="Explore topic")).to_be_visible()
+    playwright.expect(page.locator('[data-autoform-node-id="atlas/algebra"]')).to_have_attribute(
+        "data-relation", "prerequisite"
+    )
+    selected_stage_width = page.locator(".bp-dag-stage").bounding_box()["width"]
+    assert abs(selected_stage_width - stage_width) < 2
+    playwright.expect(navigation.locator('[data-navigation-node-id="atlas/topology"]')).to_have_attribute(
+        "aria-current", "true"
+    )
     page.close()
 
 
@@ -547,6 +585,7 @@ def test_reselect_does_not_duplicate_history_and_back_restores_selection(
     foundation.click()
     assert page.evaluate("history.length") == after_first_selection == initial_length + 1
 
+    page.get_by_role("button", name="Close details").click()
     target.click()
     assert page.evaluate("history.length") == initial_length + 2
     page.evaluate("history.back()")

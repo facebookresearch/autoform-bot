@@ -21,7 +21,9 @@ that child starts, the selected Lake toolchain runs Lean's own header parser,
 which the REPL also uses, on the submitted source. Every import it reports must
 have one of the allowlisted roots `Mathlib`, `Aesop`, `Batteries`, or
 `LeanSearchClient` (a plain `Init` import is ignored), and a rejected or
-unrecognized parser response fails closed.
+unrecognized parser response fails closed. Code with other imports, such as the
+project's own modules, is checked as a saved file with
+`lean_diagnostic_messages` instead.
 Allowlisted imports require plain, nonempty canonical module components; names
 that remain quoted or path-like after Lean parsing are refused instead of being
 reduced to a misleading allowlisted root. The allowlist is a policy check, not a
@@ -51,6 +53,17 @@ uv run autoform-lean-runtime stop
 `stop` is graceful: it waits for admitted tool calls and Lean children to
 finish shutting down before a subsequent `start` can replace the runtime.
 
+Closing a project's Lean server first lets Lean stop its file workers, then
+terminates the server's process group. Each server starts with a random token
+in its environment, which its file workers and their `lake setup-file` and
+`lean` builds inherit; every process that carries it is terminated next,
+including workers orphaned when the server died first and any daemon one of
+them started, and the close is retried until none is left. A process whose
+environment the runtime cannot read is never signalled and does not hold up the
+close, since nothing shows that it belongs to the server, and a process started
+without the token, for example by a program that clears its children's
+environment, is not found.
+
 `lean_diagnostic_messages` runs `lake --no-build lean` once per call and waits
 until Lean exits. When `LEAN_LSP_CMD` ends in `serve`, that command runs with
 `--no-build lean` in place of `serve`; otherwise the `lake` on `PATH` runs.
@@ -58,15 +71,19 @@ Unbuilt or stale imports are reported with the modules to build, not built. At
 most `AUTOFORM_MAX_LEAN_PROJECTS` checks run at once. `lean_hover` uses the
 project's Lean server, which builds stale imports inside the call.
 
-`LEAN_LSP_TIMEOUT` (60 seconds by default) bounds each call, including time
-spent waiting for a free Lean slot or behind other LSP calls on the same
-project. A call that runs out fails rather than returning partial results, and
-a hover that runs out also restarts the project's Lean server. The value must
-not exceed `AUTOFORM_MAX_LSP_REQUEST_SECONDS` (600 seconds by default) or the
-runtime refuses to start, and raising that maximum to 745 seconds or more also
-needs `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` raised. Like the limits below, it is
-read when the runtime starts: run `uv run autoform-lean-runtime stop` after
-changing it.
+`LEAN_LSP_TIMEOUT` (60 seconds by default) bounds each
+`lean_diagnostic_messages` call, including waiting for a free Lean slot. For
+`lean_hover` its clock starts once the project's Lean server is running and
+covers waiting behind other hovers on the same project; waiting for a free
+project slot and starting or restarting the server count against
+`AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` instead, so a cold hover can take about 870
+seconds by default. A call that runs out fails rather than returning partial
+results, and a hover that runs out during its turn on the server also restarts
+it. `LEAN_LSP_TIMEOUT` must not exceed `AUTOFORM_MAX_LSP_REQUEST_SECONDS` (600
+seconds by default) or the runtime refuses to start, and raising that maximum to
+745 seconds or more also needs `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` raised. Like
+the limits below, it is read when the runtime starts: run
+`uv run autoform-lean-runtime stop` after changing it.
 
 The private socket lives below `$XDG_RUNTIME_DIR/autoform`, falling back to a
 uid-specific directory in `/tmp`; the rotating runtime log is beside it.

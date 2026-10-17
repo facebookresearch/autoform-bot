@@ -236,7 +236,7 @@ def test_isolated_inventory_does_not_spread_the_connected_dag() -> None:
     assert max(positions[node_id]["column"] for node_id in ("root", "result")) == 1
 
 
-def test_high_level_topics_use_a_weighted_knowledge_atlas(tmp_path: Path) -> None:
+def test_high_level_topics_use_a_readable_grouped_knowledge_atlas(tmp_path: Path) -> None:
     nodes = tuple(
         ViewNode(
             id=f"chapter-{index}",
@@ -261,10 +261,9 @@ def test_high_level_topics_use_a_weighted_knowledge_atlas(tmp_path: Path) -> Non
         ("Foundations", 10),
     }
     assert len({(position["x"], position["y"]) for position in positions.values()}) == len(nodes)
-    assert all(position["width"] == position["height"] for position in positions.values())
-    assert max(position["width"] for position in positions.values()) > min(
-        position["width"] for position in positions.values()
-    )
+    assert all(position["width"] > position["height"] for position in positions.values())
+    assert min(position["width"] for position in positions.values()) >= 220
+    assert min(position["height"] for position in positions.values()) >= 88
 
 
 def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_path: Path) -> None:
@@ -298,7 +297,7 @@ def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_pa
     assert "MAX_DOM_NODES = 180" in script
     assert "MAX_MAP_NODES = 120" in script
     assert "MIN_READABLE_SCALE = .8" in script
-    assert "MIN_ATLAS_SCALE = .55" in script
+    assert "MIN_ATLAS_SCALE = .68" in script
     assert "fitted < readableFloor" in script
     assert 'params.get("view") === "list" || !state.mapAllowed' in script
     assert '" of " + data.nodes.length + " shown"' in script
@@ -333,6 +332,9 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
     assert 'refs.canvas.setAttribute("aria-hidden", "true")' in script
     assert 'refs.stage.setAttribute("role", "region")' in script
     assert 'toolbar.setAttribute("role", "toolbar")' in script
+    assert 'refs.navigation = element("aside", "bp-dag-navigation")' in script
+    assert 'refs.navigation.setAttribute("aria-label", "Wiki hierarchy")' in script
+    assert 'renderNavigation()' in script
     assert 'element("div", "bp-dag-main")' in script
     assert 'element("main", "bp-dag-main")' not in script
     assert 'refs.announcement.setAttribute("aria-live", "polite")' in script
@@ -353,6 +355,8 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
     assert 'w: node.width, h: node.height' in script
     assert 'spotlight.before.has(edge.source) && spotlight.before.has(edge.target)' in script
     assert 'spotlight.after.has(edge.source) && spotlight.after.has(edge.target)' in script
+    assert "if (atlas && !state.selected) edgeIndexes.clear()" in script
+    assert "(incident.get(state.selected.id) || []).forEach" in script
     assert "if (!state.activeDirty) return" in script
     assert "if (query === state.searchCacheQuery) return state.searchCache" in script
     assert 'data.schema !== "autoform-dag-view/v2"' in script
@@ -370,7 +374,7 @@ def test_explorer_is_responsive_accessible_and_history_addressable(tmp_path: Pat
 def test_explorer_pages_large_searches_and_relations_and_fits_deep_graphs() -> None:
     script = dag_viewer.viewer_script()
 
-    assert "MIN_SCALE = .002, MIN_READABLE_SCALE = .8, MIN_ATLAS_SCALE = .55" in script
+    assert "MIN_SCALE = .002, MIN_READABLE_SCALE = .8, MIN_ATLAS_SCALE = .68" in script
     assert '"Show all "' not in script
     assert "Math.min(matches.length, state.searchLimit + SEARCH_PAGE)" in script
     assert "Math.min(visible + RELATION_PAGE, ids.length)" in script
@@ -408,7 +412,9 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
         context_links={node.id: f"chapters/chapter.html#node={node.id}" for node in nodes},
     )
 
-    assert len(dag_viewer.viewer_script().encode()) < 56_000
+    # The hierarchy rail is part of the shared runtime, but the dependency-free
+    # application still stays below one small uncompressed network response.
+    assert len(dag_viewer.viewer_script().encode()) < 64_000
     assert output.stat().st_size < 300_000
     assert search.stat().st_size < 100_000
     search_payload = json.loads(search.read_text(encoding="utf-8"))

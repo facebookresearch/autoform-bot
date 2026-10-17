@@ -13,6 +13,7 @@ import sys
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from . import status
 from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
@@ -36,7 +37,7 @@ from .library.locate import LibraryError, WorkspaceError
 from .library.search import LibraryResult, library_argument, search_with_libraries
 from .markdown import local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
-from .render import PublicationError, render_site
+from .render import SOURCES_DIR, PublicationError, render_site
 from .runtime import RuntimeProjectionError, projection_omissions, resolve_runtime_paths
 from .scaffold import ScaffoldError, scaffold_project
 from .search import SearchError, search_blueprint, statement_preview
@@ -515,13 +516,17 @@ def _byte_order_mark_warnings(graph: Graph) -> list[str]:
     return warnings
 
 
-def _source_link_issues(graph: Graph) -> list[str]:
+def _source_link_issues(graph: Graph) -> tuple[list[str], list[str]]:
     """Name each ``## Sources`` link to a local path that is not a file in the blueprint, or is hidden.
 
-    The generated workflows run ``check`` but not ``audit``, and render publishes
-    a missing or escaping target broken: a page a strict MkDocs build cannot find,
-    a repository URL that 404s, or a path off the site. Render omits hidden files,
-    so a hidden target is refused too. Fragments and other schemes stay with
+    Returns the errors, then the warnings. The generated workflows run ``check``
+    but not ``audit``, and render publishes a missing or escaping target broken:
+    a page a strict MkDocs build cannot find, a repository URL that 404s for a
+    hidden note under ``sources/``, or the link's text alone. Render omits
+    hidden files, so a hidden target is refused too, unless it is a note under
+    ``sources/`` that exists. Only a repository link reaches that note, and
+    render writes one when it links the other source notes there, so it is only
+    warned about: it must be committed. Fragments and other schemes stay with
     ``audit``, whose anchor check renders each cited note.
     """
     rejected = {
@@ -530,24 +535,39 @@ def _source_link_issues(graph: Graph) -> list[str]:
         "malformed-source-link": "contains an invalid path",
         "hidden-source-target": "names a hidden path, which render omits",
     }
-    issues = []
+    issues, warnings = [], []
     for node in graph.nodes.values():
         for target in node.sources:
-            issue = local_target_issue(node.path, target.partition("#")[0], graph.blueprint_dir, label="source")
-            if issue is not None and issue[0] in rejected:
-                issues.append(f"{node.id}: source target {rejected[issue[0]]}: {target!r}")
-    return issues
+            located = target.partition("#")[0]
+            issue = local_target_issue(node.path, located, graph.blueprint_dir, label="source")
+            if issue is None or issue[0] not in rejected:
+                continue
+            code = issue[0]
+            if code == "hidden-source-target":
+                # The path local_target_issue found hidden: as written, with its `..` steps applied.
+                spelled = Path(os.path.normpath(node.path.parent.resolve() / unquote(urlsplit(located).path)))
+                if spelled.relative_to(graph.blueprint_dir).parts[:1] == (SOURCES_DIR,):
+                    if os.path.isfile(spelled):
+                        warnings.append(
+                            f"{node.id}: source target names a hidden path, which only a repository link reaches, "
+                            f"so it must be committed: {target!r}"
+                        )
+                        continue
+                    code = "source-not-found"
+            issues.append(f"{node.id}: source target {rejected[code]}: {target!r}")
+    return issues, warnings
 
 
-def _formalizable_container_issues(graph: Graph) -> list[str]:
+def _formalizable_container_warnings(graph: Graph) -> list[str]:
     """Name each article that sets ``declaration`` and also contains articles.
 
     The generated workflows run ``check`` but not ``audit``, which reports these
     as ``formalizable-container``. Nothing counts or schedules a container's own
     declaration, yet its scope is drawn complete once its leaves are proved.
-    The message names the move because deleting only ``declaration:`` passes
-    both commands, and a container left with ``lean:`` and ``statement:`` is
-    still drawn complete while its own proof is open.
+    The site still builds, so ``check`` warns rather than fails. The message
+    names the move because deleting only ``declaration:`` silences both
+    commands, and a container left with ``lean:`` and ``statement:`` is still
+    drawn complete while its own proof is open.
     """
     containers = {node.parent for node in graph.nodes.values() if node.parent is not None}
     return [
@@ -565,8 +585,9 @@ def _check(args: argparse.Namespace) -> int:
         for issue in exc.issues:
             print(f"error: {issue}")
         return 1
-    if issues := _formalizable_container_issues(graph) + _source_link_issues(graph):
-        for issue in issues:
+    source_issues, source_warnings = _source_link_issues(graph)
+    if source_issues:
+        for issue in source_issues:
             print(f"error: {issue}")
         return 1
 
@@ -625,7 +646,7 @@ def _check(args: argparse.Namespace) -> int:
         print(f"    {declared} declaration(s) resolved in the Lean sources")
     for omission in projection_omissions(graph):
         print(f"warning: {omission}")
-    for warning in _byte_order_mark_warnings(graph):
+    for warning in _byte_order_mark_warnings(graph) + _formalizable_container_warnings(graph) + source_warnings:
         print(f"warning: {warning}")
     return 0
 

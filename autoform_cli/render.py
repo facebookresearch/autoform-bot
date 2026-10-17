@@ -26,8 +26,11 @@ import unicodedata
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
+
+from markdown.treeprocessors import Treeprocessor
 
 from . import dag_viewer, graph_pages, graph_views, mermaid, status
 from ._tree_snapshot import (
@@ -63,7 +66,7 @@ from .lean import (
     snapshot_project_sources,
     verify_repository_snapshot,
 )
-from .markdown import article_parts
+from .markdown import article_parts, site_converter
 from .markdown import mask_fences_and_comments
 from .status import is_definition
 
@@ -94,6 +97,7 @@ _ARTICLE_SLOT = re.compile(
 )
 _DEPENDENCY_SECTIONS = frozenset({"depends on", "proof depends on"})
 _SKIPPED_DIRECTORIES = frozenset({".obsidian", ".trash", ".git"})
+
 
 #: Transcriptions of the paper being formalised. Vault material, not chapters.
 SOURCES_DIR = "sources"
@@ -2096,7 +2100,13 @@ def _rewrite_links(
         relative = candidate.relative_to(blueprint)
         # A repository link to a note the captured blueprint lacks would 404, so
         # it stays site-relative, where a strict build reports the page missing.
-        if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,) and os.path.exists(candidate):
+        # The capture skips hidden files, so a hidden note keeps its repository
+        # link, which resolves once the note is committed, as check warns.
+        if (
+            sources_base is not None
+            and relative.parts[:1] == (SOURCES_DIR,)
+            and (os.path.exists(candidate) or _is_hidden(relative))
+        ):
             return f"{_source_href(sources_base, relative.parts[1:])}{asked}{query}{separator}{fragment}"
         published = destination / relative
         # Mermaid URLs are percent-encoded because they sit in generated
@@ -2363,6 +2373,139 @@ def _place_environments(
     return "\n".join(output), placed
 
 
+class _FenceSafeHtml(HTMLParser):
+    """Keep displayed fence markers from opening fences on the second pass.
+
+    HTML entities decode to the exact displayed code/TeX. Raw script/style
+    text is not entity-decoded by HTML, so it retains its original spelling.
+    """
+
+    _runs = re.compile(r"`{3,}|~{3,}")
+    _quoted = re.compile(r"(['\"])(.*?)\1", re.DOTALL)
+
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.parts: list[str] = []
+
+    @classmethod
+    def escaped(cls, value: str) -> str:
+        return cls._runs.sub(lambda match: "".join(f"&#{ord(char)};" for char in match.group()), value)
+
+    def handle_starttag(self, tag, attrs):
+        value = self.get_starttag_text()
+        # Quoted attribute values also decode entities; names are untouched.
+        self.parts.append(self._quoted.sub(
+            lambda match: match.group(1) + self.escaped(match.group(2)) + match.group(1), value
+        ))
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag):
+        self.parts.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        self.parts.append(data if self.cdata_elem else self.escaped(data))
+
+    def handle_entityref(self, name):
+        self.parts.append(f"&{name};")
+
+    def handle_charref(self, name):
+        self.parts.append(f"&#{name};")
+
+    def handle_comment(self, data):
+        self.parts.append(f"<!--{data}-->")
+
+    def handle_decl(self, decl):
+        self.parts.append(f"<!{decl}>")
+
+    def handle_pi(self, data):
+        self.parts.append(f"<?{data}>")
+
+    def unknown_decl(self, data):
+        self.parts.append(f"<![{data}{']]>' if data.startswith('CDATA[') else ']>'}")
+
+
+class _PublishedBodyLinks(Treeprocessor):
+    """Give parsed Markdown links their final URLs before they become HTML.
+
+    MkDocs does not rewrite links inside raw HTML. Authored raw HTML links are
+    not Markdown tree elements, so their spelling remains untouched.
+    """
+
+    def __init__(self, md):
+        super().__init__(md)
+        self.validation_targets: list[tuple[str, str]] = []
+
+    def run(self, root):
+        for element in root.iter():
+            if element.tag not in {"a", "img"}:
+                continue
+            key = "href" if element.tag == "a" else "src"
+            href = element.get(key, "")
+            try:
+                parts = urlsplit(href)
+            except ValueError:
+                self.validation_targets.append((element.tag, href))
+                continue
+            if not parts.scheme and not parts.netloc:
+                # Keep the original parsed link/image and .md destination for
+                # MkDocs' configured missing-file/anchor checks on the final
+                # page. Raw authored HTML links are not tree elements here.
+                self.validation_targets.append((element.tag, href))
+                if (element.tag == "a" and not parts.path.startswith("/")
+                        and parts.path.lower().endswith(".md") and "\0" not in unquote(parts.path)):
+                    path = _as_published(parts.path[:-3] + ".html")
+                    element.set("href", urlunsplit(parts._replace(path=path)))
+
+
+def _body_converter():
+    converter = site_converter()
+    # The final page assigns heading IDs once, across all its statements.
+    # attr_list still keeps an author's explicit {#id} here.
+    converter.treeprocessors.deregister("toc")
+    converter.treeprocessors.register(_PublishedBodyLinks(converter), "published-body-links", 5)
+    return converter
+
+
+def _protect_markdown_in_html(
+    text: str, *, references: Mapping[str, tuple[str, str]] | None = None, force: bool = False,
+) -> str:
+    """Parse an affected authored chunk before introducing HTML containers.
+
+    HTML extraction precedes arithmatex and indented code. Inside markdown=1,
+    r<n can consume the container's closing tag and lose its whole suffix.
+    Parsing the fragment first lets the configured Markdown engine distinguish
+    code, math, HTML and autolinks and emit the correct escaping for each.
+    The vault and generated wrapper/navigation markup are never rewritten.
+    """
+    if not force and "<" not in text:
+        return text
+    converter = _body_converter()
+    if references:
+        converter.references.update(references)
+    rendered = converter.convert(text)
+    if "```" in rendered or "~~~" in rendered:
+        protected = _FenceSafeHtml()
+        protected.feed(rendered)
+        protected.close()
+        rendered = "".join(protected.parts)
+    targets = converter.treeprocessors["published-body-links"].validation_targets
+    if targets:
+        # The visible fragment is raw HTML, which MkDocs does not validate.
+        # Native Markdown witnesses retain the original validation behavior,
+        # including images, decoded paths, queries, fragments and warning
+        # levels. A hidden subtree prevents extra layout or keyboard targets;
+        # whitespace-only labels add no visible text.
+        witnesses = []
+        for kind, href in dict.fromkeys(targets):
+            target = f"<{href}>" if "<" not in href and ">" not in href else href
+            witnesses.append(f"{'!' if kind == 'img' else ''}[ ]({target})")
+        rendered += '\n\n<div class="bp-body-link-validation" hidden markdown="1">\n\n'
+        rendered += "\n\n".join(witnesses) + "\n\n</div>"
+    return rendered
+
+
 def _render_environment(
     node: Node,
     *,
@@ -2398,6 +2541,19 @@ def _render_environment(
             sources_base=sources_base,
         )
         for part in (statement, remainder)
+    )
+
+    # References in either chunk may be used by the other. If one chunk is
+    # preconverted, render both with the shared article context: otherwise its
+    # consumed definitions would leave the remaining Markdown links unresolved.
+    references = {}
+    affected = "<" in statement or "<" in remainder
+    if affected:
+        context = _body_converter()
+        context.convert("\n\n".join((statement, remainder)))
+        references = context.references
+    statement, remainder = (
+        _protect_markdown_in_html(part, references=references, force=affected) for part in (statement, remainder)
     )
 
     code_links, implementation_rows, linked, unresolved = _lean_presentation(node, linker)

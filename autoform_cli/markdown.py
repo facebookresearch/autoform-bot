@@ -759,7 +759,10 @@ def local_target_issue(
         return f"{label}-escapes-blueprint", f"{label} link escapes the blueprint: {target!r}"
     # Render resolves links in a copy of the vault that has no hidden paths and no
     # symbolic links, so a link on a page it publishes breaks when the path it spells
-    # is hidden. `.x/../paper.md` still passes.
+    # is hidden. `.x/../paper.md` still passes. Only a repository link reaches a
+    # hidden note under `sources/`, and render writes one when it links the other
+    # source notes there; that link resolves only once the note is committed, so it
+    # is reported too, and `check` only warns about it.
     spelled = Path(os.path.normpath(source_path.parent.resolve() / raw_path))
     if _is_hidden_path(spelled, boundary) and not _is_hidden_path(source_path.resolve(), boundary):
         return f"hidden-{label}-target", f"{label} link names a hidden path, which render omits: {target!r}"
