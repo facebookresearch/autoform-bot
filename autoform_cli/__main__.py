@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from . import status
+from . import prove2me_cli, status
 from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
 from .audit import audit_blueprint
 from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_key
@@ -421,6 +421,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "or cannot be looked up because the sources cannot be read",
     )
 
+    prove2me_cli.add_parser(subparsers)
+
     args = parser.parse_args(argv)
 
     if args.command == "init":
@@ -449,6 +451,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _skeleton(args)
     if args.command == "render":
         return _render(args)
+    if args.command == "prove2me":
+        return prove2me_cli.run(args)
     return 2
 
 

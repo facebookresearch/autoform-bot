@@ -997,6 +997,128 @@ its local context. Point `mkdocs.yml` at `docs_dir: site-src` and enable
 `md_in_html` plus a `pymdownx.superfences` mermaid fence; see the [repository
 example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 
+### Prove2Me
+
+`autoform prove2me` works on [Prove2Me](https://prove2.me) missions from a
+Prove2Me workspace: a Lake project with `Definitions/`, `Theorems/`, and
+`Solutions/` libraries, by default `$PROVE2ME_WORKSPACE` or
+`~/prove2me_workspace` (`--workspace` overrides it). The API key comes from
+`$PROVE2ME_API_KEY`, else the workspace's `credentials.json`, else the
+default workspace's (`$PROVE2ME_WORKSPACE`, then `~/prove2me_workspace`), so a
+second checkout pinned to another Mathlib needs no copy of the key. It is exchanged
+for an access token in memory, never printed, and only ever sent to
+`https://prove2.me/api/v1`; no option changes that host.
+
+`setup` prepares a workspace and asks only for what is missing. It clones
+the workspace repository when absent and, from an interactive terminal, asks
+for an API key with hidden input, checks it against the platform, and saves it
+to the default workspace's `credentials.json` with owner-only permissions. With
+`--mission` (or `--env`) it also pins Mathlib: Prove2Me keeps one checkout per
+environment, so it uses the default workspace when that is unpinned or already
+matches, and otherwise a sibling `prove2me-<rev7>` checkout, writing the
+gitignored `lean-toolchain` and `lakefile.lean` and fetching Mathlib. Such a
+checkout gets a `credentials.json` symlink to the default workspace's key, so
+it still authenticates when `$PROVE2ME_WORKSPACE` points at it. An
+existing pin is never overwritten. Cloning and the multi-gigabyte Mathlib
+download are shown first and need a yes from the terminal or `--yes`, and the
+download is refused when less than about 16 GB is free. `--print-workspace`
+prints only the chosen path, for scripts:
+
+```bash
+autoform prove2me setup --mission Weak_Goldbach_Conjecture
+```
+
+Check the key and the platform version, then read a mission's milestones and
+open frontier. A mission is named by its URL, URL slug, name, or id:
+
+```bash
+autoform prove2me auth
+autoform prove2me mission https://prove2.me/missions/Positive_definite_matrix_integral_inequality
+```
+
+Mirror a target into the workspace exactly where the verifier resolves it:
+`Theorems/Thm_<slug>.lean` from its preamble and formal statement, plus every
+`Theorems.Thm_*` and `Definitions.Def_*` module it imports, transitively. It
+warns when the workspace pins a different Mathlib than the target's
+`mathlib_rev`; re-pin before compiling. Scouting reads (milestone history,
+discussion, prior submissions, decompositions) go through a read-only `get`:
+
+```bash
+autoform prove2me fetch <theorem-id>
+autoform prove2me get /theorems/<theorem-id>/submissions --param status=ACCEPTED
+```
+
+`verify` refuses locally what the server would reject: `sorry` or `admit` in
+the file, an import of the target's own module, and a `theorem solution` that
+is missing or inside a namespace. It then refuses a Mathlib mismatch, re-mirrors
+the target, builds the solution with Lake, and elaborates
+`example : type_of% @<target> := @solution` to catch a proof of the wrong
+statement before the server reports `WA`. That check is necessary rather than
+sufficient: it compares types up to definitional equality and ignores binder
+annotations, so the server's verdict is final. The solution must live under
+`Solutions/`. `--dry-run` stops after every local check without writing to the
+platform. Otherwise it submits, waits for a verdict, and exits zero only on
+`ACCEPTED` or `SKETCH_ACCEPTED`:
+
+```bash
+autoform prove2me verify <theorem-id> Solutions/Sol_<slug>.lean \
+  --explanation-file explanation.md --dry-run
+autoform prove2me explain <submission-id> --file explanation.md
+```
+
+Pass `--disprove` when the file proves the negation of the whole statement,
+`--no-wait` to return once queued, and `--json` for machine-readable output.
+
+A sketch imports child lemmas that must exist first. `publish` validates a
+problem or definition spec (the platform's JSON body: one object, a list, or
+`{"problems": [...]}`), publishes it in an explicit environment, and waits for
+each compile job. Children belong in the parent theorem's `mathlib_rev`.
+`--private` keeps the batch visible only to you; visibility and environment
+come from the flags, and a spec that sets them itself is refused:
+
+```bash
+autoform prove2me publish problem children.json --env <mathlib-rev> --dry-run
+```
+
+Every write -- `verify` without `--dry-run`, `publish`, and `explain` -- is
+public under the platform's Apache 2.0 terms.
+
+`propose` drafts a new mission from one spec file, following the platform's
+captain guide (`references/mission_captain.md`):
+
+```json
+{
+  "proposal": {"name": "...", "description": "...", "mission_type": "OpenProblem",
+               "field_ids": ["<field id>"], "env": "<optional mathlib_rev>"},
+  "items": [
+    {"kind": "definition", "definition_name": "...", "definition": "...", "readback": "...", "readback_model": "..."},
+    {"kind": "theorem", "theorem_name": "Ns.step", "formal_statement": "... := by sorry", "...": "...",
+     "milestone": {"title": "Lemma 2.1 - ...", "description": "..."}},
+    {"kind": "theorem", "theorem_name": "Ns.main", "...": "...", "goal": true}
+  ]
+}
+```
+
+Items are the `publish` bodies plus a `kind` (`theorem`, `definition`, or
+`reference` with a `theorem_id`), listed dependencies first. One item is the
+`goal`; other theorems may carry a `milestone`. `propose` checks the spec,
+builds every draft in the workspace where the platform would place it
+(`Definitions/Def_<name>.lean`, `Theorems/Thm_<slug>.lean`, each marked as a
+local draft and never written over a mirrored module), and refuses when the
+workspace pins a different Mathlib from the proposal's environment. It then
+creates the proposal, or with `--proposal ID` updates that draft in place,
+and sets the goal, item order, and milestones:
+
+```bash
+autoform prove2me propose proposal.json --dry-run
+autoform prove2me propose proposal.json
+autoform prove2me propose proposal.json --proposal <proposal-id>
+```
+
+A proposal is a private draft. Nothing in it is published until the user
+confirms each item and clicks **Submit Proposal** on the website, which the
+API leaves to the user.
+
 ## Validation
 
 `autoform check` rejects cycles between authored articles, missing targets,

@@ -25,6 +25,9 @@ dependencies = [
     # construction, not tokenising: browsers repair malformed markup rather than
     # reject it, and the repair decides what stays hidden.
     "html5lib>=1.1,<2",
+    # `autoform prove2me` talks to the Prove2Me API. httpx verifies TLS with
+    # certifi's bundle, which works on Pythons whose system store is missing.
+    "httpx>=0.27,<1",
 ]
 
 [project.scripts]

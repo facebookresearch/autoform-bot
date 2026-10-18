@@ -38,6 +38,7 @@ commands:
 | Write Lean definitions and proofs | `/autoform:formalize` | `$autoform:formalize` |
 | Review the roadmap and progress | `/autoform:human-review` | `$autoform:human-review` |
 | Request an independent AI review | `/autoform:agent-review` | `$autoform:agent-review` |
+| Prove and submit to a Prove2Me mission | `/autoform:prove2me` | `$autoform:prove2me` |
 
 Start with `setup`, then use `roadmap` to plan your formalization and
 `formalize` to work through it. Use either review command to inspect the plan
@@ -52,6 +53,11 @@ Keep the source file in your project or provide an accessible path.
 Setup changes local files by default. Creating or pushing a remote repository,
 enabling GitHub Pages, and publishing blueprint content require an explicit
 request; content published through Pages is public.
+
+Prove2Me is opt-in. The Prove2Me skill works in a separate
+[Prove2Me](https://prove2.me) Lean workspace with your API key, gates each
+solution locally, and publishes only when you ask it to submit; see
+`autoform prove2me` in the [CLI reference](autoform_cli/README.md#prove2me).
 
 ## Blueprint model
 
