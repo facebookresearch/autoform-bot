@@ -55,6 +55,7 @@ def _write_review_site(directory: Path) -> Path:
         "Geometry": ("Geometry", "Geometry"),
         "Geometry/Distance": ("Distance geometry", "Geometry"),
         "Geometry/Distance/Finite": ("Finite configurations", "Geometry"),
+        "Geometry/Distance/Finite/page-1": ("Pagination wrapper", "Geometry"),
         "Applications": ("Applications", "Applications"),
         "Applications/Optimization": ("Optimization", "Applications"),
     }
@@ -62,11 +63,17 @@ def _write_review_site(directory: Path) -> Path:
         path = roadmap / ("README.md" if node_id == "roadmap" else f"{node_id}/README.md")
         path.parent.mkdir(parents=True, exist_ok=True)
         metadata = f"---\narea: {area}\n---\n\n" if area else ""
+        if node_id == "Geometry/Distance/Finite/page-1":
+            metadata = "---\narea: Geometry\nnavigation: transparent\n---\n\n"
         path.write_text(f"{metadata}# {title}\n\nMathematics in {title.lower()}.\n", encoding="utf-8")
 
     articles = (
         (BASE_ID, BASE_TITLE, "def", "Review.metricAxioms", "A metric separates distinct points.", ()),
         (TARGET_ID, TARGET_TITLE, "theorem", TARGET_LEAN, TARGET_STATEMENT, (BASE_ID,)),
+        (
+            "Geometry/Distance/Finite/page-1/paginated-result", "Paginated distance theorem", "theorem",
+            "Review.Geometry.paginatedDistance", "A paginated result retains its mathematical context.", (BASE_ID,),
+        ),
         (
             USE_ID, USE_TITLE, "theorem", "Review.Optimization.separation",
             "A finite configuration admits a positive separation radius.", (TARGET_ID,),
@@ -127,6 +134,15 @@ def _write_review_site(directory: Path) -> Path:
             for node_id, title, _declaration, _lean, statement, _dependencies in articles
         ),
         encoding="utf-8",
+    )
+    preview = dag_viewer.render_container(
+        "dependencies.json", script_href=dag_viewer.SCRIPT_PATH, style_href=dag_viewer.STYLE_PATH,
+        layout="embedded", search_href="dependencies/index.json", navigation_href="dependencies/navigation.json",
+    )
+    site.joinpath("index.html").write_text(
+        '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<style>body{margin:0;font-family:sans-serif}</style></head><body><article>'
+        f'<h1>Mathematics book landing</h1>{preview}</article></body></html>', encoding="utf-8",
     )
     return site
 
@@ -302,6 +318,41 @@ def test_a_copied_focused_permalink_restores_the_cross_branch_neighborhood(
     for node_id in (BASE_ID, USE_ID):
         playwright.expect(_node(page, node_id)).to_be_visible()
     playwright.expect(page.locator(".bp-dag-inspector").get_by_text(TARGET_STATEMENT, exact=True)).to_be_visible()
+
+
+def test_a_landing_preview_expands_to_the_full_explorer_and_back_restores_the_book(
+    continuous_page: object, continuous_site: _ReviewSite
+) -> None:
+    page = continuous_page
+    page.goto(f"{continuous_site.url}/index.html")
+    _node(page, "scope:Geometry").wait_for()
+    search = page.locator(".bp-dag-search").element_handle()
+    documents = _record_documents(page)
+    _search_target(page)
+    viewer = page.locator(".bp-dag-viewer")
+    playwright.expect(viewer).to_have_attribute("data-layout", "app")
+    box = viewer.bounding_box()
+    assert box is not None and abs(box["width"] - 1440) < 2 and abs(box["height"] - 1000) < 2
+    assert search.evaluate("node => node === document.querySelector('.bp-dag-search')")
+    page.evaluate("history.back()")
+    playwright.expect(viewer).to_have_attribute("data-layout", "embedded")
+    playwright.expect(page.get_by_role("heading", name="Mathematics book landing", exact=True)).to_be_visible()
+    assert search.evaluate("node => node === document.querySelector('.bp-dag-search')")
+    assert documents == []
+
+
+def test_a_paginated_result_keeps_the_visible_mathematical_ancestry(
+    continuous_page: object, continuous_site: _ReviewSite
+) -> None:
+    page = continuous_page
+    _open(page, continuous_site)
+    page.locator(".bp-dag-search").fill("Review.Geometry.paginatedDistance")
+    page.locator(".bp-dag-result", has_text="Paginated distance theorem").click()
+    _expect_focus(page, "Geometry/Distance/Finite/page-1/paginated-result")
+    trail = page.locator(".bp-dag-breadcrumb")
+    playwright.expect(trail).to_contain_text("Geometry")
+    playwright.expect(trail).to_contain_text("Finite configurations")
+    playwright.expect(trail).not_to_contain_text("Pagination wrapper")
 
 
 def test_a_failed_context_fetch_keeps_the_current_map_and_search_usable(

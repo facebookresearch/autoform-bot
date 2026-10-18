@@ -1070,7 +1070,8 @@ legacy `dependencies/full.html#node=<id>` link resolves, through the global
 index, to that result's bounded connected neighborhood. New focused links use
 `<scope>.html#node=<id>&focus=1`; both forms remain reloadable static routes.
 The layout-free search index carries optional `data_url` and `article_url`
-links plus `relations` rows `[source_index, target_index, statement_count,
+links, visible `scope` IDs that skip organizational/pagination wrappers, plus
+`relations` rows `[source_index, target_index, statement_count,
 proof_count]` referencing its node table. These derive only from the authored
 graph, not containment or imports. A focused map initially draws at most eight
 neighbors on each side; all direct relations remain accessible in its complete

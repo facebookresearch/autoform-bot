@@ -90,8 +90,9 @@
     });
     var view, atlas, resultsAvailable, originalNodes, originalEdges, topicNodes, regionGroups, regionNodes;
     var palette, byId, prerequisites, dependents, incident, statusCounts, presentStatuses, mobileIsolateBase, mapAllowed;
+    var article = host.closest("article") || host.parentElement, originalHeading = article && article.querySelector("h1");
+    var originalHeadingHidden = originalHeading && originalHeading.hidden;
     if (host.getAttribute("data-layout") === "app") {
-      var article = host.closest("article") || host.parentElement, originalHeading = article && article.querySelector("h1");
       if (originalHeading && !host.contains(originalHeading)) originalHeading.hidden = true;
     }
     function adoptGraph(payload) {
@@ -366,6 +367,7 @@
 
     function viewSnapshot() {
       return {context: state.contextHref, focus: view.focus && view.focus.id, focusLimit: state.focusLimit,
+        layout: host.getAttribute("data-layout"),
         transform: Object.assign({}, state.transform), query: state.query,
         sheetOpen: host.classList.contains("bp-dag-sheet-open"),
         navigationScroll: refs.navigation.scrollTop, inventoryScroll: refs.inventoryScroll.scrollTop};
@@ -379,6 +381,9 @@
 
     function resetView(payload, href, snapshot) {
       if (state.motionFrame) cancelAnimationFrame(state.motionFrame);
+      var app = !snapshot || snapshot.layout !== "embedded";
+      host.setAttribute("data-layout", app ? "app" : "embedded"); document.body.classList.toggle("bp-dag-app-page", app);
+      if (originalHeading && !host.contains(originalHeading)) originalHeading.hidden = app || originalHeadingHidden;
       adoptGraph(payload); state.contextHref = href;
       if (!state.searchLoaded) { state.searchNodes = data.nodes; state.searchCacheQuery = null; }
       overlays.forEach(function (control) { control.remove(); }); overlays.clear();
@@ -458,7 +463,7 @@
 
     function focusBreadcrumbs(node) {
       var nodes = state.navigationData || [], indexed = new Map(nodes.map(function (item) { return [item.id, item]; }));
-      var context = nodes.find(function (item) { return item.data_url && item.data_url === node.data_url; });
+      var context = indexed.get(node.scope) || nodes.find(function (item) { return item.data_url && item.data_url === node.data_url; });
       var lineage = [], current = context, seen = new Set();
       while (current && !seen.has(current.id)) {
         seen.add(current.id);

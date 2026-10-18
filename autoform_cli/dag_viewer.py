@@ -390,6 +390,7 @@ def write_search_index(
     context_links: Mapping[str, str],
     data_links: Mapping[str, str] | None = None,
     article_links: Mapping[str, str] | None = None,
+    scope_ids: Mapping[str, str] | None = None,
 ) -> Path:
     """Write a global search index and its compact authored relations.
 
@@ -403,6 +404,8 @@ def write_search_index(
     ``article_links`` provide graph-context JSON and textbook anchors,
     respectively, without changing existing callers' links. Scope counts
     retain their own full-view rollup, never the count of a selected result.
+    Optional ``scope_ids`` identify authored visible scopes independently of
+    context URLs, which may name transparent pagination views.
     """
     node_indexes = {node.id: index for index, node in enumerate(view.nodes)}
     if len(node_indexes) != len(view.nodes):
@@ -449,6 +452,8 @@ def write_search_index(
             entry["data_url"] = data_links[node.id]
         if article_links is not None and node.id in article_links:
             entry["article_url"] = article_links[node.id]
+        if scope_ids is not None and node.id in scope_ids:
+            entry["scope"] = scope_ids[node.id]
         nodes.append(entry)
     return _write_json(path, {"nodes": nodes, "relations": relations, "schema": SEARCH_SCHEMA})
 

@@ -150,6 +150,29 @@ def test_search_context_metadata_is_additive_and_optional(tmp_path: Path) -> Non
     assert payload["relations"] == [[0, 1, 0, 1]]
 
 
+def test_search_visible_scope_ids_are_optional_and_do_not_rewrite_context_links(tmp_path: Path) -> None:
+    view = _view(ViewEdge("z/base", "a/top", statement_count=1))
+    links = {
+        "data_links": {"a/top": "scopes/geometry/pagination.json"},
+        "article_links": {"a/top": "../roadmap/geometry/index.html#theorem"},
+    }
+    previous = _write(tmp_path, view, **links)
+    payload = _write(
+        tmp_path,
+        view,
+        **links,
+        scope_ids={"a/top": "Geometry/MathlibExt/metric"},
+    )
+
+    assert payload["relations"] == previous["relations"]
+    for node, original in zip(payload["nodes"], previous["nodes"]):
+        expected = dict(original)
+        if node["id"] == "a/top":
+            expected["scope"] = "Geometry/MathlibExt/metric"
+        assert node == expected
+        assert "scope" not in original
+
+
 def test_search_scope_rollups_do_not_borrow_result_or_inventory_semantics(tmp_path: Path) -> None:
     counts = (("mathlib", 5), ("fully_proved", 3), ("planned", 2), ("inventory_checked", 20))
     scope = ViewNode(

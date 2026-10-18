@@ -993,7 +993,7 @@ def test_a_search_result_in_this_view_selects_the_drawn_node(desktop_page: objec
         assert stage["y"] <= box["y"] and box["y"] + box["height"] <= stage["y"] + stage["height"]
         assert page.locator(".bp-dag-node").count() > 1
         playwright.expect(page.get_by_role("link", name="Open article")).to_have_attribute(
-            "href", f"articles.html#{node_id}"
+            "href", f"{explorer_url}/articles.html#{node_id}"
         )
 
 
@@ -1304,8 +1304,9 @@ def test_the_published_landing_explorer_sits_unframed_in_its_card(mobile_page: o
 
 def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_page: object, site_url: str) -> None:
     """The Status popover opened past the screen's left edge, and the toolbar's popovers painted under the sheet."""
-    # The selection opens the sheet over the lower half of the screen.
-    page = _open_site(mobile_page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
+    # Register the expanded index before selecting; focused deep links now load
+    # the global index immediately, rather than waiting for search-box focus.
+    page = _open_site(mobile_page, site_url, "dependencies/chapters/algebra.html")
 
     def lengthen_the_index(route: object) -> None:
         index = route.fetch().json()
@@ -1316,6 +1317,11 @@ def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_pag
         route.fulfill(json=index)
 
     page.route("**/dependencies/index.json", lengthen_the_index)
+    page.locator('[data-autoform-node-id="algebra/result"]').tap()
+    page.wait_for_function("new URLSearchParams(location.hash.slice(1)).get('focus') === '1'")
+    # Phones initially keep the map readable; explicitly expand the details to
+    # check that toolbar popovers still paint above the open sheet.
+    page.locator(".bp-dag-sheet-handle").tap()
 
     page.locator(".bp-dag-filter-summary").tap()
     popover = page.locator(".bp-dag-filter-popover")

@@ -84,6 +84,7 @@ def write_graph_pages(
     context_links: dict[str, str] = {}
     data_links: dict[str, str] = {}
     article_links: dict[str, str] = {}
+    scope_ids: dict[str, str] = {}
 
     def linked_articles(page: Path, node_ids: Iterable[str]) -> Mapping[str, str]:
         """Reuse the renderer's exact book anchors, without another graph-wide pass."""
@@ -104,6 +105,11 @@ def write_graph_pages(
         return links
 
     for node in complete.nodes:
+        visible_scope = node.id if node.id in containers else graph.nodes[node.id].parent
+        while visible_scope and graph.nodes[visible_scope].navigation in {"collection", "transparent"}:
+            visible_scope = graph.nodes[visible_scope].parent
+        if visible_scope:
+            scope_ids[node.id] = visible_scope
         context_page = scope_pages.get(node.id) or scope_page_path(
             destination, node.id, parent=graph.nodes[node.id].parent
         )
@@ -314,6 +320,7 @@ def write_graph_pages(
 
     dag_viewer.write_search_index(
         search_index, complete, context_links=context_links, data_links=data_links, article_links=article_links,
+        scope_ids=scope_ids,
     )
     return tuple(written)
 
