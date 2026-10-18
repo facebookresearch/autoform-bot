@@ -64,6 +64,11 @@ format and command contracts, or browse the
 The browser publication presents large roadmaps as a full-page mathematics
 atlas: authored areas and bounded hierarchy preserve readable context, while
 dependency edges remain distinct from containment and repository provenance.
+Topic changes stay within one explorer. Global title, statement, or Lean-name
+search opens a result's bounded prerequisite → result → dependent neighborhood
+directly; related results can be followed across chapters without walking the
+containment tree. Connected arrows are visible by default, and history restores
+the reader's context and camera.
 
 ## Development
 

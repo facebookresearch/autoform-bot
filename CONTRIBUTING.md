@@ -19,7 +19,8 @@ CI (`.github/workflows/tests.yml`) runs the same four steps on Python 3.10 and
 branches, which run CI on a branch with no pull request; a newer commit on a
 pull request cancels the older run. Five more jobs run beside it. `WebKit
 dependency explorer regressions` installs the `browser` extra and WebKit and
-runs `tests/test_dag_viewer_browser.py` with `AUTOFORM_REQUIRE_BROWSER_TESTS=1`,
+runs `tests/test_dag_viewer_browser.py` and `tests/test_continuous_explorer_browser.py`
+with `AUTOFORM_REQUIRE_BROWSER_TESTS=1`,
 so a missing browser fails the job instead of skipping its tests; locally they
 skip without the extra, and `make test-browser` installs both and runs them as
 CI does. `real Lean

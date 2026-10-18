@@ -432,11 +432,12 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
         context_links={node.id: f"chapters/chapter.html#node={node.id}" for node in nodes},
     )
 
-    # Region drill-down, the global outline and source/result facets share one
-    # dependency-free runtime. Bound both its parsing cost and transfer size.
+    # In-place scope routing, bounded theorem neighborhoods, global search and
+    # history restoration share one dependency-free runtime. The extra routing
+    # replaces repeated page/asset loads; still bound parsing and transfer cost.
     runtime = dag_viewer.viewer_script().encode()
-    assert len(runtime) < 90_000
-    assert len(gzip.compress(runtime)) < 23_000
+    assert len(runtime) < 110_000
+    assert len(gzip.compress(runtime)) < 28_000
     assert output.stat().st_size < 300_000
     assert search.stat().st_size < 100_000
     search_payload = json.loads(search.read_text(encoding="utf-8"))

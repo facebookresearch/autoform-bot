@@ -1038,8 +1038,11 @@ icon when a `lean:` declaration resolves to a repository permalink; a catalog
 instead links its first eight names in its Lean row and counts the rest. Its
 `dependencies.md` opens a full-viewport application and rolls dependencies
 through the article hierarchy, with bounded project, chapter, and nested-scope
-projections. Global search loads a layout-free index and jumps to the smallest
-useful scope; that index, `dependencies/index.json`, is internal to the bundled
+projections. Global search loads a layout-free index and opens a result's direct
+prerequisite → result → dependent neighborhood in the same mounted explorer,
+without walking its ancestor scopes. Topic, outline, and related-result links
+also navigate in place; Back/Forward restore context and camera. That index,
+`dependencies/index.json`, is internal to the bundled
 viewer, and its schema may change. The compatibility `dependencies/full.md`
 route renders only the project shell and never fits the whole repository into
 one canvas. Every generated site projection uses the same deterministic
@@ -1048,10 +1051,11 @@ and hash-routed node neighborhoods, so none inherits Mermaid's text, edge, or
 SVG-size ceilings. Authored Mermaid remains supported in the vault and book.
 A persistent hierarchy rail keeps the current ancestry and immediate contents
 visible. The project overview groups readable topic cards by authored
-mathematical area and reveals only a selected topic's direct dependency
-neighborhood; its detail drawer overlays the map instead of shrinking it.
+mathematical area and shows authored dependency arrows immediately. Hover and
+selection emphasize those relationships; they do not gate their visibility.
+Its detail drawer overlays the map instead of shrinking it.
 The viewer's JavaScript and stylesheet are shared assets served once per site.
-Dragging a topic card pans the map; clicking it selects the topic.
+Dragging a topic card pans the map; clicking it opens its mathematical context.
 Breadcrumbs return through the explorer hierarchy to the book (to the home page
 for a roadmap with neither a root article nor root leaves), and every formal
 statement links to the smallest explorer scope containing that item. Point
@@ -1062,8 +1066,15 @@ example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 This shared-explorer layout replaces the `dependencies/nodes/*.html` focus
 pages of earlier sites: a statement's dependency link is now
 `<scope>.html#node=<id>`, and an old focus-page link no longer resolves. Only a
-legacy `dependencies/full.html#node=<id>` link redirects, through the global
-index, to the smallest bounded scope containing that node. The [publication
+legacy `dependencies/full.html#node=<id>` link resolves, through the global
+index, to that result's bounded connected neighborhood. New focused links use
+`<scope>.html#node=<id>&focus=1`; both forms remain reloadable static routes.
+The layout-free search index carries optional `data_url` and `article_url`
+links plus `relations` rows `[source_index, target_index, statement_count,
+proof_count]` referencing its node table. These derive only from the authored
+graph, not containment or imports. A focused map initially draws at most eight
+neighbors on each side; all direct relations remain accessible in its complete
+connection list. The [publication
 contract](#publication-contract) gives the schema and when render replaces an
 earlier site.
 

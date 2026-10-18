@@ -52,7 +52,7 @@ jobs:
       - name: Install WebKit and Linux system dependencies
         run: uv run --frozen --extra browser playwright install --with-deps webkit
       - name: Run dependency explorer browser regressions
-        run: uv run --frozen --extra dev --extra browser pytest -q tests/test_dag_viewer_browser.py
+        run: uv run --frozen --extra dev --extra browser pytest -q tests/test_dag_viewer_browser.py tests/test_continuous_explorer_browser.py
         env:
           AUTOFORM_REQUIRE_BROWSER_TESTS: "1"
 

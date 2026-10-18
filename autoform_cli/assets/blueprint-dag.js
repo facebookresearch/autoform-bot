@@ -31,6 +31,33 @@
     } catch (_error) { return null; }
   }
 
+  function resolveLink(value, base) {
+    if (!value || /[\u0000-\u001f]/.test(value)) return null;
+    try { var href = new URL(value, base).href; return safeHref(href); } catch (_error) { return null; }
+  }
+
+  function resolveGraph(payload, page) {
+    if (!payload || payload.schema !== "autoform-dag-view/v2" || !payload.palette ||
+        !Array.isArray(payload.nodes) || !Array.isArray(payload.edges)) throw new Error("unsupported graph payload");
+    var known = new Set();
+    var nodes = payload.nodes.map(function (node) {
+      if (!node || typeof node.id !== "string" || typeof node.title !== "string" || known.has(node.id))
+        throw new Error("invalid or duplicate graph node");
+      known.add(node.id);
+      return Object.assign({}, node, {url: resolveLink(node.url, page),
+        data_url: resolveLink(node.data_url, page), article_url: resolveLink(node.article_url, page)});
+    });
+    payload.edges.forEach(function (edge) {
+      if (!edge || !known.has(edge.source) || !known.has(edge.target)) throw new Error("unknown graph endpoint");
+    });
+    var view = Object.assign({}, payload.view || {});
+    view.book = resolveLink(view.book, page);
+    view.breadcrumbs = (view.breadcrumbs || []).map(function (entry) {
+      return {label: entry.label, url: resolveLink(entry.url, page)};
+    });
+    return Object.assign({}, payload, {nodes: nodes, edges: payload.edges.slice(), view: view});
+  }
+
   function start(host) {
     if (host.getAttribute("data-dag-ready") === "true") return;
     host.setAttribute("data-dag-ready", "true");
@@ -54,110 +81,128 @@
   function mount(host, data, instance) {
     if (!data || data.schema !== "autoform-dag-view/v2" || !data.palette ||
         !Array.isArray(data.nodes) || !Array.isArray(data.edges)) throw new Error("unsupported graph payload");
+    data = resolveGraph(data, window.location.href);
     host.textContent = "";
     host.classList.remove("bp-dag-enhancing");
-    var view = data.view || {};
+    var initialPage = window.location.href;
+    ["data-graph-src", "data-catalog-src", "data-navigation-src"].forEach(function (key) {
+      var href = resolveLink(host.getAttribute(key), initialPage); if (href) host.setAttribute(key, href);
+    });
+    var view, atlas, resultsAvailable, originalNodes, originalEdges, topicNodes, regionGroups, regionNodes;
+    var palette, byId, prerequisites, dependents, incident, statusCounts, presentStatuses, mobileIsolateBase, mapAllowed;
     if (host.getAttribute("data-layout") === "app") {
       var article = host.closest("article") || host.parentElement, originalHeading = article && article.querySelector("h1");
       if (originalHeading && !host.contains(originalHeading)) originalHeading.hidden = true;
     }
-    var atlas = view.presentation === "atlas"; host.classList.toggle("bp-dag-atlas", atlas);
-    var resultsAvailable = Boolean(host.getAttribute("data-catalog-src")) && (view.overview || atlas);
-    var originalNodes = data.nodes.slice(), originalEdges = data.edges.slice();
-    var topicNodes = originalNodes.filter(function (node) { return node.map !== false; });
-    var regionGroups = new Map(), regionNodes = [];
-    if (atlas && topicNodes.length > 12) {
-      topicNodes.forEach(function (node) {
-        var area = node.area || "Further topics";
-        if (!regionGroups.has(area)) regionGroups.set(area, []);
-        regionGroups.get(area).push(node);
-      });
-      if (regionGroups.size < 2) regionGroups.clear();
-    }
-    if (regionGroups.size) {
-      var regionOwners = new Map(), regionCounts = new Map();
-      regionGroups.forEach(function (nodes, area) {
-        var counts = new Map(), items = 0, internal = 0;
-        nodes.forEach(function (node) {
-          regionOwners.set(node.id, "region:" + area); items += node.member_count || 0;
-          internal += node.internal_dependency_count || 0;
-          (node.status_counts || []).forEach(function (pair) { counts.set(pair[0], (counts.get(pair[0]) || 0) + pair[1]); });
+    function adoptGraph(payload) {
+      data = resolveGraph(payload, initialPage);
+      view = data.view || {};
+      atlas = view.presentation === "atlas"; host.classList.toggle("bp-dag-atlas", atlas);
+      host.classList.toggle("bp-dag-focused", Boolean(view.focus));
+      resultsAvailable = Boolean(host.getAttribute("data-catalog-src")) && (view.overview || atlas);
+      originalNodes = data.nodes.slice(); originalEdges = data.edges.slice();
+      topicNodes = originalNodes.filter(function (node) { return node.map !== false; });
+      regionGroups = new Map(); regionNodes = [];
+      if (atlas && topicNodes.length > 12) {
+        topicNodes.forEach(function (node) {
+          var area = node.area || "Further topics";
+          if (!regionGroups.has(area)) regionGroups.set(area, []);
+          regionGroups.get(area).push(node);
         });
-        var index = regionNodes.length, columns = regionGroups.size > 4 ? 3 : 2;
-        regionNodes.push({id: "region:" + area, title: area, kind: "scope", _region: area,
-          member_count: items, topic_count: nodes.length, internal_dependency_count: internal,
-          status_counts: Array.from(counts), status: (data.present_statuses || []).find(function (key) { return counts.get(key) > 0; }) || nodes[0].status,
-          summary: "Topics in this region: " + nodes.map(function (node) { return node.title; }).join(", ") + ".",
-          examples: nodes.slice(0, 4).map(function (node) { return node.title; }),
-          layout: {column: index % columns, row: Math.floor(index / columns),
-            x: index % columns * 340, y: Math.floor(index / columns) * 190, width: 310, height: 160}});
-      });
-      originalEdges.forEach(function (edge) {
-        var source = regionOwners.get(edge.source), target = regionOwners.get(edge.target);
-        if (!source || !target) return;
-        if (source === target) {
-          var region = regionNodes.find(function (node) { return node.id === source; });
-          region.internal_dependency_count += (edge.statement || 0) + (edge.proof || 0); return;
-        }
-        var key = source + "\n" + target, aggregate = regionCounts.get(key);
-        if (!aggregate) { aggregate = {source: source, target: target, statement: 0, proof: 0}; regionCounts.set(key, aggregate); }
-        aggregate.statement += edge.statement || 0; aggregate.proof += edge.proof || 0;
-      });
-      data.nodes = originalNodes.concat(regionNodes); data.edges = originalEdges.concat(Array.from(regionCounts.values()));
-    }
-    var palette = data.palette || {};
-    var byId = new Map(), prerequisites = new Map(), dependents = new Map(), incident = new Map();
-    var statusCounts = new Map(), presentStatuses = [];
-    data.nodes.forEach(function (node, index) {
-      var layout = node.layout || {};
-      node._index = index; node.column = layout.column; node.row = layout.row;
-      node.x = Number.isFinite(layout.x) ? layout.x : (node.column || 0) * 312;
-      node.y = Number.isFinite(layout.y) ? layout.y : (node.row || 0) * 66;
-      node.width = Number.isFinite(layout.width) ? layout.width : atlas && node.kind === "scope" ? (view.overview ? 280 : 232) : NODE_W;
-      node.height = Number.isFinite(layout.height) ? layout.height : atlas && node.kind === "scope" ? (view.overview ? 172 : 116) : NODE_H;
-      node.isolated = node.isolated === true;
-      byId.set(node.id, node);
-      prerequisites.set(node.id, []); dependents.set(node.id, []); incident.set(node.id, []);
-      if (!statusCounts.has(node.status)) statusCounts.set(node.status, 0);
-      if (!node._region && node.kind !== "boundary" && !/^(collection|transparent)$/.test(node.navigation || "")) {
-        (node.status_counts || [[node.status, 1]]).forEach(function (pair) {
-          statusCounts.set(pair[0], (statusCounts.get(pair[0]) || 0) + pair[1]);
-        });
+        if (regionGroups.size < 2) regionGroups.clear();
       }
-    });
-    data.edges.forEach(function (edge, index) {
-      if (prerequisites.has(edge.target) && byId.has(edge.source)) prerequisites.get(edge.target).push(edge.source);
-      if (dependents.has(edge.source) && byId.has(edge.target)) dependents.get(edge.source).push(edge.target);
-      if (incident.has(edge.source)) incident.get(edge.source).push(index);
-      if (incident.has(edge.target)) incident.get(edge.target).push(index);
-    });
-    var isolateIndex = 0;
-    data.nodes.forEach(function (node) {
-      node.isolated = node.isolated || ((prerequisites.get(node.id) || []).length + (dependents.get(node.id) || []).length === 0);
-      node._isolateIndex = node.isolated ? isolateIndex++ : -1;
-    });
-    var mobileIsolateBase = (data.nodes.reduce(function (largest, node) {
-      return node.isolated ? largest : Math.max(largest, Number.isFinite(node.column) ? node.column : 0);
-    }, -2) + 2) * (NODE_H + 72);
-    (data.present_statuses || Object.keys(palette)).forEach(function (key) {
-      if (statusCounts.has(key) && presentStatuses.indexOf(key) < 0) presentStatuses.push(key);
-    });
-    statusCounts.forEach(function (_count, key) {
-      if (presentStatuses.indexOf(key) < 0) presentStatuses.push(key);
-    });
+      if (regionGroups.size) {
+        var regionOwners = new Map(), regionCounts = new Map();
+        regionGroups.forEach(function (nodes, area) {
+          var counts = new Map(), items = 0, internal = 0;
+          nodes.forEach(function (node) {
+            regionOwners.set(node.id, "region:" + area); items += node.member_count || 0;
+            internal += node.internal_dependency_count || 0;
+            (node.status_counts || []).forEach(function (pair) { counts.set(pair[0], (counts.get(pair[0]) || 0) + pair[1]); });
+          });
+          var index = regionNodes.length, columns = regionGroups.size > 4 ? 3 : 2;
+          regionNodes.push({id: "region:" + area, title: area, kind: "scope", _region: area,
+            member_count: items, topic_count: nodes.length, internal_dependency_count: internal,
+            status_counts: Array.from(counts), status: (data.present_statuses || []).find(function (key) { return counts.get(key) > 0; }) || nodes[0].status,
+            summary: "Topics in this region: " + nodes.map(function (node) { return node.title; }).join(", ") + ".",
+            examples: nodes.slice(0, 4).map(function (node) { return node.title; }),
+            layout: {column: index % columns, row: Math.floor(index / columns),
+              x: index % columns * 340, y: Math.floor(index / columns) * 190, width: 310, height: 160}});
+        });
+        originalEdges.forEach(function (edge) {
+          var source = regionOwners.get(edge.source), target = regionOwners.get(edge.target);
+          if (!source || !target) return;
+          if (source === target) {
+            var region = regionNodes.find(function (node) { return node.id === source; });
+            region.internal_dependency_count += (edge.statement || 0) + (edge.proof || 0); return;
+          }
+          var key = source + "\n" + target, aggregate = regionCounts.get(key);
+          if (!aggregate) { aggregate = {source: source, target: target, statement: 0, proof: 0}; regionCounts.set(key, aggregate); }
+          aggregate.statement += edge.statement || 0; aggregate.proof += edge.proof || 0;
+        });
+        data.nodes = originalNodes.concat(regionNodes); data.edges = originalEdges.concat(Array.from(regionCounts.values()));
+      }
+      palette = data.palette || {};
+      byId = new Map(); prerequisites = new Map(); dependents = new Map(); incident = new Map();
+      statusCounts = new Map(); presentStatuses = [];
+      data.nodes.forEach(function (node, index) {
+        var layout = node.layout || {};
+        node._index = index; node.column = layout.column; node.row = layout.row;
+        node.x = Number.isFinite(layout.x) ? layout.x : (node.column || 0) * 312;
+        node.y = Number.isFinite(layout.y) ? layout.y : (node.row || 0) * 66;
+        node.width = Number.isFinite(layout.width) ? layout.width : atlas && node.kind === "scope" ? (view.overview ? 280 : 232) : NODE_W;
+        node.height = Number.isFinite(layout.height) ? layout.height : atlas && node.kind === "scope" ? (view.overview ? 172 : 116) : NODE_H;
+        node.isolated = node.isolated === true;
+        byId.set(node.id, node);
+        prerequisites.set(node.id, []); dependents.set(node.id, []); incident.set(node.id, []);
+        if (!statusCounts.has(node.status)) statusCounts.set(node.status, 0);
+        if (!node._region && node.kind !== "boundary" && !/^(collection|transparent)$/.test(node.navigation || "")) {
+          (node.status_counts || [[node.status, 1]]).forEach(function (pair) {
+            statusCounts.set(pair[0], (statusCounts.get(pair[0]) || 0) + pair[1]);
+          });
+        }
+      });
+      data.edges.forEach(function (edge, index) {
+        if (prerequisites.has(edge.target) && byId.has(edge.source)) prerequisites.get(edge.target).push(edge.source);
+        if (dependents.has(edge.source) && byId.has(edge.target)) dependents.get(edge.source).push(edge.target);
+        if (incident.has(edge.source)) incident.get(edge.source).push(index);
+        if (incident.has(edge.target)) incident.get(edge.target).push(index);
+      });
+      var isolateIndex = 0;
+      data.nodes.forEach(function (node) {
+        node.isolated = node.isolated || ((prerequisites.get(node.id) || []).length + (dependents.get(node.id) || []).length === 0);
+        node._isolateIndex = node.isolated ? isolateIndex++ : -1;
+      });
+      mobileIsolateBase = (data.nodes.reduce(function (largest, node) {
+        return node.isolated ? largest : Math.max(largest, Number.isFinite(node.column) ? node.column : 0);
+      }, -2) + 2) * (NODE_H + 72);
+      (data.present_statuses || Object.keys(palette)).forEach(function (key) {
+        if (statusCounts.has(key) && presentStatuses.indexOf(key) < 0) presentStatuses.push(key);
+      });
+      statusCounts.forEach(function (_count, key) {
+        if (presentStatuses.indexOf(key) < 0) presentStatuses.push(key);
+      });
 
-    var mapAllowed = (regionNodes.length || topicNodes.length) <= MAX_MAP_NODES;
+      mapAllowed = (regionNodes.length || topicNodes.length) <= MAX_MAP_NODES;
+    }
+    var initialGraph = resolveGraph(data, initialPage);
+    adoptGraph(initialGraph);
     var state = {
       active: [], activeDirty: true, activeIds: new Set(), direction: "both", listLimit: LIST_PAGE, mode: "graph", moved: false,
       orientation: "lr", pointers: new Map(), pinch: null, query: "", searchLimit: 12, selected: null, suppressClick: false,
       searchCache: [], searchCacheQuery: null, searchError: null, searchLoading: false,
-      searchNodes: data.nodes, searchPromise: null, spotlight: null, navigationLimit: atlas ? 120 : 50,
+      searchNodes: data.nodes, searchPromise: null, searchLoaded: false, workspace: false, spotlight: null, navigationLimit: atlas ? 120 : 50,
       mapAllowed: mapAllowed, readableCrop: false,
       area: null, navigationData: null, navigationError: null, expandedNavigation: new Set(),
-      showConnections: Boolean(regionNodes.length), hovered: null,
+      showConnections: true, hovered: null,
+      contextHref: initialPage, contextRoutes: new Map(), graphCache: new Map(), navigationPromise: null,
+      searchById: new Map(), searchByHref: new Map(), globalBefore: new Map(), globalAfter: new Map(), globalRelations: null,
+      requestVersion: 0, pendingRequest: null, focusLimit: 8, motionFrame: null,
       selectedStatuses: new Set(presentStatuses), showIsolated: true,
       transform: {x: 20, y: 20, scale: 1}
     };
+    state.graphCache.set(new URL(initialPage).pathname, initialGraph);
+    state.contextRoutes.set(new URL(initialPage).pathname, {url: initialPage, data_url: host.getAttribute("data-graph-src")});
     if (!mapAllowed) state.mode = "list";
     var refs = {}, overlays = new Map(), scheduled = false, firstResize = true;
 
@@ -165,28 +210,12 @@
     bindEvents();
     applyLocation();
     resize();
-    redirectLegacyFocus();
     loadNavigation();
+    redirectLegacyFocus();
 
     function buildShell() {
       var head = element("header", "bp-dag-head");
-      var context = element("div", "bp-dag-context");
-      var crumbs = element("nav", "bp-dag-breadcrumb");
-      crumbs.setAttribute("aria-label", "Explorer context");
-      var crumbList = element("ol");
-      var trail = Array.isArray(view.breadcrumbs) && view.breadcrumbs.length ? view.breadcrumbs : [
-        {label: data.title || "Dependencies", url: null}
-      ];
-      trail.forEach(function (entry, index) {
-        var item = element("li"), href = safeHref(entry.url);
-        if (href) { var link = element("a", "", entry.label); link.href = href; item.appendChild(link); }
-        else { item.textContent = entry.label; if (index === trail.length - 1) item.setAttribute("aria-current", "page"); }
-        crumbList.appendChild(item);
-      });
-      crumbs.appendChild(crumbList); context.appendChild(crumbs);
-      var book = safeHref(view.book);
-      if (book) { var bookLink = element("a", "bp-dag-book", "Open the textbook page"); bookLink.href = book; context.appendChild(bookLink); }
-      context.appendChild(element("span", "bp-dag-view-kind", atlas ? "knowledge atlas" : view.kind || "graph")); head.appendChild(context);
+      refs.context = element("div", "bp-dag-context"); renderContext(); head.appendChild(refs.context);
 
       var toolbar = element("div", "bp-dag-toolbar");
       toolbar.setAttribute("role", "group"); toolbar.setAttribute("aria-label", "Dependency explorer controls");
@@ -194,7 +223,7 @@
       refs.outlineToggle.setAttribute("aria-expanded", "false"); toolbar.appendChild(refs.outlineToggle);
       var searchWrap = refs.searchWrap = element("div", "bp-dag-search-wrap");
       refs.search = element("input", "bp-dag-search");
-      refs.search.type = "search"; refs.search.placeholder = "Search the whole roadmap ( / )";
+      refs.search.type = "search"; refs.search.placeholder = "Jump to any theorem, definition or topic… ( / )";
       refs.search.setAttribute("aria-label", "Search all graph nodes");
       refs.search.setAttribute("aria-controls", "bp-dag-search-results-" + instance);
       refs.searchResults = element("div", "bp-dag-search-results"); refs.searchResults.id = "bp-dag-search-results-" + instance;
@@ -206,16 +235,8 @@
       refs.filterSummary = button("bp-dag-filter-summary", "Status"); refs.filterSummary.setAttribute("aria-expanded", "false");
       refs.filterPopover = element("div", "bp-dag-filter-popover"); refs.filterPopover.hidden = true;
       refs.filterPopover.id = "bp-dag-filters-" + instance; refs.filterSummary.setAttribute("aria-controls", refs.filterPopover.id);
-      var fieldset = element("fieldset");
-      fieldset.appendChild(element("legend", "", "Statuses in this view")); refs.statusInputs = new Map();
-      presentStatuses.forEach(function (key) {
-        var label = element("label", "bp-dag-check"), input = element("input");
-        input.type = "checkbox"; input.checked = true; input.value = key; input.addEventListener("change", onStatusChange);
-        refs.statusInputs.set(key, input); label.appendChild(input); label.appendChild(swatch(key));
-        label.appendChild(document.createTextNode(statusLabel(key)));
-        label.appendChild(element("span", "bp-dag-check-count", String(statusCounts.get(key) || 0))); fieldset.appendChild(label);
-      });
-      refs.filterPopover.appendChild(fieldset); refs.filters.appendChild(refs.filterSummary); refs.filters.appendChild(refs.filterPopover);
+      refs.statusFieldset = element("fieldset"); renderFilters();
+      refs.filterPopover.appendChild(refs.statusFieldset); refs.filters.appendChild(refs.filterSummary); refs.filters.appendChild(refs.filterPopover);
       toolbar.appendChild(refs.filters);
 
       refs.isolatedLabel = element("label", "bp-dag-isolated"); refs.isolated = element("input");
@@ -254,6 +275,8 @@
       renderNavigation();
       refs.scopeHead = element("section", "bp-dag-scope-head"); main.appendChild(refs.scopeHead);
       renderScopeHeading();
+      refs.routeStatus = element("p", "bp-dag-route-status"); refs.routeStatus.hidden = true;
+      refs.routeStatus.setAttribute("role", "status"); main.appendChild(refs.routeStatus);
       refs.stage = element("section", "bp-dag-stage"); refs.stage.setAttribute("role", "region");
       refs.stage.setAttribute("aria-label", "Dependency graph. " + (host.getAttribute("data-layout") === "app" ? "Drag or scroll" : "Drag with a mouse") +
         " to pan, use Control or Command plus scroll to zoom, and use arrow keys between node buttons.");
@@ -287,6 +310,254 @@
       refs.inspector.appendChild(refs.inspectorInner); body.appendChild(refs.inspector); host.appendChild(body);
       refs.announcement = element("p", "bp-dag-sr-only"); refs.announcement.setAttribute("aria-live", "polite"); host.appendChild(refs.announcement);
       refs.ctx = refs.canvas.getContext("2d");
+    }
+
+    function renderContext() {
+      if (!refs.context) return;
+      refs.context.textContent = "";
+      var crumbs = element("nav", "bp-dag-breadcrumb"), list = element("ol");
+      crumbs.setAttribute("aria-label", "Explorer context");
+      var trail = view.breadcrumbs && view.breadcrumbs.length ? view.breadcrumbs : [{label: data.title || "Mathematics"}];
+      trail.forEach(function (entry, index) {
+        var item = element("li"), href = safeHref(entry.url);
+        if (href) { var link = element("a", "", entry.label); link.href = href; item.appendChild(link); }
+        else { item.textContent = entry.label; if (index === trail.length - 1) item.setAttribute("aria-current", "page"); }
+        list.appendChild(item);
+      });
+      crumbs.appendChild(list); refs.context.appendChild(crumbs);
+      var book = safeHref(view.book);
+      if (book) {
+        var link = element("a", "bp-dag-book", view.focus ? "Read the full article" : "Open the textbook page");
+        link.href = book; refs.context.appendChild(link);
+      }
+      refs.context.appendChild(element("span", "bp-dag-view-kind", view.focus ? "result neighborhood" : atlas ? "knowledge atlas" : view.kind || "graph"));
+    }
+
+    function renderFilters() {
+      if (!refs.statusFieldset) return;
+      refs.statusFieldset.textContent = "";
+      refs.statusFieldset.appendChild(element("legend", "", "Statuses in this view")); refs.statusInputs = new Map();
+      presentStatuses.forEach(function (key) {
+        var label = element("label", "bp-dag-check"), input = element("input");
+        input.type = "checkbox"; input.checked = state.selectedStatuses.has(key); input.value = key;
+        input.addEventListener("change", onStatusChange); refs.statusInputs.set(key, input);
+        label.appendChild(input); label.appendChild(swatch(key)); label.appendChild(document.createTextNode(statusLabel(key)));
+        label.appendChild(element("span", "bp-dag-check-count", String(statusCounts.get(key) || 0))); refs.statusFieldset.appendChild(label);
+      });
+    }
+
+    function fetchJSON(href, signal) {
+      var safe = safeHref(href); if (!safe) return Promise.reject(new Error("unsafe data link"));
+      return fetch(safe, {credentials: "same-origin", signal: signal}).then(function (response) {
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        if (!safeHref(response.url)) throw new Error("data redirected outside this site");
+        if (Number(response.headers.get("content-length")) > 32 * 1024 * 1024) throw new Error("data is too large");
+        return response.text().then(function (body) {
+          if (body.length > 32 * 1024 * 1024) throw new Error("data is too large");
+          return {payload: JSON.parse(body), url: response.url};
+        });
+      });
+    }
+
+    function registerContext(node) {
+      var href = safeHref(node.url), source = safeHref(node.data_url);
+      if (href && source) state.contextRoutes.set(new URL(href).pathname, {url: href, data_url: source});
+    }
+
+    function viewSnapshot() {
+      return {context: state.contextHref, focus: view.focus && view.focus.id, focusLimit: state.focusLimit,
+        transform: Object.assign({}, state.transform), query: state.query,
+        navigationScroll: refs.navigation.scrollTop, inventoryScroll: refs.inventoryScroll.scrollTop};
+    }
+
+    function rememberView() {
+      if (new URL(window.location.href).pathname !== new URL(state.contextHref).pathname) return;
+      var entry = Object.assign({}, window.history.state || {}); entry.autoformExplorer = viewSnapshot();
+      window.history.replaceState(entry, "", window.location.href);
+    }
+
+    function resetView(payload, href, snapshot) {
+      if (state.motionFrame) cancelAnimationFrame(state.motionFrame);
+      adoptGraph(payload); state.contextHref = href;
+      if (!state.searchLoaded) { state.searchNodes = data.nodes; state.searchCacheQuery = null; }
+      overlays.forEach(function (control) { control.remove(); }); overlays.clear();
+      state.selected = null; state.hovered = null; state.area = null; state.direction = "both";
+      state.activeDirty = true; state.spotlight = null; state.listLimit = LIST_PAGE;
+      state.mapAllowed = mapAllowed; state.selectedStatuses = new Set(presentStatuses);
+      state.showConnections = true; state.showIsolated = true; state.mode = mapAllowed ? "graph" : "list";
+      if (snapshot && typeof snapshot.query === "string") { state.query = snapshot.query; refs.search.value = snapshot.query; }
+      refs.graphMode.textContent = mapAllowed ? (atlas ? "Topics" : "Map") : "Map · too many items";
+      refs.graphMode.disabled = !mapAllowed;
+      refs.listMode.textContent = view.focus ? "All connections" : resultsAvailable ? "All results" : "Contents";
+      refs.sourcesMode.hidden = Boolean(view.focus) || !((view.overview || atlas) &&
+        (host.getAttribute("data-navigation-src") || originalNodes.some(function (node) { return /^(collection|source)$/.test(node.navigation || ""); })));
+      refs.isolatedLabel.hidden = Boolean(view.focus) || atlas || !data.nodes.some(function (node) { return node.isolated; }) ||
+        data.nodes.every(function (node) { return node.isolated; });
+      refs.guide.hidden = !atlas && !view.focus;
+      refs.empty.textContent = data.nodes.length ? "No nodes match these controls." : "This roadmap has no articles yet.";
+      renderContext(); renderFilters(); expandCurrentOutline(); renderNavigation(); renderScopeHeading();
+      firstResize = true; resize(); applyLocation(snapshot);
+      if (snapshot) {
+        refs.navigation.scrollTop = snapshot.navigationScroll || 0;
+        refs.inventoryScroll.scrollTop = snapshot.inventoryScroll || 0;
+      }
+      closeSearch(); host.classList.remove("bp-dag-arriving");
+      requestAnimationFrame(function () { host.classList.add("bp-dag-arriving"); });
+      document.title = (view.focus ? "" : state.area ? state.area + " · " : "") + data.title;
+    }
+
+    function expandCurrentOutline() {
+      if (!state.navigationData) return;
+      var indexed = new Map(state.navigationData.map(function (node) { return [node.id, node]; }));
+      var current = view.scope || "roadmap", seen = new Set();
+      while (current && indexed.has(current) && !seen.has(current)) {
+        seen.add(current); state.expandedNavigation.add(current); current = indexed.get(current).parent;
+      }
+    }
+
+    function routeMessage(text, error) {
+      refs.routeStatus.textContent = text || ""; refs.routeStatus.hidden = !text;
+      refs.routeStatus.classList.toggle("bp-dag-route-error", Boolean(error));
+    }
+
+    function cancelNavigation() {
+      ++state.requestVersion;
+      if (state.pendingRequest) state.pendingRequest.abort(); state.pendingRequest = null;
+      host.removeAttribute("aria-busy");
+      if (refs.routeStatus) routeMessage("");
+    }
+
+    function openContext(href, method, snapshot) {
+      var safe = safeHref(href), route = safe && state.contextRoutes.get(new URL(safe).pathname);
+      if (!route) return false;
+      cancelNavigation(); var version = state.requestVersion, controller = new AbortController();
+      state.pendingRequest = controller; host.setAttribute("aria-busy", "true"); routeMessage("Opening mathematical context…");
+      var cached = state.graphCache.get(new URL(safe).pathname);
+      var timer = setTimeout(function () { controller.abort(); }, 15000);
+      var pending = cached ? Promise.resolve(cached) : fetchJSON(route.data_url, controller.signal).then(function (loaded) {
+        return resolveGraph(loaded.payload, safe);
+      });
+      pending.then(function (payload) {
+        if (version !== state.requestVersion) return;
+        // Validate before changing the URL or replacing the current working graph.
+        var graph = resolveGraph(payload, safe);
+        if (method) { rememberView(); window.history[method + "State"]({}, "", safe); }
+        state.graphCache.delete(new URL(safe).pathname); state.graphCache.set(new URL(safe).pathname, graph);
+        if (state.graphCache.size > 12) state.graphCache.delete(state.graphCache.keys().next().value);
+        resetView(graph, safe, snapshot); routeMessage(""); rememberView();
+      }).catch(function (error) {
+        if (version !== state.requestVersion) return;
+        routeMessage("Could not open this context. Your current map is unchanged; click the link to retry. " + error.message, true);
+      }).then(function () {
+        clearTimeout(timer);
+        if (version === state.requestVersion) { state.pendingRequest = null; host.removeAttribute("aria-busy"); }
+      });
+      return true;
+    }
+
+    function focusBreadcrumbs(node) {
+      var nodes = state.navigationData || [], indexed = new Map(nodes.map(function (item) { return [item.id, item]; }));
+      var context = nodes.find(function (item) { return item.data_url && item.data_url === node.data_url; });
+      var lineage = [], current = context, seen = new Set();
+      while (current && !seen.has(current.id)) {
+        seen.add(current.id);
+        if (!/^(collection|transparent)$/.test(current.navigation || "")) lineage.unshift({label: current.title, url: current.url});
+        current = indexed.get(current.parent);
+      }
+      var root = indexed.get("roadmap"), trail = root && root.article_url ? [{label: "Book", url: root.article_url}] : [];
+      if (!lineage.length) trail = (view.breadcrumbs || []).filter(function (item) { return item.url; });
+      else trail = trail.concat(lineage);
+      trail.push({label: node.title, url: null});
+      return {trail: trail, scope: context && context.id};
+    }
+
+    function focusGraph(node) {
+      var before = state.globalBefore.get(node.id) || [], after = state.globalAfter.get(node.id) || [];
+      var beforeIds = before.map(function (row) { return row[0]; }).filter(function (id) { return id !== node.id; });
+      var afterIds = after.map(function (row) { return row[0]; }).filter(function (id) { return id !== node.id; });
+      var shownBefore = beforeIds.slice(0, state.focusLimit), shownAfter = afterIds.slice(0, state.focusLimit);
+      var visible = new Set([node.id].concat(shownBefore, shownAfter)), ids = new Set([node.id].concat(beforeIds, afterIds));
+      var beforeSet = new Set(beforeIds), scopes = new Set((state.navigationData || []).map(function (item) { return item.id; }));
+      var rows = Math.max(1, shownBefore.length, shownAfter.length), centerY = (rows - 1) * 84 / 2;
+      var nodes = Array.from(visible).map(function (id) {
+        var original = state.searchById.get(id), lane = id === node.id ? 1 : beforeSet.has(id) ? 0 : 2;
+        var scope = original.kind === "scope" || !original.result && scopes.has(id);
+        var navigation = scope && (state.navigationData || []).find(function (item) { return item.id === id; });
+        var count = scope ? original.member_count !== undefined ? original.member_count : navigation && navigation.count || 0 : 1;
+        var slot = lane === 0 ? shownBefore.indexOf(id) : shownAfter.indexOf(id);
+        return Object.assign({}, original, {kind: scope ? "boundary" : original.kind,
+          url: scope ? original.url : original.article_url || null, context_url: original.url,
+          article_url: original.article_url || navigation && navigation.article_url || null,
+          map: true, member_count: count, status_counts: scope && original.status_counts || [[original.status, count]], _focusLane: lane,
+          layout: {column: lane, row: Math.max(0, slot), x: lane === 0 ? 0 : lane === 1 ? 322 : 690,
+            y: lane === 1 ? centerY : Math.max(0, slot) * 84, width: lane === 1 ? 268 : 226, height: lane === 1 ? 96 : 68}});
+      });
+      var edges = [];
+      visible.forEach(function (source) { (state.globalAfter.get(source) || []).forEach(function (row) {
+        if (visible.has(row[0])) edges.push({source: source, target: row[0], statement: row[1], proof: row[2]});
+      }); });
+      var context = focusBreadcrumbs(node);
+      return {schema: "autoform-dag-view/v2", palette: palette, nodes: nodes, edges: edges, title: node.title,
+        present_statuses: Object.keys(palette), regions: [], edge_count: edges.reduce(function (n, edge) { return n + edge.statement + edge.proof; }, 0),
+        view: {kind: "chapter", presentation: "dag", scope: context.scope, summary: node.summary, book: node.article_url,
+          breadcrumbs: context.trail, focus: {id: node.id, before: beforeIds.length, after: afterIds.length,
+            shownBefore: shownBefore.length, shownAfter: shownAfter.length, total: ids.size}}};
+    }
+
+    function openFocus(node, method, snapshot) {
+      if (!node || !node.result || !node.data_url || !safeHref(node.url) || !state.globalRelations) return false;
+      cancelNavigation(); routeMessage("");
+      var limit = snapshot && snapshot.focusLimit || (view.focus && view.focus.id === node.id ? state.focusLimit : 8);
+      state.focusLimit = clamp(Number.isInteger(limit) ? limit : 8, 8, 48);
+      var target = new URL(node.url), params = new URLSearchParams(target.hash.slice(1));
+      params.set("node", node.id); params.set("focus", "1"); target.hash = params.toString();
+      var href = method ? target.href : window.location.href, payload = focusGraph(node);
+      if (method && href !== window.location.href) { rememberView(); window.history[method + "State"]({}, "", href); }
+      resetView(payload, href, snapshot); rememberView();
+      if (!snapshot) {
+        state.query = ""; refs.search.value = ""; state.searchCacheQuery = null; renderInventory(false); rememberView();
+      }
+      refs.announcement.textContent = node.title + ". " + payload.view.focus.before + " prerequisites and " + payload.view.focus.after + " dependents.";
+      focusNodeControl(byId.get(node.id)); return true;
+    }
+
+    function internalClick(event) {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      var link = event.target.closest && event.target.closest("a[href]");
+      if (!link || !host.contains(link) || link.target || link.hasAttribute("download")) return;
+      var href = safeHref(link.href); if (!href) return;
+      if (state.suppressClick && event.detail && link.closest(".bp-dag-node")) { event.preventDefault(); return; }
+      var params = new URLSearchParams(new URL(href).hash.slice(1)), id = params.get("node");
+      var entry = id && state.searchById.get(id);
+      if (entry && entry.result && entry.data_url && state.globalRelations) {
+        event.preventDefault(); openFocus(entry, "push"); return;
+      }
+      if (state.contextRoutes.has(new URL(href).pathname)) { event.preventDefault(); openContext(href, "push"); return; }
+      var card = link.closest(".bp-dag-node"), internal = link.matches(".bp-dag-navigation-link, .bp-dag-navigation-home") ||
+        card && /^(scope|boundary)$/.test(card.dataset.kind || "");
+      if (internal && host.getAttribute("data-navigation-src")) {
+        event.preventDefault(); cancelNavigation(); var version = state.requestVersion, current = window.location.href;
+        loadNavigation().then(function () {
+          if (version !== state.requestVersion || current !== window.location.href) return;
+          if (!openContext(href, "push")) window.location.href = href;
+        });
+      }
+    }
+
+    function restoreLocation() {
+      cancelNavigation();
+      var params = locationParams(), id = params.get("node"), snapshot = window.history.state && window.history.state.autoformExplorer;
+      var href = window.location.href, version = state.requestVersion;
+      if (params.get("focus") === "1") {
+        ensureGlobalSearch().then(function () {
+          if (version !== state.requestVersion || href !== window.location.href) return;
+          if (!openFocus(state.searchById.get(id), null, snapshot)) applyLocation(snapshot);
+        }); return;
+      }
+      if (new URL(window.location.href).pathname !== new URL(state.contextHref).pathname || view.focus) {
+        if (openContext(window.location.href, null, snapshot)) return;
+      }
+      applyLocation(snapshot);
     }
 
     function renderNavigation() {
@@ -336,26 +607,30 @@
     }
 
     function loadNavigation() {
-      var source = host.getAttribute("data-navigation-src"); if (!source) return;
-      fetch(source, {credentials: "same-origin"}).then(function (response) {
-        if (!response.ok) throw new Error("HTTP " + response.status);
-        return response.json().then(function (index) { return {index: index, url: response.url}; });
-      }).then(function (loaded) {
-        if (!loaded.index || loaded.index.schema !== "autoform-dag-navigation/v1" || !Array.isArray(loaded.index.nodes))
+      var source = host.getAttribute("data-navigation-src"); if (!source) return Promise.resolve();
+      if (state.navigationPromise) return state.navigationPromise;
+      state.navigationPromise = fetchJSON(source).then(function (loaded) {
+        var index = loaded.payload;
+        if (!index || index.schema !== "autoform-dag-navigation/v1" || !Array.isArray(index.nodes))
           throw new Error("unsupported navigation index");
-        loaded.index.nodes.forEach(function (node) { if (node.url) node.url = new URL(node.url, loaded.url).href; });
-        state.navigationData = loaded.index.nodes;
-        var indexed = new Map(state.navigationData.map(function (node) { return [node.id, node]; }));
-        var current = view.scope || "roadmap";
-        while (current && indexed.has(current)) {
-          state.expandedNavigation.add(current); current = indexed.get(current).parent;
+        state.navigationData = index.nodes.map(function (node) {
+          return Object.assign({}, node, {url: resolveLink(node.url, loaded.url), data_url: resolveLink(node.data_url, loaded.url),
+            article_url: resolveLink(node.article_url, loaded.url)});
+        });
+        state.navigationData.forEach(registerContext);
+        if (view.focus && state.searchById.has(view.focus.id)) {
+          var context = focusBreadcrumbs(state.searchById.get(view.focus.id));
+          view.scope = context.scope; view.breadcrumbs = context.trail; renderContext();
         }
+        expandCurrentOutline();
+        state.workspace = state.workspace || state.navigationData.some(function (node) { return node.data_url; });
         renderNavigation(); renderInventory(false);
         requestAnimationFrame(function () {
           var active = refs.navigationInner.querySelector('[aria-current="page"]');
           if (active) active.scrollIntoView({block: "nearest"});
         });
       }).catch(function (error) { state.navigationError = error.message; renderNavigation(); });
+      return state.navigationPromise;
     }
 
     function renderOutline() {
@@ -396,6 +671,27 @@
     function renderScopeHeading() {
       if (!refs.scopeHead) return;
       refs.scopeHead.textContent = "";
+      if (view.focus) {
+        var broad = element("a", "bp-dag-region-back", "← Show surrounding topic"), target = new URL(state.contextHref);
+        target.hash = ""; broad.href = target.href; refs.scopeHead.appendChild(broad);
+        refs.scopeHead.appendChild(element(host.getAttribute("data-layout") === "app" ? "h1" : "h2", "bp-dag-scope-title", data.title));
+        if (view.summary) refs.scopeHead.appendChild(element("p", "bp-dag-scope-description bp-dag-focus-statement", view.summary));
+        var legend = element("div", "bp-dag-focus-legend");
+        legend.appendChild(element("span", "bp-dag-focus-before", plural(view.focus.before, "prerequisite", "prerequisites")));
+        legend.appendChild(element("span", "", "→ This result →"));
+        legend.appendChild(element("span", "bp-dag-focus-after", plural(view.focus.after, "dependent", "dependents")));
+        refs.scopeHead.appendChild(legend);
+        if (view.focus.total > topicNodes.length) {
+          var more = button("bp-dag-focus-more", "Showing " + topicNodes.length + " of " + view.focus.total + " connected results · " +
+            (state.focusLimit < 48 ? "Show more on map" : "See all connections"));
+          more.addEventListener("click", function () {
+            if (state.focusLimit >= 48) { setMode("list", true); return; }
+            rememberView(); state.focusLimit = Math.min(48, state.focusLimit + 8);
+            openFocus(state.searchById.get(view.focus.id), "replace");
+          }); refs.scopeHead.appendChild(more);
+        }
+        refs.main.style.setProperty("--dag-scope-head-height", refs.scopeHead.offsetHeight + "px"); return;
+      }
       var trail = view.breadcrumbs || [], label = trail.length ? trail[trail.length - 1].label : data.title;
       var text = state.area || label || "Mathematics";
       var heading = element(host.getAttribute("data-layout") === "app" ? "h1" : "h2", "bp-dag-scope-title", text);
@@ -404,7 +700,7 @@
         var back = button("bp-dag-region-back", "← " + label);
         back.addEventListener("click", function () { setArea(null, true); }); refs.scopeHead.insertBefore(back, heading);
       }
-      var description = state.area ? "Explore a topic below. Its connections button reveals authored prerequisites and dependents." : view.summary;
+      var description = state.area ? "Arrows connect prerequisites to the results that use them. Open a topic or jump directly to any result with search." : view.summary;
       if (description) refs.scopeHead.appendChild(element("p", "bp-dag-scope-description", description));
       var count = state.area ? (regionGroups.get(state.area) || []).length : topicNodes.length;
       var unit = regionNodes.length && !state.area ? "region" : atlas || view.overview ? "topic" : "node";
@@ -419,13 +715,15 @@
     }
 
     function setArea(area, updateHistory) {
+      cancelNavigation(); routeMessage("");
+      if (updateHistory) rememberView();
       state.area = regionGroups.has(area) ? area : null;
       state.hovered = null;
       clearSelection(false); state.activeDirty = true;
       state.mapAllowed = (state.area ? regionGroups.get(state.area).length : regionNodes.length || topicNodes.length) <= MAX_MAP_NODES;
       refs.graphMode.disabled = !state.mapAllowed;
       if (!state.mapAllowed) state.mode = "list";
-      renderScopeHeading(); refresh(true); fit();
+      renderScopeHeading(); refresh(true); fit(true);
       if (updateHistory) writeLocation("push");
     }
 
@@ -439,6 +737,7 @@
     }
 
     function bindEvents() {
+      host.addEventListener("click", internalClick, true);
       refs.outlineToggle.addEventListener("click", function () { toggleOutline(!host.classList.contains("bp-dag-outline-open")); });
       refs.navigation.addEventListener("keydown", function (event) {
         if (event.key === "Escape" && host.classList.contains("bp-dag-outline-open")) { event.preventDefault(); toggleOutline(false); }
@@ -446,7 +745,7 @@
       refs.search.addEventListener("focus", ensureGlobalSearch);
       refs.search.addEventListener("input", function () {
         state.query = refs.search.value.trim(); state.searchLimit = 12; state.listLimit = LIST_PAGE;
-        if (state.mode === "list") closeSearch(); else renderSearch();
+        if (state.mode === "list" && !state.workspace) closeSearch(); else renderSearch();
         renderInventory(true); if (state.query) ensureGlobalSearch();
       });
       refs.search.addEventListener("keydown", function (event) {
@@ -480,7 +779,7 @@
       });
       refs.zoomIn.addEventListener("click", function () { zoomAt(1.24, refs.stage.clientWidth / 2, refs.stage.clientHeight / 2); });
       refs.zoomOut.addEventListener("click", function () { zoomAt(.8, refs.stage.clientWidth / 2, refs.stage.clientHeight / 2); });
-      refs.fit.addEventListener("click", fit); refs.hiddenButton.addEventListener("click", revealAll);
+      refs.fit.addEventListener("click", function () { fit(true); }); refs.hiddenButton.addEventListener("click", revealAll);
       refs.loadMore.addEventListener("click", function () { state.listLimit += LIST_PAGE; renderInventory(false); });
       refs.wholeSearch.addEventListener("click", openResults);
       refs.sheetHandle.addEventListener("click", function () {
@@ -495,18 +794,20 @@
         var zoom = event.ctrlKey || event.metaKey, pixels = event.deltaMode === 1 ? 25 : 1;
         if (!zoom && host.getAttribute("data-layout") !== "app") return;
         event.preventDefault();
-        if (!zoom) { state.transform.x -= event.deltaX * pixels; state.transform.y -= event.deltaY * pixels; schedule(); return; }
+        if (state.motionFrame) { cancelAnimationFrame(state.motionFrame); state.motionFrame = null; }
+        if (!zoom) { state.transform.x -= event.deltaX * pixels; state.transform.y -= event.deltaY * pixels; schedule(); rememberView(); return; }
         var rect = refs.stage.getBoundingClientRect();
         zoomAt(clamp(Math.exp(-event.deltaY * pixels * .002), .5, 2), event.clientX - rect.left, event.clientY - rect.top);
+        rememberView();
       }, {passive: false});
       refs.stage.addEventListener("keydown", function (event) {
         if (event.key === "Escape" && state.selected) { clearSelection(true); event.preventDefault(); }
         else if (event.key === "+" || event.key === "=") { zoomAt(1.2, refs.stage.clientWidth / 2, refs.stage.clientHeight / 2); event.preventDefault(); }
         else if (event.key === "-") { zoomAt(.82, refs.stage.clientWidth / 2, refs.stage.clientHeight / 2); event.preventDefault(); }
-        else if (event.key === "0") { fit(); event.preventDefault(); }
+        else if (event.key === "0") { fit(true); event.preventDefault(); }
       });
-      window.addEventListener("hashchange", applyLocation);
-      window.addEventListener("popstate", applyLocation);
+      window.addEventListener("hashchange", restoreLocation);
+      window.addEventListener("popstate", restoreLocation);
       document.addEventListener("keydown", function (event) {
         var target = event.target, own = target === refs.search;
         if (!own && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || "") || target.isContentEditable)) return;
@@ -558,6 +859,15 @@
       return stops.length ? "conic-gradient(" + stops.join(",") + ")" : "var(--dag-node-stroke)";
     }
     function world(node) {
+      if (view.focus && state.orientation === "tb") {
+        var columns = refs.stage.clientWidth < 540 ? 1 : 2, slot = node.row || 0;
+        var beforeHeight = Math.ceil(view.focus.shownBefore / columns) * 84;
+        var focalY = beforeHeight + 40;
+        return {x: node._focusLane === 1 || columns === 1 ? Math.max(0, (refs.stage.clientWidth - node.width) / 2) :
+          slot % columns * (226 + 20),
+          y: node._focusLane === 1 ? focalY : node._focusLane === 0 ? Math.floor(slot / columns) * 84 :
+            focalY + 136 + Math.floor(slot / columns) * 84, w: node.width, h: node.height};
+      }
       if (atlas && state.area && state.orientation !== "tb") {
         var members = regionGroups.get(state.area) || [], slot = Math.max(0, members.indexOf(node));
         var columns = Math.min(3, Math.max(1, Math.ceil(Math.sqrt(members.length))));
@@ -611,9 +921,10 @@
       refs.stage.hidden = state.mode !== "graph"; refs.inventory.hidden = state.mode === "graph";
       refs.connectionsToggle.hidden = !atlas || state.mode !== "graph";
       refs.connectionsToggle.setAttribute("aria-pressed", String(state.showConnections));
-      if (atlas) refs.guide.textContent = state.selected ?
+      if (view.focus) refs.guide.textContent = "Prerequisites → result → dependents · Select any connected result to pivot the map";
+      else if (atlas) refs.guide.textContent = state.selected ?
         "Showing the direct dependency neighborhood of " + state.selected.title :
-        "Open a topic to explore it · Connections reveals its dependency neighborhood";
+        "Arrows show authored dependencies · Hover to trace connections · Search jumps directly to a result";
     }
 
     function collect(start, adjacency) {
@@ -672,7 +983,7 @@
       var changed = nextOrientation !== state.orientation; state.orientation = nextOrientation;
       if (firstResize || changed) { firstResize = false; fit(); } else schedule();
     }
-    function fit() {
+    function fit(animated) {
       calculateActive(); var nodes = state.active; if (!nodes.length) return;
       var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       nodes.forEach(function (node) {
@@ -684,16 +995,33 @@
         maxX = Math.max(maxX, region.x + region.width); maxY = Math.max(maxY, region.y + region.height);
       });
       var pad = 54, width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
-      var fitted = Math.min((refs.stage.clientWidth - pad * 2) / width,
-        (refs.stage.clientHeight - pad * 2) / height);
+      var availableWidth = refs.stage.clientWidth, availableHeight = refs.stage.clientHeight;
+      if (view.focus && host.classList.contains("bp-dag-sheet-open")) {
+        if (sheetLayout()) availableHeight = Math.max(180, refs.inspector.getBoundingClientRect().top - refs.stage.getBoundingClientRect().top);
+        else availableWidth = Math.max(320, availableWidth - refs.inspector.offsetWidth - 24);
+      }
+      var fitted = Math.min((availableWidth - pad * 2) / width, (availableHeight - pad * 2) / height);
       var readableFloor = atlas ? MIN_ATLAS_SCALE : MIN_READABLE_SCALE;
       state.readableCrop = fitted < readableFloor;
-      state.transform.scale = clamp(Math.max(fitted, readableFloor), MIN_SCALE, 1.35);
-      state.transform.x = state.readableCrop ? pad - minX * state.transform.scale :
-        (refs.stage.clientWidth - width * state.transform.scale) / 2 - minX * state.transform.scale;
-      state.transform.y = state.readableCrop ? pad - minY * state.transform.scale :
-        (refs.stage.clientHeight - height * state.transform.scale) / 2 - minY * state.transform.scale;
-      schedule();
+      var scale = clamp(Math.max(fitted, readableFloor), MIN_SCALE, 1.35);
+      var transform = {scale: scale,
+        x: state.readableCrop ? pad - minX * scale : (availableWidth - width * scale) / 2 - minX * scale,
+        y: state.readableCrop ? pad - minY * scale : (availableHeight - height * scale) / 2 - minY * scale};
+      if (animated === true) animateCamera(transform); else { state.transform = transform; schedule(); }
+    }
+
+    function animateCamera(target) {
+      if (state.motionFrame) cancelAnimationFrame(state.motionFrame);
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { state.transform = target; schedule(); rememberView(); return; }
+      var from = Object.assign({}, state.transform), started = performance.now();
+      function frame(now) {
+        var t = clamp((now - started) / 220, 0, 1), eased = 1 - Math.pow(1 - t, 3);
+        state.transform = {x: from.x + (target.x - from.x) * eased, y: from.y + (target.y - from.y) * eased,
+          scale: from.scale + (target.scale - from.scale) * eased}; schedule();
+        state.motionFrame = t < 1 ? requestAnimationFrame(frame) : null;
+        if (t === 1) rememberView();
+      }
+      state.motionFrame = requestAnimationFrame(frame);
     }
     function center(node, minimumScale) {
       if (!node) return; var box = world(node); state.transform.scale = Math.max(state.transform.scale, minimumScale || .82);
@@ -705,9 +1033,11 @@
       state.transform.y = band / 2 - (box.y + box.h / 2) * state.transform.scale; schedule();
     }
     function zoomAt(factor, x, y) {
+      if (state.motionFrame) { cancelAnimationFrame(state.motionFrame); state.motionFrame = null; }
       var old = state.transform.scale, next = clamp(old * factor, MIN_SCALE, 4);
       state.transform.x = x - (x - state.transform.x) * next / old;
       state.transform.y = y - (y - state.transform.y) * next / old; state.transform.scale = next; schedule();
+      rememberView();
     }
 
     function draw() {
@@ -715,6 +1045,7 @@
       var width = refs.stage.clientWidth, height = refs.stage.clientHeight;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height); drawGrid(ctx, width, height);
       if (atlas) drawRegions(ctx);
+      if (view.focus) drawFocusLabels(ctx);
       var visible = state.active.filter(function (node) { return inViewport(screen(node), 80); });
       var edgeIndexes = new Set();
       var focus = state.selected || state.hovered;
@@ -739,6 +1070,16 @@
       });
       visible.forEach(function (node) { drawPlate(ctx, node, screen(node), !spotlight || spotlight.nodes.has(node.id)); });
       updateOverlays(visible, spotlight);
+    }
+    function drawFocusLabels(ctx) {
+      [0, 1, 2].forEach(function (lane) {
+        var node = topicNodes.find(function (item) { return item._focusLane === lane; }); if (!node) return;
+        var box = screen(node); if (!inViewport(box, 80)) return;
+        ctx.save(); ctx.fillStyle = lane === 0 ? (isDark() ? "#8bbcff" : "#2563eb") :
+          lane === 2 ? (isDark() ? "#d0b5ff" : "#7c3aed") : (isDark() ? "#c7d2e1" : "#475569");
+        ctx.font = "650 12px sans-serif"; ctx.fillText(lane === 0 ? "PREREQUISITES" : lane === 2 ? "USED BY" : "THIS RESULT", box.x, box.y - 14);
+        ctx.restore();
+      });
     }
     function drawRegions(ctx) {
       if (regionNodes.length) return;
@@ -791,21 +1132,25 @@
       ctx.restore();
     }
     function drawEdge(ctx, a, b, dashed, highlighted, count, offset) {
-      var horizontal = state.orientation === "lr";
-      var ax = horizontal ? a.x + a.w : a.x + a.w / 2 + offset;
-      var ay = horizontal ? a.y + a.h / 2 + offset : a.y + a.h;
-      var bx = horizontal ? b.x : b.x + b.w / 2 + offset;
-      var by = horizontal ? b.y + b.h / 2 + offset : b.y;
-      ctx.save(); ctx.globalAlpha = highlighted ? .58 : .065; ctx.strokeStyle = isDark() ? "#a8b0bb" : "#64748b";
-      ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = highlighted ? 1.35 : 1; if (dashed) ctx.setLineDash([5, 5]);
+      var dx = b.x + b.w / 2 - a.x - a.w / 2, dy = b.y + b.h / 2 - a.y - a.h / 2;
+      var horizontal = Math.abs(dx) > (a.w + b.w) * .35, forward = horizontal ? dx >= 0 : dy >= 0, sign = forward ? 1 : -1;
+      var ax = horizontal ? a.x + (forward ? a.w : 0) : a.x + a.w / 2 + offset;
+      var ay = horizontal ? a.y + a.h / 2 + offset : a.y + (forward ? a.h : 0);
+      var bx = horizontal ? b.x + (forward ? 0 : b.w) : b.x + b.w / 2 + offset;
+      var by = horizontal ? b.y + b.h / 2 + offset : b.y + (forward ? 0 : b.h);
+      ctx.save(); ctx.globalAlpha = highlighted ? (view.focus ? .8 : .64) : .12;
+      ctx.strokeStyle = view.focus ? dashed ? (isDark() ? "#bb9aff" : "#8b5cf6") : (isDark() ? "#8bbcff" : "#3b82f6") :
+        isDark() ? "#a8b6ca" : "#64748b";
+      ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = highlighted ? 1.6 + Math.min(1, Math.log2(count + 1) * .15) : 1;
+      if (dashed) ctx.setLineDash([5, 5]);
       ctx.beginPath(); ctx.moveTo(ax, ay);
-      if (horizontal) { var mx = ax + (bx - ax) * .5; ctx.bezierCurveTo(mx, ay, mx, by, bx, by); }
-      else { var my = ay + (by - ay) * .5; ctx.bezierCurveTo(ax, my, bx, my, bx, by); }
+      if (horizontal) { var bendX = Math.max(24, Math.abs(bx - ax) * .5); ctx.bezierCurveTo(ax + sign * bendX, ay, bx - sign * bendX, by, bx, by); }
+      else { var bendY = Math.max(24, Math.abs(by - ay) * .5); ctx.bezierCurveTo(ax, ay + sign * bendY, bx, by - sign * bendY, bx, by); }
       ctx.stroke(); ctx.setLineDash([]);
       if (state.transform.scale > .18) {
         ctx.beginPath();
-        if (horizontal) { ctx.moveTo(bx, by); ctx.lineTo(bx - 6, by - 3.5); ctx.lineTo(bx - 6, by + 3.5); }
-        else { ctx.moveTo(bx, by); ctx.lineTo(bx - 3.5, by - 6); ctx.lineTo(bx + 3.5, by - 6); }
+        if (horizontal) { ctx.moveTo(bx, by); ctx.lineTo(bx - sign * 6, by - 3.5); ctx.lineTo(bx - sign * 6, by + 3.5); }
+        else { ctx.moveTo(bx, by); ctx.lineTo(bx - 3.5, by - sign * 6); ctx.lineTo(bx + 3.5, by - sign * 6); }
         ctx.closePath(); ctx.fill();
       }
       if (count > 1 && state.transform.scale > .32) {
@@ -875,6 +1220,12 @@
         node.kind === "boundary" ? "Related topic" : statusLabel(node.status)));
       if ((view.overview || node._region) && node.examples && node.examples.length) content.appendChild(element("span", "bp-dag-node-examples",
         node._region ? node.examples.join(" · ") : node.summary || "Includes: " + node.examples.join(" · ")));
+      if (atlas && node.kind === "scope") {
+        var before = (prerequisites.get(node.id) || []).length, after = (dependents.get(node.id) || []).length;
+        var links = element("span", "bp-dag-node-connections", before || after ?
+          before + " prerequisites · " + after + " dependents" : "No cross-topic links");
+        content.appendChild(links);
+      }
       content.appendChild(element("span", "bp-dag-node-relation", ""));
       if (content !== primary) primary.appendChild(content);
       primary.setAttribute("aria-label", (navigable || node._region ? "Open " : "") + node.title);
@@ -894,6 +1245,7 @@
         if (/^Arrow(Left|Right|Up|Down)$/.test(event.key)) {
           var next = nearest(node, event.key);
           if (next) {
+            if (view.focus) { event.preventDefault(); activateNode(next, true); return; }
             event.preventDefault(); center(next, .7); selectNode(next, state.selected ? "replace" : "push", false);
             focusNodeControl(next);
           }
@@ -917,6 +1269,7 @@
 
     function pointerDown(event) {
       if (event.pointerType === "mouse" && event.button !== 0) return;
+      if (state.motionFrame) { cancelAnimationFrame(state.motionFrame); state.motionFrame = null; }
       var node = event.target.closest && event.target.closest(".bp-dag-node");
       state.pointers.set(event.pointerId, {x: event.clientX, y: event.clientY,
         startX: event.clientX, startY: event.clientY, node: node, type: event.pointerType});
@@ -963,6 +1316,7 @@
       state.pointers.delete(event.pointerId);
       if (state.pointers.size < 2) state.pinch = null;
       if (!state.pointers.size) refs.stage.dataset.dragging = "false";
+      if (state.moved && !state.pointers.size) rememberView();
       if (event.type === "pointerup" && wasSingle && !pressed.node && !state.moved && state.selected) clearSelection(true);
     }
 
@@ -984,20 +1338,36 @@
     }
     function ensureGlobalSearch() {
       var source = host.getAttribute("data-catalog-src");
-      if (!source || state.searchPromise || state.searchNodes !== data.nodes) return state.searchPromise;
+      if (!source) return Promise.resolve();
+      if (state.searchPromise) return state.searchPromise;
+      if (state.searchLoaded) return Promise.resolve();
       state.searchLoading = true;
-      state.searchPromise = fetch(source, {credentials: "same-origin"}).then(function (response) {
-        if (!response.ok) throw new Error("HTTP " + response.status);
-        return response.json().then(function (index) { return {index: index, url: response.url}; });
-      }).then(function (loaded) {
-        if (!loaded.index || loaded.index.schema !== "autoform-dag-search/v1" || !Array.isArray(loaded.index.nodes))
+      state.searchPromise = fetchJSON(source).then(function (loaded) {
+        var index = loaded.payload;
+        if (!index || index.schema !== "autoform-dag-search/v1" || !Array.isArray(index.nodes))
           throw new Error("unsupported search index");
-        loaded.index.nodes.forEach(function (node, index) {
-          node._index = index;
-          if (node.url) node.url = new URL(node.url, loaded.url).href;
+        var indexed = new Map(), byHref = new Map(), before = new Map(), after = new Map();
+        var nodes = index.nodes.map(function (node, position) {
+          if (!node || typeof node.id !== "string" || typeof node.title !== "string" || indexed.has(node.id))
+            throw new Error("invalid search node");
+          var copy = Object.assign({}, node, {_index: position, url: resolveLink(node.url, loaded.url),
+            data_url: resolveLink(node.data_url, loaded.url), article_url: resolveLink(node.article_url, loaded.url)});
+          indexed.set(copy.id, copy); before.set(copy.id, []); after.set(copy.id, []);
+          if (copy.url) byHref.set(copy.url, copy);
+          return copy;
         });
-        state.searchNodes = loaded.index.nodes; state.searchCacheQuery = null; state.searchError = null;
-        refs.search.placeholder = "Search " + loaded.index.nodes.length.toLocaleString() + " roadmap entries";
+        if (index.relations !== undefined && !Array.isArray(index.relations)) throw new Error("invalid relation index");
+        (index.relations || []).forEach(function (row) {
+          if (!Array.isArray(row) || row.length !== 4 || !row.every(function (value) { return Number.isInteger(value) && value >= 0; }) ||
+              !nodes[row[0]] || !nodes[row[1]] || row[2] + row[3] <= 0) throw new Error("invalid relation endpoint");
+          before.get(nodes[row[1]].id).push([nodes[row[0]].id, row[2], row[3]]);
+          after.get(nodes[row[0]].id).push([nodes[row[1]].id, row[2], row[3]]);
+        });
+        state.searchNodes = nodes; state.searchById = indexed; state.searchByHref = byHref;
+        state.searchLoaded = true; state.workspace = state.workspace || nodes.some(function (node) { return node.data_url; });
+        state.globalBefore = before; state.globalAfter = after; state.globalRelations = index.relations || null;
+        nodes.forEach(registerContext); state.searchCacheQuery = null; state.searchError = null;
+        refs.search.placeholder = "Jump to any of " + nodes.length.toLocaleString() + " entries · title, statement or Lean name";
       }).catch(function (error) {
         state.searchError = error.message;
       }).then(function () {
@@ -1015,9 +1385,14 @@
     }
     function redirectLegacyFocus() {
       var requested = locationParams().get("node");
-      if (!requested || byId.has(requested) || !host.getAttribute("data-catalog-src")) return;
+      if (!requested || !host.getAttribute("data-catalog-src")) return;
+      if (!locationParams().has("focus") && byId.has(requested) && !host.getAttribute("data-navigation-src")) return;
+      var hrefBefore = window.location.href, version = state.requestVersion;
       ensureGlobalSearch().then(function () {
+        if (hrefBefore !== window.location.href || version !== state.requestVersion) return;
         var target = state.searchNodes.find(function (node) { return node.id === requested; });
+        if (openFocus(target, "replace", window.history.state && window.history.state.autoformExplorer)) return;
+        if (byId.has(requested)) return;
         var href = target && safeHref(target.url);
         if (href && new URL(href, window.location.href).href !== window.location.href) window.location.replace(href);
       });
@@ -1082,9 +1457,22 @@
       if (first) first.focus(); return Boolean(first);
     }
     function activateNode(node, moveCamera) {
+      cancelNavigation();
       var local = byId.get(node.id); if (local) node = local;
-      var href = safeHref(node.url);
+      var global = state.searchById.get(node.id), href = safeHref(node.context_url || node.url);
       if (node._region) { setArea(node._region, true); return; }
+      if (global && openFocus(global, "push")) return;
+      if (global && !global.result && global.data_url && openContext(global.url, "push")) return;
+      if (!global && local && node.kind === "node" && host.getAttribute("data-navigation-src")) {
+        var version = state.requestVersion, current = window.location.href;
+        ensureGlobalSearch().then(function () {
+          if (version !== state.requestVersion || current !== window.location.href || byId.get(node.id) !== node) return;
+          if (!openFocus(state.searchById.get(node.id), "push")) chooseNode(node, moveCamera);
+        }); return;
+      }
+      if (href && (node.kind === "scope" || node.kind === "boundary" || !local || node.map === false)) {
+        if (openContext(href, "push")) return;
+      }
       if (!local) { if (href) window.location.href = href; return; }
       if (node.kind === "boundary" && href) { window.location.href = href; return; }
       if ((node.kind === "scope" || node.map === false) && href) { window.location.href = href; return; }
@@ -1108,7 +1496,8 @@
     }
 
     function selectNode(node, historyMode, moveCamera) {
-      if (!node) return; if (!state.selected || state.selected.id !== node.id) state.direction = "both";
+      if (!node) return; if (historyMode) rememberView();
+      if (!state.selected || state.selected.id !== node.id) state.direction = "both";
       state.selected = node; state.activeDirty = true; state.spotlight = null;
       host.classList.add("bp-dag-has-selection"); setSheet(true);
       syncControls(); renderInspector(); renderInventory(false);
@@ -1121,6 +1510,7 @@
       else schedule();
     }
     function clearSelection(updateHistory, returnFocus) {
+      if (updateHistory) rememberView();
       var refit = state.direction !== "both", cleared = state.selected;
       state.selected = null; state.direction = "both"; state.activeDirty = true; state.spotlight = null;
       host.classList.remove("bp-dag-has-selection");
@@ -1165,6 +1555,8 @@
       state.activeDirty = true; writeLocation("replace"); refresh(true);
     }
     function setMode(mode, updateHistory) {
+      cancelNavigation(); routeMessage("");
+      if (updateHistory) rememberView();
       if (mode === "graph" && !state.mapAllowed) return;
       state.mode = mode; syncControls(); if (mode !== "graph") renderInventory(true); else schedule();
       if (mode === "list" && resultsAvailable) ensureGlobalSearch();
@@ -1202,7 +1594,7 @@
       }
       var node = state.selected, header = element("div", "bp-dag-inspector-header"), titleWrap = element("div");
       titleWrap.appendChild(element("p", "bp-dag-kicker", (node.kind === "scope" ? "Scope" :
-        node.kind === "boundary" ? "External scope" : node.declaration || "Roadmap item") + (node.area ? " · " + node.area : "")));
+        node.kind === "boundary" ? "External scope" : node.declaration || (node.catalog === "module" ? "Module inventory" : "Roadmap item")) + (node.area ? " · " + node.area : "")));
       titleWrap.appendChild(element("h2", "", node.title)); header.appendChild(titleWrap);
       var close = button("bp-dag-close", "×", "Close details"); close.addEventListener("click", function () { setSheet(false); });
       header.appendChild(close); refs.inspectorInner.appendChild(header);
@@ -1229,9 +1621,12 @@
         "This topic contains " + plural(node.member_count || 0, "roadmap item", "roadmap items") + ". Explore it to see its mathematical subtopics and dependency structure."));
       if (node.kind === "scope" && node.internal_dependency_count) refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
         plural(node.internal_dependency_count, "authored dependency connects", "authored dependencies connect") + " results inside this topic."));
-      var before = prerequisites.get(node.id) || [], after = dependents.get(node.id) || [];
+      var focused = view.focus && node.id === view.focus.id;
+      var before = focused ? (state.globalBefore.get(node.id) || []).map(function (row) { return row[0]; }) : prerequisites.get(node.id) || [];
+      var after = focused ? (state.globalAfter.get(node.id) || []).map(function (row) { return row[0]; }) : dependents.get(node.id) || [];
       var path = pathSpotlight(), beforeCount = path ? path.before.size - 1 : 0;
       var afterCount = path ? path.after.size - 1 : 0;
+      if (focused) { beforeCount = before.length; afterCount = after.length; }
       if (before.length || after.length) {
         var paths = element("section", "bp-dag-section"); paths.appendChild(element("h3", "", atlas ? "Related topics" : "Path spotlight"));
         var pivots = element("div", "bp-dag-pivots");
@@ -1259,7 +1654,7 @@
       function appendNextBatch() {
         var next = Math.min(visible + RELATION_PAGE, ids.length);
         ids.slice(visible, next).forEach(function (id) {
-          var related = byId.get(id); if (!related) return;
+          var related = byId.get(id) || state.searchById.get(id); if (!related) return;
           var item = element("li"), choose = button("bp-dag-relation-button", related.title);
         choose.addEventListener("click", function () { activateNode(related, true); }); item.appendChild(choose); list.appendChild(item);
         });
@@ -1274,7 +1669,12 @@
     function inventoryNodes() {
       var query = state.query.toLocaleLowerCase();
       var nodes;
-      if (state.mode === "sources") {
+      if (view.focus) {
+        var id = view.focus.id, ids = new Set([id]);
+        (state.globalBefore.get(id) || []).forEach(function (row) { ids.add(row[0]); });
+        (state.globalAfter.get(id) || []).forEach(function (row) { ids.add(row[0]); });
+        nodes = Array.from(ids).map(function (key) { return state.searchById.get(key); });
+      } else if (state.mode === "sources") {
         nodes = originalNodes.filter(function (node) { return /^(source|collection)$/.test(node.navigation || ""); });
         if (state.navigationData) {
           var included = new Set(nodes.map(function (node) { return node.id.replace(/^scope:/, ""); }));
@@ -1293,7 +1693,7 @@
             }));
         });
       } else nodes = originalNodes;
-      if (query) nodes = rankMatches(nodes, query).map(function (match) { return match.node; });
+      if (query && !state.workspace) nodes = rankMatches(nodes, query).map(function (match) { return match.node; });
       return nodes.filter(function (node) { return state.mode === "sources" || matchesStatus(node); });
     }
     function inScope(id) {
@@ -1318,7 +1718,7 @@
           statusLabel(node.status) + (node.area ? " · " + node.area : "")));
         if (!linkRow) row.addEventListener("click", function () { activateNode(node, true); }); item.appendChild(row); refs.inventoryList.appendChild(item);
       });
-      refs.inventoryTitle.textContent = state.mode === "sources" ? "Books and libraries" : resultsAvailable ? "Mathematical results" : "Contents of this scope";
+      refs.inventoryTitle.textContent = view.focus ? "All direct connections" : state.mode === "sources" ? "Books and libraries" : resultsAvailable ? "Mathematical results" : "Contents of this scope";
       refs.inventorySummary.textContent = visible.length + " of " + nodes.length + " listed" +
         (state.mode === "list" && state.searchLoading ? " · loading all results…" : state.searchError && (view.overview || atlas) ? " · index unavailable; showing local results" :
           state.mode === "list" && !state.mapAllowed ? " · map unavailable above " + MAX_MAP_NODES + " items" :
@@ -1335,12 +1735,12 @@
     function inventoryKey() { return state.mode + " " + Array.from(state.selectedStatuses).sort().join(); }
 
     function locationParams() { return new URLSearchParams(window.location.hash.replace(/^#/, "")); }
-    function applyLocation() {
+    function applyLocation(snapshot) {
       var params = locationParams(), node = byId.get(params.get("node")) || null, direction = params.get("direction");
       var previousArea = state.area;
       var area = params.get("area") || (node && !node._region && node.area);
       state.area = regionGroups.has(area) ? area : null;
-      state.showConnections = params.get("links") === "1" || (params.get("links") !== "0" && Boolean(regionNodes.length));
+      state.showConnections = params.get("links") !== "0";
       state.hovered = null;
       state.mapAllowed = (state.area ? regionGroups.get(state.area).length : regionNodes.length || topicNodes.length) <= MAX_MAP_NODES;
       refs.graphMode.disabled = !state.mapAllowed;
@@ -1363,14 +1763,18 @@
       } else { host.classList.remove("bp-dag-has-selection"); setSheet(false); }
       renderScopeHeading(); syncControls(); renderInspector(); renderInventory(inventoryKey() !== listed); schedule();
       if (state.mode === "list" && resultsAvailable) ensureGlobalSearch();
-      if (node) setTimeout(function () { center(node, .82); }, 0);
+      var camera = snapshot && snapshot.transform;
+      if (camera && [camera.x, camera.y, camera.scale].every(Number.isFinite) && camera.scale > 0) {
+        state.transform = {x: camera.x, y: camera.y, scale: clamp(camera.scale, MIN_SCALE, 4)}; schedule();
+      } else if (node) setTimeout(function () { if (byId.get(node.id) === node) center(node, .82); }, 0);
       else if (previousArea !== state.area) requestAnimationFrame(fit);
     }
     function writeLocation(method) {
       var params = new URLSearchParams();
       if (state.area) params.set("area", state.area);
-      if (state.showConnections !== Boolean(regionNodes.length)) params.set("links", state.showConnections ? "1" : "0");
-      if (state.selected) params.set("node", state.selected.id);
+      if (!state.showConnections) params.set("links", "0");
+      if (state.selected || view.focus) params.set("node", state.selected ? state.selected.id : view.focus.id);
+      if (view.focus) params.set("focus", "1");
       if (state.selected && state.direction !== "both") params.set("direction", state.direction);
       if (state.selectedStatuses.size !== presentStatuses.length) params.set("status",
         state.selectedStatuses.size ? Array.from(state.selectedStatuses).join(",") : "-");
@@ -1379,8 +1783,8 @@
       var hash = params.toString();
       var target = window.location.pathname + window.location.search + (hash ? "#" + hash : "");
       var current = window.location.pathname + window.location.search + window.location.hash;
-      if (target === current) return;
-      window.history[method + "State"](null, "", target);
+      var entry = Object.assign({}, window.history.state || {}); entry.autoformExplorer = viewSnapshot();
+      window.history[(target === current ? "replace" : method) + "State"](entry, "", target);
     }
 
     syncControls();

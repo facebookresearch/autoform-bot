@@ -388,8 +388,39 @@ def write_search_index(
     view: GraphView,
     *,
     context_links: Mapping[str, str],
+    data_links: Mapping[str, str] | None = None,
+    article_links: Mapping[str, str] | None = None,
 ) -> Path:
-    """Write the small global index used to jump into a hierarchical view."""
+    """Write a global search index and its compact authored relations.
+
+    Publication passes the complete, uncollapsed graph view. ``relations``
+    rows contain source and target indexes into ``nodes``, followed by the
+    statement and proof counts from that view. No containment or import edges
+    are inferred. An empty array distinguishes a supported edgeless graph
+    from an older search index without relationship data.
+
+    ``url`` remains the canonical explorer link. Optional ``data_links`` and
+    ``article_links`` provide graph-context JSON and textbook anchors,
+    respectively, without changing existing callers' links. Scope counts
+    retain their own full-view rollup, never the count of a selected result.
+    """
+    node_indexes = {node.id: index for index, node in enumerate(view.nodes)}
+    if len(node_indexes) != len(view.nodes):
+        raise ValueError("dependency search index contains duplicate node ids")
+    relation_counts: dict[tuple[int, int], list[int]] = defaultdict(lambda: [0, 0])
+    for edge in view.edges:
+        if edge.source not in node_indexes or edge.target not in node_indexes:
+            raise ValueError("dependency search index edge names an unknown node")
+        if any(type(count) is not int or count < 0 for count in (edge.statement_count, edge.proof_count)):
+            raise ValueError("dependency search index edge counts must be nonnegative integers")
+        counts = relation_counts[(node_indexes[edge.source], node_indexes[edge.target])]
+        counts[0] += edge.statement_count
+        counts[1] += edge.proof_count
+    relations = [
+        [source, target, statement, proof]
+        for (source, target), (statement, proof) in sorted(relation_counts.items())
+        if statement or proof
+    ]
     nodes: list[dict[str, object]] = []
     for node in view.nodes:
         entry = {
@@ -404,8 +435,22 @@ def write_search_index(
             entry["lean"] = node.lean
         if node.summary:
             entry["summary"] = node.summary
+        for key in ("declaration", "area", "navigation", "catalog"):
+            value = getattr(node, key)
+            if value is not None:
+                entry[key] = value
+        if node.kind == "scope":
+            entry.update(
+                member_count=node.item_count,
+                status_counts=node.status_counts,
+                internal_dependency_count=node.internal_dependency_count,
+            )
+        if data_links is not None and node.id in data_links:
+            entry["data_url"] = data_links[node.id]
+        if article_links is not None and node.id in article_links:
+            entry["article_url"] = article_links[node.id]
         nodes.append(entry)
-    return _write_json(path, {"nodes": nodes, "schema": SEARCH_SCHEMA})
+    return _write_json(path, {"nodes": nodes, "relations": relations, "schema": SEARCH_SCHEMA})
 
 
 def render_container(

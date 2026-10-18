@@ -11,10 +11,11 @@ source of graph state.
 from __future__ import annotations
 
 import json
+import posixpath
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import replace
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 from . import dag_viewer, mermaid
 from .graph import Graph
@@ -81,7 +82,32 @@ def write_graph_pages(
 
     complete = full_view(graph, statuses)
     context_links: dict[str, str] = {}
+    data_links: dict[str, str] = {}
+    article_links: dict[str, str] = {}
+
+    def linked_articles(page: Path, node_ids: Iterable[str]) -> Mapping[str, str]:
+        """Reuse the renderer's exact book anchors, without another graph-wide pass."""
+        links = node_links(page, node_ids)
+        base = "/" + quote(page.relative_to(destination).with_suffix(".html").as_posix(), safe="/")
+        index_parent = "/" + search_index.parent.relative_to(destination).as_posix()
+        for node_id, href in links.items():
+            if href.startswith("/"):
+                article_links[node_id] = href
+                continue
+            target = urlsplit(urljoin(base, href))
+            if target.scheme or target.netloc:
+                article_links[node_id] = href
+            else:
+                article_links[node_id] = urlunsplit((
+                    "", "", posixpath.relpath(target.path, index_parent), target.query, target.fragment,
+                ))
+        return links
+
     for node in complete.nodes:
+        context_page = scope_pages.get(node.id) or scope_page_path(
+            destination, node.id, parent=graph.nodes[node.id].parent
+        )
+        data_links[node.id] = _search_index_link(context_page.with_suffix(".json"), search_index)
         if node.id not in scope_pages:
             # The book's statement links the same page, so search and the book agree.
             context_links[node.id] = scope_page_href(
@@ -89,8 +115,8 @@ def write_graph_pages(
             )
             continue
         context_links[node.id] = _published_link(scope_pages[node.id], search_index)
-    dag_viewer.write_search_index(search_index, complete, context_links=context_links)
     navigation_index = destination / NAVIGATION_INDEX
+    navigation_index.parent.mkdir(parents=True, exist_ok=True)
     navigation_nodes = []
     for node in complete.nodes:
         if node.id not in containers or node.navigation == "transparent":
@@ -108,6 +134,11 @@ def write_graph_pages(
         navigation_nodes.append({
             "id": node.id, "title": node.title, "parent": parent,
             "url": context_links[node.id], "count": node.item_count,
+            "data_url": data_links[node.id],
+            "article_url": _published_link(
+                book_root if node.id == "roadmap" else destination / "roadmap" / node.id / "README.md",
+                navigation_index,
+            ),
             "source": source_branch,
             "navigation": node.navigation or "topic",
         })
@@ -123,7 +154,7 @@ def write_graph_pages(
 
     def project_links(page: Path) -> dict[str, str]:
         """Link the project view from *page*: chapters to their explorers, articles to the book."""
-        book_links = node_links(page, _article_link_ids(project))
+        book_links = linked_articles(page, _article_link_ids(project))
         links = {}
         for view_node in project.nodes:
             scope = view_node.id.removeprefix("scope:")
@@ -157,7 +188,7 @@ def write_graph_pages(
 
     for group, chapter_page in chapter_pages.items():
         view = scope_maps[group] if group in scope_maps else chapter_view(graph, statuses, group)
-        links = dict(node_links(chapter_page, _article_link_ids(view)))
+        links = dict(linked_articles(chapter_page, _article_link_ids(view)))
         for node in view.nodes:
             if node.kind == "boundary":
                 external = node.id.removeprefix("boundary:")
@@ -213,7 +244,7 @@ def write_graph_pages(
             continue
         scope_page = scope_pages[scope]
         view = scope_maps[scope]
-        links = dict(node_links(scope_page, _article_link_ids(view)))
+        links = dict(linked_articles(scope_page, _article_link_ids(view)))
         for node in view.nodes:
             if node.kind == "scope":
                 nested = node.id.removeprefix("scope:")
@@ -281,6 +312,9 @@ def write_graph_pages(
         )
     )
 
+    dag_viewer.write_search_index(
+        search_index, complete, context_links=context_links, data_links=data_links, article_links=article_links,
+    )
     return tuple(written)
 
 

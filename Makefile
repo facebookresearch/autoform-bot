@@ -11,7 +11,7 @@ test:
 test-browser:
 	uv sync --extra dev --extra browser
 	uv run --extra dev --extra browser playwright install webkit
-	AUTOFORM_REQUIRE_BROWSER_TESTS=1 uv run --extra dev --extra browser pytest -q tests/test_dag_viewer_browser.py
+	AUTOFORM_REQUIRE_BROWSER_TESTS=1 uv run --extra dev --extra browser pytest -q tests/test_dag_viewer_browser.py tests/test_continuous_explorer_browser.py
 
 lint:
 	uv run ruff check autoform_cli servers tests
