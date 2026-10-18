@@ -504,7 +504,7 @@ def _load_search_index(page: object, entries: int = 64) -> object:
     """Focus the search box and wait until the whole-roadmap index of *entries* records has loaded."""
     search = page.locator(".bp-dag-search")
     search.focus()
-    playwright.expect(search).to_have_attribute("placeholder", f"Search {entries} roadmap entries")
+    playwright.expect(search).to_have_attribute("placeholder", f"Jump to any of {entries} entries · title, statement or Lean name")
     return search
 
 
@@ -557,7 +557,7 @@ def test_all_results_include_source_book_and_direct_leaves_while_sources_remain_
     result = page.get_by_role("link", name="Curvature result", exact=False)
     result.focus()
     result.press("Enter")
-    page.wait_for_url("**/dependencies/scopes/geometry/lecture-notes.html#node=geometry%2Flecture-notes%2Fcurvature")
+    page.wait_for_url("**/dependencies/scopes/geometry/lecture-notes.html#node=geometry%2Flecture-notes%2Fcurvature&focus=1")
 
 
 def test_phone_outline_is_accessible_without_losing_global_navigation(
@@ -908,6 +908,8 @@ def test_a_plain_wheel_pans_the_full_page_explorer(desktop_page: object, explore
 
 def test_dragging_a_topic_card_pans_without_opening_it(desktop_page: object, explorer_url: str) -> None:
     page = desktop_page
+    # Measure the drag, not an optional scope-arrival camera animation.
+    page.emulate_media(reduced_motion="reduce")
     page.goto(f"{explorer_url}/atlas.html")
     page.get_by_role("button", name="Open Algebra", exact=True).click()
     node = page.locator('[data-autoform-node-id="atlas/algebra"]')
@@ -1067,7 +1069,7 @@ def test_legacy_node_hash_resolves_through_the_global_index(desktop_page: object
     with page.expect_response("**/search.json"):
         page.goto(f"{explorer_url}/app.html#node=unknown%2Fitem")
     # The placeholder changes in the same promise chain, just before the redirect decision.
-    playwright.expect(page.locator(".bp-dag-search")).to_have_attribute("placeholder", "Search 64 roadmap entries")
+    playwright.expect(page.locator(".bp-dag-search")).to_have_attribute("placeholder", "Jump to any of 64 entries · title, statement or Lean name")
     # One more task lets a redirect that decision started reach the network.
     page.evaluate("() => new Promise(done => setTimeout(done))")
     assert page.url.endswith("app.html#node=unknown%2Fitem")
@@ -1120,7 +1122,7 @@ def test_a_late_search_index_keeps_focus_and_leaves_a_closed_panel_closed(
     thirteenth = page.locator(".bp-dag-result").nth(12)
     playwright.expect(thirteenth).to_be_focused()
     _release(page, held)
-    playwright.expect(search).to_have_attribute("placeholder", "Search 64 roadmap entries")
+    playwright.expect(search).to_have_attribute("placeholder", "Jump to any of 64 entries · title, statement or Lean name")
     playwright.expect(thirteenth).to_be_focused()
     page.mouse.click(2, 2)
     playwright.expect(results).to_be_hidden()
@@ -1131,7 +1133,7 @@ def test_a_late_search_index_keeps_focus_and_leaves_a_closed_panel_closed(
     search.press("Escape")
     playwright.expect(results).to_be_hidden()
     _release(page, held)
-    playwright.expect(search).to_have_attribute("placeholder", "Search 64 roadmap entries")
+    playwright.expect(search).to_have_attribute("placeholder", "Jump to any of 64 entries · title, statement or Lean name")
     playwright.expect(results).to_be_hidden()
 
 
@@ -1431,7 +1433,7 @@ def test_a_published_chapter_explorer_links_its_textbook_chapter_and_keeps_its_h
 ) -> None:
     """Script hides the page heading and navigation behind the explorer, so the explorer carries them."""
     page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
-    playwright.expect(page.locator(".bp-dag-book")).to_have_attribute("href", "../../roadmap/algebra/index.html")
+    playwright.expect(page.locator(".bp-dag-book")).to_have_attribute("href", f"{site_url}/roadmap/algebra/index.html")
     playwright.expect(page.locator(".bp-dag-book")).to_be_visible()
     # A section's explorer carries the same link to its own page, so it names no chapter.
     playwright.expect(page.locator(".bp-dag-book")).to_have_text("Open the textbook page")

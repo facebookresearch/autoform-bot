@@ -215,6 +215,12 @@ def test_remote_search_opens_the_theorem_and_its_neighborhood_in_one_shell(
     assert search.evaluate("node => node === document.querySelector('.bp-dag-search')")
     for node_id in (BASE_ID, TARGET_ID, USE_ID):
         playwright.expect(_node(page, node_id)).to_be_visible()
+        box = _node(page, node_id).bounding_box()
+        stage = page.locator(".bp-dag-stage").bounding_box()
+        inspector = page.locator(".bp-dag-inspector").bounding_box()
+        assert box is not None and stage is not None and inspector is not None
+        assert box["x"] >= stage["x"]
+        assert box["x"] + box["width"] <= inspector["x"] - 8, "Reading panel covers a connected result"
     playwright.expect(page.locator(".bp-dag-inspector").get_by_text(TARGET_STATEMENT, exact=True)).to_be_visible()
     assert documents == []
 

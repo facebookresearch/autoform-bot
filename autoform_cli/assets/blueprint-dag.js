@@ -367,6 +367,7 @@
     function viewSnapshot() {
       return {context: state.contextHref, focus: view.focus && view.focus.id, focusLimit: state.focusLimit,
         transform: Object.assign({}, state.transform), query: state.query,
+        sheetOpen: host.classList.contains("bp-dag-sheet-open"),
         navigationScroll: refs.navigation.scrollTop, inventoryScroll: refs.inventoryScroll.scrollTop};
     }
 
@@ -489,7 +490,7 @@
           url: scope ? original.url : original.article_url || null, context_url: original.url,
           article_url: original.article_url || navigation && navigation.article_url || null,
           map: true, member_count: count, status_counts: scope && original.status_counts || [[original.status, count]], _focusLane: lane,
-          layout: {column: lane, row: Math.max(0, slot), x: lane === 0 ? 0 : lane === 1 ? 322 : 690,
+          layout: {column: lane, row: Math.max(0, slot), x: lane === 0 ? 0 : lane === 1 ? 278 : 598,
             y: lane === 1 ? centerY : Math.max(0, slot) * 84, width: lane === 1 ? 268 : 226, height: lane === 1 ? 96 : 68}});
       });
       var edges = [];
@@ -602,7 +603,7 @@
         "Arrows point from a prerequisite to a result. Solid links are used in its statement; dashed links are used in its proof."));
       refs.navigationInner.appendChild(key);
       refs.navigationInner.appendChild(element("p", "bp-dag-navigation-key-note",
-        "Open a topic to explore its mathematics. Use a card’s connections button to inspect dependencies."));
+        "Search jumps directly to a result and its connections. Topic links provide broader mathematical context."));
       syncNavigationSelection();
     }
 
@@ -1589,7 +1590,7 @@
         if (statusCounts.has("inventory_checked") || statusCounts.has("inventory_pending")) refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
           "Inventory statuses are neutral: an inventory records inspection, not a mathematical proof."));
         refs.inspectorInner.appendChild(element("p", "bp-dag-overview",
-          atlas ? "Open a region, then a topic. Connections exposes its authored prerequisites and dependents; All results includes the source-book results too." :
+          atlas ? "Search opens any result's connected neighborhood directly. Topic and outline links change the mathematical context in place." :
           "The map carries dependency topology; Map and Contents expose the same nodes as keyboard-accessible controls.")); return;
       }
       var node = state.selected, header = element("div", "bp-dag-inspector-header"), titleWrap = element("div");
@@ -1759,14 +1760,19 @@
       state.activeDirty = true; state.spotlight = null;
       if (node) {
         state.selectedStatuses.add(node.status);
-        host.classList.add("bp-dag-has-selection"); setSheet(true);
+        host.classList.add("bp-dag-has-selection");
+        setSheet(snapshot && typeof snapshot.sheetOpen === "boolean" ? snapshot.sheetOpen : !view.focus || !sheetLayout());
       } else { host.classList.remove("bp-dag-has-selection"); setSheet(false); }
       renderScopeHeading(); syncControls(); renderInspector(); renderInventory(inventoryKey() !== listed); schedule();
       if (state.mode === "list" && resultsAvailable) ensureGlobalSearch();
       var camera = snapshot && snapshot.transform;
       if (camera && [camera.x, camera.y, camera.scale].every(Number.isFinite) && camera.scale > 0) {
         state.transform = {x: camera.x, y: camera.y, scale: clamp(camera.scale, MIN_SCALE, 4)}; schedule();
-      } else if (node) setTimeout(function () { if (byId.get(node.id) === node) center(node, .82); }, 0);
+      } else if (node && view.focus) requestAnimationFrame(function () {
+        if (byId.get(node.id) !== node) return;
+        fit(); if (state.readableCrop) center(node, .82); rememberView();
+      });
+      else if (node) setTimeout(function () { if (byId.get(node.id) === node) center(node, .82); }, 0);
       else if (previousArea !== state.area) requestAnimationFrame(fit);
     }
     function writeLocation(method) {
