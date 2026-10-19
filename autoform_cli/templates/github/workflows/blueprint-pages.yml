@@ -9,6 +9,10 @@ on:
       - "mkdocs.yml"
       - "theme/**"
       - ".github/workflows/blueprint-pages.yml"
+      # A CODEOWNERS change can change whether approvals read policy-enforced.
+      - ".github/CODEOWNERS"
+      - "CODEOWNERS"
+      - "docs/CODEOWNERS"
   pull_request:
     paths:
       - "blueprint/**"
@@ -30,7 +34,93 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Builds the Lean project, which runs project code, and extracts the skeleton
+  # report, the only thing the build job takes from here.
+  lean:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out project
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Lake runs the project's build code, which must not find the token in .git/config.
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          # The build runs project code, which could poison a cache the build job restores.
+          enable-cache: false
+
+      - name: Detect statement review
+        run: |
+          set -euo pipefail
+          marker="blueprint/.autoform-review"
+          has_review_artifacts=false
+          if [[ -d blueprint/readbacks ]] || \
+            git grep -q '^[[:space:]]*review_approved[[:space:]]*:' -- blueprint/roadmap; then
+            has_review_artifacts=true
+          fi
+          if [[ -e "$marker" || -L "$marker" ]]; then
+            if [[ ! -f "$marker" || -L "$marker" ]] || \
+              ! echo "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620  $marker" \
+                | sha256sum --check --strict; then
+              echo "invalid Autoform review policy marker: $marker" >&2
+              exit 1
+            fi
+            echo "AUTOFORM_REVIEW_ENABLED=true" >> "$GITHUB_ENV"
+          elif [[ "$has_review_artifacts" == true ]]; then
+            echo "review cards or approvals exist without $marker" >&2
+            exit 1
+          fi
+
+      - name: Install elan for statement review
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            https://github.com/leanprover/elan/releases/download/v4.2.3/elan-x86_64-unknown-linux-gnu.tar.gz \
+            -o elan.tar.gz
+          echo "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2  elan.tar.gz" \
+            | sha256sum --check --strict
+          tar xzf elan.tar.gz
+          ./elan-init -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Build Lean for statement review
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        run: |
+          lake exe cache get || echo "no cache available; building from source"
+          lake build
+
+      # Exit status 1 means some declaration did not resolve; the report says
+      # which, and the build job's review check fails on it.
+      - name: Extract statement skeletons
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/autoform-skeleton"
+          status=0
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            autoform skeleton blueprint --lean-root . \
+            --output "$RUNNER_TEMP/autoform-skeleton/skeleton-report.json" || status=$?
+          if (( status > 1 )); then
+            exit "$status"
+          fi
+
+      - name: Upload the skeleton report
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: autoform-skeleton-report
+          path: ${{ runner.temp }}/autoform-skeleton/skeleton-report.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # Checks reviews, labels approvals, and builds the site from a fresh
+  # checkout, without building or running the Lean project.
   build:
+    needs: lean
     runs-on: ubuntu-latest
     steps:
       - name: Check out project
@@ -40,6 +130,8 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.12.1"
+          # Never restore what the lean job could have written.
+          enable-cache: false
 
       # Rejects cycles and dangling links, and fails when a node names a Lean
       # declaration that is not in the sources.
@@ -48,15 +140,68 @@ jobs:
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           autoform check blueprint --lean-root .
 
-      # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
-      # and permalinks into the Lean code at this exact commit.
-      - name: Render the blueprint
+      # Decided again from this checkout, not taken from the lean job.
+      - name: Detect statement review
+        run: |
+          set -euo pipefail
+          marker="blueprint/.autoform-review"
+          has_review_artifacts=false
+          if [[ -d blueprint/readbacks ]] || \
+            git grep -q '^[[:space:]]*review_approved[[:space:]]*:' -- blueprint/roadmap; then
+            has_review_artifacts=true
+          fi
+          if [[ -e "$marker" || -L "$marker" ]]; then
+            if [[ ! -f "$marker" || -L "$marker" ]] || \
+              ! echo "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620  $marker" \
+                | sha256sum --check --strict; then
+              echo "invalid Autoform review policy marker: $marker" >&2
+              exit 1
+            fi
+            echo "AUTOFORM_REVIEW_ENABLED=true" >> "$GITHUB_ENV"
+          elif [[ "$has_review_artifacts" == true ]]; then
+            echo "review cards or approvals exist without $marker" >&2
+            exit 1
+          fi
+
+      - name: Download the skeleton report
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: autoform-skeleton-report
+          path: ${{ runner.temp }}/autoform-skeleton
+
+      # The check derives its evidence from the report, which it refuses
+      # unless the report names this checkout's blueprint hash.
+      - name: Verify statement reviews
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
         run: >-
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          autoform render blueprint
-          --output site-src
-          --lean-root .
-          --require-declarations
+          autoform review check blueprint
+          --skeleton-report "$RUNNER_TEMP/autoform-skeleton/skeleton-report.json"
+
+      # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
+      # and permalinks into the Lean code at this exact commit. Only a build
+      # that publishes checks the repository's review policy, which labels the
+      # approvals (see autoform_cli/README.md).
+      - name: Render the blueprint
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+        run: |
+          set -euo pipefail
+          review_args=()
+          if [[ "${AUTOFORM_REVIEW_ENABLED:-}" == true ]]; then
+            review_args=(--review --skeleton-report "$RUNNER_TEMP/autoform-skeleton/skeleton-report.json")
+            if [[ "$PUBLISH" == true ]]; then
+              review_args+=(--policy github)
+            fi
+          fi
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" \
+            autoform render blueprint \
+            --output site-src \
+            --lean-root . \
+            --require-declarations \
+            "${review_args[@]}"
 
       - name: Build the Markdown site
         run: >-

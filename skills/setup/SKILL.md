@@ -187,6 +187,11 @@ With names the user gives, merge its rules into the first CODEOWNERS file
 GitHub reads, then require code-owner review, dismiss stale approvals, and
 audit bypasses. Report that new rules cannot protect their own activation
 unless equivalent coverage already exists on the pull request's base branch.
+When statement review is on, tell the user that approvals read
+"policy-enforced" only under default-branch rulesets (not classic branch
+protection) and a `CODEOWNERS` that owns every path, as the
+[CLI reference](../../autoform_cli/README.md#commands) states; adding them is
+their decision.
 
 After it runs, fill in what only a human or a source can supply: the project
 description in `blueprint/README.md`, the coverage contract, and a verified
