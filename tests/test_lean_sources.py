@@ -1488,7 +1488,8 @@ def test_lean_file_edited_while_it_is_read_is_named(
 
     assert edited
     assert len(binds) == 2
-    assert snapshot.index.find("edited") is not None
+    assert snapshot.index.find("edited") is None
+    assert len(snapshot.index.occurrences("edited")) == 2
 
 
 
@@ -3444,8 +3445,8 @@ def test_an_alias_is_followed_only_to_an_earlier_declaration_of_its_file(tmp_pat
 
 
 def test_a_name_filter_resolves_an_alias_as_the_unfiltered_index_does(tmp_path: Path) -> None:
-    # The unfiltered index keeps A.lean's `N.aux`, so B.lean's alias has no sure
-    # target, whether or not a request also names A.lean's `N.helper`.
+    # Each alias sees its own earlier private declaration, not whichever file
+    # the lexical index happened to scan first. Name filters preserve that.
     (tmp_path / "A.lean").write_text(
         "namespace N\nprivate theorem aux : True := trivial\ntheorem helper : True := trivial\nend N\n",
         encoding="utf-8",
@@ -3456,7 +3457,9 @@ def test_a_name_filter_resolves_an_alias_as_the_unfiltered_index_does(tmp_path: 
 
     for names in (None, ("N.good",), ("N.good", "N.helper")):
         index = index_project(tmp_path, names=names)
-        assert index.reached(index.find("N.good")) is None, names
+        target = index.reached(index.find("N.good"))
+        assert target is not None and target.path == Path("B.lean") and target.line == 2, names
+        assert target.private
 
 
 def test_anonymous_instances_are_not_mistaken_for_names(tmp_path: Path) -> None:
