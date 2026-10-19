@@ -12,6 +12,7 @@ from autoform_cli.__main__ import main
 from autoform_cli.graph import (
     GraphValidationError,
     _containment_cycles,
+    _extract_summary,
     atlas_omissions,
     catalogs_without_ledger,
     load_graph,
@@ -160,6 +161,68 @@ def test_summary_clips_a_long_paragraph_at_a_word(tmp_path: Path) -> None:
     summary = load_graph(blueprint).nodes["topic"].summary
 
     assert summary == " ".join(f"word{index}" for index in range(61)) + "…"
+
+
+@pytest.mark.parametrize(("opening", "closing"), [(r"\(", r"\)"), ("$", "$")])
+def test_summary_retreats_before_a_complete_inline_formula(tmp_path: Path, opening: str, closing: str) -> None:
+    blueprint = tmp_path / "blueprint"
+    formula = opening + "x + " * 110 + "y" + closing
+    _node(blueprint, "topic.md", f"# Identity\n\nAn exact identity {formula} holds.\n")
+
+    summary = load_graph(blueprint).nodes["topic"].summary
+
+    assert summary == "An exact identity…"
+    assert len(summary) <= 420
+
+
+def test_summary_retreats_before_display_math_that_survives_entity_decoding() -> None:
+    # Ordinary display lines are excluded, but decoded entities can leave
+    # canonical display delimiters in the reader-facing paragraph.
+    source = "A display identity &#92;[" + "x + " * 110 + "y&#92;] holds."
+    full = _extract_summary([source], {}, limit=1000)
+    assert r"\[" in full and r"\]" in full
+
+    assert _extract_summary([source], {}) == "A display identity…"
+
+
+def test_summary_omits_an_oversized_first_formula() -> None:
+    formula = r"\(" + "x + " * 110 + r"y\)"
+
+    assert _extract_summary([formula], {}) is None
+
+
+def test_summary_keeps_a_complete_formula_that_fits_the_cap() -> None:
+    formula = r"\(" + "x" * 416 + r"\)"
+
+    assert len(formula) == 420
+    assert _extract_summary([formula], {}) == formula
+
+
+@pytest.mark.parametrize(
+    ("offset", "kept"),
+    [(0, "Intro"), (1, "Intro"), (2, "Intro"), (6, "Intro"), (7, r"Intro\(x+y\)")],
+)
+def test_summary_does_not_split_inline_math_delimiter_edges(offset: int, kept: str) -> None:
+    source = r"Intro\(x+y\)" + "tail" * 20
+    limit = len("Intro") + offset + 1
+
+    summary = _extract_summary([source], {}, limit=limit)
+
+    assert summary == kept + "…"
+    assert len(summary) <= limit
+
+
+@pytest.mark.parametrize(
+    ("prefix", "limit", "expected"),
+    [
+        (r"Intro\(unclosed ", 32, "Intro(unclosed word word word…"),
+        (r"Intro\(outer \(inner\) ", 22, "Intro\\(outer…"),
+    ],
+)
+def test_summary_preserves_malformed_math_source_behavior(prefix: str, limit: int, expected: str) -> None:
+    source = prefix + "word " * 20
+
+    assert _extract_summary([source], {}, limit=limit) == expected
 
 
 def test_authored_atlas_manifest_groups_nodes_independently_of_paths(tmp_path: Path) -> None:

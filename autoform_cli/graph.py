@@ -722,7 +722,26 @@ def _extract_summary(body: list[str], references: dict[str, str], *, limit: int 
     if len(summary) <= limit:
         return summary
     clipped = summary[: limit - 1].rsplit(" ", 1)[0]
-    return (clipped or summary[: limit - 1]).rstrip() + "…"
+    clipped = (clipped or summary[: limit - 1]).rstrip()
+    # A word boundary can still bisect TeX or either two-character delimiter.
+    # Retreat only inside a complete, non-nested canonical math span; do not
+    # guess a closing delimiter for malformed source or rewrite its formula.
+    start = 0
+    closing = None
+    valid = False
+    for token in re.finditer(r"(?<!\\)\\[()[\]]", summary):
+        character = token.group()[1]
+        if closing is None:
+            if character in "([":
+                start, closing, valid = token.start(), {"(": ")", "[": "]"}[character], True
+        elif character == closing:
+            if valid and start < len(clipped) < token.end():
+                prefix = summary[:start].rstrip()
+                return prefix + "…" if prefix else None
+            closing = None
+        else:
+            valid = False
+    return clipped + "…"
 
 
 def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], int, list[str]]:
