@@ -1947,6 +1947,11 @@ def test_a_root_several_files_declare_fails_closed_naming_every_file(tmp_path: P
         (project / "Skel" / f"{module}.lean").write_text(
             f"namespace Skel\n{prefix}theorem dup : {value} := sorry\nend Skel\n", encoding="utf-8"
         )
+    index = index_project(project, names=("Skel.dup",))
+    assert index.find("Skel.dup") is None
+    assert {item.path.as_posix() for item in index.occurrences("Skel.dup")} == {
+        "Skel/Adup.lean", "Skel/Bdup.lean", "Skel/Cdup.lean",
+    }
     blueprint = _blueprint(tmp_path, lean={"dup": "Skel.dup"})
     if passage == "broken":
         article = blueprint / "roadmap" / "basics" / "dup.md"

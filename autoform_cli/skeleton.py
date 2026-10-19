@@ -2318,14 +2318,17 @@ def locate_declaration(
     """The module that builds ``name``, or ``None`` and the reason no module does."""
 
     location = index.find(name)
+    files = {item.path.as_posix() for item in index.occurrences(name)}
+    files.update(path.as_posix() for path in index.elsewhere.get(name, ()))
+    if len(files) > 1:
+        # Even when the public-name index selects nothing, every lexical
+        # occurrence must be named and no ambiguous module may be probed.
+        return None, f"several source files declare it: {', '.join(sorted(files))}"
     if location is None:
+        ambiguity = index.ambiguity(name)
+        if ambiguity:
+            return None, f"ambiguous declaration in the Lean sources: {ambiguity}"
         return None, "declaration not found in the Lean sources"
-    if name in index.elsewhere:
-        # The lexical index cannot tell which of several declarations Lean binds
-        # a name to (one may be private, or in a file no target builds), so the
-        # name fails closed.
-        files = sorted(path.as_posix() for path in (location.path, *index.elsewhere[name]))
-        return None, f"several source files declare it: {', '.join(files)}"
     module = module_of(lean_root / location.path, libraries)
     if module is None:
         return None, f"source {location.path.as_posix()} is not built by any library target"

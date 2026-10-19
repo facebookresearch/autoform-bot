@@ -521,7 +521,6 @@ def _lean_findings(
             )
         ]
     index = snapshot.index
-    spans = _source_spans(index)
     sizes: dict[str, int] = {}
     sources = _captured_source_lines(snapshot.source_files)
     catalogs: dict[str, tuple[Declaration, ...]] = {}
@@ -610,7 +609,7 @@ def _lean_findings(
             )
 
         if resolved:
-            sizes[node_id] = sum(spans[body.name] for body in bodies)
+            sizes[node_id] = sum(_source_span(index, body) for body in bodies)
 
     findings.extend(_size_findings(graph, sizes))
     if warnings is not None:
@@ -785,6 +784,14 @@ def _catalog_limit_warnings(
     return warnings
 
 
+def _source_span(index: SourceIndex, declaration: Declaration) -> int:
+    """Measure the exact occurrence, including a private target reached by an alias."""
+    lines = index.declaration_lines[declaration.path]
+    following = bisect_right(lines, declaration.line)
+    end = lines[following] - 1 if following < len(lines) else index.line_counts.get(declaration.path, 0)
+    return max(1, end - declaration.line + 1)
+
+
 def _source_spans(index: SourceIndex) -> dict[str, int]:
     """Measure each declaration's source span, up to the next declaration in its file.
 
@@ -792,13 +799,7 @@ def _source_spans(index: SourceIndex) -> dict[str, int]:
     article, it is what the node actually cost once it was formalized.
     """
 
-    spans: dict[str, int] = {}
-    for declaration in index.declarations.values():
-        lines = index.declaration_lines[declaration.path]
-        following = bisect_right(lines, declaration.line)
-        end = lines[following] - 1 if following < len(lines) else index.line_counts.get(declaration.path, 0)
-        spans[declaration.name] = max(1, end - declaration.line + 1)
-    return spans
+    return {declaration.name: _source_span(index, declaration) for declaration in index.declarations.values()}
 
 
 def _size_findings(graph: Graph, sizes: dict[str, int]) -> list[AuditFinding]:

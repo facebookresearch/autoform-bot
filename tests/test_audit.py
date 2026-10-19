@@ -1128,9 +1128,9 @@ def test_a_source_span_does_not_depend_on_the_names_a_filter_admits(tmp_path: Pa
 
 
 def test_an_alias_s_limits_do_not_depend_on_the_names_other_articles_request(tmp_path: Path) -> None:
-    # Unfiltered, the index keeps A.lean's `N.aux` and cannot place B.lean's
-    # alias, so it reads no limit for it; an article naming `N.helper` must
-    # not change that.
+    # The globally ambiguous private name selects nothing, but B.lean's alias
+    # reaches its earlier private target. Its source span and unbounded limit
+    # must be read from that exact occurrence under every name filter.
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     _article(blueprint, "good.md", declaration="theorem", statement="formalized", proof="formalized", lean="N.good")
@@ -1141,13 +1141,25 @@ def test_an_alias_s_limits_do_not_depend_on_the_names_other_articles_request(tmp
         encoding="utf-8",
     )
     (lean_root / "B.lean").write_text(
-        "namespace N\nset_option maxHeartbeats 0 in\nprivate theorem aux : True := trivial\nalias good := aux\nend N\n",
+        "namespace N\nset_option maxHeartbeats 0 in\nprivate theorem aux : True := by\n  trivial\nalias good := aux\nend N\n",
         encoding="utf-8",
     )
 
-    assert audit_blueprint(blueprint, lean_root=lean_root).findings == ()
+    for names in (None, ("N.good",), ("N.good", "N.helper")):
+        index = index_project(lean_root, names=names)
+        assert index.find("N.aux") is None
+        target = index.reached(index.find("N.good"))
+        assert target is not None and target.path == Path("B.lean") and target.line == 3 and target.private
+        assert audit_module._source_span(index, target) == 2
+
+    findings = audit_blueprint(blueprint, lean_root=lean_root).findings
+    (finding,) = findings
+    assert finding.code == "lean-target-unbounded-limit"
+    assert finding.article_path == "roadmap/good.md"
+    assert "lean target N.aux has no maxHeartbeats limit" in finding.reason
+    assert "at B.lean:2" in finding.reason
     _article(blueprint, "helper.md", declaration="theorem", statement="formalized", proof="formalized", lean="N.helper")
-    assert audit_blueprint(blueprint, lean_root=lean_root).findings == ()
+    assert audit_blueprint(blueprint, lean_root=lean_root).findings == findings
 
 
 def test_an_alias_ends_the_source_span_of_the_declaration_above_it(tmp_path: Path) -> None:

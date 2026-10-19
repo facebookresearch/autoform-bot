@@ -388,24 +388,28 @@ def _navigation_children(
     owners: dict[str, str] = {}
 
     def own_subtree(node_id: str, owner: str) -> None:
-        owners[node_id] = owner
-        for child in children.get(node_id, ()):
-            own_subtree(child, owner)
+        pending = [node_id]
+        while pending:
+            current = pending.pop()
+            owners[current] = owner
+            pending.extend(reversed(children.get(current, ())))
 
-    def visit(node_id: str, collection: str | None = None) -> None:
+    # _containment_children has checked that this is a forest. Explicit stacks
+    # keep both role flattening and ownership finite beyond Python's call-depth
+    # limit, while reversed pushes preserve the authored sibling order.
+    pending: list[tuple[str, str | None]] = [(child, None) for child in reversed(children[scope])]
+    while pending:
+        node_id, collection = pending.pop()
         if graph.nodes[node_id].navigation in {"collection", "transparent"} and node_id in children:
             owner = collection or node_id
             if collection is None:
                 collections.append(node_id)
             owners[node_id] = owner
-            for child in children[node_id]:
-                visit(child, owner)
+            pending.extend((child, owner) for child in reversed(children[node_id]))
         else:
             visible.append(node_id)
             own_subtree(node_id, node_id)
 
-    for child in children[scope]:
-        visit(child)
     return tuple(visible), tuple(collections), owners
 
 
