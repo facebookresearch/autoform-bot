@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import status
 from .coverage import CoverageSummary, load_coverage, validate_coverage_roles
+from .dag_viewer import MAX_MAP_NODES
 from .elaboration_limits import LimitSetting, limits_by_line, limits_in_force
 from .graph import (
     IMPLEMENTATION_NOTES_DIR,
@@ -54,6 +55,9 @@ _MAX_DIRECT_CHILDREN = 24
 #: A repository-wide subject index is itself a table of contents and can be
 #: wider than a readable mathematical chapter while remaining navigable.
 _MAX_ROOT_CHILDREN = 64
+#: A module page lists one Lean module's declarations, so its width is the
+#: module's; it may hold as many as the explorer still draws as a map.
+_MAX_MODULE_CHILDREN = MAX_MAP_NODES
 
 #: A node is reported as oversized only once its finished Lean work clears both
 #: an absolute floor and a large multiple of this project's own median. The
@@ -319,7 +323,12 @@ def audit_graph(
             and bool(children)
             and all(graph.nodes[child].path.name == "README.md" for child in children)
         )
-        child_limit = _MAX_ROOT_CHILDREN if repository_subject_index else _MAX_DIRECT_CHILDREN
+        if repository_subject_index:
+            child_limit = _MAX_ROOT_CHILDREN
+        elif node.navigation == "module":
+            child_limit = _MAX_MODULE_CHILDREN
+        else:
+            child_limit = _MAX_DIRECT_CHILDREN
         if len(children) > child_limit:
             findings.append(
                 AuditFinding(

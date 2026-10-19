@@ -786,7 +786,7 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
                 f"frontmatter key {key!r}"
             )
 
-    if metadata.get("navigation") in {"collection", "source", "transparent"} and "declaration" in metadata:
+    if metadata.get("navigation") in {"collection", "source", "transparent", "module"} and "declaration" in metadata:
         issues.append(f"{node_id}: 'navigation' describes containers, not declaration articles")
 
     if metadata.get("statement") == _RETRACTED:
@@ -829,8 +829,8 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
             return value, f"{location}: 'catalog' accepts only 'module'"
         return folded, None
     if key == "navigation":
-        if folded not in {"topic", "collection", "source", "transparent"}:
-            return value, f"{location}: 'navigation' accepts topic, collection, source, or transparent"
+        if folded not in {"topic", "collection", "source", "transparent", "module"}:
+            return value, f"{location}: 'navigation' accepts topic, collection, source, transparent, or module"
         return folded, None
     if key == "statement":
         if folded not in {_FORMALIZED, _RETRACTED}:

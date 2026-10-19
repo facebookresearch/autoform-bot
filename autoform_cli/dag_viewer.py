@@ -302,6 +302,12 @@ def write_payload(
         node for node in view.nodes
         if not view.overview or (node.kind == "scope" and node.navigation not in {"collection", "source", "transparent"})
     )
+    if view.overview and not map_nodes:
+        # An overview whose children are only a source book, or pagination
+        # parts of leaves, would otherwise draw nothing.
+        map_nodes = tuple(
+            node for node in view.nodes if node.kind != "boundary" and node.navigation != "transparent"
+        )
     map_ids = frozenset(node.id for node in map_nodes)
     map_view = replace(view, nodes=map_nodes, edges=tuple(
         edge for edge in view.edges if edge.source in map_ids and edge.target in map_ids

@@ -106,7 +106,7 @@ def test_shared_outline_skips_collections_but_keeps_source_book_routes_and_canon
     assert all(node["result"] for node in search["nodes"] if node["kind"] == "node")
 
 
-@pytest.mark.parametrize("role", ("topic", "collection", "source", "transparent"))
+@pytest.mark.parametrize("role", ("topic", "collection", "source", "transparent", "module"))
 def test_navigation_roles_load_as_presentation_metadata(tmp_path: Path, role: str) -> None:
     roadmap = tmp_path / "roadmap"
     roadmap.mkdir()
@@ -114,10 +114,61 @@ def test_navigation_roles_load_as_presentation_metadata(tmp_path: Path, role: st
     assert load_graph(tmp_path).nodes["roadmap"].navigation == role
 
 
-@pytest.mark.parametrize("metadata", ("navigation: guess-from-directory", "navigation: collection\ndeclaration: theorem"))
+@pytest.mark.parametrize("metadata", (
+    "navigation: guess-from-directory",
+    "navigation: collection\ndeclaration: theorem",
+    "navigation: module\ndeclaration: theorem",
+))
 def test_invalid_roles_cannot_hide_a_mathematical_declaration(tmp_path: Path, metadata: str) -> None:
     roadmap = tmp_path / "roadmap"
     roadmap.mkdir()
     (roadmap / "README.md").write_text(f"---\n{metadata}\n---\n# Geometry\n")
     with pytest.raises(GraphValidationError, match="navigation"):
         load_graph(tmp_path)
+
+
+def _overview_payload(tmp_path: Path, nodes: dict[str, Node], scope: str) -> dict:
+    graph = Graph(tmp_path, nodes)
+    view = scope_view(graph, derive(graph), scope)
+    assert view.overview
+    output = tmp_path / "view.json"
+    dag_viewer.write_payload(output, view, links={})
+    return json.loads(output.read_text())
+
+
+def test_an_overview_of_pagination_parts_of_leaves_maps_the_leaves(tmp_path: Path) -> None:
+    nodes: dict[str, Node] = {}
+
+    def add(node_id: str, parent: str | None = None, **facts: object) -> None:
+        nodes[node_id] = Node(node_id, node_id, tmp_path / f"{node_id}.md", (), parent=parent, **facts)
+
+    add("roadmap")
+    add("roadmap/module", "roadmap")
+    for part in ("part-01", "part-02"):
+        add(f"roadmap/module/{part}", "roadmap/module", navigation="transparent")
+        for index in range(2):
+            add(f"roadmap/module/{part}/result-{index}", f"roadmap/module/{part}", declaration="theorem")
+
+    payload = _overview_payload(tmp_path, nodes, "roadmap/module")
+
+    assert sorted(node["id"] for node in payload["nodes"] if node["map"]) == [
+        f"roadmap/module/{part}/result-{index}" for part in ("part-01", "part-02") for index in range(2)
+    ]
+    assert all("layout" in node for node in payload["nodes"] if node["map"])
+
+
+def test_an_overview_whose_only_child_is_a_source_book_maps_the_book(tmp_path: Path) -> None:
+    nodes: dict[str, Node] = {}
+
+    def add(node_id: str, parent: str | None = None, **facts: object) -> None:
+        nodes[node_id] = Node(node_id, node_id, tmp_path / f"{node_id}.md", (), parent=parent, **facts)
+
+    add("roadmap")
+    add("roadmap/chapter", "roadmap")
+    add("roadmap/chapter/book", "roadmap/chapter", navigation="source")
+    add("roadmap/chapter/book/result", "roadmap/chapter/book", declaration="theorem")
+
+    payload = _overview_payload(tmp_path, nodes, "roadmap/chapter")
+
+    assert [node["id"] for node in payload["nodes"] if node["map"]] == ["scope:roadmap/chapter/book"]
+

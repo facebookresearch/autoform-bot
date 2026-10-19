@@ -120,6 +120,9 @@ An optional container-only `navigation` role makes that distinction explicit:
   topic navigation and omitted from the outline and ancestor breadcrumbs.
 - `source`: a book or other source corpus, available through **Sources** rather
   than presented as a peer mathematical concept.
+- `module`: a container that mirrors one Lean source module and holds its
+  declarations. It navigates like a topic, and its size is the module's (see
+  [Structure](#structure)).
 
 These roles never change article identity, containment, proof readiness, or
 dependency edges. A relation mentioning a collection itself stays attached to
@@ -210,7 +213,7 @@ An article asserts only facts a human or agent verified:
 | Key | Meaning |
 | --- | --- |
 | `area: Geometry & Topology` | Authored mathematical region for atlas grouping. CI's `autoform check` at an older `AUTOFORM_REF` rejects the key, so move the pin first, or assign the area in `blueprint/atlas.json`, which older refs ignore. |
-| `navigation: collection` | Presentation-only container role: `topic`, `collection`, `transparent`, or `source`. Collections and pagination are transparent in mathematical navigation; books/libraries remain source facets. Older pins reject this key. |
+| `navigation: collection` | Presentation-only container role: `topic`, `collection`, `transparent`, `source`, or `module`. Collections and pagination are transparent in mathematical navigation; books/libraries remain source facets. Older pins reject this key. |
 | `catalog: module` | A non-dispatchable leaf cataloging one existing Lean module. Its `lean:` lists the module's public keyword-declared names, and it links its declaration ledger under `blueprint/sources/` from `## Sources`; cannot be combined with `declaration` or the `mathlib*` keys. CI's `autoform check` at an older `AUTOFORM_REF` rejects the key, so move the pin first. |
 | `statement: formalized` | The Lean statement exists and compiles. Requires `lean:`. |
 | `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. CI's `autoform check` at an older `AUTOFORM_REF` rejects the marker, so move the pin first; until then, retract by removing `statement` and `proof` and keeping `lean:`. |
@@ -1296,6 +1299,8 @@ example uses) are a filing convention inside a chapter and are not checked.
 children, which is a table of contents rather than a chapter. A roadmap root
 whose direct children are all chapter pages is a repository-wide subject index
 and may hold 64; one root-level leaf returns the root to the 24-article limit.
+A `navigation: module` page lists one Lean module's declarations, so it may
+hold as many as the dependency explorer draws as a map, 120.
 Both defects leave a valid graph, which is why they need their own checks
 rather than falling out of `autoform check`.
 

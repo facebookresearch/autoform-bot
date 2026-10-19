@@ -1707,6 +1707,28 @@ def test_audit_reports_a_container_holding_too_many_articles(tmp_path: Path) -> 
     ]
 
 
+@pytest.mark.parametrize(("leaves", "clean"), [(120, True), (121, False)])
+def test_audit_lets_a_module_page_hold_as_many_articles_as_the_explorer_maps(
+    tmp_path: Path, leaves: int, clean: bool
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    _article(blueprint, "module/README.md", depends=False, navigation="module")
+    for index in range(leaves):
+        _article(blueprint, f"module/unit-{index:03d}.md", declaration="theorem")
+
+    findings = _finding_map(blueprint).get("roadmap/module/README.md", [])
+
+    assert findings == ([] if clean else [
+        (
+            "overfull-container",
+            "article directly contains 121 articles, more than the 120-article limit; "
+            "group them into chapters",
+        )
+    ])
+
+
 def test_audit_allows_a_wide_repository_subject_index(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
