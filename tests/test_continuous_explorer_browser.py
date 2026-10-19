@@ -7,12 +7,15 @@ existing WebKit suite, including its optional-extra and required-CI policy.
 
 from __future__ import annotations
 
+import hashlib
 import html
+import os
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
+from urllib.request import urlopen
 
 import pytest
 
@@ -33,6 +36,15 @@ TARGET_LEAN = "Review.Geometry.distanceBound"
 TARGET_STATEMENT = "Every finite set of distinct points has a strictly positive minimum pairwise distance."
 USE_ID = "Applications/Optimization/separation"
 USE_TITLE = "Separated configuration theorem"
+MATH_TITLE = "Theorem (Crystallographic Restriction)"
+MATH_STATEMENT = (
+    r"Let $L \neq \{0\}.$ Then $\overline{G} = C_n$ or $D_n$, "
+    r"where $n = 1, 2, 3, 4,$ or $6.$"
+)
+MATH_TEX = (r"L \neq \{0\}.", r"\overline{G} = C_n", "D_n", "n = 1, 2, 3, 4,", "6.")
+MATHJAX_URL = "https://cdn.jsdelivr.net/npm/mathjax-full@3.2.2/es5/tex-svg.js"
+MATHJAX_BYTES = 2_108_580
+MATHJAX_SHA256 = "d4295dc33744836935c1399feece5159577b34c5c8ffb9f1c6324cd82e03a882"
 
 
 @dataclass(frozen=True)
@@ -44,7 +56,24 @@ class _ReviewSite:
         return f"{self.url}/dependencies.html"
 
 
-def _write_review_site(directory: Path) -> Path:
+@dataclass(frozen=True)
+class _MathReviewSite(_ReviewSite):
+    title: str
+    tex: tuple[str, ...]
+
+    @property
+    def mathjax(self) -> str:
+        return f"{self.url}/mathjax/tex-svg.js"
+
+
+def _write_review_site(
+    directory: Path,
+    *,
+    target_statement: str = TARGET_STATEMENT,
+    target_title: str = TARGET_TITLE,
+    statements: Mapping[str, str] | None = None,
+    scope_statements: Mapping[str, str] | None = None,
+) -> Path:
     """Publish production graph pages, wrapping their hosts in minimal HTML."""
     blueprint = directory / "blueprint"
     roadmap = blueprint / "roadmap"
@@ -65,11 +94,12 @@ def _write_review_site(directory: Path) -> Path:
         metadata = f"---\narea: {area}\n---\n\n" if area else ""
         if node_id == "Geometry/Distance/Finite/page-1":
             metadata = "---\narea: Geometry\nnavigation: transparent\n---\n\n"
-        path.write_text(f"{metadata}# {title}\n\nMathematics in {title.lower()}.\n", encoding="utf-8")
+        description = (scope_statements or {}).get(node_id, f"Mathematics in {title.lower()}.")
+        path.write_text(f"{metadata}# {title}\n\n{description}\n", encoding="utf-8")
 
     articles = (
         (BASE_ID, BASE_TITLE, "def", "Review.metricAxioms", "A metric separates distinct points.", ()),
-        (TARGET_ID, TARGET_TITLE, "theorem", TARGET_LEAN, TARGET_STATEMENT, (BASE_ID,)),
+        (TARGET_ID, target_title, "theorem", TARGET_LEAN, target_statement, (BASE_ID,)),
         (
             "Geometry/Distance/Finite/page-1/paginated-result", "Paginated distance theorem", "theorem",
             "Review.Geometry.paginatedDistance", "A paginated result retains its mathematical context.", (BASE_ID,),
@@ -78,6 +108,10 @@ def _write_review_site(directory: Path) -> Path:
             USE_ID, USE_TITLE, "theorem", "Review.Optimization.separation",
             "A finite configuration admits a positive separation radius.", (TARGET_ID,),
         ),
+    )
+    articles = tuple(
+        (node_id, title, declaration, lean, (statements or {}).get(node_id, statement), dependencies)
+        for node_id, title, declaration, lean, statement, dependencies in articles
     )
     for node_id, title, declaration, lean, statement, dependencies in articles:
         path = roadmap / f"{node_id}.md"
@@ -154,6 +188,67 @@ def continuous_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Revie
         yield _ReviewSite(url)
 
 
+@pytest.fixture(scope="module")
+def mathjax_bundle(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """One bounded, verified real runtime; CI may provide an offline mirror."""
+    mirror = os.environ.get("AUTOFORM_MATHJAX_BUNDLE")
+    try:
+        if mirror:
+            with Path(mirror).open("rb") as stream:
+                content = stream.read(MATHJAX_BYTES + 1)
+        else:
+            with urlopen(MATHJAX_URL, timeout=20) as response:
+                content = response.read(MATHJAX_BYTES + 1)
+    except OSError as error:
+        if browser_regressions._REQUIRED or mirror:
+            pytest.fail(f"Pinned MathJax runtime unavailable: {error}")
+        pytest.skip(f"Pinned MathJax unavailable; set AUTOFORM_MATHJAX_BUNDLE: {error}")
+    if len(content) != MATHJAX_BYTES or hashlib.sha256(content).hexdigest() != MATHJAX_SHA256:
+        pytest.fail("Pinned MathJax runtime has an unexpected size or SHA256")
+    bundle = tmp_path_factory.mktemp("mathjax-runtime") / "tex-svg.js"
+    bundle.write_bytes(content)
+    return bundle
+
+
+def _math_site_directory(
+    directory: Path, bundle: Path, *, title: str, statement: str,
+) -> Path:
+    site = _write_review_site(
+        directory,
+        target_title=title,
+        target_statement=statement,
+        statements={USE_ID: "A separated lattice has point group $G$."},
+        scope_statements={"Geometry": "A lattice $L$ organizes discrete symmetries."},
+    )
+    asset = site / "mathjax/tex-svg.js"
+    asset.parent.mkdir(parents=True)
+    asset.write_bytes(bundle.read_bytes())
+    return site
+
+
+@pytest.fixture(scope="module")
+def math_site(tmp_path_factory: pytest.TempPathFactory, mathjax_bundle: Path) -> Iterator[_MathReviewSite]:
+    directory = _math_site_directory(
+        tmp_path_factory.mktemp("mathematical-explorer"), mathjax_bundle,
+        title=MATH_TITLE, statement=MATH_STATEMENT,
+    )
+    with browser_regressions._served(directory) as url:
+        yield _MathReviewSite(url, MATH_TITLE, MATH_TEX)
+
+
+@pytest.fixture(scope="module")
+def literal_math_site(
+    tmp_path_factory: pytest.TempPathFactory, mathjax_bundle: Path
+) -> Iterator[_MathReviewSite]:
+    title = "Literal prices and a mathematical assumption"
+    directory = _math_site_directory(
+        tmp_path_factory.mktemp("literal-mathematical-explorer"), mathjax_bundle,
+        title=title, statement=r"Literal prices are \$5 and \$6; suppose $n \neq 0$.",
+    )
+    with browser_regressions._served(directory) as url:
+        yield _MathReviewSite(url, title, (r"n \neq 0",))
+
+
 @pytest.fixture()
 def continuous_page(webkit_browser: object) -> Iterator[object]:
     with browser_regressions._page(
@@ -182,10 +277,10 @@ def _record_documents(page: object) -> list[str]:
     return requests
 
 
-def _search_target(page: object) -> None:
+def _search_target(page: object, title: str = TARGET_TITLE) -> None:
     search = page.locator(".bp-dag-search")
     search.fill(TARGET_LEAN)
-    result = page.locator(".bp-dag-result", has_text=TARGET_TITLE)
+    result = page.locator(".bp-dag-result", has_text=title)
     playwright.expect(result).to_be_visible()
     result.click()
     _expect_focus(page, TARGET_ID)
@@ -430,3 +525,230 @@ def test_a_delayed_context_does_not_override_a_newer_navigation_intent(
     playwright.expect(page.locator(".bp-dag-scope-title")).to_have_text(expected_title)
     assert search.evaluate("node => node === document.querySelector('.bp-dag-search')")
     assert documents == []
+
+
+def _load_math_engine(page: object, site: _MathReviewSite, *, hold_startup: bool = False) -> None:
+    page.evaluate(
+        r"""hold => {
+          let release;
+          const gate = new Promise(resolve => { release = resolve; });
+          window.__releaseMathStartup = release;
+          window.MathJax = {
+            tex: {inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']]},
+            options: {enableMenu: false},
+            svg: {fontCache: 'local'},
+            startup: {typeset: false}
+          };
+          if (hold) MathJax.startup.ready = function () {
+            MathJax.startup.defaultReady();
+            MathJax.startup.promise = MathJax.startup.promise.then(() => gate);
+          };
+        }""",
+        arg=hold_startup,
+    )
+    page.add_script_tag(url=site.mathjax)
+    page.wait_for_function("() => window.MathJax && typeof MathJax.typesetPromise === 'function'")
+    # Instrument public APIs, retaining their genuine MathJax implementations.
+    # The reject switch is fault injection, never substitute rendered output.
+    page.evaluate(
+        """() => {
+          const original = MathJax.typesetPromise.bind(MathJax);
+          const clear = MathJax.typesetClear.bind(MathJax);
+          const trace = window.__mathTrace = {calls: [], clears: 0, active: 0, maximum: 0, reject: false};
+          MathJax.typesetPromise = function (elements) {
+            const roots = elements ? Array.from(elements) : [];
+            trace.calls.push({count: roots.length, scoped: roots.length > 0 && roots.every(node =>
+              node instanceof Element && node !== document.body && node !== document.documentElement &&
+              !!node.closest('.bp-dag-viewer'))});
+            trace.active++; trace.maximum = Math.max(trace.maximum, trace.active);
+            let result;
+            try { result = trace.reject ? Promise.reject(new Error('Intentional renderer failure')) : original(elements); }
+            catch (error) { result = Promise.reject(error); }
+            return Promise.resolve(result).finally(() => { trace.active--; });
+          };
+          MathJax.typesetClear = function (elements) { trace.clears++; return clear(elements); };
+        }"""
+    )
+    if not hold_startup:
+        page.evaluate("() => MathJax.startup.promise")
+
+
+def _math_stats(page: object) -> dict[str, object]:
+    return page.evaluate(
+        """() => {
+          const items = Array.from(MathJax.startup.document.math);
+          return {items: items.length, detached: items.filter(item =>
+            item.typesetRoot && !item.typesetRoot.isConnected).length,
+            calls: __mathTrace.calls.length, active: __mathTrace.active, maximum: __mathTrace.maximum,
+            scoped: __mathTrace.calls.every(call => call.scoped), clears: __mathTrace.clears};
+        }"""
+    )
+
+
+def _math_idle(page: object) -> None:
+    _frames(page)
+    page.wait_for_function(
+        "() => __mathTrace.active === 0 && Array.from(MathJax.startup.document.math).every(item => "
+        "!item.typesetRoot || item.typesetRoot.isConnected)"
+    )
+    _frames(page)
+
+
+def _assert_rendered_math(page: object, tex: tuple[str, ...]) -> None:
+    for selector in (".bp-dag-focus-statement", ".bp-dag-inspector .bp-dag-summary"):
+        surface = page.locator(selector)
+        output = surface.locator('mjx-container[jax="SVG"]')
+        playwright.expect(output).to_have_count(len(tex), timeout=15000)
+        playwright.expect(output.first).to_be_visible()
+        assert output.locator("svg").count() == len(tex)
+        assert surface.locator('[data-mml-node="merror"]').count() == 0
+        actual = surface.evaluate(
+            "node => Array.from(MathJax.startup.document.math).filter(item => "
+            "item.typesetRoot && node.contains(item.typesetRoot)).map(item => item.math)"
+        )
+        assert actual == list(tex), "Rendering changed the canonical theorem formula"
+    _math_idle(page)
+    stats = _math_stats(page)
+    assert stats["scoped"] and stats["maximum"] <= 1
+    assert stats["detached"] == 0
+
+
+def test_real_mathjax_renders_the_reported_statement_after_topic_and_focus_navigation(
+    continuous_page: object, math_site: _MathReviewSite
+) -> None:
+    page = continuous_page
+    _open(page, math_site)
+    _load_math_engine(page, math_site)
+    documents = _record_documents(page)
+    # startup.typeset=false rules out an initial whole-document pass masking
+    # missing hooks on either the topic transition or the later theorem jump.
+    assert page.evaluate("MathJax.config.startup.typeset") is False
+    page.locator(".bp-dag-navigation").get_by_role("link", name="Geometry", exact=True).click()
+    playwright.expect(page.locator('.bp-dag-scope-description mjx-container[jax="SVG"]')).to_have_count(1)
+    _search_target(page, math_site.title)
+    _assert_rendered_math(page, math_site.tex)
+    assert documents == []
+
+
+def test_a_math_engine_loaded_after_focus_typesets_both_existing_reading_surfaces(
+    continuous_page: object, math_site: _MathReviewSite
+) -> None:
+    page = continuous_page
+    _open(page, math_site)
+    _search_target(page, math_site.title)
+    playwright.expect(page.locator(".bp-dag-focus-statement mjx-container")).to_have_count(0)
+    playwright.expect(page.locator(".bp-dag-focus-statement")).to_contain_text(r"\(L \neq \{0\}.\)")
+    _load_math_engine(page, math_site)
+    _assert_rendered_math(page, math_site.tex)
+
+
+def test_math_api_becoming_available_after_startup_needs_no_second_script_load(
+    continuous_page: object, math_site: _MathReviewSite
+) -> None:
+    page = continuous_page
+    _open(page, math_site)
+    _load_math_engine(page, math_site)
+    _math_idle(page)
+    page.evaluate(
+        """() => {
+          const render = MathJax.typesetPromise;
+          let release;
+          const gate = new Promise(resolve => { release = resolve; });
+          window.__releaseLateMathAPI = release;
+          MathJax.typesetPromise = undefined;
+          MathJax.startup.promise = gate.then(() => { MathJax.typesetPromise = render; });
+        }"""
+    )
+    _search_target(page, math_site.title)
+    playwright.expect(page.locator(".bp-dag-focus-statement mjx-container")).to_have_count(0)
+    playwright.expect(page.locator(".bp-dag-focus-statement")).to_contain_text(r"\(L \neq \{0\}.\)")
+    assert page.evaluate("typeof MathJax.typesetPromise") == "undefined"
+    # Restore the captured real/spied API solely by resolving startup.promise.
+    # No script tag, load event or explicit typesetting call wakes the viewer.
+    page.evaluate("__releaseLateMathAPI()")
+    _assert_rendered_math(page, math_site.tex)
+
+
+def test_delayed_mathjax_startup_typesets_the_current_context_after_pivot_and_back(
+    continuous_page: object, math_site: _MathReviewSite
+) -> None:
+    page = continuous_page
+    _open(page, math_site)
+    _load_math_engine(page, math_site, hold_startup=True)
+    documents = _record_documents(page)
+    _search_target(page, math_site.title)
+    page.locator(".bp-dag-inspector").get_by_role("button", name=USE_TITLE, exact=True).click()
+    _expect_focus(page, USE_ID)
+    page.evaluate("history.back()")
+    _expect_focus(page, TARGET_ID)
+    playwright.expect(page.locator(".bp-dag-focus-statement mjx-container")).to_have_count(0)
+    assert _math_stats(page)["calls"] == 0, "Typesetting ran before the startup promise resolved"
+    page.evaluate("__releaseMathStartup()")
+    _assert_rendered_math(page, math_site.tex)
+    assert documents == []
+
+
+def test_literal_markdown_dollars_stay_prose_beside_genuine_rendered_math(
+    continuous_page: object, literal_math_site: _MathReviewSite
+) -> None:
+    page = continuous_page
+    _open(page, literal_math_site)
+    _load_math_engine(page, literal_math_site)
+    _search_target(page, literal_math_site.title)
+    _assert_rendered_math(page, literal_math_site.tex)
+    for selector in (".bp-dag-focus-statement", ".bp-dag-inspector .bp-dag-summary"):
+        playwright.expect(page.locator(selector)).to_contain_text("Literal prices are $5 and $6; suppose")
+
+
+@pytest.mark.parametrize("engine", ("missing", "rejecting"))
+def test_optional_math_renderer_failure_preserves_text_and_cross_topic_navigation(
+    continuous_page: object, math_site: _MathReviewSite, engine: str
+) -> None:
+    page = continuous_page
+    _open(page, math_site)
+    if engine == "rejecting":
+        _load_math_engine(page, math_site)
+        page.evaluate("__mathTrace.reject = true")
+    documents = _record_documents(page)
+    search = page.locator(".bp-dag-search").element_handle()
+    _search_target(page, math_site.title)
+    playwright.expect(page.locator(".bp-dag-focus-statement mjx-container")).to_have_count(0)
+    playwright.expect(page.locator(".bp-dag-focus-statement")).to_contain_text(r"\(\overline{G} = C_n\)")
+    if engine == "rejecting":
+        page.wait_for_function("() => __mathTrace.calls.length > 0 && __mathTrace.active === 0")
+    page.locator(".bp-dag-inspector").get_by_role("button", name=USE_TITLE, exact=True).click()
+    _expect_focus(page, USE_ID)
+    assert search.evaluate("node => node === document.querySelector('.bp-dag-search')")
+    assert documents == []
+
+
+def test_repeated_math_pivots_clear_detached_items_and_resize_preserves_cached_header(
+    continuous_page: object, math_site: _MathReviewSite
+) -> None:
+    page = continuous_page
+    _open(page, math_site)
+    _load_math_engine(page, math_site)
+    _search_target(page, math_site.title)
+    _assert_rendered_math(page, math_site.tex)
+    baseline = _math_stats(page)
+    for _ in range(4):
+        previous_calls = _math_stats(page)["calls"]
+        page.locator(".bp-dag-inspector").get_by_role("button", name=USE_TITLE, exact=True).click()
+        _expect_focus(page, USE_ID)
+        _assert_rendered_math(page, ("G",))
+        page.evaluate("history.back()")
+        _expect_focus(page, TARGET_ID)
+        _assert_rendered_math(page, math_site.tex)
+        stats = _math_stats(page)
+        assert stats["items"] == baseline["items"]
+        assert stats["calls"] - previous_calls <= 4, "One pivot/back caused unbounded retypesetting"
+    header = page.locator(".bp-dag-focus-statement").element_handle()
+    stable = _math_stats(page)
+    page.set_viewport_size({"width": 1500, "height": 1000})
+    _math_idle(page)
+    assert header.evaluate("node => node === document.querySelector('.bp-dag-focus-statement')")
+    page.get_by_role("button", name="Zoom in", exact=True).click()
+    _math_idle(page)
+    final = _math_stats(page)
+    assert final["calls"] == stable["calls"], "Resize or camera movement retypeset unchanged prose"
+    assert final["clears"] > 0

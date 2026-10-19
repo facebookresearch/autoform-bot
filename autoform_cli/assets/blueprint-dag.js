@@ -8,11 +8,75 @@
   var SEARCH_PAGE = 50, RELATION_PAGE = 50, MIN_SCALE = .002, MIN_READABLE_SCALE = .8, MIN_ATLAS_SCALE = .68, hostSequence = 0;
   var clamp = function (value, low, high) { return Math.max(low, Math.min(high, value)); };
   var plural = function (count, one, many) { return count + " " + (count === 1 ? one : many); };
+  var pendingMath = new Set(), mathItems = new Set(), mathScheduled = false, mathRunning = false, mathReadyPromise = null;
+
+  function clearDetachedMath(mathjax) {
+    var detached = Array.from(mathItems).filter(function (node) { return !node.isConnected; });
+    if (!detached.length) return;
+    if (typeof mathjax.typesetClear === "function") {
+      try { mathjax.typesetClear(detached); } catch (_error) { /* Math is optional; navigation must remain usable. */ }
+    }
+    detached.forEach(function (node) { mathItems.delete(node); });
+  }
+
+  function scheduleMath() {
+    if (mathScheduled || (!pendingMath.size && !Array.from(mathItems).some(function (node) { return !node.isConnected; }))) return;
+    mathScheduled = true;
+    requestAnimationFrame(function () {
+      mathScheduled = false;
+      pendingMath.forEach(function (node) { if (!node.isConnected) pendingMath.delete(node); });
+      if (mathRunning) return;
+      var mathjax = window.MathJax;
+      if (!mathjax || typeof mathjax.typesetPromise !== "function") {
+        var ready = mathjax && mathjax.startup && mathjax.startup.promise;
+        if (ready && typeof ready.then === "function" && ready !== mathReadyPromise) {
+          mathReadyPromise = ready;
+          Promise.resolve(ready).then(scheduleMath, function () { /* Leave a failed startup as readable TeX. */ });
+        }
+        return;
+      }
+      var batch = Array.from(pendingMath); pendingMath.clear(); mathRunning = true;
+      Promise.resolve(mathjax.startup && mathjax.startup.promise).then(function () {
+        clearDetachedMath(mathjax);
+        batch = batch.filter(function (node) { return node.isConnected; });
+        batch.forEach(function (node) { mathItems.add(node); });
+        return batch.length ? mathjax.typesetPromise(batch) : null;
+      }).catch(function () { /* Keep the original TeX visible if the optional renderer fails. */ }).then(function () {
+        clearDetachedMath(mathjax); mathRunning = false;
+        var hosts = new Set();
+        batch.forEach(function (node) {
+          var host = node.isConnected && node.closest(".bp-dag-viewer"); if (host) hosts.add(host);
+        });
+        hosts.forEach(function (host) { host.dispatchEvent(new Event("autoform-math-typeset")); });
+        scheduleMath();
+      });
+    });
+  }
+
+  function mathematicalText(node, text) {
+    node.textContent = text;
+    if (typeof text !== "string" || /^(CODE|PRE)$/.test(node.tagName)) return;
+    // visible_prose preserves formulas as canonical delimiters, but literal
+    // Markdown \$ loses its escape. Typeset only the formulas, never prose dollars.
+    node.classList.add("mathjax_ignore");
+    var spans = /\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g, match, offset = 0;
+    while ((match = spans.exec(text))) {
+      if (!offset) node.textContent = "";
+      if (match.index > offset) node.appendChild(document.createTextNode(text.slice(offset, match.index)));
+      var math = document.createElement("span"); math.className = "arithmatex mathjax_process bp-dag-math";
+      math.textContent = match[0]; node.appendChild(math); pendingMath.add(math);
+      offset = spans.lastIndex;
+    }
+    if (offset) {
+      if (offset < text.length) node.appendChild(document.createTextNode(text.slice(offset)));
+      scheduleMath();
+    }
+  }
 
   function element(tag, className, text) {
     var node = document.createElement(tag);
     if (className) node.className = className;
-    if (text !== undefined) node.textContent = text;
+    if (text !== undefined) mathematicalText(node, text);
     return node;
   }
 
@@ -676,6 +740,11 @@
 
     function renderScopeHeading() {
       if (!refs.scopeHead) return;
+      var layout = host.getAttribute("data-layout");
+      if (refs.scopeGraph === data && refs.scopeArea === state.area && refs.scopeLayout === layout) {
+        refs.main.style.setProperty("--dag-scope-head-height", refs.scopeHead.offsetHeight + "px"); return;
+      }
+      refs.scopeGraph = data; refs.scopeArea = state.area; refs.scopeLayout = layout;
       refs.scopeHead.textContent = "";
       if (view.focus) {
         var broad = element("a", "bp-dag-region-back", "← Show surrounding topic"), target = new URL(state.contextHref);
@@ -823,6 +892,8 @@
         }
       });
       if (window.ResizeObserver) new ResizeObserver(resize).observe(refs.stage); else window.addEventListener("resize", resize);
+      host.addEventListener("autoform-math-typeset", resize);
+      new MutationObserver(scheduleMath).observe(host, {childList: true, subtree: true});
       window.addEventListener("resize", syncSheetAccessibility);
       new MutationObserver(schedule).observe(document.body, {attributes: true, attributeFilter: ["data-md-color-scheme"]});
     }
@@ -1802,5 +1873,10 @@
   }
 
   function boot() { document.querySelectorAll(".bp-dag-viewer[data-graph-src]").forEach(start); }
+  // A page may load MathJax after the graph, including through an async script.
+  document.addEventListener("load", function (event) {
+    if (event.target && event.target.tagName === "SCRIPT") scheduleMath();
+  }, true);
+  window.addEventListener("load", scheduleMath);
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();
