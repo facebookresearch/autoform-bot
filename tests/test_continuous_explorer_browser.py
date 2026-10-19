@@ -600,7 +600,9 @@ def _assert_rendered_math(page: object, tex: tuple[str, ...]) -> None:
         output = surface.locator('mjx-container[jax="SVG"]')
         playwright.expect(output).to_have_count(len(tex), timeout=15000)
         playwright.expect(output.first).to_be_visible()
-        assert output.locator("svg").count() == len(tex)
+        # Stretchy accents can contain nested SVGs; each expression has one
+        # direct output SVG, not necessarily one SVG anywhere in its subtree.
+        assert output.locator(":scope > svg").count() == len(tex)
         assert surface.locator('[data-mml-node="merror"]').count() == 0
         actual = surface.evaluate(
             "node => Array.from(MathJax.startup.document.math).filter(item => "

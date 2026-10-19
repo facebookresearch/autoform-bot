@@ -433,11 +433,12 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
     )
 
     # In-place scope routing, bounded theorem neighborhoods, global search and
-    # history restoration share one dependency-free runtime. The extra routing
-    # replaces repeated page/asset loads; still bound parsing and transfer cost.
+    # history restoration share one runtime. Scoped typesetting reuses the
+    # page's optional MathJax engine and adds about 1 KiB compressed; keep both
+    # parsing and transfer budgets bounded alongside the existing payload caps.
     runtime = dag_viewer.viewer_script().encode()
-    assert len(runtime) < 110_000
-    assert len(gzip.compress(runtime)) < 28_000
+    assert len(runtime) < 115_000
+    assert len(gzip.compress(runtime)) < 29_000
     assert output.stat().st_size < 300_000
     assert search.stat().st_size < 100_000
     search_payload = json.loads(search.read_text(encoding="utf-8"))
