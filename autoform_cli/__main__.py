@@ -81,6 +81,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="immutable ref the workflows pin (default: this checkout's HEAD commit)",
     )
     init.add_argument("--force", action="store_true", help="overwrite files that already exist")
+    init.add_argument(
+        "--no-verify-workflow",
+        action="store_true",
+        help="write the verify workflow as a stub that keeps its name and triggers but builds and audits nothing; "
+        "init keeps it from then on",
+    )
     init.add_argument("--json", action="store_true", help="write stable machine-readable output")
 
     check = subparsers.add_parser("check", help="validate a Markdown blueprint")
@@ -516,6 +522,7 @@ def _init(args: argparse.Namespace) -> int:
             autoform_source=args.autoform_source,
             autoform_ref=args.autoform_ref,
             force=args.force,
+            verify_workflow=not args.no_verify_workflow,
         )
     except ScaffoldError as error:
         for issue in error.issues:
@@ -528,10 +535,13 @@ def _init(args: argparse.Namespace) -> int:
 
     print(f"{target}: {len(result.written)} files written")
     for path in result.written:
-        print(f"  + {path}")
+        print(f"  + {path}" + (" (verification turned off)" if path == result.verify_workflow_off else ""))
     for path in result.skipped:
         needs_pin = result.unpinned and path != ".github/CODEOWNERS.autoform.example" and ".github" in path
-        note = "no Autoform ref to pin" if needs_pin else "exists, left alone"
+        if path == result.verify_workflow_off:
+            note = "verification turned off on purpose, kept"
+        else:
+            note = "no Autoform ref to pin" if needs_pin else "exists, left alone"
         print(f"  = {path} ({note})")
     print("Next: describe the project in blueprint/README.md, then add chapters "
           "as roadmap/<chapter>/README.md.")

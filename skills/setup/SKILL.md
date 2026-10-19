@@ -148,7 +148,9 @@ not copy the bundled example: the layout is fixed, and a chapter written as a
 sibling file instead of `<chapter>/README.md` still validates while publishing
 a book with no chapters. `init` preserves existing files, appending only missing
 Autoform rules through a retained bounded regular root `.gitignore` file, so it
-is also the repair path; it reports what it left alone. See the
+is also the repair path; it reports what it left alone. When the generated
+verify workflow cannot fit the project, `init --no-verify-workflow` turns it off
+for good. See the
 [CLI reference](../../autoform_cli/README.md#commands) for its flags.
 
 `init` pins the generated workflows to the Autoform commit that ran it, using a

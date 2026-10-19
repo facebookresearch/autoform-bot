@@ -194,6 +194,17 @@ autoform init . --title "Finite Flat Group Schemes" \
 
 Pass `--autoform-ref <sha>` to pin the generated workflows at an immutable
 commit, `--force` to overwrite, and `--json` for machine-readable output.
+Pass `--no-verify-workflow` when the generated verify workflow cannot fit the
+project, for example when several Lake projects back one roadmap or the
+project's own CI already builds it. `init` then writes
+`.github/workflows/autoform-verify.yml` as a stub that keeps the workflow's
+name, triggers and job but only reports that verification is turned off, so a
+required check or the Pages deploy that waits on it still runs. It replaces a
+verify workflow already there. From then on `init`, with or without `--force`,
+keeps a file at that path that carries the stub's first line; delete the file
+and run `init` to get the verify workflow back. `init` still writes
+`.github/autoform_audit.py`, which runs the same kernel-trust audit after the
+project's own build, as the end of [Open statements](#open-statements) shows.
 An existing root `.gitignore` must be a bounded single-link regular file;
 missing Autoform rules are appended through one retained descriptor. If an
 append cannot be fully reverified, the error says it may be partial and the
