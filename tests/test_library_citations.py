@@ -106,9 +106,18 @@ def _consumer(
     return library.project
 
 
+#: How this check's warnings start. check also warns about what render would refuse, such as a link or
+#: an unreadable file in the blueprint, which several cases here create on purpose.
+_OWN_WARNINGS = ("warning: library ", "warning: the project's Lake files")
+
+
+def _warnings(out: str) -> list[str]:
+    return [line for line in out.splitlines() if line.startswith(_OWN_WARNINGS)]
+
+
 def _check(project: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, list[str]]:
     status = main(["check", str(project / "blueprint"), "--lean-root", str(project)])
-    return status, [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning:")]
+    return status, _warnings(capsys.readouterr().out)
 
 
 def _warning(
@@ -337,7 +346,7 @@ def test_a_sources_folder_that_cannot_be_searched_never_raises(
 
     out = capsys.readouterr().out.splitlines()
     if beside:  # the folder hides its page, so the declaration is still reported
-        assert (status, [line for line in out if line.startswith("warning:")]) == (0, [_warning()])
+        assert (status, _warnings("\n".join(out))) == (0, [_warning()])
     else:  # check's own index build walks the blueprint too, and names the folder
         assert status == 1 and out[-1].startswith("error: Lean sources could not be indexed: permission denied")
 
@@ -789,7 +798,7 @@ def test_a_lean_root_written_with_a_tilde_is_read_like_any_other(
     project = _consumer(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     assert main(["check", str(project / "blueprint"), "--lean-root", "~/project"]) == 0
-    assert [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning:")] == [_warning()]
+    assert _warnings(capsys.readouterr().out) == [_warning()]
 
     manifest = project / "lake-manifest.json"
     manifest.write_text(json.dumps({**json.loads(manifest.read_text(encoding="utf-8")), "lakeDir": "_lake"}))
@@ -903,4 +912,4 @@ def test_a_symlinked_lean_root_is_compared_like_its_target(
         pytest.skip("symlinks are unavailable")
 
     assert main(["check", str(project / "blueprint"), "--lean-root", str(link)]) == 0
-    assert [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning:")] == [_warning()]
+    assert _warnings(capsys.readouterr().out) == [_warning()]
