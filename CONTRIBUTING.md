@@ -68,6 +68,10 @@ Complete your CLA here: <https://code.facebook.com/cla>
 We use GitHub issues to track public bugs. Please ensure your description is
 clear and has sufficient instructions to be able to reproduce the issue.
 
+Open an issue for a failure you hit on `main`, or for a decision the
+maintainers need to make. Findings from a pull request review stay in that pull
+request's thread.
+
 Meta has a [bounty program](https://bugbounty.meta.com/) for the safe
 disclosure of security bugs. In those cases, please go through the process
 outlined on that page and do not file a public issue.

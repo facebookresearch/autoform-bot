@@ -16,8 +16,30 @@ workflow and cross-file maintenance.
 - Treat declining, closing, deleting, or replacing a proposal as a successful
   engineering outcome when it removes duplication, obsolete machinery, or
   needless repository state. Preserve genuinely reusable insight in the owning
-  skill or a focused issue. Remove the inferior artifact only when authorized;
-  otherwise recommend its closure or removal.
+  skill. Remove the inferior artifact only when authorized; otherwise recommend
+  its closure or removal.
+
+## Flow
+
+- Agents do not merge. A maintainer merges a pull request once CI is green and
+  the latest review at its head commit has no blocking finding.
+- At most 8 agent pull requests are open at once, drafts included, and a stack
+  is at most 2 deep. A session opens no new pull request while one of its own
+  awaits changes. Start on an issue or file area only when no open pull request
+  already covers it.
+- Review a pull request once, at its final head; a second round only checks that
+  the first round's blockers were fixed. Label each finding "Blocks merge" or
+  "Note". Notes stay in the pull request thread. A merged pull request gets at
+  most one follow-up pull request, and nobody reviews or polishes merged work
+  unless a maintainer asks.
+- Open an issue only for a failure a user or CI hit, a maintainer's request, or
+  a decision only a maintainer can make, and never against code that is not on
+  `main`. When a pull request fixes an issue's core, write "Fixes #N" and post
+  the leftovers as a comment on the issue.
+- A pull request description states the problem, why it matters, the change,
+  and how it was tested.
+- Surface freeze: until a maintainer lifts it, add no new command, flag, JSON
+  key, or schema, except to fix a reported failure or at a maintainer's request.
 
 ## Repository invariants
 
