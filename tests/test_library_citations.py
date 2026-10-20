@@ -122,6 +122,11 @@ def _warning(
     )
 
 
+def _stop(issue: str) -> str:
+    """Name what check reports because render refuses to publish it."""
+    return f"warning: {issue}; autoform render stops until this is fixed"
+
+
 def _note(project: Path, text: str, number: int = 0) -> None:
     notes = project / "blueprint/.implementation-notes"
     notes.mkdir(exist_ok=True)
@@ -295,15 +300,19 @@ def test_a_source_page_no_article_links_still_records_a_declaration(
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (elsewhere / "gauss.md").write_text(record, encoding="utf-8")
+    links: list[str] = []
     try:
         (sources / "linked.md").symlink_to(elsewhere / "gauss.md")
+        links.append("linked.md")
         (sources / "linked").symlink_to(elsewhere, target_is_directory=True)
+        links.append("linked")
     except OSError:
         pass  # without symlinks, the other cases still run
-    assert _check(project, capsys) == (0, [_warning()])
+    stops = [_stop(f"refusing symlink in blueprint publication: sources/{link}") for link in sorted(links)]
+    assert _check(project, capsys) == (0, [_warning(), *stops])
 
     (sources / "gauss/theorem-2.md").write_text(f"`{_THEOREM}` states r(n) only for n > 0.\n", encoding="utf-8")
-    assert _check(project, capsys) == (0, [])
+    assert _check(project, capsys) == (0, stops)
 
 
 def test_a_sources_folder_that_is_a_link_is_not_read(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -316,7 +325,7 @@ def test_a_sources_folder_that_is_a_link_is_not_read(tmp_path: Path, capsys: pyt
     except OSError:
         pytest.skip("symlinks are unavailable")
 
-    assert _check(project, capsys) == (0, [_warning()])
+    assert _check(project, capsys) == (0, [_warning(), _stop("refusing symlink in blueprint publication: sources")])
 
 
 @_UNREADABLE
@@ -337,7 +346,10 @@ def test_a_sources_folder_that_cannot_be_searched_never_raises(
 
     out = capsys.readouterr().out.splitlines()
     if beside:  # the folder hides its page, so the declaration is still reported
-        assert (status, [line for line in out if line.startswith("warning:")]) == (0, [_warning()])
+        assert (status, [line for line in out if line.startswith("warning:")]) == (
+            0,
+            [_warning(), _stop("blueprint could not be captured: permission denied: sources/gauss")],
+        )
     else:  # check's own index build walks the blueprint too, and names the folder
         assert status == 1 and out[-1].startswith("error: Lean sources could not be indexed: permission denied")
 
@@ -349,7 +361,16 @@ def test_a_named_pipe_among_the_source_pages_is_not_read(tmp_path: Path, capsys:
     sources.mkdir(parents=True)
     os.mkfifo(sources / "scratch.md")
 
-    assert _check(project, capsys) == (0, [_warning()])
+    assert _check(project, capsys) == (
+        0,
+        [
+            _warning(),
+            _stop(
+                "refusing non-regular blueprint publication input: sources/scratch.md: "
+                "named pipe is not a regular file or directory"
+            ),
+        ],
+    )
 
 
 def test_only_a_linked_markdown_page_adds_to_what_an_article_cites(
@@ -858,7 +879,10 @@ def test_a_source_page_that_cannot_be_read_cites_nothing(tmp_path: Path, capsys:
     page.write_text("arXiv:2307.05244\n", encoding="utf-8")
     page.chmod(0)
     try:
-        assert _check(project, capsys) == (0, [])
+        assert _check(project, capsys) == (
+            0,
+            [_stop("blueprint could not be captured: permission denied: sources/gauss.md")],
+        )
     finally:
         page.chmod(0o644)
 
