@@ -23,6 +23,13 @@ codex plugin marketplace add facebookresearch/autoform-bot --ref main
 codex plugin add autoform@autoform
 ```
 
+**Muse Code**
+
+```bash
+muse plugins marketplace add autoform https://github.com/facebookresearch/autoform-bot.git
+muse plugins install autoform@autoform
+```
+
 After installing, start a new session in the repository you want to inspect or
 set up.
 
