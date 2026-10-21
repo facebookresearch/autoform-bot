@@ -131,7 +131,8 @@ def test_type_uses_impact_statements_and_theorem_values_impact_proofs() -> None:
 def test_module_import_impact_reports_reverse_import_scope_without_blocking() -> None:
     records = {
         "Demo.Base.value": _rec("Demo.Base.value", module="Demo.Base"),
-        "Demo.Base.helper": _rec("Demo.Base.helper", module="Demo.Base"),
+        # Demo.Mid holds no article's declaration, so its helper has no owner.
+        "Demo.Mid.helper": _rec("Demo.Mid.helper", module="Demo.Mid"),
         "Demo.Use.result": _rec("Demo.Use.result", module="Demo.Use"),
         "Demo.Down.result": _rec("Demo.Down.result", module="Demo.Down"),
         "Demo.Other.result": _rec("Demo.Other.result", module="Demo.Other"),
@@ -140,6 +141,7 @@ def test_module_import_impact_reports_reverse_import_scope_without_blocking() ->
         "Demo.Base": ModuleEvidence("Demo.Base", "/project/Demo/Base.lean"),
         "Demo.Use": ModuleEvidence("Demo.Use", "/project/Demo/Use.lean", ("Demo.Base",)),
         "Demo.Down": ModuleEvidence("Demo.Down", "/project/Demo/Down.lean", ("Demo.Use",)),
+        "Demo.Mid": ModuleEvidence("Demo.Mid", "/project/Demo/Mid.lean", ("Demo.Base",)),
         "Demo.Other": ModuleEvidence("Demo.Other", "/project/Demo/Other.lean"),
     }
     articles = (
@@ -159,7 +161,7 @@ def test_module_import_impact_reports_reverse_import_scope_without_blocking() ->
         lean_source_revision="sources",
     )
 
-    assert report.affected_modules == ("Demo.Base", "Demo.Down", "Demo.Use")
+    assert report.affected_modules == ("Demo.Base", "Demo.Down", "Demo.Mid", "Demo.Use")
     assert [(article.id, article.modules) for article in report.affected_articles] == [
         ("base", ("Demo.Base",)),
         ("down", ("Demo.Down",)),
@@ -171,13 +173,13 @@ def test_module_import_impact_reports_reverse_import_scope_without_blocking() ->
         for helper in report.affected_unowned_helpers
     ] == [
         (
-            "Demo.Base.helper",
-            "Demo.Base",
-            _lean_key("Demo.Base.helper"),
-            claims.author_claim_key(_lean_key("Demo.Base.helper")),
+            "Demo.Mid.helper",
+            "Demo.Mid",
+            _lean_key("Demo.Mid.helper"),
+            claims.author_claim_key(_lean_key("Demo.Mid.helper")),
         )
     ]
-    assert report.affected_claim_targets == ("af_use", "down", _lean_key("Demo.Base.helper"))
+    assert report.affected_claim_targets == ("af_use", "down", _lean_key("Demo.Mid.helper"))
     assert report.module_claim_key == claims.author_claim_key(report.module_claim_target)
     assert report.claim_keys == tuple(claims.author_claim_key(target) for target in report.claim_targets)
     assert report.affected_claim_keys == tuple(
@@ -328,19 +330,23 @@ def test_module_import_impact_lists_articles_through_the_helpers_they_own() -> N
 
 
 def test_module_import_impact_is_not_article_local_with_an_unowned_helper() -> None:
+    # Demo is the library root: no article names a declaration there, so its helper has no owner.
     records = {
-        "Demo.main": _rec("Demo.main"),
+        "Demo.Sel.main": _rec("Demo.Sel.main", module="Demo.Sel"),
         "Demo.helper": _rec("Demo.helper"),
     }
-    modules = {"Demo": ModuleEvidence("Demo", "/project/Demo.lean")}
-    selected = ImpactArticle("chapter/sel", None, ("Demo.main",))
+    modules = {
+        "Demo.Sel": ModuleEvidence("Demo.Sel", "/project/Demo/Sel.lean"),
+        "Demo": ModuleEvidence("Demo", "/project/Demo.lean", ("Demo.Sel",)),
+    }
+    selected = ImpactArticle("chapter/sel", None, ("Demo.Sel.main",))
 
-    report = compute_module_import_impact(records, modules, (selected,), selected, "Demo", source_revision="rev")
+    report = compute_module_import_impact(records, modules, (selected,), selected, "Demo.Sel", source_revision="rev")
     assert report.affected_claim_targets == (_lean_key("Demo.helper"),)
     assert report.article_local is False
 
     alone = compute_module_import_impact(
-        {"Demo.main": records["Demo.main"]}, modules, (selected,), selected, "Demo", source_revision="rev"
+        {"Demo.Sel.main": records["Demo.Sel.main"]}, modules, (selected,), selected, "Demo.Sel", source_revision="rev"
     )
     assert alone.article_local is True
     assert (
@@ -352,11 +358,16 @@ def test_module_import_impact_is_not_article_local_with_an_unowned_helper() -> N
 def test_import_closure_scope_owns_records_by_name_prefix_even_without_the_parent_loaded() -> None:
     # Demo.Foo is declared in a module the narrowed probe did not load, so the
     # lemma's loaded parent is missing; the article naming Demo.Foo still owns it.
+    # The lemma sits in a module no article names declarations in, so no article
+    # owns it as a module-mate either.
     records = {
-        "Demo.Foo.lemma": _rec("Demo.Foo.lemma", module="Demo.B"),
+        "Demo.Foo.lemma": _rec("Demo.Foo.lemma", module="Demo.C"),
         "Demo.B.main": _rec("Demo.B.main", module="Demo.B"),
     }
-    modules = {"Demo.B": ModuleEvidence("Demo.B", "/project/Demo/B.lean")}
+    modules = {
+        "Demo.B": ModuleEvidence("Demo.B", "/project/Demo/B.lean"),
+        "Demo.C": ModuleEvidence("Demo.C", "/project/Demo/C.lean", ("Demo.B",)),
+    }
     articles = (
         ImpactArticle("chapter/sel", None, ("Demo.B.main",)),
         ImpactArticle("chapter/x", "af_x", ("Demo.Foo",)),
@@ -387,6 +398,50 @@ def test_import_closure_scope_is_never_article_local() -> None:
 
     assert report.selected_affected is True
     assert report.article_local is False
+
+
+def test_module_import_impact_gives_a_helper_to_the_one_article_of_its_module() -> None:
+    # A worker's helpers beside its article's declarations are its own, public or private.
+    records = {
+        "Demo.Sel.main": _rec("Demo.Sel.main", module="Demo.Sel"),
+        "Demo.Sel.helper": _rec("Demo.Sel.helper", module="Demo.Sel"),
+        "_private.Demo.Sel.0.Demo.Sel.aux": _rec(
+            "_private.Demo.Sel.0.Demo.Sel.aux", module="Demo.Sel", user_name="Demo.Sel.aux"
+        ),
+        "Demo.X.main": _rec("Demo.X.main", module="Demo.X"),
+        "Demo.X.helper": _rec("Demo.X.helper", module="Demo.X"),
+        "Demo.Shared.a": _rec("Demo.Shared.a", module="Demo.Shared"),
+        "Demo.Shared.b": _rec("Demo.Shared.b", module="Demo.Shared"),
+        "Demo.Shared.helper": _rec("Demo.Shared.helper", module="Demo.Shared"),
+    }
+    modules = {
+        "Demo.Sel": ModuleEvidence("Demo.Sel", "/project/Demo/Sel.lean"),
+        "Demo.X": ModuleEvidence("Demo.X", "/project/Demo/X.lean", ("Demo.Sel",)),
+        "Demo.Shared": ModuleEvidence("Demo.Shared", "/project/Demo/Shared.lean", ("Demo.Sel",)),
+    }
+    articles = (
+        ImpactArticle("chapter/sel", None, ("Demo.Sel.main",)),
+        ImpactArticle("chapter/x", "af_x", ("Demo.X.main",)),
+        ImpactArticle("chapter/a", "af_a", ("Demo.Shared.a",)),
+        ImpactArticle("chapter/b", "af_b", ("Demo.Shared.b",)),
+    )
+
+    own = compute_module_import_impact(
+        {name: records[name] for name in records if name.startswith(("Demo.Sel", "_private"))},
+        {"Demo.Sel": modules["Demo.Sel"]},
+        articles[:1],
+        articles[0],
+        "Demo.Sel",
+        source_revision="rev",
+    )
+    assert own.affected_unowned_helpers == ()
+    assert own.article_local is True
+
+    report = compute_module_import_impact(records, modules, articles, articles[0], "Demo.Sel", source_revision="rev")
+    # Another article's helper makes that article affected, not a helper key of its own;
+    # a module several articles share keeps its helpers unowned, since which one owns them is unknown.
+    assert [helper.name for helper in report.affected_unowned_helpers] == ["Demo.Shared.helper"]
+    assert report.affected_claim_targets == ("af_a", "af_b", "af_x", _lean_key("Demo.Shared.helper"))
 
 
 def test_constructor_edges_carry_an_inductive_s_meaning() -> None:

@@ -118,10 +118,14 @@ make it `true`. It is `false` outside a Git work tree or when Git fails.
 `autoform claim list --worker-id WORKER` given those targets.
 `affected_articles` lists each article that names, or owns through the parent
 chain, a declaration in an affected module, with those `modules`, and
-`selected_affected` says whether the selected article is one.
-`unresolved_articles` reports local declarations absent from the loaded
-environment without blocking unrelated edits, and each
-`affected_unowned_helpers` entry carries its own claim target and key.
+`selected_affected` says whether the selected article is one. A declaration with
+no owner through the parent chain belongs to the one article that names
+declarations in its module, when exactly one does, so a worker's own helpers,
+public or private, count as its article's. `unresolved_articles` reports local
+declarations absent from the loaded environment without blocking unrelated
+edits, and each `affected_unowned_helpers` entry, a declaration in a module that
+no article, or several, name declarations in, carries its own claim target and
+key.
 `article_local` holds only when `selected_affected` does,
 `affected_claim_targets` is empty, and no other article has unresolved
 declarations.

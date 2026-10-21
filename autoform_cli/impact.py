@@ -1308,9 +1308,23 @@ def compute_module_import_impact(
 
     # An article also owns, through the parent chain, the helpers it names no
     # declaration for, such as a structure's API lemmas in a later module.
+    # A helper with no such owner belongs to its module's article when exactly
+    # one article names declarations in that module: a worker's own helpers
+    # beside its article's declarations are its own, public or private.
+    module_articles: dict[str, set[str]] = {}
+    for resolved, article_ids in named.items():
+        module_articles.setdefault(records[resolved].module, set()).update(article_ids)
+
+    def module_owner(record: ConstantRecord) -> tuple[str, ...]:
+        in_module = module_articles.get(record.module, set())
+        return tuple(in_module) if len(in_module) == 1 else ()
+
+    def helper_owners(record: ConstantRecord) -> tuple[str, ...]:
+        return _owners(record, records, named) or module_owner(record)
+
     for record in records.values():
         if record.module in affected_set and record.name not in named:
-            for owner in owners(record):
+            for owner in owners(record) or module_owner(record):
                 touched[owner].add(record.module)
     affected_articles = tuple(
         ModuleImpactedArticle(article.id, article.article_id, article.claim_target, tuple(sorted(touched[article.id])))
@@ -1320,7 +1334,7 @@ def compute_module_import_impact(
     unresolved_articles.sort(key=lambda article: article.id)
 
     module_claim_target = _module_claim_target(module)
-    # Helpers keep the parent-chain rule under either scope: a narrowed chain
+    # Helpers keep the default rule under either scope: a narrowed chain
     # is only shorter, so every helper the default scope reports keeps its key.
     affected_helpers = tuple(
         ModuleImpactedHelper(record.name, record.module, _helper_claim_target(record.name))
@@ -1328,7 +1342,7 @@ def compute_module_import_impact(
         if record.module in affected_set
         and not record.internal
         and record.name not in named
-        and not _owners(record, records, named)
+        and not helper_owners(record)
     )
     affected_claim_targets = tuple(
         sorted(
