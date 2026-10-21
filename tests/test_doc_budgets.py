@@ -15,6 +15,7 @@ BUDGETS = {
     "README.md": 120,
     "autoform_cli/README.md": 828,  # K5: skeleton, review, work, debrief, setup and publishing moved to reference pages.
     "autoform_cli/project/README.md": 120,
+    "autoform_cli/reference/abstraction.md": 38,
     "autoform_cli/reference/claims-and-revisions.md": 164,
     "autoform_cli/reference/debrief.md": 45,
     "autoform_cli/reference/open-statements.md": 186,

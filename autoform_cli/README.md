@@ -678,6 +678,20 @@ Both kinds share one store that Git does not track, and `AUTOFORM_DEBRIEF_DIR`
 chooses another. [Debriefs](reference/debrief.md) gives
 the form, what `record` stores and prints, and where the store lives.
 
+The subagent form also asks for `copied_code`, the project's own code the agent
+copied because it could not use it where it was. Keep the to-do list of copies
+to raise into shared declarations with:
+
+```bash
+autoform abstraction list . --json
+autoform abstraction target 3f9c2a1b7d4e.1 . --file Project/Shared/Order.lean
+autoform abstraction close 3f9c2a1b7d4e.1 . --raised Project.foo_le --file Project/Shared/Order.lean
+autoform abstraction close 3f9c2a1b7d4e.2 . --dismissed --note "the copies diverged"
+```
+
+[Copied code](reference/abstraction.md) gives the clusters, the JSON and the
+decisions. None of these commands edits the project.
+
 ### visualize and render
 
 Refresh the vault's dependency summary, `blueprint/dependencies.md`:
@@ -799,6 +813,7 @@ Each area's contract has its own page:
 - [Claims and revisions](reference/claims-and-revisions.md): leases and revising a published statement.
 - [Work](reference/work.md): the frontier, open statements, and the impact of a Lean or import edit.
 - [Debriefs](reference/debrief.md): what the debrief commands ask, store and print.
+- [Copied code](reference/abstraction.md): how `autoform abstraction` clusters copies and records decisions.
 - [Project setup](reference/project-setup.md): what `init` and `project` write, refuse and report.
 - [The published site](reference/site.md): subdirectory projects, the dashboard overlay, and Pages deploys and reports.
 - [Runtime and publication](reference/runtime-and-publication.md): `doctor`, the in-memory runtime projection and the published site.
