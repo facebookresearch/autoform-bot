@@ -2105,7 +2105,7 @@ def _render_landing_page(
             if book == Path("README.md")
             else '<a class="bp-intro-book" href="'
             + html.escape(_as_published(relative_link(destination / book, page, ".html")), quote=True)
-            + '">Explore all mathematics</a>'
+            + '">Read the book</a>'
         )
         # The shared shell is attached after all full reading content is final.
         reading = f'<div class="bp-landing-intro">{hero}{book_link}{next_up}</div>'
@@ -2170,7 +2170,7 @@ def _render_hero(
     The same numbers set as figures answer "how far along is this?" before the
     reader has finished the title, which is the only question the top of a
     blueprint has to answer. In the explorer's narrow rail (*rail*) the
-    stylesheet keeps only the first two figures, so the chapter and inventory
+    stylesheet keeps only the first two figures, so the topic and inventory
     counts also come as one plain line under them.
     """
     leaves = _countable(graph)
@@ -2185,11 +2185,14 @@ def _render_hero(
     total = len(leaves)
     inventory_count = len(_module_inventories(graph))
     share = _completion_percentage(done, total)
-    target_label = "target" if total == 1 else "targets"
+    article_label = "article" if total == 1 else "articles"
 
+    # The labels reuse the status words, so the share reads as the fully
+    # proved status it counts and the second figure as "ready to state or
+    # prove"; each note says in plain words what the number counts.
     figures = [
-        ("Scoped roadmap", f"{share}%", f"{done} of {total} {target_label} complete", False),
-        ("Ready now", str(actionable), "unblocked, waiting for an author", False),
+        ("Fully proved", f"{share}%", f"{done} of {total} {article_label}", False),
+        ("Ready to start", str(actionable), "nothing they need is blocked", False),
     ]
     # The figure counts every catalog, checked or not; a project without
     # catalogs has no inventory to report.
@@ -2203,7 +2206,7 @@ def _render_hero(
             )
         )
     chapters = len(graph_views.group_nodes(graph))
-    figures.append(("Chapters", str(chapters), "top-level milestones", False))
+    figures.append(("Topics", str(chapters), "top-level parts of the book", False))
     stats = "".join(
         f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">'
         f'<div class="bp-figure-value">{value}</div>'
@@ -2211,7 +2214,7 @@ def _render_hero(
         f'<div class="bp-figure-note">{html.escape(note)}</div></div>'
         for label, value, note, neutral in figures
     )
-    counts = [f"{chapters} {'chapter' if chapters == 1 else 'chapters'}"]
+    counts = [f"{chapters} {'topic' if chapters == 1 else 'topics'}"]
     if inventory_count:
         counts.append(f"{inventory_count} module {'inventory' if inventory_count == 1 else 'inventories'}")
     counts_line = f'<p class="bp-hero-counts">{" · ".join(counts)}</p>' if rail else ""
@@ -2220,7 +2223,7 @@ def _render_hero(
         '<span class="bp-hero-coverage-label">Declared source coverage:</span> '
         f'<span class="bp-hero-coverage-counts">{html.escape(_coverage_summary(coverage))}</span> '
         f'<a class="bp-hero-coverage-link" href="{html.escape(coverage_href, quote=True)}">'
-        "View coverage contract</a>"
+        "What the sources cover</a>"
         "</div>"
     )
     lead = _lead_sentence(body)
@@ -3467,15 +3470,15 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
    reach the hero's heading, paragraph and links there, so these rules carry
    a doubled class; the explorer's own rules stay in its script. The narrow
    hero keeps the gradient rule as its one accent and two plain figures,
-   the share complete and what is ready now; the chapter and inventory
-   counts become one muted line, and coverage its link. */
+   the share fully proved and what is ready to start, each with its
+   one-line note; the topic and inventory counts become one muted line,
+   and coverage its link. */
 .bp-landing-intro.bp-landing-intro {{ margin: 0 6px 18px; font-size: 13px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero {{ margin: 0; }}
 .bp-landing-intro.bp-landing-intro .bp-hero-rule {{ width: 56px; height: 3px; }}
 .bp-landing-intro.bp-landing-intro :is(
   .bp-hero-kicker,
   .bp-figure:nth-child(n + 3),
-  .bp-figure-note,
   .bp-hero-bar,
   .bp-hero-coverage-label,
   .bp-hero-coverage-counts
@@ -3512,6 +3515,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-weight: 700;
 }}
 .bp-landing-intro.bp-landing-intro .bp-figure-label {{ margin-top: 5px; font-size: 12px; font-weight: 600; }}
+.bp-landing-intro.bp-landing-intro .bp-figure-note {{ margin-top: 2px; font-size: 12px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero-counts {{
   margin: 8px 0 0;
   color: var(--bp-muted);

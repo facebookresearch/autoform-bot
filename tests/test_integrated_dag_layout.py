@@ -209,7 +209,7 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
       const seams=`
         function buildShell() {events.push('shell');family='sans-serif';dom$stage={clientWidth:900};
           dom$ctx={font:'11px sans-serif',measureText:text=>({width:String(text).length*8})};
-          dom$search={};dom$breadcrumb={replaceChildren(){}};}
+          dom$search={removeAttribute(){}};dom$breadcrumb={replaceChildren(){}};}
         function markIntro() {} function bindEvents() {events.push('bind');}
         function sheetLayout() {return false;} function renderNavigation() {} function renderReaderContext() {}
         function renderInventory() {} function refresh() {} function routeTrail() {return [];} function trailList() {return [];}

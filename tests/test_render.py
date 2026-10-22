@@ -746,8 +746,15 @@ def test_overview_carries_the_counts_without_a_separate_progress_page(tmp_path: 
     # The landing page leads with the figures; a chapter keeps the compact strip.
     assert overview.index("bp-hero-title") < overview.index("bp-hero-figures")
     assert 'class="bp-figure-value"' in overview
-    assert '<div class="bp-figure-label">Scoped roadmap</div>' in overview
-    assert "2 of 2 targets complete" in overview
+    assert '<div class="bp-figure-label">Fully proved</div>' in overview
+    assert '<div class="bp-figure-note">2 of 2 articles</div>' in overview
+    assert '<div class="bp-figure-label">Ready to start</div>' in overview
+    assert '<div class="bp-figure-note">nothing they need is blocked</div>' in overview
+    assert '<div class="bp-figure-label">Topics</div>' in overview
+    # The figures speak the reader's nouns, not the authoring tool's.
+    for retired in ("Scoped roadmap", "Ready now", "targets complete", "top-level milestones", "coverage contract</a>"):
+        assert retired not in overview
+    assert ">What the sources cover</a>" in overview
     assert "Declared source coverage:" in overview
     assert "1 mapped" in overview
     assert 'href="coverage/index.html"' in overview
@@ -787,7 +794,7 @@ def test_statement_only_theorems_never_count_as_complete(tmp_path: Path) -> None
 
     render_site(project / "blueprint", tmp_path / "blocked", lean_root=project)
     blocked = (tmp_path / "blocked/README.md").read_text(encoding="utf-8")
-    assert "1 of 3 targets complete" in blocked
+    assert '<div class="bp-figure-note">1 of 3 articles</div>' in blocked
 
     blocker.write_text(
         "---\ndeclaration: theorem\nstatement: formalized\nproof: formalized\nlean: Project.blocker\n---\n\n"
@@ -799,7 +806,7 @@ def test_statement_only_theorems_never_count_as_complete(tmp_path: Path) -> None
 
     render_site(project / "blueprint", tmp_path / "ready", lean_root=project)
     ready = (tmp_path / "ready/README.md").read_text(encoding="utf-8")
-    assert "2 of 3 targets complete" in ready
+    assert '<div class="bp-figure-note">2 of 3 articles</div>' in ready
 
 
 def test_completion_requires_every_dependency_to_be_fully_proved(tmp_path: Path) -> None:
@@ -816,7 +823,7 @@ def test_completion_requires_every_dependency_to_be_fully_proved(tmp_path: Path)
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert "0 of 1 target complete" in overview
+    assert '<div class="bp-figure-note">0 of 1 article</div>' in overview
     assert '<div class="bp-figure-value">0%</div>' in overview
 
 
@@ -833,7 +840,7 @@ def test_definitions_and_mathlib_marked_targets_count_as_complete(tmp_path: Path
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert "3 of 3 targets complete" in overview
+    assert '<div class="bp-figure-note">3 of 3 articles</div>' in overview
     assert '<div class="bp-figure-value">100%</div>' in overview
 
 
@@ -861,8 +868,8 @@ def test_single_target_uses_singular_completion_copy(tmp_path: Path) -> None:
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert "1 of 1 target complete" in overview
-    assert "1 of 1 targets complete" not in overview
+    assert '<div class="bp-figure-note">1 of 1 article</div>' in overview
+    assert '<div class="bp-figure-note">1 of 1 articles</div>' not in overview
 
 
 def test_module_catalog_is_separate_from_formalization_progress(
@@ -889,8 +896,8 @@ def test_module_catalog_is_separate_from_formalization_progress(
     render_site(project / "blueprint", tmp_path / "out")
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert "2 of 2 targets complete" in overview
-    assert "3 of 3 targets complete" not in overview
+    assert '<div class="bp-figure-note">2 of 2 articles</div>' in overview
+    assert '<div class="bp-figure-note">3 of 3 articles</div>' not in overview
     assert (
         '<div class="bp-figure bp-figure-neutral"><div class="bp-figure-value">1</div>'
         '<div class="bp-figure-label">Module inventories</div>'
@@ -993,7 +1000,7 @@ def test_partial_module_catalog_is_not_reported_as_dispatchable_work(tmp_path: P
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
     assert (
         '<div class="bp-figure-value">0</div>'
-        '<div class="bp-figure-label">Ready now</div>'
+        '<div class="bp-figure-label">Ready to start</div>'
     ) in overview
 
 
@@ -1032,7 +1039,7 @@ def test_the_module_inventory_figure_counts_inventories_and_hides_at_zero(tmp_pa
     ) in overview
     assert "existing Lean modules checked" not in overview
     # The rail hides the figure and counts the inventory in its line of counts.
-    assert re.search(r'<p class="bp-hero-counts">\d+ chapters? · 1 module inventory</p>', overview)
+    assert re.search(r'<p class="bp-hero-counts">\d+ topics? · 1 module inventory</p>', overview)
 
 
 def test_an_unclassified_catalog_warning_names_the_contract_once(tmp_path: Path) -> None:
@@ -1151,7 +1158,7 @@ def test_the_landing_page_preserves_its_full_reading_hero_in_one_integrated_shel
     assert overview.index('class="bp-landing-intro"') < overview.index('class="bp-dag-viewer"')
     intro = overview.split('class="bp-landing-intro"', 1)[1]
     assert intro.index("bp-hero-title") < intro.index("bp-hero-figures") < intro.index("bp-intro-book")
-    assert '<a class="bp-intro-book" href="roadmap/index.html">Explore all mathematics</a>' in intro
+    assert '<a class="bp-intro-book" href="roadmap/index.html">Read the book</a>' in intro
     # The hero's title is the page's one heading.
     assert overview.count("<h1") == 1 and "\n# " not in overview
     for retired in ("bp-map", 'class="bp-landing"', "open full-page", "## Status breakdown", "## Contents", "```mermaid"):
@@ -1177,12 +1184,14 @@ def test_the_rail_hero_keeps_two_figures_a_counts_line_and_the_coverage_link(tmp
     # Every figure stays in the no-JavaScript reading source; compact presentation also gives counts in words.
     assert intro.index("bp-hero-figures") < intro.index('<p class="bp-hero-counts">') < intro.index("bp-hero-bar")
     counts = re.search(r'<p class="bp-hero-counts">([^<]*)</p>', intro)
-    assert counts is not None and re.fullmatch(r"\d+ chapters?( · \d+ module inventor(y|ies))?", counts.group(1))
+    assert counts is not None and re.fullmatch(r"\d+ topics?( · \d+ module inventor(y|ies))?", counts.group(1))
     css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
     assert (
         ".bp-landing-intro.bp-landing-intro :is(\n  .bp-hero-kicker,\n  .bp-figure:nth-child(n + 3),\n"
-        "  .bp-figure-note,\n  .bp-hero-bar,\n  .bp-hero-coverage-label,\n  .bp-hero-coverage-counts\n) { display: none; }"
+        "  .bp-hero-bar,\n  .bp-hero-coverage-label,\n  .bp-hero-coverage-counts\n) { display: none; }"
     ) in css
+    # Each of the two figures keeps its one-line note, so the number says what it counts.
+    assert ".bp-landing-intro.bp-landing-intro .bp-figure-note { margin-top: 2px; font-size: 12px; }" in css
     # The gradient rule is the narrow hero's one accent; its figures are plain.
     value = css.split(".bp-landing-intro.bp-landing-intro .bp-figure-value {", 1)[1].split("}", 1)[0]
     assert "background: none;" in value and "color: var(--bp-fg);" in value
@@ -1244,7 +1253,7 @@ def test_the_legends_beside_the_explorer_count_what_its_rings_count(tmp_path: Pa
         )
     ]
     overview = (out / "README.md").read_text(encoding="utf-8")
-    assert "2 of 2 targets complete" in overview
+    assert '<div class="bp-figure-note">2 of 2 articles</div>' in overview
     # Compatibility entrances have no second legend/body. The standalone API
     # still explains the exact scope-target and inventory counts without JS.
     standalone = tmp_path / "standalone"
@@ -3012,7 +3021,7 @@ def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path
     render_site(project / "blueprint", out)
 
     overview = (out / "README.md").read_text(encoding="utf-8")
-    assert "0 of 0 targets complete" in overview
+    assert '<div class="bp-figure-note">0 of 0 articles</div>' in overview
     assert "items settled" not in overview
     assert '<div class="bp-figure-value">0%</div>' in overview
     assert '<div class="bp-figure-value">0</div>' in overview

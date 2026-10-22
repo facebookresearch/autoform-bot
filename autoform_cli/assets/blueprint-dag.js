@@ -456,10 +456,9 @@
     }
     function useIndex(index) {
       if (!index || sharedIndex === index) return;
-      sharedIndex = index; records = new Map();
+      sharedIndex = index; records = new Map(); dom$search.removeAttribute("aria-busy");
       index.nodes.forEach(function (node, i) { node._index = i; records.set(node.id, node); });
       ui$searchNodes = index.nodes; ui$searchCacheQuery = null;
-      dom$search.placeholder = "Search " + index.nodes.length.toLocaleString() + " roadmap entries";
       if (currentBundle) { updateProjection(); dom$breadcrumb.replaceChildren(trailList(routeTrail(currentBundle))); }
       renderNavigation(); renderReaderContext(); renderInventory(false); refresh(false);
       if (ui$requestedNode) { fit(); centerIfHidden(ui$selected); }
@@ -670,7 +669,9 @@
       }
       var searchWrap = dom$searchWrap = element("div", "bp-dag-search-wrap");
       dom$search = element("input", "bp-dag-search");
-      dom$search.type = "search"; dom$search.placeholder = "Search the roadmap";
+      dom$search.type = "search"; dom$search.placeholder = "Search titles and Lean names";
+      // aria-busy says the whole-roadmap index search reads has not loaded yet.
+      if (navigation && host.getAttribute("data-catalog-src")) dom$search.setAttribute("aria-busy", "true");
       dom$search.setAttribute("aria-label", "Search all graph nodes");
       dom$search.setAttribute("aria-controls", "bp-dag-search-results-" + instance);
       dom$searchResults = element("div", "bp-dag-search-results"); dom$searchResults.id = "bp-dag-search-results-" + instance;
@@ -679,26 +680,26 @@
       searchWrap.appendChild(dom$search); searchWrap.appendChild(dom$searchResults); toolbar.appendChild(searchWrap);
 
       dom$filters = element("div", "bp-dag-filters");
-      dom$filterSummary = button("bp-dag-filter-summary", "Status"); dom$filterSummary.setAttribute("aria-expanded", "false");
+      dom$filterSummary = button("bp-dag-filter-summary", "Filter: all statuses"); dom$filterSummary.setAttribute("aria-expanded", "false");
       dom$filterPopover = element("div", "bp-dag-filter-popover"); dom$filterPopover.hidden = true;
       dom$filterPopover.id = "bp-dag-filters-" + instance; dom$filterSummary.setAttribute("aria-controls", dom$filterPopover.id);
       var fieldset = dom$statusFieldset = element("fieldset"); dom$statusInputs = new Map();
       var edges = dom$edgeFieldset = element("fieldset", "bp-dag-isolated"), isolated = element("label", "bp-dag-check");
-      edges.appendChild(element("legend", "", "Edges"));
+      edges.appendChild(element("legend", "", "Links"));
       dom$isolated = element("input"); dom$isolated.type = "checkbox"; isolated.appendChild(dom$isolated);
-      isolated.appendChild(document.createTextNode("Include items without edges")); edges.appendChild(isolated);
+      isolated.appendChild(document.createTextNode("Show unlinked")); edges.appendChild(isolated);
       renderStatusFields();
       dom$filterPopover.appendChild(fieldset); dom$filterPopover.appendChild(edges);
       dom$filters.appendChild(dom$filterSummary); dom$filters.appendChild(dom$filterPopover); toolbar.appendChild(dom$filters);
 
       var modes = element("div", "bp-dag-modes"); modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "Explorer view");
-      dom$graphMode = button("bp-dag-mode-button", mapAllowed ? "Map" : "Map · too many items");
+      dom$graphMode = button("bp-dag-mode-button", mapAllowed ? "Map" : "Map (too large)");
       dom$graphMode.disabled = !mapAllowed; dom$listMode = button("bp-dag-mode-button", "Contents");
       modes.appendChild(dom$graphMode); modes.appendChild(dom$listMode); toolbar.appendChild(modes);
       if (navigation) {
         dom$listMode.textContent = "Results";
         dom$sourcesMode = button("bp-dag-mode-button", "Sources");
-        dom$regionsMode = button("bp-dag-mode-button", "Regions");
+        dom$regionsMode = button("bp-dag-mode-button", "Areas");
         modes.appendChild(dom$sourcesMode); modes.appendChild(dom$regionsMode);
       }
 
@@ -741,7 +742,7 @@
         dom$mapContext = element("div", "bp-map-context"); dom$mapKey = element("div", "bp-map-key");
         dom$stage.appendChild(dom$mapContext); dom$stage.appendChild(dom$mapKey);
       }
-      dom$empty = element("div", "bp-dag-empty", data.nodes.length ? "No nodes match these controls." :
+      dom$empty = element("div", "bp-dag-empty", data.nodes.length ? "Nothing matches these filters." :
         "This roadmap has no articles yet."); dom$empty.hidden = true;
       dom$stage.appendChild(dom$canvas); dom$stage.appendChild(dom$nodeLayer);
       dom$stage.appendChild(dom$density); dom$stage.appendChild(dom$empty);
@@ -1035,8 +1036,8 @@
       dom$isolated.checked = ui$showIsolated;
       dom$statusInputs.forEach(function (input, key) { input.checked = ui$selectedStatuses.has(key); });
       var enabled = ui$selectedStatuses.size;
-      dom$filterSummary.textContent = (enabled === presentStatuses.length ? "Status" : "Status · " + enabled) +
-        (ui$showIsolated ? "" : " · edges only");
+      dom$filterSummary.textContent = "Filter: " + (enabled === presentStatuses.length ? "all" : enabled + " of " + presentStatuses.length) +
+        " statuses" + (ui$showIsolated ? "" : " · linked only");
       dom$graphMode.setAttribute("aria-pressed", String(ui$mode === "graph"));
       dom$listMode.setAttribute("aria-pressed", String(ui$mode === "list"));
       if (dom$sourcesMode) dom$sourcesMode.setAttribute("aria-pressed", String(ui$mode === "sources"));
@@ -1074,7 +1075,7 @@
       });
       ui$activeIds = new Set(ui$active.map(function (node) { return node.id; }));
       var hidden = data.nodes.length - ui$active.length;
-      dom$hiddenButton.textContent = "Show " + hidden + " hidden"; dom$hiddenButton.hidden = !hidden;
+      dom$hiddenButton.textContent = "Show " + hidden + " filtered out"; dom$hiddenButton.hidden = !hidden;
       dom$empty.hidden = ui$active.length !== 0;
       ui$activeDirty = false;
     }
@@ -1336,7 +1337,7 @@
     }
     function makeNodeControl(node) {
       var control = button("bp-dag-node", ""); control.dataset.autoformNodeId = node.id; control.dataset.kind = node.kind || "node";
-      var scopeMeta = node.kind === "scope" ? node._unknownCount ? "Topic" : plural(node.member_count || 0, "item", "items") :
+      var scopeMeta = node.kind === "scope" ? node._unknownCount ? "Topic" : plural(node.member_count || 0, "article", "articles") :
         node.kind === "boundary" ? "External scope · open" : null;
       control.setAttribute("aria-label", node.title + (node.area ? ", " + node.area : "") + ", " +
         (scopeMeta || statusLabel(node.status)) + (node.isolated ? ", no dependency edges in this view" : ""));
@@ -1421,11 +1422,11 @@
     }
     function ensureGlobalSearch() {
       if (navigation) return navigation.loadIndex().then(function (loaded) { useIndex(loaded); if (ui$query) renderSearch(); }).catch(function (error) {
-        ui$searchError = error.message; if (ui$query) renderSearch();
+        ui$searchError = error.message; dom$search.removeAttribute("aria-busy"); if (ui$query) renderSearch();
       });
       var source = host.getAttribute("data-catalog-src");
       if (!source || ui$searchPromise || ui$searchNodes !== data.nodes) return ui$searchPromise;
-      ui$searchLoading = true;
+      ui$searchLoading = true; dom$search.setAttribute("aria-busy", "true");
       ui$searchPromise = fetch(source, {credentials: "same-origin"}).then(function (response) {
         if (!response.ok) throw new Error("HTTP " + response.status);
         return response.json().then(function (index) { return {index: index, url: response.url}; });
@@ -1437,11 +1438,10 @@
           if (node.url) node.url = new URL(node.url, loaded.url).href;
         });
         ui$searchNodes = loaded.index.nodes; ui$searchCacheQuery = null; ui$searchError = null;
-        dom$search.placeholder = "Search " + loaded.index.nodes.length.toLocaleString() + " roadmap entries";
       }).catch(function (error) {
         ui$searchError = error.message;
       }).then(function () {
-        ui$searchLoading = false;
+        ui$searchLoading = false; dom$search.removeAttribute("aria-busy");
         if (dom$searchResults.hidden) return;
         var focused = document.activeElement, inside = dom$searchResults.contains(focused);
         var key = inside && (focused.dataset.resultId || "more");

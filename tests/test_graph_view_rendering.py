@@ -348,7 +348,7 @@ def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_pa
     assert {node["id"] for node in payload["nodes"] if node["isolated"]} == {"isolated"}
     script = _viewer_source()
     assert "inventoryNodes" in script
-    assert '"Include items without edges"' in script
+    assert '"Show unlinked"' in script
     assert "state.showIsolated || !node.isolated || node === state.selected" in script
     # Contents counts what it lists, and names no internals such as the map's size limit.
     assert 'element("h2", "", "Contents")' in script
@@ -439,7 +439,8 @@ def test_card_meta_counts_items_in_a_readable_colour() -> None:
     """Topic cards read "1 item · 0 internal links" at three-quarter opacity, jargon in a faded grey."""
     script = _viewer_source()
     assert 'var scopeMeta = node.kind === "scope" ?' in script
-    assert 'plural(node.member_count || 0, "item", "items")' in script
+    # A topic counts the articles inside it, the noun the book uses for them.
+    assert 'plural(node.member_count || 0, "article", "articles")' in script
     assert "internal link" not in script
     rule = re.search(r"\.bp-dag-node-meta \{([^}]*)\}", dag_viewer._STYLE)
     assert rule is not None and "opacity" not in rule.group(1) and "font-size: 12px" in rule.group(1)
@@ -675,8 +676,8 @@ def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_und
     """The toolbar always counted what it showed, and the toggle for items without edges sat in it."""
     script, style = _viewer_source(), dag_viewer._STYLE
     assert "bp-dag-stats" not in script and "bp-dag-stats" not in style and '" shown"' not in script
-    assert 'refs.hiddenButton.textContent = "Show " + hidden + " hidden"; refs.hiddenButton.hidden = !hidden;' in script
-    assert '"Include items without edges"' in script and "Show items without edges" not in script
+    assert 'refs.hiddenButton.textContent = "Show " + hidden + " filtered out"; refs.hiddenButton.hidden = !hidden;' in script
+    assert '"Show unlinked"' in script and "without edges" not in script
     assert "refs.filterPopover.appendChild(fieldset); refs.filterPopover.appendChild(edges);" in script
     # Map | Contents and the zoom buttons are borderless ghost buttons inside one 1px group each.
     assert (
@@ -686,11 +687,35 @@ def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_und
     assert ".bp-dag-zoom .bp-dag-button, .bp-dag-modes .bp-dag-mode-button { min-height: 30px; padding: 4px 10px; border: 0;" in style
 
 
+def test_explorer_toolbar_copy_says_what_it_searches_and_filters() -> None:
+    """The toolbar read "Search 7 roadmap entries", "Status · 2 · edges only" and "Regions".
+
+    The 7 mixed topics, articles and the root, and search matches titles, ids,
+    Lean names and summaries, so the placeholder says what it matches and no
+    count. With the count gone, aria-busy is what says the index is loading.
+    """
+    script = _viewer_source()
+    assert "roadmap entries" not in script and "Search the roadmap" not in script
+    assert script.count("refs.search.placeholder =") == 1
+    assert (
+        'refs.filterSummary.textContent = "Filter: " + (enabled === presentStatuses.length ? "all" : '
+        'enabled + " of " + presentStatuses.length) +\n        " statuses" + (state.showIsolated ? "" : " · linked only");'
+    ) in script
+    assert 'button("bp-dag-filter-summary", "Filter: all statuses")' in script
+    assert 'element("legend", "", "Links")' in script and '"Edges"' not in script
+    assert 'button("bp-dag-mode-button", "Areas")' in script and '"Regions"' not in script
+    assert '"Nothing matches these filters."' in script and "No nodes match" not in script
+    assert 'mapAllowed ? "Map" : "Map (too large)"' in script
+    assert script.count('refs.search.setAttribute("aria-busy", "true")') == 2
+    assert script.count('refs.search.removeAttribute("aria-busy")') == 3
+    assert 'if (navigation && host.getAttribute("data-catalog-src")) refs.search.setAttribute("aria-busy", "true");' in script
+
+
 def test_explorer_search_draws_its_magnifier_and_shortcut_hint_in_css() -> None:
     """U+2315 is not in Plus Jakarta Sans and sat off the box's line, and "( / )" read as debug output."""
     script, style = _viewer_source(), dag_viewer._STYLE
     assert "⌕" not in style and "( / )" not in script
-    assert 'refs.search.placeholder = "Search the roadmap";' in script
+    assert 'refs.search.placeholder = "Search titles and Lean names";' in script
     # A currentColor square masked by an inline SVG draws the magnifier in the muted text colour.
     assert "background: currentColor; color: var(--dag-muted);" in style
     assert "-webkit-mask: var(--dag-magnifier) center / 14px no-repeat; mask: var(--dag-magnifier)" in style

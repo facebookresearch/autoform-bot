@@ -172,7 +172,7 @@ A completed catalog may assert `statement: formalized` and `proof: formalized`
 when the complete module has been checked. It contributes to the neutral
 inventory metric and graph status while remaining a readable page in the vault
 and a section of its parent chapter on the site, but its own entry stays
-outside the mathematical `Scoped roadmap` completion percentage. Like any
+outside the mathematical `Fully proved` completion percentage. Like any
 prerequisite, a catalog linked under `## Depends on` or `## Proof depends on`
 holds its dependents back until its whole-module assertion is recorded, so a
 dependent that needs one result links the declaration article that expounds it.

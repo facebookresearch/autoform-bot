@@ -266,7 +266,7 @@ def test_region_graph_first_keeps_native_reading_reopen_and_back_pane_camera(
     if width > 720:
         playwright.expect(handle).to_be_hidden()
         playwright.expect(page.locator(".bp-reading-body")).to_be_focused()
-    page.get_by_role("button", name="Regions", exact=True).click()
+    page.get_by_role("button", name="Areas", exact=True).click()
     _focus_graph_region(page, "Geometry").press("Enter")
     _frames(page)
     focused = page.locator(".bp-dag-node:focus")
@@ -557,7 +557,7 @@ def test_five_authored_dependency_areas_remain_readable_reachable_and_keep_nativ
     assert 280 <= stage["width"] <= width + 1
     for node in geometry:
         assert node["width"] >= 200 and node["titlePixels"] >= 15 and node["metaPixels"] >= 12
-        assert node["meta"] == "3 topics · 3 items" and ", 3 items" in node["aria"]
+        assert node["meta"] == "3 topics · 3 articles" and ", 3 articles" in node["aria"]
         assert node["titleFits"] and node["hit"]
         if stage["width"] <= 620:
             assert not node["sampleVisible"]

@@ -49,7 +49,7 @@ def test_human_review_distinguishes_roadmap_progress_from_source_scope(
     skill = (repo_root / "skills/human-review/SKILL.md").read_text(encoding="utf-8")
     normalized = " ".join(skill.split())
 
-    assert "`Scoped roadmap` percentage" in skill
+    assert "`Fully proved` percentage" in skill
     assert "formalizable leaf targets only" in normalized
     assert "Module catalogs are non-dispatchable source" in normalized
     assert "separate neutral metric" in normalized
@@ -950,8 +950,8 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     overview = (site / "README.md").read_text(encoding="utf-8")
     assert 'data-graph-src="dependencies.json"' in overview
     # The landing page states progress as figures; the chapters keep the strip.
-    assert "Scoped roadmap" in overview
-    assert "5 of 7 targets complete" in overview
+    assert '<div class="bp-figure-label">Fully proved</div>' in overview
+    assert '<div class="bp-figure-note">5 of 7 articles</div>' in overview
     assert ">71%<" in overview
     assert "Declared source coverage:" in overview
     assert "1 decomposed · 5 mapped · 1 out" in overview

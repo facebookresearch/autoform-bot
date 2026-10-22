@@ -536,11 +536,15 @@ def _open_ready(page: object, explorer_url: str) -> None:
     playwright.expect(page.locator("main")).to_have_count(1)
 
 
-def _load_search_index(page: object, entries: int = 64) -> object:
-    """Focus the search box and wait until the whole-roadmap index of *entries* records has loaded."""
+def _load_search_index(page: object) -> object:
+    """Focus the search box and wait until the whole-roadmap index has loaded.
+
+    Focus starts the load and marks the box aria-busy in the same handler, so
+    the busy state clearing means the index is in place.
+    """
     search = page.locator(".bp-dag-search")
     search.focus()
-    playwright.expect(search).to_have_attribute("placeholder", f"Search {entries} roadmap entries")
+    playwright.expect(search).not_to_have_attribute("aria-busy", "true")
     return search
 
 
@@ -714,7 +718,7 @@ def test_a_view_of_topics_and_results_draws_readable_result_cards(desktop_page: 
     assert not page.locator(".bp-dag-viewer").evaluate("element => element.classList.contains('bp-dag-atlas')")
     assert title.evaluate("element => element.scrollWidth <= element.clientWidth")
     meta = page.locator('[data-autoform-node-id="topics/compactness"] .bp-dag-node-meta')
-    playwright.expect(meta).to_have_text("1 item")
+    playwright.expect(meta).to_have_text("1 article")
     # A drawn DAG counts its nodes by status; only an atlas counts topics by their least-complete item.
     playwright.expect(page.locator(".bp-dag-inspector h3")).to_have_text("Nodes by status")
     page.locator('[data-autoform-node-id="topics/library"]').click()
@@ -862,7 +866,7 @@ def test_mobile_isolates_do_not_overlap_the_connected_dag(mobile_page: object, e
     assert a is not None and b is not None
     assert a["y"] + a["height"] <= b["y"] or b["y"] + b["height"] <= a["y"]
     page.locator(".bp-dag-filter-summary").tap()
-    playwright.expect(page.get_by_role("checkbox", name="Include items without edges")).to_be_visible()
+    playwright.expect(page.get_by_role("checkbox", name="Show unlinked")).to_be_visible()
 
 
 def test_a_plain_wheel_pans_the_full_page_explorer(desktop_page: object, explorer_url: str) -> None:
@@ -969,7 +973,7 @@ def test_a_result_neither_drawn_here_nor_safely_linked_selects_nothing(
 
     page.route("**/search.json", add_unlinked_record)
     _open_ready(page, explorer_url)
-    search = _load_search_index(page, 65)
+    search = _load_search_index(page)
     search.fill("Unlinked")
     url = page.url
     page.locator(".bp-dag-result", has_text="Unlinked result").click()
@@ -1030,8 +1034,8 @@ def test_legacy_node_hash_resolves_through_the_global_index(desktop_page: object
     page.on("request", lambda request: navigations.append(request.url) if request.is_navigation_request() else None)
     with page.expect_response("**/search.json"):
         page.goto(f"{explorer_url}/index.html#node=unknown%2Fitem")
-    # The placeholder changes in the same promise chain, just before the redirect decision.
-    playwright.expect(page.locator(".bp-dag-search")).to_have_attribute("placeholder", "Search 64 roadmap entries")
+    # The busy state clears in the same promise chain, just before the redirect decision.
+    playwright.expect(page.locator(".bp-dag-search")).not_to_have_attribute("aria-busy", "true")
     # One more task lets a redirect that decision started reach the network.
     page.evaluate("() => new Promise(done => setTimeout(done))")
     assert page.url.endswith("index.html#node=unknown%2Fitem")
@@ -1084,7 +1088,7 @@ def test_a_late_search_index_keeps_focus_and_leaves_a_closed_panel_closed(
     thirteenth = page.locator(".bp-dag-result").nth(12)
     playwright.expect(thirteenth).to_be_focused()
     _release(page, held)
-    playwright.expect(search).to_have_attribute("placeholder", "Search 64 roadmap entries")
+    playwright.expect(search).not_to_have_attribute("aria-busy", "true")
     playwright.expect(thirteenth).to_be_focused()
     page.mouse.click(2, 2)
     playwright.expect(results).to_be_hidden()
@@ -1095,7 +1099,7 @@ def test_a_late_search_index_keeps_focus_and_leaves_a_closed_panel_closed(
     search.press("Escape")
     playwright.expect(results).to_be_hidden()
     _release(page, held)
-    playwright.expect(search).to_have_attribute("placeholder", "Search 64 roadmap entries")
+    playwright.expect(search).not_to_have_attribute("aria-busy", "true")
     playwright.expect(results).to_be_hidden()
 
 
@@ -1107,7 +1111,7 @@ def test_direct_list_view_has_current_shown_and_hidden_counts(
     page.locator(".bp-dag-inventory").wait_for()
     # The reviewed #411 count controls replace the redundant always-present stats string.
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 of 63")
-    playwright.expect(page.locator(".bp-dag-hidden-button")).to_have_text("Show 62 hidden")
+    playwright.expect(page.locator(".bp-dag-hidden-button")).to_have_text("Show 62 filtered out")
     playwright.expect(page.locator(".bp-dag-inventory-row")).to_have_count(1)
 
 
@@ -1115,17 +1119,17 @@ def test_hidden_items_without_edges_stay_hidden_after_a_reload(desktop_page: obj
     """The location records only that they are hidden, so a reload has to read that back."""
     page = desktop_page
     _open_ready(page, explorer_url)
-    # The toggle is the Status popover's second group.
+    # The toggle is the filter popover's second group.
     page.locator(".bp-dag-filter-summary").click()
     isolates = page.locator(".bp-dag-filter-popover fieldset + fieldset").get_by_role(
-        "checkbox", name="Include items without edges"
+        "checkbox", name="Show unlinked"
     )
     isolates.uncheck()
     page.wait_for_function("location.hash === '#isolates=0'")
 
     page.reload()
     page.locator("[data-autoform-node-id]").first.wait_for()
-    playwright.expect(page.locator(".bp-dag-hidden-button")).to_have_text("Show 60 hidden")
+    playwright.expect(page.locator(".bp-dag-hidden-button")).to_have_text("Show 60 filtered out")
     page.locator(".bp-dag-filter-summary").click()
     playwright.expect(isolates).not_to_be_checked()
 
@@ -1322,7 +1326,7 @@ def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_pag
     assert 0 <= box["x"] and box["x"] + box["width"] <= viewport["width"]
     assert 0 <= box["y"] and box["y"] + box["height"] <= viewport["height"]
     _assert_hit(page, popover.locator("input").first)
-    search = _load_search_index(page, 27)
+    search = _load_search_index(page)
     search.fill("Result")
     assert _paints_over_the_details(page, ".bp-dag-result", ".bp-dag-search-results") is True
 
@@ -1502,7 +1506,7 @@ def test_the_toolbars_popovers_paint_over_the_open_details(desktop_page: object,
     playwright.expect(page.locator(".bp-dag-filter-popover")).to_be_visible()
     assert _paints_over_the_details(page, ".bp-dag-check", ".bp-dag-filter-popover") is True
     page.locator(".bp-dag-filter-summary").click()
-    search = _load_search_index(page, 27 + len(palette))
+    search = _load_search_index(page)
     for width in (1000, 800):
         page.set_viewport_size({"width": width, "height": 900})
         search.fill("")
@@ -1558,7 +1562,7 @@ def test_the_published_atlas_hides_the_isolate_toggle(desktop_page: object, site
     # This atlas has only isolated topics; hiding them all is not a meaningful view filter.
     page.locator(".bp-dag-filter-summary").click()
     playwright.expect(page.locator(".bp-dag-filter-popover")).to_be_visible()
-    playwright.expect(page.get_by_role("group", name="Edges", exact=True)).to_be_hidden()
+    playwright.expect(page.get_by_role("group", name="Links", exact=True)).to_be_hidden()
 
 
 def test_published_explorer_controls_keep_their_own_styles_under_material(
@@ -1672,7 +1676,7 @@ def test_slash_inside_the_explorer_opens_its_search_but_an_input_keeps_its_keys(
     page = desktop_page
     _open_ready(page, explorer_url)
     search, wrap = page.locator(".bp-dag-search"), page.locator(".bp-dag-search-wrap")
-    playwright.expect(search).to_have_attribute("placeholder", "Search the roadmap")
+    playwright.expect(search).to_have_attribute("placeholder", "Search titles and Lean names")
     # The box draws a masked magnifier and a "/" key hint, which focus hides.
     assert "svg" in wrap.evaluate("element => getComputedStyle(element, '::before').webkitMaskImage")
     hint = "element => [getComputedStyle(element, '::after').content, getComputedStyle(element, '::after').display]"
@@ -1682,7 +1686,7 @@ def test_slash_inside_the_explorer_opens_its_search_but_an_input_keeps_its_keys(
     playwright.expect(search).to_be_focused()
     assert wrap.evaluate(hint)[1] == "none"
     page.locator(".bp-dag-filter-summary").click()
-    isolates = page.get_by_role("checkbox", name="Include items without edges")
+    isolates = page.get_by_role("checkbox", name="Show unlinked")
     isolates.focus()
     page.keyboard.press("Control+K")
     playwright.expect(isolates).to_be_focused()
@@ -2043,28 +2047,28 @@ def test_edges_group_and_status_summary_follow_checkbox_and_history_state(
     foundation = page.locator('[data-autoform-node-id="chapter/foundation"]')
     middle.click()
     summary.click()
-    edges = page.get_by_role("group", name="Edges", exact=True)
+    edges = page.get_by_role("group", name="Links", exact=True)
     playwright.expect(edges).to_be_visible()
-    isolates = edges.get_by_role("checkbox", name="Include items without edges", exact=True)
-    playwright.expect(summary).to_have_text("Status")
+    isolates = edges.get_by_role("checkbox", name="Show unlinked", exact=True)
+    playwright.expect(summary).to_have_text("Filter: all statuses")
     isolates.uncheck()
-    playwright.expect(summary).to_have_text("Status · edges only")
+    playwright.expect(summary).to_have_text("Filter: all statuses · linked only")
     foundation.click()
     summary.click()
     isolates.check()
-    playwright.expect(summary).to_have_text("Status")
+    playwright.expect(summary).to_have_text("Filter: all statuses")
     page.evaluate("history.back()")
     page.wait_for_function("location.hash.includes('isolates=0')")
     playwright.expect(isolates).not_to_be_checked()
-    playwright.expect(summary).to_have_text("Status · edges only")
+    playwright.expect(summary).to_have_text("Filter: all statuses · linked only")
     page.evaluate("history.forward()")
     page.wait_for_function("!location.hash.includes('isolates=0')")
     playwright.expect(isolates).to_be_checked()
-    playwright.expect(summary).to_have_text("Status")
+    playwright.expect(summary).to_have_text("Filter: all statuses")
     page.locator('.bp-dag-filter-popover input[value="planned"]').uncheck()
-    playwright.expect(summary).to_have_text("Status · 2")
+    playwright.expect(summary).to_have_text("Filter: 2 of 3 statuses")
     isolates.uncheck()
-    playwright.expect(summary).to_have_text("Status · 2 · edges only")
+    playwright.expect(summary).to_have_text("Filter: 2 of 3 statuses · linked only")
 
 
 
@@ -2156,7 +2160,7 @@ def test_the_toolbar_counts_only_what_it_hides_and_shows_it_on_request(
     page.goto(f"{explorer_url}/index.html#view=list&status=fully_proved")
     page.locator(".bp-dag-inventory").wait_for()
     reveal, summary = page.locator(".bp-dag-hidden-button"), page.locator(".bp-dag-inventory-summary")
-    playwright.expect(reveal).to_have_text("Show 62 hidden")
+    playwright.expect(reveal).to_have_text("Show 62 filtered out")
     playwright.expect(summary).to_have_text("1 of 63")
     reveal.click()
     playwright.expect(reveal).to_be_hidden()

@@ -314,9 +314,10 @@ def _open(page: object, site: _WorkspaceSite, runtime: _PinnedRuntime, node_id: 
     page.goto(site.route(node_id))
     page.locator(".bp-dag-integrated .bp-dag-stage").wait_for()
     playwright.expect(page.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
-    playwright.expect(page.locator(".bp-dag-search")).to_have_attribute(
-        "placeholder", f"Search {len(site.records):,} roadmap entries",
-    )
+    # The placeholder says what search matches; aria-busy clearing says its index has loaded.
+    search = page.locator(".bp-dag-search")
+    playwright.expect(search).to_have_attribute("placeholder", "Search titles and Lean names")
+    playwright.expect(search).not_to_have_attribute("aria-busy", "true")
     page.evaluate("() => window.__workspaceDocument = document")
     _frames(page)
 
@@ -649,7 +650,7 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
     assert _TARGET_TITLE in page.locator(".bp-dag-inventory-title").all_text_contents()
     assert not set(_SOURCE_TITLES).intersection(page.locator(".bp-dag-inventory-title").all_text_contents())
     assert "Reading note" not in page.locator(".bp-dag-inventory-title").all_text_contents()
-    page.get_by_role("button", name="Regions", exact=True).click()
+    page.get_by_role("button", name="Areas", exact=True).click()
     _focus_graph_region(page, "Geometry").click()
     notes = _focus_graph_node(page, "scope:source-notes")
     playwright.expect(notes).to_be_focused()
@@ -714,10 +715,10 @@ def test_zero_count_authored_region_is_visible_and_does_not_invent_one_item(
     assert authored and all(node["member_count"] == 0 and node["status_counts"] == [] for node in authored)
     _open(page, site, workspace_runtime)
     region = _focus_graph_region(page, "Unstarted mathematics")
-    assert ", 0 items" in region.get_attribute("aria-label")
-    assert ", 1 item" not in region.get_attribute("aria-label")
+    assert ", 0 articles" in region.get_attribute("aria-label")
+    assert ", 1 article" not in region.get_attribute("aria-label")
     page.get_by_role("button", name="Results", exact=True).click()
-    page.get_by_role("button", name="Regions", exact=True).click()
+    page.get_by_role("button", name="Areas", exact=True).click()
     _focus_graph_region(page, "Unstarted mathematics")
 
 
