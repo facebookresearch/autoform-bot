@@ -1334,43 +1334,35 @@ Write the Mermaid dependency graph into the vault, where Obsidian renders it:
 autoform-visualize blueprint
 ```
 
-Build the publishable site source — a book overview, aggregate progress,
-statement boxes with collapsed dependency details, a multi-scale dependency
-explorer, and direct links to Lean declarations at the current commit:
+Build the publishable site source — complete mathematical reading, aggregate
+progress, statement boxes, an integrated dependency workspace, and direct links
+to Lean declarations at the current commit:
 
 ```bash
 autoform render blueprint --output site-src --lean-root . --require-declarations
 ```
 
-`render` never writes into the vault. Once the roadmap has articles to draw, it
-makes the landing page the full-page project explorer, whose hierarchy rail
-opens with the project's title, what is formalized and what is unblocked, the
-coverage contract, and a link into the book (on phones these sit in the details
-sheet). It places a compact progress summary after each chapter's opening prose, keeps `structure.md` as a
-short page that opens the explorer, which shows the vault's hierarchy, and
-shows a source icon when a `lean:` declaration resolves to a repository
-permalink; a catalog
-instead links its first eight names in its Lean row and counts the rest. Its
-`dependencies.md` opens a full-viewport application and rolls dependencies
-through the article hierarchy, with bounded project, chapter, and nested-scope
-projections. Global search loads a layout-free index and jumps to the smallest
-useful scope. That index, `dependencies/index.json`, the project payload
-`dependencies.json`, and every other payload under `dependencies/` are internal
-to the bundled viewer, and their schemas may change. The compatibility `dependencies/full.md`
-route renders only the project shell and never fits the whole repository into
-one canvas. Every generated site projection uses the same deterministic
-JSON-derived Canvas and semantic-DOM explorer with search, filters, pan/zoom,
-and hash-routed node neighborhoods, so none inherits Mermaid's text, edge, or
-SVG-size ceilings. Authored Mermaid remains supported in the vault and book.
-A persistent hierarchy rail keeps the current ancestry and immediate contents
-visible, except on phones and, up to 1,200 px wide, under open details, while
-the head shows the trail. The project overview groups readable topic cards by
-authored mathematical area and reveals only a selected topic's direct
-dependency neighborhood; its detail drawer overlays the map instead of
-shrinking it.
-Breadcrumbs return through the explorer hierarchy to the book (to the home page
-for a roadmap with neither a root article nor root leaves), and every formal
-statement links to the smallest explorer scope containing that item. Render
+`render` never writes into the vault. Canonical book and roadmap pages keep
+their complete mathematical content and native statement anchors, enhanced by
+one full-viewport reading/map workspace. The topic rail, breadcrumb and global
+search navigate that workspace without switching to another viewer. Search
+opens any statement directly; its mathematical reader and bounded dependency
+neighborhood update together. The reader sits beside the map on wide screens
+and opens as a sheet on phones. Source tracks and complete result lists are
+separate entry points, and authored mathematical areas—not directories—supply
+the regional overview.
+
+Each chapter retains its compact progress summary. A source icon links a
+`lean:` declaration only when it resolves to a repository permalink; a catalog
+instead links its first eight names and counts the rest. The old
+`dependencies.md`, nested dependency pages and `dependencies/full.md` are
+compatibility entrances to canonical reading, never an all-repository canvas.
+Their JSON projections and layout-free `dependencies/index.json` use the same
+shared client, with Canvas topology and semantic DOM controls, rather than
+Mermaid-sized generated diagrams. The [publication contract](#publication-contract)
+describes their schemas and navigation metadata.
+
+Authored Mermaid remains supported in the vault and book. Render
 writes no Mermaid graph of its own, so `javascripts/blueprint-mermaid.js` draws
 every ```` ```mermaid ```` diagram an article holds strictly, its labels as
 text and with no click. The explorer shows a title as typed, and a link render
@@ -1383,13 +1375,12 @@ name, holds a colon, for the same reason. Point
 `pymdownx.superfences` mermaid fence; see the [repository
 example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
 
-This shared-explorer layout replaces the `dependencies/nodes/*.html` focus
-pages of earlier sites: a statement's dependency link is now
-`<scope>.html#node=<id>`, and an old focus-page link no longer resolves. Only a
-legacy `dependencies/full.html#node=<id>` link redirects, through the global
-index, to the smallest bounded scope containing that node. The [publication
-contract](#publication-contract) gives the schema and when render replaces an
-earlier site.
+The shared workspace replaces the `dependencies/nodes/*.html` focus pages of
+earlier sites; those obsolete per-node pages are not regenerated. Existing
+`dependencies.html#node=<id>`, nested dependency routes and
+`dependencies/full.html#node=<id>` resolve through the global index to the
+canonical article or chapter-card anchor. No separate “Open dependency
+explorer” link is needed on each statement.
 
 `render` also writes `javascripts/mathjax.js`, the site's MathJax
 configuration, on every build; `mkdocs.yml` lists it before the MathJax
@@ -2617,8 +2608,13 @@ compatibility shells for those canonical pages, not a second viewer. They share
 the same client and a layout-free global search index, never an all-repository
 node cloud. The graph and search schemas remain `autoform-dag-view/v2` and
 `autoform-dag-search/v1`. Search records keep their existing `url` meaning and
-may additionally carry `route`, `scope`, `data_url`, `parent`, `navigation` and
-`area`; optional `relations` rows are `[source_id, target_id, statement_count,
+may additionally carry `route`, `scope`, `data_url`, `parent`, `navigation`,
+`area` and `result`; module inventories also carry `catalog: "module"`.
+`result` identifies an authored concrete declaration leaf,
+not a proof or compilation claim; containers, source tracks and inventories are
+false. Module inventory articles stay navigable in “Results & articles”, with
+neutral inventory statuses, rather than disappearing from large mathematical
+scopes or being counted as proved declarations. Optional `relations` rows are `[source_id, target_id, statement_count,
 proof_count]`. These are derived from the same captured publication as the
 reading pages and preserve authored statement/proof edge types.
 

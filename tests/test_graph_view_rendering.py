@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -13,10 +14,13 @@ def _viewer_source() -> str:
     """Inspect readable implementation seams, not a compiler's private names.
 
     The emitted runtime and its exact source fingerprint have separate asset
-    tests. Removing only the explicit private-property prefixes keeps these
-    control-flow checks independent of the development compiler's mangling.
+    tests. Normalizing explicit private-property prefixes and renderer-private
+    ui$/dom$ locals keeps these static assertions independent of compiler naming.
+    Executed production bodies are never normalized.
     """
-    return dag_viewer._SCRIPT.replace("refs.$", "refs.").replace("state.$", "state.")
+    source = dag_viewer._SCRIPT.replace("refs.$", "refs.").replace("state.$", "state.")
+    source = re.sub(r"\bui\$([A-Za-z_]\w*)", r"state.\1", source)
+    return re.sub(r"\bdom\$([A-Za-z_]\w*)", r"refs.\1", source)
 
 
 def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path: Path) -> None:

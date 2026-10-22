@@ -410,12 +410,18 @@ def write_search_index(
             entry["lean"] = node.lean
         if node.summary:
             entry["summary"] = node.summary
+        # Preserve authored module articles without calling their inventories
+        # concrete declarations or inferring proof progress from them.
+        if node.catalog == "module":
+            entry["catalog"] = node.catalog
         if metadata is not None:
             details = metadata.get(node.id, {})
             for key in ("route", "scope", "data_url", "parent", "navigation", "area"):
                 value = details.get(key)
                 if value is not None:
                     entry[key] = value
+            if type(details.get("result")) is bool:
+                entry["result"] = details["result"]
         nodes.append(entry)
     payload: dict[str, object] = {"nodes": nodes, "schema": SEARCH_SCHEMA}
     if include_relations:

@@ -48,12 +48,15 @@ The book and explorer share a vanilla-JavaScript client. Its readable sources
 are `autoform_cli/assets/blueprint-navigation.js` and `blueprint-dag.js`; their
 styles are in `blueprint-dag.css`. When changing either script, install Node
 22.23.2 and run `make build-explorer`, then `make check-explorer` and
-`make test-browser`. The pinned development-only compiler writes
+`make test-browser`. Pinned development-only esbuild and Terser write
 `blueprint-explorer.min.js` with an exact source digest. CI checks its bytes and
 the unchanged 66 KB budget. Only explicitly `$`-prefixed private properties may
-be renamed: graph/index fields, route attributes, renderer callbacks and history
+be renamed; renderer-private scene and DOM references use local variables.
+Graph/index fields, route attributes, renderer callbacks and history
 snapshot fields keep their names. Python publication ships the compiled client;
 projects consuming Autoform do not need Node or a separate application build.
+Compression never renames public properties, assumes getters are pure, enables
+unsafe transforms, or drops console calls.
 
 `tests/test_real_repl.py` skips unless `AUTOFORM_RUN_REAL_REPL_TESTS=1`. To run
 it locally, build its fixture and install the oldest supported toolchain first:

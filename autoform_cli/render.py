@@ -1062,18 +1062,19 @@ def _render_pages(
         encoding="utf-8",
     )
 
+    contexts: dict[str, tuple[Path, str]] = {}
     generated_graph_pages = graph_pages.write_graph_pages(
         graph,
         statuses,
         destination,
         node_links=lambda page, node_ids: _node_links(targets, page, node_ids),
         book_targets=targets,
+        contexts_out=contexts,
     )
     report.pages += len(generated_graph_pages)
 
     # These are the final safe pages, including generated theorem cards and
     # their exact anchors. Never reread an authored article to build the reader.
-    contexts = graph_pages.publication_contexts(graph, destination)
     page_contexts: dict[Path, tuple[Path, str, str | None]] = {}
     for node_id, (page, anchor) in targets.items():
         payload, scope = contexts[node_id]

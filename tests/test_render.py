@@ -1022,7 +1022,7 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
     assert topic["layout"]["height"] == 92
     alias = (out / "dependencies.md").read_text(encoding="utf-8")
     assert 'data-page-href="roadmap/index.html"' in alias
-    assert "[Continue to the mathematical page](roadmap/index.html)" in alias
+    assert '<a href="roadmap/index.html">Continue to the mathematical page</a>' in alias
     assert "Module A" not in alias
     chapter = json.loads((out / "dependencies/chapters/library.json").read_text(encoding="utf-8"))
     assert {node["id"]: node["status"] for node in chapter["nodes"]} == dict.fromkeys(
@@ -2776,8 +2776,18 @@ def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path
     assert "items settled" not in overview
     assert '<div class="bp-figure-value">0%</div>' in overview
     assert '<div class="bp-figure-value">0</div>' in overview
-    # Nothing is there to explore yet, so the home page mounts no explorer.
-    assert "bp-dag-viewer" not in overview
+    # The shared shell exists even before any mathematical work is planned.
+    # Its empty graph and result index must not invent ready work.
+    assert overview.count('class="bp-dag-viewer"') == overview.count('class="bp-reading-source"') == 1
+    assert 'data-page-href="index.html"' in overview
+    payload = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))
+    assert payload["schema"] == "autoform-dag-view/v2"
+    assert payload["nodes"] == payload["edges"] == [] and payload["edge_count"] == 0
+    index = json.loads((out / "dependencies/index.json").read_text(encoding="utf-8"))
+    assert index["schema"] == "autoform-dag-search/v1"
+    assert index["relations"] == []
+    assert not any(record["result"] for record in index["nodes"])
+    assert "bp-next-target" not in overview
 
 
 def test_a_directory_link_uses_tree_even_when_the_repo_url_says_blob() -> None:

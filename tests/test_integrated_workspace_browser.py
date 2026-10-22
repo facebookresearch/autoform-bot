@@ -8,12 +8,15 @@ exercise publication and UI behavior, not kernel verification.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
+import shutil
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin, urlsplit
 
 import pytest
 
@@ -30,6 +33,8 @@ _TARGET = "division-00/part-01/results/main"
 _OTHER = "division-09/main"
 _ISOLATED = "division-00/part-01/results/isolated"
 _READY = "division-00/part-01/results/ready"
+_BASE = "division-00/part-01/results/base"
+_AREAS = ("Geometry", "Analysis", "Unstarted mathematics")
 _TARGET_TITLE = "Complete zero identity with full mathematical notation"
 _OTHER_TITLE = "Counterpart zero identity"
 _SOURCE_TITLES = ("Classical source essays", "Contemporary source records")
@@ -41,6 +46,7 @@ _LAST_SENTENCE = "This final mathematical sentence is retained in the complete r
 class _WorkspaceSite:
     url: str
     records: dict[str, dict]
+    root_graph: dict
 
     def route(self, node_id: str) -> str:
         return urljoin(self.url + "/dependencies/index.json", self.records[node_id]["route"])
@@ -49,6 +55,16 @@ class _WorkspaceSite:
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def _area_edges(graph: dict) -> list[dict]:
+    areas = {node["id"]: node.get("area") for node in graph["nodes"]}
+    return [
+        {"source": areas[edge["source"]], "target": areas[edge["target"]],
+         "statement": edge["statement"], "proof": edge["proof"]}
+        for edge in graph["edges"]
+        if areas.get(edge["source"]) and areas.get(edge["target"]) and areas[edge["source"]] != areas[edge["target"]]
+    ]
 
 
 @pytest.fixture(scope="module")
@@ -61,12 +77,13 @@ def workspace_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Worksp
     blueprint = project / "blueprint"
     _write(blueprint / "tex-macros.json", '{"RR":"\\\\mathbb{R}"}')
     _write(blueprint / "README.md", "# Synthetic mathematical workspace\n\n- [Mathematical library](roadmap/README.md)\n")
-    topics = [f"division-{index:02d}" for index in range(17)] + ["source-notes"]
-    links = "\n".join(f"- [Topic {index + 1}]({topic}/README.md)" for index, topic in enumerate(topics))
+    topics = [f"division-{index:02d}" for index in range(15)] + ["scope:authored", "boundary:authored", "source-notes"]
+    links = "\n".join(f"- [Topic {index + 1}](./{topic}/README.md)" for index, topic in enumerate(topics))
     _write(blueprint / "roadmap/README.md", (
         "# " + _LIBRARY + "\n\nAn authored collection of mathematical topics and complete reading pages.\n\n"
         + links + "\n- [Classical source essays](appendix-a/README.md)\n"
         "- [Contemporary source records](literature-b/README.md)\n"
+        "- [A topic without declarations](unstarted/README.md)\n"
     ))
     for index, topic in enumerate(topics):
         title = _ANCESTOR if index == 0 else (
@@ -114,9 +131,16 @@ def workspace_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Worksp
             body += "\n\n[Read the independent identity](isolated.md).\n"
         else:
             body = "The zero identity $0=0$ holds.\n\n" + "Its complete explanation remains available. " * 12
+            if index == 9:
+                body += "\n\nThe proof uses the complete zero identity from the geometric topic."
+        proof_dependencies = (
+            "\n\n## Proof depends on\n\n- [Complete zero identity](../division-00/part-01/results/main.md)\n"
+            if index == 9 else ""
+        )
         _write(blueprint / f"roadmap/{group}/main.md", (
             "---\ndeclaration: theorem\n" + claim + "---\n\n# " + result_title + "\n\n" + body
             + "\n\n## Depends on\n\n- [Base](base.md)\n"
+            + proof_dependencies
         ))
         if index == 0:
             _write(blueprint / f"roadmap/{group}/ready.md", (
@@ -135,10 +159,16 @@ def workspace_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Worksp
             "This is an authored source track, not a guessed topic.\n\n- [Reading note](note.md)\n"
         ))
         _write(blueprint / f"roadmap/{name}/note.md", "# Reading note\n\nComplete source commentary is retained.\n")
+    _write(blueprint / "roadmap/unstarted/README.md", (
+        "---\nnavigation: module\narea: Unstarted mathematics\n---\n\n"
+        "# A reading topic without declarations\n\nThis authored topic currently has zero mathematical targets.\n\n"
+        "- [Reading note](note.md)\n"
+    ))
+    _write(blueprint / "roadmap/unstarted/note.md", "# Reading note\n\nA narrative is not a declaration to formalize.\n")
     _write(project / "ReaderFixture.lean", (
         "namespace ReaderFixture\ndef base : Nat := 0\n"
         "theorem zero_identity : (0 : Nat) = 0 := rfl\n"
-        "theorem counterpart_identity : (0 : Nat) = 0 := rfl\n"
+        "theorem counterpart_identity : (0 : Nat) = 0 := zero_identity\n"
         "theorem ready_identity : (0 : Nat) = 0 := rfl\nend ReaderFixture\n"
     ))
     render_site(blueprint, project / "site-src", lean_root=project)
@@ -148,9 +178,33 @@ def workspace_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Worksp
         if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE
     ]
     build(configuration)
-    index = json.loads((project / "site/dependencies/index.json").read_text(encoding="utf-8"))
+    index_path = project / "site/dependencies/index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    records = {record["id"]: record for record in index["nodes"]}
+    root_path = index_path.parent / unquote(urlsplit(records["roadmap"]["data_url"]).path)
+    root_graph = json.loads(root_path.read_text(encoding="utf-8"))
+    exported = os.environ.get("AUTOFORM_UI_SITE_EXPORT_DIR")
+    if exported:
+        destination = Path(exported)
+        shutil.copytree(project / "site", destination, dirs_exist_ok=True)
+        runtime = (destination / "javascripts/blueprint-dag.js").read_bytes()
+        fingerprint = re.match(rb"/\* autoform-explorer-source-sha256:([0-9a-f]{64}) \*/", runtime)
+        assert fingerprint is not None, "the exported site did not carry its exact compiled source fingerprint"
+        provenance = {
+            "schema": "autoform-ci-site-provenance/v1",
+            "consumer": "rich synthetic mathematical workspace",
+            "candidate_sha": os.environ.get("AUTOFORM_CI_SOURCE_SHA"),
+            "runtime_bytes": len(runtime),
+            "runtime_sha256": hashlib.sha256(runtime).hexdigest(),
+            "runtime_source_sha256": fingerprint.group(1).decode("ascii"),
+            "root_nodes": len(root_graph["nodes"]),
+            "root_edges": len(root_graph["edges"]),
+            "area_edges": _area_edges(root_graph),
+            "kernel_checked": False,
+        }
+        (destination / "ci-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
     with _served(project / "site") as url:
-        yield _WorkspaceSite(url, {record["id"]: record for record in index["nodes"]})
+        yield _WorkspaceSite(url, records, root_graph)
 
 
 @pytest.fixture(scope="module")
@@ -445,8 +499,8 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
     page, site = workspace_page, workspace_site
     _open(page, site, workspace_runtime)
     regions = page.locator('.bp-dag-node[data-autoform-node-id^="region:"]')
-    playwright.expect(regions).to_have_count(2)
-    assert set(regions.locator(".bp-dag-node-title").all_text_contents()) == {"Geometry", "Analysis"}
+    playwright.expect(regions).to_have_count(len(_AREAS))
+    assert set(regions.locator(".bp-dag-node-title").all_text_contents()) == set(_AREAS)
     assert page.locator('.bp-dag-node[data-autoform-node-id="scope:appendix-a"]').count() == 0
     page.get_by_role("button", name="Sources", exact=True).click()
     playwright.expect(page.locator(".bp-dag-inventory-head h2")).to_have_text("Source tracks")
@@ -457,8 +511,9 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
     playwright.expect(page.locator(".bp-dag-inventory-head h2")).to_have_text("Results")
     assert _TARGET_TITLE in page.locator(".bp-dag-inventory-title").all_text_contents()
     assert not set(_SOURCE_TITLES).intersection(page.locator(".bp-dag-inventory-title").all_text_contents())
+    assert "Reading note" not in page.locator(".bp-dag-inventory-title").all_text_contents()
     page.get_by_role("button", name="Regions", exact=True).click()
-    playwright.expect(regions).to_have_count(2)
+    playwright.expect(regions).to_have_count(len(_AREAS))
     page.locator('.bp-dag-node[data-autoform-node-id="region:Geometry"]').click()
     playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id="scope:source-notes"]')).to_be_visible()
     assert page.url == site.route("roadmap")
@@ -476,6 +531,97 @@ def test_zero_edge_native_article_keeps_focal_node_surrounding_context_and_compl
     assert "independent statement" in card.inner_text()
     assert page.url == site.route(_ISOLATED)
     assert page.locator(".bp-dag-empty").is_hidden()
+
+
+def test_real_result_flag_drives_document_title_leaf_breadcrumb_and_result_count(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    page, site = workspace_page, workspace_site
+    assert site.records[_TARGET]["result"] is True
+    _open(page, site, workspace_runtime)
+    _search(page, _TARGET_TITLE, _TARGET)
+    page.wait_for_url(site.route(_TARGET))
+    _selected(page, _TARGET)
+    assert page.title() == site.records[_TARGET]["title"]
+    playwright.expect(page.locator(".bp-dag-breadcrumb li").last).to_have_text(_TARGET_TITLE)
+    page.get_by_role("button", name="Results", exact=True).click()
+    enabled = set(page.locator(".bp-dag-filter-popover input[value]:checked").evaluate_all("inputs => inputs.map(input => input.value)"))
+    expected = sum(record.get("result") is True and record.get("scope") == site.records[_TARGET]["scope"]
+                   and record.get("status") in enabled
+                   for record in site.records.values())
+    assert expected > 0
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text(f"{expected} results")
+
+
+@pytest.mark.parametrize("node_id", ["scope:authored/main", "boundary:authored/main"])
+def test_authored_prefix_like_ids_activate_the_exact_published_result(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, node_id: str,
+) -> None:
+    page, site = workspace_page, workspace_site
+    assert site.records[node_id]["result"] is True
+    _open(page, site, workspace_runtime)
+    _search(page, site.records[node_id]["title"], node_id)
+    page.wait_for_url(site.route(node_id))
+    _selected(page, node_id)
+    playwright.expect(page.locator(f'.bp-reading-body .bp-thmwrapper[data-autoform-node-id="{node_id}"]')).to_have_count(1)
+    assert page.title() == site.records[node_id]["title"]
+    assert page.evaluate("() => document === __workspaceDocument") is True
+
+
+def test_zero_count_authored_region_is_visible_and_does_not_invent_one_item(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    page, site = workspace_page, workspace_site
+    authored = [node for node in site.root_graph["nodes"] if node.get("area") == "Unstarted mathematics"]
+    assert authored and all(node["member_count"] == 0 and node["status_counts"] == [] for node in authored)
+    _open(page, site, workspace_runtime)
+    region = page.locator('.bp-dag-node[data-autoform-node-id="region:Unstarted mathematics"]')
+    playwright.expect(region).to_be_visible()
+    assert ", 0 items" in region.get_attribute("aria-label")
+    assert ", 1 item" not in region.get_attribute("aria-label")
+    page.get_by_role("button", name="Results", exact=True).click()
+    page.get_by_role("button", name="Regions", exact=True).click()
+    playwright.expect(region).to_be_visible()
+
+
+def test_authored_cross_topic_proof_dependency_has_a_real_captured_area_edge(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    page, site = workspace_page, workspace_site
+    assert {"source": "Geometry", "target": "Analysis", "statement": 0, "proof": 1} in _area_edges(site.root_graph)
+    _open(page, site, workspace_runtime)
+    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id="region:Geometry"]')).to_be_visible()
+    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id="region:Analysis"]')).to_be_visible()
+    assert _pixels(page)["painted"] > 0
+
+
+def test_isolated_focal_context_keeps_connected_peers_and_their_real_edge(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    page, site = workspace_page, workspace_site
+    _open(page, site, workspace_runtime, _ISOLATED)
+    _selected(page, _ISOLATED)
+    base = page.locator(f'.bp-dag-node[data-autoform-node-id="{_BASE}"]')
+    main = page.locator(f'.bp-dag-node[data-autoform-node-id="{_TARGET}"]')
+    playwright.expect(base).to_be_visible()
+    playwright.expect(main).to_be_visible()
+    assert "no dependency edges" not in base.get_attribute("aria-label")
+    assert "no dependency edges" not in main.get_attribute("aria-label")
+    page.locator(".bp-dag-filter-summary").click()
+    page.locator(".bp-dag-isolated input").uncheck()
+    page.keyboard.press("Escape")
+    _frames(page)
+    playwright.expect(base).to_be_visible()
+    playwright.expect(main).to_be_visible()
+    _selected(page, _ISOLATED)
+    assert page.evaluate("""([source, target]) => {
+      const a = document.querySelector(source).getBoundingClientRect(), b = document.querySelector(target).getBoundingClientRect();
+      const canvas = document.querySelector('.bp-dag-canvas'), bounds = canvas.getBoundingClientRect();
+      const x = Math.round(((a.right+b.left)/2 - bounds.left) * canvas.width/bounds.width);
+      const y = Math.round(((a.top+a.height/2+b.top+b.height/2)/2 - bounds.top) * canvas.height/bounds.height);
+      const pixels = canvas.getContext('2d').getImageData(x-3, y-3, 7, 7).data;
+      return Array.from(pixels).some((value, index) => index % 4 === 3 && value > 0);
+    }""", [f'.bp-dag-node[data-autoform-node-id="{_BASE}"]', f'.bp-dag-node[data-autoform-node-id="{_TARGET}"]']) is True
 
 
 def test_native_reader_and_library_links_remain_soft_navigation(
@@ -536,7 +682,7 @@ def test_rich_workspace_region_and_full_reader_screenshots(
     page, site = workspace_page, workspace_site
     page.set_viewport_size({"width": width, "height": height})
     _open(page, site, workspace_runtime)
-    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id^="region:"]')).to_have_count(2)
+    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id^="region:"]')).to_have_count(len(_AREAS))
     assert _pixels(page)["painted"] > 0
     if width <= 720:
         handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
@@ -557,7 +703,9 @@ def test_rich_workspace_region_and_full_reader_screenshots(
     playwright.expect(page.get_by_role("heading", level=1)).to_have_count(1)
     if directory:
         page.screenshot(path=str(directory / f"reader-{width}x{height}.png"))
-        report = {"viewport": [width, height], "route": page.url, "nodes": len(site.records), "areas": ["Geometry", "Analysis"],
+        report = {"viewport": [width, height], "route": page.url, "nodes": len(site.records), "areas": list(_AREAS),
+                  "root_nodes": len(site.root_graph["nodes"]), "root_edges": len(site.root_graph["edges"]),
+                  "area_edges": _area_edges(site.root_graph),
                   "mathjax": page.evaluate("() => MathJax.version"), "complete_math": 5, "canvas": _pixels(page)}
         (directory / f"workspace-{width}x{height}.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     assert page.evaluate("() => document === __workspaceDocument") is True

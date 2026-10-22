@@ -581,12 +581,28 @@ _FORGED = '<span class="bp-mark">FORGED MARK</span><script>document.title="INJEC
 
 
 def _published(page: Path) -> str:
-    """``page`` as MkDocs publishes it: its metadata read off, and the rest
-    converted as the site's configuration converts it."""
+    """The complete mathematical content as MkDocs publishes it.
 
+    Validate the one trusted renderer-owned script outside the reader, then
+    inspect the entire reading subtree. Authored scripts remain forbidden;
+    adding a shared application host cannot weaken those inertness checks.
+    """
+
+    import html5lib
     from mkdocs.utils.meta import get_data
 
-    return site_converter().convert(get_data(page.read_text(encoding="utf-8"))[0])
+    rendered = site_converter().convert(get_data(page.read_text(encoding="utf-8"))[0])
+    tree = html5lib.parseFragment(rendered, namespaceHTMLElements=False)
+    readers = [node for node in tree.iter() if "bp-reading-source" in node.get("class", "").split()]
+    assert len(readers) == 1
+    assert list(readers[0].iter("script")) == []
+    scripts = list(tree.iter("script"))
+    assert len(scripts) == 1
+    root = next(parent for parent in page.parents if (parent / "publication.json").is_file())
+    relative_script = Path(os.path.relpath(root / "javascripts/blueprint-dag.js", page.parent)).as_posix()
+    assert scripts[0].attrib == {"defer": "defer", "src": quote(relative_script, safe="/%")}
+    assert not list(scripts[0]) and not (scripts[0].text or "").strip()
+    return html5lib.serialize(readers[0], omit_optional_tags=False, quote_attr_values="always")
 
 
 def test_text_shown_as_typed_is_inert_on_the_site() -> None:
@@ -964,7 +980,9 @@ def test_the_landing_page_is_checked_without_the_dashboard_render_adds(tmp_path:
     blueprint = _vault(tmp_path)
 
     assert publication_issues(load_graph(blueprint), blueprint) == []
-    assert 'class="bp-dag-intro bp-landing-intro"' in (_render(blueprint) / "README.md").read_text(encoding="utf-8")
+    page = (_render(blueprint) / "README.md").read_text(encoding="utf-8")
+    assert 'class="bp-landing-intro"' in page
+    assert 'class="bp-reading-source"' in page and 'class="bp-explorer-page"' in page
 
 
 def test_a_page_that_is_not_utf8_is_left_out_by_name(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

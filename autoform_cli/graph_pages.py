@@ -10,6 +10,7 @@ source of graph state.
 
 from __future__ import annotations
 
+import html
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -93,15 +94,23 @@ def publication_contexts(graph: Graph, destination: str | Path) -> dict[str, tup
     Paths locate publication artifacts, never mathematical areas.
     """
     destination = Path(destination).resolve()
-    project, full, chapters, scopes = _pages(graph, destination, group_nodes(graph))
+    return _publication_contexts(graph, destination, _pages(graph, destination, group_nodes(graph)))
+
+
+def _publication_contexts(
+    graph: Graph,
+    destination: Path,
+    pages: tuple[Path, Path, Mapping[str, Path], Mapping[str, Path]],
+) -> dict[str, tuple[Path, str]]:
+    """Derive reader contexts from already planned publication paths."""
+    project, full, chapters, scopes = pages
     known = {project, full, *chapters.values(), *scopes.values()}
-    parents = {node.parent for node in graph.nodes.values() if node.parent is not None}
     result: dict[str, tuple[Path, str]] = {}
     for node in graph.nodes.values():
         payload = scopes.get(node.id) or scope_page_path(destination, node.id, parent=node.parent)
         if payload not in known:
             payload = scopes.get(node.parent or "roadmap", project)
-        scope = node.id if node.id in parents else node.parent or "roadmap"
+        scope = node.id if node.id in scopes else node.parent or "roadmap"
         result[node.id] = (payload.with_suffix(".json"), scope)
     return result
 
@@ -113,6 +122,7 @@ def write_graph_pages(
     *,
     node_links: NodeLinks,
     book_targets: Mapping[str, tuple[Path, str]] | None = None,
+    contexts_out: dict[str, tuple[Path, str]] | None = None,
 ) -> tuple[Path, ...]:
     """Write project, chapter, nested-scope, and shared full-explorer pages.
 
@@ -120,6 +130,8 @@ def write_graph_pages(
     each generated page.  Keeping that callback in the site renderer avoids
     duplicating its URL and chapter-anchor policy here. With ``book_targets``,
     pages are compatibility entrances to canonical full-text book routes.
+    ``contexts_out`` receives the same reader-context map used for this index;
+    it is transient publication data, not another authored graph or cache.
     """
     destination = Path(destination).resolve()
     groups = group_nodes(graph)
@@ -132,7 +144,11 @@ def write_graph_pages(
     written: list[Path] = []
 
     complete = full_view(graph, statuses)
-    contexts = publication_contexts(graph, destination)
+    contexts = _publication_contexts(
+        graph, destination, (project_page, full_page, chapter_pages, scope_pages),
+    )
+    if contexts_out is not None:
+        contexts_out.update(contexts)
     context_links: dict[str, str] = {}
     metadata: dict[str, dict[str, object]] = {}
     # One bounded whole-index request, not one whole-graph request per page.
@@ -142,6 +158,12 @@ def write_graph_pages(
         payload, scope = contexts[node.id]
         original = graph.nodes[node.id]
         metadata[node.id] = {
+            # A concrete authored declaration is a result before it has Lean
+            # code. Organization, provenance and inventory are not results.
+            "result": (
+                original.formalizable and original.catalog is None
+                and node.id not in containers and original.navigation != "source"
+            ),
             "scope": scope,
             "data_url": _search_index_link(payload, search_index),
             "parent": original.parent,
@@ -417,7 +439,7 @@ def _write_page(
         reading = (
             '<div class="bp-reading-source" markdown="1">\n\n'
             'This compatibility route opens the same mathematical page and its graph.\n\n'
-            f'[Continue to the mathematical page]({href})\n\n</div>'
+            f'<a href="{html.escape(href, quote=True)}">Continue to the mathematical page</a>\n\n</div>'
         )
         sections.extend(['<div class="bp-explorer-page" markdown="1">', "", reading, "", explorer, "", "</div>", ""])
     else:

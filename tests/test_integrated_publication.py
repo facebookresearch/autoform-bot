@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import html5lib
+import pytest
 from mkdocs.utils.meta import get_data
 
 from autoform_cli import dag_viewer, graph_pages, render
@@ -111,6 +112,7 @@ def test_routes_preserve_encoded_book_anchors_and_real_scope_metadata(tmp_path: 
     index = json.loads(index_path.read_text(encoding="utf-8"))
     records = {record["id"]: record for record in index["nodes"]}
     theorem = records[f"{group}/main"]
+    assert theorem["result"] is True and records[f"{group}/base"]["result"] is True
     assert theorem["route"] == "../roadmap/Analysis%20%25%20caf%C3%A9/part-01/index.html#main"
     assert theorem["url"].startswith("scopes/Analysis%20%25%20caf%C3%A9/part-01.html#node=")
     assert theorem["data_url"] == "scopes/Analysis%20%25%20caf%C3%A9/part-01.json"
@@ -119,6 +121,7 @@ def test_routes_preserve_encoded_book_anchors_and_real_scope_metadata(tmp_path: 
     assert records[topic]["scope"] == topic and records[topic]["area"] == "Analysis"
     assert records[topic]["navigation"] == "module"
     assert records[group]["scope"] == group and records[group]["navigation"] == "transparent"
+    assert all(records[node_id]["result"] is False for node_id in ("roadmap", topic, group, f"{topic}/note"))
     assert index["relations"] == [[f"{group}/base", f"{group}/main", 1, 0]]
     for record in records.values():
         assert (index_path.parent / unquote(record["data_url"])).resolve().is_file()
@@ -128,6 +131,77 @@ def test_routes_preserve_encoded_book_anchors_and_real_scope_metadata(tmp_path: 
     assert "This final sentence" not in "".join(alias.itertext())
     assert any("Continue to the mathematical page" in "".join(link.itertext()) for link in alias.iter("a"))
     assert urlsplit(theorem["route"]).fragment == "main"
+
+
+def test_emitted_result_flags_use_declarations_not_progress_or_lean_availability(tmp_path: Path) -> None:
+    project, group, _explanation = _project(tmp_path)
+    blueprint, output = project / "blueprint", tmp_path / "out"
+    root = blueprint / "roadmap/README.md"
+    _write(root, "---\ndeclaration: def\n---\n\n" + root.read_text(encoding="utf-8"))
+    chapter = blueprint / "roadmap" / group
+    _write(chapter / "ready.md", "---\ndeclaration: def\n---\n\n# Ready definition\n\nA concrete definition, not yet in Lean.\n")
+    _write(chapter / "planned.md", (
+        "---\ndeclaration: theorem\n---\n\n# Planned theorem\n\nA concrete theorem with an unstated prerequisite.\n\n"
+        "## Depends on\n\n- [Ready definition](ready.md)\n"
+    ))
+    _write(chapter / "deferred.md", "---\nnot_ready: true\n---\n\n# Deferred scope\n\nNo concrete declaration has been chosen.\n")
+    _write(chapter / "source.md", "---\nnavigation: source\n---\n\n# Original textbook\n\nThis page records provenance.\n")
+    _write(blueprint / "sources/ledger.md", "# Declaration ledger\n\nThe existing module declarations.\n")
+    ledger = "\n## Sources\n\n- [Declaration ledger](../../../sources/ledger.md)\n"
+    _write(chapter / "pending.md", "---\ncatalog: module\n---\n\n# Pending inventory\n" + ledger)
+    _write(chapter / "checked.md", (
+        "---\ncatalog: module\nlean: Demo.main\nstatement: formalized\nproof: formalized\n---\n\n# Checked inventory\n" + ledger
+    ))
+    coverage = blueprint / "coverage/README.md"
+    _write(coverage, coverage.read_text(encoding="utf-8") + (
+        f"| Existing modules | INVENTORIED | [Pending](../roadmap/{group}/pending.md), [Checked](../roadmap/{group}/checked.md) |\n"
+    ))
+
+    render.render_site(blueprint, output, lean_root=project)
+
+    index = json.loads((output / graph_pages.SEARCH_INDEX).read_text(encoding="utf-8"))
+    records = {record["id"]: record for record in index["nodes"]}
+    for name, expected_status in (("ready", "can_state"), ("planned", "planned")):
+        record = records[f"{group}/{name}"]
+        assert record["status"] == expected_status and "lean" not in record
+        assert record["result"] is True
+    for name, expected_status in (("pending", "inventory_pending"), ("checked", "inventory_checked")):
+        record = records[f"{group}/{name}"]
+        assert record["status"] == expected_status and record["result"] is False
+        assert record["catalog"] == "module"
+    assert all("catalog" not in records[node_id] for node_id in ("roadmap", "chapter/note", f"{group}/ready", f"{group}/main"))
+    graph = load_graph(blueprint)
+    assert graph.nodes["roadmap"].formalizable  # A declared container is still organization, not a leaf result.
+    assert records["roadmap"]["result"] is False
+    for node_id in ("chapter", group, "chapter/note", f"{group}/deferred", f"{group}/source"):
+        assert records[node_id]["result"] is False
+    assert records[f"{group}/main"]["result"] is True
+    assert all(type(record["result"]) is bool for record in records.values())
+
+
+def test_emitted_result_ids_and_book_anchors_preserve_reserved_looking_prefixes(tmp_path: Path) -> None:
+    project, _group, _explanation = _project(tmp_path)
+    blueprint, output = project / "blueprint", tmp_path / "out"
+    ids = ("Geometry", "scope:Geometry", "boundary:Geometry")
+    for node_id in ids:
+        _write(blueprint / "roadmap" / f"{node_id}.md", (
+            f"---\ndeclaration: theorem\n---\n\n# Exact {node_id}\n\nThe distinct statement belonging to {node_id}.\n"
+        ))
+
+    render.render_site(blueprint, output, lean_root=project)
+
+    index = json.loads((output / graph_pages.SEARCH_INDEX).read_text(encoding="utf-8"))
+    records = {record["id"]: record for record in index["nodes"]}
+    chapter = _tree(output / "roadmap/README.md")
+    cards = {card.get("data-autoform-node-id"): card for card in _class(chapter, "bp-thmwrapper")}
+    assert len({records[node_id]["route"] for node_id in ids}) == len(ids)
+    for node_id in ids:
+        record, card = records[node_id], cards[node_id]
+        assert record["id"] == node_id and record["result"] is True
+        assert record["route"] == "../roadmap/index.html#" + card.get("id")
+        assert record["scope"] == record["parent"] == "roadmap"
+        assert unquote(urlsplit(record["url"]).fragment) == "node=" + node_id
+        assert f"The distinct statement belonging to {node_id}." in "".join(card.itertext())
 
 
 def test_shared_style_is_planned_written_and_not_duplicated_in_pages(tmp_path: Path) -> None:
@@ -151,6 +225,34 @@ def test_shared_style_is_planned_written_and_not_duplicated_in_pages(tmp_path: P
     summary = (output / "SUMMARY.md").read_text(encoding="utf-8")
     assert "- Mathematics" in summary and "- Graph" not in summary
     assert "Dependency explorer" not in summary
+
+
+def test_legacy_aliases_keep_exact_canonical_links_in_a_strict_mkdocs_build(tmp_path: Path) -> None:
+    mkdocs_build = pytest.importorskip("mkdocs.commands.build")
+    from mkdocs.config import load_config
+
+    project, group, _explanation = _project(tmp_path)
+    output, built = tmp_path / "out", tmp_path / "site"
+    render.render_site(project / "blueprint", output, lean_root=project)
+    config = tmp_path / "mkdocs.yml"
+    _write(config, (
+        f'site_name: Strict canonical publication\ndocs_dir: "{output}"\nsite_dir: "{built}"\n'
+        'use_directory_urls: false\nstrict: true\nmarkdown_extensions:\n  - md_in_html\n'
+    ))
+
+    # Strict doc-link validation must accept every alias: the published HTML
+    # route is not a missing Markdown source file. Do not suppress warnings.
+    mkdocs_build.build(load_config(config_file=str(config)))
+
+    for relative, href in (
+        ("dependencies.html", "roadmap/index.html"),
+        (f"dependencies/scopes/{group}.html", "../../../roadmap/chapter/part-01/index.html"),
+    ):
+        tree = html5lib.parse((built / relative).read_text(encoding="utf-8"), treebuilder="etree", namespaceHTMLElements=False)
+        (viewer,) = _class(tree, "bp-dag-viewer")
+        assert viewer.get("data-page-href") == href
+        assert any(link.get("href") == href and "Continue to the mathematical page" in "".join(link.itertext()) for link in tree.iter("a"))
+        assert (built / relative).parent.joinpath(href).resolve().is_file()
 
 
 def test_unpublished_reading_and_route_data_never_enter_the_site(tmp_path: Path) -> None:

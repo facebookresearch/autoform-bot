@@ -43,8 +43,14 @@ def test_explorer_compiler_is_private_pinned_development_tooling() -> None:
     lock = json.loads((_ROOT / "package-lock.json").read_text(encoding="utf-8"))
     assert package["private"] is True
     assert not package.get("dependencies")
-    assert package["devDependencies"] == {"esbuild": "0.28.2"}
+    assert package["devDependencies"] == {"esbuild": "0.28.2", "terser": "5.51.2"}
     assert lock["packages"]["node_modules/esbuild"]["version"] == "0.28.2"
+    terser = lock["packages"]["node_modules/terser"]
+    assert terser["version"] == "5.51.2"
+    assert terser["resolved"] == "https://registry.npmjs.org/terser/-/terser-5.51.2.tgz"
+    assert terser["integrity"] == (
+        "sha512-bWnjSNscmuI+GJze6ZupnHP8G/cTcsJF+bXCeQknk2SHQsgbNJnLrqiH9jZ2W4STPVXH2mDKKRX3iwPhc9Cn/Q=="
+    )
     assert package["scripts"] == {
         "build:explorer": "node scripts/build-explorer.mjs",
         "check:explorer": "node scripts/build-explorer.mjs --check",
@@ -54,6 +60,8 @@ def test_explorer_compiler_is_private_pinned_development_tooling() -> None:
 def test_explorer_mangles_only_explicitly_private_refs_and_keeps_public_contracts() -> None:
     compiler = (_ROOT / "scripts/build-explorer.mjs").read_text(encoding="utf-8")
     assert re.findall(r"\bmangleProps:\s*([^,\n]+)", compiler) == [r"/^\$/"]
+    assert re.search(r"\bmangle:\s*\{\s*properties:\s*false\s*\}", compiler)
+    assert "pure_getters: false" in compiler and "unsafe: false" in compiler and "drop_console: false" in compiler
     bundled = _BUNDLE.read_bytes()
     # Public schema, publication attributes, route fields and renderer/history APIs are not private.
     for marker in (
@@ -68,6 +76,14 @@ def test_explorer_mangles_only_explicitly_private_refs_and_keeps_public_contract
         b"data-scope-id",
         b".route",
         b".data_url",
+        b".result",
+        b".catalog",
+        b".kind",
+        b".scope",
+        b".navigation",
+        b".parent",
+        b".area",
+        b".relations",
         b".onCommit",
         b".captureState",
         b".restoreState",

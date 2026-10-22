@@ -835,8 +835,9 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'class="bp-thmwrapper theorem-style-plain bp-planned"' in chapter
     assert '<a class="bp-code-link"' in chapter
     assert '<svg class="bp-code-icon"' in chapter
-    assert '<a class="bp-context-link"' in chapter
-    assert "dependencies/chapters/infimum-loss.html#node=infimum-loss%2Ftheorems%2Fsupervision-recovery" in chapter
+    assert '<a class="bp-context-link"' not in chapter
+    assert 'class="bp-reading-source"' in chapter and 'class="bp-explorer-page"' in chapter
+    assert 'data-graph-src="../../dependencies/chapters/infimum-loss.json"' in chapter
     assert '<details class="bp-dependencies"><summary>Dependencies</summary>' in chapter
     assert '<nav class="bp-book-nav" aria-label="Blueprint chapters">' in chapter
     assert (
@@ -886,8 +887,8 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     }
     assert all(node["summary"] for node in project_payload["nodes"])
     assert {node["url"] for node in project_payload["nodes"]} == {
-        "dependencies/chapters/full-supervision.html",
-        "dependencies/chapters/infimum-loss.html",
+        "roadmap/full-supervision/index.html",
+        "roadmap/infimum-loss/index.html",
     }
 
     chapter_graph = (site / "dependencies/chapters/infimum-loss.md").read_text(
@@ -925,9 +926,12 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     search_index = json.loads((site / "dependencies/index.json").read_text(encoding="utf-8"))
     assert {node["id"] for node in search_index["nodes"]} == set(graph.nodes)
     statement_page = (site / "roadmap/infimum-loss/README.md").read_text(encoding="utf-8")
-    assert "dependencies/chapters/infimum-loss.html#node=infimum-loss%2Ftheorems%2Fsupervision-recovery" in statement_page
+    assert 'data-graph-src="../../dependencies/chapters/infimum-loss.json"' in statement_page
+    result = next(node for node in search_index["nodes"] if node["id"] == "infimum-loss/theorems/supervision-recovery")
+    assert result["route"] == "../roadmap/infimum-loss/index.html#theorems-supervision-recovery"
+    assert result["result"] is True
 
-    # Progress folded into the Book landing and the Graph; no separate page.
+    # Progress stays in the integrated reading/map workspace; no separate page.
     assert not (site / "progress.md").exists()
     assert not (site / "book.md").exists()
     overview = (site / "README.md").read_text(encoding="utf-8")
@@ -970,8 +974,9 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     summary = (site / "SUMMARY.md").read_text(encoding="utf-8")
     assert summary.startswith("---\nsearch:\n  exclude: true\n---\n")
     assert "- [Home](README.md)" in summary
-    assert "- Book" in summary
-    assert "- Graph" in summary
+    assert "- Mathematics" in summary
+    assert "- Book" not in summary and "- Graph" not in summary
+    assert "[Dependency explorer]" not in summary
     assert "[Infimum Loss milestone](roadmap/infimum-loss/README.md)" in summary
     theme = (example / "theme" / "main.html").read_text(encoding="utf-8")
     assert "{% block footer %}" in theme

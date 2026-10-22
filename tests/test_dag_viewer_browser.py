@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import functools
+import json
 import os
+import re
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 import pytest
 
@@ -421,11 +424,109 @@ def _offline(page: object, site_url: str) -> object:
 
 
 def _open_site(page: object, site_url: str, path: str) -> object:
-    """Open a page of the built site, offline, once its explorer has drawn a node."""
+    """Open a real published consumer, including legacy aliases, after its full reader mounts."""
     _offline(page, site_url)
     page.goto(f"{site_url}/{path}")
-    page.locator(".bp-dag-node").first.wait_for()
+    _ready_site(page)
     return page
+
+
+def _ready_site(page: object) -> None:
+    page.locator(".bp-dag-integrated .bp-dag-node").first.wait_for()
+    playwright.expect(page.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
+    playwright.expect(page.locator(".bp-explorer-page > .bp-reading-source")).to_have_count(0)
+
+
+def _site_record(page: object, site_url: str, node_id: str) -> dict[str, object]:
+    response = page.request.get(f"{site_url}/dependencies/index.json", timeout=10_000)
+    assert response.ok
+    return next(node for node in response.json()["nodes"] if node["id"] == node_id)
+
+
+def _site_route(page: object, site_url: str, node_id: str) -> str:
+    record = _site_record(page, site_url, node_id)
+    assert isinstance(record["route"], str)
+    route = urljoin(f"{site_url}/dependencies/index.json", record["route"])
+    assert route.startswith(site_url + "/roadmap/"), "The reader permalink must be a canonical book page"
+    return route
+
+
+def _reading_card(page: object, node_id: str) -> object:
+    card = page.locator(f'.bp-reading-body .bp-thmwrapper[data-autoform-node-id="{node_id}"]')
+    playwright.expect(card).to_have_count(1)
+    return card
+
+
+def _assert_hit(page: object, control: object) -> None:
+    playwright.expect(control).to_be_visible()
+    assert control.evaluate(
+        """element => {
+          const box = element.getBoundingClientRect();
+          const x = Math.max(0, box.left) + Math.min(box.width, innerWidth - Math.max(0, box.left)) / 2;
+          const y = Math.max(0, box.top) + Math.min(box.height, innerHeight - Math.max(0, box.top)) / 2;
+          const hit = document.elementFromPoint(x, y);
+          return hit === element || element.contains(hit);
+        }"""
+    )
+
+
+@pytest.fixture(scope="module")
+def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """A genuine marked-math consumer with 55 authored dependents, not an inconsistent payload-only patch."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("marked-math-site") / "project"
+    scaffold_project(project, title="Marked mathematics fixture")
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text(
+        "# Mathematical library\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n",
+        encoding="utf-8",
+    )
+    expressions = (r"L\neq\{0\}", r"\overline{G}=C_n", r"D_n", r"n=1,2,3,4", r"6")
+    for name in ("algebra", "topology"):
+        folder = roadmap / name
+        folder.mkdir()
+        links = "- [Base](base.md)\n- [Result](result.md)\n"
+        if name == "topology":
+            links += "".join(f"- [Later {n}](later-{n}.md)\n" for n in range(55))
+        (folder / "README.md").write_text(
+            f"---\nnavigation: module\n---\n\n# {name.title()}\n\n{links}",
+            encoding="utf-8",
+        )
+        (folder / "base.md").write_text(
+            "---\ndeclaration: def\n---\n\n# Base\n\nThe base value is $0$.\n\n## Depends on\n\nNo prerequisites.\n",
+            encoding="utf-8",
+        )
+        notations = ", ".join("$" + expression + "$" for expression in expressions)
+        (folder / "result.md").write_text(
+            "---\ndeclaration: theorem\n---\n\n# Result\n\n"
+            + "The synthetic reading fixture retains these five mathematical notations: " + notations + ".\n\n"
+            + "This complete explanatory paragraph stays in the mathematical reader. " * 10
+            + "\n\nFinal sentence of the complete statement.\n\n## Depends on\n\n- [Base](base.md)\n",
+            encoding="utf-8",
+        )
+        if name == "topology":
+            for n in range(55):
+                (folder / f"later-{n}.md").write_text(
+                    f"---\ndeclaration: theorem\n---\n\n# Later {n}\n\nThe identity $0=0$ is stated explicitly.\n\n"
+                    "Its complete explanatory text remains available after relation navigation.\n\n"
+                    "## Depends on\n\n- [Result](result.md)\n",
+                    encoding="utf-8",
+                )
+    render_site(project / "blueprint", project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml")))
+    index = json.loads((project / "site/dependencies/index.json").read_text(encoding="utf-8"))
+    assert sum(edge[0] == "topology/result" for edge in index["relations"]) == 55
+    with _served(project / "site") as url:
+        yield url
+
+
+@pytest.fixture(scope="module")
+def marked_math_runtime() -> object:
+    from tests.test_integrated_explorer_browser import _PinnedRuntime
+
+    return _PinnedRuntime()
 
 
 def _open_ready(page: object, explorer_url: str) -> None:
@@ -452,6 +553,9 @@ def test_mobile_node_interaction_and_selected_sheet_collapse(mobile_page: object
 
     playwright.expect(node).to_have_attribute("data-selected", "true")
     playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text("Middle lemma")
+    # The card and the details name the status, never the internal id.
+    playwright.expect(node.locator(".bp-dag-node-meta")).to_have_text("ready to prove")
+    playwright.expect(page.locator(".bp-dag-inspector")).not_to_contain_text("chapter/middle")
     handle = page.locator(".bp-dag-sheet-handle")
     inspector_inner = page.locator(".bp-dag-inspector-inner")
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
@@ -459,6 +563,18 @@ def test_mobile_node_interaction_and_selected_sheet_collapse(mobile_page: object
     assert inspector_inner.get_attribute("aria-hidden") is None
     assert inspector_inner.get_attribute("inert") is None
     assert "node=chapter%2Fmiddle" in page.url
+    # The handle names the selection, so the sheet's heading is hidden text, and the close button
+    # sits in the handle's top-right corner, clear of its title.
+    page.evaluate("() => new Promise(done => setTimeout(done, 300))")
+    heading, close, handle_box = (
+        page.locator(selector).bounding_box() for selector in (".bp-dag-inspector h2", ".bp-dag-close", ".bp-dag-sheet-handle")
+    )
+    assert heading is not None and close is not None and handle_box is not None
+    assert heading["width"] <= 1 and heading["height"] <= 1
+    assert (close["width"], close["height"]) == (32, 32)
+    assert handle_box["y"] <= close["y"] and close["y"] + close["height"] <= handle_box["y"] + handle_box["height"]
+    assert abs(handle_box["x"] + handle_box["width"] - 10 - (close["x"] + close["width"])) < 2
+    assert handle.evaluate("element => getComputedStyle(element).paddingRight") == "48px"
 
     handle.tap()
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
@@ -503,7 +619,24 @@ def test_connected_project_maps_open_at_readable_scale(
     box = node.bounding_box()
     assert box is not None
     assert box["height"] >= 44
-    playwright.expect(page.locator(".bp-dag-density")).to_contain_text("Readable window")
+    density = page.locator(".bp-dag-density")
+    playwright.expect(density).to_contain_text("Readable window")
+    # The note is plain text at the map's bottom-left, not a bubble over the map.
+    style = density.evaluate(
+        "element => ['borderTopStyle', 'boxShadow', 'pointerEvents'].map(name => getComputedStyle(element)[name])"
+    )
+    assert style == ["none", "none", "none"]
+    note, stage = density.bounding_box(), page.locator(".bp-dag-stage").bounding_box()
+    assert note is not None and stage is not None
+    assert abs(note["x"] - stage["x"] - 16) < 1
+    assert abs(stage["y"] + stage["height"] - 12 - (note["y"] + note["height"])) < 1
+    # On a phone it sat flush on the collapsed sheet's peek; it keeps 8px above it.
+    page.emulate_media(reduced_motion="reduce")
+    page.set_viewport_size({"width": 390, "height": 844})
+    playwright.expect(density).to_contain_text("Readable window")
+    note, sheet = density.bounding_box(), page.locator(".bp-dag-inspector").bounding_box()
+    assert note is not None and sheet is not None
+    assert abs(sheet["y"] - 8 - (note["y"] + note["height"])) < 1
 
 
 def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
@@ -520,6 +653,8 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     navigation = page.locator(".bp-dag-navigation")
     playwright.expect(navigation).to_be_visible()
     playwright.expect(navigation).to_contain_text("Knowledge atlas")
+    # No guide pill over the map: the drawer and the dimming show a selection.
+    playwright.expect(page.locator(".bp-dag-guide")).to_have_count(0)
     playwright.expect(navigation).to_contain_text("Geometry & Topology")
     playwright.expect(page.locator(".bp-dag-inspector")).to_be_hidden()
     # The closed drawer still holds the overview. Topics count once, by their least-complete item,
@@ -542,7 +677,8 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     assert "Geometry & Topology" in (topic.get_attribute("aria-label") or "")
     topic.click()
     playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text("Topology")
-    playwright.expect(page.locator(".bp-dag-inspector .bp-dag-kicker")).to_have_text("Scope · Geometry & Topology")
+    # A topic has no declaration, so no kicker names its kind over the title.
+    playwright.expect(page.locator(".bp-dag-inspector .bp-dag-kicker")).to_have_count(0)
     playwright.expect(page.locator(".bp-dag-inspector h3", has_text="in this scope")).to_have_text(
         "80 items in this scope"
     )
@@ -564,8 +700,9 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     playwright.expect(page.locator(".bp-dag-status-pill")).to_have_text("inventory only")
     # Contents names each topic's region, which the map paints only on the canvas.
     page.get_by_role("button", name="Contents").click()
-    topology = page.locator(".bp-dag-inventory-row").filter(has=page.get_by_text("atlas/topology", exact=True))
+    topology = page.locator(".bp-dag-inventory-row").filter(has=page.get_by_text("Topology", exact=True))
     playwright.expect(topology.locator(".bp-dag-inventory-meta")).to_contain_text("Geometry & Topology")
+    playwright.expect(topology).not_to_contain_text("atlas/topology")
 
 
 def test_a_view_of_topics_and_results_draws_readable_result_cards(desktop_page: object, explorer_url: str) -> None:
@@ -577,7 +714,7 @@ def test_a_view_of_topics_and_results_draws_readable_result_cards(desktop_page: 
     assert not page.locator(".bp-dag-viewer").evaluate("element => element.classList.contains('bp-dag-atlas')")
     assert title.evaluate("element => element.scrollWidth <= element.clientWidth")
     meta = page.locator('[data-autoform-node-id="topics/compactness"] .bp-dag-node-meta')
-    playwright.expect(meta).to_have_text("1 item · 0 internal links")
+    playwright.expect(meta).to_have_text("1 item")
     # A drawn DAG counts its nodes by status; only an atlas counts topics by their least-complete item.
     playwright.expect(page.locator(".bp-dag-inspector h3")).to_have_text("Nodes by status")
     page.locator('[data-autoform-node-id="topics/library"]').click()
@@ -644,9 +781,8 @@ def test_oversized_flat_scope_defaults_to_contents(desktop_page: object, explore
     inventory.wait_for()
     playwright.expect(inventory).to_be_visible()
     playwright.expect(page.locator(".bp-dag-mode-button").first).to_be_disabled()
-    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_contain_text(
-        "map unavailable above 120 items"
-    )
+    # The first page of a list too long to draw.
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("100 of 1,000")
     playwright.expect(page.locator(".bp-dag-node")).to_have_count(0)
 
 
@@ -712,7 +848,7 @@ def test_mobile_contents_pagination_stays_above_the_collapsed_sheet(
     assert box is not None and handle_box is not None
     assert box["y"] + box["height"] <= handle_box["y"]
     more.tap()
-    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_contain_text("200 of 1000 listed")
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("200 of 1,000")
 
 
 def test_mobile_isolates_do_not_overlap_the_connected_dag(mobile_page: object, explorer_url: str) -> None:
@@ -725,7 +861,8 @@ def test_mobile_isolates_do_not_overlap_the_connected_dag(mobile_page: object, e
     a, b = connected.bounding_box(), isolated.bounding_box()
     assert a is not None and b is not None
     assert a["y"] + a["height"] <= b["y"] or b["y"] + b["height"] <= a["y"]
-    playwright.expect(page.locator(".bp-dag-isolated")).to_be_visible()
+    page.locator(".bp-dag-filter-summary").tap()
+    playwright.expect(page.get_by_role("checkbox", name="Include items without edges")).to_be_visible()
 
 
 def test_a_plain_wheel_pans_the_full_page_explorer(desktop_page: object, explorer_url: str) -> None:
@@ -842,7 +979,7 @@ def test_a_result_neither_drawn_here_nor_safely_linked_selects_nothing(
 
 
 def test_a_contents_query_lists_only_this_scope(desktop_page: object, explorer_url: str) -> None:
-    """Whole-roadmap matches belong to the search dropdown, not under "Contents of this scope".
+    """Whole-roadmap matches belong to the search dropdown, not under "Contents".
 
     The dropdown opened on every keystroke and covered the list being filtered,
     so in Contents it opens only when asked: by Down from the search box, or the
@@ -854,6 +991,7 @@ def test_a_contents_query_lists_only_this_scope(desktop_page: object, explorer_u
     page.get_by_role("button", name="Contents").click()
     search.fill("theorem")
     playwright.expect(page.locator(".bp-dag-inventory-title")).to_have_text(["Target theorem"])
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 of 63 · search the whole roadmap")
     results = page.locator(".bp-dag-search-results")
     playwright.expect(results).to_be_hidden()
     search.press("ArrowDown")
@@ -868,8 +1006,12 @@ def test_global_search_jumps_to_the_smallest_context(desktop_page: object, explo
     page = desktop_page
     _open_ready(page, explorer_url)
     search = page.locator(".bp-dag-search")
+    # A Lean name finds its entry, which shows its status rather than its id or why it matched.
     search.fill("Remote.Namespace.deepTheorem")
-    playwright.expect(page.locator(".bp-dag-result-reason").first).to_have_text("Exact Lean name")
+    first = page.locator(".bp-dag-result").first
+    playwright.expect(first.locator(".bp-dag-result-title")).to_have_text("Remote theorem")
+    playwright.expect(first.locator(".bp-dag-result-meta")).to_have_text("planned")
+    playwright.expect(first).not_to_contain_text("remote/deep-theorem")
     search.fill("spectral gap")
     playwright.expect(page.locator(".bp-dag-result", has_text="Remote theorem")).to_be_visible()
     search.fill("Remote theorem")
@@ -963,22 +1105,29 @@ def test_direct_list_view_has_current_shown_and_hidden_counts(
     page = desktop_page
     page.goto(f"{explorer_url}/index.html#view=list&status=fully_proved")
     page.locator(".bp-dag-inventory").wait_for()
-    playwright.expect(page.locator(".bp-dag-stats")).to_contain_text("1 of 63 shown")
-    playwright.expect(page.locator(".bp-dag-hidden-button")).to_have_text("+62 hidden")
+    # The reviewed #411 count controls replace the redundant always-present stats string.
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 of 63")
+    playwright.expect(page.locator(".bp-dag-hidden-button")).to_have_text("Show 62 hidden")
+    playwright.expect(page.locator(".bp-dag-inventory-row")).to_have_count(1)
 
 
 def test_hidden_items_without_edges_stay_hidden_after_a_reload(desktop_page: object, explorer_url: str) -> None:
     """The location records only that they are hidden, so a reload has to read that back."""
     page = desktop_page
     _open_ready(page, explorer_url)
-    isolates = page.get_by_role("checkbox", name="Show items without edges")
+    # The toggle is the Status popover's second group.
+    page.locator(".bp-dag-filter-summary").click()
+    isolates = page.locator(".bp-dag-filter-popover fieldset + fieldset").get_by_role(
+        "checkbox", name="Include items without edges"
+    )
     isolates.uncheck()
     page.wait_for_function("location.hash === '#isolates=0'")
 
     page.reload()
     page.locator("[data-autoform-node-id]").first.wait_for()
+    playwright.expect(page.locator(".bp-dag-hidden-button")).to_have_text("Show 60 hidden")
+    page.locator(".bp-dag-filter-summary").click()
     playwright.expect(isolates).not_to_be_checked()
-    playwright.expect(page.locator(".bp-dag-hidden-button")).to_have_text("+60 hidden")
 
 
 def test_reselect_does_not_duplicate_history_and_back_restores_selection(
@@ -1106,57 +1255,65 @@ def test_a_published_canvas_covers_exactly_its_stage(
 def test_the_published_landing_page_is_one_full_page_explorer_opened_by_its_hero(
     desktop_page: object, site_url: str
 ) -> None:
-    """The page stacked a hero, a framed map card and the explorer's own title over a boxed map."""
+    """The landing mathematics belongs to the same full-page reading/map shell, not a second hero surface."""
     page = _open_site(desktop_page, site_url, "index.html")
     box = page.locator(".bp-dag-viewer").bounding_box()
     assert box is not None and (box["width"], box["height"]) == (1280, 900)
     playwright.expect(page.locator(".md-header")).to_be_hidden()
-    intro = page.locator(".bp-dag-navigation .bp-dag-intro")
-    playwright.expect(intro).to_be_visible()
-    headings = page.get_by_role("heading", level=1)
-    playwright.expect(headings).to_have_count(1)
-    playwright.expect(headings).to_have_text("Explorer fixture")
-    playwright.expect(page.locator(".bp-dag-navigation-title")).to_have_count(0)
-    playwright.expect(intro.get_by_role("link", name="Read the book")).to_have_attribute("href", "roadmap/index.html")
-    # The rail lists the project's chapters under the hero.
-    playwright.expect(page.locator(".bp-dag-navigation-link", has_text="Algebra")).to_be_visible()
-    # Only autoform dashboard serves the live overlay; this local server answers 404, so no panel opens.
-    with page.expect_response(lambda response: response.url.endswith("/__autoform/live.json")):
-        page.reload()
-    page.locator(".bp-dag-navigation .bp-dag-intro").wait_for()
+    playwright.expect(page.get_by_role("heading", level=1)).to_have_count(1)
+    playwright.expect(page.get_by_role("heading", level=1)).to_have_text("Explorer fixture")
+    playwright.expect(page.locator(".bp-reading-body .bp-hero-title")).to_have_count(1)
+    library = page.locator(".bp-dag-book")
+    playwright.expect(library).to_have_attribute("href", _site_route(page, site_url, "roadmap"))
+    _assert_hit(page, library)
+    algebra = page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')
+    playwright.expect(algebra).to_have_attribute("href", _site_route(page, site_url, "algebra"))
+    _assert_hit(page, algebra)
+    # A static publication is not the dashboard's live-overlay service.
+    page.route("**/__autoform/live.json", lambda route: route.fulfill(status=404, body=""))
+    page.reload()
+    _ready_site(page)
     playwright.expect(page.locator("#bp-live-activity")).to_have_count(0)
 
 
 def test_on_a_phone_the_landing_hero_opens_in_the_details_sheet(mobile_page: object, site_url: str) -> None:
-    """Phones hide the hierarchy rail, so the hero moves into the details sheet and a hidden heading names the page."""
+    """A collapsed phone reader remains named; opening it reveals the same authored landing content."""
     page = _open_site(mobile_page, site_url, "index.html")
     playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
-    handle = page.locator(".bp-dag-sheet-handle")
-    playwright.expect(handle).to_have_text("Explorer fixture")
-    playwright.expect(page.locator(".bp-dag-inspector .bp-dag-intro")).to_have_count(1)
+    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     headings = page.get_by_role("heading", level=1)
     playwright.expect(headings).to_have_count(1)
+    playwright.expect(headings).to_have_text("Explorer fixture")
+    inner = page.locator(".bp-reading-pane .bp-dag-inspector-inner")
+    playwright.expect(inner).to_have_attribute("inert", "")
     handle.click()
-    playwright.expect(page.locator(".bp-dag-inspector .bp-hero-title")).to_be_visible()
-    # The open sheet's visible title is not a second heading.
+    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    assert inner.get_attribute("inert") is None and inner.get_attribute("aria-hidden") is None
+    playwright.expect(page.locator(".bp-reading-body .bp-hero-title")).to_be_visible()
     playwright.expect(headings).to_have_count(1)
+    playwright.expect(headings).to_have_text("Explorer fixture")
+    handle.click()
+    playwright.expect(headings).to_have_count(1)
+    playwright.expect(headings).to_have_text("Explorer fixture")
 
 
 def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_page: object, site_url: str) -> None:
-    """The Status popover opened past the screen's left edge, and the toolbar's popovers painted under the sheet."""
-    # The selection opens the sheet over the lower half of the screen.
-    page = _open_site(mobile_page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
-
+    """Toolbar popovers must remain on-screen and clickable over the phone's full reading pane."""
+    page = mobile_page
     def lengthen_the_index(route: object) -> None:
         index = route.fetch().json()
         index["nodes"] += [
-            {"id": f"more/result-{n}", "kind": "node", "status": "planned", "title": f"Result {n}", "url": None}
+            {"id": f"more/result-{n}", "kind": "node", "status": "planned", "result": True, "title": f"Result {n}", "url": None}
             for n in range(20)
         ]
         route.fulfill(json=index)
-
+    # The shared router loads its catalog before its first graph; install the fixture before opening.
     page.route("**/dependencies/index.json", lengthen_the_index)
-
+    _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
+    playwright.expect(page.get_by_role("button", name="Toggle mathematical reading", exact=True)).to_have_attribute(
+        "aria-expanded", "true"
+    )
     page.locator(".bp-dag-filter-summary").tap()
     popover = page.locator(".bp-dag-filter-popover")
     playwright.expect(popover).to_be_visible()
@@ -1164,135 +1321,122 @@ def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_pag
     assert box is not None and viewport is not None
     assert 0 <= box["x"] and box["x"] + box["width"] <= viewport["width"]
     assert 0 <= box["y"] and box["y"] + box["height"] <= viewport["height"]
-    assert popover.locator("input").first.evaluate(
-        """input => {
-          const box = input.getBoundingClientRect();
-          return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === input;
-        }"""
-    )
-
+    _assert_hit(page, popover.locator("input").first)
     search = _load_search_index(page, 27)
     search.fill("Result")
-    # The lowest result the dropdown shows lies over the sheet, so it is the one to hit.
-    lowest = page.evaluate(
-        """() => {
-          const sheet = document.querySelector(".bp-dag-inspector").getBoundingClientRect();
-          const list = document.querySelector(".bp-dag-search-results").getBoundingClientRect();
-          const centre = box => [box.x + box.width / 2, box.y + box.height / 2];
-          const result = Array.from(document.querySelectorAll(".bp-dag-result"))
-            .filter(result => centre(result.getBoundingClientRect())[1] < list.bottom)
-            .pop();
-          const [x, y] = centre(result.getBoundingClientRect());
-          return [y > sheet.top, result.contains(document.elementFromPoint(x, y))];
-        }"""
-    )
-    assert lowest == [True, True]
+    assert _paints_over_the_details(page, ".bp-dag-result", ".bp-dag-search-results") is True
 
 
-@pytest.mark.parametrize("width", (800, 1100, 1440))
+@pytest.mark.parametrize("width", (800, 1100, 1101, 1440))
 def test_a_node_chosen_on_a_wider_screen_lands_beside_the_open_details(
     desktop_page: object, site_url: str, width: int
 ) -> None:
-    """Centring in the whole stage put the chosen node, which also takes focus, under the drawer its selection opens."""
+    """The graph, explicit activation and full reader agree; keyboard roving alone does not replace mathematics."""
     page = desktop_page
     page.set_viewport_size({"width": width, "height": 900})
-    # The drawer slides in; without motion it is measured where it stops.
     page.emulate_media(reduced_motion="reduce")
     _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
-    settled = "() => new Promise(done => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(done))))"
-
-    def assert_beside_the_details(node: object) -> None:
+    def assert_beside_reading(node: object) -> None:
         playwright.expect(node).to_have_attribute("data-selected", "true")
-        page.evaluate(settled)
-        box = node.bounding_box()
-        drawer = page.locator(".bp-dag-inspector").bounding_box()
-        stage = page.locator(".bp-dag-stage").bounding_box()
-        assert box is not None and drawer is not None and stage is not None
-        assert box["x"] + box["width"] <= drawer["x"] or drawer["x"] + drawer["width"] <= box["x"]
+        _paint_frame(page)
+        box, reader, stage = (
+            item.bounding_box() for item in (node, page.locator(".bp-reading-pane"), page.locator(".bp-dag-stage"))
+        )
+        assert box is not None and reader is not None and stage is not None
+        assert box["x"] + box["width"] <= reader["x"] or reader["x"] + reader["width"] <= box["x"]
         assert stage["x"] <= box["x"] and box["x"] + box["width"] <= stage["x"] + stage["width"]
-
-    result = page.locator('[data-autoform-node-id="algebra/result"]')
-    assert_beside_the_details(result)
-    # An arrow key from closed details centred the next node before its selection opened them.
-    page.get_by_role("button", name="Close details").click()
-    playwright.expect(result).to_be_focused()
+        _assert_hit(page, node)
+    result = page.locator('[data-autoform-node-id="algebra/result"].bp-dag-node')
+    assert_beside_reading(result)
+    _reading_card(page, "algebra/result")
+    result.focus()
     stacked = page.locator(".bp-dag-stage").evaluate("stage => stage.clientWidth <= 620")
-    page.keyboard.press("ArrowUp" if stacked else "ArrowLeft")
-    base = page.locator('[data-autoform-node-id="algebra/base"]')
+    result.press("ArrowUp" if stacked else "ArrowLeft")
+    base = page.locator('[data-autoform-node-id="algebra/base"].bp-dag-node')
     playwright.expect(base).to_be_focused()
-    assert_beside_the_details(base)
+    playwright.expect(result).to_have_attribute("data-selected", "true")
+    assert page.url == _site_route(page, site_url, "algebra/result")
+    base.press("Enter")
+    page.wait_for_url(_site_route(page, site_url, "algebra/base"))
+    assert_beside_reading(base)
+    _reading_card(page, "algebra/base")
 
 
 def test_the_rail_under_the_open_details_leaves_the_tab_order(desktop_page: object, site_url: str) -> None:
-    """Up to 1,200px open details cover the rail, and Tab still walked its links under the drawer."""
+    """An explicitly closed narrow outline is absent from Tab; an open outline and wide rail remain usable."""
     page = desktop_page
     page.set_viewport_size({"width": 1000, "height": 900})
     page.emulate_media(reduced_motion="reduce")
     _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
-    result = page.locator('[data-autoform-node-id="algebra/result"]')
-    playwright.expect(result).to_have_attribute("data-selected", "true")
-    playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
+    outline = page.locator(".bp-dag-navigation")
+    playwright.expect(outline).to_be_hidden()
     page.get_by_role("button", name="Fit shown nodes").focus()
-    page.keyboard.press("Tab")
-    playwright.expect(result).to_be_focused()
-    # Closing the details uncovers the rail and brings it back.
-    page.get_by_role("button", name="Close details").click()
-    playwright.expect(page.locator(".bp-dag-navigation-link").first).to_be_visible()
-    # With motion allowed it hides after the drawer's .2s slide; hiding at once left it blank before the
-    # drawer covered it. Material turns every transition off for reduced motion, as the steps above ran.
-    page.emulate_media(reduced_motion="no-preference")
-    _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
-    playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
-    timing = "element => [getComputedStyle(element).transitionProperty, getComputedStyle(element).transitionDelay]"
-    assert page.locator(".bp-dag-navigation").evaluate(timing) == ["visibility", "0.2s"]
-    assert page.locator(".bp-dag-navigation h1").evaluate(timing) == ["opacity", "0.2s"]
+    for _ in range(8):
+        page.keyboard.press("Tab")
+        assert not outline.evaluate("rail => rail.contains(document.activeElement)")
+    toggle = page.get_by_role("button", name="Toggle topic outline", exact=True)
+    toggle.click()
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "true")
+    link = outline.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')
+    _assert_hit(page, link)
+    link.focus()
+    playwright.expect(link).to_be_focused()
+    toggle.click()
+    playwright.expect(outline).to_be_hidden()
+    page.set_viewport_size({"width": 1440, "height": 900})
+    playwright.expect(outline).to_be_visible()
+    link.focus()
+    playwright.expect(link).to_be_focused()
+    assert page.locator(".bp-reading-pane .bp-dag-inspector-inner").get_attribute("inert") is None
 
 
 @pytest.mark.parametrize(
     ("path", "title"),
     (
-        ("dependencies/chapters/algebra.html#node=algebra%2Fresult", "Algebra dependencies"),
-        ("index.html#node=scope%3Aalgebra", "Explorer fixture"),
+        ("dependencies/chapters/algebra.html#node=algebra%2Fresult", "Algebra"),
+        ("index.html#node=scope%3Aalgebra", "Algebra"),
     ),
 )
 def test_the_rail_under_the_open_details_keeps_the_page_heading(
     desktop_page: object, site_url: str, path: str, title: str
 ) -> None:
-    """Up to 1,200px open details hide the rail, which held the page's only h1, so the page had no heading."""
+    """The reading page owns one authored H1 even when the topic outline is closed."""
     page = desktop_page
     page.set_viewport_size({"width": 1000, "height": 900})
     page.emulate_media(reduced_motion="reduce")
     _open_site(page, site_url, path)
-    playwright.expect(page.locator(".bp-dag-inspector")).to_be_visible()
+    playwright.expect(page.locator(".bp-reading-pane")).to_be_visible()
     playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
     headings = page.get_by_role("heading", level=1)
     playwright.expect(headings).to_have_count(1)
     playwright.expect(headings).to_have_text(title)
-    # It is kept for assistive technology, not drawn over the drawer's edge.
-    playwright.expect(headings).to_have_css("opacity", "0")
+    playwright.expect(headings).to_have_css("opacity", "1")
+    assert page.locator(".bp-reading-pane .bp-dag-inspector-inner").get_attribute("inert") is None
 
 
 def test_contents_start_right_of_the_open_details(desktop_page: object, site_url: str) -> None:
-    """Up to 1,200px open details covered the start of every Contents row, its heading and the selected marker."""
+    """Results occupy their own pane without clipping the selected marker or lying beneath the reader."""
     page = desktop_page
     page.set_viewport_size({"width": 1000, "height": 900})
     page.emulate_media(reduced_motion="reduce")
-    # The list view never draws a map node, so the list itself is what to wait for.
     _offline(page, site_url)
     page.goto(f"{site_url}/dependencies/chapters/algebra.html#node=algebra%2Fresult&view=list")
-    playwright.expect(page.locator(".bp-dag-inventory")).to_be_visible()
-    playwright.expect(page.locator('.bp-dag-inventory-row[aria-current="true"]')).to_contain_text("Result")
-    drawer = page.locator(".bp-dag-inspector").bounding_box()
-    assert drawer is not None
-    edge = drawer["x"] + drawer["width"]
-    for item in (".bp-dag-inventory-head h2", ".bp-dag-inventory-row", ".bp-dag-inventory-title"):
-        box = page.locator(item).first.bounding_box()
-        assert box is not None and box["x"] >= edge, item
-    # Closed details give the list the whole stage again.
-    page.get_by_role("button", name="Close details").click()
-    main = page.locator(".bp-dag-main").bounding_box()
-    inventory = page.locator(".bp-dag-inventory").bounding_box()
-    assert main is not None and inventory is not None and abs(inventory["x"] - main["x"]) < 1
+    inventory = page.locator(".bp-dag-inventory")
+    playwright.expect(inventory).to_be_visible()
+    row = inventory.locator('.bp-dag-inventory-row[aria-current="true"]')
+    playwright.expect(row).to_contain_text("Result")
+    playwright.expect(inventory.locator(".bp-dag-inventory-title")).to_have_text(["Base", "Result"])
+    playwright.expect(inventory.locator(".bp-dag-inventory-summary")).to_have_text("2 results")
+    reader = page.locator(".bp-reading-pane").bounding_box()
+    assert reader is not None
+    for item in (inventory.locator(".bp-dag-inventory-head h2"), row, row.locator(".bp-dag-inventory-title")):
+        box = item.bounding_box()
+        assert box is not None and box["x"] + box["width"] <= reader["x"] + 1
+    _assert_hit(page, row)
+    page.get_by_role("button", name="Map", exact=True).click()
+    playwright.expect(inventory).to_be_hidden()
+    _reading_card(page, "algebra/result")
+    playwright.expect(page.locator(".bp-reading-pane")).to_be_visible()
 
 
 def _paints_over_the_details(page: object, items: str, container: str) -> bool | None:
@@ -1304,53 +1448,61 @@ def _paints_over_the_details(page: object, items: str, container: str) -> bool |
         """([items, container]) => {
           const drawer = document.querySelector(".bp-dag-inspector").getBoundingClientRect();
           const shown = document.querySelector(container).getBoundingClientRect();
-          const inside = (box, [x, y]) => box.left < x && x < box.right && box.top < y && y < box.bottom;
-          const centre = item => {
+          for (const item of document.querySelectorAll(items)) {
             const box = item.getBoundingClientRect();
-            return [box.x + box.width / 2, box.y + box.height / 2];
-          };
-          const item = Array.from(document.querySelectorAll(items))
-            .find(item => inside(drawer, centre(item)) && inside(shown, centre(item)));
-          return item ? item.contains(document.elementFromPoint(...centre(item))) : null;
+            // The reading pane is now on the right on desktop. Probe an actual shared visible area,
+            // not only the row's centre, which can be left of it while its right half overlaps.
+            const left = Math.max(box.left, drawer.left, shown.left, 0);
+            const right = Math.min(box.right, drawer.right, shown.right, innerWidth);
+            const top = Math.max(box.top, drawer.top, shown.top, 0);
+            const bottom = Math.min(box.bottom, drawer.bottom, shown.bottom, innerHeight);
+            if (right - left > 2 && bottom - top > 2)
+              return item.contains(document.elementFromPoint((left + right) / 2, (top + bottom) / 2));
+          }
+          return null;
         }""",
         [items, container],
     )
 
 
 def test_the_toolbars_popovers_paint_over_the_open_details(desktop_page: object, site_url: str) -> None:
-    """The head stacked under the details drawer, which covered the Status popover and the search results."""
+    """Real overlapping popup areas must win hit-testing over both phone and wider reading panes."""
     page = desktop_page
-    page.set_viewport_size({"width": 1000, "height": 900})
     page.emulate_media(reduced_motion="reduce")
-
+    palette: dict[str, object] = {}
     def every_status(route: object) -> None:
         payload = route.fetch().json()
+        palette.update(payload["palette"])
         payload["nodes"] += [
             {"id": f"more/{key}", "kind": "node", "status": key, "status_counts": [[key, 1]], "title": f"More {key}"}
             for key in payload["palette"]
         ]
         route.fulfill(json=payload)
-
     def lengthen_the_index(route: object) -> None:
         index = route.fetch().json()
+        # The published palette is authoritative; read it before the router's first request.
         index["nodes"] += [
-            {"id": f"more/result-{n}", "kind": "node", "status": "planned", "title": f"Result {n}", "url": None}
+            {"id": f"more/{key}", "kind": "node", "status": key, "result": True, "title": f"More {key}", "url": None}
+            for key in palette
+        ]
+        index["nodes"] += [
+            {"id": f"more/result-{n}", "kind": "node", "status": "planned", "result": True, "title": f"Result {n}", "url": None}
             for n in range(20)
         ]
         route.fulfill(json=index)
-
-    # A row per status makes the popover reach well down over the drawer.
+    payload = page.request.get(f"{site_url}/dependencies/chapters/algebra.json", timeout=10_000)
+    assert payload.ok
+    palette.update(payload.json()["palette"])
     page.route("**/algebra.json", every_status)
     page.route("**/dependencies/index.json", lengthen_the_index)
+    page.set_viewport_size({"width": 390, "height": 844})
     _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
-    playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text("Result")
-
+    _reading_card(page, "algebra/result")
     page.locator(".bp-dag-filter-summary").click()
     playwright.expect(page.locator(".bp-dag-filter-popover")).to_be_visible()
     assert _paints_over_the_details(page, ".bp-dag-check", ".bp-dag-filter-popover") is True
     page.locator(".bp-dag-filter-summary").click()
-
-    search = _load_search_index(page, 27)
+    search = _load_search_index(page, 27 + len(palette))
     for width in (1000, 800):
         page.set_viewport_size({"width": width, "height": 900})
         search.fill("")
@@ -1382,73 +1534,59 @@ def test_a_phones_chapter_explorer_gives_its_breadcrumb_a_line_of_its_own(mobile
 
 
 def test_the_explorer_draws_its_breadcrumb_once(desktop_page: object, site_url: str) -> None:
-    """On desktop the head and the hierarchy rail both drew the trail."""
+    """One persistent canonical trail replaces the former duplicate header and rail trails."""
     page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
-    playwright.expect(page.locator(".bp-dag-navigation-path li")).to_have_count(3)
-    playwright.expect(page.locator(".bp-dag-navigation-path")).to_be_visible()
-    playwright.expect(page.locator(".bp-dag-breadcrumb")).to_be_hidden()
-    # The textbook link shares the head's row and stays.
-    playwright.expect(page.locator(".bp-dag-book")).to_be_visible()
-    # Up to 1,200px open details cover the rail, so the head draws the trail again.
-    page.set_viewport_size({"width": 1000, "height": 800})
-    _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
-    playwright.expect(page.locator(".bp-dag-inspector")).to_be_visible()
-    playwright.expect(page.locator(".bp-dag-breadcrumb")).to_be_visible()
-    # Phones hide the rail, so there the head draws the trail.
-    page.set_viewport_size({"width": 390, "height": 844})
-    playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
-    playwright.expect(page.locator(".bp-dag-breadcrumb")).to_be_visible()
-    # The landing page's rail holds the hero instead of a trail, so its head keeps the trail on desktop too.
-    page.set_viewport_size({"width": 1280, "height": 900})
+    crumbs = page.locator(".bp-dag-breadcrumb")
+    playwright.expect(crumbs).to_have_count(1)
+    playwright.expect(crumbs).to_be_visible()
+    playwright.expect(crumbs.locator('[aria-current="page"]')).to_have_text("Algebra")
+    playwright.expect(page.locator(".bp-dag-navigation-path")).to_have_count(0)
+    library = page.locator(".bp-dag-book")
+    _assert_hit(page, library)
+    for width in (1000, 390, 1280):
+        page.set_viewport_size({"width": width, "height": 900 if width != 390 else 844})
+        playwright.expect(crumbs).to_be_visible()
+        playwright.expect(crumbs.locator('[aria-current="page"]')).to_have_text("Algebra")
+        playwright.expect(page.get_by_role("heading", level=1)).to_have_count(1)
     _open_site(page, site_url, "index.html")
-    playwright.expect(page.locator(".bp-dag-navigation .bp-dag-intro")).to_be_visible()
-    playwright.expect(page.locator(".bp-dag-breadcrumb")).to_be_visible()
+    playwright.expect(crumbs).to_have_count(1)
+    playwright.expect(crumbs).to_be_visible()
 
 
 def test_the_published_atlas_hides_the_isolate_toggle(desktop_page: object, site_url: str) -> None:
     page = _open_site(desktop_page, site_url, "dependencies.html")
-    playwright.expect(page.locator(".bp-dag-isolated")).to_be_hidden()
+    # This atlas has only isolated topics; hiding them all is not a meaningful view filter.
+    page.locator(".bp-dag-filter-summary").click()
+    playwright.expect(page.locator(".bp-dag-filter-popover")).to_be_visible()
+    playwright.expect(page.get_by_role("group", name="Edges", exact=True)).to_be_hidden()
 
 
 def test_published_explorer_controls_keep_their_own_styles_under_material(
     desktop_page: object, site_url: str
 ) -> None:
-    """Material's typeset rules stacked the breadcrumb and drew the status filter as an admonition."""
+    """Controls and reading typography retain their own roles beneath Material's generic typeset rules."""
     page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
-
     summary = page.locator(".bp-dag-filter-summary")
-    background = page.locator(".bp-dag-viewer").evaluate("element => getComputedStyle(element).backgroundColor")
-    assert summary.evaluate("element => getComputedStyle(element).backgroundColor") == background
-    assert summary.evaluate("element => getComputedStyle(element).borderLeftStyle") == "solid"
+    assert summary.evaluate(
+        "element => {const s=getComputedStyle(element);return [element.tagName,s.display,s.borderLeftWidth,s.borderRightWidth];}"
+    ) == ["BUTTON", "flex", "1px", "1px"]
     page.locator(".bp-dag-search").fill("Result")
     results = page.locator(".bp-dag-results")
     results.wait_for()
     assert results.evaluate("element => getComputedStyle(element).listStyleType") == "none"
     assert results.locator("li").first.evaluate("element => getComputedStyle(element).marginLeft") == "0px"
-    # The hierarchy rail's lists took Material's bullets, indents and block flow, and its title Material's light h1.
-    for rail_list in (page.locator(".bp-dag-navigation-path"), page.locator(".bp-dag-navigation-list").first):
-        assert rail_list.evaluate("element => getComputedStyle(element).listStyleType") == "none"
-        assert rail_list.evaluate("element => getComputedStyle(element).display") == "grid"
-        assert rail_list.locator("li").first.evaluate("element => getComputedStyle(element).marginLeft") == "0px"
-    title = page.locator(".bp-dag-navigation-title")
-    assert title.evaluate("element => getComputedStyle(element).fontWeight") == "650"
-    # The head draws the breadcrumb only where phones hide the rail.
+    rail = page.locator(".bp-dag-navigation-list")
+    assert rail.evaluate("element => getComputedStyle(element).listStyleType") == "none"
+    assert rail.evaluate("element => getComputedStyle(element).display") == "grid"
+    assert rail.locator("li").first.evaluate("element => getComputedStyle(element).marginLeft") == "0px"
+    heading = page.locator(".bp-reading-body h1")
+    playwright.expect(heading).to_have_css("font-weight", "700")
+    assert heading.evaluate("element => parseFloat(getComputedStyle(element).fontSize)") >= 22
     page.set_viewport_size({"width": 390, "height": 844})
     crumbs = page.locator(".bp-dag-breadcrumb li")
-    playwright.expect(crumbs).to_have_count(3)
-    playwright.expect(crumbs.first).to_be_visible()
-    assert len({round(crumbs.nth(index).bounding_box()["y"]) for index in range(3)}) == 1
-    page.set_viewport_size({"width": 1280, "height": 900})
-
-    # The atlas overview's heading, in the details drawer, took Material's large, light h2 and its margin.
-    page.goto(f"{site_url}/dependencies.html")
-    heading = page.locator(".bp-dag-inspector-inner > h2").evaluate(
-        """heading => {
-          const style = getComputedStyle(heading), root = getComputedStyle(document.documentElement);
-          return [style.fontWeight, parseFloat(style.marginTop) < parseFloat(root.fontSize)];
-        }"""
-    )
-    assert heading == ["700", True]
+    assert crumbs.count() >= 2
+    assert len({round(crumbs.nth(index).bounding_box()["y"]) for index in range(crumbs.count())}) == 1
+    assert page.locator(".bp-dag-head").evaluate("head => head.scrollWidth <= head.clientWidth + 1")
 
 
 def _assert_site_chrome_is_reachable(page: object) -> None:
@@ -1456,45 +1594,65 @@ def _assert_site_chrome_is_reachable(page: object) -> None:
     for chrome in (
         page.locator(".md-header"),
         page.get_by_role("heading", level=1),
-        page.get_by_role("link", name="Open textbook chapter").first,
+        page.locator(".bp-reading-source").get_by_role("link", name="Base", exact=True).first,
     ):
         playwright.expect(chrome).to_be_visible()
         chrome.click(trial=True, timeout=5_000)
 
 
 def test_a_published_app_page_without_script_keeps_the_site_chrome(webkit_browser: object, site_url: str) -> None:
-    """The full-viewport layout belongs to the script, so it cannot cover the page before it runs."""
+    """Canonical complete mathematics and native book links remain usable without enhancement."""
     with _page(webkit_browser, java_script_enabled=False) as page:
         _offline(page, site_url)
-        page.goto(f"{site_url}/dependencies/chapters/algebra.html")
-        # Checked first: without script, the trial click on the textbook link follows it.
+        page.goto(_site_route(page, site_url, "algebra"))
         loading = page.locator(".bp-dag-loading")
         playwright.expect(loading).to_be_attached()
         playwright.expect(loading).to_be_hidden()
         _assert_site_chrome_is_reachable(page)
+        playwright.expect(page.locator('.bp-reading-source .bp-thmwrapper[data-autoform-node-id="algebra/result"]')).to_contain_text(
+            "The main result."
+        )
+        playwright.expect(page.locator(".bp-dag-integrated")).to_have_count(0)
+        # A legacy entrance is still a usable native notice, not a blank graph without JavaScript.
+        page.goto(f"{site_url}/dependencies/chapters/algebra.html")
+        notice = page.locator(".bp-reading-source")
+        playwright.expect(notice).to_be_visible()
+        link = notice.get_by_role("link").first
+        href = link.get_attribute("href")
+        assert isinstance(href, str)
+        assert urljoin(page.url, href) == _site_route(page, site_url, "algebra")
+        link.click(trial=True)
 
 
 def test_a_published_app_page_restores_the_site_chrome_when_its_data_fails(
     desktop_page: object, site_url: str
 ) -> None:
     page = _offline(desktop_page, site_url)
+    canonical = _site_route(page, site_url, "algebra")
     page.route("**/algebra.json", lambda route: route.fulfill(status=404, body=""))
-    page.goto(f"{site_url}/dependencies/chapters/algebra.html")
+    page.goto(canonical)
     playwright.expect(page.locator(".bp-dag-error")).to_contain_text("HTTP 404")
     _assert_site_chrome_is_reachable(page)
+    playwright.expect(page.locator('.bp-reading-source .bp-thmwrapper[data-autoform-node-id="algebra/result"]')).to_contain_text(
+        "The main result."
+    )
     assert "bp-dag-app-page" not in (page.locator("body").get_attribute("class") or "")
 
 
 def test_a_published_chapter_explorer_links_its_textbook_chapter_and_keeps_its_heading(
     desktop_page: object, site_url: str
 ) -> None:
-    """Script hides the page heading and navigation behind the explorer, so the explorer carries them."""
+    """The canonical mathematical page is already the reader; Library is navigation, not a second self-link."""
     page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
-    playwright.expect(page.locator(".bp-dag-book")).to_have_attribute("href", "../../roadmap/algebra/index.html")
-    playwright.expect(page.locator(".bp-dag-book")).to_be_visible()
-    # A section's explorer carries the same link to its own page, so it names no chapter.
-    playwright.expect(page.locator(".bp-dag-book")).to_have_text("Open the textbook page")
-    playwright.expect(page.get_by_role("heading", level=1)).to_have_text("Algebra dependencies")
+    assert page.url == _site_route(page, site_url, "algebra")
+    library = page.locator(".bp-dag-book")
+    playwright.expect(library).to_have_attribute("href", _site_route(page, site_url, "roadmap"))
+    playwright.expect(library).to_have_text("Library")
+    _assert_hit(page, library)
+    playwright.expect(page.get_by_role("heading", level=1)).to_have_count(1)
+    playwright.expect(page.get_by_role("heading", level=1)).to_have_text("Algebra")
+    _reading_card(page, "algebra/base")
+    playwright.expect(_reading_card(page, "algebra/result")).to_contain_text("The main result.")
 
 
 def test_slash_on_the_published_landing_page_opens_the_explorer_search(desktop_page: object, site_url: str) -> None:
@@ -1510,68 +1668,578 @@ def test_slash_inside_the_explorer_opens_its_search_but_an_input_keeps_its_keys(
     """Focus inside the explorer lets "/" open its search, but no shortcut takes a key from an input."""
     page = desktop_page
     _open_ready(page, explorer_url)
+    search, wrap = page.locator(".bp-dag-search"), page.locator(".bp-dag-search-wrap")
+    playwright.expect(search).to_have_attribute("placeholder", "Search the roadmap")
+    # The box draws a masked magnifier and a "/" key hint, which focus hides.
+    assert "svg" in wrap.evaluate("element => getComputedStyle(element, '::before').webkitMaskImage")
+    hint = "element => [getComputedStyle(element, '::after').content, getComputedStyle(element, '::after').display]"
+    assert wrap.evaluate(hint) == ['"/"', "block"]
     page.locator("[data-autoform-node-id]").first.focus()
     page.keyboard.press("/")
-    playwright.expect(page.locator(".bp-dag-search")).to_be_focused()
-    isolates = page.get_by_role("checkbox", name="Show items without edges")
+    playwright.expect(search).to_be_focused()
+    assert wrap.evaluate(hint)[1] == "none"
+    page.locator(".bp-dag-filter-summary").click()
+    isolates = page.get_by_role("checkbox", name="Include items without edges")
     isolates.focus()
     page.keyboard.press("Control+K")
     playwright.expect(isolates).to_be_focused()
 
 
-def test_the_explorer_typesets_the_math_it_draws_in_its_rail_and_details(desktop_page: object, site_url: str) -> None:
-    """MathJax typesets the page once when it starts, so authored TeX the explorer draws later stayed raw."""
-    page = desktop_page
-    # The site's mathjax.js assigns its configuration to window.MathJax, and offline the CDN script that
-    # would replace it is aborted, so a stub behind an accessor stands in for MathJax once started.
+def test_the_explorer_typesets_the_math_it_draws_in_its_rail_and_details(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
+) -> None:
+    """Actual marked reader math survives navigation and more-than-50 authored relations with real readback."""
+    from tests.test_integrated_explorer_browser import _math_source, _routes
+
+    page, site_url = desktop_page, marked_math_site_url
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _routes(page, site_url, marked_math_runtime, graph_client=True)
+    first = _site_route(page, site_url, "algebra/result")
+    page.goto(first)
+    _ready_site(page)
+    page.evaluate("() => window.__mathReaderDocument = document")
+    def full_math(node_id: str, count: int) -> object:
+        assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-reading-body'))") is True
+        card = _reading_card(page, node_id)
+        playwright.expect(card.locator(".arithmatex")).to_have_count(count)
+        playwright.expect(card.locator("mjx-container")).to_have_count(count)
+        playwright.expect(card.locator("mjx-merror, merror")).to_have_count(0)
+        assert page.locator("[data-autoform-math-stage]").count() == 0
+        return card
+    card = full_math("algebra/result", 5)
+    assert _math_source(page, card.locator("mjx-container").first) == r"L\neq\{0\}"
+    assert "Final sentence of the complete statement." in card.inner_text()
+    search = page.locator(".bp-dag-search")
+    search.fill("topology/result")
+    remote = page.locator('.bp-dag-result[data-result-id="topology/result"]')
+    playwright.expect(remote).to_be_visible()
+    remote.click()
+    page.wait_for_url(_site_route(page, site_url, "topology/result"))
+    full_math("topology/result", 5)
+    related = page.locator(".bp-reading-neighbors").get_by_role("button", name="Show all 55", exact=True)
+    playwright.expect(related).to_be_visible()
+    related.click()
+    inventory = page.locator(".bp-dag-inventory")
+    playwright.expect(inventory).to_be_visible()
+    playwright.expect(inventory.locator(".bp-dag-inventory-row")).to_have_count(55)
+    last = inventory.locator(".bp-dag-inventory-row", has=page.get_by_text("Later 54", exact=True))
+    last.scroll_into_view_if_needed()
+    _assert_hit(page, last)
+    last.click()
+    page.wait_for_url(_site_route(page, site_url, "topology/later-54"))
+    last_card = full_math("topology/later-54", 1)
+    assert _math_source(page, last_card.locator("mjx-container").first) == "0=0"
+    assert page.evaluate("() => document === __mathReaderDocument")
+    assert documents == [first]
+
+
+def _paint_frame(page: object) -> None:
+    page.evaluate("() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))")
+
+
+
+def _canvas_pixels(page: object) -> dict[str, object]:
+    return page.locator(".bp-dag-canvas").evaluate(
+        """canvas => {
+          const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+          let painted = 0;
+          for (let index = 3; index < pixels.length; index += 4) if (pixels[index]) painted++;
+          return {width: canvas.width, height: canvas.height, painted};
+        }"""
+    )
+
+
+
+def _assert_sheet_state(page: object, *, selected: str | None, opened: bool) -> None:
+    _paint_frame(page)
+    state = page.locator(".bp-dag-viewer").evaluate(
+        "host => ({selected: host.classList.contains('bp-dag-has-selection'), "
+        "opened: host.classList.contains('bp-dag-sheet-open')})"
+    )
+    assert state == {"selected": selected is not None, "opened": opened}
+    playwright.expect(page.locator(".bp-dag-sheet-handle")).to_have_attribute("aria-expanded", str(opened).lower())
+    inner = page.locator(".bp-dag-inspector-inner")
+    assert inner.get_attribute("inert") == (None if opened else "")
+    assert inner.get_attribute("aria-hidden") == (None if opened else "true")
+    marked = page.locator('.bp-dag-node[data-selected="true"]')
+    playwright.expect(marked).to_have_count(0 if selected is None else 1)
+    if selected is not None:
+        playwright.expect(marked).to_have_attribute("data-autoform-node-id", selected)
+
+
+
+def _canvas_region(route: object) -> None:
+    """Give this page a real authored region label without changing its fixture."""
+    payload = route.fetch().json()
+    label = "Algebra and topology mathematical region"
+    layouts = [node["layout"] for node in payload["nodes"]]
+    left = min(box["x"] for box in layouts) - 12
+    top = min(box["y"] for box in layouts) - 46
+    right = max(box["x"] + box["width"] for box in layouts) + 12
+    bottom = max(box["y"] + box["height"] for box in layouts) + 12
+    for node in payload["nodes"]:
+        node["area"] = label
+    payload["regions"] = [{
+        "label": label, "count": len(layouts), "x": left, "y": top,
+        "width": right - left, "height": bottom - top,
+    }]
+    route.fulfill(json=payload)
+
+
+
+def _record_label_paints(page: object, *, reject_family: bool) -> None:
     page.add_init_script(
         """
-        window.typesetContainers = [];
-        const stub = {
-          startup: {promise: Promise.resolve()},
-          typesetClear() {},
-          typesetPromise(elements) {
-            elements.forEach((element) =>
-              window.typesetContainers.push({name: element.classList[0], text: element.textContent}));
-            return Promise.resolve();
-          },
+        const rejectFamily = __REJECT_FAMILY__;
+        window.labelPaints = [];
+        const prototype = CanvasRenderingContext2D.prototype;
+        const paint = prototype.fillText;
+        const font = Object.getOwnPropertyDescriptor(prototype, 'font');
+        if (rejectFamily) {
+          Object.defineProperty(prototype, 'font', {
+            configurable: font.configurable, enumerable: font.enumerable, get: font.get,
+            set(value) {
+              if (String(value).includes('Plus Jakarta Sans')) return;
+              font.set.call(this, value);
+            }
+          });
+          const context = HTMLCanvasElement.prototype.getContext;
+          HTMLCanvasElement.prototype.getContext = function (...args) {
+            const result = context.apply(this, args);
+            if (args[0] === '2d' && result && this.classList.contains('bp-dag-canvas'))
+              font.set.call(result, '11px serif');
+            return result;
+          };
+        }
+        prototype.fillText = function (text, ...args) {
+          if (this.canvas.classList.contains('bp-dag-canvas'))
+            window.labelPaints.push({text: String(text), font: this.font, width: this.measureText(text).width});
+          return paint.call(this, text, ...args);
         };
-        Object.defineProperty(window, "MathJax", {configurable: true, get: () => stub, set() {}});
-        """
+        """.replace("__REJECT_FAMILY__", str(reject_family).lower())
     )
+
+
+
+def test_widening_with_the_book_focused_resizes_and_repaints_the_live_canvas(
+    desktop_page: object, site_url: str
+) -> None:
+    page = desktop_page
+    page.emulate_media(reduced_motion="reduce")
+    page.set_viewport_size({"width": 1000, "height": 800})
+    _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
+    _paint_frame(page)
+    book = page.locator(".bp-dag-book").element_handle()
+    book.focus()
+    before = _canvas_pixels(page)
+    assert before["painted"] > 0
+    page.set_viewport_size({"width": 1280, "height": 900})
+    playwright.expect(page.locator(".bp-dag-context > .bp-dag-book")).to_have_count(1)
+    _paint_frame(page)
+    assert book.evaluate("node => node === document.activeElement && node === document.querySelector('.bp-dag-book')")
+    after = _canvas_pixels(page)
+    assert after["width"] != before["width"] and after["height"] != before["height"]
+    assert after["painted"] > 0, "Resizing cleared the canvas without painting the graph again"
+    stage = page.locator(".bp-dag-stage").bounding_box()
+    ratio = page.evaluate("Math.min(2, devicePixelRatio || 1)")
+    assert stage is not None
+    assert abs(after["width"] - stage["width"] * ratio) <= 1
+    assert abs(after["height"] - stage["height"] * ratio) <= 1
+
+
+
+@pytest.mark.parametrize("reject_family", (False, True), ids=("multiword-site-font", "rejected-site-font"))
+def test_canvas_label_paints_use_the_site_family_or_a_valid_fallback(
+    desktop_page: object, site_url: str, reject_family: bool
+) -> None:
+    page = desktop_page
+    _record_label_paints(page, reject_family=reject_family)
+    if not reject_family:
+        def serif_host_before_startup(route: object) -> None:
+            body = route.fetch().text()
+            marker = 'class="bp-dag-viewer"'
+            assert body.count(marker) == 1
+            body = body.replace(
+                marker,
+                marker + ' style="font-family: &quot;Times New Roman&quot;, serif !important;"',
+                1,
+            )
+            route.fulfill(content_type="text/html", body=body)
+
+        # The family must be present on the host before the runtime's probe;
+        # Material can override an inherited root custom property later.
+        page.route("**/dependencies.html", serif_host_before_startup)
+    page.route("**/dependencies.json", _canvas_region)
+    _open_site(page, site_url, "dependencies.html")
+    page.wait_for_function("window.labelPaints.some(paint => paint.text.startsWith('Algebra and topology mathematical region'))")
+    painted = page.evaluate(
+        "window.labelPaints.filter(paint => paint.text.startsWith('Algebra and topology mathematical region')).at(-1)"
+    )
+    family = page.locator(".bp-dag-viewer").evaluate("host => getComputedStyle(host).fontFamily")
+    assert ("Plus Jakarta Sans" if reject_family else "Times New Roman") in family
+    measured = page.evaluate(
+        """({text, family}) => {
+          const ctx = document.createElement('canvas').getContext('2d');
+          ctx.font = '700 13px ' + family;
+          const expected = ctx.measureText(text).width;
+          ctx.font = '700 13px sans-serif';
+          return {expected, generic: ctx.measureText(text).width};
+        }""",
+        {"text": painted["text"], "family": "sans-serif" if reject_family else family},
+    )
+    assert abs(painted["width"] - measured["expected"]) < .1
+    assert float(re.search(r"(\d+(?:\.\d+)?)px", painted["font"]).group(1)) >= 11
+    if not reject_family:
+        assert abs(painted["width"] - measured["generic"]) > .5, "The live labels ignored the site's serif family"
+
+
+
+def test_a_deep_long_rail_trail_keeps_its_full_accessible_names(
+    desktop_page: object, site_url: str
+) -> None:
+    """Logical ancestors come from authored catalog titles; elision must retain their full accessible names."""
+    page = desktop_page
+    labels = (
+        "Collected mathematical foundations and supporting results",
+        "Topological vector spaces and infinite-dimensional functional analysis",
+        "The complete mathematical statement and prerequisite structure of the current result",
+    )
+    canonical = _site_route(page, site_url, "algebra")
+    def long_titles(route: object) -> None:
+        index = route.fetch().json()
+        titles = dict(zip(("roadmap", "algebra", "algebra/result"), labels))
+        for node in index["nodes"]:
+            if node["id"] in titles:
+                node["title"] = titles[node["id"]]
+        route.fulfill(json=index)
+    def long_authored_heading(route: object) -> None:
+        body = route.fetch().text()
+        body, replaced = re.subn(r'(<h1\b[^>]*>)Algebra(?=<)', lambda match: match[1] + labels[1], body, count=1)
+        assert replaced == 1
+        body = body.replace('data-page-title="Algebra"', 'data-page-title="' + labels[1] + '"')
+        route.fulfill(content_type="text/html", body=body)
+    page.route("**/dependencies/index.json", long_titles)
+    page.route("**" + urlsplit(canonical).path, long_authored_heading)
+    _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
+    crumbs = page.locator(".bp-dag-breadcrumb li")
+    playwright.expect(crumbs).to_have_count(3)
+    for index, label in enumerate(labels):
+        item = crumbs.nth(index)
+        playwright.expect(item).to_have_text(label)
+        assert item.evaluate(
+            "item => item.scrollWidth <= item.clientWidth + 1 || item.title === item.textContent || item.querySelector('a')?.title === item.textContent"
+        ), "An elided mathematical ancestor has no full tooltip"
+    link = page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')
+    playwright.expect(link).to_have_text(labels[1])
+    playwright.expect(link).to_have_attribute("title", labels[1])
+    rail_box, box = page.locator(".bp-dag-navigation").bounding_box(), link.bounding_box()
+    assert rail_box is not None and box is not None
+    assert box["x"] >= rail_box["x"] and box["x"] + box["width"] <= rail_box["x"] + rail_box["width"] + 1
+    heading = page.locator(".bp-reading-body h1")
+    playwright.expect(heading).to_have_text(labels[1])
+    assert heading.evaluate("node => node.scrollWidth <= node.clientWidth + 1")
+
+
+
+@pytest.mark.parametrize("width", (390, 1000, 1280))
+def test_sheet_selection_close_clear_filter_and_history_states_stay_consistent(
+    desktop_page: object, explorer_url: str, width: int
+) -> None:
+    page = desktop_page
+    page.emulate_media(reduced_motion="reduce")
+    page.set_viewport_size({"width": width, "height": 900})
+    if width == 1000:
+        def trail_without_book(route: object) -> None:
+            payload = route.fetch().json()
+            payload["view"]["book"] = None
+            payload["view"]["breadcrumbs"] = [
+                {"label": "Mathematics", "url": "articles.html"},
+                {"label": "Standalone dependency explorer", "url": None},
+            ]
+            route.fulfill(json=payload)
+
+        page.route("**/graph.json", trail_without_book)
+    _open_ready(page, explorer_url)
+    _assert_sheet_state(page, selected=None, opened=False)
+    if width == 390:
+        page.locator(".bp-dag-sheet-handle").click()
+        _assert_sheet_state(page, selected=None, opened=True)
+        page.locator(".bp-dag-sheet-handle").click()
+        _assert_sheet_state(page, selected=None, opened=False)
+
+    foundation = page.locator('[data-autoform-node-id="chapter/foundation"]')
+    middle = page.locator('[data-autoform-node-id="chapter/middle"]')
+    original = foundation.bounding_box()
+    assert original is not None
+    foundation.click()
+    _assert_sheet_state(page, selected="chapter/foundation", opened=True)
+    if width == 1000:
+        assert abs(foundation.bounding_box()["y"] - original["y"]) < 2, "Opening the trail row moved the clicked card"
+    page.get_by_role("button", name="Close details", exact=True).click()
+    _assert_sheet_state(page, selected="chapter/foundation", opened=False)
+    if width == 1000:
+        assert abs(foundation.bounding_box()["y"] - original["y"]) < 2, "Closing the trail row moved the selection"
+    foundation.click()
+    _assert_sheet_state(page, selected="chapter/foundation", opened=True)
+    foundation.press("Escape")
+    _assert_sheet_state(page, selected=None, opened=False)
+    if width == 1000:
+        assert abs(foundation.bounding_box()["y"] - original["y"]) < 2, "Clearing selection changed the map's vertical position"
+    assert "node=" not in page.url
+
+    foundation.click()
+    middle.click()
+    _assert_sheet_state(page, selected="chapter/middle", opened=True)
+    page.locator(".bp-dag-filter-summary").click()
+    page.locator('.bp-dag-filter-popover input[value="can_prove"]').uncheck()
+    _assert_sheet_state(page, selected=None, opened=False)
+    page.evaluate("history.back()")
+    page.wait_for_function("location.hash.includes('node=chapter%2Ffoundation')")
+    _assert_sheet_state(page, selected="chapter/foundation", opened=True)
+    page.evaluate("history.forward()")
+    page.wait_for_function("!new URLSearchParams(location.hash.slice(1)).has('node')")
+    _assert_sheet_state(page, selected=None, opened=False)
+    playwright.expect(page.locator('.bp-dag-filter-popover input[value="can_prove"]')).not_to_be_checked()
+
+
+
+def test_edges_group_and_status_summary_follow_checkbox_and_history_state(
+    desktop_page: object, explorer_url: str
+) -> None:
+    page = desktop_page
+    _open_ready(page, explorer_url)
+    summary = page.locator(".bp-dag-filter-summary")
+    middle = page.locator('[data-autoform-node-id="chapter/middle"]')
+    foundation = page.locator('[data-autoform-node-id="chapter/foundation"]')
+    middle.click()
+    summary.click()
+    edges = page.get_by_role("group", name="Edges", exact=True)
+    playwright.expect(edges).to_be_visible()
+    isolates = edges.get_by_role("checkbox", name="Include items without edges", exact=True)
+    playwright.expect(summary).to_have_text("Status")
+    isolates.uncheck()
+    playwright.expect(summary).to_have_text("Status · edges only")
+    foundation.click()
+    summary.click()
+    isolates.check()
+    playwright.expect(summary).to_have_text("Status")
+    page.evaluate("history.back()")
+    page.wait_for_function("location.hash.includes('isolates=0')")
+    playwright.expect(isolates).not_to_be_checked()
+    playwright.expect(summary).to_have_text("Status · edges only")
+    page.evaluate("history.forward()")
+    page.wait_for_function("!location.hash.includes('isolates=0')")
+    playwright.expect(isolates).to_be_checked()
+    playwright.expect(summary).to_have_text("Status")
+    page.locator('.bp-dag-filter-popover input[value="planned"]').uncheck()
+    playwright.expect(summary).to_have_text("Status · 2")
+    isolates.uncheck()
+    playwright.expect(summary).to_have_text("Status · 2 · edges only")
+
+
+
+def test_details_close_from_their_corner_and_space_the_status_from_the_link(
+    desktop_page: object, explorer_url: str
+) -> None:
+    """The close button floated beside the kicker, and the status text touched the Open article button."""
+    page = desktop_page
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.emulate_media(reduced_motion="reduce")
+    page.goto(f"{explorer_url}/index.html#node=chapter%2Fmiddle")
+    playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text("Middle lemma")
+    drawer, close, heading, pill, link = (
+        page.locator(selector).bounding_box()
+        for selector in (".bp-dag-inspector", ".bp-dag-close", ".bp-dag-inspector h2", ".bp-dag-status-pill", ".bp-dag-open")
+    )
+    assert drawer is not None and close is not None and heading is not None and pill is not None and link is not None
+    assert (close["width"], close["height"]) == (32, 32)
+    # 10px inside the drawer's 1px border, at its top-right corner, with the title stopping short of it.
+    assert abs(drawer["x"] + drawer["width"] - 11 - (close["x"] + close["width"])) < 1.5
+    assert abs(close["y"] - drawer["y"] - 11) < 1.5
+    assert heading["x"] + heading["width"] <= close["x"]
+    # The status and the button share a line, 16px apart.
+    assert abs(pill["y"] + pill["height"] / 2 - (link["y"] + link["height"] / 2)) < 1.5
+    assert abs(link["x"] - (pill["x"] + pill["width"]) - 16) < 1.5
+
+
+
+def test_details_read_as_mathematics_not_as_instructions(desktop_page: object, explorer_url: str) -> None:
+    """The drawer explained the map's controls, and its path pivots sat under a "Path spotlight" heading."""
+    page = desktop_page
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(f"{explorer_url}/index.html#node=chapter%2Fmiddle")
+    inspector = page.locator(".bp-dag-inspector")
+    playwright.expect(inspector.locator("h2")).to_have_text("Middle lemma")
+    playwright.expect(inspector.locator(".bp-dag-kicker")).to_have_text("lemma")
+    playwright.expect(inspector).not_to_contain_text("Path spotlight")
+    pivots = inspector.locator(".bp-dag-pivot")
+    playwright.expect(pivots).to_have_text(["All", "Prerequisites 1", "Dependents 1"])
+    playwright.expect(pivots.first).to_have_attribute("aria-pressed", "true")
+    # One segmented control: the three pivots share a row inside one border.
+    tops = {round(pivots.nth(index).bounding_box()["y"]) for index in range(3)}
+    assert len(tops) == 1
+    page.get_by_role("button", name="Close details").click()
+    page.keyboard.press("Escape")
+    playwright.expect(page.locator(".bp-dag-has-selection")).to_have_count(0)
+    # The overview opens with the view's title, with no kicker over it and no closing instructions.
+    playwright.expect(inspector.locator(".bp-dag-kicker")).to_have_count(0)
+    playwright.expect(inspector).not_to_contain_text("keyboard-accessible")
+
+
+
+@pytest.mark.parametrize(("name", "counts"), (("mixed", "4 items · 1 dependency"), ("flat", "1,000 items · 0 dependencies")))
+def test_the_rail_counts_in_words_that_agree_with_their_numbers(
+    desktop_page: object, explorer_url: str, name: str, counts: str
+) -> None:
+    """The rail read "1 dependencies" and printed a count without its plural."""
+    page = desktop_page
+    page.goto(f"{explorer_url}/{name}.html")
+    playwright.expect(page.locator(".bp-dag-navigation-counts")).to_have_text(counts)
+
+
+
+def test_rail_rows_end_in_a_status_swatch_and_a_lone_group_goes_unnamed(
+    desktop_page: object, explorer_url: str
+) -> None:
+    """Each leaf row ended in a status phrase of its own length, and a lone "Inside this scope" headed the rail."""
+    page = desktop_page
+    _open_ready(page, explorer_url)
+    navigation = page.locator(".bp-dag-navigation")
+    row = navigation.locator('[data-navigation-node-id="chapter/middle"]')
+    playwright.expect(row).to_have_text("Middle lemma")
+    swatch = row.get_by_role("img", name="ready to prove")
+    playwright.expect(swatch).to_have_attribute("title", "ready to prove")
+    playwright.expect(navigation.locator(".bp-dag-navigation-group h2")).to_have_count(0)
+    # Topics keep their item counts, and several areas keep their headings.
+    page.goto(f"{explorer_url}/atlas.html")
+    topology = navigation.locator('[data-navigation-node-id="atlas/topology"]')
+    playwright.expect(topology.locator(".bp-dag-navigation-meta")).to_have_text("80")
+    playwright.expect(navigation.locator(".bp-dag-navigation-group h2").first).to_be_visible()
+
+
+
+def test_the_toolbar_counts_only_what_it_hides_and_shows_it_on_request(
+    desktop_page: object, explorer_url: str
+) -> None:
+    """The toolbar always said "N of M shown", hiding nothing or not."""
+    page = desktop_page
+    page.goto(f"{explorer_url}/index.html#view=list&status=fully_proved")
+    page.locator(".bp-dag-inventory").wait_for()
+    reveal, summary = page.locator(".bp-dag-hidden-button"), page.locator(".bp-dag-inventory-summary")
+    playwright.expect(reveal).to_have_text("Show 62 hidden")
+    playwright.expect(summary).to_have_text("1 of 63")
+    reveal.click()
+    playwright.expect(reveal).to_be_hidden()
+    playwright.expect(summary).to_have_text("63 items")
+
+
+
+def test_a_click_that_opens_details_over_its_card_pans_it_clear(desktop_page: object, site_url: str) -> None:
+    """Explicit graph activation keeps its focal theorem visible beside the persistent full reading pane."""
+    page = desktop_page
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.emulate_media(reduced_motion="reduce")
     _open_site(page, site_url, "dependencies/chapters/algebra.html")
-    # The rail is empty until its first render, so text in the typeset container means it ran after the render.
-    page.wait_for_function(
-        "window.typesetContainers.some(({name, text}) => name === 'bp-dag-navigation-inner' && text.trim())"
-    )
-    page.evaluate("window.typesetContainers = []")
-    page.locator('[data-autoform-node-id="algebra/result"]').click()
-    playwright.expect(page.locator(".bp-dag-inspector-inner h2")).to_have_text("Result")
-    # The whole drawer is typeset, so the phone sheet's handle, which repeats the title, is too.
-    page.wait_for_function(
-        "window.typesetContainers.some(({name, text}) => name === 'bp-dag-inspector' && text.includes('Result'))"
-    )
-    # Map cards and search results are not typeset.
-    assert {entry["name"] for entry in page.evaluate("window.typesetContainers")} == {"bp-dag-inspector"}
+    page.evaluate("() => window.__clickedGraphDocument = document")
+    before_head = page.locator(".bp-dag-head").bounding_box()
+    for node_id in ("algebra/result", "algebra/base"):
+        card = page.locator(f'.bp-dag-node[data-autoform-node-id="{node_id}"]')
+        card.click()
+        page.wait_for_url(_site_route(page, site_url, node_id))
+        selected = page.locator(f'.bp-dag-node[data-autoform-node-id="{node_id}"][data-selected="true"]')
+        playwright.expect(selected).to_be_visible()
+        _paint_frame(page)
+        box, reader, stage = (
+            item.bounding_box() for item in (selected, page.locator(".bp-reading-pane"), page.locator(".bp-dag-stage"))
+        )
+        assert box is not None and reader is not None and stage is not None
+        assert stage["x"] <= box["x"] and box["x"] + box["width"] <= stage["x"] + stage["width"]
+        assert stage["y"] <= box["y"] and box["y"] + box["height"] <= stage["y"] + stage["height"]
+        assert box["x"] + box["width"] <= reader["x"] + 1
+        _assert_hit(page, selected)
+        _reading_card(page, node_id)
+        assert page.evaluate("() => document === __clickedGraphDocument")
+    after_head = page.locator(".bp-dag-head").bounding_box()
+    assert before_head is not None and after_head is not None
+    assert abs(after_head["height"] - before_head["height"]) < 2
 
-    def many_dependents(route: object) -> None:
-        payload = route.fetch().json()
-        key = next(node["status"] for node in payload["nodes"] if node["id"] == "topology/result")
-        payload["nodes"] += [
-            {"id": f"later/{n}", "kind": "node", "status": key, "status_counts": [[key, 1]], "title": f"Later {n}"}
-            for n in range(55)
-        ]
-        payload["edges"] += [{"source": "topology/result", "target": f"later/{n}"} for n in range(55)]
-        route.fulfill(json=payload)
 
-    # Relation rows past the first 50, which Show more appends to the drawer later, stayed raw.
-    page.route("**/topology.json", many_dependents)
-    _open_site(page, site_url, "dependencies/chapters/topology.html#node=topology%2Fresult")
-    more = page.get_by_role("button", name="Show 5 more", exact=True)
-    playwright.expect(more).to_be_visible()
-    page.evaluate("window.typesetContainers = []")
-    more.click()
-    playwright.expect(page.get_by_role("button", name="Later 54", exact=True)).to_be_visible()
-    page.wait_for_function(
-        "window.typesetContainers.some(({name, text}) => name === 'bp-dag-relation-list' && text.includes('Later 54'))"
+
+@pytest.mark.parametrize("width", (800, 1000))
+def test_a_head_without_a_textbook_link_has_no_blank_row(desktop_page: object, site_url: str, width: int) -> None:
+    """The reusable Library/context row is real navigation, never a reserved blank textbook-link row."""
+    page = desktop_page
+    page.set_viewport_size({"width": width, "height": 900})
+    page.emulate_media(reduced_motion="reduce")
+    for path in ("dependencies.html", "dependencies/full.html"):
+        _open_site(page, site_url, path)
+        _assert_hit(page, page.locator(".bp-dag-book"))
+        context, toolbar, head = (
+            page.locator(selector).bounding_box() for selector in (".bp-dag-context", ".bp-dag-toolbar", ".bp-dag-head")
+        )
+        assert context is not None and toolbar is not None and head is not None
+        assert context["height"] >= 20
+        assert 0 <= toolbar["y"] - (context["y"] + context["height"]) <= 12
+        assert toolbar["y"] + toolbar["height"] <= head["y"] + head["height"] + 1
+        page.locator(".bp-dag-search").fill("algebra/result")
+        page.locator('.bp-dag-result[data-result-id="algebra/result"]').click()
+        page.wait_for_url(_site_route(page, site_url, "algebra/result"))
+        _reading_card(page, "algebra/result")
+        after = page.locator(".bp-dag-head").bounding_box()
+        assert after is not None and abs(after["height"] - head["height"]) < 2
+
+
+
+def test_opening_details_keeps_the_clicked_card_under_the_pointer(desktop_page: object, site_url: str) -> None:
+    """Phone reading-plane toggles do not silently move the current graph camera or replace its node."""
+    page = desktop_page
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.emulate_media(reduced_motion="reduce")
+    _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
+    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    handle.click()
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    node = page.locator('.bp-dag-node[data-autoform-node-id="algebra/result"]')
+    _paint_frame(page)
+    original = node.bounding_box()
+    identity = node.element_handle()
+    url, history_length = page.url, page.evaluate("history.length")
+    assert original is not None
+    for _ in range(2):
+        handle.click()
+        playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+        _paint_frame(page)
+        opened = node.bounding_box()
+        assert opened is not None and abs(opened["y"] - original["y"]) < 2
+        handle.click()
+        playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+        _paint_frame(page)
+        closed = node.bounding_box()
+        assert closed is not None and abs(closed["y"] - original["y"]) < 2
+        assert identity.evaluate("node => node === document.querySelector('.bp-dag-node[data-autoform-node-id=\"algebra/result\"]')")
+        assert page.url == url and page.evaluate("history.length") == history_length
+
+
+
+def test_the_canvas_paints_its_labels_in_the_sites_family(desktop_page: object, site_url: str) -> None:
+    """Verify a live painted region label, not merely a scratch context that accepts the site's family."""
+    page = desktop_page
+    _record_label_paints(page, reject_family=False)
+    page.route("**/dependencies.json", _canvas_region)
+    _open_site(page, site_url, "dependencies.html")
+    page.wait_for_function("window.labelPaints.some(paint => paint.text.startsWith('Algebra and topology mathematical region'))")
+    painted = page.evaluate(
+        "window.labelPaints.filter(paint => paint.text.startsWith('Algebra and topology mathematical region')).at(-1)"
     )
+    family = page.locator(".bp-dag-viewer").evaluate("host => getComputedStyle(host).fontFamily")
+    assert "Plus Jakarta Sans" in family and "Plus Jakarta Sans" in painted["font"]
+    assert float(re.search(r"(\d+(?:\.\d+)?)px", painted["font"]).group(1)) >= 11
+    expected = page.evaluate(
+        """({text, family}) => {
+          const ctx=document.createElement('canvas').getContext('2d');
+          ctx.font='700 13px '+family; return ctx.measureText(text).width;
+        }""",
+        {"text": painted["text"], "family": family},
+    )
+    assert abs(painted["width"] - expected) < .1

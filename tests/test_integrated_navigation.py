@@ -293,7 +293,13 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
         $search:{value:'',focus(){calls.push('old-search-focus');}},$error:{hidden:true},
         $breadcrumb:{replaceChildren(){}},$navigation:{scrollTop:0},$inventoryScroll:{scrollTop:0}
       };
-      const state={$selected:null},records=new Map(),byId=new Map(),overlays=new Map(),navigation=app.nav;
+      // Supply the renderer's actual private lexical collaborators; executed source stays verbatim.
+      let ui$selected=null,ui$filtersTouched,ui$area,ui$requestedNode,ui$selectedStatuses,ui$showIsolated,
+        ui$mode,ui$listLimit,ui$relationIds,ui$direction,ui$query,ui$transform,ui$activeDirty,ui$reading;
+      const dom$readingBody=refs.$readingBody,dom$search=refs.$search,dom$error=refs.$error,
+        dom$breadcrumb=refs.$breadcrumb,dom$navigation=refs.$navigation,dom$inventoryScroll=refs.$inventoryScroll;
+      let dom$outlineToggle;
+      const records=new Map(),byId=new Map(),overlays=new Map(),navigation=app.nav;
       const mapAllowed=true,presentStatuses=['planned'],palette={planned:{}},LIST_PAGE=100;
       const updateProjection=()=>{},closeSearch=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
       const resize=()=>{},center=()=>{},showError=()=>{},trailList=()=>[],routeTrail=()=>[],sheetLayout=()=>false;
