@@ -741,9 +741,10 @@ module.
 Before any probe, Lake must confirm once, without rebuilding, that every
 probed module (only those need to be built) matches its exact source inputs;
 a missing `lake-manifest.json`, stale artifacts, or a source tree that
-changes during extraction makes the command fail. That check rehashes every
-input and rewrites Lake's `.hash` files, so the project's `.lake` directory
-must be writable. When the check fails other than as stale, the error keeps
+changes during extraction makes the command fail; stale artifacts are reported
+with the probed modules as Lake module targets, `lake build +A.B +A.C`, to
+rebuild. That check rehashes every input and rewrites Lake's `.hash` files, so
+the project's `.lake` directory must be writable. When the check fails other than as stale, the error keeps
 the first 20 lines of Lake's standard output and error and counts the rest.
 A lexical closure would miss what
 `open`, notation, implicit instances, and auto-bound variables bring in, and
@@ -1170,14 +1171,18 @@ import-closure` first reads each captured source's import header, then imports
 only `MODULE` and the loaded modules that import it, transitively; only they
 and what they import must be built, and a stale build names those modules as
 Lake module targets, `lake build +A.B +A.C` (the libraries when there are more
-than 50). `affected_modules` is the same in both scopes. Under
-`import-closure`, Lean's loaded graph must match the headers for every module
-it loaded, and every loaded header must be readable; otherwise the command
-exits 2 and suggests the default scope. `unresolved_articles` then leaves out
+than 50). `affected_modules` is the same in both scopes. Here a loaded module
+is one the libraries' roots and globs reach through import headers. Under
+`import-closure` the command exits 2, suggesting the default scope, when a
+loaded module's header cannot be read, when a loaded header imports a module
+the root package can supply (a source under a library's `srcDir` or an OLean
+in its artifact directory) that the captured inventory lacks, such as one under
+a symlinked directory, or when Lean's loaded graph differs from the headers of
+the modules it loaded. A `MODULE` outside the loaded modules exits 2 as not a
+loaded project module. In this scope `unresolved_articles` leaves out
 declarations the source index places only in modules the scope did not load.
-The `skeleton` stale-build message likewise names `+<module>` targets. Freshness is
-Lake's rehash of this checkout's `.lake` against this checkout's sources, so a
-build in another clone or worktree does not make this one fresh.
+Freshness is Lake's rehash of this checkout's `.lake` against this checkout's
+sources, so a build in another clone or worktree does not make this one fresh.
 `SELECTOR` identifies the working article and `MODULE` the module whose
 effective header would change.
 Lean supplies the loaded module graph; Autoform binds every node to its captured
@@ -1193,8 +1198,8 @@ only what they import, transitively, so a module only the removed import
 reached is no longer built. The report does not list such modules.
 
 JSON uses `autoform-module-import-impact/v1` and binds the graph with
-`module_graph_revision`; `module_scope` is the scope that ran, `loaded-root-library-graph` or
-`import-closure`.
+`module_graph_revision`; `module_scope` is the scope that ran,
+`loaded-root-library-graph` or `import-closure`.
 The import edit's `claim_targets` contain only the selected article and a stable
 `module_claim_target` resource, `lean-module/<lowercase-slug>-<sha256[:16]>`.
 `affected_claim_targets` are downstream warnings, not pre-emptive ownership
