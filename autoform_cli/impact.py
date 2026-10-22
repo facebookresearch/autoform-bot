@@ -677,6 +677,9 @@ def render_impact_probe(
     walks = [
         [str(directory), list(skeleton._lean_name_components(base)), glob] for directory, base, glob in glob_directories
     ]
+    selected = tuple(sorted(set(selected_modules)))
+    if walks and not selected:
+        raise SkeletonError(["refusing to render an impact probe that walks globs without the selected modules"])
     return _impact_template().format(
         imports="\n".join(f"import {module}" for module in modules),
         marker=IMPACT_MARKER,
@@ -688,7 +691,7 @@ def render_impact_probe(
         output_env=skeleton.PROBE_OUTPUT_ENV,
         output_limit=skeleton.DEFAULT_PROBE_OUTPUT_LIMIT,
         project_modules=_lean_requests(tuple(sorted(set(project_modules)))),
-        selected_modules=_lean_requests(tuple(sorted(set(selected_modules)))),
+        selected_modules=_lean_requests(selected),
     )
 
 

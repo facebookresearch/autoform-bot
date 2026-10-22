@@ -1182,6 +1182,7 @@ def test_rendered_probe_imports_modules_and_names_exact_local_modules() -> None:
         project_modules=["Demo"],
         artifact_dir=Path("/lean/.lake/build/lib/lean"),
         glob_directories=[(Path("/lean/Demo"), "Demo", "Demo.*")],
+        selected_modules=["Demo"],
     )
     assert (checked.count("if true then"), checked.count("if false then")) == (1, 1)
     assert 'IO.FS.realPath "/lean/.lake/build/lib/lean"' in checked
@@ -1195,6 +1196,14 @@ def test_rendered_probe_imports_modules_and_names_exact_local_modules() -> None:
     assert evidence.count("if true then") == 2
     with pytest.raises(SkeletonError, match="no imports"):
         render_impact_probe(imports=[], project_modules=["Demo"])
+    # Without the selected modules, the walk would refuse every module it finds.
+    with pytest.raises(SkeletonError, match="walks globs without the selected modules"):
+        render_impact_probe(
+            imports=["Demo"],
+            project_modules=["Demo"],
+            artifact_dir=Path("/lean/.lake/build/lib/lean"),
+            glob_directories=[(Path("/lean/Demo"), "Demo", "Demo.*")],
+        )
 
 
 _SHADOWED_STD = "object file '/deps/Std/Data.olean' of module Std.Data does not exist"
