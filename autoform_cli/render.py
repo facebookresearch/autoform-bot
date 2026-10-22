@@ -3024,6 +3024,9 @@ def _render_environment(
     # A checked inventory is fully proved, so it keeps the tick.
     mark = "✓" if node_status.key in {"fully_proved", "mathlib"} else "●"
 
+    shown = _display_title(node.title, caption)
+    title_html = f'<span class="bp-thmtitle">{html.escape(shown)}</span>' if shown else ""
+
     lines = [
         f'<div class="bp-thmwrapper {style} bp-{display_key}" '
         f'id="{html.escape(anchor, quote=True)}" '
@@ -3031,7 +3034,7 @@ def _render_environment(
         '<div class="bp-thmheading">',
         f'<span class="bp-thmcaption">{html.escape(caption)}</span>'
         f'<span class="bp-thmlabel">{html.escape(number)}</span>'
-        f'<span class="bp-thmtitle">{html.escape(node.title)}</span>'
+        f"{title_html}"
         f"{code_links}"
         f"{source_link}"
         f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}">#</a>'
@@ -3175,6 +3178,26 @@ def _dependency_disclosure(
     return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
 
 
+def _display_title(title: str, caption: str) -> str:
+    """Drop a kind the caption already shows: 'Theorem (X)' under 'Theorem 4' reads X.
+
+    Display only; the graph keeps the authored title. A title that is just the
+    kind word shows nothing, and the outer parentheses are only removed when
+    they enclose the whole rest of the title.
+    """
+    if title.casefold() == caption.casefold():
+        return ""
+    prefix = f"{caption} ("
+    if not (title.casefold().startswith(prefix.casefold()) and title.endswith(")")):
+        return title
+    inner, depth = title[len(prefix) : -1], 0
+    for character in inner:
+        depth += (character == "(") - (character == ")")
+        if depth < 0:
+            return title
+    return inner if depth == 0 else title
+
+
 def _node_references(
     node_ids: list[str] | tuple[str, ...],
     *,
@@ -3190,7 +3213,8 @@ def _node_references(
     rendered = []
     for other_id in node_ids:
         other = graph.nodes[other_id]
-        label = html.escape(f"{numbers[other_id]} ({other.title})")
+        shown = _display_title(other.title, numbers[other_id].rpartition(" ")[0])
+        label = html.escape(numbers[other_id] + (f" ({shown})" if shown else ""))
         key = graph_views.display_status_key(other, statuses[other_id])
         rendered.append(
             f'<a class="bp-ref bp-ref-{key}" '

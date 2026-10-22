@@ -41,6 +41,7 @@ from autoform_cli.render import (
     PublicationError,
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
+    _display_title,
     _document_body,
     _first_h1,
     _protect_markdown_in_html,
@@ -515,6 +516,54 @@ def test_every_explorer_breadcrumb_reaches_a_published_page(tmp_path: Path) -> N
     (project / "blueprint/roadmap/README.md").unlink()
     render_site(project / "blueprint", out, lean_root=project)
     assert book_crumbs() == {out / "index.html"}
+
+
+@pytest.mark.parametrize(
+    ("title", "caption", "shown"),
+    [
+        ("Theorem (Crystallographic Restriction)", "Theorem", "Crystallographic Restriction"),
+        ("theorem (Lagrange)", "Theorem", "Lagrange"),
+        ("Theorem", "Theorem", ""),
+        ("THEOREM", "Theorem", ""),
+        ("Theorem ()", "Theorem", ""),
+        # Nested parentheses: only the outer pair goes.
+        ("Theorem (Lagrange (finite groups))", "Theorem", "Lagrange (finite groups)"),
+        ("Theorem (Sylow (p) (q))", "Theorem", "Sylow (p) (q)"),
+        # The outer parentheses do not enclose the rest, so the title stays.
+        ("Theorem (A) and (B)", "Theorem", "Theorem (A) and (B)"),
+        ("Theorem (open (paren)", "Theorem", "Theorem (open (paren)"),
+        # Another kind, a bare word or no parentheses: nothing to strip.
+        ("Lemma (Zorn)", "Theorem", "Lemma (Zorn)"),
+        ("Theorem of Lagrange", "Theorem", "Theorem of Lagrange"),
+        ("Theorems (plural)", "Theorem", "Theorems (plural)"),
+        ("Top", "Theorem", "Top"),
+        ("Section (Finite subgroups)", "Definition", "Section (Finite subgroups)"),
+    ],
+)
+def test_display_title_drops_a_kind_the_caption_already_shows(title: str, caption: str, shown: str) -> None:
+    assert _display_title(title, caption) == shown
+
+
+def test_statement_headings_and_references_do_not_repeat_the_kind(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    roadmap = project / "blueprint" / "roadmap"
+    titles = {"base": "Definition", "top": "Theorem (Top (finite case))"}
+    for node_id, title in titles.items():
+        path = roadmap / f"{node_id}.md"
+        authored = path.read_text(encoding="utf-8")
+        path.write_text(authored.replace(f"# {node_id.capitalize()}\n", f"# {title}\n"), encoding="utf-8")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    base, top = page[page.index('id="base"') : page.index('id="top"')], page[page.index('id="top"') :]
+
+    # A title that is only the kind word leaves no empty parentheses behind.
+    assert "bp-thmtitle" not in base
+    assert '<span class="bp-thmtitle">Top (finite case)</span>' in top
+    assert 'href="#top">Theorem 1 (Top (finite case))</a>' in base
+    assert 'href="#base">Definition 1</a>' in top
+    # The graph keeps the authored titles.
+    chapter = json.loads((tmp_path / "out/dependencies/chapters/roadmap.json").read_text(encoding="utf-8"))
+    assert {node["id"]: node["title"] for node in chapter["nodes"]} == titles
 
 
 def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -> None:
