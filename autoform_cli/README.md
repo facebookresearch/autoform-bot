@@ -1157,14 +1157,25 @@ Report the coordination and review scope of an import edit without forbidding
 the edit:
 
 ```bash
-autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH [--json] [--timeout SECONDS]
+autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH [--json] [--timeout SECONDS] [--module-scope SCOPE]
 ```
 
 `import-impact` is advisory and does not edit authored roadmap or Lean source;
-its Lake freshness check may refresh build hash sidecars. The probe imports
-every module of the root libraries, so each must be built: a missing or stale
-build exits 2 with the `lake build` command for those libraries, how many
-modules were checked, and the first module Lake found unbuilt. Freshness is
+its Lake freshness check may refresh build hash sidecars. By default
+(`--module-scope loaded-root-library-graph`) the probe imports every module of
+the root libraries, so each must be built: a missing or stale build exits 2
+with the `lake build` command for those libraries, how many modules were
+checked, and the first module Lake found unbuilt. `--module-scope
+import-closure` first reads each captured source's import header, then imports
+only `MODULE` and the loaded modules that import it, transitively; only they
+and what they import must be built, and a stale build names those modules as
+Lake module targets, `lake build +A.B +A.C` (the libraries when there are more
+than 50). `affected_modules` is the same in both scopes. Under
+`import-closure`, Lean's loaded graph must match the headers for every module
+it loaded, and every loaded header must be readable; otherwise the command
+exits 2 and suggests the default scope. `unresolved_articles` then leaves out
+declarations the source index places only in modules the scope did not load.
+The `skeleton` stale-build message likewise names `+<module>` targets. Freshness is
 Lake's rehash of this checkout's `.lake` against this checkout's sources, so a
 build in another clone or worktree does not make this one fresh.
 `SELECTOR` identifies the working article and `MODULE` the module whose
@@ -1182,7 +1193,8 @@ only what they import, transitively, so a module only the removed import
 reached is no longer built. The report does not list such modules.
 
 JSON uses `autoform-module-import-impact/v1` and binds the graph with
-`module_graph_revision`; `module_scope` is `loaded-root-library-graph`.
+`module_graph_revision`; `module_scope` is the scope that ran, `loaded-root-library-graph` or
+`import-closure`.
 The import edit's `claim_targets` contain only the selected article and a stable
 `module_claim_target` resource, `lean-module/<lowercase-slug>-<sha256[:16]>`.
 `affected_claim_targets` are downstream warnings, not pre-emptive ownership

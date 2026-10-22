@@ -9,6 +9,12 @@ date when the release is tagged.
 
 ## Unreleased
 
+- `work import-impact --module-scope import-closure` imports only the edited
+  module and the modules that import it, so a large project need not build
+  every root library to ask about one import (#430). The default scope is
+  unchanged. The shared Lake freshness check, and `skeleton`'s stale-build
+  message, now name modules as `+<module>` targets.
+
 ## 0.6.0 (2026-10-22)
 
 What has landed since 0.5.0, across 236 merged pull requests, grouped by

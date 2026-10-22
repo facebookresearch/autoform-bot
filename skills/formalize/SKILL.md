@@ -79,7 +79,9 @@ subagent so, and follow the [claim rules](references/claims.md) at each step.
 
 Lean imports are allowed; do not pre-block a proof because it needs one. Before
 an effective module header or import change, run `autoform work import-impact`
-as documented in the CLI reference. When the run uses claims, follow the [import
+as documented in the CLI reference. On a large project, pass
+`--module-scope import-closure` so only the module's importers and what they
+import must be built. When the run uses claims, follow the [import
 claims](references/claims.md#import-edits) from then on; otherwise send the lead
 the report's `claim_targets` and `affected_claim_targets` and wait for its
 answer, as above. Capture baseline skeleton evidence for the report's currently
