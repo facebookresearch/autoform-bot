@@ -713,6 +713,26 @@ def test_explorer_toolbar_copy_says_what_it_searches_and_filters() -> None:
     assert 'if (navigation && host.getAttribute("data-catalog-src")) refs.search.setAttribute("aria-busy", "true");' in script
 
 
+def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> None:
+    """Map and Areas both read as pressed at the root, a deep trail sat in a third of an empty row, and tablets had three rows."""
+    script, style = _viewer_source(), dag_viewer._STYLE
+    # Areas stays: inside an area it is the way back to the overview, whose root crumb is then not a link.
+    assert 'var areas = state.mode === "graph" && !state.area && data.nodes.some(function (node) { return node._region; });' in script
+    assert 'refs.graphMode.setAttribute("aria-pressed", String(state.mode === "graph" && !areas));' in script
+    assert 'if (refs.regionsMode) refs.regionsMode.setAttribute("aria-pressed", String(areas));' in script
+    assert 'refs.graphMode.setAttribute("aria-pressed", String(state.mode === "graph"));' not in script
+    assert ".bp-dag-integrated .bp-dag-breadcrumb { display: block; flex: 1 1 auto; max-width: none;" in style
+    assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li { min-width: 4em; }" in style
+    assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:has(.bp-dag-sr-only) { flex: none; min-width: 0; }" in style
+    tablet = style.split("@media (max-width: 1100px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
+    assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: 160px; }" in tablet and "100%" not in tablet
+    # Topics was a few px above Status in the same row.
+    assert ".bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; align-items: center; }" in tablet
+    phones = style.split("@media (max-width: 720px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
+    assert ".bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :last-child) { display: none; }" in phones
+    assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: 100%; }" in phones
+
+
 def test_explorer_search_draws_its_magnifier_and_shortcut_hint_in_css() -> None:
     """U+2315 is not in Plus Jakarta Sans and sat off the box's line, and "( / )" read as debug output."""
     script, style = _viewer_source(), dag_viewer._STYLE

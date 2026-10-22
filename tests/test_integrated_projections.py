@@ -39,7 +39,7 @@ assert(kinds, 'Production kind words missing');
 const functions = [
   'element', 'button', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
   'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'calculateActive',
-  'statusLabel', 'finished', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory'
+  'statusLabel', 'finished', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');
 const sandbox = {assert, URL, fixtureText}; vm.createContext(sandbox);
@@ -297,3 +297,26 @@ def test_an_oversized_module_scope_keeps_its_real_math_articles_navigable_withou
       ui$mode = 'sources';
       assert.deepEqual(inventoryNodes().map(node => node.id), ['catalogs/source']);
     """, fixture={"index": index, "context": context, "count": count})
+
+
+def test_a_deep_trail_keeps_first_parent_and_current_and_names_what_the_ellipsis_hides() -> None:
+    _run(r"""
+      const crumb = (label, url) => ({label, url});
+      const trail = [crumb('ATLAS roadmap', 'https://example.test/math/roadmap/index.html'),
+        crumb('Algebra', 'https://example.test/math/roadmap/algebra/index.html'),
+        crumb('MIT RES.18-011', 'https://example.test/math/roadmap/mit/index.html'),
+        crumb('Crystallographic Restriction', 'https://example.test/math/roadmap/crystal/index.html'),
+        crumb('Theorem (Crystallographic Restriction)')];
+      const items = trailList(trail).children;
+      assert.deepEqual(items.map(item => item.title), ['ATLAS roadmap', 'Algebra / MIT RES.18-011',
+        'Crystallographic Restriction', 'Theorem (Crystallographic Restriction)']);
+      assert.equal(items[1].text, '…');
+      assert.equal(items[1].children[0].className, 'bp-dag-sr-only', 'Screen readers hear the hidden ancestors');
+      assert.equal(items[1].children[0].textContent, 'Algebra / MIT RES.18-011');
+      assert.equal(items[1].getAttribute('aria-current'), null);
+      assert.equal(items[3].getAttribute('aria-current'), 'page');
+      assert.equal(items[2].children[0].href, trail[3].url);
+      // Three entries fit, and the rail's ancestor path is never shortened.
+      assert.deepEqual(trailList(trail.slice(2)).children.map(item => item.title), trail.slice(2).map(entry => entry.label));
+      assert.equal(trailList(trail, 'bp-dag-navigation-path').children.length, 5);
+    """)

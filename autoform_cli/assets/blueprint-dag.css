@@ -244,7 +244,11 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-integrated .bp-dag-body { grid-template-columns: var(--dag-navigation-width) minmax(0, 1fr) minmax(360px, 39%); }
 .bp-dag-integrated .bp-dag-head { display: block; padding: 0; }
 .bp-dag-integrated .bp-dag-context { display: flex; padding: 10px 16px 0; }
-.bp-dag-integrated .bp-dag-breadcrumb { display: block; visibility: visible !important; }
+/* The trail has the row to itself: each crumb keeps a few letters, the "…" its glyph, and a parent at most 24ch. */
+.bp-dag-integrated .bp-dag-breadcrumb { display: block; flex: 1 1 auto; max-width: none; visibility: visible !important; }
+.bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li { min-width: 4em; }
+.bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:has(.bp-dag-sr-only) { flex: none; min-width: 0; }
+.bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :last-child) { max-width: 24ch; }
 .bp-dag-integrated .bp-dag-book { grid-area: auto; margin: 0 18px 0 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 .bp-dag-integrated .bp-dag-toolbar { display: flex; padding: 10px 16px; }
 .bp-dag-integrated .bp-dag-search-wrap { max-width: none; }
@@ -305,10 +309,11 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated .bp-dag-body { grid-template-columns: minmax(0, 1fr) minmax(340px, 43%); }
   .bp-dag-integrated.bp-dag-area-expanded:not(.bp-dag-sheet-open) .bp-dag-body { grid-template-columns: minmax(0, 1fr) 48px; }
   .bp-dag-integrated .bp-dag-navigation { display: none; }
-  .bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; }
+  .bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; align-items: center; }
   .bp-dag-integrated.bp-dag-outline-open .bp-dag-navigation { display: block; position: absolute; z-index: 18; inset: 0 auto 0 0; width: 264px; box-shadow: var(--dag-e2); }
   .bp-dag-integrated .bp-dag-toolbar { flex-wrap: wrap; }
-  .bp-dag-integrated .bp-dag-search-wrap { flex-basis: 100%; }
+  /* Topics, search, filter, views and zoom share one row on a tablet; search wraps only when it would drop under 160px. */
+  .bp-dag-integrated .bp-dag-search-wrap { flex-basis: 160px; }
 }
 @media (max-width: 720px) {
   .bp-dag-integrated .bp-dag-body { display: block; }
@@ -322,6 +327,9 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated .bp-dag-context { padding-inline: 12px; }
   .bp-dag-integrated .bp-dag-toolbar { padding-inline: 12px; gap: 6px; }
   .bp-dag-integrated .bp-dag-breadcrumb { min-width: 0; flex: 1; }
+  /* A phone keeps first / current; Topics and the reader's "← parent" link reach the steps between. */
+  .bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :last-child) { display: none; }
+  .bp-dag-integrated .bp-dag-search-wrap { flex-basis: 100%; }
   .bp-dag-integrated .bp-dag-book { margin-right: 10px; max-width: 150px; }
 }
 @media (prefers-reduced-motion: reduce) { .bp-dag-integrated .bp-reading-pane { transition: none; } }

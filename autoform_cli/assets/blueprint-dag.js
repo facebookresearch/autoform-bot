@@ -774,11 +774,14 @@
 
     function trailList(entries, className) {
       var list = element("ol", className);
+      // A deep trail keeps its ends, first / … / parent / current, and the "…" names the ancestors it stands for.
+      if (!className && entries.length > 3) entries = [entries[0], {label: "…", hidden: entries.slice(1, -2).map(function (entry) { return entry.label; }).join(" / ")}].concat(entries.slice(-2));
       entries.forEach(function (entry, index) {
         var item = element("li"), href = safeHref(entry.url);
-        item.title = entry.label;
+        item.title = entry.hidden || entry.label;
         if (href) { var link = element("a", "", entry.label); link.href = href; link.title = entry.label; item.appendChild(link); }
-        else { item.textContent = entry.label; if (!className && index === entries.length - 1) item.setAttribute("aria-current", "page"); }
+        else { item.textContent = entry.label; if (entry.hidden) item.appendChild(element("span", "bp-dag-sr-only", entry.hidden));
+          else if (!className && index === entries.length - 1) item.setAttribute("aria-current", "page"); }
         list.appendChild(item);
       });
       return list;
@@ -1040,10 +1043,12 @@
       var enabled = ui$selectedStatuses.size;
       dom$filterSummary.textContent = "Filter: " + (enabled === presentStatuses.length ? "all" : enabled + " of " + presentStatuses.length) +
         " statuses" + (ui$showIsolated ? "" : " · linked only");
-      dom$graphMode.setAttribute("aria-pressed", String(ui$mode === "graph"));
+      // The areas overview is the map at the root, so Map gives way to Areas there and one view reads as pressed.
+      var areas = ui$mode === "graph" && !ui$area && data.nodes.some(function (node) { return node._region; });
+      dom$graphMode.setAttribute("aria-pressed", String(ui$mode === "graph" && !areas));
       dom$listMode.setAttribute("aria-pressed", String(ui$mode === "list"));
       if (dom$sourcesMode) dom$sourcesMode.setAttribute("aria-pressed", String(ui$mode === "sources"));
-      if (dom$regionsMode) dom$regionsMode.setAttribute("aria-pressed", String(ui$mode === "graph" && !ui$area && data.nodes.some(function (node) { return node._region; })));
+      if (dom$regionsMode) dom$regionsMode.setAttribute("aria-pressed", String(areas));
       dom$stage.hidden = ui$mode !== "graph"; dom$inventory.hidden = ui$mode === "graph";
       dom$graphMode.disabled = !ui$mapAllowed;
       if (navigation) dom$inventory.querySelector("h2").textContent = ui$mode === "sources" ? "Source tracks" : "Results";

@@ -621,6 +621,31 @@ def test_long_ancestor_labels_and_full_reading_heading_stay_within_their_panes(
     playwright.expect(heading).to_have_text(_DEEP_TITLE)
     assert heading.evaluate("heading => heading.scrollWidth <= heading.clientWidth + 1") is True
     assert page.locator(".bp-dag-head").evaluate("head => head.scrollWidth <= head.clientWidth + 1") is True
+    # The four-deep trail reads first / … / parent / current; the "…" names the ancestor it hides.
+    crumbs = page.locator(".bp-dag-breadcrumb li")
+    playwright.expect(crumbs).to_have_count(4)
+    playwright.expect(crumbs.nth(0)).to_have_text(_LIBRARY)
+    playwright.expect(crumbs.nth(1)).to_have_attribute("title", _ANCESTOR)
+    playwright.expect(crumbs.nth(1).locator(".bp-dag-sr-only")).to_have_text(_ANCESTOR)
+    playwright.expect(crumbs.nth(3)).to_have_text(_TARGET_TITLE)
+    playwright.expect(crumbs.nth(3)).to_have_attribute("aria-current", "page")
+    if width <= 720:
+        # A phone keeps only the first crumb and the current page.
+        playwright.expect(crumbs.nth(1)).to_be_hidden()
+        playwright.expect(crumbs.nth(2)).to_be_hidden()
+    else:
+        playwright.expect(crumbs.nth(1)).to_be_visible()
+        playwright.expect(crumbs.nth(2)).to_have_text(_DEEP_TITLE)
+        # The trail has the row to itself, rather than a third of it.
+        trail_box, head_box = page.locator(".bp-dag-breadcrumb").bounding_box(), page.locator(".bp-dag-head").bounding_box()
+        assert trail_box is not None and head_box is not None and trail_box["width"] >= head_box["width"] / 2
+    if width == 1000:
+        # A tablet keeps Topics, search, filter, views and zoom on one row.
+        assert page.locator(".bp-dag-toolbar").evaluate(
+            "bar => { const boxes = [...bar.children].filter(child => child.getClientRects().length)"
+            ".map(child => child.getBoundingClientRect());"
+            " return Math.max(...boxes.map(box => box.top)) < Math.min(...boxes.map(box => box.bottom)); }"
+        ) is True
     if width <= 1100:
         page.get_by_role("button", name="Toggle topic outline", exact=True).click()
     outline = page.locator(".bp-dag-navigation")
@@ -637,6 +662,11 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
 ) -> None:
     page, site = workspace_page, workspace_site
     _open(page, site, workspace_runtime)
+    views = page.get_by_role("group", name="Explorer view", exact=True)
+    # The areas overview is the map at the root, so exactly one view reads as pressed.
+    pressed = views.locator('[aria-pressed="true"]')
+    playwright.expect(pressed).to_have_count(1)
+    playwright.expect(pressed).to_have_text("Areas")
     titles = {_focus_graph_region(page, area).locator(".bp-dag-node-title").inner_text() for area in _AREAS}
     assert titles == set(_AREAS)
     assert page.locator('.bp-dag-node[data-autoform-node-id="scope:appendix-a"]').count() == 0
@@ -651,9 +681,12 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
     assert not set(_SOURCE_TITLES).intersection(page.locator(".bp-dag-inventory-title").all_text_contents())
     assert "Reading note" not in page.locator(".bp-dag-inventory-title").all_text_contents()
     page.get_by_role("button", name="Areas", exact=True).click()
+    playwright.expect(pressed).to_have_text("Areas")
     _focus_graph_region(page, "Geometry").click()
     notes = _focus_graph_node(page, "scope:source-notes")
     playwright.expect(notes).to_be_focused()
+    playwright.expect(pressed).to_have_count(1)
+    playwright.expect(pressed).to_have_text("Map")
     playwright.expect(notes.locator(".bp-dag-node-title")).to_have_text(site.records["source-notes"]["title"])
     assert page.url == site.route("roadmap")
 
