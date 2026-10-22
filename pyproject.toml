@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "autoform"
-version = "0.5.0"
+version = "0.6.0"
 description = "Markdown-blueprint roadmaps with Lean LSP and REPL servers"
 license = "MIT"
 license-files = ["LICENSE"]

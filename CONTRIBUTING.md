@@ -67,6 +67,16 @@ new script tag or runtime CDN dependency.
 Compression never renames public properties, assumes getters are pure, enables
 unsafe transforms, or drops console calls.
 
+The verify workflow's kernel-trust probe is Lean, kept in
+`autoform_cli/probes/audit_probe.lean`. Projects get one self-contained helper,
+`.github/autoform_audit.py`, which carries a verbatim copy of that file, so edit
+the `.lean` file and then run `python3 scripts/sync_audit_probe.py` to rewrite
+the copy in the template and the bundled example. The probe imports only the
+toolchain's Lean, so Lean checks the file without a project:
+`elan run "$(cat tests/fixtures/library-project/lean-toolchain)" lean
+autoform_cli/probes/audit_probe.lean` prints nothing when it is clean, and the
+real-Lean tests run that check on both fixture toolchains.
+
 `tests/test_real_repl.py` skips unless `AUTOFORM_RUN_REAL_REPL_TESTS=1`. To run
 it locally, build its fixture and install the oldest supported toolchain first:
 
