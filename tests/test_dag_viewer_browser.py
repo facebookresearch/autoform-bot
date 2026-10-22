@@ -1774,22 +1774,45 @@ def _assert_sheet_state(page: object, *, selected: str | None, opened: bool) -> 
 
 
 
-def _canvas_region(route: object) -> None:
-    """Give this page a real authored region label without changing its fixture."""
-    payload = route.fetch().json()
-    label = "Algebra and topology mathematical region"
-    layouts = [node["layout"] for node in payload["nodes"]]
-    left = min(box["x"] for box in layouts) - 12
-    top = min(box["y"] for box in layouts) - 46
-    right = max(box["x"] + box["width"] for box in layouts) + 12
-    bottom = max(box["y"] + box["height"] for box in layouts) + 12
-    for node in payload["nodes"]:
-        node["area"] = label
-    payload["regions"] = [{
-        "label": label, "count": len(layouts), "x": left, "y": top,
-        "width": right - left, "height": bottom - top,
-    }]
-    route.fulfill(json=payload)
+@pytest.fixture(scope="module")
+def count_label_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """A real published route count from twelve authored, unverified dependency links."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("canvas-count-consumer") / "project"
+    scaffold_project(project, title="Canvas dependency count consumer")
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text(
+        "# Canvas dependency count consumer\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n",
+        encoding="utf-8",
+    )
+    algebra, topology = roadmap / "algebra", roadmap / "topology"
+    algebra.mkdir()
+    topology.mkdir()
+    (algebra / "README.md").write_text("# Algebra\n\n- [Base statement](base.md)\n", encoding="utf-8")
+    (algebra / "base.md").write_text(
+        "---\ndeclaration: theorem\nnot_ready: true\n---\n\n# Base statement\n\n"
+        "This proposed zero identity is an unverified target.\n\n## Depends on\n\nNo prerequisites.\n",
+        encoding="utf-8",
+    )
+    (topology / "README.md").write_text(
+        "# Topology\n\n" + "\n".join(f"- [Planned statement {number}](result-{number}.md)" for number in range(12)) + "\n",
+        encoding="utf-8",
+    )
+    for number in range(12):
+        (topology / f"result-{number}.md").write_text(
+            f"---\ndeclaration: theorem\nnot_ready: true\n---\n\n# Planned statement {number}\n\n"
+            "This fixture records an unverified target, not a Lean proof.\n\n"
+            "## Depends on\n\n- [Base statement](../algebra/base.md)\n",
+            encoding="utf-8",
+        )
+    render_site(project / "blueprint", project / "site-src")
+    payload = json.loads((project / "site-src/dependencies.json").read_text(encoding="utf-8"))
+    assert len(payload["edges"]) == 1 and payload["edges"][0]["statement"] == 12 and payload["edges"][0]["proof"] == 0
+    build(load_config(config_file=str(project / "mkdocs.yml"), strict=True))
+    with _served(project / "site") as url:
+        yield url
 
 
 
@@ -1856,10 +1879,11 @@ def test_widening_with_the_book_focused_resizes_and_repaints_the_live_canvas(
 
 @pytest.mark.parametrize("reject_family", (False, True), ids=("multiword-site-font", "rejected-site-font"))
 def test_canvas_label_paints_use_the_site_family_or_a_valid_fallback(
-    desktop_page: object, site_url: str, reject_family: bool
+    desktop_page: object, count_label_site_url: str, reject_family: bool
 ) -> None:
-    page = desktop_page
+    page, site_url = desktop_page, count_label_site_url
     _record_label_paints(page, reject_family=reject_family)
+    canonical = _site_route(page, site_url, "roadmap")
     if not reject_family:
         def serif_host_before_startup(route: object) -> None:
             body = route.fetch().text()
@@ -1874,27 +1898,27 @@ def test_canvas_label_paints_use_the_site_family_or_a_valid_fallback(
 
         # The family must be present on the host before the runtime's probe;
         # Material can override an inherited root custom property later.
-        page.route("**/dependencies.html", serif_host_before_startup)
-    page.route("**/dependencies.json", _canvas_region)
-    _open_site(page, site_url, "dependencies.html")
-    page.wait_for_function("window.labelPaints.some(paint => paint.text.startsWith('Algebra and topology mathematical region'))")
-    painted = page.evaluate(
-        "window.labelPaints.filter(paint => paint.text.startsWith('Algebra and topology mathematical region')).at(-1)"
-    )
+        page.route(canonical, serif_host_before_startup)
+    _open_site(page, site_url, urlsplit(canonical).path.lstrip("/"))
+    page.wait_for_function("window.labelPaints.some(paint => paint.text === '×12')")
+    painted = page.evaluate("window.labelPaints.filter(paint => paint.text === '×12').at(-1)")
     family = page.locator(".bp-dag-viewer").evaluate("host => getComputedStyle(host).fontFamily")
     assert ("Plus Jakarta Sans" if reject_family else "Times New Roman") in family
+    pixels = float(re.search(r"(\d+(?:\.\d+)?)px", painted["font"]).group(1))
+    assert pixels >= 11 and painted["font"].startswith("600 ")
+    assert ("sans-serif" if reject_family else "Times New Roman") in painted["font"]
+    assert _canvas_pixels(page)["painted"] > 0
     measured = page.evaluate(
-        """({text, family}) => {
+        """({text, family, pixels}) => {
           const ctx = document.createElement('canvas').getContext('2d');
-          ctx.font = '700 13px ' + family;
+          ctx.font = '600 ' + pixels + 'px ' + family;
           const expected = ctx.measureText(text).width;
-          ctx.font = '700 13px sans-serif';
+          ctx.font = '600 ' + pixels + 'px sans-serif';
           return {expected, generic: ctx.measureText(text).width};
         }""",
-        {"text": painted["text"], "family": "sans-serif" if reject_family else family},
+        {"text": painted["text"], "family": "sans-serif" if reject_family else family, "pixels": pixels},
     )
     assert abs(painted["width"] - measured["expected"]) < .1
-    assert float(re.search(r"(\d+(?:\.\d+)?)px", painted["font"]).group(1)) >= 11
     if not reject_family:
         assert abs(painted["width"] - measured["generic"]) > .5, "The live labels ignored the site's serif family"
 
@@ -2227,24 +2251,24 @@ def test_opening_details_keeps_the_clicked_card_under_the_pointer(desktop_page: 
 
 
 
-def test_the_canvas_paints_its_labels_in_the_sites_family(desktop_page: object, site_url: str) -> None:
-    """Verify a live painted region label, not merely a scratch context that accepts the site's family."""
-    page = desktop_page
+def test_the_canvas_paints_its_labels_in_the_sites_family(desktop_page: object, count_label_site_url: str) -> None:
+    """Verify a real routed count paint, not a scratch context or retired region-frame label."""
+    page, site_url = desktop_page, count_label_site_url
     _record_label_paints(page, reject_family=False)
-    page.route("**/dependencies.json", _canvas_region)
-    _open_site(page, site_url, "dependencies.html")
-    page.wait_for_function("window.labelPaints.some(paint => paint.text.startsWith('Algebra and topology mathematical region'))")
-    painted = page.evaluate(
-        "window.labelPaints.filter(paint => paint.text.startsWith('Algebra and topology mathematical region')).at(-1)"
-    )
+    canonical = _site_route(page, site_url, "roadmap")
+    _open_site(page, site_url, urlsplit(canonical).path.lstrip("/"))
+    page.wait_for_function("window.labelPaints.some(paint => paint.text === '×12')")
+    painted = page.evaluate("window.labelPaints.filter(paint => paint.text === '×12').at(-1)")
     family = page.locator(".bp-dag-viewer").evaluate("host => getComputedStyle(host).fontFamily")
     assert "Plus Jakarta Sans" in family and "Plus Jakarta Sans" in painted["font"]
-    assert float(re.search(r"(\d+(?:\.\d+)?)px", painted["font"]).group(1)) >= 11
+    pixels = float(re.search(r"(\d+(?:\.\d+)?)px", painted["font"]).group(1))
+    assert pixels >= 11 and painted["font"].startswith("600 ")
+    assert _canvas_pixels(page)["painted"] > 0
     expected = page.evaluate(
-        """({text, family}) => {
+        """({text, family, pixels}) => {
           const ctx=document.createElement('canvas').getContext('2d');
-          ctx.font='700 13px '+family; return ctx.measureText(text).width;
+          ctx.font='600 '+pixels+'px '+family; return ctx.measureText(text).width;
         }""",
-        {"text": painted["text"], "family": family},
+        {"text": painted["text"], "family": family, "pixels": pixels},
     )
     assert abs(painted["width"] - expected) < .1

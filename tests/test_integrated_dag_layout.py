@@ -31,7 +31,7 @@ function original(name) {
   }
   assert.fail('Production function did not parse: '+name);
 }
-const context={assert,structuredClone,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
+const context={assert,structuredClone,URL,productionSource:source,original,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(ROOT+'/autoform_cli/assets/blueprint-dagre.vendor.js','utf8'),context);
 const functions=['layoutGraph','geometry','compactRegions'].map(original).join('\n');
@@ -156,6 +156,82 @@ def test_captured_eleven_node_expansion_retains_every_weight_without_card_crossi
     fixture = json.loads(_FIXTURE.read_text(encoding="utf-8"))
     assert len(fixture["nodes"]) == 11 and len(fixture["edges"]) == 22
     _run(f"const result=check(fixture,{json.dumps(direction)});assert.equal(result.routes.length,33);", fixture)
+
+
+@pytest.mark.parametrize(("direction", "width", "height"), [("lr", 264, 148), ("tb", 312, 96)])
+def test_captured_five_area_root_keeps_all_cross_area_weights_and_clear_routes(direction: str, width: int, height: int) -> None:
+    captured = json.loads(_FIXTURE.read_text(encoding="utf-8"))
+    owners = {node["id"]: node["area"] for node in captured["nodes"]}
+    areas = list(dict.fromkeys(owners.values()))
+    links: dict[tuple[str, str], dict] = {}
+    for edge in captured["edges"]:
+        source, target = owners[edge["source"]], owners[edge["target"]]
+        if source == target:  # Internal dependencies belong to the expanded area, not a root self-loop.
+            continue
+        aggregate = links.setdefault((source, target), {"source": "region:" + source, "target": "region:" + target,
+                                                        "statement": 0, "proof": 0})
+        for kind in ("statement", "proof"):
+            aggregate[kind] += edge[kind]
+    fixture = {"nodes": [{"id": "region:" + area, "width": width, "height": height} for area in areas],
+               "edges": list(links.values())}
+    assert len(fixture["nodes"]) == 5 and len(fixture["edges"]) == 12
+    assert sum(edge[kind] > 0 for edge in fixture["edges"] for kind in ("statement", "proof")) == 19
+    for kind, total in (("statement", 98), ("proof", 218)):
+        assert sum(edge[kind] for edge in fixture["edges"]) == total
+        assert sum(edge[kind] for edge in captured["edges"] if owners[edge["source"]] != owners[edge["target"]]) == total
+    _run(f"const result=check(fixture,{json.dumps(direction)});assert.equal(result.routes.length,19);", fixture)
+
+
+@pytest.mark.parametrize("entry", ["roadmap", "resultA"])
+def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(entry: str) -> None:
+    """Execute the real cold-mount prefix, with DOM seams isolated but the actual projection and engine."""
+    _run(r"""
+      const events=[],expected=fixture.entry==='roadmap'?['region:Algebra','region:Topology']:['resultA','resultB'];
+      const scopes=Array.from({length:12},(_,number)=>({id:'scope-'+number,title:'Topic '+number,
+        scope:'scope-'+number,kind:'scope',navigation:'module',status:'planned',area:number<6?'Algebra':'Topology'}));
+      const results=['resultA','resultB'].map((id,number)=>({id,title:id,scope:'scope-'+number*6,kind:'node',status:'planned',result:true}));
+      const index={nodes:[{id:'roadmap',scope:'roadmap',title:'Mathematics',status:'planned'},...scopes,...results],
+        relations:[['resultA','resultB',2,1]]};
+      const payload={schema:'autoform-dag-view/v2',title:'Mathematics',palette:{planned:{label:'planned'}},
+        nodes:scopes.map(node=>({...node,id:'scope:'+node.id,member_count:1,status_counts:[['planned',1]],
+          layout:{width:232,height:116}})),edges:[{source:'scope:scope-0',target:'scope:scope-6',statement:2,proof:1}],
+        view:{presentation:'atlas',breadcrumbs:[]},regions:[],present_statuses:['planned']};
+      const firstBundle={nodeId:fixture.entry,graph:payload,dataURL:'https://example.test/dependencies.json'};
+      const navigation={getIndex(){events.push('index');return index;}};
+      const host={querySelector(){return null;},classList:{remove(){},toggle(){}}};
+      const window={location:{href:'https://example.test/roadmap/index.html',origin:'https://example.test'}};
+      const constants=productionSource.slice(productionSource.indexOf('  var NODE_W ='),productionSource.indexOf('  var clients ='));
+      eval(constants);
+      const start=productionSource.indexOf('  function mount('),end=productionSource.indexOf('    function globalListen(',start);
+      assert(start>=0&&end>start,'The real cold-mount boundary must exist');
+      const helpers=['safeHref','graphAt','useIndex','updateProjection','neighborhood','neighborIds','regionProjection',
+        'geometry','compactRegions'].map(original).join('\n');
+      const seams=`
+        function buildShell() {events.push('shell');family='sans-serif';dom$stage={clientWidth:900};
+          dom$ctx={font:'11px sans-serif',measureText:text=>({width:String(text).length*8})};
+          dom$search={};dom$breadcrumb={replaceChildren(){}};}
+        function markIntro() {} function bindEvents() {events.push('bind');}
+        function sheetLayout() {return false;} function renderNavigation() {} function renderReaderContext() {}
+        function renderInventory() {} function refresh() {} function routeTrail() {return [];} function trailList() {return [];}
+        function centerIfHidden() {} function redirectLegacyFocus() {events.push('legacy');}
+        function applyRoute(bundle) {assert.strictEqual(bundle,firstBundle);events.push('route');return Promise.resolve();}
+        function record(phase) {
+          assert.strictEqual(sharedIndex,index,"Cold layout must use the router's validated index");
+          assert.equal(ui$requestedNode,fixture.entry,'First fit must retain the canonical requested route');
+          assert.deepEqual(data.nodes.map(node=>node.id).sort(),expected,'Raw scopes or an unrelated neighborhood reached layout');
+          const current=geometry(),verified=check(data,'lr');
+          assert.equal(normal(current),normal(verified),'Cold layout must run the production engine and clear-route oracle');
+          events.push({phase,nodes:current.nodes.size,lanes:current.routes.length});
+        }
+        function fit() {record('fit');} function applyLocation() {record('location');} function resize() {record('resize');}
+      `;
+      const bootstrap=eval('('+productionSource.slice(start,end)+'\nreturn ui$requestedNode;\n'+helpers+'\n'+seams+'})');
+      assert.equal(bootstrap(host,payload,1,firstBundle,navigation),fixture.entry);
+      const phase=name=>events.findIndex(event=>typeof event==='string'?event===name:event.phase===name);
+      assert(phase('shell')<phase('bind')&&phase('bind')<phase('index')&&phase('index')<phase('fit'));
+      assert(phase('fit')<phase('location')&&phase('location')<phase('resize')&&phase('resize')<phase('route'));
+      assert(events.filter(event=>event==='index').length===1);
+    """, {"entry": entry})
 
 
 def test_layout_replays_deterministically_after_input_permutation() -> None:

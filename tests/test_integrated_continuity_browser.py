@@ -242,7 +242,7 @@ def test_region_graph_first_keeps_native_reading_reopen_and_back_pane_camera(
     page.set_viewport_size({"width": width, "height": height})
     documents = _documents(page)
     _open(page, site, workspace_runtime)
-    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    handle = page.locator('.bp-reading-pane > button[aria-label="Toggle mathematical reading"]')
     inner = page.locator(".bp-reading-pane > .bp-dag-inspector-inner")
     initial_width = page.locator(".bp-dag-stage").bounding_box()["width"]
     _focus_graph_region(page, "Geometry").press("Enter")
@@ -260,8 +260,12 @@ def test_region_graph_first_keeps_native_reading_reopen_and_back_pane_camera(
     _frames(page)
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
     playwright.expect(inner).not_to_have_attribute("inert", "")
+    assert inner.get_attribute("inert") is None and inner.get_attribute("aria-hidden") is None
     playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_LIBRARY)
     playwright.expect(page.locator(".bp-reading-body")).to_be_visible()
+    if width > 720:
+        playwright.expect(handle).to_be_hidden()
+        playwright.expect(page.locator(".bp-reading-body")).to_be_focused()
     page.get_by_role("button", name="Regions", exact=True).click()
     _focus_graph_region(page, "Geometry").press("Enter")
     _frames(page)
@@ -286,6 +290,7 @@ def test_region_graph_first_keeps_native_reading_reopen_and_back_pane_camera(
     _frames(page)
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     playwright.expect(inner).to_have_attribute("inert", "")
+    playwright.expect(handle).to_be_visible()
     restored = page.locator(".bp-dag-node:focus")
     playwright.expect(restored).to_have_attribute("data-autoform-node-id", scope_id)
     assert restored.evaluate("""node=>{const m=new DOMMatrix(getComputedStyle(node).transform);return [m.a,m.d,m.e,m.f];}""") == pytest.approx(camera, abs=2)

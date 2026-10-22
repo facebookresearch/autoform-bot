@@ -380,7 +380,8 @@
       ui$spotlight = null, ui$navigationLimit = atlas ? 120 : 50, ui$mapAllowed = mapAllowed, ui$readableCrop = false,
       ui$introInSheet = sheetLayout(), ui$selectedStatuses = new Set(presentStatuses), ui$showIsolated = true,
       ui$transform = {x: 20, y: 20, scale: 1}, ui$reading = Boolean(firstBundle && firstBundle.readingSource),
-      ui$area = null, ui$filtersTouched = false, ui$relationIds = null, ui$requestedNode = null, ui$outlineLimit = 120;
+      ui$area = null, ui$filtersTouched = false, ui$relationIds = null,
+      ui$requestedNode = firstBundle && firstBundle.nodeId || null, ui$outlineLimit = 120;
     if (!mapAllowed) ui$mode = "list";
     var dom$announcement, dom$body, dom$breadcrumb, dom$canvas, dom$ctx, dom$density, dom$edgeFieldset, dom$empty,
       dom$error, dom$filterPopover, dom$filterSummary, dom$filters, dom$fit, dom$graphMode, dom$hiddenButton,
@@ -396,6 +397,9 @@
 
     buildShell(); markIntro();
     bindEvents();
+    // The router has already validated its index. Project before the first
+    // layout, including direct theorem entries, not a transient raw scope.
+    if (navigation && navigation.getIndex) useIndex(navigation.getIndex());
     applyLocation();
     resize();
     redirectLegacyFocus();

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlsplit
 
+import html5lib
 import pytest
 
 from autoform_cli.mathjax import MATHJAX_BUNDLE, MATHJAX_VERSION
@@ -650,7 +651,9 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
     assert "Reading note" not in page.locator(".bp-dag-inventory-title").all_text_contents()
     page.get_by_role("button", name="Regions", exact=True).click()
     _focus_graph_region(page, "Geometry").click()
-    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id="scope:source-notes"]')).to_be_visible()
+    notes = _focus_graph_node(page, "scope:source-notes")
+    playwright.expect(notes).to_be_focused()
+    playwright.expect(notes.locator(".bp-dag-node-title")).to_have_text(site.records["source-notes"]["title"])
     assert page.url == site.route("roadmap")
 
 
@@ -889,18 +892,17 @@ def reader_declutter_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
         "## Topic catalogue\n\n- [First mathematical topic](alpha/README.md)\n"
         "- [Second mathematical topic](beta/README.md)\n\n"
         "## Full exposition\n\n" + exposition + "\n\nThe equality $\\frac{0}{2}=0$ is retained.\n\n"
-        '<h2 id="sources">Sources</h2>\n<ul><li><a href="beta/index.html">Second mathematical topic</a></li></ul>\n\n'
-        '<section role="doc-bibliography"><h2 id="source-material">Source material</h2>\n'
-        '<ul><li><a href="alpha/index.html">First mathematical topic</a></li></ul></section>\n\n'
+        "## Sources\n\n- [Second mathematical topic](beta/README.md)\n\n"
+        "## Bibliography\n\n- [First mathematical topic](alpha/README.md)\n\n"
         "## Commentary links\n\n- [First mathematical topic](alpha/README.md)\n"
         "- This mathematical commentary is not a navigation-only link.\n\n"
         "[Read retained exposition](#retained-section).\n\n"
-        "<h2 id=\"retained-section\">Retained mathematical section</h2>\n\n" + _DECLUTTER_END + "\n"
+        "## Retained section\n\n" + _DECLUTTER_END + "\n"
     ))
     _write(blueprint / "roadmap/alpha/README.md", (
         "---\nnavigation: module\n---\n\n# First mathematical topic\n\n"
         "The complete reading page includes its authored theorem.\n\n"
-        "## Reading contents\n\n- [Complete identity](identity.md)\n"
+        "## Reading contents\n\nRead the [Complete identity](identity.md).\n"
     ))
     _write(blueprint / "roadmap/alpha/identity.md", (
         "---\ndeclaration: theorem\nnot_ready: true\n---\n\n# Complete identity\n\n"
@@ -918,6 +920,14 @@ def reader_declutter_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
     index_path = project / "site/dependencies/index.json"
     index = json.loads(index_path.read_text(encoding="utf-8"))
     records = {record["id"]: record for record in index["nodes"]}
+    published_root = index_path.parent / unquote(urlsplit(records["roadmap"]["route"]).path)
+    tree = html5lib.parse(published_root.read_text(encoding="utf-8"), treebuilder="etree", namespaceHTMLElements=False)
+    reading = next(element for element in tree.iter() if "bp-reading-source" in element.get("class", "").split())
+    assert not any("bp-as-typed" in element.get("class", "").split() for element in reading.iter())
+    assert {"topic-catalogue", "sources", "bibliography", "commentary-links", "retained-section"} <= {
+        element.get("id") for element in reading.iter() if element.tag == "h2"
+    }
+    assert sum("arithmatex" in element.get("class", "").split() for element in reading.iter()) == 2
     root_path = index_path.parent / unquote(urlsplit(records["roadmap"]["data_url"]).path)
     root_graph = json.loads(root_path.read_text(encoding="utf-8"))
     with _served(project / "site") as url:
@@ -930,14 +940,16 @@ def test_enhanced_reader_hides_only_duplicate_scope_index_and_keeps_full_ssr_sou
     page, site = workspace_page, reader_declutter_site
     _open(page, site, workspace_runtime)
     reader = page.locator(".bp-reading-body > .bp-reading-source")
+    playwright.expect(reader.locator("#topic-catalogue")).to_have_count(1)  # Check existence before hidden accepts absence.
+    playwright.expect(reader.locator("#topic-catalogue + ul")).to_have_count(1)
     playwright.expect(reader.locator("#topic-catalogue")).to_be_hidden()
     playwright.expect(reader.locator("#topic-catalogue + ul")).to_be_hidden()
-    playwright.expect(reader.locator("#topic-catalogue")).to_have_count(1)  # The native ID is not rewritten.
     for node_id in ("alpha", "beta"):
         playwright.expect(page.locator(f'.bp-dag-navigation [data-navigation-node-id="{node_id}"]')).to_be_visible()
     playwright.expect(reader.locator("#sources")).to_be_visible()
     playwright.expect(reader.locator("#sources + ul")).to_be_visible()
-    playwright.expect(reader.locator('[role="doc-bibliography"]')).to_be_visible()
+    playwright.expect(reader.locator("#bibliography")).to_be_visible()
+    playwright.expect(reader.locator("#bibliography + ul")).to_be_visible()
     playwright.expect(reader.locator("#commentary-links + ul")).to_be_visible()
     assert _DECLUTTER_END in reader.inner_text() and len(reader.inner_text()) > 420
     assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-reading-body'))") is True
@@ -969,6 +981,7 @@ def test_decluttered_reader_keeps_native_math_anchors_leaf_navigation_and_back_p
     page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
     _open(page, site, workspace_runtime)
     reader = page.locator(".bp-reading-body")
+    playwright.expect(reader.locator("#topic-catalogue + ul")).to_have_count(1)
     playwright.expect(reader.locator("#topic-catalogue + ul")).to_be_hidden()
     reader.get_by_role("link", name="Read retained exposition", exact=True).click()
     page.wait_for_url(site.route("roadmap") + "#retained-section")
