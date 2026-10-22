@@ -33,7 +33,6 @@ _EXPECTED = {
     "blueprint/.gitignore",
     "blueprint/README.md",
     "blueprint/coverage/README.md",
-    "blueprint/javascripts/mathjax.js",
     "blueprint/roadmap/README.md",
     "blueprint/sources/README.md",
     "mkdocs.yml",
@@ -223,7 +222,13 @@ def test_scaffolded_vault_has_a_valid_incomplete_coverage_contract(tmp_path: Pat
 
     assert issues == ()
     assert coverage is not None
-    assert coverage.counts == {"MAPPED": 1, "DECOMPOSED": 0, "DEFERRED": 0, "OUT": 0}
+    assert coverage.counts == {
+        "MAPPED": 1,
+        "DECOMPOSED": 0,
+        "INVENTORIED": 0,
+        "DEFERRED": 0,
+        "OUT": 0,
+    }
     assert not coverage.complete
 
 
@@ -257,6 +262,7 @@ def test_substitutions_reach_the_site_config(tmp_path: Path) -> None:
     # Quoted: a title is a YAML scalar, not bare text pasted after a colon.
     assert 'site_name: "Finite Flat"' in mkdocs
     assert 'repo_url: "https://example.test/repo"' in mkdocs
+    assert "- navigation.prune" in mkdocs
 
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
     assert 'AUTOFORM_SOURCE: "https://example.test/autoform.git"' in verify
@@ -308,7 +314,7 @@ def test_force_overwrites(tmp_path: Path) -> None:
     ("relative", "expected"),
     [
         ("mkdocs.yml", b'site_name: "Finite Flat"'),
-        ("blueprint/javascripts/mathjax.js", b"window.MathJax"),
+        ("theme/main.html", b'{% extends "base.html" %}'),
     ],
 )
 def test_force_atomically_breaks_hard_links_for_rendered_and_static_files(
@@ -638,6 +644,8 @@ def test_scaffolded_blueprint_tracks_authored_structure(tmp_path: Path) -> None:
 
     assert "dependencies.md" in ignored
     assert "structure.md" not in ignored
+    # A read-back write killed by SIGTERM or SIGKILL leaves its staging file.
+    assert ".autoform-readback-*.tmp" in ignored
 
 
 def test_scaffolded_theme_defers_navigation_to_the_book(tmp_path: Path) -> None:
@@ -1045,6 +1053,83 @@ def test_plugin_pin_skips_a_remote_whose_url_is_not_utf8(
     _run_from(monkeypatch, checkout)
 
     assert scaffold_module.plugin_pin() == (scaffold_module.DEFAULT_AUTOFORM_SOURCE, head)
+
+
+def _tag_clone(tmp_path: Path, *options: str) -> tuple[Path, str]:
+    """Clone tag v0.6.0 at depth 1, as marketplace installs do; return clone and tag sha."""
+    source = tmp_path / "source"
+    tagged = _autoform_checkout(source, "https://example.test/unused.git", advertise=False)
+    _git_output(source, "tag", "v0.6.0")
+    _git_output(source, "commit", "-q", "--allow-empty", "-m", "after the tag")
+    _git_output(tmp_path, "clone", "-q", "--bare", str(source), "bare.git")
+    clone = tmp_path / "clone"
+    _git_output(
+        tmp_path,
+        "-c",
+        "advice.detachedHead=false",
+        "clone",
+        "-q",
+        "--depth",
+        "1",
+        "--branch",
+        "v0.6.0",
+        *options,
+        (tmp_path / "bare.git").as_uri(),
+        str(clone),
+    )
+    _git_output(clone, "remote", "set-url", "origin", "https://example.test/fork.git")
+    return clone, tagged
+
+
+@pytest.mark.parametrize("options", [(), ("--single-branch",)], ids=["claude", "muse"])
+def test_plugin_pin_accepts_a_depth_one_tag_clone(
+    options: tuple[str, ...], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude Code and Muse Code clone a marketplace ref with no refs/remotes/."""
+    clone, tagged = _tag_clone(tmp_path, *options)
+    assert _git_output(clone, "for-each-ref", "--format=%(refname)") == "refs/tags/v0.6.0"
+    _run_from(monkeypatch, clone)
+
+    assert scaffold_module.plugin_pin() == ("https://example.test/fork.git", tagged)
+
+
+def test_plugin_pin_omits_a_local_commit_on_top_of_a_tag_clone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clone, _ = _tag_clone(tmp_path)
+    _git_output(clone, "commit", "-q", "--allow-empty", "-m", "local")
+    _run_from(monkeypatch, clone)
+
+    assert scaffold_module.plugin_pin() == ("", "")
+
+
+@pytest.mark.parametrize("claims_tag", [False, True])
+def test_a_fetched_tag_is_credited_only_to_the_remote_that_fetched_it(
+    claims_tag: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A preferred canonical remote must not borrow the fork's tag; a shared one counts for neither."""
+    clone, tagged = _tag_clone(tmp_path)
+    _git_output(clone, "remote", "add", "upstream", scaffold_module.DEFAULT_AUTOFORM_SOURCE)
+    if claims_tag:
+        _git_output(
+            clone, "config", "--add", "remote.upstream.fetch", "+refs/tags/v0.6.0:refs/tags/v0.6.0"
+        )
+    _run_from(monkeypatch, clone)
+
+    expected = ("", "") if claims_tag else ("https://example.test/fork.git", tagged)
+    assert scaffold_module.plugin_pin() == expected
+
+
+def test_a_remote_with_an_unread_name_keeps_a_fetched_tag_from_counting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A remote whose name pinning does not read might fetch the same tag, so the tag counts for nobody."""
+    clone, _ = _tag_clone(tmp_path)
+    _git_output(clone, "config", "remote._x.url", "https://example.test/other.git")
+    _git_output(clone, "config", "--add", "remote._x.fetch", "+refs/tags/v0.6.0:refs/tags/v0.6.0")
+    _run_from(monkeypatch, clone)
+
+    assert scaffold_module.plugin_pin() == ("", "")
 
 
 @pytest.mark.parametrize(

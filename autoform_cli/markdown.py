@@ -27,16 +27,26 @@ itself, so the two cannot drift apart unnoticed.
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
+from itertools import groupby
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import html5lib
 import markdown as pymarkdown
+from markdown.blockprocessors import ReferenceProcessor
+from markdown.inlinepatterns import ReferenceInlineProcessor
+from pymdownx.arithmatex import RE_BRACKET_INLINE, RE_SMART_DOLLAR_INLINE
 from pymdownx.superfences import fence_div_format
+
+#: The class pymdownx.arithmatex gives each formula it finds in the site's
+#: Markdown. The page's MathJax reads these elements and no other text, so a
+#: title or the navigation shows its TeX as typed.
+FORMULA_CLASS = "arithmatex"
 
 #: The Markdown extensions the generated `mkdocs.yml` enables, and their
 #: settings. Anchor prediction builds a real converter from these, so the site's
@@ -60,6 +70,10 @@ SITE_EXTENSION_CONFIGS: dict[str, dict[str, object]] = {
     },
 }
 
+#: The file names MkDocs converts to pages, as ``mkdocs.utils.markdown_extensions``
+#: lists them. A file so named in the vault is a page on the site, whoever wrote it.
+PAGE_SUFFIXES = (".markdown", ".mdown", ".mkdn", ".mkd", ".md")
+
 #: A published heading's ID, read back out of the rendered HTML.
 _HEADING_ID = re.compile(r"<h[1-6][^>]*\bid=\"([^\"]*)\"", re.IGNORECASE)
 
@@ -75,10 +89,26 @@ INLINE_CODE = re.compile(r"(`+).*?\1")
 #: content that is still fenced when the page renders.
 FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 
-#: A complete inline link. The closing parenthesis is required: a target such as
-#: ``[Node](../roadmap/node.md`` renders as literal text, so accepting it would
-#: let unrendered evidence satisfy a coverage disposition.
-LINK = re.compile(r"(?<!!)\[[^\]]+\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+[^)]*)?\)")
+#: The destination of an inline link, just after its label. The closing
+#: parenthesis is required: a target such as ``[Node](../roadmap/node.md``
+#: renders as literal text, so accepting it would let unrendered evidence
+#: satisfy a coverage disposition.
+_INLINE_TARGET = re.compile(r"\(\s*(<[^>]+>|[^)\s]+)(?:\s+[^)]*)?\)")
+
+#: The second label of a full or collapsed reference link, ``[text][label]`` or
+#: ``[label][]``, as Python-Markdown reads it after the first.
+_REFERENCE_LABEL = ReferenceInlineProcessor.RE_LINK
+
+#: A reference definition, ``[label]: target "title"``, as the site's Markdown
+#: reads one.
+_LINK_DEFINITION = ReferenceProcessor.RE
+
+#: Inline math, which the site reads right after code spans and before any
+#: link, so a bracket inside it neither opens nor closes one.
+_INLINE_MATH = re.compile(f"(?:{RE_SMART_DOLLAR_INLINE}|{RE_BRACKET_INLINE})")
+
+#: A backslash escape that decides whether a bracket opens a link or an image.
+_BRACKET_ESCAPE = re.compile(r"\\[\\\[\]!]")
 
 #: An unordered or ordered list marker. Content indented under a list item is a
 #: continuation of that item, not an indented code block.
@@ -186,24 +216,112 @@ def content_lines(text: str) -> list[str]:
     return list(content(text).lines)
 
 
-def link_targets(value: str) -> tuple[str, ...]:
-    """Return the targets of every complete inline link in ``value``.
+def link_targets(value: str, references: dict[str, str] | None = None) -> tuple[str, ...]:
+    """Return the target of every link Python-Markdown reads in ``value``.
 
-    Inline code is ignored, so a link shown as an example inside backticks does
-    not count as a real reference. Angle-bracket targets are unwrapped.
+    Inline code is masked, not deleted, as the renderer reads it before links:
+    a link shown as an example inside backticks is no link, while a label that
+    is only code, ``[`Foo.bar`](foo.md)``, is still a label. Inline math is
+    masked the same way, since the site reads it before links too. Brackets
+    nest in a label and an escaped bracket is text. A reference link,
+    ``[text][label]``, ``[label][]`` or ``[label]``, takes its target from
+    ``references``, as :func:`link_definitions` reads them, and is no link
+    without a definition; a definition shows no link itself. Angle-bracket
+    targets are unwrapped, and images are not links.
     """
 
-    return tuple(
-        _unwrap_target(match.group(1)) for match in LINK.finditer(INLINE_CODE.sub("", value))
-    )
+    if _LINK_DEFINITION.match(value):
+        return ()
+    references = references or {}
+    # Code spans, then inline math, are read before any link. Brackets are
+    # matched with escapes masked; a target keeps its escapes.
+    code_masked = _INLINE_MATH.sub(_blank, INLINE_CODE.sub(_blank, value))
+    masked = _BRACKET_ESCAPE.sub(_blank, code_masked)
+    closing = _closing_brackets(masked)
+    targets: list[str] = []
+    # Python-Markdown reads full and collapsed references, inline links and
+    # shortcut references in that order, each in its own pass. A reference pass
+    # skips what it reads without a definition: both labels of a full or
+    # collapsed reference, the whole bracket pair of a shortcut one, so `[[1]]`
+    # links nothing even with `[1]` defined. Neither pass starts at `![`.
+    passed = spent = -1
+    start = masked.find("[")
+    while start >= 0:
+        close = closing.get(start)
+        image = masked[start - 1 : start] == "!"
+        link = None
+        if close is not None:
+            label = masked[start + 1 : close]
+            reference = _REFERENCE_LABEL.match(masked, close + 1) if start > passed else None
+            full = _WHITESPACE.sub(" ", (reference.group(1) or label).lower()) if reference else None
+            short = _WHITESPACE.sub(" ", label.lower())
+            inline = _INLINE_TARGET.match(code_masked, close + 1)
+            if reference and full not in references and not image:
+                passed = reference.end() - 1
+            if full in references:
+                link = references[full], reference.end()
+            elif inline is not None:
+                link = _unwrap_target(inline.group(1)), inline.end()
+            elif start > spent and short in references:
+                link = references[short], close + 1
+            elif not image:
+                spent = max(spent, close)
+        if link is None:
+            start = masked.find("[", start + 1)
+            continue
+        if not image:
+            targets.append(link[0])
+        start = masked.find("[", link[1])
+    return tuple(targets)
+
+
+def link_definitions(lines: list[str]) -> dict[str, str]:
+    """Return the target of each reference definition in ``lines``, by label.
+
+    ``lines`` are masked as :func:`mask_code_and_comments` or
+    :func:`content_lines` leave them, so a definition in code or a comment does
+    not count. A definition counts on a line of its own, and its label is
+    matched without regard to case. A later definition of a label replaces an
+    earlier one, as the site's Markdown reads them.
+    """
+
+    references: dict[str, str] = {}
+    for line in lines:
+        definition = _LINK_DEFINITION.match(line)
+        if definition is not None:
+            references[definition.group(1).strip().lower()] = definition.group(2).lstrip("<").rstrip(">")
+    return references
+
+
+def _closing_brackets(text: str) -> dict[int, int]:
+    """Map the index of each ``[`` in ``text`` to that of the ``]`` closing it."""
+
+    closing: dict[int, int] = {}
+    opened: list[int] = []
+    for index, character in enumerate(text):
+        if character == "[":
+            opened.append(index)
+        elif character == "]" and opened:
+            closing[opened.pop()] = index
+    return closing
+
+
+def _blank(match: re.Match[str]) -> str:
+    return " " * len(match.group(0))
 
 
 def markdown_links(text: str) -> list[tuple[int, str]]:
-    """Return ``(line number, target)`` for every visible link in ``text``."""
+    """Return ``(line number, target)`` for every visible link in ``text``.
 
+    A reference link is reported on its own line, with the target of its
+    definition anywhere in ``text``.
+    """
+
+    lines = content_lines(text)
+    references = link_definitions(lines)
     links: list[tuple[int, str]] = []
-    for line_number, line in enumerate(content_lines(text), start=1):
-        links.extend((line_number, target) for target in link_targets(line))
+    for line_number, line in enumerate(lines, start=1):
+        links.extend((line_number, target) for target in link_targets(line, references))
     return links
 
 
@@ -257,6 +375,29 @@ def render_tree(text: str) -> object | None:
         return None
 
 
+#: What could be markup where render writes a title itself, as references.
+_TITLE_REFERENCES = str.maketrans({character: f"&#{ord(character)};" for character in "&<>\"'`*_[]$\\"})
+
+
+@lru_cache(maxsize=4096)
+def title_text(title: str) -> str:
+    """``title``, Markdown an author wrote, as the plain text a reader sees,
+    with every character that could be markup written as a numeric reference.
+
+    Render writes titles into headings, navigation entries, and page metadata,
+    and the theme prints the last two as they are. A reference reads as its
+    character in all three, so a title only ever reads as text."""
+
+    return name_text(rendered_visible_text(title))
+
+
+def name_text(name: str) -> str:
+    """``name``, such as a file's, with :func:`title_text`'s references and
+    nothing read as Markdown first, so a name that holds a tag shows it."""
+
+    return name.translate(_TITLE_REFERENCES)
+
+
 def rendered_visible_text(value: str) -> str:
     """Return the text a reader sees once ``value`` is published.
 
@@ -271,6 +412,39 @@ def rendered_visible_text(value: str) -> str:
         # vouch for, so report no visible text rather than guess.
         return ""
     return _collapse("".join(_visible_parts(tree, hidden=False)))
+
+
+def page_title(text: str) -> str | None:
+    """The title MkDocs takes from the page ``text``, as the text a reader
+    sees: its first block's, when that block is an H1, else None, and MkDocs
+    titles the page by its file's name."""
+
+    tree = render_tree(text)
+    body = tree.find("body") if tree is not None else None
+    first = body[0] if body is not None and len(body) else None
+    if first is None or first.tag != "h1":
+        return None
+    return _collapse("".join(_visible_parts(first, hidden=False))) or None
+
+
+def yaml_string(value: str) -> str:
+    """``value`` as a YAML double-quoted string MkDocs reads back as written:
+    JSON's escapes, with a character above U+FFFF as YAML's ``\\U`` escape,
+    since YAML refuses the surrogate pair JSON writes for it."""
+
+    return re.sub(
+        r"\\u(d[89ab][0-9a-f]{2})\\u(d[c-f][0-9a-f]{2})",
+        lambda pair: "\\U%08X" % (0x10000 + ((int(pair[1], 16) - 0xD800) << 10) + (int(pair[2], 16) - 0xDC00)),
+        json.dumps(value),
+    )
+
+
+def header_title(title: str) -> str:
+    """The ``title:`` line of a page's header for ``title``, the text a reader
+    sees: the theme prints a page's metadata as it is, so ``&``, ``<``, ``>``
+    and ``"`` are written as references, in a YAML string."""
+
+    return "title: " + yaml_string(html.escape(title, quote=False).replace('"', "&quot;"))
 
 
 def visible_prose(value: str) -> str:
@@ -567,6 +741,157 @@ def site_converter() -> pymarkdown.Markdown:
     )
 
 
+#: The sections that list an article's dependencies. The site shows them in
+#: its own form in the article's box, so they are not published as written.
+DEPENDENCY_SECTIONS = frozenset({"depends on", "proof depends on"})
+
+#: The boxes a leaf article's statement and the sections after it are
+#: published in, on the page of the article that contains it.
+STATEMENT_BOX = "bp-thmcontent"
+NOTES_BOX = "bp-thmnotes"
+
+#: What render writes at the top of every page an author wrote, in place of
+#: the page's frontmatter. MkDocs takes it for the page's metadata, so no key
+#: an author wrote reaches the theme, which prints metadata unescaped, and
+#: MkDocs reads no leading line of the page as metadata either.
+PAGE_HEADER = "---\n{}\n---\n"
+
+#: A code span, which shows a comment as typed, or an HTML comment with its
+#: end. A span opens at a run of backticks no backslash escapes and may cross
+#: lines, but not a blank one, as in CommonMark.
+_CODE_OR_COMMENT = re.compile(r"(?<![\\`])(`+)(?!`)(?:(?!\n[ \t]*\n).)*?(?<!`)\1(?!`)|<!--.*?-->", re.DOTALL)
+
+
+def published_lines(text: str) -> str:
+    """``text`` with every line break :meth:`str.splitlines` reads written as
+    ``\\n``, and ending in one.
+
+    The site edits articles a line at a time and writes them back this way,
+    so a form feed or U+2028, which Python-Markdown reads as text, is a line
+    break by the time the page is converted. Checking this text, rather than
+    the bytes in the vault, checks the lines the page has."""
+
+    return "".join(f"{line}\n" for line in text.splitlines())
+
+
+def published_page(text: str) -> str:
+    """The page render publishes for a page an author wrote with ``text``:
+    :data:`PAGE_HEADER`, then the page with its frontmatter, as
+    :func:`frontmatter_end` reads it, left as blank lines, so each line is
+    three below its line in the file, and without the HTML comments outside
+    code, as :func:`published_lines` writes it.
+
+    A comment in a code span or a fenced or indented code block is shown as
+    typed, so it stays, as does a comment that never closes, which check
+    warns about.
+    """
+
+    # A byte-order mark would sit after render's header, where MkDocs no longer strips it.
+    lines = text.removeprefix("\ufeff").splitlines()
+    start = frontmatter_end(lines)
+    if start == len(lines) and (start < 2 or lines[-1].strip() != "---"):
+        start = 0  # a first line of --- that nothing closes is no frontmatter
+    body = lines[start:]
+    code: set[int] = set()
+    continued: set[int] = set()
+    masked = _mask_fences_and_comments(body, set(), unclosed_fence_is_text=True, fenced=code, continued=continued)
+    # A line that opens a comment and holds nothing else is blank once masked,
+    # but indented as code it may open or close a code block, which shows the
+    # comment as typed. A line inside a comment opened earlier stays hidden.
+    for index, line in enumerate(body):
+        if index not in code and index not in continued and not masked[index].strip():
+            if line.lstrip().startswith("<!--") and _indent(line) >= _CODE_INDENT:
+                masked[index] = line
+    _mask_indented_code(masked, code)
+    kept: list[str] = []
+    for in_code, run in groupby(enumerate(body), key=lambda numbered: numbered[0] in code):
+        block = "\n".join(line for _, line in run)
+        kept.append(block if in_code else _CODE_OR_COMMENT.sub(lambda found: found.group() if found[1] else "", block))
+    return PAGE_HEADER + "\n" * start + published_lines("\n".join(kept))
+
+
+def published_markdown(text: str) -> list[tuple[str, str]]:
+    """Each piece of the article ``text`` the site can publish, with the
+    Markdown it is converted in: the page MkDocs reads from its file, and the
+    statement and notes a leaf's boxes show on its chapter page. ``text`` is
+    :func:`published_page` text; the renderer publishes these same pieces,
+    so check reads an article as the site does."""
+
+    # MkDocs reads the header off, and the blank lines after it.
+    page = text.removeprefix(PAGE_HEADER).lstrip("\n")
+    pieces = [(page, page)]
+    parts = statement_and_notes(text)
+    alone = converted_alone(*parts)
+    for part, box in zip(parts, (STATEMENT_BOX, NOTES_BOX), strict=True):
+        if part:
+            pieces.append((part, part if alone else "\n".join(boxed(part, box))))
+    return pieces
+
+
+def converted_alone(*parts: str) -> bool:
+    """Whether render converts a statement and its notes on their own before
+    boxing them: when either holds a "<", which the box's HTML reading could
+    take for a tag."""
+
+    return any("<" in part for part in parts)
+
+
+def boxed(part: str, box: str) -> list[str]:
+    """The lines that publish ``part`` as Markdown in a ``<div>`` of class
+    ``box`` on a page."""
+
+    return [f'<div class="{box}" markdown="1">', "", part, "", "</div>"]
+
+
+def statement_and_notes(text: str) -> tuple[str, str]:
+    """A leaf article's statement and the sections after it, as the site
+    publishes them in the article's box.
+
+    The statement is :func:`article_parts`'s, the span the audit reads. The
+    dependency sections are dropped, since the box shows the DAG in its
+    metadata line, and the headings in both parts are demoted below the
+    chapter page's. Otherwise each part is the author's Markdown, less the
+    blank lines around it and each section's body, so an indented first line
+    is code in the box as in the vault."""
+
+    parts = article_parts(text)
+    notes = "\n\n".join(
+        f"{section.heading}\n\n{section.body}".rstrip()
+        for section in parts.sections
+        if section.title.casefold() not in DEPENDENCY_SECTIONS
+    )
+    return _demote_headings(parts.statement), _demote_headings(notes)
+
+
+def outside_fences(text: str, transform) -> str:
+    """Apply *transform* to every line that is not inside a code fence."""
+    fence: tuple[str, int] | None = None
+    out: list[str] = []
+    for line in text.splitlines():
+        match = FENCE.match(line) if fence is None else FENCE_CLOSE.match(line)
+        if match:
+            marker = match.group(1)
+            if fence is None:
+                fence = (marker[0], len(marker))
+            elif marker[0] == fence[0] and len(marker) >= fence[1]:
+                fence = None
+            out.append(line)
+            continue
+        out.append(line if fence is not None else transform(line))
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def _demote_headings(text: str) -> str:
+    def demote(line: str) -> str:
+        heading = HEADING.match(line)
+        if heading is None:
+            return line
+        level = min(len(heading.group(1)) + 4, 6)
+        return f"{'#' * level} {heading.group(2)}"
+
+    return outside_fences(text, demote)
+
+
 def markdown_anchors(path: Path) -> set[str]:
     """Return the heading anchors MkDocs will publish for ``path``.
 
@@ -603,24 +928,95 @@ def _anchors_from_body(body: str) -> frozenset[str]:
     return frozenset(html.unescape(found) for found in _HEADING_ID.findall(rendered))
 
 
+#: Views earlier renders wrote at the blueprint root, which render no longer writes.
+RETIRED_VIEWS = frozenset({"dependencies.html", "graph.html", "progress.md"})
+#: Views generated at the blueprint root. Render omits the vault's copies: it
+#: writes the current views itself and drops stale copies of the retired ones.
+GENERATED_VIEWS = RETIRED_VIEWS | {
+    "dependencies.md",
+    # The vault keeps its own Obsidian-readable copy; the site builds one.
+    "structure.md",
+}
+
+
+def resolved_path(path: Path) -> Path | None:
+    """``path`` with its symbolic links resolved, or None when the system cannot open it.
+
+    The kernel follows the links first, so a missing part, a symlink loop or a
+    chain past its link limit gives None on every Python, and that limit bounds
+    the work `os.path.realpath` then does. Strict `realpath` also gives None at
+    a link it cannot read, which macOS follows anyway. Windows applies `..` as
+    text before it looks anything up. Callers still check where the result
+    points and whether it is a file.
+    """
+
+    try:
+        os.stat(path)
+        return Path(os.path.realpath(path, strict=True))
+    except (OSError, ValueError):  # ValueError: a NUL in the path
+        return None
+
+
+def directory_path(path: Path) -> Path | None:
+    """``path`` as `resolved_path` gives it, or, for a directory it gives None
+    for, the path the system gives the opened directory; None when neither works.
+
+    For a blueprint root. `resolved_path` gives None at a link the system
+    follows but will not let anyone read, which macOS allows for another
+    user's symlink; above a blueprint such a link changes nothing inside it,
+    so the system is asked for the path of the directory it opened. Links
+    under that path then resolve as usual, and one inside the blueprint that
+    cannot be read still gives None.
+    """
+
+    resolved = resolved_path(path)
+    if resolved is not None or os.name == "nt":
+        return resolved
+    import fcntl
+
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    except (OSError, ValueError):
+        return None
+    try:
+        if hasattr(fcntl, "F_GETPATH"):  # macOS
+            opened = os.fsdecode(fcntl.fcntl(descriptor, fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0])
+        else:  # Linux; elsewhere, without /proc, this fails and gives None
+            opened = os.readlink(f"/proc/self/fd/{descriptor}")
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+    return Path(opened)
+
+
+def blueprint_root(path: str | Path) -> Path:
+    """The directory ``path`` names, as `directory_path` gives it, or as written, made absolute."""
+
+    given = Path(path).expanduser()
+    return directory_path(given) or given.absolute()
+
+
 def local_target_issue(
     source_path: Path,
     target: str,
     boundary: Path,
     *,
     label: str,
+    unpublished: tuple[Path, ...] = (),
 ) -> tuple[str, str] | None:
-    """Return ``(code, reason)`` when a local link does not resolve.
+    """Return ``(code, reason)`` when a local link does not resolve, or names a path render omits.
 
     ``source_path`` is the file containing the link, ``boundary`` the directory
-    the link may not escape. External schemes are the reader's problem and are
-    reported as fine. A fragment on a Markdown target must name a real heading.
+    the link may not escape, and ``unpublished`` the folders render leaves out.
+    External schemes are the reader's problem and are reported as fine. A
+    fragment on a Markdown target must name a real heading.
     """
 
     try:
         split = urlsplit(target)
     except ValueError:
-        return f"malformed-{label}-link", f"{label} link is not a valid URL: {target!r}"
+        return f"malformed-{label}-url", f"{label} link is not a valid URL: {target!r}"
     scheme = split.scheme.casefold()
     if scheme in EXTERNAL_SCHEMES:
         return None
@@ -632,24 +1028,33 @@ def local_target_issue(
     raw_path = unquote(split.path)
     if "\x00" in raw_path:
         return f"malformed-{label}-link", f"{label} link contains an invalid path: {target!r}"
-    if not raw_path:
-        candidate = source_path
-    else:
-        relative = Path(raw_path)
-        if relative.is_absolute():
-            return f"{label}-escapes-blueprint", f"{label} link escapes the blueprint: {target!r}"
-        candidate = source_path.parent / relative
-    try:
-        candidate = candidate.resolve()
-    except (OSError, RuntimeError, ValueError):
-        # Before Python 3.13 a symlink loop raises RuntimeError here. From 3.13 resolve
-        # returns the looping path, so the lexical one stands in, and the checks below
-        # report it as on 3.13.
-        candidate = Path(os.path.abspath(candidate))
-
     boundary = boundary.resolve()
+    # The path the link spells, after its `..` steps. One that leaves the
+    # blueprint escapes it, and nothing outside is looked at.
+    spelled = Path(os.path.normpath(source_path.parent.resolve() / raw_path))
+    if Path(raw_path).is_absolute() or not _is_within(spelled, boundary):
+        return f"{label}-escapes-blueprint", f"{label} link escapes the blueprint: {target!r}"
+    if spelled.parent == boundary and spelled.name in GENERATED_VIEWS:
+        return f"generated-{label}-target", f"{label} link names a generated view, which render omits: {target!r}"
+    if any(_is_within(spelled, folder) for folder in unpublished):
+        reason = f"{label} link names an unpublished folder, which render omits: {target!r}"
+        return f"unpublished-{label}-target", reason
+    candidate = resolved_path(source_path.parent / raw_path if raw_path else source_path)
+    if candidate is None:
+        return f"{label}-not-found", f"{label} link does not resolve to a file: {target!r}"
     if not _is_within(candidate, boundary):
         return f"{label}-escapes-blueprint", f"{label} link escapes the blueprint: {target!r}"
+    # Render resolves links in a copy of the vault that has no hidden paths and no
+    # symbolic links, so a link on a page it publishes breaks when the path it spells
+    # is hidden. A link naming a hidden part that its `..` steps leave again, as
+    # `.x/../paper.md` does, is refused too: nothing needs one, and render opens
+    # coverage evidence in its copy, which has no `.x`. Only a repository link
+    # reaches a hidden note under `sources/`, and render writes one when it links
+    # the other source notes there; that link resolves only once the note is
+    # committed, so it is reported too, and `check` only warns about it.
+    named = any(part.startswith(".") and part != ".." for part in Path(raw_path).parts)
+    if named or _is_hidden_path(spelled, boundary):
+        return f"hidden-{label}-target", f"{label} link names a hidden path, which render omits: {target!r}"
     # Before Python 3.14, `Path.is_file` raises under an unreadable directory.
     if not os.path.isfile(candidate):
         return f"{label}-not-found", f"{label} link does not resolve to a file: {target!r}"
@@ -698,7 +1103,12 @@ def _mask_fences_and_comments(
     *,
     unclosed_fence_is_text: bool = False,
     unclosed_openers: set[int] | None = None,
+    fenced: set[int] | None = None,
+    continued: set[int] | None = None,
 ) -> list[str]:
+    fenced = set() if fenced is None else fenced
+    # The lines that start inside a comment opened on an earlier line.
+    continued = set() if continued is None else continued
     masked: list[str] = []
     fence: tuple[str, int] | None = None
     in_comment = False
@@ -718,6 +1128,8 @@ def _mask_fences_and_comments(
             index, in_comment = opened
             del masked[index:]
             hidden.difference_update(range(index, len(lines)))
+            fenced.difference_update(range(index, len(lines)))
+            continued.difference_update(range(index, len(lines)))
             fence = None
             continue
         raw = lines[index]
@@ -731,10 +1143,13 @@ def _mask_fences_and_comments(
                 if marker[0] == fence[0] and len(marker) >= fence[1]:
                     fence = None
             hidden.add(index)
+            fenced.add(index)
             masked.append("")
             index += 1
             continue
         opened_in_comment = in_comment
+        if opened_in_comment:
+            continued.add(index)
         line, in_comment = strip_line_comments(raw, in_comment)
         match = FENCE.match(line)
         if match is not None and len(match.group(1)) < unclosed.get(match.group(1)[0], len(line) + 1):
@@ -742,6 +1157,7 @@ def _mask_fences_and_comments(
             fence = (marker[0], len(marker))
             opened = (index, opened_in_comment)
             hidden.add(index)
+            fenced.add(index)
             masked.append("")
             index += 1
             continue
@@ -811,36 +1227,71 @@ def _is_within(path: Path, directory: Path) -> bool:
     return True
 
 
+def _is_hidden_path(path: Path, boundary: Path) -> bool:
+    """Whether a part of *path* below *boundary* starts with ".", so render omits it (its `_is_hidden`)."""
+    return _is_within(path, boundary) and any(part.startswith(".") for part in path.relative_to(boundary).parts)
+
+
+def relative_link(target: Path, output: Path, link_extension: str) -> str:
+    """Relative link from the page at *output* to *target*, with its suffix swapped."""
+    relative = Path(os.path.relpath(target.resolve(), output.resolve().parent))
+    if not relative.name:
+        # The page's own directory is ``.``, which has no name to take a suffix.
+        return quote(relative.as_posix(), safe="/")
+    return quote(relative.with_suffix(link_extension).as_posix(), safe="/")
+
 __all__ = [
     "EXTERNAL_SCHEMES",
     "FENCE",
     "FENCE_CLOSE",
+    "FORMULA_CLASS",
+    "GENERATED_VIEWS",
     "HEADING",
     "INLINE_CODE",
-    "LINK",
+    "NOTES_BOX",
+    "PAGE_SUFFIXES",
+    "RETIRED_VIEWS",
     "SITE_EXTENSIONS",
     "SITE_EXTENSION_CONFIGS",
+    "STATEMENT_BOX",
     "ArticleParts",
     "ArticleSection",
     "article_parts",
     "Content",
+    "boxed",
+    "converted_alone",
     "content",
+    "blueprint_root",
     "content_lines",
+    "directory_path",
     "frontmatter_end",
     "has_substance",
     "is_placeholder",
+    "link_definitions",
     "link_targets",
     "local_target_issue",
     "markdown_anchors",
     "PublishedTable",
     "markdown_links",
+    "outside_fences",
+    "PAGE_HEADER",
+    "published_markdown",
+    "published_page",
     "mask_code_and_comments",
     "mask_fences_and_comments",
     "published_tables",
+    "relative_link",
     "render_html",
     "render_tree",
     "rendered_visible_text",
+    "resolved_path",
     "site_converter",
+    "statement_and_notes",
+    "title_text",
+    "name_text",
+    "page_title",
+    "header_title",
+    "yaml_string",
     "strip_line_comments",
     "first_unclosed_fence",
     "visible_prose",

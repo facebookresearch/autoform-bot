@@ -32,6 +32,7 @@ theme:
     # The chapter tree stays visible, which is what makes a blueprint readable
     # as a book rather than as a pile of pages.
     - navigation.sections
+    - navigation.prune
     - navigation.indexes
     - navigation.top
     - toc.follow

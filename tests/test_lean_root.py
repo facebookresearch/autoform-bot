@@ -129,7 +129,6 @@ def test_index_project_refuses_an_unusable_root(unusable_root: tuple[Path, str])
         pytest.param(["search", "{blueprint}", "result"], "unsearchable", 2, "error: {}\n", id="search"),
         pytest.param(["work", "list", "{blueprint}"], "unsearchable", 2, "error: {}\n", id="work-list"),
         pytest.param(["work", "impact", "result", "{blueprint}"], "missing", 2, "error: {}\n", id="work-impact"),
-        pytest.param(["unused-hypotheses", "{blueprint}"], "missing", 2, "error: {}\n", id="unused-hypotheses"),
     ],
     indirect=["unusable_root"],
 )

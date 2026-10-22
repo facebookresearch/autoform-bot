@@ -125,16 +125,24 @@ def _require_plain_file(root: Path, relative: str) -> None:
         raise PinError(f"its {relative} is not a regular file")
 
 
-def load_library(workspace: LakeWorkspace, library: str, index_path: Path | None = None) -> VerifiedLibrary:
-    """Return ``library``'s index once every check against its checkout has passed."""
+def load_library(
+    workspace: LakeWorkspace, library: str, index_path: Path | None = None, *, index: LibraryIndex | None = None
+) -> VerifiedLibrary:
+    """Return ``library``'s index once every check against its checkout has passed.
+
+    ``index`` is the checkout's index when the caller has already read and parsed it, so it is not read
+    again; every other check still runs.
+    """
 
     try:
-        return _load_library(workspace, library, index_path)
+        return _load_library(workspace, library, index_path, index)
     except OSError:
         raise LibraryError(library, "its checkout cannot be read") from None
 
 
-def _load_library(workspace: LakeWorkspace, library: str, index_path: Path | None) -> VerifiedLibrary:
+def _load_library(
+    workspace: LakeWorkspace, library: str, index_path: Path | None, index: LibraryIndex | None = None
+) -> VerifiedLibrary:
     package = find_package(workspace, library)
     name = package.name
 
@@ -154,9 +162,11 @@ def _load_library(workspace: LakeWorkspace, library: str, index_path: Path | Non
 
     path = root / INDEX_FILE if index_path is None else Path(index_path)
     try:
-        index = parse_index(_index_bytes(path))
+        index = parse_index(_index_bytes(path)) if index is None else index
     except FileNotFoundError:
         raise refuse(f"it has no index ({path.name})") from None
+    except PermissionError:
+        raise refuse("its index cannot be read") from None
     except OSError:
         raise refuse("its index is not a regular file") from None
     except LibraryIndexError as error:

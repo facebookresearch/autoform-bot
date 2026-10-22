@@ -17,8 +17,14 @@ make check-example  # validate, render, and build the bundled example site
 CI (`.github/workflows/tests.yml`) runs the same four steps on Python 3.10 and
 3.13 for every pull request, for pushes to `main`, and for pushes to `scratch/`
 branches, which run CI on a branch with no pull request; a newer commit on a
-pull request cancels the older run. Four more jobs run beside it. `real Lean
-(fixture toolchain)` builds a project from the bundled Mathlib release and runs
+pull request cancels the older run. Five more jobs run beside it. `WebKit
+dependency explorer regressions` installs the `browser` extra and WebKit and
+runs `tests/test_dag_viewer_browser.py` with `AUTOFORM_REQUIRE_BROWSER_TESTS=1`,
+so a missing browser fails the job instead of skipping its tests; locally they
+skip without the extra, and `make test-browser` installs both and runs them as
+CI does. `real Lean
+(fixture toolchain)` builds and audits a project from the bundled Mathlib
+release and runs
 the real-Lean suites other than the skeleton suite, which `real Lean skeleton
 suite` runs with one `tests/test_project_inspect.py` test. Another job runs the
 inspection, bounded-subprocess, and transactional-output tests on Windows, and
@@ -26,14 +32,27 @@ the last builds
 `tests/fixtures/repl-smoke` and runs `tests/test_real_repl.py` against the
 pinned upstream REPL, also checking the header parser on the oldest Lean release
 Autoform supports. Locally, tests that need Lean skip when
-`lake` is not on `PATH`. The `tests/test_skeleton.py` ones also skip when the
+`lake` is not on `PATH`. Those in `tests/test_skeleton.py`, `test_impact.py`,
+`test_contract.py`, `test_lake_artifact_audit.py`, `test_lsp_protocol.py` and
+`test_batch_diagnostics.py` also skip when elan is installed but the
 toolchain pinned in `tests/fixtures/skeleton-project/lean-toolchain` is
-missing; the others let elan download it. The `tests/test_library_generate.py`
+missing; only the real-Lake test in `tests/test_project_inspect.py` lets elan
+download it. The `tests/test_library_generate.py`
 ones that run Lean build a fixture that clones Batteries from GitHub, so they
 run only when `AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS=1` is set, as their CI job
 does; a missing toolchain or a failed download then fails them. Run
 `lake build` in `skills/setup/assets/cabannes-thesis-project` when you change
 the example's Lean sources or declarations.
+
+The verify workflow's kernel-trust probe is Lean, kept in
+`autoform_cli/probes/audit_probe.lean`. Projects get one self-contained helper,
+`.github/autoform_audit.py`, which carries a verbatim copy of that file, so edit
+the `.lean` file and then run `python3 scripts/sync_audit_probe.py` to rewrite
+the copy in the template and the bundled example. The probe imports only the
+toolchain's Lean, so Lean checks the file without a project:
+`elan run "$(cat tests/fixtures/library-project/lean-toolchain)" lean
+autoform_cli/probes/audit_probe.lean` prints nothing when it is clean, and the
+real-Lean tests run that check on both fixture toolchains.
 
 `tests/test_real_repl.py` skips unless `AUTOFORM_RUN_REAL_REPL_TESTS=1`. To run
 it locally, build its fixture and install the oldest supported toolchain first:

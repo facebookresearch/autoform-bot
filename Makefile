@@ -1,4 +1,4 @@
-.PHONY: setup test lint check-example
+.PHONY: setup test test-browser lint check-example
 
 THESIS_EXAMPLE := skills/setup/assets/cabannes-thesis-project
 
@@ -7,6 +7,11 @@ setup:
 
 test:
 	uv run pytest -q
+
+test-browser:
+	uv sync --extra dev --extra browser
+	uv run --extra dev --extra browser playwright install webkit
+	AUTOFORM_REQUIRE_BROWSER_TESTS=1 uv run --extra dev --extra browser pytest -q tests/test_dag_viewer_browser.py
 
 lint:
 	uv run ruff check autoform_cli servers tests
@@ -19,3 +24,4 @@ check-example:
 		--lean-root $(THESIS_EXAMPLE) \
 		--require-declarations
 	uv run --extra dev mkdocs build --strict --config-file $(THESIS_EXAMPLE)/mkdocs.yml
+	uv run autoform site check $(THESIS_EXAMPLE)/site --source $(THESIS_EXAMPLE)/site-src

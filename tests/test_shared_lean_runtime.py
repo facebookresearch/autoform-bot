@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -1753,6 +1754,30 @@ def test_silent_connection_cannot_block_graceful_stop(runtime_dir, monkeypatch):
         silent.close()
         if thread.is_alive():
             thread.join(timeout=3)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SIGCHLD is POSIX-specific")
+def test_serve_reads_real_exit_statuses_when_started_with_sigchld_ignored(runtime_dir, monkeypatch):
+    # On Linux the daemon keeps an ignored SIGCHLD from whatever started it. The
+    # kernel then reaps each child as it exits and Popen reports status 0, so
+    # Lake's exit 3 for unbuilt imports would read as a clean file.
+    from servers import lean_runtime
+    from servers.lean_client import runtime_paths_for_socket
+
+    statuses = []
+
+    def serve_forever(server, poll_interval=0.5):
+        statuses.append(subprocess.run([sys.executable, "-c", "raise SystemExit(3)"]).returncode)
+
+    monkeypatch.setattr(lean_runtime, "_configure_logging", lambda log_path: None)
+    monkeypatch.setattr(lean_runtime.LeanRuntimeServer, "serve_forever", serve_forever)
+    previous = signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+    try:
+        lean_runtime.serve(runtime_paths_for_socket(runtime_dir / "sigchld.sock"))
+        assert signal.getsignal(signal.SIGCHLD) == signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGCHLD, previous)
+    assert statuses == [3]
 
 
 def test_connected_send_failure_is_never_retried(runtime_dir, monkeypatch):

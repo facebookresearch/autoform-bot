@@ -15,9 +15,10 @@ from urllib.parse import unquote, urlsplit
 
 from .graph import Graph, load_graph, roadmap_symlink_issues
 from .lean import LeanSourceError, declaration_names, index_failure_message, index_project, resolve_lean_root
+from .markdown import directory_path, resolved_path
 from .status import derive, is_definition
 
-RUNTIME_SCHEMA = "autoform-runtime/v3"
+RUNTIME_SCHEMA = "autoform-runtime/v4"
 RUNTIME_AUTHORITY = "markdown-articles"
 
 
@@ -122,12 +123,14 @@ class RuntimeNode:
     mathlib: bool
     mathlib_declarations: tuple[str, ...]
     mathlib_file: str | None
+    catalog: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
             "article_id": self.article_id,
             "article_path": self.article_path,
             "assertions": self.assertions.as_dict(),
+            "catalog": self.catalog,
             "declaration": self.declaration,
             "dependencies": list(self.dependencies),
             "depth": self.depth,
@@ -203,8 +206,8 @@ def resolve_runtime_paths(project_or_blueprint: str | Path) -> RuntimePaths:
     supplied = Path(project_or_blueprint).expanduser()
     if supplied.is_symlink():
         raise RuntimeProjectionError(["project or blueprint path is a symbolic link"])
-    candidate = supplied.resolve()
-    if not candidate.is_dir():
+    candidate = directory_path(supplied)
+    if candidate is None or not candidate.is_dir():
         raise RuntimeProjectionError(["project or blueprint directory does not exist"])
 
     is_blueprint = (candidate / "roadmap").is_dir()
@@ -213,7 +216,9 @@ def resolve_runtime_paths(project_or_blueprint: str | Path) -> RuntimePaths:
         raise RuntimeProjectionError(["input is ambiguous between a project and blueprint directory"])
     if is_project:
         project_root = candidate
-        blueprint_dir = (candidate / "blueprint").resolve()
+        blueprint_dir = directory_path(candidate / "blueprint")
+        if blueprint_dir is None:
+            raise RuntimeProjectionError(["blueprint directory cannot be resolved"])
     elif is_blueprint:
         blueprint_dir = candidate
         project_root = candidate.parent.resolve()
@@ -352,8 +357,11 @@ def build_runtime_graph(
                 parent=node.parent,
                 depth=node.depth,
                 declaration=node.declaration,
+                catalog=node.catalog,
                 formalizable=node.formalizable,
-                dispatchable=node.formalizable and node_id not in parents,
+                dispatchable=(
+                    node.catalog is None and node.formalizable and node_id not in parents
+                ),
                 statement_dependencies=node.statement_dependencies,
                 proof_dependencies=node.proof_dependencies,
                 dependencies=node.dependencies,
@@ -433,7 +441,10 @@ def _article_id(relative_blueprint: Path) -> str:
 
 
 def _source_target_is_confined(article: Path, target: str, blueprint: Path) -> bool:
-    split = urlsplit(target)
+    try:
+        split = urlsplit(target)
+    except ValueError:  # an unbalanced IPv6 bracket, for one
+        return False
     if split.scheme.casefold() in {"http", "https"}:
         return True
     if split.scheme or split.netloc:
@@ -445,11 +456,8 @@ def _source_target_is_confined(article: Path, target: str, blueprint: Path) -> b
     windows = PureWindowsPath(value)
     if path.is_absolute() or windows.is_absolute():
         return False
-    try:
-        (article.parent / path).resolve().relative_to(blueprint)
-    except (OSError, ValueError):
-        return False
-    return True
+    resolved = resolved_path(article.parent / path)
+    return resolved is not None and resolved.is_relative_to(blueprint)
 
 
 def _portable_mathlib_file(value: str | None) -> str | None:
@@ -555,6 +563,10 @@ def _validate_runtime(runtime: RuntimeGraph) -> None:
         has_children = node.id in parents_with_children
         if node.dispatchable and (not node.formalizable or has_children):
             issues.append(f"{node.id}: dispatchable node is not a formalizable leaf")
+        if node.catalog is not None and node.dispatchable:
+            issues.append(f"{node.id}: catalog node is dispatchable")
+        if node.catalog not in {None, "module"}:
+            issues.append(f"{node.id}: runtime catalog kind is unsupported")
         if Path(node.article_path).is_absolute() or PureWindowsPath(node.article_path).is_absolute():
             issues.append(f"{node.id}: runtime article path is absolute")
     if runtime.article_count != len(runtime.nodes):

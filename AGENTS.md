@@ -29,8 +29,8 @@ workflow and cross-file maintenance.
 - Markdown under `blueprint/roadmap/` is the authored roadmap and dependency
   graph. Versioned implementation handoffs live only in hidden, per-article
   files under `blueprint/.implementation-notes/`; they are not mathematics or
-  graph state. Rendered sites, Mermaid graphs, dashboards, and runtime
-  projections are derived views, not another durable scheduler or graph.
+  graph state. Rendered sites, the vault's dependency summary, dashboards, and
+  runtime projections are derived views, not another durable scheduler or graph.
 - In consumer formalization work, Lean imports are allowed. Follow Formalize's
   `autoform work import-impact` policy: baseline the affected articles and
   repeat that evidence after rebuilding, check them for active conflicts, and
@@ -51,3 +51,25 @@ workflow and cross-file maintenance.
   ignore rules, are equivalent.
 - Keep release versions synchronized across `pyproject.toml`, `uv.lock`, Claude
   and Muse manifests, and the semantic base of Codex's cachebuster version.
+
+## Inform, don't break
+
+Autoform's commands inform the orchestrator; they must not break a codebase
+(#325). A new check that a repository could fail reports a warning and keeps the
+exit status, so a repository that passed before still passes, and the
+orchestrator decides what to do. A command exits nonzero only when it cannot
+give a correct answer: input it cannot read, a stale or missing build it would
+otherwise misreport, a contract it cannot honor, or evidence it would have to
+forge. Never add a refusal to the graph loader, where it stops every command.
+The [CLI reference](autoform_cli/README.md) gives each command's exact rules.
+
+| Command | Exits nonzero for | Warns, exit unchanged, for |
+| --- | --- | --- |
+| `check` | invalid graph or `## Sources` structure; a `lean:` name missing or ambiguous under `--lean-root` | what work and search omit, byte-order marks, container declarations, library declarations citing the blueprint's sources |
+| `audit` | any finding; reporting findings is its job | none |
+| `render` | an input it refuses to publish (a symlink, a special or sensitive file), an output that overlaps the source, unresolved names under `--require-declarations` | unresolved names otherwise, omitted repository links |
+| `skeleton` | a stale or missing build, an unresolved or refused declaration | none; its report is trust evidence |
+| `work`, `search` | invalid usage (2); bytes changed since the graph loaded; a refused library; under `--module-scope import-closure`, a file outside the captured sources that may import the closure | none; they leave out values they cannot represent, which `check` warns about |
+| `library index` | a missing or stale build (2); a stale index under `--check` (1) | none |
+| `project`, `doctor` | an inspection or catalog error, a failed diagnosis | a release pairing it cannot resolve |
+| `init` | an existing entry that differs from one it manages, without `--force` | the entries it left alone |

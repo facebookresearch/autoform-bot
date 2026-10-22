@@ -19,7 +19,9 @@ def create_repl_server(runtime: LeanRuntimeClient) -> FastMCP:
 
         ``import Mathlib`` is added in front unless the snippet starts with
         ``module`` or ``prelude`` or already has ``import Mathlib``. Imports
-        must come from Mathlib, Aesop, Batteries, or LeanSearchClient.
+        must come from Mathlib, Aesop, Batteries, or LeanSearchClient. To
+        check code that needs other modules, such as the project's own, save
+        it in the project and use ``lean_diagnostic_messages``.
 
         Each call starts Lean and loads its imports from scratch, including an
         added ``import Mathlib``, so even a one-line snippet takes at least as

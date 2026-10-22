@@ -11,8 +11,13 @@ quality here.
 3. Compare quantifiers, hypotheses, domains, locality, conclusions, and edge cases side by side.
 4. Check that source-specific objects have substantive definitions. Reusing a standard Mathlib
    concept or typeclass is correct when it genuinely matches the source concept.
-5. When the Lean is proved, run `autoform unused-hypotheses` on its article, but only in a trusted
-   checkout or an operating-system sandbox: the command runs project Lean through `lake env lean`.
+5. When the Lean is proved, run `#lint only unusedArguments in <Module>` after `import <Module>`,
+   where `<Module>` declares the theorem, but only in a trusted checkout or an operating-system
+   sandbox, since that runs project Lean. From its release for Lean v4.32.0, Batteries' linter
+   does not report an argument whose name starts with `_` or any unnamed argument other than an
+   instance, such as the antecedent of `p → q` or the hypothesis in `∀ n > 0`; its releases for
+   Lean v4.30.0 and v4.31.0 check no theorem at all. A leading `_` marks a hypothesis the author
+   kept on purpose; check that the article says why.
    A hypothesis the proof never uses is either a source hypothesis Lean does not need or a sign
    that the statement assumes what the source derives.
 

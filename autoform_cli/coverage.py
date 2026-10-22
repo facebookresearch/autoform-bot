@@ -10,27 +10,34 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlsplit
 
 from .markdown import (
     INLINE_CODE,
     Content,
     PublishedTable,
+    blueprint_root,
     content,
     link_targets,
     local_target_issue,
     published_tables,
     rendered_visible_text,
+    resolved_path,
 )
 from .markdown import has_substance as _has_substance
 from .markdown import is_placeholder as _is_placeholder
 
-COVERAGE_SCHEMA = "autoform-coverage/v1"
-COVERAGE_DISPOSITIONS = ("MAPPED", "DECOMPOSED", "DEFERRED", "OUT")
+if TYPE_CHECKING:
+    from .graph import Graph
+
+COVERAGE_SCHEMA = "autoform-coverage/v2"
+COVERAGE_DISPOSITIONS = ("MAPPED", "DECOMPOSED", "INVENTORIED", "DEFERRED", "OUT")
 _EXPECTED_HEADER = ("Area", "Coverage", "Evidence")
 _SEPARATOR = re.compile(r"^:?-{3,}:?$")
 
@@ -46,6 +53,15 @@ class CoverageIssue:
     """One structural problem in a coverage contract."""
 
     line: int
+    reason: str
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class CoverageRoleIssue:
+    """One graph-semantic mismatch in an otherwise valid coverage contract."""
+
+    line: int
+    code: str
     reason: str
 
 
@@ -86,8 +102,9 @@ class CoverageSummary:
         """Whether every author-declared row reached a terminal disposition.
 
         Terminal means the row is no longer ``MAPPED`` -- the author has either
-        decomposed it into roadmap articles, deferred it to a named milestone,
-        or excluded it with a reason.
+        decomposed it into declaration-sized mathematical articles, inventoried
+        it in module catalogs, deferred it to a named milestone, or excluded it
+        with a reason.
 
         This is a claim about the *contract*, not about the project. It does not
         establish that the declared rows cover the source exhaustively, and it
@@ -112,10 +129,12 @@ class CoverageSummary:
         return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
 
 
-def load_coverage(blueprint_dir: str | Path) -> tuple[CoverageSummary | None, tuple[CoverageIssue, ...]]:
-    """Read and validate ``coverage/README.md`` without modifying it."""
+def load_coverage(
+    blueprint_dir: str | Path, *, unpublished: tuple[Path, ...] = ()
+) -> tuple[CoverageSummary | None, tuple[CoverageIssue, ...]]:
+    """Read and validate ``coverage/README.md`` without modifying it; it may not link into *unpublished* folders."""
 
-    blueprint = Path(blueprint_dir).expanduser().resolve()
+    blueprint = blueprint_root(blueprint_dir)
     path = blueprint / "coverage" / "README.md"
     try:
         content = path.read_bytes()
@@ -128,7 +147,7 @@ def load_coverage(blueprint_dir: str | Path) -> tuple[CoverageSummary | None, tu
         return None, (CoverageIssue(0, "coverage contract cannot be read"),)
 
     rows, issues = _parse_table(text)
-    issues.extend(_validate_evidence(rows, blueprint=blueprint, coverage_path=path))
+    issues.extend(_validate_evidence(rows, blueprint=blueprint, coverage_path=path, unpublished=unpublished))
     if issues:
         return None, tuple(issues)
     return (
@@ -140,6 +159,155 @@ def load_coverage(blueprint_dir: str | Path) -> tuple[CoverageSummary | None, tu
         ),
         (),
     )
+
+
+def validate_coverage_roles(
+    graph: Graph,
+    coverage: CoverageSummary,
+) -> tuple[CoverageRoleIssue, ...]:
+    """Validate exposition and inventory evidence against *graph*.
+
+    :func:`load_coverage` remains a syntax-only operation. Callers that already
+    have a validated graph use this second phase to distinguish declaration
+    exposition from module inventory. Audit reports each issue as a finding,
+    except ``decomposed-without-declaration``, which it reports as a warning.
+    Render prints every issue as a warning and still publishes, as it publishes
+    a contract with ``MAPPED`` rows, so a blueprint keeps its site while its
+    rows migrate.
+    """
+
+    contained: dict[str, list[str]] = {}
+    for node in graph.nodes.values():
+        if node.parent is not None:
+            contained.setdefault(node.parent, []).append(node.id)
+
+    issues: list[CoverageRoleIssue] = []
+    inventoried: set[str] = set()
+    catalog_nodes = {node_id for node_id, node in graph.nodes.items() if node.catalog}
+    by_path = {node.path.resolve(): node_id for node_id, node in graph.nodes.items()}
+
+    def article_path(node_id: str) -> str:
+        return graph.nodes[node_id].path.relative_to(graph.blueprint_dir).as_posix()
+
+    for entry in coverage.entries:
+        role = {
+            "DECOMPOSED": "declaration",
+            "INVENTORIED": "catalog",
+        }.get(entry.disposition)
+        if role is None:
+            continue
+
+        targets = _coverage_target_nodes(graph, coverage, entry.evidence, by_path=by_path)
+        reached = {node_id: _leaves(contained, node_id) for node_id in targets}
+        failing = [
+            article_path(node_id)
+            for node_id, leaves in reached.items()
+            if not any(getattr(graph.nodes[leaf], role) is not None for leaf in leaves)
+        ]
+        if not targets or failing:
+            offenders = _first(failing, 1) if failing else "its evidence"
+            verb = "reach" if len(failing) > 1 else "reaches"
+            leaves = set().union(*reached.values())
+            if role == "declaration" and not (leaves and all(graph.nodes[leaf].catalog for leaf in leaves)):
+                # Earlier versions accepted a DECOMPOSED row whatever its links
+                # reached, so a link that reaches no declaration leaf only warns,
+                # and the warning names every such link. A row that reaches
+                # nothing but catalogs, which they could not express, fails.
+                code = "decomposed-without-declaration"
+                offenders = ", ".join(failing) or offenders
+                reason = f"coverage area {entry.area!r} is DECOMPOSED, but {offenders} {verb} no declaration leaf"
+            else:
+                code = "coverage-role-mismatch"
+                reason = (
+                    f"coverage area {entry.area!r} is {entry.disposition}, but each roadmap "
+                    f"link must resolve to a {role} leaf or a container with {role} descendants; "
+                    f"{offenders} {verb} no {role} leaf"
+                )
+            issues.append(CoverageRoleIssue(entry.line, code, reason))
+
+        if entry.disposition == "INVENTORIED":
+            # Classify everything the row reaches. The role walk stops at
+            # leaves, which would leave a catalog that contains articles
+            # unclassified; audit reports that one as catalog-container.
+            pending = list(targets)
+            while pending:
+                node_id = pending.pop()
+                if node_id not in inventoried:
+                    inventoried.add(node_id)
+                    pending.extend(contained.get(node_id, ()))
+
+    unclassified = sorted(article_path(node_id) for node_id in catalog_nodes - inventoried)
+    if unclassified:
+        noun = "article" if len(unclassified) == 1 else "articles"
+        issues.append(
+            CoverageRoleIssue(
+                0,
+                "unclassified-inventory",
+                f"coverage contract leaves {len(unclassified)} catalog {noun} outside "
+                f"INVENTORIED evidence ({_first(unclassified, 3)}); link each inventory "
+                "area directly or through a containing roadmap article",
+            )
+        )
+    return tuple(issues)
+
+
+def _first(paths: list[str], shown: int) -> str:
+    """Name the first *shown* paths, then count the rest."""
+
+    rest = len(paths) - shown
+    return ", ".join(paths[:shown]) + (f" and {rest} more" if rest > 0 else "")
+
+
+def _coverage_target_nodes(
+    graph: Graph,
+    coverage: CoverageSummary,
+    evidence: str,
+    *,
+    by_path: dict[Path, str],
+) -> tuple[str, ...]:
+    """Resolve the roadmap nodes visibly linked by one coverage evidence cell.
+
+    *by_path* maps each article's resolved path to its node. The caller builds
+    it once for all rows, since resolving every article's path per row would
+    grow as rows times articles.
+    """
+
+    coverage_path = graph.blueprint_dir / coverage.source_path
+    resolved: list[str] = []
+    for target in link_targets(evidence):
+        split = urlsplit(target)
+        if split.scheme or split.netloc:
+            continue
+        raw_path = unquote(split.path)
+        if not raw_path or "\x00" in raw_path:
+            continue
+        try:
+            candidate = (coverage_path.parent / Path(raw_path)).resolve()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        node_id = by_path.get(candidate)
+        if node_id is not None and node_id not in resolved:
+            resolved.append(node_id)
+    return tuple(resolved)
+
+
+def _leaves(contained: dict[str, list[str]], root_id: str) -> set[str]:
+    """Return the leaves at or beneath one coverage target."""
+
+    found: set[str] = set()
+    pending = [root_id]
+    seen: set[str] = set()
+    while pending:
+        node_id = pending.pop()
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        children = contained.get(node_id, ())
+        if children:
+            pending.extend(children)
+        else:
+            found.add(node_id)
+    return found
 
 
 def _parse_table(text: str) -> tuple[list[CoverageEntry], list[CoverageIssue]]:
@@ -465,6 +633,7 @@ def _validate_evidence(
     *,
     blueprint: Path,
     coverage_path: Path,
+    unpublished: tuple[Path, ...],
 ) -> list[CoverageIssue]:
     issues: list[CoverageIssue] = []
     roadmap = (blueprint / "roadmap").resolve()
@@ -476,15 +645,16 @@ def _validate_evidence(
         if _is_placeholder(visible_evidence):
             issues.append(CoverageIssue(entry.line, "coverage evidence is a placeholder"))
             continue
-        if entry.disposition != "DECOMPOSED":
+        if entry.disposition not in {"DECOMPOSED", "INVENTORIED"}:
             continue
 
+        disposition = entry.disposition
         targets = link_targets(entry.evidence)
         if not targets:
             issues.append(
                 CoverageIssue(
                     entry.line,
-                    "DECOMPOSED coverage evidence must link to at least one roadmap article",
+                    f"{disposition} coverage evidence must link to at least one roadmap article",
                 )
             )
             continue
@@ -493,7 +663,7 @@ def _validate_evidence(
         # One good link beside a broken one is a broken claim.
         broken: list[str] = []
         for target in targets:
-            problem = local_target_issue(coverage_path, target, blueprint, label="coverage")
+            problem = local_target_issue(coverage_path, target, blueprint, label="coverage", unpublished=unpublished)
             if problem is not None:
                 broken.append(problem[1])
         if broken:
@@ -503,7 +673,7 @@ def _validate_evidence(
             issues.append(
                 CoverageIssue(
                     entry.line,
-                    "DECOMPOSED coverage evidence has no link to an existing roadmap article",
+                    f"{disposition} coverage evidence has no link to an existing roadmap article",
                 )
             )
     return issues
@@ -527,15 +697,14 @@ def _is_roadmap_article(target: str, *, coverage_path: Path, roadmap: Path) -> b
     parsed = urlsplit(target)
     if parsed.scheme or parsed.netloc:
         return False
-    try:
-        raw_path = unquote(parsed.path)
-        if not raw_path or "\x00" in raw_path:
-            return False
-        candidate = (coverage_path.parent / raw_path).resolve()
-        candidate.relative_to(roadmap)
-        return candidate.is_file() and candidate.suffix.casefold() == ".md"
-    except (OSError, RuntimeError, ValueError):
-        return False
+    # None only for a link load_coverage has already reported through local_target_issue.
+    candidate = resolved_path(coverage_path.parent / unquote(parsed.path))
+    return (
+        candidate is not None
+        and candidate.is_relative_to(roadmap)
+        and os.path.isfile(candidate)
+        and candidate.suffix.casefold() == ".md"
+    )
 
 
 def _cells(line: str) -> tuple[str, ...]:
@@ -573,6 +742,8 @@ __all__ = [
     "COVERAGE_SCHEMA",
     "CoverageEntry",
     "CoverageIssue",
+    "CoverageRoleIssue",
     "CoverageSummary",
     "load_coverage",
+    "validate_coverage_roles",
 ]

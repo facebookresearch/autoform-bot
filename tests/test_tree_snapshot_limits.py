@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import gc
+import hashlib
+import io
 import os
 import stat
 import sys
 import weakref
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
@@ -30,13 +32,14 @@ def _capture(
     *,
     portable: bool,
     monkeypatch: pytest.MonkeyPatch,
+    digests: bool = False,
 ) -> TreeSnapshot:
     if portable:
         _use_portable_capture(monkeypatch)
     else:
         _require_descriptor_capture()
     with bind_directory_tree(root, selection=selection) as bound:
-        return bound.capture()
+        return bound.capture(digests=digests)
 
 
 def _all_entries(limits: TreeCaptureLimits) -> TreeSelection:
@@ -66,14 +69,6 @@ def test_capture_limits_are_frozen() -> None:
 
     with pytest.raises(FrozenInstanceError):
         limits.max_entries = 2  # type: ignore[misc]
-
-
-def test_capture_limit_error_exposes_a_stable_discriminator() -> None:
-    error = TreeCaptureLimitError("max_entries", 3)
-
-    assert error.limit == "max_entries"
-    assert error.maximum == 3
-    assert str(error) == "directory tree exceeds max_entries=3"
 
 
 def test_portable_file_capture_accepts_windows_path_and_handle_stat_views(
@@ -164,15 +159,13 @@ def test_entry_limit_counts_ignored_entries(
     assert snapshot.files == ()
     assert snapshot.omitted == (("ignored.bin", "file"), ("other.bin", "file"))
 
-    with pytest.raises(TreeCaptureLimitError, match="max_entries=1") as captured:
+    with pytest.raises(TreeCaptureLimitError, match=r"^directory tree exceeds max_entries=1$"):
         _capture(
             root,
             selection(1),
             portable=portable,
             monkeypatch=monkeypatch,
         )
-    assert captured.value.limit == "max_entries"
-    assert captured.value.maximum == 1
 
 
 @pytest.mark.parametrize("portable", [False, True])
@@ -225,7 +218,7 @@ def test_total_byte_limit_accepts_the_boundary_and_rejects_one_more_byte(
 
     monkeypatch.setattr(tree_snapshot_module, reader_name, record_read)
 
-    with pytest.raises(TreeCaptureLimitError, match="max_total_bytes=4") as captured:
+    with pytest.raises(TreeCaptureLimitError, match=r"^directory tree exceeds max_total_bytes=4$"):
         _capture(
             root,
             _all_entries(TreeCaptureLimits(max_total_bytes=4)),
@@ -234,8 +227,6 @@ def test_total_byte_limit_accepts_the_boundary_and_rejects_one_more_byte(
         )
 
     assert read_paths == ["a"]
-    assert captured.value.limit == "max_total_bytes"
-    assert captured.value.maximum == 4
 
 
 def test_file_read_cap_does_not_trust_an_underreported_size() -> None:
@@ -551,3 +542,67 @@ def test_verification_recognizes_markers_like_the_scan(
     snapshot = _capture(tmp_path, selection, portable=False, monkeypatch=monkeypatch)
     assert snapshot.directories == ("",)
     assert snapshot.files == (("kept.src", b"kept\n"),)
+
+
+@pytest.mark.parametrize("portable", [False, True])
+def test_a_digest_capture_keeps_each_files_sha256_instead_of_its_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    portable: bool,
+) -> None:
+    root = tmp_path / "tree"
+    (root / "nested").mkdir(parents=True)
+    (root / "empty").write_bytes(b"")
+    (root / "nested" / "small").write_bytes(b"345")
+    # Several reads long, so the digest has to cover every chunk.
+    (root / "nested" / "large").write_bytes(os.urandom(tree_snapshot_module._READ_CHUNK_BYTES * 5 // 2))
+    selection = _all_entries(TreeCaptureLimits())
+
+    whole = _capture(root, selection, portable=portable, monkeypatch=monkeypatch)
+    hashed = _capture(root, selection, portable=portable, monkeypatch=monkeypatch, digests=True)
+
+    digests = tuple((name, hashlib.sha256(data).digest()) for name, data in whole.files)
+    assert hashed == replace(whole, files=digests)
+
+
+@pytest.mark.parametrize("portable", [False, True])
+def test_a_digest_capture_counts_file_bytes_against_the_total_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    portable: bool,
+) -> None:
+    root = tmp_path / "tree"
+    root.mkdir()
+    (root / "a").write_bytes(b"12")
+    (root / "b").write_bytes(b"345")
+
+    snapshot = _capture(
+        root,
+        _all_entries(TreeCaptureLimits(max_total_bytes=5)),
+        portable=portable,
+        monkeypatch=monkeypatch,
+        digests=True,
+    )
+
+    assert snapshot.files == (("a", hashlib.sha256(b"12").digest()), ("b", hashlib.sha256(b"345").digest()))
+    with pytest.raises(TreeCaptureLimitError, match=r"^directory tree exceeds max_total_bytes=4$"):
+        _capture(
+            root,
+            _all_entries(TreeCaptureLimits(max_total_bytes=4)),
+            portable=portable,
+            monkeypatch=monkeypatch,
+            digests=True,
+        )
+
+
+def test_a_digest_read_hashes_exactly_the_bytes_a_plain_read_returns() -> None:
+    chunk = tree_snapshot_module._READ_CHUNK_BYTES
+    data = os.urandom(chunk * 5 // 2)
+
+    for max_bytes in (None, 0, chunk - 1, chunk, 2 * chunk + 7, len(data) - 1, len(data)):
+        expected = data if max_bytes is None else data[: max_bytes + 1]
+        plain = tree_snapshot_module._read_stream(io.BytesIO(data), max_bytes, digest=False)
+        hashed = tree_snapshot_module._read_stream(io.BytesIO(data), max_bytes, digest=True)
+
+        assert plain == (expected, len(expected))
+        assert hashed == (hashlib.sha256(expected).digest(), len(expected))

@@ -1,14 +1,14 @@
 name: Blueprint Pages
 
+# The site publishes only a commit that `autoform verify` passed on main, so it
+# never shows progress Lean did not check, and it keeps the last verified site
+# while main is red. Pull requests and manual runs build the site to check it,
+# and never deploy.
 on:
-  push:
+  workflow_run:
+    workflows: [autoform verify]
+    types: [completed]
     branches: [main]
-    paths:
-      - "blueprint/**"
-      - "**.lean"
-      - "mkdocs.yml"
-      - "theme/**"
-      - ".github/workflows/blueprint-pages.yml"
   pull_request:
     paths:
       - "blueprint/**"
@@ -25,16 +25,49 @@ env:
   AUTOFORM_SOURCE: {{AUTOFORM_SOURCE_YAML}}
   AUTOFORM_REF: {{AUTOFORM_REF_YAML}}
 
+# Deploys queue in one group, so none is cancelled by a build that cannot
+# deploy; every other run gets a group of its own. A run deploys under the
+# same condition as the build job's `if`.
 concurrency:
-  group: blueprint-pages
+  group: >-
+    ${{ (github.event_name == 'workflow_run'
+    && github.event.workflow_run.conclusion == 'success'
+    && github.event.workflow_run.event == 'push'
+    && github.event.workflow_run.head_branch == 'main'
+    && github.event.workflow_run.path == '.github/workflows/autoform-verify.yml'
+    && github.event.workflow_run.head_repository.full_name == github.repository)
+    && 'blueprint-pages-deploy' || format('blueprint-pages-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
   build:
+    # A verify run deploys only when it is this project's own verify workflow,
+    # by its file rather than its name, and it passed on a push to main here.
+    if: >-
+      github.event_name != 'workflow_run'
+      || (github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
+      && github.event.workflow_run.path == '.github/workflows/autoform-verify.yml'
+      && github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
-      - name: Check out project
+      - name: Check out the verified commit
+        if: github.event_name == 'workflow_run'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Check out project
+        if: github.event_name != 'workflow_run'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Never main's newest commit in place of the verified one.
+      - name: Confirm the checked-out commit is the verified one
+        if: github.event_name == 'workflow_run'
+        env:
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: test -n "$VERIFIED_SHA" && test "$(git rev-parse HEAD)" = "$VERIFIED_SHA"
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -48,15 +81,28 @@ jobs:
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           autoform check blueprint --lean-root .
 
-      # Writes site-src/: statement boxes, derived statuses, the Mermaid graph,
-      # and permalinks into the Lean code at this exact commit.
+      # Lists every roadmap audit finding, such as a declared coverage gap or an
+      # oversized node. It builds no Lean, and a finding never fails the build
+      # or stops a deploy: publication and audit are separate gates.
+      - name: Audit the roadmap (report only)
+        continue-on-error: true
+        run: >-
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          autoform audit blueprint --lean-root .
+
+      # Writes site-src/: statement boxes, derived statuses, dependency maps,
+      # and permalinks into the Lean code at this exact commit. A deploy names
+      # the verified commit, since GITHUB_SHA is then main's newest one.
       - name: Render the blueprint
+        env:
+          PAGES_REF: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
         run: >-
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           autoform render blueprint
           --output site-src
           --lean-root .
           --require-declarations
+          --ref "$PAGES_REF"
 
       - name: Build the Markdown site
         run: >-
@@ -68,13 +114,13 @@ jobs:
           mkdocs build --strict
 
       - name: Upload Pages artifact
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_run'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
 
   deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_run'
     needs: build
     runs-on: ubuntu-latest
     permissions:

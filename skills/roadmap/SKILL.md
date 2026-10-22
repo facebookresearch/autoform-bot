@@ -3,8 +3,9 @@ name: roadmap
 description: >-
   Build, continue, inspect, or visualize a source-grounded mathematical roadmap
   and theorem DAG in an existing Autoform Markdown blueprint. Use for source
-  research, scope, coverage, milestones, and roadmap articles; do not create
-  repository infrastructure or prove Lean declarations.
+  research, repository-wide inventories of existing and planned mathematics,
+  scope, coverage, milestones, and roadmap articles; do not create repository
+  infrastructure or prove Lean declarations.
 ---
 
 # Build an Autoform roadmap
@@ -48,26 +49,65 @@ record assumptions. Ask one concise question only after inspection cannot
 identify or access the source, or when incompatible scope choices remain and
 choosing one would discard accepted work.
 
+## Inventory existing project mathematics
+
+When the adopted boundary is a repository-wide library, global wiki, or other
+existing codebase, project-owned Lean is a primary mathematical source rather
+than implementation prior art to omit. Before planning future work:
+
+- inventory every in-scope tracked module and public mathematical declaration,
+  plus declaration-like wishlist or conjecture entries and adopted planning
+  sources;
+- state explicitly how private helpers, tests, generated code, aggregate import
+  roots, and imported dependencies are treated;
+- reconcile each in-scope declaration to a roadmap article, an exact grouped
+  ledger, or an evidenced coverage disposition; and
+- record each module and declaration name, together with any separate literary
+  provenance, under `blueprint/sources/`.
+
+Treat exact inventory reconciliation and mathematical exposition as independent
+completeness axes. A declaration ledger answers what exists and where; prose
+explains the mathematics. A catalog ledger can close the inventory axis, but it
+does not make an area `DECOMPOSED`.
+
+A future-work slice cannot stand in for a repository-wide inventory. Keep
+existing, wishlist, conjectural, and planned mathematics in the same book and
+DAG. `DECOMPOSED` means represented by declaration articles, not unfinished,
+so it may describe mathematics whose Lean implementation is already complete.
+A checked local declaration is valid grounding for repository documentation;
+do not invent an external citation or historical-source claim.
+
 ## Ground and decompose
 
 Inspect the repository and existing vault before writing. Preserve accepted
 material and unrelated changes; send missing infrastructure to Setup. Formalize
 owns Lean execution after this skill produces a validated ready frontier.
 
-Work from exact source passages. Record stable source locations, assumptions,
-and uncovered prerequisites under `blueprint/sources/`; label project-authored
-specifications honestly. Search the pinned Mathlib checkout and every usable
-shared library before planning a replacement. External research is read-only,
-and contacting people requires permission. Read [Setup's Zulip workflow](../setup/references/zulip.md) only for
-requested Zulip work.
+Work from exact source passages. When the boundary includes existing Lean,
+first extract module and declaration docstrings and nearby source comments
+alongside the Lean signatures and implementations; they locate and describe
+code but never replace the adopted source. Record stable source locations,
+assumptions, and uncovered prerequisites under `blueprint/sources/`; label
+project-authored specifications honestly. Search the pinned Mathlib checkout
+and every usable shared library before planning a replacement. External
+research is read-only, and contacting people requires permission. Do not invent
+a statement, motivation, proof narrative, dependency, citation, or historical
+attribution that the available sources do not support. Read
+[Setup's Zulip workflow](../setup/references/zulip.md) only for requested
+Zulip work.
 
 Before adding a formalizable article, run `autoform search` over the blueprint
-for its result, by a few distinctive words of the statement and by a Lean name
-when one is known; the
-[search contract](../../autoform_cli/README.md#search-contract) says what is
-matched. Read each hit's statement, and narrow a query whose listing the limit
-cut short. Matching is literal, so the result is new only when retries with
-fewer words, and under other usual names for its objects, also show no article
+for its result and for each intermediate result its proof proves or cites, by a
+few distinctive words of each statement and by a Lean name when one is known;
+the [search contract](../../autoform_cli/README.md#search-contract) says what
+is matched. Bound a listing with search's limit, never by dropping lines (as
+`| head` does), since that drops later hits and the library listings, which
+print last. Read each hit's statement, or a library hit's signature, and the
+counts the output opens with; a line ending in `...` is shortened, and the
+JSON output has it whole. Narrow a query whose count shows the limit cut it
+short. Matching is literal, so a
+result is new only when retries with fewer words, and under other usual names
+for its objects, also show no article
 stating it. Search the project's usable shared libraries in the same call: run
 `autoform library list .` once, and pass each package it reports as usable to
 every search as `--library NAME --lean-root .`, even while the blueprint is
@@ -75,13 +115,18 @@ empty, since a library may already prove the result. The
 [library search rules](../formalize/references/library-search.md) give the
 details.
 If a library already proves a result, reuse that proof instead of proving the
-result again: the result keeps its article, and its proof cites the library
-declaration. If a proof needs a library result that has no article yet, add an
-article for it, proved from the library, and link it under `## Proof depends
-on`. A refusal (exit 2) is not an empty result: resolve what it reports without
+result again: the result keeps its article. If a proof needs a library result
+that has no article yet, add an article for it, proved from the library, and
+link it under `## Proof depends on`. Whenever an article reuses a shared
+library declaration, name it in its implementation note, not in the article,
+and leave `lean:` unset until the project declares the result, which Formalize
+does from the library declaration. `lean:` names only a declaration in the
+project's own Lean files, since `autoform check --lean-root` resolves no other.
+A refusal (exit 2) is not an empty result: resolve what it reports without
 adding the article, and search again, except that a refusal naming a library is
 handled as the library search rules say. A dependency link to a page not yet
-written causes one, so search for a batch of articles before writing the first.
+written causes one, so search for a batch of articles before writing the first,
+for each one's result and the intermediate results its proof proves or cites.
 When another formalizable article already states the result, link to it from
 each article that needs it, under `## Depends on` or `## Proof depends on`, and
 from the coverage row, instead of adding a node. A hit that is more general, a
@@ -91,45 +136,65 @@ given, so the owner of global consistency repeats it for what parallel agents
 added.
 
 Enumerate the entire adopted boundary in `blueprint/coverage/README.md`.
-`MAPPED` is unfinished, `DECOMPOSED` links to roadmap nodes, `DEFERRED` records
-an explicit user decision or concrete external blocker, and `OUT` explains an
+`MAPPED` is unfinished, `DECOMPOSED` links source-grounded declaration
+articles, `INVENTORIED` links exact module catalogs, `DEFERRED` records an
+explicit user decision or concrete external blocker, and `OUT` explains an
 exclusion. Treat every other `DEFERRED` row as queued work; never defer merely
 to shorten the run. Because `coverage.complete` only checks declared rows,
 compare the table with the source structure yourself.
 
 Write milestone pages under `blueprint/roadmap/` by mathematical significance,
-then one fine article per coherent unit with one unique main result. Ground each
-statement and proof sketch in the source. Put genuine statement prerequisites
-under `## Depends on` and proof-only prerequisites under `## Proof depends on`.
+then one fine article per coherent unit with one unique main result. For an
+existing repository, coherent grouping is allowed only when the exact ledger
+still reconciles every public declaration. Do not turn existing formalization
+into fictional future work. Ground each statement and proof sketch in the
+source. Put genuine statement prerequisites under `## Depends on` and
+proof-only prerequisites under `## Proof depends on`.
+Never delete or reverse a genuine article edge to make a chapter-level or
+scope-level projection acyclic. When the project's CI pins an older
+`AUTOFORM_REF`, its `autoform check` still rejects such a cycle as a
+`rolled-up dependency cycle`: leave out the edge that closes it until the pin
+moves, and report the old pin and that edge.
 Assign durable `article_id` metadata to new articles; run
 `autoform migrate article-ids blueprint --write` after creating the pages to
 add deterministic IDs.
 Articles hold only frontmatter and informal mathematics; put Lean-side findings
-such as Mathlib gaps, prior art, and declaration names in
+such as Mathlib gaps, prior art, and candidate declaration names in
 `blueprint/.implementation-notes/<article_id>.md`, never a transcript, a secret,
-or a machine-local path. The hidden per-article file
+or a machine-local path; Finish records a shared library declaration that does
+not apply on the source's page instead. The hidden per-article file
 stays out of the mathematical wiki and remains valid when the article moves.
 Never link it from an article. Delete it when the article is proved or marked
 `mathlib: true`; delete a container's note when every formalizable descendant,
 and every leaf marked `not_ready` beneath it, is proved and there is at least
-one. To move an article, move its file, which keeps its `article_id` line and
+one; a module catalog never counts. To move an article, move its file, which
+keeps its `article_id` line and
 so its note; a page written afresh must take that line in the same edit that
 deletes the old page. When a commit deletes or merges an article,
 move anything still useful from its note into a surviving article's note and
 delete the note in that commit; an orphaned note blocks every command that loads
 the graph, and any worker may repair one the same way, or by restoring the
 `article_id` line of an article that still exists but lost it.
-Assert formalization or `mathlib: true` only after exact verification. Before
-revising a formalizable leaf, acquire the `claim_target` that `autoform work
-context` reports for it, passing your own `--worker-id`; renew it while editing
-and release it once the committed revision is on the branch Formalize works
-from. A refused acquire means another agent owns the article: leave it and
+
+Before revising a formalizable leaf, acquire the `claim_target` that `autoform
+work context` reports for it, passing your own `--worker-id`; renew it while
+editing and release it once the committed revision is on the branch Formalize
+works from. A refused acquire means another agent owns the article: leave it and
 report it. Claims write refs to the board's remote, which is outward-facing, so
 make sure the request covers them. When a revision changes a statement whose
 article has `lean:`, retract it: replace `statement: formalized` with
 `statement: retracted`, remove `proof: formalized`, and keep `lean:`, which
 Formalize needs to run `autoform work impact`; an article without `lean:` just
-loses `statement` and `proof`. When the project's CI pins an `AUTOFORM_REF`
+loses `statement` and `proof`. Formalize may land `lean:` on the branch it works
+from after your checkout, with or without claims. Before the revision lands on
+that branch, and so before releasing any claim, bring it up to date with that
+branch by rebase or merge, retract any revised article that gained `lean:`
+there, repeat the Finish step's final validation, and commit the retraction as a
+new commit. When the revision lands later through a pull request, report the
+revised articles that had no `lean:` on that branch at your last update, and
+list them in the pull request's description if you open it, so whoever merges it
+retracts any that have gained `lean:` by then.
+When the project's CI pins an `AUTOFORM_REF`
 older than the marker, its `autoform check` rejects `statement: retracted`:
 remove `statement` and `proof` and keep `lean:` until the pin moves, and report
 the old pin. Under the open policy a retracted theorem stays
@@ -141,9 +206,7 @@ the article's `blueprint/.implementation-notes/<article_id>.md` and retract the
 article the same way, so it returns to the frontier as a statement phase flagged
 as a revision, and leave the Lean change to Formalize, which follows the
 [revision contract](../../autoform_cli/README.md#revision-contract); this skill
-edits only Markdown. For a large source, divide independent sections among
-available agents while retaining one owner for global coverage and dependency
-consistency.
+edits only Markdown.
 
 `open_statements` in `roadmap/README.md` is a project policy; absent means
 strict. `allowed` lets a theorem's statement land with a `sorry` proof, so
@@ -154,21 +217,82 @@ the user's request and only once CI meets the
 Turn it back off only once no open statement remains: the strict audit rejects
 every `sorry`, and strict status shows a proof resting on one as proved.
 
-Reconcile every affected source and milestone page, the coverage contract,
-`blueprint/README.md`, and the repository `README.md`.
+Assert `statement: formalized`, `proof: formalized`, or `mathlib: true` only
+after exact verification. For declaration leaves, record exact compiled names
+in `lean`. Definitions, structures, classes, instances, and inductives have no
+separate proof obligation. Set `proof: formalized` for a theorem or lemma only
+after checking that its proof is complete and contains no placeholder or
+proof-wanted mechanism. An axiom or wanted placeholder does not justify a
+formalized proof; a definition of a conjecture proposition formalizes its
+statement representation, not the conjecture. Set `mathlib: true` only for an
+exact verified upstream result. Hand deeper trust and axiom review to Agent
+Review.
+
+Use `catalog: module` only as a source inventory for one existing Lean module.
+It may accompany exposition, but names, signatures, status tables, and imports
+do not replace reader-facing mathematical prose. A catalog leaf omits
+`declaration` and is never dispatchable proof work. When the project's CI pins
+an `AUTOFORM_REF` older than catalogs, its `autoform check` rejects `catalog:`
+and `area:`, and its `render` rejects `INVENTORIED`: move the pin, or report
+it, before adding catalogs, areas, or `INVENTORIED` rows.
+
+For a `catalog: module` leaf, assertion keys describe the whole tracked module:
+set `statement: formalized` only when all inventoried public declarations
+exist, and `proof: formalized` only when every included implementation or proof
+is complete under the repository's trust policy. Record the full name of every
+public declaration the module writes with a declaration keyword, as the Lean
+source index records them, in `lean` and in the declaration ledger linked from
+the article's `## Sources` section. Names Lean generates
+(constructors, structure fields, derived or unnamed instances, and `@[ext]`,
+`@[simps]`, or `@[to_additive]` results) and declarations the index cannot see
+yet (behind `nonrec` or `meta`, or written `class inductive`) go in the ledger
+as supporting entries, never in `lean`; a `private` name never goes in `lean`.
+A keyword-declared public name left out of `lean` or unresolved means the
+catalog is not yet verified and must not carry formalized assertions. Like any
+prerequisite, a catalog linked under `## Depends on` or `## Proof depends on`
+holds its dependents back until its whole-module assertion is recorded, so a
+dependent that needs one result links the declaration article that expounds it.
+
+For a large source, divide independent sections among available agents while
+retaining one owner for global coverage, status semantics, and dependency
+consistency. Reconcile every affected source and milestone page, the coverage
+contract, `blueprint/README.md`, and the repository `README.md`.
 
 ## Finish
 
-After the final edit, use the CLI reference to run `autoform check` and
-`autoform audit`, refresh the Mermaid graph, and resolve every finding introduced
-by this work or inside the adopted boundary. Report unrelated pre-existing
-findings instead of silently widening scope. Commit the vault and refreshed
-graph only after this final validation; pushing is outward-facing and requires
-a user request.
+After the final edit, use the CLI reference to run `autoform check` with
+`--lean-root .` and `autoform audit`, refresh the dependency summary with
+`autoform-visualize`, and resolve every finding introduced by this work or
+inside the adopted boundary. A `check` warning that a shared library
+declaration's docstring cites one of the blueprint's sources usually means a
+library search was skipped. Reuse the declaration as the library search rules
+say, and name it in the implementation note of each article that uses it. If it
+does not apply, or no article concerns it, name it on the source's page under
+`blueprint/sources/` with the reason; that record outlasts the implementation
+notes, which audit asks to delete once their article is proved. It covers every
+article that reaches the source, including ones added later, so give a reason
+that holds for each, and revisit it when the adopted boundary changes. A warning
+about a module's docstring is a library hit for each declaration it counts:
+naming the module on the source's page records them all, and importing the
+module, or naming one of them, silences the rest, so review the module when its
+warning first appears. Report unrelated
+pre-existing findings instead of silently widening scope. A
+`catalog-unbounded-limit` or `catalog-unscoped-limit` warning describes
+existing Lean code and never fails the audit: report it, and change that code
+only when the user asks, through Formalize, rebuilding before anything is
+recorded. Fix the other `warning:` lines inside the adopted boundary as you
+would a finding. Commit the vault, with the refreshed summary where the
+repository tracks it, only after this final validation; pushing is
+outward-facing and requires a user request.
 
 Finish only when the adopted boundary has no `MAPPED` rows, every `DECOMPOSED`
-area links to a source-grounded fine DAG, affected pages and the graph agree,
-and the latest commit contains every change from the pass. Do not stop after
-discovery, a coarse proposal, one chapter, or unchanged validation. Report the
-material delta, evidence, remaining explicit blockers, and next execution
-frontier. Mark an active Goal complete only after these conditions hold.
+area links source-grounded declaration articles, every `INVENTORIED` area links
+exact catalogs, affected pages and the graph agree, and the latest commit
+contains every change from the pass; a repository inventory also needs every
+in-scope declaration reconciled. Do not stop after discovery, a coarse
+proposal, one chapter, or unchanged validation. Report the material delta,
+evidence, remaining blockers, and the next execution frontier, and for a
+repository inventory the existing/formalized versus wishlist/conjectural/planned
+counts and the reconciliation gaps. Before reporting, follow
+[Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with `--skill roadmap`.
+Mark an active Goal complete only after these conditions hold.

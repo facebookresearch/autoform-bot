@@ -151,6 +151,12 @@ Autoform rules through a retained bounded regular root `.gitignore` file, so it
 is also the repair path; it reports what it left alone. See the
 [CLI reference](../../autoform_cli/README.md#commands) for its flags.
 
+The site's MathJax configuration is not part of the vault: `autoform render`
+writes `javascripts/mathjax.js` on every build. Put the project's notation in
+`blueprint/tex-macros.json`, an object from macro names to MathJax `tex.macros`
+definitions; a definition written in an article shows in red on the site, and
+`autoform check` warns about it.
+
 `init` pins the generated workflows to the Autoform commit that ran it, using a
 safe remote only when a cached remote-tracking ref contains that commit. It
 prefers Autoform's canonical repository, then `origin`, then `upstream`, then a
@@ -174,7 +180,8 @@ The two workflows it writes are `autoform-verify.yml`, which validates the
 Markdown DAG, builds Lean, rejects unfinished or unsafe proofs, and audits
 theorem axioms on pull requests, and `blueprint-pages.yml`, which validates the
 DAG and its `lean:` declarations, renders the blueprint, builds MkDocs, and
-deploys GitHub Pages. Pass `--autoform-ref` to pin them at an immutable commit.
+deploys GitHub Pages only for a commit `autoform verify` passed on main. Pass
+`--autoform-ref` to pin them at an immutable commit.
 It also writes `.github/CODEOWNERS.autoform.example`. GitHub does not read it,
 so it cannot mask active owners. Do not guess owners or activate it silently.
 With names the user gives, merge its rules into the first CODEOWNERS file
@@ -231,7 +238,8 @@ asks to discover community context or announce and coordinate the project, read
 and follow [the shared Zulip workflow](references/zulip.md). Do not infer consent
 to post from repository setup, roadmap work, or permission to search.
 
-Report the Lean toolchain, vault path, CI and Pages files, validation results,
-the publication decision, and any one-time GitHub setting the user must still
-apply. State explicitly that no sources were scoped, roadmap nodes created, or
+Before reporting, follow [Debrief Orchestrator](../debrief-orchestrator/SKILL.md)
+with `--skill setup`. Report the Lean toolchain, vault path, CI and Pages files,
+validation results, the publication decision, and any one-time GitHub setting
+the user must still apply. State explicitly that no sources were scoped, roadmap nodes created, or
 proofs started, then hand the repository to Roadmap.

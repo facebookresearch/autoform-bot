@@ -62,7 +62,7 @@ article, and replaces proving the result only if it states it at full strength.
 A hit that is more general, a special case, or only similar does not, the same
 test the blueprint rule applies; a result may need several hits combined, such
 as a theorem and its converse. Keep the article, declare the result in the
-project under the article's `lean:` name, and prove it from the library
+project (`lean:` records its name on acceptance), and prove it from the library
 declaration. For a definition, the project's declaration keeps the keyword the
 article's `declaration:` names, copies the library declaration's modifiers
 (such as `noncomputable`), which the hit's `statement` in the JSON output

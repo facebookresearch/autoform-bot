@@ -23,6 +23,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
         "human-review",
         "agent-review",
         "develop-plugin",
+        "debrief-orchestrator",
     }
 
     review_dir = repo_root / "skills" / "agent-review"
@@ -78,6 +79,7 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
         "human-review",
         "agent-review",
         "develop-plugin",
+        "debrief-orchestrator",
     ]
     for command in muse["capabilities"]["commands"]:
         assert (repo_root / command["path"]).is_file()
@@ -196,7 +198,6 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
             "autoform_cli/__main__.py",
             "autoform_cli/graph.py",
             "autoform_cli/probes/skeleton_probe.lean",
-            "autoform_cli/probes/unused_hypotheses.lean",
             "autoform_cli/project/README.md",
             "autoform_cli/project/_lake_metadata.py",
             "autoform_cli/project/_snapshot.py",

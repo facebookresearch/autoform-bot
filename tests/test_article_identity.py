@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import stat
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -102,6 +103,23 @@ def test_cli_json_and_check_exit_status(tmp_path: Path, capsys) -> None:
 
 def _bytes(blueprint: Path) -> dict[str, bytes]:
     return {path.relative_to(blueprint).as_posix(): path.read_bytes() for path in blueprint.rglob("*.md")}
+
+
+def test_ids_are_written_through_a_link_that_cannot_be_read(
+    tmp_path: Path, unreadable_link: Callable[[Path, Path | str], None]
+) -> None:
+    blueprint = _blueprint(tmp_path / "real")
+    unreadable_link(tmp_path / "via", tmp_path / "real")
+
+    written = write_article_ids(tmp_path / "via" / "blueprint")
+
+    assert {entry.article_path for entry in written} == {
+        "roadmap/README.md",
+        "roadmap/chapter/README.md",
+        "roadmap/chapter/result.md",
+    }
+    for entry in written:
+        assert f"article_id: {entry.article_id}" in (blueprint / entry.article_path).read_text(encoding="utf-8")
 
 
 def test_write_adds_each_planned_id_as_the_first_frontmatter_line_and_nothing_else(tmp_path: Path) -> None:

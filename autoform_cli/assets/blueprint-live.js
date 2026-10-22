@@ -20,15 +20,16 @@
   }
 
   function activity(payload) {
-    var landing = document.querySelector(".bp-landing");
+    // The landing page's introduction moves into the explorer's rail or sheet, and the panel moves with it.
+    var landing = document.querySelector(".bp-dag-intro") || document.querySelector(".bp-landing");
     if (!landing) return;
     var panel = document.getElementById("bp-live-activity");
     if (!panel) {
       panel = document.createElement("section");
       panel.id = "bp-live-activity";
       panel.className = "bp-live-activity";
-      var map = landing.querySelector(".bp-map");
-      if (map && map.parentNode === landing) landing.insertBefore(panel, map);
+      var next = landing.querySelector(".bp-next-target");
+      if (next && next.parentNode === landing) landing.insertBefore(panel, next);
       else landing.appendChild(panel);
     }
     panel.replaceChildren();
@@ -78,12 +79,18 @@
   function refresh() {
     fetch(endpoint, { cache: "no-store" })
       .then(function (response) {
+        // Only autoform dashboard serves the overlay; another local server answers 404.
+        if (response.status === 404) return null;
         if (!response.ok) throw new Error("live overlay unavailable");
         return response.json();
       })
-      .then(render)
-      .catch(function () { render({ claims: [], error: "Live overlay unavailable" }); })
-      .then(function () { window.setTimeout(refresh, pollDelayMs); });
+      .then(function (payload) {
+        if (!payload) return false;
+        render(payload);
+        return true;
+      })
+      .catch(function () { render({ claims: [], error: "Live overlay unavailable" }); return true; })
+      .then(function (poll) { if (poll) window.setTimeout(refresh, pollDelayMs); });
   }
 
   refresh();

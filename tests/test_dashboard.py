@@ -130,7 +130,19 @@ def test_live_loader_does_not_hide_programming_errors() -> None:
         live_state_loader(_runtime, BuggyClaims())()
 
 
-def test_live_overlay_refuses_a_stale_built_publication(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("publication_schema", "accepted"),
+    [
+        ("autoform-publication/v1", False),
+        ("autoform-publication/v2", False),
+        ("autoform-publication/v3", True),
+    ],
+)
+def test_live_overlay_refuses_a_stale_built_publication(
+    tmp_path: Path,
+    publication_schema: str,
+    accepted: bool,
+) -> None:
     blueprint = tmp_path / "blueprint"
     roadmap = blueprint / "roadmap"
     roadmap.mkdir(parents=True)
@@ -142,7 +154,7 @@ def test_live_overlay_refuses_a_stale_built_publication(tmp_path: Path) -> None:
     (site / "publication.json").write_text(
         json.dumps(
             {
-                "schema": "autoform-publication/v2",
+                "schema": publication_schema,
                 "complete": True,
                 "source_revision": revision,
             }
@@ -160,7 +172,12 @@ def test_live_overlay_refuses_a_stale_built_publication(tmp_path: Path) -> None:
         site_dir=site,
     )
 
-    assert state()["source_revision"] == revision
+    initial = state()
+    if not accepted:
+        assert initial["claims"] == []
+        assert "stale" in str(initial["error"])
+        return
+    assert initial["source_revision"] == revision
     article.write_text("# Changed\n", encoding="utf-8")
     stale = state()
     assert stale["claims"] == []
@@ -178,7 +195,7 @@ def test_live_overlay_projects_claims_onto_the_bytes_it_compared(
     site = tmp_path / "site"
     site.mkdir()
     revision = publication_source_revision(tmp_path / "blueprint")
-    manifest = {"schema": "autoform-publication/v2", "complete": True, "source_revision": revision}
+    manifest = {"schema": "autoform-publication/v3", "complete": True, "source_revision": revision}
     (site / "publication.json").write_text(json.dumps(manifest), encoding="utf-8")
     capture = render_module._capture_blueprint
 

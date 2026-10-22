@@ -7,28 +7,41 @@ import hashlib
 import json
 import os
 import shlex
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
-from . import status
+from . import debrief, debrief_orchestrator, status
 from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
 from .audit import audit_blueprint
-from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, author_claim_key
+from .claims import (
+    CLAIM_TTL_S,
+    ClaimBoard,
+    ClaimContentionError,
+    ClaimTimeoutError,
+    ClaimTransportError,
+    author_claim_key,
+)
 from .doctor import diagnose_project
 from .dashboard import publication_bound_live_state, serve_dashboard
-from .graph import Graph, GraphValidationError, load_graph
+from .graph import Graph, GraphValidationError, atlas_omissions, catalogs_without_ledger, load_graph
+from .graph_views import _countable, _module_inventories
 from .impact import (
+    IMPORT_CLOSURE_SCOPE,
+    MODULE_IMPORT_SCOPE,
     ImpactError,
     format_impact,
     format_module_import_impact,
     module_import_impact,
     revision_impact,
 )
-from .lean import build_linker, declaration_names, index_failure_message
+from .lean import declaration_names, index_failure_message, index_project
+from .library.citations import library_citation_warnings
 from .library.generate import GenerateError, check_index, generate_index, write_index
 from .library.index import INDEX_FILE
 from .library.listing import indexed_packages, list_libraries
@@ -36,25 +49,42 @@ from .library.locate import LibraryError, WorkspaceError
 from .library.search import LibraryResult, library_argument, search_with_libraries
 from .markdown import local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
-from .render import PublicationError, render_site
+from .render import SOURCES_DIR, PublicationError, publication_issues, render_site
 from .runtime import RuntimeProjectionError, projection_omissions, resolve_runtime_paths
 from .scaffold import ScaffoldError, scaffold_project
 from .search import SearchError, search_blueprint, statement_preview
+from .site_check import SiteCheckError, check_site
 from .skeleton import (
     DEFAULT_PROBE_TIMEOUT,
     SkeletonError,
     extract_skeletons,
     format_report,
-    run_probe,
     write_packets,
     write_skeleton_report,
 )
-from .unused_hypotheses import find_unused_hypotheses, format_unused_hypotheses
 from .work import WORK_SCHEMA, WorkError, assumption_contract, list_ready_work, work_context
 
 
+class _Version(argparse.Action):
+    """Print the version only when asked, since reading a plugin checkout's commit runs git."""
+
+    def __call__(
+        self, parser: argparse.ArgumentParser, namespace: object, values: object, option: str | None = None
+    ) -> None:
+        print(f"{parser.prog} {debrief_orchestrator.autoform_version()}")
+        parser.exit()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    if os.name == "posix" and signal.getsignal(signal.SIGCHLD) == signal.SIG_IGN:
+        # An ignored SIGCHLD, on Linux even one inherited across exec, has the kernel
+        # reap every child, and Popen would report each exit status as 0. Autoform
+        # waits for its own children.
+        signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     parser = argparse.ArgumentParser(prog="autoform")
+    parser.add_argument(
+        "--version", action=_Version, nargs=0, default=argparse.SUPPRESS, help="show the version and exit"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init = subparsers.add_parser("init", help="write the blueprint vault, site config, and CI")
@@ -114,6 +144,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=_port,
         default=0,
         help="local port (default: choose an available port)",
+    )
+
+    site = subparsers.add_parser("site", help="inspect a site MkDocs built from rendered source")
+    site_subparsers = site.add_subparsers(dest="site_command", required=True)
+    site_check = site_subparsers.add_parser(
+        "check", help="report dead internal links, missing anchors and statement cards the build lost"
+    )
+    site_check.add_argument("site_dir", help="the built site: MkDocs's site_dir")
+    site_check.add_argument(
+        "--source",
+        type=Path,
+        help="the rendered source the site was built from (MkDocs's docs_dir), to check every statement card",
     )
 
     project = subparsers.add_parser("project", help="create or inspect local projects and supported releases")
@@ -247,6 +289,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g}); "
         "the Lake freshness check before it has its own budget",
     )
+    work_import_impact.add_argument(
+        "--module-scope",
+        choices=(MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE),
+        default=MODULE_IMPORT_SCOPE,
+        metavar="SCOPE",
+        help=f"{MODULE_IMPORT_SCOPE} (default) loads every root library; {IMPORT_CLOSURE_SCOPE} loads only "
+        "files that may import MODULE, reports affected modules exactly and over-reports articles",
+    )
     search = subparsers.add_parser(
         "search", help="find articles by title, Lean name, or statement text before adding one"
     )
@@ -277,7 +327,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="keep articles whose frontmatter declaration is KIND: theorem, lemma, def, ... (repeatable)",
     )
     search.add_argument(
-        "--limit", type=int, default=20, metavar="N", help="show at most N articles (default 20)"
+        "--limit",
+        type=int,
+        default=20,
+        metavar="N",
+        help="show at most N hits from the blueprint and from each --library (default 20)",
     )
     search.add_argument(
         "--library",
@@ -328,9 +382,57 @@ def main(argv: Sequence[str] | None = None) -> int:
         if operation == "acquire":
             command.add_argument("--note", default="")
     claim_list = claim_subparsers.add_parser("list")
+    claim_list.add_argument("node_id", nargs="*", help="list only these claim targets")
     _add_claim_board_arguments(claim_list)
+    claim_list.add_argument(
+        "--timeout",
+        type=_positive_seconds,
+        default=120.0,
+        metavar="SECONDS",
+        help="time limit for the whole listing (default: 120)",
+    )
     claim_cleanup = claim_subparsers.add_parser("cleanup")
     _add_claim_board_arguments(claim_cleanup)
+
+    debrief_parser = subparsers.add_parser("debrief", help="feedback forms agents fill in about their work")
+    debrief_kinds = debrief_parser.add_subparsers(dest="debrief_kind", required=True)
+    orchestrator = debrief_kinds.add_parser(
+        "orchestrator", help="feedback on AutoformBot from the agent that led a Setup, Roadmap or Formalize run"
+    )
+    orchestrator_subparsers = orchestrator.add_subparsers(dest="debrief_command", required=True)
+    for operation, help_text in (
+        ("form", "print the form for a finished run (or report that orchestrator debriefs are disabled)"),
+        ("record", "validate an answer, store it, and draft an issue for any AutoformBot friction"),
+    ):
+        command = orchestrator_subparsers.add_parser(operation, help=help_text)
+        command.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+        command.add_argument("--skill", required=True, choices=debrief_orchestrator.SKILLS, help="skill that ran")
+        if operation == "record":
+            command.add_argument("--answer", type=Path, help="answer file (default: standard input)")
+            command.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    subagent = debrief_kinds.add_parser(
+        "subagent", help="opt-in form the agent that worked a formalization attempt fills in"
+    )
+    debrief_subparsers = subagent.add_subparsers(dest="debrief_command", required=True)
+    for operation, help_text in (
+        ("form", "print the form for a finished attempt (or report that subagent debriefs are disabled)"),
+        ("record", "validate an answer and store it as a new debrief record"),
+    ):
+        command = debrief_subparsers.add_parser(operation, help=help_text)
+        command.add_argument("selector", help="path-derived node id or durable article_id")
+        command.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+        command.add_argument("--phase", required=True, choices=("statement", "proof"), help="phase attempted")
+        command.add_argument("--note", default="", help="why the attempt did not succeed, if it did not")
+        if operation == "record":
+            command.add_argument("--answer", type=Path, help="answer file (default: standard input)")
+            command.add_argument(
+                "--worker-id",
+                default=os.environ.get("AUTOFORM_WORKER_ID"),
+                help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
+            )
+            command.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    debrief_render = debrief_subparsers.add_parser("render", help="rebuild Markdown views of the records")
+    debrief_render.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
 
     migrate = subparsers.add_parser("migrate", help="plan or apply authored migrations")
     migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
@@ -393,35 +495,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--timeout",
         type=_positive_seconds,
         metavar="SECONDS",
-        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g}); "
-        "the Lake freshness check before it has its own budget",
-    )
-
-    unused = subparsers.add_parser(
-        "unused-hypotheses",
-        help="report the hypotheses that the proof of each theorem the blueprint names never uses",
-    )
-    unused.add_argument("blueprint_dir")
-    unused.add_argument(
-        "--lean-root",
-        type=Path,
-        required=True,
-        help="built Lean project whose declarations the blueprint names",
-    )
-    unused.add_argument(
-        "--node",
-        action="append",
-        dest="nodes",
-        metavar="ID",
-        help="restrict to one article id (repeatable)",
-    )
-    unused.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    unused.add_argument(
-        "--timeout",
-        type=_positive_seconds,
-        metavar="SECONDS",
-        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g}); "
-        "the Lake freshness check before it has its own budget",
+        help="seconds the probe helper's build, and each Lean probe, may each run "
+        f"(default {DEFAULT_PROBE_TIMEOUT:g}); "
+        "one probe runs per root module, several in parallel, and the budget is per probe, not a deadline "
+        "for the whole extraction; the Lake freshness check before them has its own budget",
     )
 
     render = subparsers.add_parser("render", help="build the publishable blueprint")
@@ -431,13 +508,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     render.add_argument("--repository-url", help="project URL, e.g. https://github.com/owner/repo")
     render.add_argument(
         "--ref",
-        help="commit or branch to link; links appear only if its local commit "
-        "holds the exact rendered inputs",
+        help="commit or branch to link; code links appear only if its local commit holds "
+        "the captured Lean sources, and links into the blueprint only if it also holds the blueprint",
     )
     render.add_argument(
         "--require-declarations",
         action="store_true",
-        help="fail when a 'lean:' declaration is not found in the Lean sources "
+        help="fail when a 'lean:' declaration is not found in the Lean sources, is defined more than once in them, "
         "or cannot be looked up because the sources cannot be read",
     )
 
@@ -461,14 +538,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _search(args)
     if args.command == "library":
         return _library_index(args) if args.library_command == "index" else _library_list(args)
+    if args.command == "site":
+        return _site_check(args)
     if args.command == "claim":
         return _claim(args)
+    if args.command == "debrief":
+        return _debrief(args)
     if args.command == "migrate":
         return _migrate(args)
     if args.command == "skeleton":
         return _skeleton(args)
-    if args.command == "unused-hypotheses":
-        return _unused_hypotheses(args)
     if args.command == "render":
         return _render(args)
     return 2
@@ -545,26 +624,74 @@ def _byte_order_mark_warnings(graph: Graph) -> list[str]:
     return warnings
 
 
-def _source_link_issues(graph: Graph) -> list[str]:
-    """Name each ``## Sources`` link to a local path that is not a file in the blueprint.
+def _source_link_issues(graph: Graph) -> tuple[list[str], list[str]]:
+    """Name each ``## Sources`` link to a local path that is not a file in the blueprint, or is hidden.
 
-    The generated workflows run ``check`` but not ``audit``, and render publishes
-    a missing or escaping target broken: a page a strict MkDocs build cannot find,
-    a repository URL that 404s, or a path off the site. Fragments and other
-    schemes stay with ``audit``, whose anchor check renders each cited note.
+    Returns the errors, then the warnings. The generated workflows gate on
+    ``check`` and run ``audit`` only as a report, and render publishes a missing
+    or escaping target broken: a page a strict MkDocs build cannot find, a
+    repository URL that 404s for a hidden note under ``sources/``, or the link's
+    text alone. Render omits hidden files, so a hidden target is refused too,
+    unless it is a note under ``sources/`` that exists. Only a repository link
+    reaches that note, and render writes one when it links the other source
+    notes there, so it is only warned about: it must be committed. Fragments and
+    other schemes stay with ``audit``, whose anchor check renders each cited
+    note.
     """
     rejected = {
         "source-not-found": "does not resolve to a file",
         "source-escapes-blueprint": "escapes the blueprint directory",
+        "malformed-source-url": "is not a valid URL",
         "malformed-source-link": "contains an invalid path",
+        "hidden-source-target": "names a hidden path, which render omits",
+        "generated-source-target": "names a generated view, which render omits",
     }
-    issues = []
+    issues, warnings = [], []
     for node in graph.nodes.values():
         for target in node.sources:
-            issue = local_target_issue(node.path, target.partition("#")[0], graph.blueprint_dir, label="source")
-            if issue is not None and issue[0] in rejected:
-                issues.append(f"{node.id}: source target {rejected[issue[0]]}: {target!r}")
-    return issues
+            located = target.partition("#")[0]
+            issue = local_target_issue(node.path, located, graph.blueprint_dir, label="source")
+            if issue is None or issue[0] not in rejected:
+                continue
+            code = issue[0]
+            if code == "hidden-source-target":
+                # A link that names a hidden note under sources/, and steps through no other
+                # hidden folder on the way, only needs the note committed. No repository link
+                # mends any other hidden link.
+                written = unquote(urlsplit(located).path)
+                inside = Path(os.path.normpath(node.path.parent.resolve() / written)).relative_to(graph.blueprint_dir)
+                hidden = [part for part in Path(written).parts if part.startswith(".") and part != ".."]
+                if inside.parts[:1] == (SOURCES_DIR,) and hidden == [p for p in inside.parts if p.startswith(".")]:
+                    spelled = graph.blueprint_dir / inside
+                    if os.path.isfile(spelled):
+                        warnings.append(
+                            f"{node.id}: source target names a hidden path, which only a repository link reaches, "
+                            f"so it must be committed: {target!r}"
+                        )
+                        continue
+                    code = "source-not-found"
+            issues.append(f"{node.id}: source target {rejected[code]}: {target!r}")
+    return issues, warnings
+
+
+def _formalizable_container_warnings(graph: Graph) -> list[str]:
+    """Name each article that sets ``declaration`` and also contains articles.
+
+    The generated workflows gate on ``check`` and run ``audit``, which reports
+    these as ``formalizable-container``, only as a report. Nothing counts or
+    schedules a container's own declaration, yet its scope is drawn complete
+    once its leaves are proved. The site still builds, so ``check`` warns rather
+    than fails. The message names the move because deleting only
+    ``declaration:`` silences both commands, and a container left with ``lean:``
+    and ``statement:`` is still drawn complete while its own proof is open.
+    """
+    containers = {node.parent for node in graph.nodes.values() if node.parent is not None}
+    return [
+        f"{node.id}: formalizable article has contained articles; declaration-sized articles must be leaves; "
+        "move the declaration and its lean, statement and proof fields into a leaf article"
+        for node in graph.nodes.values()
+        if node.formalizable and node.id in containers
+    ]
 
 
 def _check(args: argparse.Namespace) -> int:
@@ -574,41 +701,72 @@ def _check(args: argparse.Namespace) -> int:
         for issue in exc.issues:
             print(f"error: {issue}")
         return 1
-    if source_issues := _source_link_issues(graph):
+    source_issues, source_warnings = _source_link_issues(graph)
+    if source_issues:
         for issue in source_issues:
             print(f"error: {issue}")
         return 1
+    if args.lean_root is not None:
+        source_warnings += [_human_text(warning) for warning in library_citation_warnings(graph, args.lean_root)]
 
-    linker = None
+    # Check looks each name up and builds no permalink, so it skips the Git
+    # work a linker does.
+    index = None
     if args.lean_root is not None:
         try:
-            linker = build_linker(args.lean_root)
+            index = index_project(args.lean_root)
         except OSError as error:
             print(f"error: {index_failure_message(error)}")
             return 1
 
+    # The book's hero counts the same targets and inventories.
     statuses = status.derive(graph)
-    summary = " · ".join(f"{count} {state.label}" for state, count in status.summarize(statuses))
+    target_statuses = {node_id: statuses[node_id] for node_id in _countable(graph)}
+    inventories = len(_module_inventories(graph))
+    summary = " · ".join(
+        f"{count} {state.label}" for state, count in status.summarize(target_statuses)
+    )
     print(f"OK: {len(graph.nodes)} articles, {graph.edge_count} dependencies")
     if summary:
         print(f"    {summary}")
+    if inventories:
+        label = "module inventory" if inventories == 1 else "module inventories"
+        print(f"    {inventories} {label}")
 
-    if linker is not None:
+    if index is not None:
         missing = [
-            f"{node.id}: declaration not found in {args.lean_root}: {name}"
+            f"{node.id}: declaration defined more than once in {args.lean_root}: {name} ({ambiguous})"
+            if (ambiguous := index.ambiguity(name))
+            else f"{node.id}: declaration not found in {args.lean_root}: {name}"
+            + ("; a name Lean generates is not indexed and belongs in the catalog's ledger" if node.catalog else "")
             for node in graph.nodes.values()
             for name in declaration_names(node.lean or "")
-            if linker.location(name) is None
+            if index.find(name) is None
         ]
         for issue in missing:
             print(f"error: {issue}")
+        if any(": declaration not found in " in issue for issue in missing):
+            print(
+                "note: check resolves lean: names only in the project's own Lean files, not in Mathlib or other "
+                "dependencies under .lake; if a name is a shared library's declaration, record it in the article's "
+                "implementation note instead"
+            )
         if missing:
             return 1
-        declared = sum(1 for node in graph.nodes.values() if node.lean)
-        print(f"    {declared} declaration(s) resolved in the Lean sources")
+        print(f"    {len(graph.lean_names())} declaration name(s) resolved in the Lean sources")
     for omission in projection_omissions(graph):
         print(f"warning: {omission}")
-    for warning in _byte_order_mark_warnings(graph):
+    for omission in atlas_omissions(graph):
+        print(f"warning: atlas.json: {omission}")
+    for node_id in catalogs_without_ledger(graph):
+        print(
+            f"warning: {node_id}: module catalog links no declaration ledger under blueprint/sources/ from '## Sources'"
+        )
+    for warning in _byte_order_mark_warnings(graph) + _formalizable_container_warnings(graph) + source_warnings:
+        print(f"warning: {warning}")
+    # What the site would leave out or show as typed, and what would stop
+    # render; none of it fails check.
+    for warning in publication_issues(graph, Path(args.blueprint_dir)):
         print(f"warning: {warning}")
     return 0
 
@@ -626,11 +784,14 @@ def _audit(args: argparse.Namespace) -> int:
                 "    coverage: "
                 f"{counts['MAPPED']} mapped · "
                 f"{counts['DECOMPOSED']} decomposed · "
+                f"{counts['INVENTORIED']} inventoried · "
                 f"{counts['DEFERRED']} deferred · "
                 f"{counts['OUT']} out"
             )
         for finding in result.findings:
             print(f"error: {finding.article_path}: {finding.code}: {finding.reason}")
+        for warning in result.warnings:
+            print(f"warning: {warning.article_path}: {warning.code}: {warning.message}")
     return 0 if result.clean else 1
 
 
@@ -679,6 +840,20 @@ def _dashboard(args: argparse.Namespace) -> int:
         return 2
     except KeyboardInterrupt:
         return 130
+    return 0
+
+
+def _site_check(args: argparse.Namespace) -> int:
+    try:
+        report = check_site(args.site_dir, args.source)
+    except SiteCheckError as exc:
+        print(f"error: {_human_text(exc)}")
+        return 1
+
+    print(f"{_human_text(args.site_dir)}: {report.pages} pages, {len(report.issues)} problem(s)")
+    for issue in report.issues:
+        print(f"warning: {_human_text(issue)}")
+    # It informs: what it finds never fails the build.
     return 0
 
 
@@ -896,17 +1071,34 @@ def _search(args: argparse.Namespace) -> int:
         print("error: project, blueprint, or Lean root path cannot be read", file=sys.stderr)
         return 2
 
+    notes = []
+    if result.unused_declarations:
+        kinds = ", ".join(result.unused_declarations)
+        notes.append(_human_text(f"note: no article declares kind {kinds}, so the search used only the other kinds"))
     note = None if args.libraries else _unsearched_library_note(args.target, args.lean_root)
+    if note:
+        notes.append(note)
     if args.json:
         print(result.to_json() if combined is None else combined.to_json())
-        if note:
+        for note in notes:
             print(note, file=sys.stderr)
         return 0
-    if not result.hits:
+    # Every count comes first, and each hit's statement on its first line, so output cut short still shows them.
+    if result.hits:
+        print(f"{len(result.hits)} of {result.total_matches} matching article(s) shown.")
+    else:
         print("No matching articles.")
+    for library in libraries:
+        if library.hits:
+            shown = f"{len(library.hits)} of {library.total_matches} matching declaration(s) shown."
+            print(_human_text(f"Library {library.name}: {shown}"))
+        else:
+            print(_human_text(f"Library {library.name}: no matching declarations."))
     for hit in result.hits:
         durable = f" [{hit.article_id}]" if hit.article_id else ""
-        print(_human_text(f"{hit.title} ({hit.node_id}){durable}"))
+        preview = statement_preview(hit)
+        statement = f": {preview}" if preview else ""
+        print(_human_text(f"{hit.title} ({hit.node_id}){durable}{statement}"))
         summary = [
             hit.declaration or "no declaration",
             hit.state,
@@ -920,17 +1112,13 @@ def _search(args: argparse.Namespace) -> int:
             print(_human_text(f"  Lean: {target.declaration}{location}"))
         if hit.mathlib_declarations:
             print(_human_text("  Mathlib: " + ", ".join(hit.mathlib_declarations)))
-        preview = statement_preview(hit)
-        if preview:
-            print(_human_text(f"  Statement: {preview}"))
         print("  Matched: " + ", ".join(hit.matched_fields))
-    if result.hits:
-        print(f"{len(result.hits)} of {result.total_matches} matching article(s) shown.")
     for library in libraries:
         _print_library(library)
-    if note:
+    if notes:
         sys.stdout.flush()
-        print(note, file=sys.stderr)
+        for note in notes:
+            print(note, file=sys.stderr)
     return 0
 
 
@@ -970,20 +1158,17 @@ def _print_library(library: LibraryResult) -> None:
         else:
             held = f"project: {difference.project}"
         print(_human_text(f"  differs: {what} {difference.library} ({held})"))
-    if not library.hits:
-        print("No matching declarations.")
-        return
     for hit in library.hits:
         declaration = hit.declaration
-        print(_human_text(f"{declaration.name} ({declaration.kind}, {declaration.status})"))
+        heading = f"{declaration.name} ({declaration.kind}, {declaration.status})"
+        signature = _one_line(declaration.signature)
+        print(_human_text(f"{heading}: {signature}" if signature else heading))
         print(_human_text(f"  {hit.source_file}:{declaration.line}"))
         if hit.import_line is not None:
             print(_human_text(f"  {hit.import_line}"))
-        print(_human_text(f"  Signature: {_one_line(declaration.signature)}"))
         if declaration.docstring:
             print(_human_text(f"  Docstring: {_one_line(declaration.docstring)}"))
         print("  Matched: " + ", ".join(hit.matched_fields))
-    print(f"{len(library.hits)} of {library.total_matches} matching declaration(s) shown.")
 
 
 def _one_line(text: str) -> str:
@@ -1126,6 +1311,7 @@ def _work_impact(args: argparse.Namespace) -> int:
                 args.module,
                 lean_root=args.lean_root,
                 timeout=args.timeout,
+                module_scope=args.module_scope,
             )
     except (GraphValidationError, RuntimeProjectionError) as error:
         for issue in error.issues:
@@ -1150,6 +1336,102 @@ def _work_impact(args: argparse.Namespace) -> int:
     lines = format_impact(report) if args.work_command == "impact" else format_module_import_impact(report)
     for line in lines:
         print(_human_text(line))
+    return 0
+
+
+def _read_answer(args: argparse.Namespace) -> str:
+    if args.answer is not None:
+        with args.answer.open("rb") as handle:
+            raw = handle.read(debrief.MAX_ANSWER_BYTES + 1)
+    else:
+        raw = sys.stdin.buffer.read(debrief.MAX_ANSWER_BYTES + 1)
+    return raw.decode("utf-8", "replace")
+
+
+def _debrief(args: argparse.Namespace) -> int:
+    if args.debrief_kind == "orchestrator":
+        return _debrief_orchestrator(args)
+    try:
+        if args.debrief_command == "render":
+            root = debrief.debrief_root(args.target)
+            written = debrief.render(root)
+            print(f"rendered {len(written)} debrief report(s) into {_human_text(root / debrief.VIEWS)}")
+            return 0
+        if args.debrief_command == "form":
+            if not debrief.enabled():
+                print(
+                    f"Subagent debriefs are disabled ({debrief.SUBAGENT_DEBRIEF_ENV} is not set, "
+                    "or this platform cannot store them); skip this step."
+                )
+                return 0
+            print(debrief.form(args.target, args.selector, phase=args.phase, note=args.note))
+            return 0
+        entry, path = debrief.record(
+            args.target,
+            args.selector,
+            _read_answer(args),
+            phase=args.phase,
+            note=args.note,
+            worker_id=args.worker_id,
+        )
+    except (GraphValidationError, RuntimeProjectionError) as error:
+        for issue in error.issues:
+            print(f"error: {_human_text(issue)}", file=sys.stderr)
+        return 2
+    except (debrief.DebriefError, OSError) as error:
+        print(f"error: {_human_text(error)}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(
+            {"attempt_id": entry.attempt_id, "outcome": entry.outcome, "path": str(path)},
+            sort_keys=True,
+            separators=(",", ":"),
+        ))
+    else:
+        print(_human_text(f"recorded debrief {entry.attempt_id} ({entry.outcome_label}) at {path}"))
+    return 0
+
+
+def _debrief_orchestrator(args: argparse.Namespace) -> int:
+    try:
+        if args.debrief_command == "form":
+            if not debrief_orchestrator.enabled():
+                print(
+                    f"Orchestrator debriefs are disabled ({debrief_orchestrator.DEBRIEF_ENV} is off, "
+                    "or this platform cannot store them); skip this step."
+                )
+                return 0
+            print(debrief_orchestrator.form(args.skill))
+            return 0
+        entry, path, issue = debrief_orchestrator.record(args.target, _read_answer(args), skill=args.skill)
+    except (GraphValidationError, RuntimeProjectionError) as error:
+        for issue_text in error.issues:
+            print(f"error: {_human_text(issue_text)}", file=sys.stderr)
+        return 2
+    except (debrief.DebriefError, OSError) as error:
+        print(f"error: {_human_text(error)}", file=sys.stderr)
+        return 2
+    if args.json:
+        draft = None
+        if issue is not None:
+            draft = {"path": str(issue.path), "url": issue.url, "url_has_body": issue.url_has_body}
+        print(json.dumps(
+            {"run_id": entry.run_id, "path": str(path), "issue": draft},
+            sort_keys=True,
+            separators=(",", ":"),
+        ))
+        return 0
+    print(_human_text(f"recorded orchestrator debrief {entry.run_id} at {path}"))
+    if issue is None:
+        print("no AutoformBot friction reported; no issue drafted")
+        return 0
+    print(_human_text(f"drafted an issue for {debrief_orchestrator.ISSUE_REPOSITORY} at {issue.path}"))
+    if issue.url_has_body:
+        print("nothing has been sent; the draft ends with a link that opens the issue form pre-filled with the "
+              "draft as it was recorded")
+    else:
+        print("nothing has been sent; the draft is too long for a link, so its footer opens the issue form with "
+              "the title only")
     return 0
 
 
@@ -1227,20 +1509,14 @@ def _shell_quote_one_line(value: str) -> str:
 
 
 def _claim(args: argparse.Namespace) -> int:
+    if args.claim_command == "list":
+        return _claim_list(args)
     try:
         board = _claim_board(args)
         operation = args.claim_command
-        if operation == "list":
-            print(json.dumps(board.list(), sort_keys=True, separators=(",", ":")))
-        elif operation == "cleanup":
+        if operation == "cleanup":
             print(f"removed {board.cleanup()} expired claim(s)")
-        if operation in {"list", "cleanup"}:
-            # Lock files are not refs, so neither command's own output can show one.
-            for lock in board.ref_locks():
-                print(
-                    f"warning: {lock.describe()}; if no Git process is using the claim board, delete it",
-                    file=sys.stderr,
-                )
+            _warn_about_ref_locks(board)
             return 0
 
         past_tense = {"acquire": "acquired", "renew": "renewed", "release": "released"}
@@ -1287,6 +1563,51 @@ def _claim(args: argparse.Namespace) -> int:
     except (ClaimTransportError, ValueError) as exc:
         print(f"error: {exc}")
         return 1
+
+
+def _claim_list(args: argparse.Namespace) -> int:
+    """List claims; stdout carries only the JSON, and a failure's line on stderr says what kind it is."""
+    targets: dict[str, str] = {}
+    for node_id in args.node_id:
+        key = author_claim_key(node_id)
+        if key in targets:
+            print(f"error: duplicate claim target: {node_id}", file=sys.stderr)
+            return 2
+        targets[key] = node_id
+
+    def progress(step: str) -> None:
+        print(f"claim list: {step}...", file=sys.stderr, flush=True)
+
+    try:
+        board = _claim_board(args)
+        leases = board.list(list(targets) or None, timeout=args.timeout, progress=progress)
+    except ClaimTimeoutError as exc:
+        print(
+            f"error: timeout: no answer from the claim board within {args.timeout:g}s while {exc.step}",
+            file=sys.stderr,
+        )
+        return 1
+    except ClaimContentionError as exc:
+        print(f"error: contention: {exc}", file=sys.stderr)
+        return 1
+    except ClaimTransportError as exc:
+        print(f"error: transport: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(leases, sort_keys=True, separators=(",", ":")))
+    _warn_about_ref_locks(board)
+    return 0
+
+
+def _warn_about_ref_locks(board: ClaimBoard) -> None:
+    # Lock files are not refs, so neither list's nor cleanup's own output can show one.
+    for lock in board.ref_locks():
+        print(
+            f"warning: {lock.describe()}; if no Git process is using the claim board, delete it",
+            file=sys.stderr,
+        )
 
 
 def _migrate(args: argparse.Namespace) -> int:
@@ -1349,9 +1670,7 @@ def _skeleton(args: argparse.Namespace) -> int:
         report = extract_skeletons(
             args.blueprint_dir,
             lean_root=args.lean_root,
-            runner=None
-            if args.timeout is None
-            else lambda probe, root: run_probe(probe, root, timeout=args.timeout),
+            timeout=args.timeout,
             node_ids=tuple(args.nodes) if args.nodes else None,
         )
         if args.packets is not None and not report.clean:
@@ -1380,22 +1699,6 @@ def _skeleton(args: argparse.Namespace) -> int:
         print(report.to_json())
     else:
         print(format_report(report, lean_root=args.lean_root), end="")
-    return 0 if report.clean else 1
-
-
-def _unused_hypotheses(args: argparse.Namespace) -> int:
-    try:
-        report = find_unused_hypotheses(
-            args.blueprint_dir,
-            lean_root=args.lean_root,
-            node_ids=tuple(args.nodes) if args.nodes else None,
-            timeout=args.timeout or DEFAULT_PROBE_TIMEOUT,
-        )
-    except SkeletonError as exc:
-        for issue in exc.issues:
-            print(f"error: {issue}", file=sys.stderr)
-        return 2
-    print(report.to_json() if args.json else format_unused_hypotheses(report), end="\n" if args.json else "")
     return 0 if report.clean else 1
 
 
@@ -1454,9 +1757,7 @@ def _render(args: argparse.Namespace) -> int:
         return 1
 
     print(f"{report.output_dir}: {report.pages} pages, {report.nodes} nodes, {report.linked} code links")
-    for issue in report.unresolved:
-        print(f"warning: declaration not found in the Lean sources: {issue}")
-    for issue in report.warnings:
+    for issue in (*report.unresolved, *report.warnings):
         print(f"warning: {issue}")
     # A declaration that was never looked up is not known to exist.
     if (report.unresolved or report.unchecked) and args.require_declarations:

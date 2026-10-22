@@ -40,10 +40,9 @@ LIBRARY_MARKER = "AUTOFORM_LIBRARY "
 #: Raised by any change, here or in the probe, that can alter the bytes of an index.
 PROBE_REVISION = 1
 #: The Lean releases the probe has been run on; its use of Lean internals is checked on each.
-VERIFIED_TOOLCHAINS = ("leanprover/lean4:v4.34.1",)
+VERIFIED_TOOLCHAINS = ("leanprover/lean4:v4.34.1", "leanprover/lean4:v4.35.0")
 _LABEL = "library index probe"
 _DUPLICATE = re.compile(r"import (\S+) failed, environment already contains '([^']+)' from (\S+)")
-_STALE = "Lean build artifacts are stale; run `lake build "
 _NAMED = 5
 _DETAIL = 200
 
@@ -236,13 +235,9 @@ def generate_index(
         if clash:
             second, name, first = clash.groups()
             raise GenerateError(_clash(first, second, name)) from None
-        if detail.startswith(_STALE):
+        said = skeleton.stale_build_said(error)
+        if said is not None:
             # The probe imports every module, and `run_probe` names each one; the libraries say the same.
-            # Lake first replays the warnings of what is built; `✖` marks the module that is not.
-            lines = [line.strip() for line in detail.split("\n")[1:] if line.strip()]
-            said = next((line for line in lines if line.startswith("✖")), lines[0] if lines else "")
-            if len(said) > _DETAIL:
-                said = said[: _DETAIL - 3].rstrip() + "..."
             raise GenerateError(
                 f"the build is missing or stale; run `lake build {' '.join(sources.libraries)}` and index again"
                 + (f" (Lake: {said})" if said else "")

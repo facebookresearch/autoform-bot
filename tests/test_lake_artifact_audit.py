@@ -14,10 +14,13 @@ from types import ModuleType
 
 import pytest
 
+from autoform_cli import status
+
 from tests.test_impact import _lean_toolchain_available
 
 
 _TEMPLATE = Path("autoform_cli/templates/github/autoform_audit.py")
+_PROBE_SOURCE = Path("autoform_cli/probes/audit_probe.lean")
 # The toolchain the real-Lean CI job installs.
 _TOOLCHAIN = (Path(__file__).parent / "fixtures" / "skeleton-project" / "lean-toolchain").read_text(
     encoding="utf-8"
@@ -166,12 +169,69 @@ def test_both_probes_spell_module_names_outside_the_basic_multilingual_plane(hel
         assert "\\ud835" not in probe
 
 
+def _arguments(probe: str) -> tuple[str, object, object]:
+    """The audit a rendered probe's last line runs, and the module list and table it passes."""
+
+    last = probe.rstrip("\n").rpartition("\n")[2]
+    call = re.fullmatch(r'run_cmd (\w+) ("(?:[^"\\]|\\.)*") ("(?:[^"\\]|\\.)*")', last)
+    assert call is not None and probe.endswith(f"{last}\n")
+    entry, modules, table = call.groups()
+    return entry, json.loads(json.loads(modules)), json.loads(json.loads(table))
+
+
 def _modules(probe: str) -> object:
     """The JSON module list a rendered probe decodes."""
 
-    literal = re.search(r'ReadModules ("(?:[^"\\]|\\.)*")', probe)
-    assert literal is not None
-    return json.loads(json.loads(literal.group(1)))
+    return _arguments(probe)[1]
+
+
+def _definition(source: str, name: str) -> str:
+    """One top-level definition of the probe source, up to the next line that starts a command."""
+
+    start = source.index(f"\ndef {name} ") + 1
+    following = re.search(r"\n(?=\S)", source[start:])
+    return source[start:] if following is None else source[start : start + following.start()]
+
+
+def test_the_helper_carries_the_probe_source_verbatim(helper: ModuleType, repo_root: Path) -> None:
+    source = (repo_root / _PROBE_SOURCE).read_text(encoding="utf-8")
+
+    assert helper._PROBE == source, "the helper's copy of the probe is stale; run python3 scripts/sync_audit_probe.py"
+
+
+def _toolchain_installed(pinned: str) -> bool:
+    """Whether `lean`, run in a directory pinned to *pinned*, runs that toolchain without a download."""
+
+    elan = shutil.which("elan")
+    if elan is None:
+        # Without elan, `lean` ignores lean-toolchain files.
+        version = subprocess.run(["lean", "--version"], capture_output=True, text=True, timeout=30, check=False)
+        return f"version {pinned.rpartition(':v')[2]}," in version.stdout
+    listed = subprocess.run([elan, "toolchain", "list"], capture_output=True, text=True, timeout=30, check=False)
+    return any(line.split()[:1] == [pinned] for line in listed.stdout.splitlines())
+
+
+@pytest.mark.skipif(not _REAL_LEAN, reason="needs lake and the fixture's Lean toolchain")
+@pytest.mark.parametrize("fixture", ["skeleton-project", "library-project"])
+def test_the_probe_source_elaborates_cleanly_on_each_fixture_toolchain(
+    repo_root: Path, tmp_path: Path, fixture: str
+) -> None:
+    # The probe imports only the toolchain's Lean, so Lean checks its source with no project.
+    pinned = (repo_root / "tests/fixtures" / fixture / "lean-toolchain").read_text(encoding="utf-8")
+    if not _toolchain_installed(pinned.strip()):
+        if os.environ.get("AUTOFORM_REQUIRE_REAL_LEAN_TESTS") == "1":
+            pytest.fail(f"{pinned.strip()} is not installed")
+        pytest.skip(f"{pinned.strip()} is not installed")
+    _write(tmp_path / "lean-toolchain", pinned)
+    shutil.copyfile(repo_root / _PROBE_SOURCE, tmp_path / "audit_probe.lean")
+    without = {key: value for key, value in os.environ.items() if key not in {"LEAN_PATH", "AUTOFORM_AUDIT_LEAN_PATH"}}
+
+    run = subprocess.run(
+        ["lean", "audit_probe.lean"], cwd=tmp_path, env=without, capture_output=True, text=True, timeout=300
+    )
+
+    # No error or warning, the v4.34 deprecation included.
+    assert (run.returncode, run.stdout) == (0, ""), run.stdout + run.stderr
 
 
 @pytest.mark.skipif(not _REAL_LEAN, reason="needs lake and the fixture's Lean toolchain")
@@ -770,9 +830,9 @@ def test_contract_lists_each_article_declaration(helper: ModuleType, tmp_path: P
 
     entries = helper.load_assumption_contract(contract)
 
-    assert [(entry.name, entry.article, entry.is_open, entry.allowed) for entry in entries] == [
-        ("Fixture.open_stmt", "open", True, ("Fixture.open_stmt",)),
-        ("Fixture.uses", "uses", False, ("Fixture.open_stmt",)),
+    assert [(entry.name, entry.article, entry.is_open, entry.allowed, entry.state) for entry in entries] == [
+        ("Fixture.open_stmt", "open", True, ("Fixture.open_stmt",), "stated"),
+        ("Fixture.uses", "uses", False, ("Fixture.open_stmt",), "proved"),
     ]
 
 
@@ -880,26 +940,33 @@ def test_strict_probe_embeds_its_targets_and_imports_the_build_itself(helper: Mo
 
     probe = helper.render_probe(("Fixture",), helper.load_target_contract(contract))
 
-    table = next(line for line in probe.splitlines() if "ReadTargets " in line and " with" in line)
-    literal = table.split("ReadTargets ", 1)[1].rsplit(" with", 1)[0]
-    assert json.loads(json.loads(literal)) == [
-        [["Fixture", "a.b c"], 'odd "id"'],
-        [["Fixture", "x", 1], 'odd "id"'],
+    entry, _, table = _arguments(probe)
+    assert entry == "autoformAuditStrict"
+    # Each target carries its article's state and whether a wanted placeholder may back it.
+    assert table == [
+        [["Fixture", "a.b c"], 'odd "id"', "proved", False],
+        [["Fixture", "x", 1], 'odd "id"', "proved", False],
     ]
-    assert "is not a declaration of the Lean build" in probe
     old_form = helper.render_probe(("Fixture",))
-    assert 'autoformAuditReadTargets "[]" with' in old_form
+    assert _arguments(old_form) == ("autoformAuditStrict", [["Fixture"]], [])
+    # Every render is the probe source and one line that runs an audit.
     for text in (probe, old_form, helper.render_open_probe(("Fixture",), ())):
-        assert "Lean.Environment.replay rootConstants base" in text
-        assert "kernel replay of the root package failed" in text
-        assert "kernel replay of the root package skipped" in text
-        assert "searchPathRef.set (libDir :: projectEntries)" in text
-        assert "with another library on the search path" in text
-        assert "(loadExts := false)" in text
-        assert "({ module := `Init } : Import)" in text
-        assert "is declared by an imported module" not in text
-        # The replay runs compiled code, so it comes after every check.
-        assert text.rindex("depends on unexpected axiom") < text.index("Lean.Environment.replay rootConstants")
+        assert text.startswith(helper._PROBE) and text.count("\n", len(helper._PROBE)) == 2
+    source = helper._PROBE
+    assert "is not a declaration of the Lean build" in source
+    assert "Lean.Environment.replay rootConstants base" in source
+    assert "kernel replay of the root package failed" in source
+    assert "searchPathRef.set (libDir :: projectEntries)" in source
+    assert "with another library on the search path" in source
+    assert "(loadExts := false)" in source
+    assert "({ module := `Init } : Import)" in source
+    assert "is declared by an imported module" not in source
+    # The replay runs compiled code, so each audit calls it once every other check has passed.
+    for entry in ("autoformAuditStrict", "autoformAuditOpen"):
+        body = _definition(source, entry)
+        replay = body.index("autoformAuditKernelReplay env")
+        assert body.rindex("depends on unexpected axiom") < replay
+        assert body.index("kernel replay of the root package skipped") < replay
 
 
 def test_open_probe_spells_names_as_components(helper: ModuleType, tmp_path: Path) -> None:
@@ -913,16 +980,15 @@ def test_open_probe_spells_names_as_components(helper: ModuleType, tmp_path: Pat
 
     probe = helper.render_open_probe(("Fixture",), helper.load_assumption_contract(contract))
 
-    table = next(line for line in probe.splitlines() if "ReadArticles " in line and " with" in line)
-    literal = table.split("ReadArticles ", 1)[1].rsplit(" with", 1)[0]
-    assert json.loads(json.loads(literal)) == [
-        [["Fixture", "a.b c"], "open", True, [["Fixture", "a.b c"]]],
-        [["Fixture", "x", 1], 'odd "id" \\', False, [["Fixture", "a.b c"]]],
+    entry, _, table = _arguments(probe)
+    assert entry == "autoformAuditOpen"
+    assert table == [
+        [["Fixture", "a.b c"], "open", True, [["Fixture", "a.b c"]], "stated", True],
+        [["Fixture", "x", 1], 'odd "id" \\', False, [["Fixture", "a.b c"]], "proved", False],
     ]
     assert probe.startswith("import Lean.Elab.Command\n")
     assert "import Fixture" not in probe
     assert "kernel trust clean except declared open statements" in probe
-    assert "kernel trust clean (" not in probe
     with pytest.raises(helper.AuditInputError, match="empty open-statement audit"):
         helper.render_open_probe((), ())
 
@@ -956,7 +1022,7 @@ def test_helper_cli_forms(repo_root: Path, tmp_path: Path) -> None:
     assert prepared.stdout == (
         "prepared open-statement audit for 1 root-package module(s) and 1 open statement candidate(s)\n"
     )
-    assert "autoformOpenAuditReadArticles" in probe.read_text(encoding="utf-8")
+    assert _arguments(probe.read_text(encoding="utf-8"))[0] == "autoformAuditOpen"
 
     targeted = run("--targets", str(contract), "Fixture", str(archive), str(probe))
     assert targeted.returncode == 1
@@ -971,7 +1037,7 @@ def test_helper_cli_forms(repo_root: Path, tmp_path: Path) -> None:
     targeted = run("--targets", str(contract), "Fixture", str(archive), str(probe))
     assert targeted.returncode == 0, targeted.stderr
     assert targeted.stdout == "prepared kernel-trust audit for 1 root-package module(s) and 2 lean: target(s)\n"
-    assert "autoformAuditReadTargets" in probe.read_text(encoding="utf-8")
+    assert _arguments(probe.read_text(encoding="utf-8"))[0] == "autoformAuditStrict"
 
     for arguments in (
         (),
@@ -1104,6 +1170,70 @@ theorem Fixture.after_exit : False := sorry
 
 _UNIMPORTED_LEAN = "theorem Fixture.unimported : False := sorry\n"
 
+# Batteries' wanted commands elaborate to a private def whose type ends in one of
+# these root-level wrappers (Batteries/Util/ProofWanted.lean). The fixture
+# declares them itself, so the build needs no Batteries.
+_WANTED_WRAPPERS_LEAN = """universe u
+
+structure ProofWanted (α : Sort u) : Type where
+  mk ::
+
+structure DefWanted (α : Sort u) : Type where
+  mk ::
+
+structure DerivedWanted (α : Sort u) : Sort (max 1 u) where
+  ofVal ::
+  val : α
+"""
+
+# A placeholder named like one in the root module, which is private there too.
+_WANTED_TWIN_LEAN = """import Fixture.Wrappers
+
+namespace Fixture
+
+private def twin : ProofWanted True := ⟨⟩
+
+end Fixture
+"""
+
+# A placeholder whose body uses sorry, as `theorem_wanted broken : 1 = 2 := sorry`
+# elaborates, fails its own checks, so it must get no wanted line.
+_WANTED_BROKEN_LEAN = """import Fixture.Wrappers
+
+namespace Fixture
+
+private def broken : ProofWanted (1 = 2) := have : 1 = 2 := sorry; ⟨⟩
+
+theorem clean : True := trivial
+
+end Fixture
+"""
+
+# What `theorem_wanted wish (n : Nat) : n + 0 = n`, `def_wanted shape : Nat` and
+# `def_wanted derived : Nat := 3` elaborate to, `alias ofWish := wish`, which
+# Batteries makes a public def of the placeholder's type, a second `twin`, and a
+# private theorem, which no wanted command made.
+_WANTED_LEAN = """import Fixture.Twin
+
+namespace Fixture
+
+private def wish (n : Nat) : ProofWanted (n + 0 = n) := ⟨⟩
+
+def ofWish (n : Nat) : ProofWanted (n + 0 = n) := wish n
+
+private def shape : DefWanted Nat := ⟨⟩
+
+@[reducible] private noncomputable def derived : DerivedWanted Nat := ⟨3⟩
+
+private def twin : ProofWanted True := ⟨⟩
+
+private theorem hidden : True := trivial
+
+theorem clean : True := trivial
+
+end Fixture
+"""
+
 # A declaration the kernel never checked. Neither the axiom walk nor the safety
 # scan can tell; the workflow's lexical bypass check is not part of the probe.
 _UNCHECKED_LEAN = """import Lean.Elab.Command
@@ -1226,6 +1356,8 @@ def open_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[P
         ("recursive", _RECURSIVE_LEAN),
         ("partial", _PARTIAL_LEAN),
         ("copy", _COPY_LEAN),
+        ("wanted", _WANTED_LEAN),
+        ("wanted-broken", _WANTED_BROKEN_LEAN),
     ):
         project = root / name
         _write(project / "lean-toolchain", _TOOLCHAIN)
@@ -1237,6 +1369,10 @@ def open_projects(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[P
         )
         _write(project / "Fixture.lean", source)
         _write(project / "Fixture/Unimported.lean", _UNIMPORTED_LEAN)
+        if name.startswith("wanted"):
+            _write(project / "Fixture/Wrappers.lean", _WANTED_WRAPPERS_LEAN)
+        if name == "wanted":
+            _write(project / "Fixture/Twin.lean", _WANTED_TWIN_LEAN)
         built = _run(project, "lake", "build")
         assert built.returncode == 0, built.stdout + built.stderr
         archive = project / "root.tgz"
@@ -1532,6 +1668,146 @@ def test_strict_probe_requires_every_target_and_checks_non_root_ones(
     assert _ends_with_the_success_line(passed.stdout), passed.stdout
 
 
+_NOT_IN_BUILD = "is not a declaration of the Lean build; fix the article's lean: name or build the module that declares it"
+
+
+def _wanted_refusal(name: str, article: str, wrapper: str, state: str) -> str:
+    return (
+        f"{name} [{article}] is a wanted placeholder ({wrapper}), which defers its proof or construction, "
+        f"so it cannot back an article recorded as {state}"
+    )
+
+
+def test_strict_probe_resolves_wanted_targets_to_their_placeholders(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    # Batteries declares a wanted command's placeholder private, so env.find? on
+    # the written name misses it, and every wanted target once failed CI.
+    passed = _strict_audit(
+        helper,
+        open_projects["wanted"],
+        [
+            _article("wish", ["Fixture.wish"], state="stated"),
+            _article("derived", ["Fixture.derived"], state="can_prove"),
+            _article("alias", ["Fixture.ofWish"], state="planned"),
+            _article("clean", ["Fixture.clean"]),
+        ],
+    )
+
+    output = passed.stdout + passed.stderr
+    assert passed.returncode == 0, output
+    assert "wanted: Fixture.wish [wish]" in output
+    assert "wanted: Fixture.derived [derived]" in output
+    assert "wanted: Fixture.ofWish [alias]" in output
+    assert _ends_with_the_success_line(passed.stdout), passed.stdout
+
+    refused = _strict_audit(
+        helper,
+        open_projects["wanted"],
+        [
+            _article("proved", ["Fixture.wish"]),
+            _article("defined", ["Fixture.shape"], state="defined"),
+            _article("alias", ["Fixture.ofWish"], state="fully_proved"),
+            _article("mathlib", ["Fixture.derived"], state="mathlib"),
+            _article("twin", ["Fixture.twin"], state="stated"),
+            _article("hidden", ["Fixture.hidden"], state="stated"),
+            _article("typo", ["Fixture.wishes"], state="stated"),
+        ],
+    )
+
+    output = refused.stdout + refused.stderr
+    assert refused.returncode != 0, output
+    for message in (
+        _wanted_refusal("Fixture.wish", "proved", "ProofWanted", "proved"),
+        _wanted_refusal("Fixture.shape", "defined", "DefWanted", "defined"),
+        _wanted_refusal("Fixture.ofWish", "alias", "ProofWanted", "fully_proved"),
+        _wanted_refusal("Fixture.derived", "mathlib", "DerivedWanted", "mathlib"),
+        "Fixture.twin [twin] names a wanted placeholder in each of 2 modules; give them different names",
+        f"Fixture.hidden [hidden] {_NOT_IN_BUILD}",
+        f"Fixture.wishes [typo] {_NOT_IN_BUILD}",
+    ):
+        assert message in output
+    assert "wanted:" not in output
+    assert "kernel trust clean" not in output
+
+
+def test_open_probe_resolves_wanted_targets_to_their_placeholders(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    passed = _audit(
+        helper,
+        open_projects["wanted"],
+        _contract(
+            _article("wish", ["Fixture.wish"], is_open=True, allowed=["Fixture.wish"]),
+            _article("clean", ["Fixture.clean"]),
+        ),
+    )
+
+    output = passed.stdout + passed.stderr
+    assert passed.returncode == 0, output
+    assert "wanted: Fixture.wish [wish]" in output
+    assert "sorry-free: Fixture.clean [clean]" in output
+    assert _ends_with_the_success_line(passed.stdout), passed.stdout
+
+    refused = _audit(
+        helper,
+        open_projects["wanted"],
+        _contract(
+            _article("proved", ["Fixture.wish"]),
+            _article("defined", ["Fixture.derived"], state="defined"),
+            _article("alias", ["Fixture.ofWish"], state="conditional"),
+            _article("twin", ["Fixture.twin"], is_open=True, allowed=["Fixture.twin"]),
+        ),
+    )
+
+    output = refused.stdout + refused.stderr
+    assert refused.returncode != 0, output
+    for message in (
+        _wanted_refusal("Fixture.wish", "proved", "ProofWanted", "proved"),
+        _wanted_refusal("Fixture.derived", "defined", "DerivedWanted", "defined"),
+        _wanted_refusal("Fixture.ofWish", "alias", "ProofWanted", "conditional"),
+        "Fixture.twin [twin] names a wanted placeholder in each of 2 modules; give them different names",
+    ):
+        assert message in output
+    assert "kernel trust clean" not in output
+
+
+def test_only_unproved_states_may_be_backed_by_a_wanted_placeholder(helper: ModuleType, tmp_path: Path) -> None:
+    # A deny list once missed `mathlib`, and any state a newer CLI adds; refuse all but these.
+    may_be_wanted = {"stated", "can_prove", "can_state", "planned", "not_ready"}
+    states = [state.key for state in status.STATES]
+    assert may_be_wanted <= set(states)
+    assert set(states) - may_be_wanted == {"mathlib", "fully_proved", "proved", "defined", "conditional"}
+    contract = _contract_file(
+        tmp_path / "contract.json",
+        _contract(
+            *(_article(state, [f"Fixture.{state}"], state=state) for state in [*states, "not_yet_known"]),
+            open_statements=False,
+        ),
+    )
+
+    probe = helper.render_probe(("Fixture",), helper.load_target_contract(contract))
+
+    flags = {article: flag for _name, article, _state, flag in _arguments(probe)[2]}
+    assert flags == {state: state in may_be_wanted for state in [*states, "not_yet_known"]}
+
+
+def test_both_probes_give_no_wanted_line_to_a_placeholder_that_fails_its_own_checks(
+    helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
+) -> None:
+    for audited in (
+        _strict_audit(helper, open_projects["wanted-broken"], [_article("broken", ["Fixture.broken"], state="stated")]),
+        _audit(helper, open_projects["wanted-broken"], _contract(
+            _article("broken", ["Fixture.broken"], is_open=True, allowed=["Fixture.broken"]),
+        )),
+    ):
+        output = audited.stdout + audited.stderr
+        assert audited.returncode != 0, output
+        assert "Fixture.broken" in output
+        assert "wanted:" not in output
+        assert "kernel trust clean" not in output
+
+
 def test_strict_probe_audits_a_build_that_declares_its_helper_names(
     helper: ModuleType, open_projects: dict[str, tuple[Path, Path]]
 ) -> None:
@@ -1551,25 +1827,15 @@ def test_both_probes_refuse_a_target_that_names_one_of_their_own_helpers(
     # The probe declares its helpers itself, so the build never compiled them.
     # A lean: name that matched one once passed as a clean declaration outside
     # the root package.
-    walk_helpers = [
-        "autoformAuditBlockOf",
-        "autoformAuditEdges",
-        "autoformAuditAxioms",
-        "autoformAuditCompiledCopy",
-        "autoformAuditUnsafeOrPartial",
-    ]
-    strict_helpers = ["autoformAuditNameOf", "autoformAuditReadTargets", *walk_helpers]
-    open_helpers = [
-        "autoformOpenAuditNameOf",
-        "autoformOpenAuditReadArticles",
-        *walk_helpers,
-        "autoformOpenAuditOpenHits",
-        "autoformOpenAuditReachesFailed",
-        "autoformOpenAuditNameList",
-    ]
-    for audited, names in (
-        (_strict_audit(helper, open_projects["strict"], [_article("helper", strict_helpers)]), strict_helpers),
-        (_audit(helper, open_projects["open"], _contract(_OPEN_ARTICLE, _article("helper", open_helpers))), open_helpers),
+    names = re.findall(
+        r"^(?:(?:private|protected|partial|unsafe|noncomputable) )*(?:def|abbrev|theorem|instance|opaque) (\w+)",
+        helper._PROBE,
+        re.MULTILINE,
+    )
+    assert {"autoformAuditStrict", "autoformAuditOpen", "autoformAuditKernelReplay"} <= set(names)
+    for audited in (
+        _strict_audit(helper, open_projects["strict"], [_article("helper", names)]),
+        _audit(helper, open_projects["open"], _contract(_OPEN_ARTICLE, _article("helper", names))),
     ):
         output = audited.stdout + audited.stderr
         assert audited.returncode != 0, output

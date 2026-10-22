@@ -38,6 +38,7 @@ from ._tree_snapshot import (
     TreeSnapshot,
     TreeSnapshotError,
 )
+from .markdown import directory_path
 
 _NAMESPACE = re.compile(r"^\s*namespace\s+(.+)$")
 #: ``section`` in every form that opens one, e.g. ``@[expose] public section``.
@@ -54,8 +55,55 @@ _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
     r"(?:(?:public|private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
     r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom|irreducible_def"
-    r"|theorem_wanted|proof_wanted|def_wanted|instance_wanted|alias)\s+(.+)$"
+    r"|theorem_wanted|proof_wanted|def_wanted|instance_wanted|alias)\b(?:\s+(.*))?$"
 )
+# Core command heads and their modifiers cannot supply a declaration's name.
+# Compare complete identifiers: `open'`, `Qualified.open` and `«open»` are names.
+# These cover the core command parsers and their stock syntax extensions. The
+# continuation grammar below also rejects syntax that cannot follow a
+# declaration identifier, without assuming every command extension is known.
+_COMMAND_HEADS = frozenset(
+    {
+        "abbrev", "add_decl_doc", "alias", "assert_not_exists", "assert_not_imported",
+        "attribute", "aux_def", "axiom", "binder_predicate", "builtin_cbv_simproc",
+        "builtin_cbv_simproc_decl", "builtin_dsimproc", "builtin_dsimproc_decl",
+        "builtin_grind_propagator", "builtin_initialize", "builtin_simproc",
+        "builtin_simproc_decl", "cbv_simproc", "cbv_simproc_decl", "class", "coinductive",
+        "declare_bitwise_int_theorems", "declare_bitwise_uint_theorems",
+        "declare_command_config_elab", "declare_command_config_elab_legacy",
+        "declare_config_elab", "declare_config_elab_legacy", "declare_core_config_elab",
+        "declare_eval_bin", "declare_eval_bin_bitwise", "declare_eval_bin_bool_pred",
+        "declare_int_theorems", "declare_simp_like_tactic", "declare_sint_simprocs",
+        "declare_syntax_cat", "declare_term_config_elab", "declare_uint_simprocs",
+        "declare_uint_theorems", "def", "def_eval_config_item", "def_wanted",
+        "deprecated_module", "deprecated_syntax", "derive_eval_expr_instance_using_meta_eval",
+        "deriving", "docs_to_verso", "dsimproc", "dsimproc_decl", "elab", "elab_rules",
+        "elab_stx_quot", "end", "end_local_scope", "ensure_eval_expr_instance",
+        "ensure_eval_term_expr_instances", "ensure_eval_term_instance", "example",
+        "export", "gen_cnstr_fns", "grind_annotated", "grind_pattern", "grind_propagator",
+        "import", "include", "inductive",
+        "infix", "infixl", "infixr", "init_grind_norm", "init_quot", "initialize", "irreducible_def",
+        "instance", "instance_wanted", "lemma", "macro", "macro_rules",
+        "make_elab_grind_config", "make_elab_simp_config", "module",
+        "mutual", "namespace", "norm_cast_add_elim", "notation", "omit", "opaque", "open",
+        "postfix", "postprocess_traces", "prefix", "prelude", "proof_wanted", "recommended_spelling",
+        "register_builtin_option", "register_error_explanation", "register_option",
+        "register_grind_attr", "register_label_attr", "register_linter_set", "register_simp_attr",
+        "register_sym_dsimp", "register_sym_simp", "register_sym_simp_attr", "register_tactic_tag",
+        "register_try?_tactic", "reprove", "run_cmd", "run_elab", "run_meta",
+        "run_tac", "seal", "section", "set_library_suggestions", "set_option",
+        "show_panel_widgets", "simproc", "simproc_decl", "store_traces_as", "structure",
+        "syntax", "tactic_extension", "test_extern", "theorem", "theorem_wanted",
+        "unif_hint", "universe", "unlock_limits", "unseal", "variable", "wait_for_cancel_once_command",
+        "with_weak_namespace",
+    }
+)
+_COMMAND_MODIFIERS = frozenset(
+    {"public", "private", "protected", "meta", "noncomputable", "unsafe", "partial", "nonrec", "local", "scoped"}
+)
+#: The wanted commands. Batteries makes each a private placeholder, so none of
+#: them binds its name outside its own module.
+_WANTED_KEYWORDS = frozenset({"theorem_wanted", "proof_wanted", "def_wanted", "instance_wanted"})
 _IGNORED_DIRECTORIES = frozenset(
     {
         ".direnv",
@@ -88,7 +136,11 @@ MANAGED_OUTPUT_SCHEMAS = frozenset(
 #: Render marks each finished site with this manifest. ``mkdocs`` copies it
 #: into its own output, so both folders hold rendered copies, never sources.
 PUBLICATION_MANIFEST = "publication.json"
-PUBLICATION_SCHEMA = "autoform-publication/v2"
+#: v3 adds the shared dependency explorer to v2's inventoried site and hashes
+#: the blueprint under a label of its own.
+PUBLICATION_SCHEMA = "autoform-publication/v3"
+#: Sites render may replace: each records a file inventory to check first.
+_REPLACEABLE_SCHEMAS = frozenset({"autoform-publication/v2", PUBLICATION_SCHEMA})
 #: Render never writes a larger manifest, so the next render can always read it.
 PUBLICATION_MANIFEST_MAX_BYTES = 8 * 1024 * 1024
 
@@ -117,23 +169,43 @@ class Declaration:
     keyword: str
     #: Whether ``protected`` is written before the keyword, on its line or above.
     protected: bool = False
+    #: Whether ``private`` is written before the keyword, on its line or above.
+    private: bool = False
     alias: Alias | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class SourceIndex:
-    """Every declaration the scanner found, keyed by fully qualified name."""
+    """The scanner's declarations, by fully qualified name.
+
+    The one each name selects is in ``declarations``, and every occurrence of a
+    repeated name in ``duplicates``.
+    """
 
     root: Path
+    #: The declaration each name selects: its only one, else its only one that
+    #: binds the name outside its module (not private, not wanted). A name
+    #: declared more than once without such a unique one selects nothing.
     declarations: dict[str, Declaration]
     source_digest: str
     line_counts: dict[Path, int] = field(default_factory=dict)
-    #: For a name more than one file declares, the files after the one
-    #: ``find`` returns.
-    elsewhere: dict[str, tuple[Path, ...]] = field(default_factory=dict)
+    #: Every declaration of each name declared more than once, by path and line.
+    duplicates: dict[str, tuple[Declaration, ...]] = field(default_factory=dict)
 
     def find(self, name: str) -> Declaration | None:
         return self.declarations.get(name)
+
+    def occurrences(self, name: str) -> tuple[Declaration, ...]:
+        """Every declaration of ``name``, by path and line."""
+
+        found = self.declarations.get(name)
+        return self.duplicates.get(name, () if found is None else (found,))
+
+    def ambiguity(self, name: str) -> str:
+        """The ``path:line`` of each declaration of ``name`` when it selects none of them, else ``""``."""
+
+        found = () if name in self.declarations else self.duplicates.get(name, ())
+        return ", ".join(f"{item.path.as_posix()}:{item.line}" for item in found)
 
     def reached(self, declaration: Declaration) -> Declaration | None:
         """The declaration ``declaration`` stands for: itself, or what an alias names through any chain.
@@ -155,22 +227,24 @@ class SourceIndex:
         Lean takes the first candidate it can see, so a candidate the index
         lacks may be declared outside the project, and one in another file may
         or may not be imported: either way the answer is ``None``. A candidate
-        below the alias in its file is not declared yet, so Lean looks further
-        out. A ``protected`` candidate is skipped for a one-component target,
-        except when it is also private, written or under the module system;
-        not knowing which, the answer is ``None`` again.
+        declared above the alias in its file is the one Lean sees, whatever
+        other files declare: importing a public one would be a clash, and an
+        imported private one is tried only after this file's own. A candidate
+        only below the alias in its file is not declared yet, so Lean looks
+        further out. A ``protected`` candidate is skipped for a one-component
+        target unless it is also private; written ``private`` is not consulted
+        here, and the module system can make a declaration private without it,
+        so the answer is ``None`` again.
         """
 
         assert declaration.alias is not None
         for candidate in declaration.alias.candidates:
-            found = self.declarations.get(candidate)
-            if found is None or found.path != declaration.path:
+            found = self.occurrences(candidate)
+            above = [other for other in found if other.path == declaration.path and other.line < declaration.line]
+            if above:
+                return None if above[0].protected and declaration.alias.atomic else above[0]
+            if not found or any(other.path != declaration.path for other in found):
                 return None
-            if found.line >= declaration.line:
-                continue
-            if found.protected and declaration.alias.atomic:
-                return None
-            return found
         return None
 
 
@@ -231,7 +305,9 @@ def resolve_lean_root(lean_root: str | Path) -> Path:
     """
 
     try:
-        root = directory_binding.lexical_absolute_path(lean_root).resolve()
+        given = directory_binding.lexical_absolute_path(lean_root)
+        # As a blueprint root is resolved, so paths under both compare by spelling.
+        root = directory_path(given) or given.resolve()
         metadata = os.stat(root)
     except RuntimeError as error:
         # An unknown ~user, or before Python 3.13 a symbolic link loop.
@@ -612,8 +688,7 @@ def _indexed_source_snapshot(root: Path, snapshot: TreeSnapshot) -> IndexedSourc
         relative, reason = unsupported[0]
         raise LeanSourceError(f"unsafe Lean source {relative}: {reason}")
 
-    declarations: dict[str, Declaration] = {}
-    elsewhere: dict[str, tuple[Path, ...]] = {}
+    by_name: dict[str, list[Declaration]] = {}
     line_counts: dict[Path, int] = {}
     source_files: list[tuple[Path, bytes]] = []
     digest = hashlib.sha256(b"autoform-lean-source-index/v1\0")
@@ -627,17 +702,17 @@ def _indexed_source_snapshot(root: Path, snapshot: TreeSnapshot) -> IndexedSourc
             continue
         found, line_counts[relative_path] = _scan(text, relative_path)
         for declaration in found:
-            first = declarations.setdefault(declaration.name, declaration)
-            if first.path != relative_path and relative_path not in elsewhere.get(declaration.name, ()):
-                elsewhere[declaration.name] = (*elsewhere.get(declaration.name, ()), relative_path)
+            by_name.setdefault(declaration.name, []).append(declaration)
     source_digest = digest.hexdigest()
     return IndexedSourceSnapshot(
         SourceIndex(
             root=root,
-            declarations=declarations,
+            declarations={
+                name: selected for name, same in by_name.items() if (selected := _select(same)) is not None
+            },
             source_digest=source_digest,
             line_counts=line_counts,
-            elsewhere=elsewhere,
+            duplicates={name: tuple(same) for name, same in by_name.items() if len(same) > 1},
         ),
         source_digest,
         snapshot.generation_revision,
@@ -669,9 +744,11 @@ def _is_complete_publication(data: bytes) -> bool:
         value = json.loads(data)
     except (ValueError, RecursionError):
         return False
+    schema = value.get("schema") if isinstance(value, dict) else None
     return (
         isinstance(value, dict)
-        and value.get("schema") in {"autoform-publication/v1", PUBLICATION_SCHEMA}
+        and isinstance(schema, str)
+        and schema in {"autoform-publication/v1", *_REPLACEABLE_SCHEMAS}
         and value.get("complete") is True
     )
 
@@ -684,13 +761,26 @@ def _update_source_digest(digest, relative: Path, data: bytes) -> None:
     digest.update(data)
 
 
+def _select(occurrences: list[Declaration]) -> Declaration | None:
+    """The declaration a name means among all of its declarations, when the index can be sure which.
+
+    A private declaration, including the placeholder a wanted command makes,
+    is local to its file, so beside them every other module sees the one
+    public declaration. Two or more public ones, or only private and wanted
+    ones, leave no single answer.
+    """
+
+    public = [item for item in occurrences if not item.private and item.keyword not in _WANTED_KEYWORDS] or occurrences
+    return public[0] if len(public) == 1 else None
+
+
 def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
     """The declarations in ``text`` and the number of its lines Lean reads."""
     found: list[Declaration] = []
     namespaces: list[str] = []
     scopes: list[str | None] = []
 
-    lines = _without_lean_comments(text).splitlines()
+    lines = _without_lean_comments(text, mask_literals=True).splitlines()
     for number, line in enumerate(lines, start=1):
         if not line.strip():
             continue
@@ -721,23 +811,43 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
         declaration_match = _DECLARATION.match(line)
         if declaration_match:
             keyword = declaration_match.group(1)
+            body = declaration_match.group(2)
+            body_index = number - 1
+            name = None
+            if not body:
+                body_index = next((later for later in range(number, len(lines)) if lines[later].strip()), len(lines))
+                if body_index == len(lines):
+                    continue
+                body = lines[body_index].lstrip()
+                if keyword == "alias":
+                    if _ALIAS.match(body) is None:
+                        continue
+                else:
+                    name = _continuation_name(body)
+                    if name is None:
+                        continue
             # Modifiers may also stand on the lines above the keyword.
             header = [line[: declaration_match.start(1)]]
             for above in range(number - 2, -1, -1):
                 if not _MODIFIER_LINE.fullmatch(lines[above]):
                     break
                 header.append(lines[above])
-            protected = "protected" in _ATTRIBUTE_LIST.sub(" ", " ".join(header)).split()
+            modifiers = _ATTRIBUTE_LIST.sub(" ", " ".join(header)).split()
+            protected = "protected" in modifiers
+            private = "private" in modifiers
             if keyword == "alias":
-                following = next((lines[later] for later in range(number, len(lines)) if lines[later].strip()), "")
+                following = next((lines[later] for later in range(body_index + 1, len(lines)) if lines[later].strip()), "")
                 found.extend(
-                    _aliases(declaration_match.group(2), following, namespaces, relative, number, protected)
+                    _aliases(body, following, namespaces, relative, number, protected, private)
                 )
                 continue
-            name = _name_token(declaration_match.group(2))
+            name = name or _name_token(body)
             if name is None:
                 continue
-            found.append(Declaration(_qualified(namespaces, name), relative, number, keyword, protected))
+            # `_name_token` stops before the `{` in an explicit universe
+            # binder, leaving the syntactic separator behind.
+            name = name.removesuffix(".")
+            found.append(Declaration(_qualified(namespaces, name), relative, number, keyword, protected, private))
     return found, len(lines)
 
 
@@ -764,6 +874,77 @@ def _name_token(text: str) -> str | None:
     return match.group() if match and text[match.end() : match.end() + 1] not in ("«", "»") else None
 
 
+# Lean's isIdFirst/isIdRest (Init.Meta.Defs): ASCII letters plus the listed
+# letter-like blocks; later characters also admit digits, primes and subscripts.
+_ID_LETTER = (
+    r"A-Za-z_\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f"
+    r"\u0391-\u039f\u03a1-\u03a2\u03a4-\u03a9\u03b1-\u03ba\u03bc-\u03fb"
+    r"\u1f00-\u1ffe\u2100-\u214f\U0001d49c-\U0001d59f"
+)
+_ID_REST = rf"[{_ID_LETTER}0-9'!?\u2080-\u2089\u2090-\u209c\u1d62-\u1d6a\u2c7c]*"
+_ID_COMPONENT = rf"(?:«[^«»]*»|[{_ID_LETTER}]{_ID_REST})"
+_CONTINUATION_IDENTIFIER = re.compile(rf"{_ID_COMPONENT}(?:\.{_ID_COMPONENT})*")
+_SIGNATURE_WORDS = frozenset({"where", "extends", "requires", "ensures"})
+_NAME_FORBIDDEN = _COMMAND_HEADS | _COMMAND_MODIFIERS | {"where", "extends", "by", "do", "in", "let", "match"}
+_BINDER_CLOSERS = {"(": ")", "{": "}", "[": "]", "⦃": "⦄"}
+
+
+def _continuation_name(text: str) -> str | None:
+    """Read a name followed by a possible declaration signature, not another command.
+
+    Only the new keyword-on-its-own-line case uses this conservative guard.
+    A name may stand alone or be followed by universe parameters, binders, a
+    type or a declaration value. A bracketed binder may continue on later
+    lines; source indexing does not elaborate its contents. Attribute lists,
+    command modifiers and arbitrary punctuation cannot be identifiers here.
+    """
+
+    match = _CONTINUATION_IDENTIFIER.match(text)
+    if match is None or match.group() in _NAME_FORBIDDEN:
+        return None
+    name = match.group()
+    rest = text[match.end() :]
+    if rest.startswith(".{"):
+        # declId's universe list belongs to the signature, not the public name.
+        rest = rest[1:]
+    while rest.strip():
+        rest = rest.lstrip()
+        if rest.startswith((":", "|")):
+            return name
+        if rest[0] in _BINDER_CLOSERS:
+            closers: list[str] = []
+            position = 0
+            while position < len(rest):
+                char = rest[position]
+                if char == "«":
+                    end = rest.find("»", position + 1)
+                    if end == -1:
+                        return None
+                    position = end + 1
+                    continue
+                if char in _BINDER_CLOSERS:
+                    closers.append(_BINDER_CLOSERS[char])
+                elif char in _BINDER_CLOSERS.values():
+                    if not closers or char != closers.pop():
+                        return None
+                    if not closers:
+                        break
+                position += 1
+            if closers:
+                return name  # This binder can finish on a later line.
+            rest = rest[position + 1 :]
+            continue
+        binder = _CONTINUATION_IDENTIFIER.match(rest)
+        if binder is None:
+            return None
+        if binder.group() in _SIGNATURE_WORDS:
+            return name
+        if binder.group() in _NAME_FORBIDDEN:
+            return None
+        rest = rest[binder.end() :]
+    return name
+
+
 #: A name as ``alias`` takes one: it starts with a letter, ``_`` or ``«``.
 _ALIAS_NAME = r"(?:«[^«»]*»|[^\W\d])(?:«[^«»]*»|[^\s:(){}\[\]⦃⦄,«»⟨⟩])*"
 #: What follows ``alias``: one name, or ``⟨mp, mpr⟩`` naming the two directions
@@ -777,7 +958,7 @@ _ALIAS_TARGET = re.compile(rf"\s*({_ALIAS_NAME})")
 
 
 def _aliases(
-    text: str, following: str, namespaces: list[str], relative: Path, line: int, protected: bool
+    text: str, following: str, namespaces: list[str], relative: Path, line: int, protected: bool, private: bool
 ) -> list[Declaration]:
     """The declarations one ``alias`` command makes.
 
@@ -803,7 +984,7 @@ def _aliases(
     iff = match["name"] is None
     alias = Alias(candidates, atomic, iff)
     return [
-        Declaration(_qualified(namespaces, name), relative, line, "alias", protected, alias)
+        Declaration(_qualified(namespaces, name), relative, line, "alias", protected, private, alias)
         for name in ([match["mp"], match["mpr"]] if iff else [match["name"]])
         if name != "_"
     ]
@@ -814,93 +995,89 @@ _ONE_COMPONENT = re.compile(r"(?:«[^«»]*»|[^.«»])+")
 
 _RAW_OPEN = re.compile(r'r(#*)"')
 _CHAR_LITERAL = re.compile(r"'(?:\\.|[^'\\\n])*'")
-# Where a comment, literal, or interpolation brace can start. The text between
-# two of these positions is copied as one slice, not character by character.
-_CODE_EVENT = re.compile(r"""--|/-|r#*"|["«']""")
-_INTERPOLATION_EVENT = re.compile(r"""--|/-|r#*"|["«'{}]""")
+# _without_lean_comments copies the text between two matches of these patterns
+# unread, so each must match every position its branch of the loop reacts to:
+# a branch whose trigger is missing never runs, while an extra match only
+# copies one character. In code, a comment, literal or interpolation brace can
+# start there; inside a literal, its closer (", » or '), an escape, or an
+# interpolation.
+_CODE_EVENT = re.compile(rf"""--|/-|{_RAW_OPEN.pattern}|["«']""")
+_INTERPOLATION_EVENT = re.compile(rf"""--|/-|{_RAW_OPEN.pattern}|["«'{{}}]""")
+_LITERAL_EVENT = re.compile(r"""["»'\\{]""")
+# Inside a block comment: where a nested comment opens or the current one closes.
+# Every match changes the depth, so this pattern can't match anything extra.
 _COMMENT_EVENT = re.compile(r"-/|/-")
-_LITERAL_EVENTS: dict[tuple[str, bool, bool], re.Pattern[str]] = {}
 
 
-def _literal_event(close: str, interpolated: bool) -> re.Pattern[str]:
-    """Where a literal ended by *close* can next close, escape, or interpolate."""
+def _without_lean_comments(text: str, *, mask_literals: bool = False) -> str:
+    """Remove nested Lean comments, preserving literals or blanking them for declaration scanning.
 
-    key = (close[0], close in {'"', "'"}, interpolated)
-    pattern = _LITERAL_EVENTS.get(key)
-    if pattern is None:
-        chars = close[0] + ("\\" if key[1] else "") + ("{" if interpolated else "")
-        pattern = _LITERAL_EVENTS[key] = re.compile(f"[{re.escape(chars)}]")
-    return pattern
-
-
-def _without_lean_comments(text: str) -> str:
-    """Remove nested Lean comments, keeping strings intact and newlines in place."""
+    Blanking preserves character positions and newlines, including across
+    interpolations. Guillemets delimit identifiers, so those stay intact.
+    """
 
     out: list[str] = []
     stack: list[list] = []  # [closer, interpolated] for a string, [None, depth] for `{…}` in `s!"…"`
+
+    def append(fragment: str, literal: bool = False) -> None:
+        # A raw string never reaches the stack, so its branch passes literal=True.
+        in_literal = literal or any(frame[0] not in {None, "»"} for frame in stack)
+        out.append(re.sub(r"[^\r\n]", " ", fragment) if mask_literals and in_literal else fragment)
+
     index = 0
     while index < len(text):
         top = stack[-1] if stack else None
-        if top is not None and top[0] is not None:
+        literal = top is not None and top[0] is not None
+        events = _LITERAL_EVENT if literal else _CODE_EVENT if top is None else _INTERPOLATION_EVENT
+        event = events.search(text, index)
+        if event is None:
+            append(text[index:])
+            break
+        append(text[index : event.start()])
+        index = event.start()
+        char = text[index]
+        if literal:
             close, interpolated = top
-            event = _literal_event(close, interpolated).search(text, index)
-            if event is None:
-                out.append(text[index:])
-                break
-            if event.start() > index:
-                out.append(text[index : event.start()])
-                index = event.start()
-            char = text[index]
-            if text.startswith(close, index):
-                out.append(close)
-                index += len(close)
-                stack.pop()
-                continue
             if close in {'"', "'"} and char == "\\":
-                out.append(text[index : index + 2])
+                append(text[index : index + 2])
                 index += 2
                 continue
-            if interpolated and char == "{":
+            # Append before popping, so blanking covers the closer.
+            append(char)
+            if char == close:
+                stack.pop()
+            elif interpolated and char == "{":
                 stack.append([None, 1])
-            out.append(char)
             index += 1
             continue
-        event = (_CODE_EVENT if top is None else _INTERPOLATION_EVENT).search(text, index)
-        if event is None:
-            out.append(text[index:])
-            break
-        if event.start() > index:
-            out.append(text[index : event.start()])
-            index = event.start()
-        char = text[index]
         if text.startswith("--", index):
             newline = text.find("\n", index + 2)
             if newline < 0:
                 break
-            out.append("\n")
+            append("\n")
             index = newline + 1
             continue
         if text.startswith("/-", index):
             # `/--` and `/-!` open a docstring whose body starts after the marker.
-            depth, index = 1, index + (3 if text[index + 2 : index + 3] in {"-", "!"} else 2)
-            out.append(" ")
-            while index < len(text) and depth:
-                pair = _COMMENT_EVENT.search(text, index)
-                end = len(text) if pair is None else pair.start()
-                out.append("\n" * text.count("\n", index, end))
-                if pair is None:
-                    index = end
-                    break
+            depth, start = 1, index + (3 if text[index + 2 : index + 3] in {"-", "!"} else 2)
+            index = len(text)
+            for pair in _COMMENT_EVENT.finditer(text, start):
                 depth += 1 if pair.group() == "/-" else -1
-                index = pair.end()
-            continue
-        raw = _RAW_OPEN.match(text, index)
-        if raw:
-            out.append(raw.group())
-            index = raw.end()
-            stack.append(['"' + raw.group(1), False])
+                if not depth:
+                    index = pair.end()
+                    break
+            append(" " + "\n" * text.count("\n", start, index))
             continue
         previous = text[index - 1] if index else " "
+        # An `r` inside a name, or a name literal's, is part of it. Lean reads no
+        # escapes in a raw string, so it ends at the first closer: `r"\"` is one
+        # backslash.
+        raw = None if previous.isalnum() or previous in "_'!?.`" else _RAW_OPEN.match(text, index)
+        if raw:
+            found = text.find('"' + raw.group(1), raw.end())
+            index = len(text) if found < 0 else found + 1 + len(raw.group(1))
+            append(text[raw.start() : index], literal=True)
+            continue
         if char == '"':
             interpolated = previous == "!" and index >= 2 and (text[index - 2].isalnum() or text[index - 2] == "_")
             stack.append(['"', interpolated])
@@ -912,7 +1089,7 @@ def _without_lean_comments(text: str) -> str:
             top[1] += 1 if char == "{" else -1
             if top[1] == 0:
                 stack.pop()
-        out.append(char)
+        append(char)
         index += 1
     return "".join(out)
 
@@ -941,13 +1118,14 @@ class SourceLinker:
     index: SourceIndex
     repository_url: str | None = None
     ref: str | None = None
-    linkable_paths: frozenset[Path] | None = None
     indexed: bool = True
     """False when the sources were not read, so no name was looked up."""
     links_blueprint: bool = False
     """True when the blueprint's files are in ``ref``'s commit too, so links into it show the published bytes."""
     spellings: Mapping[str, str] = field(default_factory=dict)
     """Committed path of each repository path whose name Git stores under another spelling."""
+    root_prefix: str = ""
+    """The Lean root's path below the repository's top level, or empty at the top level."""
 
     def location(self, name: str) -> Declaration | None:
         return self.index.find(name)
@@ -955,113 +1133,17 @@ class SourceLinker:
     def url(self, name: str) -> str | None:
         """Return a permanent link to *name*, or ``None`` if it cannot be built."""
         declaration = self.index.find(name)
-        if (
-            declaration is None
-            or not self.repository_url
-            or not self.ref
-            or (
-                self.linkable_paths is not None
-                and declaration.path not in self.linkable_paths
-            )
-        ):
+        if declaration is None or not self.repository_url or not self.ref:
             return None
+        encoded_ref = quote_from_bytes(os.fsencode(self.ref), safe="")
         relative = declaration.path.as_posix()
+        if self.root_prefix:
+            relative = f"{self.root_prefix}/{relative}"
         path = "/".join(
             quote_from_bytes(os.fsencode(part), safe="")
             for part in self.spellings.get(relative, relative).split("/")
         )
-        return f"{self.repository_url}/blob/{self.ref}/{path}#L{declaration.line}"
-
-
-def build_linker(lean_root: str | Path) -> SourceLinker:
-    """Index *lean_root* and resolve repository coordinates."""
-    resolved_root = resolve_lean_root(lean_root)
-    snapshot, repository_url, ref, linkable_paths = _capture_link_state(resolved_root)
-    if repository_url is None:
-        repository_url = detect_repository_url(resolved_root)
-    return SourceLinker(
-        index=snapshot.index,
-        repository_url=repository_url,
-        ref=ref,
-        linkable_paths=linkable_paths,
-    )
-
-
-def _capture_link_state(
-    root: Path,
-) -> tuple[
-    IndexedSourceSnapshot,
-    str | None,
-    str | None,
-    frozenset[Path] | None,
-]:
-    """Capture source bytes and prove which ones belong to one stable commit."""
-
-    last_snapshot: IndexedSourceSnapshot | None = None
-    last_url: str | None = None
-    for attempt in range(_SNAPSHOT_ATTEMPTS):
-        if attempt:
-            time.sleep(_SNAPSHOT_RETRY_DELAY_SECONDS * attempt)
-        before_url = detect_repository_url(root)
-        before_ref = detect_ref(root)
-        snapshot = snapshot_project_sources(root)
-        last_snapshot = snapshot
-        last_url = before_url
-        after_url = detect_repository_url(root)
-        after_ref = detect_ref(root)
-        if before_url != after_url or before_ref != after_ref:
-            continue
-        if before_ref is None:
-            return snapshot, before_url, None, frozenset()
-        commit = _git(root, "rev-parse", "--verify", f"{before_ref}^{{commit}}")
-        if commit is None:
-            return snapshot, before_url, None, frozenset()
-        linkable = _committed_source_paths(root, snapshot, commit)
-        if linkable is None:
-            return snapshot, before_url, None, frozenset()
-        if (
-            detect_repository_url(root) == before_url
-            and detect_ref(root) == before_ref
-        ):
-            return snapshot, before_url, commit, linkable
-    assert last_snapshot is not None
-    return last_snapshot, last_url, None, frozenset()
-
-
-def _committed_source_paths(
-    root: Path,
-    snapshot: IndexedSourceSnapshot,
-    commit: str,
-) -> frozenset[Path] | None:
-    """Return captured files whose Git blob is exactly the commit's blob."""
-
-    top_level_text = _git(root, "rev-parse", "--show-toplevel")
-    algorithm = _git(root, "rev-parse", "--show-object-format")
-    if top_level_text is None or algorithm not in {"sha1", "sha256"}:
-        return None
-    top_level = Path(top_level_text).resolve()
-    try:
-        prefix = root.resolve().relative_to(top_level)
-    except (OSError, RuntimeError, ValueError):
-        return None
-    if prefix.parts:
-        # SourceLinker URLs are rooted at ``lean_root`` today.  Until that API
-        # carries a repository-relative prefix, refusing links is safer than
-        # emitting a valid commit with the wrong path.
-        return frozenset()
-    repo_paths = {
-        path: (prefix / path).as_posix()
-        for path, _data in snapshot.source_files
-    }
-    tree_oids = _git_tree_oids(root, commit, tuple(repo_paths.values()))
-    if tree_oids is None:
-        return None
-    linkable: set[Path] = set()
-    for path, data in snapshot.source_files:
-        framed = b"blob " + str(len(data)).encode("ascii") + b"\0" + data
-        if hashlib.new(algorithm, framed).hexdigest() == tree_oids.get(repo_paths[path]):
-            linkable.add(path)
-    return frozenset(linkable)
+        return f"{self.repository_url}/blob/{encoded_ref}/{path}#L{declaration.line}"
 
 
 def verify_repository_snapshot(
@@ -1081,6 +1163,9 @@ def verify_repository_snapshot(
     to the repository only. The shared Git runner strips ambient overrides.
     Given *spellings*, a file Git committed under another spelling of its name
     is accepted too, and its committed path recorded there (``_git_tree_oids``).
+
+    *root* may be any directory of the working tree: files are compared at their
+    paths from its top level.
     """
 
     def refuse(reason: str) -> None:
@@ -1092,12 +1177,12 @@ def verify_repository_snapshot(
     algorithm = _git(root, "rev-parse", "--show-object-format")
     if commit is None or algorithm not in {"sha1", "sha256"}:
         return refuse(f"{requested_ref!r} does not name a commit in a local Git repository")
-    prefix = _git(root, "rev-parse", "--show-prefix")
-    if prefix:  # tree paths start at the top level, so nothing below could match
+    top_level = repository_top_level(root)  # where tree paths start
+    if top_level is None:
         return refuse(
-            f"the Lean root is the subdirectory {prefix.rstrip('/')} of its Git repository; "
-            "links need the repository top level"
+            "the Lean root is outside its Git repository's working tree, or spelled other than as Git spells it"
         )
+    root = top_level
     captured: dict[str, bytes] = {}
     try:
         for path, data in files:
@@ -1213,6 +1298,32 @@ def detect_repository_url(root: str | Path) -> str | None:
     return _normalize_remote(remote) if remote else None
 
 
+def repository_top_level(root: str | Path) -> Path | None:
+    """The top level of *root*'s Git working tree, spelled as *root* is.
+
+    *root*'s last parts must spell Git's path to it, compared in NFC, since
+    macOS Git composes names; otherwise, or outside a working tree, the top
+    level is unknown and this is ``None``. *root* should be resolved, as
+    ``resolve_lean_root`` gives it.
+    """
+    try:
+        output = _git(root, "rev-parse", "--is-inside-work-tree", "--show-prefix")
+    except ValueError:  # Git printed a name that is not UTF-8
+        return None
+    lines = output.splitlines() if output is not None else []
+    if not lines or lines[0] != "true":
+        return None
+    parts = lines[1].rstrip("/").split("/") if len(lines) > 1 else []
+    if not parts:
+        return Path(root)
+    spelled = Path(root).parts[-len(parts) :]
+    if [unicodedata.normalize("NFC", part) for part in spelled] != [
+        unicodedata.normalize("NFC", part) for part in parts
+    ]:
+        return None
+    return Path(root).parents[len(parts) - 1]
+
+
 def detect_ref(root: str | Path) -> str | None:
     """Prefer the exact commit so links keep pointing at the reviewed code."""
     github_sha = os.environ.get("GITHUB_SHA") if _is_github_workspace(root) else None
@@ -1325,13 +1436,13 @@ __all__ = [
     "SourceIndex",
     "SourceLinker",
     "bind_project_source_snapshot",
-    "build_linker",
     "declaration_names",
     "detect_ref",
     "detect_repository_url",
     "index_failure_message",
     "index_project",
     "project_source_revision",
+    "repository_top_level",
     "resolve_lean_root",
     "snapshot_project_sources",
     "strip_lean_comments",

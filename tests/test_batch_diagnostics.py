@@ -14,7 +14,7 @@ import psutil
 import pytest
 
 from servers import batch_diagnostics as batch
-from servers.lean_runtime import LeanRuntimeServices
+from servers.lean_runtime import DEFAULT_LSP_TIMEOUT, LeanRuntimeServices
 from servers.lsp import server as lsp
 from tests.test_lsp_protocol import _real_lean_project, _requires_real_lean
 from tests.test_shared_lean_runtime import make_lake_project, runtime_config
@@ -104,7 +104,7 @@ def test_stale_imports_are_reported_instead_of_built(tmp_path):
     with pytest.raises(batch.BatchDiagnosticsError, match="imports are not built") as raised:
         batch.batch_diagnostics(tmp_path, _lean_file(tmp_path), command=command, timeout=30)
 
-    assert "Build the modules Lake lists below" in str(raised.value)
+    assert "Build the modules that Probe.lean imports" in str(raised.value)
     assert str(raised.value).endswith("- Skel.Defs")
 
 
@@ -417,13 +417,17 @@ def test_real_lean_batch_diagnostics_render_the_probe(tmp_path):
 
 @_requires_real_lean
 def test_real_lean_reports_unbuilt_imports_without_building_them(tmp_path):
-    project = _real_lean_project(tmp_path / "stale", "import Probe.Dep\n", Dep="def dep : Nat := 1\n")
+    project = _real_lean_project(
+        tmp_path / "stale", "import Probe.Mid\n", Mid="import Probe.Dep\n", Dep="def dep : Nat := 1\n"
+    )
 
     with pytest.raises(batch.BatchDiagnosticsError, match="imports are not built") as raised:
         batch.batch_diagnostics(project, project / "Probe" / "Main.lean", command=_LAKE_LEAN, timeout=300)
 
-    assert "Probe.Dep" in str(raised.value)
-    assert not list((project / ".lake").rglob("Dep.olean"))
+    # Lake lists only the first module to build, not the ones that import it.
+    assert str(raised.value).endswith("- Probe.Dep")
+    assert "- Probe.Mid" not in str(raised.value)
+    assert not list((project / ".lake").rglob("*.olean"))
 
 
 @_requires_real_lean
@@ -439,7 +443,8 @@ def test_real_lean_batch_diagnostics_through_a_mathlib_import():
     probe.parent.mkdir(parents=True, exist_ok=True)
     probe.write_text("import Mathlib\nexample : (2 : Nat) + 2 = 5 := rfl\n", encoding="utf-8")
     try:
-        diagnostics = batch.batch_diagnostics(project, probe, command=_LAKE_LEAN, timeout=300)
+        # The shipped LEAN_LSP_TIMEOUT default, so real Lean is checked against it.
+        diagnostics = batch.batch_diagnostics(project, probe, command=_LAKE_LEAN, timeout=DEFAULT_LSP_TIMEOUT)
     finally:
         probe.unlink(missing_ok=True)
         if created:

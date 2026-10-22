@@ -276,6 +276,95 @@ def test_a_full_lean_name_ending_in_a_prime_or_a_mark_finds_its_owner_first(tmp_
     assert _ids(project, name)[0] == "convexity/owner"
 
 
+@pytest.mark.parametrize("ending", ["'", "?", "!"])
+def test_a_lean_name_typed_with_its_ending_puts_its_owner_before_the_plain_name(tmp_path: Path, ending: str) -> None:
+    project = _project(tmp_path)
+    marked = f"Project.foo{ending}"
+    _article(project, "convexity/plain.md", title="Plain", metadata=("declaration: theorem", "lean: Project.foo"))
+    _article(project, "convexity/marked.md", title="Marked", metadata=("declaration: theorem", f"lean: {marked}"))
+    # A dependent puts the plain name first on any later tie.
+    _article(project, "convexity/user.md", title="User", depends=("plain.md",))
+
+    queries = (
+        marked, f"foo{ending}", f"_root_.{marked}", f"`{marked}`", f"({marked})", f'"{marked}",', f"**{marked}**"
+    )
+    for query in queries:
+        assert _ids(project, query)[:2] == ["convexity/marked", "convexity/plain"], query
+
+
+def test_the_exact_name_key_follows_the_field_keys_and_precedes_the_dependents(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    # With no ending to tell them apart, an exact last component still beats a dependent.
+    _article(project, "convexity/base.md", title="Base", metadata=("declaration: theorem", "lean: Project.foo"))
+    _article(project, "convexity/longer.md", title="Longer", metadata=("declaration: theorem", "lean: Project.foobar"))
+    _article(project, "convexity/user.md", title="User", depends=("longer.md",))
+    assert _ids(project, "foo")[:2] == ["convexity/base", "convexity/longer"]
+
+    # A better worst field comes first, and so do the words as typed.
+    primed, plain = ("declaration: theorem", "lean: Project.bar'"), ("declaration: theorem", "lean: Project.bar")
+    _article(project, "convexity/primed.md", title="Primed", metadata=primed)
+    _article(project, "convexity/plain.md", title="Plain", body="A convex statement.", metadata=plain)
+    assert _ids(project, "Project.bar' convex")[:2] == ["convexity/plain", "convexity/primed"]
+    stem, typed = ("declaration: theorem", "lean: Project.baz'"), ("declaration: theorem", "lean: Project.baz")
+    _article(project, "convexity/stem.md", title="Stem", body="A ring.", metadata=stem)
+    _article(project, "convexity/typed.md", title="Typed", body="Two rings.", metadata=typed)
+    assert _ids(project, "Project.baz' rings")[:2] == ["convexity/typed", "convexity/stem"]
+
+
+def test_a_name_in_single_quotes_is_compared_without_them(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _article(project, "convexity/plain.md", title="Plain", metadata=("declaration: theorem", "lean: Project.foo"))
+    _article(project, "convexity/marked.md", title="Marked", metadata=("declaration: theorem", "lean: Project.foo'"))
+
+    # By node ID alone the marked name comes first. The quotation closes at the last prime.
+    assert _ids(project, "'Project.foo'")[:2] == ["convexity/plain", "convexity/marked"]
+    assert _ids(project, "'Project.foo''")[:2] == ["convexity/marked", "convexity/plain"]
+
+
+def test_the_exact_name_key_reads_whole_components_of_lean_and_mathlib_names(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    theorem = ("declaration: theorem",)
+    mathlib = ("declaration: theorem", "mathlib: true", "mathlib_file: Mathlib/Order/Basic.lean")
+    # Per query: the name it spells, and a rival a dependent would put first on any later tie.
+    cases = {
+        "Convex.foo'": (theorem, "lean: Project.Convex.foo'", "lean: Project.Convex.foo"),
+        "Foo.bar'": (mathlib, "mathlib_declaration: Foo.bar'", "mathlib_declaration: Foo.bar"),
+        "qux": (theorem, "lean: Project.qux", "lean: Project.xqux"),
+        "sep": (theorem, "lean: Project.«sep»", "lean: Project.sepal"),
+    }
+    for index, (kind, named, rival) in enumerate(cases.values()):
+        _article(project, f"convexity/named{index}.md", title=f"Named {index}", metadata=(*kind, named))
+        _article(project, f"convexity/rival{index}.md", title=f"Rival {index}", metadata=(*kind, rival))
+    _article(project, "convexity/fan.md", title="Fan", depends=tuple(f"rival{index}.md" for index in range(len(cases))))
+
+    for index, query in enumerate(cases):
+        order = _ids(project, query)
+        assert order.index(f"convexity/named{index}") < order.index(f"convexity/rival{index}"), query
+
+
+def test_a_filler_word_names_no_declaration(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    free = ("declaration: def", "lean: Project.FreeGroup.of")
+    _article(project, "convexity/free.md", title="Free group units", metadata=free)
+    _article(project, "convexity/units.md", title="Group units")
+    _article(project, "convexity/fan.md", title="Fan", depends=("units.md",))
+
+    # `of` is dropped from the terms, so it does not make the owner of `FreeGroup.of` an exact match.
+    assert _ids(project, "group of units")[:2] == ["convexity/units", "convexity/free"]
+
+
+def test_a_namespace_inside_quoting_marks_matches_as_a_namespace(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _article(
+        project, "convexity/odd.md", title="Odd", metadata=("declaration: theorem", "lean: Project.«weird name».bar")
+    )
+
+    # The space belongs to the quoted component, so `Project.weird` names no declaration.
+    assert _matched(project, "Project.weird")["convexity/odd"] == ("qualified_names",)
+    assert _matched(project, "weird")["convexity/odd"] == ("qualified_names",)
+    assert _matched(project, "bar")["convexity/odd"] == ("lean",)
+
+
 def test_a_full_mathlib_name_finds_the_article_that_owns_it(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _article(
@@ -508,13 +597,31 @@ def test_a_declaration_kind_no_article_uses_is_refused_with_the_kinds_in_use(tmp
 
     # An empty answer would read as "this result is new" when the kind was only misspelled.
     with pytest.raises(SearchError) as refused:
-        search_blueprint(project, "convex", declarations=["theorem", "Definition", "thm"])
+        search_blueprint(project, "convex", declarations=["Definition", "thm"])
 
     assert str(refused.value) == (
         "no article declares kind definition, thm; this blueprint uses: lemma, noncomputable def, theorem"
     )
     # A kind in use that the query does not reach is an ordinary empty result.
     assert _ids(project, "nowhere", declarations=["def"]) == []
+
+
+def test_an_unused_kind_beside_one_in_use_adds_nothing_and_the_cli_names_it(tmp_path: Path, capsys) -> None:
+    project = _project(tmp_path)
+
+    result = search_blueprint(project, "convex", declarations=["theorem", "Definition", "thm"])
+    assert [hit.node_id for hit in result.hits] == ["convexity/hyperplane"]
+    assert result.unused_declarations == ("definition", "thm")
+    assert search_blueprint(project, "convex", declarations=["theorem"]).unused_declarations == ()
+
+    command = ["search", str(project), "convex", "--declaration", "theorem", "--declaration", "thm"]
+    for extra in ([], ["--json"]):
+        assert cli.main([*command, *extra]) == 0
+        captured = capsys.readouterr()
+        assert "hyperplane" in captured.out
+        assert captured.err == "note: no article declares kind thm, so the search used only the other kinds\n"
+    # The note is not part of the JSON, whose filters keep every requested kind.
+    assert json.loads(captured.out)["filters"]["declaration"] == ["theorem", "thm"]
 
 
 def test_a_hit_names_at_most_ten_dependents_and_counts_them_all(tmp_path: Path) -> None:
@@ -624,6 +731,25 @@ def test_a_statement_the_renderer_gives_up_on_is_still_found_by_its_title(tmp_pa
     assert _ids(project, "affine") == ["convexity/hyperplane"]
 
 
+@pytest.mark.parametrize(
+    ("public_files", "line", "source_file"),
+    [(("Public.lean",), 3, "Public.lean"), (("Public.lean", "Second.lean"), None, None)],
+)
+def test_a_lean_target_skips_a_private_twin_and_an_ambiguous_one_is_unlocated(
+    tmp_path: Path, public_files: tuple[str, ...], line: int | None, source_file: str | None
+) -> None:
+    project = _project(tmp_path)
+    (project / "A.lean").write_text(_LEAN_SOURCE.replace("theorem", "private theorem"), encoding="utf-8")
+    for name in public_files:
+        (project / name).write_text(_LEAN_SOURCE, encoding="utf-8")
+
+    (hit,) = search_blueprint(project, "separating hyperplane", lean_root=project).hits
+
+    assert [target.as_dict() for target in hit.lean_targets] == [
+        {"declaration": "Project.separation", "line": line, "source_file": source_file}
+    ]
+
+
 def test_the_bundled_example_answers_a_reuse_question(repo_root: Path) -> None:
     project = repo_root / "skills/setup/assets/cabannes-thesis-project"
 
@@ -679,6 +805,7 @@ def test_search_cli_emits_stable_json(tmp_path: Path, capsys) -> None:
     assert hit == {
         "article_id": None,
         "article_path": "blueprint/roadmap/convexity/hyperplane.md",
+        "catalog": None,
         "declaration": "theorem",
         "lean_targets": [{"declaration": "Project.separation", "line": None, "source_file": None}],
         "matched_fields": ["title", "statement_text"],
@@ -693,6 +820,27 @@ def test_search_cli_emits_stable_json(tmp_path: Path, capsys) -> None:
         "title": "Separating hyperplane",
         "used_by": ["convexity/support"],
         "used_by_count": 1,
+    }
+
+
+def test_a_catalog_hit_says_it_is_a_module_inventory(tmp_path: Path, capsys) -> None:
+    """A declaration both exposited and inventoried hits twice; only one hit is a duplicate candidate."""
+    project = _project(tmp_path)
+    _article(
+        project,
+        "convexity/inventory.md",
+        title="Convexity module",
+        body="An existing module.",
+        metadata=("catalog: module", "lean: Project.separation"),
+    )
+
+    assert cli.main(["search", str(project), "Project.separation", "--json"]) == 0
+    document = json.loads(capsys.readouterr().out)
+    # The key is additive, so the schema stays v1; --library already has v2.
+    assert document["schema"] == "autoform-search/v1"
+    assert {hit["node_id"]: hit["catalog"] for hit in document["hits"]} == {
+        "convexity/hyperplane": None,
+        "convexity/inventory": "module",
     }
 
 
@@ -736,7 +884,7 @@ def test_search_cli_reports_identity_mathlib_sources_and_dependents(tmp_path: Pa
 
     assert cli.main(["search", str(project), "exists_extension_norm_eq"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert "Extension (convexity/hahn) [af_000000000000000000000001]" in lines
+    assert "Extension (convexity/hahn) [af_000000000000000000000001]: Extends a functional." in lines
     assert "  theorem, mathlib, used by 1, title shared with another article" in lines
     assert "  Mathlib: exists_extension_norm_eq" in lines
 
@@ -752,13 +900,14 @@ def test_search_cli_human_output_escapes_project_text(tmp_path: Path, capsys) ->
     assert cli.main(["search", str(project), "separating", "--lean-root", str(project)]) == 0
     output = capsys.readouterr().out
     assert "\x1b" not in output and "\x07" not in output
-    lines = output.splitlines()
-    assert "Separating hyperplane\\x1b[2J (convexity/hyperplane)" in lines
-    assert "  theo\\x1brem, can_prove, used by 1" in lines
-    assert "  Lean: Project.separation (Project.lean:3)" in lines
-    assert "  Statement: Two disjoint convex sets are separated by an affine\\x07 functional." in lines
-    assert "  Matched: title" in lines
-    assert lines[-1] == "1 of 1 matching article(s) shown."
+    assert output.splitlines() == [
+        "1 of 1 matching article(s) shown.",
+        "Separating hyperplane\\x1b[2J (convexity/hyperplane): "
+        "Two disjoint convex sets are separated by an affine\\x07 functional.",
+        "  theo\\x1brem, can_prove, used by 1",
+        "  Lean: Project.separation (Project.lean:3)",
+        "  Matched: title",
+    ]
 
     _article(
         project,
@@ -782,15 +931,20 @@ def test_search_cli_cuts_a_long_statement_and_counts_what_the_limit_hides(tmp_pa
     _article(project, "convexity/long.md", title="Longwinded", body="convex " * 100 + "\n\nSecond paragraph.")
 
     assert cli.main(["search", str(project), "convex", "--declaration", "lemma", "--limit", "1"]) == 0
-    assert capsys.readouterr().out.splitlines()[0] == "Supporting functional (convexity/support)"
+    assert capsys.readouterr().out.splitlines()[1].startswith("Supporting functional (convexity/support): ")
 
     assert cli.main(["search", str(project), "convex", "--limit", "1"]) == 0
-    assert capsys.readouterr().out.splitlines()[-1] == "1 of 4 matching article(s) shown."
+    assert capsys.readouterr().out.splitlines()[0] == "1 of 4 matching article(s) shown."
+
+    _article(project, "convexity/bare.md", title="Bare", body="")
+    assert cli.main(["search", str(project), "bare"]) == 0
+    assert capsys.readouterr().out.splitlines()[1] == "Bare (convexity/bare)"
 
     assert cli.main(["search", str(project), "longwinded"]) == 0
-    statement = next(line for line in capsys.readouterr().out.splitlines() if line.startswith("  Statement: "))
-    assert len(statement) <= len("  Statement: ") + 200
-    assert statement.endswith("...")
+    heading = "Longwinded (convexity/long): "
+    (line,) = [line for line in capsys.readouterr().out.splitlines() if line.startswith(heading)]
+    assert len(line) <= len(heading) + 200
+    assert line.endswith("...")
 
 
 def test_search_cli_reports_errors_on_stderr_with_exit_2(

@@ -78,8 +78,6 @@ class TreeCaptureLimitError(TreeSnapshotError):
     """A named resource limit stopped a directory-tree capture."""
 
     def __init__(self, limit: str, maximum: int) -> None:
-        self.limit = limit
-        self.maximum = maximum
         super().__init__(f"directory tree exceeds {limit}={maximum}")
 
 
@@ -176,7 +174,11 @@ ALL_ENTRIES = TreeSelection(
 
 @dataclass(frozen=True, slots=True)
 class TreeSnapshot:
-    """Immutable names, types, and bytes captured below one directory root."""
+    """Immutable names, types, and bytes captured below one directory root.
+
+    A capture with ``digests=True`` holds each file's SHA-256 digest in place
+    of its bytes.
+    """
 
     directories: tuple[str, ...]
     files: tuple[tuple[str, bytes], ...]
@@ -388,11 +390,7 @@ class BoundDirectoryTree:
             if self._binding is not None:
                 self._binding.verify()
                 return
-            if (
-                self._portable_path_identities is None
-                or _portable_directory_identities(self.root)
-                != self._portable_path_identities
-            ):
+            if _portable_directory_identities(self.root) != self._portable_path_identities:
                 raise TreeChangedError("directory tree changed while it was in use")
             metadata = os.lstat(self.root)
             if not stat.S_ISDIR(metadata.st_mode) or (
@@ -403,22 +401,27 @@ class BoundDirectoryTree:
         except OSError as error:
             raise TreeChangedError("directory tree changed while it was in use") from error
 
-    def capture(self) -> TreeSnapshot:
-        """Capture one stable tree through the retained directory generation."""
+    def capture(self, *, digests: bool = False) -> TreeSnapshot:
+        """Capture one stable tree through the retained directory generation.
+
+        With *digests*, each file is hashed as it is read and only its SHA-256
+        digest is kept, so memory does not grow with file sizes.
+        """
 
         self.verify()
         try:
             if self._binding is not None:
                 snapshot = capture_directory_descriptor(
                     self._binding.descriptor,
-                    expected_identity=self.identity,
                     selection=self.selection,
+                    digests=digests,
                 )
             else:
                 first = _capture_portable(
                     self.root,
                     expected_identity=self.identity,
                     selection=self.selection,
+                    digests=digests,
                 )
                 _tree_snapshot_checkpoint("between-portable-captures", "")
                 _tree_snapshot_checkpoint("before-final-verification", "")
@@ -426,6 +429,7 @@ class BoundDirectoryTree:
                     self.root,
                     expected_identity=self.identity,
                     selection=self.selection,
+                    digests=digests,
                 )
                 if first != snapshot:
                     raise TreeChangedError(
@@ -468,8 +472,8 @@ def bind_directory_tree(
 def capture_directory_descriptor(
     descriptor: int,
     *,
-    expected_identity: tuple[int, int] | None = None,
-    selection: TreeSelection = ALL_ENTRIES,
+    selection: TreeSelection,
+    digests: bool,
 ) -> TreeSnapshot:
     """Capture a tree below an already retained directory descriptor."""
 
@@ -477,11 +481,6 @@ def capture_directory_descriptor(
         root = os.fstat(descriptor)
     except OSError as error:
         raise TreeSnapshotError("directory tree cannot be inspected safely") from error
-    if not stat.S_ISDIR(root.st_mode) or (
-        expected_identity is not None
-        and (root.st_dev, root.st_ino) != expected_identity
-    ):
-        raise TreeChangedError("directory tree changed before it was captured")
     directories: list[_DirectoryRecord] = []
     entries: list[_EntryRecord] = []
     files: list[tuple[str, bytes]] = []
@@ -599,12 +598,13 @@ def capture_directory_descriptor(
             if stat.S_ISREG(metadata.st_mode):
                 max_bytes = budget.file_read_limit(metadata.st_size)
                 try:
-                    data = _read_file(
+                    data, size = _read_file(
                         descriptor,
                         name,
                         child_identity,
                         relative=relative,
                         max_bytes=max_bytes,
+                        digest=digests,
                     )
                 except PermissionError as error:
                     raise _access_denied(descriptor, name, relative) from error
@@ -612,7 +612,7 @@ def capture_directory_descriptor(
                     if _vanished_in_selected_capture(error, selection):
                         continue
                     raise
-                budget.add_file_bytes(len(data))
+                budget.add_file_bytes(size)
                 files.append((child_relative, data))
             elif stat.S_ISLNK(metadata.st_mode):
                 try:
@@ -882,7 +882,7 @@ def _opaque_marker(
             continue
         max_bytes = budget.file_read_limit(metadata.st_size, marker.max_bytes)
         try:
-            data = _read_file(
+            data, size = _read_file(
                 descriptor,
                 name,
                 _stat_signature(metadata),
@@ -895,8 +895,8 @@ def _opaque_marker(
             if _vanished_in_selected_capture(error, selection):
                 continue
             raise
-        if len(data) <= marker.max_bytes and marker.recognizes(data):
-            budget.add_file_bytes(len(data))
+        if size <= marker.max_bytes and marker.recognizes(data):
+            budget.add_file_bytes(size)
             return None
     return names
 
@@ -1060,8 +1060,9 @@ def _read_file(
     expected: tuple[int, ...],
     *,
     relative: str,
-    max_bytes: int | None = None,
-) -> bytes:
+    max_bytes: int | None,
+    digest: bool = False,
+) -> tuple[bytes, int]:
     """Read the regular file *name* in the directory *relative*."""
 
     descriptor: int | None = None
@@ -1072,7 +1073,7 @@ def _read_file(
             raise _TreeChanged(f"{relative}/{name}" if relative else name)
         stream = os.fdopen(descriptor, "rb", buffering=0, closefd=False)
         try:
-            data = stream.read() if max_bytes is None else _read_prefix(stream, max_bytes + 1)
+            data, size = _read_stream(stream, max_bytes, digest=digest)
         finally:
             stream.close()
         if (
@@ -1083,7 +1084,7 @@ def _read_file(
             != expected
         ):
             raise _TreeChanged(f"{relative}/{name}" if relative else name)
-        return data
+        return data, size
     finally:
         if descriptor is not None:
             _close_descriptor(descriptor)
@@ -1101,6 +1102,23 @@ def _read_prefix(stream, length: int) -> bytes:
         chunks.append(chunk)
         remaining -= len(chunk)
     return b"".join(chunks)
+
+
+def _read_stream(stream, max_bytes: int | None, *, digest: bool) -> tuple[bytes, int]:
+    """Read through ``max_bytes + 1`` bytes or EOF: the bytes, or their SHA-256 digest, and how many there were."""
+
+    if not digest:
+        data = stream.read() if max_bytes is None else _read_prefix(stream, max_bytes + 1)
+        return data, len(data)
+    hasher = hashlib.sha256()
+    size = 0
+    while max_bytes is None or size <= max_bytes:
+        chunk = stream.read(_READ_CHUNK_BYTES if max_bytes is None else min(max_bytes + 1 - size, _READ_CHUNK_BYTES))
+        if not chunk:
+            break
+        hasher.update(chunk)
+        size += len(chunk)
+    return hasher.digest(), size
 
 
 def _verify_snapshot(
@@ -1216,8 +1234,9 @@ def _verify_snapshot(
 def _capture_portable(
     root: Path,
     *,
-    expected_identity: tuple[int, int] | None = None,
+    expected_identity: tuple[int, int],
     selection: TreeSelection,
+    digests: bool,
 ) -> TreeSnapshot:
     """Best-effort double-captured fallback for read-only non-POSIX clients.
 
@@ -1237,11 +1256,10 @@ def _capture_portable(
         )
     path_identities = _portable_directory_identities(root)
     root_before = os.lstat(root)
-    root_identity = (root_before.st_dev, root_before.st_ino)
     if (
         not stat.S_ISDIR(root_before.st_mode)
         or _is_reparse_point(root_before)
-        or (expected_identity is not None and root_identity != expected_identity)
+        or (root_before.st_dev, root_before.st_ino) != expected_identity
     ):
         raise TreeSnapshotError("directory tree cannot be inspected safely")
     directories: list[str] = [""]
@@ -1291,14 +1309,15 @@ def _capture_portable(
                 before = _stat_signature(metadata)
                 max_bytes = budget.file_read_limit(metadata.st_size)
                 try:
-                    data = _read_portable_file(
+                    data, size = _read_portable_file(
                         path,
                         before,
                         max_bytes=max_bytes,
+                        digest=digests,
                     )
                 except PermissionError as error:
                     raise _PermissionDenied(child_relative) from error
-                budget.add_file_bytes(len(data))
+                budget.add_file_bytes(size)
                 files.append((child_relative, data))
                 identities.append((child_relative, before))
             elif stat.S_ISLNK(metadata.st_mode) or _is_reparse_point(metadata):
@@ -1348,8 +1367,9 @@ def _read_portable_file(
     path: Path,
     expected: tuple[int, ...],
     *,
-    max_bytes: int | None = None,
-) -> bytes:
+    max_bytes: int | None,
+    digest: bool,
+) -> tuple[bytes, int]:
     descriptor: int | None = None
     try:
         descriptor = os.open(path, _FILE_FLAGS)
@@ -1363,7 +1383,7 @@ def _read_portable_file(
             raise TreeChangedError("directory tree changed while it was captured")
         stream = os.fdopen(descriptor, "rb", buffering=0, closefd=False)
         try:
-            data = stream.read() if max_bytes is None else _read_prefix(stream, max_bytes + 1)
+            data, size = _read_stream(stream, max_bytes, digest=digest)
         finally:
             stream.close()
         final_opened = os.fstat(descriptor)
@@ -1373,7 +1393,7 @@ def _read_portable_file(
             or _stat_signature(final_named) != expected
         ):
             raise TreeChangedError("directory tree changed while it was captured")
-        return data
+        return data, size
     finally:
         if descriptor is not None:
             _close_descriptor(descriptor)

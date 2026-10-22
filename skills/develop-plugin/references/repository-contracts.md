@@ -3,6 +3,15 @@
 Read these contracts when changing coordination state, publication surfaces,
 generated files, or dependency pins.
 
+## Knowledge-map publication
+
+Full-viewport knowledge maps use authored mathematical areas and prose to drive
+regions and reading panels. Keep containment and dependency distinct; regions
+come only from authored areas, never from folders or paths. Never fit the whole
+repository.
+Run `make test-browser` for any explorer change: `make test` skips the WebKit
+suite, which CI runs with `AUTOFORM_REQUIRE_BROWSER_TESTS=1`.
+
 ## Coordination and local views
 
 - `refs/autoform-claims/*` is shared cross-machine coordination state. Pushing
@@ -17,7 +26,9 @@ The bundled example mirrors only artifacts with explicit equivalence tests:
 
 - generated workflow templates, after substituting the example's concrete
   Autoform source and ref;
-- `.github/autoform_audit.py` byte-for-byte; and
+- `.github/autoform_audit.py` byte-for-byte, which itself carries
+  `autoform_cli/probes/audit_probe.lean` verbatim (`scripts/sync_audit_probe.py`
+  rewrites both copies); and
 - significant `mkdocs.yml` settings except the example-specific site name and
   repository URL.
 

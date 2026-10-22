@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "autoform",
   "displayName": "AutoForm Bot",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Set up Lean repositories, build and formalize Markdown roadmaps, and support review.",
   "compat": {
     "source": "native",
@@ -39,6 +39,11 @@
       {
         "id": "develop-plugin",
         "path": "skills/develop-plugin/SKILL.md",
+        "enabledDefault": true
+      },
+      {
+        "id": "debrief-orchestrator",
+        "path": "skills/debrief-orchestrator/SKILL.md",
         "enabledDefault": true
       }
     ],

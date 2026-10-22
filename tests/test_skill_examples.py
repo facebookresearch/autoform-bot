@@ -13,7 +13,7 @@ except ModuleNotFoundError:  # Python 3.10
 
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.graph import load_graph
-from autoform_cli.lean import build_linker, declaration_names
+from autoform_cli.lean import declaration_names, index_project
 from autoform_cli.project.create import _MINIMUM_LEAN
 from autoform_cli.render import render_site
 from autoform_cli.status import derive
@@ -34,10 +34,7 @@ def test_root_readme_uses_the_canonical_repository(repo_root: Path) -> None:
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
 
     assert "claude plugin marketplace add facebookresearch/autoform-bot" in readme
-    assert (
-        "codex plugin marketplace add facebookresearch/autoform-bot --ref main"
-        in readme
-    )
+    assert "codex plugin marketplace add facebookresearch/autoform-bot" in readme
     assert "git clone https://github.com/facebookresearch/autoform-bot.git" in readme
     assert "`execution` branch" not in readme
     assert "VivienCabannes/autoform-bot" not in readme
@@ -47,10 +44,13 @@ def test_human_review_distinguishes_roadmap_progress_from_source_scope(
     repo_root: Path,
 ) -> None:
     skill = (repo_root / "skills/human-review/SKILL.md").read_text(encoding="utf-8")
+    normalized = " ".join(skill.split())
 
     assert "`Scoped roadmap` percentage" in skill
-    assert "formalizable leaf targets" in skill
-    assert "fully proved, including every dependency" in skill
+    assert "formalizable leaf targets only" in normalized
+    assert "Module catalogs are non-dispatchable source" in normalized
+    assert "separate neutral metric" in normalized
+    assert "Completion includes every dependency recursively" in normalized
     assert "bodies for definitions" in skill
     assert "`mathlib: true` follows the authored status contract" in skill
     assert "not audit verification" in skill
@@ -61,7 +61,53 @@ def test_human_review_distinguishes_roadmap_progress_from_source_scope(
     assert "autoform dashboard <PROJECT> --site-dir site" in skill
     assert "same site deployed to\nGitHub Pages" in skill
     assert "local-only live claim badges" in skill
+    assert "full-page route" in normalized
+    assert "move from the project's topics to a chapter" in normalized
+    assert "smallest useful scope" in normalized
+    assert "mathematical knowledge map, not navigation chrome" in normalized
+    assert "Regions come only from authored `area:` or `blueprint/atlas.json`" in normalized
+    assert "folders that only file or paginate pages never become regions" in normalized
+    assert "Areas show as regions, containment as topics you open, and dependency as arrows" in normalized
+    assert "no authored dependency edges says so" in normalized
     assert "overview, progress, project graph" not in skill
+
+
+def test_generated_site_docs_describe_one_multiscale_explorer(repo_root: Path) -> None:
+    cli, review = (
+        " ".join((repo_root / relative).read_text(encoding="utf-8").split())
+        for relative in ("autoform_cli/README.md", "skills/human-review/SKILL.md")
+    )
+
+    assert "Every generated site projection uses the same" in cli
+    assert "Authored Mermaid remains supported in the vault and book" in cli
+    assert (
+        "That index, `dependencies/index.json`, the project payload `dependencies.json`, and every other payload "
+        "under `dependencies/` are internal to the bundled viewer, and their schemas may change"
+    ) in cli
+    assert "Every generated site route uses the same" in review
+
+
+def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -> None:
+    """The example's CI runs its pinned AUTOFORM_REF, 0288506b, which predates catalogs.
+
+    That check rejects `catalog:` and `area:` and that render rejects
+    INVENTORIED, while it ignores atlas.json, and its render draws Mermaid maps
+    through the global Mermaid script, so mkdocs.yml keeps that line. Move the
+    pin, here and in the workflow equivalence test, before relaxing this.
+    """
+    example = repo_root / _EXAMPLE
+    for page in (example / "blueprint/roadmap").rglob("*.md"):
+        text = page.read_text(encoding="utf-8")
+        frontmatter = text[4:].split("\n---", 1)[0] if text.startswith("---\n") else ""
+        assert not re.search(r"^(?:area|catalog):", frontmatter, re.MULTILINE), page
+    assert "mermaid@11.4.1/dist/mermaid.min.js" in (example / "mkdocs.yml").read_text(encoding="utf-8")
+    assert "INVENTORIED" not in (example / "blueprint/coverage/README.md").read_text(encoding="utf-8")
+    assert "dependency maps of the project and each chapter" in " ".join(
+        (example / "README.md").read_text(encoding="utf-8").split()
+    )
+    assert "derived statuses, dependency maps," in (example / ".github/workflows/blueprint-pages.yml").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_formalize_replaces_custom_orchestration_with_the_markdown_frontier(
@@ -121,15 +167,16 @@ def test_import_edits_use_reported_scope_instead_of_a_blanket_ban(
     cli = " ".join(documents["autoform_cli/README.md"].split())
     assert (
         "autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH "
-        "[--json] [--timeout SECONDS]"
+        "[--json] [--timeout SECONDS] [--module-scope SCOPE]"
     ) in cli
     assert "advisory and does not edit authored roadmap or Lean source" in cli
     assert "freshness check may refresh build hash sidecars" in cli
     assert "`autoform-module-import-impact/v1`" in cli
     assert "`module_scope` is `loaded-root-library-graph`" in cli
+    assert "`--module-scope import-closure`" in cli
     assert "`module_claim_target`" in cli
     assert "`lean-module/<lowercase-slug>-<sha256[:16]>`" in cli
-    assert "Required `claim_targets` contain only the selected article" in cli
+    assert "The import edit's `claim_targets` contain only the selected article" in cli
     assert "`affected_claim_targets`" in cli
     assert "downstream warnings, not pre-emptive ownership requirements" in cli
     assert "`claim_keys`" in cli
@@ -185,11 +232,12 @@ def test_import_edits_use_reported_scope_instead_of_a_blanket_ban(
 
 
 def test_claims_are_optional_and_builds_take_none(repo_root: Path) -> None:
-    """A run's lead keeps its workers apart, so claims are only for independent workers.
+    """A run's lead keeps its workers apart, so claims are only for other people and sessions.
 
-    A remote claim around `lake build` blocked other machines while missing the
-    real, machine-local conflict (#121): worktrees downloading into one Mathlib
-    cache at once. Builds take no claim, and the lead fills the cache first.
+    A remote claim around `lake build` made unrelated machines wait on each other,
+    while agents on one machine using different boards still downloaded into one
+    Mathlib cache at once (#121). Builds take no claim, and the lead fills the cache
+    first and asks the user if it cannot.
     """
 
     def read(relative: str) -> str:
@@ -201,12 +249,24 @@ def test_claims_are_optional_and_builds_take_none(repo_root: Path) -> None:
     assert "Within one run the lead keeps its workers apart" in formalize
     assert "no two workers, the lead included, hold the same target at once" in formalize
     assert (
-        "A worker holds its article's `claim_target` and the `claim_targets` it reported until its work lands "
-        "or it abandons the leaf without a candidate, so a handoff keeps them"
+        "A worker holds its article's `claim_target` and the `claim_targets` the lead confirmed until its work "
+        "lands or it abandons the leaf without a candidate, so a handoff keeps them"
     ) in formalize
     assert "reports the new targets to the lead before editing" in formalize
     assert "goes ahead only once the lead confirms that no other worker holds them" in formalize
-    assert "A subagent that cannot wait for the lead's answer stops and reports instead" in formalize
+    assert "A subagent that cannot wait for the lead's answer commits its work, stops, and reports instead" in formalize
+    assert "the lead answers when it dispatches the leaf again from that commit" in formalize
+    assert "otherwise send the lead the report's `claim_targets` and `affected_claim_targets`" in formalize
+    assert "In a run without claims, send the lead that report's `affected_claim_targets`" in formalize
+    assert "land the edit only once the lead confirms that no other worker holds them" in formalize
+    assert "without the lead's answer, or when integration fails, report the branch and commit" in formalize
+    assert "so capture a fresh baseline of that article on the shared branch" in formalize
+    assert "If the rerun fails too, ask the user before creating worktrees" in formalize
+    assert "dispatch no more at once than its memory can build for" in formalize
+    assert "Before choosing none, run `autoform claim list` once" in formalize
+    assert "an unexpired claim on the board means another session uses them" in formalize
+    assert "if the command fails, as it does in a checkout without an `origin`, tell the user" in formalize
+    assert "means the board exists but could not be read, not that it holds no claims" in formalize
     assert "the lead checks them when it confirms the edit's new targets and again before the edit lands" in formalize
     assert "If workers would wait on each other, the lead has one of them give up what it holds" in formalize
     assert "re-run `autoform work import-impact` on the result; if integration brought in a change" in formalize
@@ -218,12 +278,15 @@ def test_claims_are_optional_and_builds_take_none(repo_root: Path) -> None:
     assert "Claims are optional" in cli
     assert "builds take no claim" in cli
     assert "use them when other people or sessions may work on the same project at the same time" in cli
+    assert "Without claims, a Formalize subagent has its lead confirm the set instead" in cli
+    assert "or, without claims, after the lead confirms them" in cli
     assert "Claims are optional" in read("AGENTS.md")
     claims = (repo_root / "skills/formalize/references/claims.md").read_text(encoding="utf-8")
     assert "They replace asking the lead" in " ".join(claims.split())
     headings = {line[3:].lower().replace(" ", "-") for line in claims.splitlines() if line.startswith("## ")}
     anchors = re.findall(r"references/claims\.md#([a-z-]+)", formalize)
-    assert len(anchors) == 3 and set(anchors) <= headings, anchors
+    assert {"acquire-and-renew", "import-edits", "integration-and-handoff"} <= set(anchors), anchors
+    assert set(anchors) <= headings, set(anchors) - headings
     for relative in (
         "skills/formalize/SKILL.md",
         "skills/formalize/references/claims.md",
@@ -231,6 +294,22 @@ def test_claims_are_optional_and_builds_take_none(repo_root: Path) -> None:
         "autoform_cli/README.md",
     ):
         assert "lake-build" not in read(relative), relative
+
+
+def test_readme_tells_users_how_to_run_several_sessions(repo_root: Path) -> None:
+    """A session's agent limit is not the project's: several sessions share one claim board (#421).
+
+    Sessions started together each see an empty board and would choose no claims,
+    so only the user's request can tell a session that others share the project.
+    """
+    readme = " ".join((repo_root / "README.md").read_text(encoding="utf-8").split())
+    assert "## Run several sessions" in readme
+    assert "own clone of the project, with the same `origin` and the same branch" in readme
+    assert "Tell each session that other sessions share the project" in readme
+    assert "push claims and verified results to `origin`" in readme
+    assert "each one sees an empty claim board and would otherwise work without claims" in readme
+    assert "raise `max_threads` under `[agents]` in `~/.codex/config.toml`" in readme
+    assert "They also share one Lean runtime" in readme
 
 
 def test_implementation_notes_are_hidden_and_keyed_by_article_id(repo_root: Path) -> None:
@@ -265,7 +344,7 @@ def test_implementation_notes_are_hidden_and_keyed_by_article_id(repo_root: Path
     assert "Delete it when the article is proved or marked `mathlib: true`" in roadmap
     assert (
         "delete a container's note when every formalizable descendant, and every leaf marked `not_ready` "
-        "beneath it, is proved and there is at least one"
+        "beneath it, is proved and there is at least one; a module catalog never counts"
         in roadmap
     )
     assert "an orphaned note blocks every command that loads the graph" in roadmap
@@ -284,7 +363,7 @@ def test_implementation_notes_are_hidden_and_keyed_by_article_id(repo_root: Path
     assert "Versioned implementation notes live outside the mathematical roadmap" in reference
     assert (
         "delete it once every formalizable descendant, and every leaf marked `not_ready` beneath it, "
-        "is proved and there is at least one" in reference
+        "is proved and there is at least one; a module catalog never counts" in reference
     )
     assert "Record what happened in the revision commit and report" in reference
     assert (
@@ -308,7 +387,11 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     development = (repo_root / "skills" / "develop-plugin" / "SKILL.md").read_text(
         encoding="utf-8"
     )
+    contracts = (
+        repo_root / "skills" / "develop-plugin" / "references" / "repository-contracts.md"
+    ).read_text(encoding="utf-8")
     normalized = " ".join(development.split())
+    contract_text = " ".join(contracts.split())
 
     assert "private declaration safety as fail-closed evidence" in normalized
     assert "official user name" in normalized
@@ -321,6 +404,12 @@ def test_development_guidance_requires_fail_closed_local_safety(repo_root: Path)
     assert "repeated pathname reads are not a generation boundary" in normalized
     assert "marker schema in its owning feature" in normalized
     assert "match the blob at the stable detected commit" in normalized
+    assert "Full-viewport knowledge maps" in contract_text
+    assert "authored mathematical areas and prose to drive regions and reading panels" in contract_text
+    assert "containment and dependency distinct" in contract_text
+    assert "regions come only from authored areas, never from folders or paths" in contract_text
+    assert "Never fit the whole repository" in contract_text
+    assert "Run `make test-browser` for any explorer change" in contract_text
 
 
 def test_development_guidance_uses_progressive_command_reference(repo_root: Path) -> None:
@@ -347,6 +436,7 @@ def test_development_guidance_routes_repository_contracts(repo_root: Path) -> No
     skill = skill_path.read_text(encoding="utf-8")
 
     assert "[repository contracts](references/repository-contracts.md)" in skill
+    assert "pins/releases/explorers, read" in skill
     assert contracts_path.is_file()
 
 
@@ -630,10 +720,10 @@ def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
     )
 
     # Every declaration a node claims must exist in the project's Lean sources.
-    linker = build_linker(example)
+    index = index_project(example)
     for node in graph.nodes.values():
         for name in declaration_names(node.lean or ""):
-            assert linker.location(name) is not None, f"{node.id}: {name}"
+            assert index.find(name) is not None, f"{node.id}: {name}"
 
     assert (blueprint / "roadmap" / "README.md").is_file()
     assert (blueprint / "roadmap" / "full-supervision" / "README.md").is_file()
@@ -713,7 +803,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
 
     assert report.unresolved == []
     manifest = json.loads((site / "publication.json").read_text(encoding="utf-8"))
-    assert manifest["schema"] == "autoform-publication/v2"
+    assert manifest["schema"] == "autoform-publication/v3"
     assert manifest["nodes"] == 10
     assert manifest["dependencies"] == 9
     assert manifest["git_ref"] == ref
@@ -721,6 +811,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert manifest["coverage"]["counts"] == {
         "DECOMPOSED": 1,
         "DEFERRED": 0,
+        "INVENTORIED": 0,
         "MAPPED": 5,
         "OUT": 1,
     }
@@ -746,7 +837,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert '<a class="bp-code-link"' in chapter
     assert '<svg class="bp-code-icon"' in chapter
     assert '<a class="bp-context-link"' in chapter
-    assert "dependencies/nodes/infimum-loss/theorems/supervision-recovery.html" in chapter
+    assert "dependencies/chapters/infimum-loss.html#node=infimum-loss%2Ftheorems%2Fsupervision-recovery" in chapter
     assert '<details class="bp-dependencies"><summary>Dependencies</summary>' in chapter
     assert '<nav class="bp-book-nav" aria-label="Blueprint chapters">' in chapter
     assert (
@@ -784,10 +875,21 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
         assert linked.is_file(), href
 
     graph_page = (site / "dependencies.md").read_text(encoding="utf-8")
-    assert "```mermaid" in graph_page
+    assert "```mermaid" not in graph_page
+    assert 'class="bp-dag-viewer"' in graph_page
+    assert 'data-graph-src="dependencies.json"' in graph_page
     assert "graph_view: project" in graph_page
-    assert '"dependencies/chapters/infimum-loss.html"' in graph_page
-    assert '"dependencies/chapters/full-supervision.html"' in graph_page
+    project_payload = json.loads((site / "dependencies.json").read_text(encoding="utf-8"))
+    assert project_payload["view"]["presentation"] == "atlas"
+    assert {region["label"] for region in project_payload["regions"]} == {
+        "Foundations",
+        "Learning Theory",
+    }
+    assert all(node["summary"] for node in project_payload["nodes"])
+    assert {node["url"] for node in project_payload["nodes"]} == {
+        "dependencies/chapters/full-supervision.html",
+        "dependencies/chapters/infimum-loss.html",
+    }
 
     chapter_graph = (site / "dependencies/chapters/infimum-loss.md").read_text(
         encoding="utf-8"
@@ -797,30 +899,40 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     )
     assert "graph_view: chapter" in chapter_graph
     assert "graph_view: chapter" in support_graph
+    chapter_payloads = {
+        group: json.loads((site / f"dependencies/chapters/{group}.json").read_text(encoding="utf-8"))
+        for group in ("infimum-loss", "full-supervision")
+    }
     for node_id in formalizable:
         anchor = node_id.split("/", 1)[1].replace("/", "-")
         group = node_id.split("/", 1)[0]
-        target_graph = chapter_graph if group == "infimum-loss" else support_graph
-        assert f'"../../roadmap/{group}/index.html#{anchor}"' in target_graph
-        assert (site / "dependencies/nodes" / f"{node_id}.md").is_file()
+        urls = {node["id"]: node["url"] for node in chapter_payloads[group]["nodes"]}
+        assert urls[node_id] == f"../../roadmap/{group}/index.html#{anchor}"
+    assert not (site / "dependencies/nodes").exists()
+
+    generated_graph_pages = [site / "dependencies.md", *(site / "dependencies").rglob("*.md")]
+    for generated_page in generated_graph_pages:
+        document = generated_page.read_text(encoding="utf-8")
+        assert "```mermaid" not in document
+        assert 'class="bp-dag-viewer"' in document
+        assert document.count("blueprint-dag.js") == 1
 
     full_graph = (site / "dependencies/full.md").read_text(encoding="utf-8")
-    assert "graph_view: full" in full_graph
-    focus_graph = (
-        site / "dependencies/nodes/infimum-loss/theorems/supervision-recovery.md"
-    ).read_text(encoding="utf-8")
-    assert "graph_view: focus" in focus_graph
-    assert re.search(r"class n\d+ focus", focus_graph)
-    assert "one dependency hop" in focus_graph
-    assert (
-        "[Open textbook statement](../../../../roadmap/infimum-loss/README.md#"
-        "theorems-supervision-recovery)"
-    ) in focus_graph
+    assert "graph_view: project" in full_graph
+    assert 'class="bp-dag-viewer"' in full_graph
+    assert "```mermaid" not in full_graph
+    payload = json.loads((site / "dependencies/full.json").read_text(encoding="utf-8"))
+    assert len(payload["nodes"]) < len(graph.nodes)
+    search_index = json.loads((site / "dependencies/index.json").read_text(encoding="utf-8"))
+    assert {node["id"] for node in search_index["nodes"]} == set(graph.nodes)
+    statement_page = (site / "roadmap/infimum-loss/README.md").read_text(encoding="utf-8")
+    assert "dependencies/chapters/infimum-loss.html#node=infimum-loss%2Ftheorems%2Fsupervision-recovery" in statement_page
 
     # Progress folded into the Book landing and the Graph; no separate page.
     assert not (site / "progress.md").exists()
     assert not (site / "book.md").exists()
     overview = (site / "README.md").read_text(encoding="utf-8")
+    assert 'data-graph-src="dependencies.json"' in overview
     # The landing page states progress as figures; the chapters keep the strip.
     assert "Scoped roadmap" in overview
     assert "5 of 7 targets complete" in overview
@@ -849,13 +961,16 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "pymdownx.superfences" in mkdocs
     assert "stylesheets/blueprint.css" in mkdocs
     assert "javascripts/blueprint-mermaid.js" in mkdocs
+    assert "javascripts/blueprint-dag.js" not in mkdocs
     # The nav is generated from the vault into SUMMARY.md, so mkdocs.yml has
     # none: a hand-written chapter list would drift from the book.
     assert "\nnav:\n" not in mkdocs
     assert "literate-nav" in mkdocs
     assert "navigation.tabs" in mkdocs
+    assert "  - search\n" in mkdocs
     summary = (site / "SUMMARY.md").read_text(encoding="utf-8")
-    assert summary.startswith("- [Home](README.md)")
+    assert summary.startswith("---\nsearch:\n  exclude: true\n---\n")
+    assert "- [Home](README.md)" in summary
     assert "- Book" in summary
     assert "- Graph" in summary
     assert "[Infimum Loss milestone](roadmap/infimum-loss/README.md)" in summary
@@ -888,8 +1003,8 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'version: "0.12.1"' in verify
     assert "elan/releases/download/v4.2.3" in verify
     assert "df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2" in verify
-    assert "github.ref == 'refs/heads/main'" in workflow
-    assert workflow.count('- "theme/**"') == 2
+    assert "github.event.workflow_run.path == '.github/workflows/autoform-verify.yml'" in workflow
+    assert workflow.count('- "theme/**"') == 1
     assert 'version: "0.12.1"' in workflow
     assert "@main" not in verify
 
@@ -1086,9 +1201,11 @@ def test_roadmap_skill_commits_the_final_checked_pass(repo_root: Path) -> None:
 
     for required in (
         "After the final edit",
-        "`autoform check`",
+        "`autoform check` with `--lean-root .`",
         "`autoform audit`",
-        "Commit the vault and refreshed graph only after this final validation",
+        "Fix the other `warning:` lines inside the adopted boundary as you would a finding",
+        "refresh the dependency summary with `autoform-visualize`",
+        "Commit the vault, with the refreshed summary where the repository tracks it, only after this final validation",
         "no `MAPPED` rows",
         "latest commit contains every change from the pass",
     ):
@@ -1298,6 +1415,17 @@ def test_skills_search_the_blueprint_before_adding_a_result(repo_root: Path) -> 
     assert "duplicate" in rubric and "not proof" in rubric
 
 
+def test_agent_review_judges_a_catalog_as_an_inventory(repo_root: Path) -> None:
+    """A catalog lists peer declarations by design, which the rubric scored as a defect."""
+    rubric = " ".join(
+        (repo_root / "skills/agent-review/references/roadmap-quality.md").read_text(encoding="utf-8").split()
+    )
+
+    assert "`DECOMPOSED`, `INVENTORIED`, `DEFERRED`, and `OUT`" in rubric
+    assert "not a duplicate of the article that expounds it" in rubric
+    assert "The pull-request-unit and unique-main-result rules do not apply to it" in rubric
+
+
 def test_roadmap_states_the_library_search_without_the_link(repo_root: Path) -> None:
     """Roadmap carries the library flags itself, not only behind the link to the rules.
 
@@ -1317,11 +1445,57 @@ def test_roadmap_states_the_library_search_without_the_link(repo_root: Path) -> 
     assert "Search the pinned Mathlib checkout and every usable shared library before planning a replacement" in flat
 
 
+def test_roadmap_searches_the_results_a_proof_uses_and_reads_all_of_the_output(repo_root: Path) -> None:
+    """A library may prove a step of an article's proof, which only a search of that step finds.
+
+    In a trial (#346), Roadmap searched in two broad batches before writing 36 articles, and piped every
+    search through `head`, which cut off the statement of an ATLAS theorem proving a step of one proof.
+    The plan proved that step again, and check and audit passed; the review rubric searched only main
+    results, so a review would have missed it too.
+    """
+
+    def sentences(relative: str) -> list[str]:
+        blocks = (repo_root / relative).read_text(encoding="utf-8").split("\n\n")
+        search = next(" ".join(block.split()) for block in blocks if "`autoform search`" in block)
+        return re.split(r"(?<=\.) ", search)
+
+    roadmap = sentences("skills/roadmap/SKILL.md")
+    # These check that each instruction is present, in one sentence of the search rule, not how it is worded.
+    assert any("`autoform search`" in s and "proof" in s for s in roadmap), roadmap
+    # A rule that names `head` must forbid it, and a batch search must still go article by article.
+    assert any(re.search(r"\bhead\b", s) and re.search(r"\b(?:never|not)\b", s) for s in roadmap), roadmap
+    assert any("batch" in s and "proof" in s and re.search(r"\b(?:each|every)\b", s) for s in roadmap), roadmap
+    rubric = sentences("skills/agent-review/references/roadmap-quality.md")
+    assert any("proof" in s and "missed reuse" in s for s in rubric), rubric
+
+
+def test_roadmap_leaves_lean_unset_for_a_library_declaration(repo_root: Path) -> None:
+    """A library declaration goes in the implementation note, and `lean:` waits for the project's declaration.
+
+    `autoform check --lean-root` resolves `lean:` only in the project's own Lean files. In a trial (#349),
+    Roadmap set `lean:` to the library declarations it found; check could not find them, so it imported the
+    modules and rebuilt, then moved the names into the articles' prose instead of their implementation notes
+    (a comment on #346 records this).
+    """
+
+    blocks = (repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8").split("\n\n")
+    search = next(" ".join(block.split()) for block in blocks if "`autoform search`" in block)
+    sentences = re.split(r"(?<=\.) ", search)
+    # These check that each instruction is present, in one sentence of the search rule, not how it is worded.
+    assert any("implementation note" in s and "unset" in s and "Formalize" in s for s in sentences), sentences
+    assert any("`lean:`" in s and "project" in s and "--lean-root" in s for s in sentences), sentences
+    # The rules Roadmap defers to have Formalize record `lean:` once the project's declaration exists.
+    reference = (repo_root / "skills/formalize/references/library-search.md").read_text(encoding="utf-8")
+    own = next(p for p in (" ".join(b.split()) for b in reference.split("\n\n")) if "own result" in p)
+    assert "`lean:` records its name on acceptance" in own
+
+
 def test_skills_search_shared_libraries_and_say_what_to_do_with_a_hit(repo_root: Path) -> None:
     """A library hit prevents a second proof only if the agent searches the library and knows what to do.
 
     The rules live once, in Formalize's reference page; the three search paragraphs link to it and carry
     only what changes how they read: search the libraries too, and a library refusal is not a blocker.
+    Roadmap's also says how a hit is reused, since its agents did not open the link in trials.
     """
 
     reference_path = repo_root / "skills/formalize/references/library-search.md"
@@ -1451,6 +1625,55 @@ def test_roadmap_reconciles_the_pages_setup_wrote(repo_root: Path) -> None:
         assert required in roadmap, f"Roadmap never reconciles {required}"
 
 
+def test_roadmap_repository_scope_inventories_existing_lean(repo_root: Path) -> None:
+    """A global blueprint is an inventory, not merely a future-work backlog.
+
+    A consumer asked for one wiki covering all mathematics in an established
+    Lean repository. The old workflow treated local implementations as prior
+    art, produced only prospective roadmaps, and therefore rendered 0% despite
+    extensive existing code.
+    """
+
+    roadmap_path = repo_root / "skills" / "roadmap" / "SKILL.md"
+    roadmap = roadmap_path.read_text(encoding="utf-8")
+    normalized = " ".join(roadmap.split())
+    metadata = (
+        repo_root / "skills" / "roadmap" / "agents" / "openai.yaml"
+    ).read_text(encoding="utf-8")
+    example = (
+        repo_root / "skills" / "roadmap" / "references" / "cabannes-thesis-roadmap.md"
+    ).read_text(encoding="utf-8")
+
+    for required in (
+        "repository-wide library, global wiki, or other existing codebase",
+        "project-owned Lean is a primary mathematical source",
+        "inventory every in-scope tracked module and public mathematical declaration",
+        "future-work slice cannot stand in for a repository-wide inventory",
+        # A docstring describes code; a paper-based pass still works from its source.
+        "Work from exact source passages. When the boundary includes existing Lean",
+        "never replace the adopted source",
+        "a repository inventory also needs every in-scope declaration reconciled",
+        "`DECOMPOSED` means represented by declaration articles, not unfinished",
+        "record exact compiled names in `lean`",
+        "`proof: formalized` for a theorem or lemma only after checking that its proof is complete",
+        "An axiom or wanted placeholder does not justify a formalized proof",
+        "a definition of a conjecture proposition formalizes its statement representation",
+        "`mathlib: true` only for an exact verified upstream result",
+    ):
+        assert required in normalized
+
+    assert "inventorying existing formalized Lean when the boundary is an existing repository or library" in metadata
+    assert "Existing and planned mathematics coexist in one book" in example
+
+
+def test_roadmap_and_formalize_leave_code_an_audit_warns_about_to_the_user(repo_root: Path) -> None:
+    """A catalog's limit warning describes code that builds today; a guessed limit can break it."""
+    for skill in ("roadmap", "formalize"):
+        text = " ".join((repo_root / f"skills/{skill}/SKILL.md").read_text(encoding="utf-8").split())
+        assert "`catalog-unscoped-limit` warning describes existing Lean code and never fails the audit" in text, skill
+        assert "change that code only when the user asks" in text, skill
+
+
 def test_roadmap_commits_so_the_published_site_can_catch_up(repo_root: Path) -> None:
     """CI publishes from the repository, not from a working tree.
 
@@ -1464,12 +1687,31 @@ def test_roadmap_commits_so_the_published_site_can_catch_up(repo_root: Path) -> 
     assert "outward-facing" in roadmap
 
 
+def test_roadmap_retracts_against_the_branch_formalize_works_from(repo_root: Path) -> None:
+    """Roadmap's base can predate a Formalize landing, with or without claims.
+
+    If Roadmap looks for `lean:` only on its own base, an article Formalize
+    formalized meanwhile keeps `statement: formalized` through a clean rebase
+    or merge although the revision changed its statement, and check and audit
+    both pass.
+    """
+
+    roadmap = " ".join((repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8").split())
+    for required in (
+        "Before the revision lands on that branch, and so before releasing any claim",
+        "bring it up to date with that branch by rebase or merge, "
+        "retract any revised article that gained `lean:` there",
+        "report the revised articles that had no `lean:` on that branch at your last update",
+    ):
+        assert required in roadmap
+
+
 def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None:
     """The executable example differs only by its concrete immutable pin."""
 
     substitutions = {
         "{{AUTOFORM_SOURCE_YAML}}": '"https://github.com/facebookresearch/autoform-bot.git"',
-        "{{AUTOFORM_REF_YAML}}": '"c994d83f9fab1f40d69b2f279d4c62ca937a0186"',
+        "{{AUTOFORM_REF_YAML}}": '"0288506b87e2e2f70b7446bf0cf7145006138d74"',
     }
     template_dir = repo_root / "autoform_cli/templates/github/workflows"
     example_dir = repo_root / _EXAMPLE / ".github/workflows"
@@ -1498,8 +1740,12 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
     writes, or the example stops demonstrating the product. It already drifted
     once: the template moved to Plus Jakarta Sans and the example kept
     requesting Merriweather, so the built demo showed the old typeface.
+
+    The example also keeps the Mermaid script its pinned render needs, which
+    the template no longer lists because the site script loads Mermaid itself.
     """
     substituted = {"site_name", "repo_url"}
+    pinned_mermaid = "  - https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"
 
     def significant(text: str) -> list[str]:
         return [
@@ -1515,4 +1761,5 @@ def test_the_example_site_config_matches_what_setup_would_write(repo_root) -> No
         repo_root / "skills/setup/assets/cabannes-thesis-project/mkdocs.yml"
     ).read_text(encoding="utf-8")
 
-    assert significant(example) == significant(template)
+    assert pinned_mermaid not in template.splitlines()
+    assert [line for line in significant(example) if line != pinned_mermaid] == significant(template)

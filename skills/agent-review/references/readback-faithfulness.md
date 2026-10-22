@@ -14,9 +14,9 @@ Keep the three roles separate.
    Lean packets, source passages, and their manifests. It does not produce a
    read-back or a verdict.
 2. A **blind auditor** receives one declaration packet and no article, source,
-   locator, or statement of intent. The auditor returns a nonempty UTF-8
-   Markdown account of what that packet literally asserts. This returned text
-   is the read-back artifact.
+   locator, or statement of intent. The auditor returns a nonempty plain-text
+   account, with TeX formulas between dollar signs, of what that packet
+   literally asserts. This returned text is the read-back artifact.
 3. A **faithfulness judge** receives the source passage, the raw read-back text
    for every declaration in the article, and the opaque provenance projection
    below. The judge must not receive a packet, Lean name, article path, or
@@ -26,8 +26,9 @@ The coordinator, not either reviewing agent, supplies the evidence, taken from
 the verified review bundle and its read-back cards. The judge only returns its
 JSON and never writes into the reviewed repository. The coordinator maps the
 packet manifest's `node_id` to that blueprint node's `article_id`; an absent or
-duplicate identity stops dispatch. Hash the read-back bytes exactly as the
-auditor returned them; do not render or normalize them before hashing.
+duplicate identity stops dispatch. Hash the read-back text as its card records
+it, in UTF-8 with `\n` line ends and no line break at either end; do not render
+or otherwise normalize it before hashing.
 
 Before dispatching the judge, build one opaque item:
 

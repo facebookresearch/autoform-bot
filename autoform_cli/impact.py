@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -30,6 +31,7 @@ from .work import select_work_item
 IMPACT_SCHEMA = "autoform-impact/v1"
 MODULE_IMPORT_IMPACT_SCHEMA = "autoform-module-import-impact/v1"
 MODULE_IMPORT_SCOPE = "loaded-root-library-graph"
+IMPORT_CLOSURE_SCOPE = "import-closure"
 
 #: Every line the impact probe wants read back starts with this marker.
 IMPACT_MARKER = "AUTOFORM_IMPACT "
@@ -411,6 +413,100 @@ def _module_source_paths(
     return paths
 
 
+def _may_import(data: bytes, module: str) -> bool:
+    """Whether ``data`` could import ``module``: it contains each component, however the import spells it."""
+
+    return all(part.encode("utf-8") in data for part, _quoted in _lean_name_parts(module))
+
+
+def import_closure(
+    module: str,
+    sources: Iterable[tuple[str, bytes]],
+    outside: Iterable[tuple[str, bytes]],
+) -> set[str]:
+    """``module`` and every root-package module that may import it, transitively.
+
+    ``sources`` pairs each module name with one file's bytes; a name two
+    libraries' files share joins when any of them may import the closure.
+    The test is textual, so it can admit a module that does not import one in
+    the closure but never misses one that does. A file outside the captured
+    inventory that may import the closure has no module name to load, so the
+    narrowed scope is refused rather than incomplete.
+    """
+
+    sources = list(sources)
+    closure = {module}
+    work = [module]
+    while work:
+        target = work.pop()
+        for name, data in sources:
+            if name not in closure and _may_import(data, target):
+                closure.add(name)
+                work.append(name)
+    firsts = {_lean_name_parts(name)[0][0].encode("utf-8") for name in closure}
+    for path, data in outside:
+        if any(first in data for first in firsts):
+            for name in sorted(closure):
+                if _may_import(data, name):
+                    raise ImpactError(
+                        f"{path} may import {name} but is outside the captured root-package sources; "
+                        "rerun with the default --module-scope"
+                    )
+    return closure
+
+
+_RERUN_DEFAULT_SCOPE = "; rerun with the default --module-scope"
+
+
+def _raise(error: OSError) -> None:
+    raise ImpactError(f"cannot read {error.filename}{_RERUN_DEFAULT_SCOPE}") from error
+
+
+def _outside_sources(root: Path, inventoried: Collection[Path]) -> Iterator[tuple[str, bytes]]:
+    """Every ``.lean`` file the captured inventory lacks under ``root`` and the manifest's outside package dirs."""
+
+    tops = [root]
+    manifest_path = root / "lake-manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+    except (OSError, ValueError) as error:
+        raise ImpactError(f"cannot read {manifest_path}{_RERUN_DEFAULT_SCOPE}") from error
+    if isinstance(manifest, dict):
+        dirs = [manifest.get("packagesDir")]
+        packages = manifest.get("packages")
+        if isinstance(packages, list):
+            dirs += [
+                package.get("dir")
+                for package in packages
+                if isinstance(package, dict) and package.get("type") == "path"
+            ]
+        real_root = Path(os.path.realpath(root))
+        for entry in dirs:
+            if isinstance(entry, str):
+                top = Path(os.path.realpath(root / entry))
+                if top.is_dir() and not top.is_relative_to(real_root):
+                    tops.append(top)
+    seen: set[str] = set()
+    for top in tops:
+        # An unreadable directory raises rather than hiding a file that may import the closure.
+        for directory, names, files in os.walk(top, onerror=_raise, followlinks=True):
+            real = os.path.realpath(directory)
+            if real in seen:
+                names[:] = []
+                continue
+            seen.add(real)
+            names[:] = [name for name in names if name != ".git"]
+            for file in files:
+                path = Path(directory, file)
+                relative = path.relative_to(root) if top == root else path
+                if file.endswith(".lean") and relative not in inventoried:
+                    try:
+                        data = path.read_bytes()
+                    except OSError as error:
+                        raise ImpactError(f"cannot read {path}{_RERUN_DEFAULT_SCOPE}") from error
+                    yield relative.as_posix(), data
+
+
 def _validated_module_evidence(
     text: str,
     *,
@@ -545,6 +641,7 @@ def render_impact_probe(
     *,
     imports: Iterable[str],
     project_modules: Iterable[str],
+    selected_modules: Iterable[str] = (),
     artifact_dir: Path | None = None,
     glob_directories: Iterable[tuple[Path, str, str]] = (),
     emit_module_evidence: bool = False,
@@ -554,10 +651,11 @@ def render_impact_probe(
     Given ``artifact_dir``, the root package's Lean artifact directory, the
     probe refuses a root-package module the captured inventory lacks: a loaded
     module outside ``project_modules`` whose OLean lies under ``artifact_dir``,
-    or a module the probe did not load that it finds by walking a
-    ``glob_directories`` entry. Each entry is the directory of an ``M.*`` or
-    ``M.+`` glob, with ``M`` and the glob. ``emit_module_evidence`` also
-    records every loaded project module's source, artifact and direct imports.
+    or a module outside ``selected_modules`` (every module a library's globs or
+    roots select) that it finds by walking a ``glob_directories`` entry. Each
+    entry is the directory of an ``M.*`` or ``M.+`` glob, with ``M`` and the
+    glob. ``emit_module_evidence`` also records every loaded project module's
+    source, artifact and direct imports.
     """
 
     modules = sorted(set(imports))
@@ -577,6 +675,7 @@ def render_impact_probe(
         output_env=skeleton.PROBE_OUTPUT_ENV,
         output_limit=skeleton.DEFAULT_PROBE_OUTPUT_LIMIT,
         project_modules=_lean_requests(tuple(sorted(set(project_modules)))),
+        selected_modules=_lean_requests(tuple(sorted(set(selected_modules)))),
     )
 
 
@@ -796,6 +895,7 @@ class ModuleImportImpactReport:
     affected_unowned_helpers: tuple[ModuleImpactedHelper, ...]
     affected_claim_targets: tuple[str, ...]
     claim_targets: tuple[str, ...]
+    module_scope: str = MODULE_IMPORT_SCOPE
 
     @property
     def selected_affected(self) -> bool:
@@ -820,11 +920,13 @@ class ModuleImportImpactReport:
         It holds when the selected article is affected, nothing else is a claim
         target (no other article names or owns an affected declaration, and no
         unowned helper is affected), and no other article has unresolved
-        declarations whose scope is unknown.
+        declarations whose scope is unknown, and the scope is not
+        ``import-closure``, whose ownership over-reports.
         """
 
         return (
-            self.selected_affected
+            self.module_scope != IMPORT_CLOSURE_SCOPE
+            and self.selected_affected
             and not self.affected_claim_targets
             and all(article.id == self.article.id for article in self.unresolved_articles)
         )
@@ -836,7 +938,7 @@ class ModuleImportImpactReport:
             "lean_source_revision": self.lean_source_revision,
             "build_revision": self.build_revision,
             "module_graph_revision": self.module_graph_revision,
-            "module_scope": MODULE_IMPORT_SCOPE,
+            "module_scope": self.module_scope,
             "article": {
                 "id": self.article.id,
                 "article_id": self.article.article_id,
@@ -1034,6 +1136,8 @@ def compute_module_import_impact(
     *,
     source_revision: str,
     lean_source_revision: str = "",
+    module_scope: str = MODULE_IMPORT_SCOPE,
+    declaration_modules: Mapping[str, str] | None = None,
 ) -> ModuleImportImpactReport:
     """Return the reverse-import scope of changing ``module`` imports.
 
@@ -1042,7 +1146,9 @@ def compute_module_import_impact(
     can affect. Removing an import can also drop modules from the build,
     transitively, when only imports bring them in, as under a library's
     roots; this scope does not list them. It never refuses the edit merely
-    because the scope is larger than one article.
+    because the scope is larger than one article. ``declaration_modules`` maps
+    a name to the module whose source declares it; an unresolved name it places
+    in an unaffected module is not reported.
     """
 
     if module not in modules:
@@ -1064,7 +1170,8 @@ def compute_module_import_impact(
         for declaration in article.declarations:
             resolved = resolve(declaration, f"{article.id}: lean: ")
             if resolved is None:
-                if not article.mathlib:
+                place = (declaration_modules or {}).get(declaration)
+                if not article.mathlib and (place is None or place in affected_set):
                     unresolved_names.append(declaration)
             else:
                 resolved_names.append(resolved)
@@ -1080,11 +1187,25 @@ def compute_module_import_impact(
         for resolved in resolved_names:
             named.setdefault(resolved, []).append(article.id)
         touched[article.id] = {records[resolved].module for resolved in resolved_names} & affected_set
+
+    by_key: dict[tuple[object, ...], set[str]] = {}
+    for article in articles:
+        for declaration in article.declarations:
+            by_key.setdefault(_name_key(declaration), set()).add(article.id)
+
+    def owners(record: ConstantRecord) -> tuple[str, ...]:
+        if module_scope != IMPORT_CLOSURE_SCOPE:
+            return _owners(record, records, named)
+        # A parent declared in a module this scope did not load is missing from
+        # the chain, so every article naming a prefix owns the record.
+        key = _name_key(record.user_name or record.name)
+        return tuple(sorted(set().union(*(by_key.get(key[:length], ()) for length in range(1, len(key) + 1)))))
+
     # An article also owns, through the parent chain, the helpers it names no
     # declaration for, such as a structure's API lemmas in a later module.
     for record in records.values():
         if record.module in affected_set and record.name not in named:
-            for owner in _owners(record, records, named):
+            for owner in owners(record):
                 touched[owner].add(record.module)
     affected_articles = tuple(
         ModuleImpactedArticle(article.id, article.article_id, article.claim_target, tuple(sorted(touched[article.id])))
@@ -1094,6 +1215,8 @@ def compute_module_import_impact(
     unresolved_articles.sort(key=lambda article: article.id)
 
     module_claim_target = _module_claim_target(module)
+    # Helpers keep the parent-chain rule under either scope: a narrowed chain
+    # is only shorter, so every helper the default scope reports keeps its key.
     affected_helpers = tuple(
         ModuleImpactedHelper(record.name, record.module, _helper_claim_target(record.name))
         for record in sorted(records.values(), key=lambda record: record.name)
@@ -1132,6 +1255,7 @@ def compute_module_import_impact(
         affected_unowned_helpers=affected_helpers,
         affected_claim_targets=affected_claim_targets,
         claim_targets=claim_targets,
+        module_scope=module_scope,
     )
 
 
@@ -1324,6 +1448,7 @@ class _ImpactEvidence:
     records: Mapping[str, ConstantRecord]
     modules: Mapping[str, ModuleEvidence]
     locate: Locator
+    declaration_modules: Mapping[str, str] | None = None
 
 
 def _load_impact_evidence(
@@ -1334,6 +1459,8 @@ def _load_impact_evidence(
     timeout: float | None,
     require_modules: bool,
     require_default_declarations: bool,
+    module: str | None = None,
+    module_scope: str = MODULE_IMPORT_SCOPE,
 ) -> _ImpactEvidence:
     """Load one freshness-bound roadmap, source, module, and Lean environment."""
 
@@ -1373,18 +1500,60 @@ def _load_impact_evidence(
             source_snapshot,
             strict_module_ownership=require_modules,
         )
-        output = skeleton.run_probe(
-            render_impact_probe(
-                imports=imports,
-                project_modules=local_modules,
-                artifact_dir=_root_artifact_dir(libraries),
-                glob_directories=_glob_directories(libraries),
-                emit_module_evidence=require_modules,
-            ),
-            root,
-            timeout=skeleton.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
-            label="impact probe",
-        )
+        selected_modules = imports
+        declaration_modules = None
+        if module_scope == IMPORT_CLOSURE_SCOPE:
+            if module not in local_modules:
+                raise ImpactError(f"not a project module: {module}")
+            captured = dict(source_snapshot.source_files)
+            sources = [
+                (name, captured[path])
+                for library in libraries
+                for name, path in _source_modules(library, source_snapshot)[0].items()
+            ]
+            closure = import_closure(module, sources, _outside_sources(root, set(captured)))
+            paths = {path: name for name, path in _module_source_paths(libraries, source_snapshot, strict=True).items()}
+            index = source_snapshot.index
+            # A name the narrowed probe did not load is unresolved; the index
+            # says whether its source lies in a module the edit can affect.
+            declaration_modules = {
+                name: paths[declaration.path.as_posix()]
+                for name, declaration in index.declarations.items()
+                if name not in index.duplicates and declaration.path.as_posix() in paths
+            }
+            imports = tuple(name for name in imports if name in closure)
+            if not imports:
+                raise ImpactError(f"not a loaded project module: {module}")
+        try:
+            output = skeleton.run_probe(
+                render_impact_probe(
+                    imports=imports,
+                    project_modules=local_modules,
+                    selected_modules=selected_modules,
+                    artifact_dir=_root_artifact_dir(libraries),
+                    glob_directories=_glob_directories(libraries),
+                    emit_module_evidence=require_modules,
+                ),
+                root,
+                timeout=skeleton.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
+                label="impact probe",
+            )
+        except SkeletonError as error:
+            said = skeleton.stale_build_said(error)
+            if said is None:
+                raise
+            if module_scope == IMPORT_CLOSURE_SCOPE:
+                names = shlex.join(imports)
+            else:
+                # The probe imports every root library's modules, which can be thousands; the libraries say the same.
+                names = shlex.join(sorted({library.name for library in libraries}))
+            checked = f"{len(imports)} module{'' if len(imports) == 1 else 's'}"
+            raise SkeletonError(
+                [
+                    f"{skeleton.STALE_BUILD}{names}` before running the impact probe "
+                    f"({checked}" + (f"; Lake: {said})" if said else ")")
+                ]
+            ) from None
         latest = load_runtime_graph(project_or_blueprint)
         if latest.source_revision != source_revision:
             raise ImpactError("the roadmap changed while the impact probe ran; rerun the command")
@@ -1422,6 +1591,7 @@ def _load_impact_evidence(
         records=records,
         modules=module_evidence,
         locate=_locator(libraries, source_snapshot),
+        declaration_modules=declaration_modules,
     )
 
 
@@ -1468,9 +1638,12 @@ def module_import_impact(
     *,
     lean_root: str | Path,
     timeout: float | None = None,
+    module_scope: str = MODULE_IMPORT_SCOPE,
 ) -> ModuleImportImpactReport:
     """Report, without blocking it, the reverse-import scope of an import edit."""
 
+    if module_scope not in (MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE):
+        raise ImpactError(f"unknown module scope: {module_scope}")
     evidence = _load_impact_evidence(
         project_or_blueprint,
         selector,
@@ -1478,6 +1651,8 @@ def module_import_impact(
         timeout=timeout,
         require_modules=True,
         require_default_declarations=False,
+        module=module,
+        module_scope=module_scope,
     )
     return compute_module_import_impact(
         evidence.records,
@@ -1487,6 +1662,8 @@ def module_import_impact(
         module,
         source_revision=evidence.source_revision,
         lean_source_revision=evidence.lean_source_revision,
+        module_scope=module_scope,
+        declaration_modules=evidence.declaration_modules,
     )
 
 
@@ -1494,14 +1671,22 @@ def _locator(
     libraries: tuple[LeanLibrary, ...],
     snapshot: IndexedSourceSnapshot,
 ) -> Locator:
-    """Locate a constant through one captured index, else by its captured module path."""
+    """Locate a constant in its compiled module's file, with the line from the index, else through the index alone.
+
+    The compiled module says which of a name's declarations a record is, so a
+    private one beside a public twin is still located.
+    """
 
     def locate(record: ConstantRecord) -> tuple[str | None, int | None]:
         module_path = module_paths.get(_name_key(record.module))
-        declaration = snapshot.index.find(record.user_name or record.name)
-        if declaration is not None and module_path in (None, declaration.path.as_posix()):
-            return declaration.path.as_posix(), declaration.line
-        return module_path, None
+        name = record.user_name or record.name
+        if module_path is None:
+            declaration = snapshot.index.find(name)
+            return (None, None) if declaration is None else (declaration.path.as_posix(), declaration.line)
+        line = next(
+            (item.line for item in snapshot.index.occurrences(name) if item.path.as_posix() == module_path), None
+        )
+        return module_path, line
 
     module_paths = {_name_key(module): path for module, path in _module_source_paths(libraries, snapshot).items()}
     return locate
@@ -1575,7 +1760,7 @@ def format_module_import_impact(report: ModuleImportImpactReport) -> list[str]:
         f"Lean source revision: {report.lean_source_revision or 'unbound'}",
         f"Lean build revision: {report.build_revision}",
         f"Module graph revision: {report.module_graph_revision}",
-        f"Module scope: {MODULE_IMPORT_SCOPE}",
+        f"Module scope: {report.module_scope}",
         f"Module claim target: {report.module_claim_target} (key {report.module_claim_key})",
         "Affected project modules: " + ", ".join(report.affected_modules),
         "Removing an import can also drop modules that only imports bring into the build; "
@@ -1617,10 +1802,10 @@ def format_module_import_impact(report: ModuleImportImpactReport) -> list[str]:
         )
     if report.affected_claim_targets:
         lines.append(
-            "Check active claims or semantic changes for: "
+            "Check other workers, live claims, or semantic changes for: "
             + _keyed(report.affected_claim_targets, report.affected_claim_keys)
         )
-    lines.append("Required claims for the import edit: " + _keyed(report.claim_targets, report.claim_keys))
+    lines.append("Claim targets of the import edit: " + _keyed(report.claim_targets, report.claim_keys))
     return lines
 
 
