@@ -1734,7 +1734,9 @@ def test_the_explorer_typesets_the_math_it_draws_in_its_rail_and_details(
     last_card = full_math("topology/later-54", 1)
     assert _math_source(page, last_card.locator("mjx-container").first) == "0=0"
     assert page.evaluate("() => document === __mathReaderDocument")
-    assert documents == [first]
+    # The chapter-card fragment selects the initial statement in the client;
+    # HTTP document requests never include URL fragments.
+    assert documents == [urlsplit(first)._replace(fragment="").geturl()]
 
 
 def _paint_frame(page: object) -> None:
