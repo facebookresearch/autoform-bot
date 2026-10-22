@@ -642,8 +642,9 @@
         around.addEventListener("click", function (event) { if (event.metaKey || event.ctrlKey || event.shiftKey) return;
           event.preventDefault(); navigation.navigateNode(scope.id, {history: "push"}); }); dom$readingContext.appendChild(around);
       }
-      // The handle names the page or entry, with its status, rather than a generic "Reading".
-      dom$sheetHandle.replaceChildren(record && record.status ? swatch(record.status) : "", (currentBundle || data).title);
+      // The handle names the page or entry, with its status, rather than a generic "Reading"; its accessible name starts with that title.
+      var title = (currentBundle || data).title;
+      dom$sheetHandle.replaceChildren(record && record.status ? swatch(record.status) : "", title); dom$sheetHandle.setAttribute("aria-label", title + ", reading");
     }
 
     function buildShell() {
@@ -653,13 +654,13 @@
       crumbs.setAttribute("aria-label", "Explorer context");
       crumbs.appendChild(trailList(trail.length ? trail : [{label: data.title || "Dependencies"}])); context.appendChild(crumbs);
       head.appendChild(context);
-      // The explorer hides Material's header and its sun or moon, so this clicks the theme's radio for the other scheme.
-      // Material never checks the radio it starts on, so the current scheme, not :checked, says which one that is.
+      // The explorer hides Material's header and its sun or moon, so this clicks that toggle: the one label Material leaves
+      // unhidden, which points at the next palette entry, so a three-entry automatic palette steps on as Material's own does.
       var schemes = document.querySelector("[data-md-component=palette]");
       if (schemes) {
         var themeLabel = "Switch light or dark theme", flip = button("bp-dag-button bp-dag-theme", "◐", themeLabel);
         flip.title = themeLabel; context.appendChild(flip);
-        flip.onclick = function () { schemes.querySelector("[data-md-color-scheme=" + (isDark() ? "default" : "slate") + "]").click(); };
+        flip.onclick = function () { schemes.querySelector("label:not([hidden])").click(); };
       }
 
       var toolbar = element("div", "bp-dag-toolbar");
@@ -759,7 +760,7 @@
       main.appendChild(dom$inventory); body.appendChild(main);
 
       dom$inspector = element("aside", "bp-dag-inspector bp-reading-pane"); dom$inspector.setAttribute("aria-label", navigation ? "Mathematical reading" : "Node inspector");
-      dom$sheetHandle = button("bp-dag-sheet-handle", navigation ? "Reading" : "Graph details", navigation ? "Toggle mathematical reading" : "Toggle graph details");
+      dom$sheetHandle = button("bp-dag-sheet-handle", navigation ? "Reading" : "Graph details", navigation ? "" : "Toggle graph details");
       dom$sheetHandle.setAttribute("aria-expanded", "false");
       dom$inspectorInner = element("div", "bp-dag-inspector-inner");
       dom$inspectorInner.id = "bp-dag-inspector-content-" + instance;
@@ -1068,7 +1069,9 @@
       host.classList.toggle("bp-dag-compact-regions", compactRegions());
       if (navigation) {
         var record = records.get(currentBundle && currentBundle.nodeId), links = record && record.result && neighborIds(record.id);
-        dom$mapContext.textContent = links ? record.title + " · uses " + links.before.length + " · used by " + links.after.length : ui$area || currentBundle && currentBundle.title || data.title;
+        // A long title gives way before the counts after it.
+        dom$mapContext.replaceChildren(element("span", "", links ? record.title : ui$area || currentBundle && currentBundle.title || data.title),
+          links ? " · uses " + links.before.length + " · used by " + links.after.length : "");
         dom$mapKey.replaceChildren();
         ["statement", "proof"].forEach(function (kind) {
           if (data.edges.some(function (edge) { return edge[kind]; })) dom$mapKey.appendChild(element("span", "bp-map-key-" + kind, kind === "proof" ? "Proof dependency" : "Statement dependency"));
@@ -1143,8 +1146,7 @@
       calculateActive(); var all = ui$active.length ? ui$active : data.nodes; if (!all.length) return;
       var compact = compactRegions(), pad = navigation ? 36 : 54, side = compact ? 18 : pad,
         top = compact ? 52 : navigation ? 56 : pad, bottom = compact ? 44 : pad, stageW = dom$stage.clientWidth;
-      // A phone's open reader leaves the map only the band above it, so the map fits there.
-      var shown = navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-open") ? freeArea().band : dom$stage.clientHeight;
+      var shown = mapHeight();
       var readableFloor = navigation ? .9 : atlas ? MIN_ATLAS_SCALE : MIN_READABLE_SCALE;
       // Unlinked cards are inventory: when the whole map cannot open readable and whole, the first view frames the linked graph.
       var linked = all.filter(function (node) { return !node.isolated; }), box = frame(all);
@@ -1178,6 +1180,8 @@
           wide: width * scale > stageW && !compact, tall: height * scale > shown - top - bottom};
       }
     }
+    // A phone's open reader leaves the map only the band above it, so the map fits there and counts what falls below as off screen.
+    function mapHeight() { return navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-open") ? freeArea().band : dom$stage.clientHeight; }
     // Open details cover part of the map; this is the larger part they leave, in stage pixels.
     function freeArea() {
       var band = dom$stage.clientHeight, left = 0, right = dom$stage.clientWidth, drawer = dom$inspector;
@@ -1222,7 +1226,8 @@
       if (atlas && !navigation) drawRegions(ctx);
       var visible = ui$active.filter(function (node) { return inViewport(screen(node), 80); });
       // The area overview and the free-standing atlas stay quiet until a card is selected, hovered or focused; then only its own links show.
-      var quiet = navigation ? data.nodes.every(function (node) { return node._region; }) : atlas, subject = ui$selected || ui$hovered;
+      // The compact overview (phones and most tablets, where a tap opens an area and nothing hovers) keeps every link, since its label boxes keep them apart.
+      var quiet = navigation ? !compactRegions() && data.nodes.every(function (node) { return node._region; }) : atlas, subject = ui$selected || ui$hovered;
       var edgeIndexes = new Set();
       if (atlas && subject) {
         (incident.get(subject.id) || []).forEach(function (index) { edgeIndexes.add(index); });
@@ -1382,19 +1387,23 @@
         }
         control.dataset.relation = relation;
         var relationLabel = control.querySelector(".bp-dag-node-relation");
-        if (relationLabel) relationLabel.textContent = relation === "prerequisite" ? "Prerequisite" : relation === "dependent" ? "Dependent" : "";
+        if (relationLabel) relationLabel.textContent = relation === "prerequisite" ? "Uses" : relation === "dependent" ? "Used by" : "";
         control.dataset.subdued = String(Boolean(spotlight && !spotlight.nodes.has(node.id)));
         control.tabIndex = node.id === tabId ? 0 : -1;
       });
-      // The note asks for a drag only while a shown card's real box reaches past the stage, and for a zoom only while labels are too small.
+      // The note asks for a drag only while a shown card's real box reaches past the stage or under a phone's open reader,
+      // and for a zoom only while labels are too small.
+      var bottom = mapHeight();
       var cropped = ui$active.some(function (node) {
-        var box = screen(node); return box.x < 0 || box.y < 0 || box.x + box.w > dom$stage.clientWidth || box.y + box.h > dom$stage.clientHeight;
+        var box = screen(node); return box.x < 0 || box.y < 0 || box.x + box.w > dom$stage.clientWidth || box.y + box.h > bottom;
       }), tiny = visible.length && ui$transform.scale < .34;
       dom$density.hidden = !cropped && !tiny;
       dom$density.textContent = cropped ? "Showing part of the map. Drag to see more, or open " + (navigation ? "Results" : "Contents") + " for all " + ui$active.length + "." :
         tiny ? "Zoom in to reveal " + visible.length + " node labels" : "";
       // Card meta counter-scales through this factor, so it stays readable at the zoom floors.
       dom$nodeLayer.style.setProperty("--dag-k", ui$transform.scale);
+      // A removed card gets no pointerleave or blur, and a late timer can name one from the previous projection.
+      if (ui$hovered && !overlays.has(ui$hovered.id)) { ui$hovered = null; schedule(); }
     }
     function makeNodeControl(node) {
       var control = button("bp-dag-node", ""); control.dataset.autoformNodeId = node.id; control.dataset.kind = node.kind || "node";
@@ -1421,12 +1430,12 @@
       // A drag or pinch that began on the card is not a tap; a keyboard click has no detail and always opens it.
       control.addEventListener("click", function (event) { event.stopPropagation(); if (!ui$moved || !event.detail) activateNode(node, false); });
       if (!navigation) control.addEventListener("dblclick", function () { var href = safeHref(node.url); if (href) window.location.href = href; });
-      // Resting a mouse on a card for 120 ms, or focusing it, previews its neighbours without selecting it; touch has no hover.
+      // Resting a mouse on a card for 120 ms, or focusing it from the keyboard, previews its neighbours without selecting it; touch has no hover.
       // Moving straight onto another card hands over after its delay instead of flashing the whole map back.
       ["pointerenter", "focus", "pointerleave", "blur"].forEach(function (type, index) {
         control.addEventListener(type, function (event) {
           clearTimeout(hoverTimer);
-          if (index || event.pointerType !== "touch") hoverTimer = setTimeout(function () { ui$hovered = index < 2 && node; schedule(); }, index ? 0 : 120);
+          if (index - 1 ? index || event.pointerType !== "touch" : control.matches(":focus-visible")) hoverTimer = setTimeout(function () { ui$hovered = index < 2 && node; schedule(); }, index ? 0 : 120);
         });
       });
       control.addEventListener("keydown", function (event) {
@@ -1472,6 +1481,8 @@
       return {distance: Math.max(1, Math.hypot(dx, dy)), x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2};
     }
     function pointerMove(event) {
+      // A press released off the stage never sends its pointerup here; a move with no button down ends it.
+      if (!event.buttons) ui$pointers.delete(event.pointerId);
       var previous = ui$pointers.get(event.pointerId);
       if (!previous) return;
       var dx = event.clientX - previous.x, dy = event.clientY - previous.y;
@@ -1760,8 +1771,9 @@
       var count = finished(node), done = count[0], total = count[1];
       var progress = node.kind === "scope" && total && !inventoryOnly;
       var actions = element("div", "bp-dag-actions"), mark = element("span", "bp-dag-status-pill", inventoryOnly ? "inventory only" :
-        progress ? done.toLocaleString() + " of " + total.toLocaleString() + " fully proved" : statusLabel(node.status)), color = colors(progress && done === total ? {status: "fully_proved"} : node);
-      mark.style.setProperty("--dag-pill-fill", color.fill); mark.style.setProperty("--dag-pill-stroke", color.stroke); actions.appendChild(mark);
+        progress ? done.toLocaleString() + " of " + total.toLocaleString() + " fully proved" : statusLabel(node.status));
+      // The dot is the map's swatch, which carries both schemes' colours, so a theme switch needs no rebuild.
+      mark.prepend(swatch(progress && done === total ? "fully_proved" : node.status)); actions.appendChild(mark);
       var href = safeHref(node.url);
       if (href) { var open = element("a", "bp-dag-open", node.kind === "scope" || node.kind === "boundary" ? "Explore topic" : "Open article"); open.href = href; actions.appendChild(open); }
       dom$inspectorInner.appendChild(actions);
@@ -1800,6 +1812,7 @@
         ids.slice(visible, next).forEach(function (id) {
           var related = byId.get(id); if (!related) return;
           var item = element("li"), choose = button("bp-dag-relation-button", related.title);
+          choose.prepend(swatch(related.status));
         choose.addEventListener("click", function () { activateNode(related, true); }); item.appendChild(choose); list.appendChild(item);
         });
         visible = next;

@@ -247,7 +247,7 @@ def _frames(page: object) -> None:
 
 def _focus_graph_node(page: object, target_id: str) -> object:
     """Reach a map control with real keys, without relying on grid coordinates."""
-    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    handle = page.get_by_role("button", name=re.compile(r", reading$"))
     # A phone's taps cycle half, full and peek, so the map is clear once the reader is closed.
     while page.viewport_size["width"] <= 720 and handle.get_attribute("aria-expanded") == "true":
         handle.click()
@@ -579,7 +579,7 @@ def test_closed_phone_reader_resized_to_desktop_is_visible_and_interactive(
     page, site = workspace_page, workspace_site
     page.set_viewport_size({"width": 390, "height": 844})
     _open(page, site, workspace_runtime, _TARGET)
-    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    handle = page.get_by_role("button", name=re.compile(r", reading$"))
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
     # Half, then full, then the peek.
     handle.click()
@@ -916,7 +916,7 @@ def test_rich_workspace_region_and_full_reader_screenshots(
     _frames(page)
     assert _pixels(page)["painted"] > 0
     if width <= 720:
-        handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+        handle = page.get_by_role("button", name=re.compile(r", reading$"))
         while handle.get_attribute("aria-expanded") == "true":
             handle.click()
             _frames(page)

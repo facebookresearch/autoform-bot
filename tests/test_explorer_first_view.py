@@ -30,11 +30,11 @@ function original(name) {
   assert.fail('Production function did not parse: ' + name);
 }
 const constants = source.match(/\bvar NODE_W =[^;]+;/)[0] + source.match(/\bvar SEARCH_PAGE =[^;]+;/)[0] + source.match(/\bvar clamp = [^}]+\};/)[0];
-const functions = ['world', 'screen', 'fit', 'updateOverlays'].map(original).join('\n');
+const functions = ['world', 'screen', 'fit', 'updateOverlays', 'mapHeight'].map(original).join('\n');
 const fixture = JSON.parse(fs.readFileSync(0, 'utf8'));
 const sandbox = {assert, fixture}; vm.createContext(sandbox);
 const setup = String.raw`
-var navigation = Boolean(fixture.navigation), atlas = false, data, byId, ui$active, ui$activeIds, ui$selected = null, ui$orientation = 'lr', ui$area = null;
+var navigation = Boolean(fixture.navigation), atlas = false, data, byId, ui$active, ui$activeIds, ui$selected = null, ui$orientation = 'lr', ui$area = null, ui$hovered = null;
 var ui$transform = {x: 0, y: 0, scale: 1}, mobileIsolateBase = 0, overlays = new Map(), document = {activeElement: null};
 var host = {classList: {contains() { return false; }}}, prerequisites = new Map(), dependents = new Map();
 var dom$stage = {clientWidth: fixture.width, clientHeight: fixture.height}, dom$density = {hidden: true, textContent: ''};

@@ -999,6 +999,18 @@ def test_resting_the_mouse_on_a_card_previews_its_neighbours_without_selecting_i
     playwright.expect(target).to_have_attribute("data-subdued", "false")
     playwright.expect(middle).to_have_attribute("data-subdued", "false")
 
+    # A card zoomed off the map gets no pointerleave, so its preview ends with it instead of fading the map for good.
+    foundation.hover()
+    playwright.expect(target).to_have_attribute("data-subdued", "true")
+    page.keyboard.down("Control")
+    for _ in range(3):
+        page.mouse.wheel(0, 2000)
+    page.keyboard.up("Control")
+    playwright.expect(foundation).to_have_count(0)
+    page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+    playwright.expect(target).to_have_attribute("data-subdued", "false")
+    playwright.expect(foundation).to_have_attribute("data-subdued", "false")
+
 
 def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_url: str) -> None:
     page = desktop_page
@@ -1384,8 +1396,10 @@ def test_on_a_phone_the_landing_hero_opens_in_the_details_sheet(mobile_page: obj
     """A collapsed phone reader remains named; opening it reveals the same authored landing content."""
     page = _open_site(mobile_page, site_url, "index.html")
     playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
-    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    handle = page.get_by_role("button", name=re.compile(r", reading$"))
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    # The handle shows the page's title, so its name starts with it, and voice control can say what it sees.
+    assert handle.get_attribute("aria-label") == handle.inner_text().strip() + ", reading"
     headings = page.get_by_role("heading", level=1)
     playwright.expect(headings).to_have_count(1)
     playwright.expect(headings).to_have_text("Explorer fixture")
@@ -1420,7 +1434,7 @@ def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_pag
     # The shared router loads its catalog before its first graph; install the fixture before opening.
     page.route("**/dependencies/index.json", lengthen_the_index)
     _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
-    playwright.expect(page.get_by_role("button", name="Toggle mathematical reading", exact=True)).to_have_attribute(
+    playwright.expect(page.get_by_role("button", name=re.compile(r", reading$"))).to_have_attribute(
         "aria-expanded", "true"
     )
     page.locator(".bp-dag-filter-summary").tap()
@@ -1926,11 +1940,11 @@ def count_label_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
 
 
 
-def _point_at_a_region_link(page: object) -> None:
-    """The area overview paints no link or count at rest; pointing at a region lights its link and count pill."""
+def _point_at_a_linked_card(page: object) -> None:
+    """This root draws its one link at rest without a count; pointing at either card lights the link and its count pill."""
     _paint_frame(page)
     assert page.evaluate("window.labelPaints.every(paint => !paint.text.endsWith(' links'))")
-    page.locator('.bp-dag-node[data-autoform-node-id^="region:"]').first.hover()
+    page.locator('.bp-dag-node[data-autoform-node-id="scope:topology"]').hover()
     page.wait_for_function("window.labelPaints.some(paint => paint.text === '12 links')")
 
 
@@ -2018,7 +2032,7 @@ def test_canvas_label_paints_use_the_site_family_or_a_valid_fallback(
         # Material can override an inherited root custom property later.
         page.route(canonical, serif_host_before_startup)
     _open_site(page, site_url, urlsplit(canonical).path.lstrip("/"))
-    _point_at_a_region_link(page)
+    _point_at_a_linked_card(page)
     painted = page.evaluate("window.labelPaints.filter(paint => paint.text === '12 links').at(-1)")
     family = page.locator(".bp-dag-viewer").evaluate("host => getComputedStyle(host).fontFamily")
     assert ("Plus Jakarta Sans" if reject_family else "Times New Roman") in family
@@ -2378,7 +2392,7 @@ def test_opening_details_keeps_the_clicked_card_under_the_pointer(desktop_page: 
     page.set_viewport_size({"width": 390, "height": 844})
     page.emulate_media(reduced_motion="reduce")
     _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
-    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    handle = page.get_by_role("button", name=re.compile(r", reading$"))
     # The page opens at half; taps go on to full and back to the peek.
     handle.click()
     handle.click()
@@ -2413,7 +2427,7 @@ def test_a_phone_reader_opens_at_half_snaps_where_it_is_dragged_and_maps_back_fr
     """The phone reader covered the map on arrival, said only "Reading", and ignored a drag on its grabber."""
     page = _open_site(mobile_page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
     viewer, pane, body = page.locator(".bp-dag-viewer"), page.locator(".bp-reading-pane"), page.locator(".bp-dag-body")
-    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    handle = page.get_by_role("button", name=re.compile(r", reading$"))
     full = re.compile(r"\bbp-dag-sheet-full\b")
     saved = "() => history.state.autoformNavigation.snapshot.readingOpen"
     # Half leaves the top 45% to the map, with the selected node above the sheet.
@@ -2470,7 +2484,7 @@ def test_the_canvas_paints_its_labels_in_the_sites_family(desktop_page: object, 
     _record_label_paints(page, reject_family=False)
     canonical = _site_route(page, site_url, "roadmap")
     _open_site(page, site_url, urlsplit(canonical).path.lstrip("/"))
-    _point_at_a_region_link(page)
+    _point_at_a_linked_card(page)
     painted = page.evaluate("window.labelPaints.filter(paint => paint.text === '12 links').at(-1)")
     family = page.locator(".bp-dag-viewer").evaluate("host => getComputedStyle(host).fontFamily")
     assert "Plus Jakarta Sans" in family and "Plus Jakarta Sans" in painted["font"]

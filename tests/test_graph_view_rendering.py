@@ -416,6 +416,8 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert "} else if (!quiet) {" in script
     assert "visible.forEach(function (node) { (incident.get(node.id) || []).forEach" in script
     assert "quiet && !edgeIndexes.has(route.edgeIndex)) return;" in script
+    # The compact overview, where a tap opens an area and nothing hovers, keeps its links at rest.
+    assert "var quiet = navigation ? !compactRegions() && data.nodes.every(" in script
     assert "if (!state.activeDirty) return" in script
     assert "if (query === state.searchCacheQuery) return state.searchCache" in script
     assert f'data.schema !== "{dag_viewer.SCHEMA}"' in script
@@ -442,9 +444,13 @@ def test_resting_a_mouse_on_a_card_previews_its_neighbours_without_selecting_it(
     script = _viewer_source()
     start = script.index('["pointerenter", "focus", "pointerleave", "blur"].forEach')
     hover = script[start:script.index('control.addEventListener("keydown"', start)]
-    # A mouse waits 120 ms; focus and leaving act on the next tick, and a touch, which has no hover, sets nothing.
+    # A mouse waits 120 ms; keyboard focus and leaving act on the next tick, and a touch, which has no hover, sets nothing.
+    # Focus the explorer moves itself after a click is not keyboard focus, so it previews nothing.
     assert "clearTimeout(hoverTimer);" in hover
-    assert 'if (index || event.pointerType !== "touch") hoverTimer = setTimeout(function () { state.hovered = index < 2 && node; schedule(); }, index ? 0 : 120);' in hover
+    assert ('if (index - 1 ? index || event.pointerType !== "touch" : control.matches(":focus-visible")) hoverTimer = setTimeout('
+            'function () { state.hovered = index < 2 && node; schedule(); }, index ? 0 : 120);') in hover
+    # A hovered card that leaves the map (zoom, filter, a new projection, a late timer) gets no pointerleave, so the redraw drops it.
+    assert "if (state.hovered && !overlays.has(state.hovered.id)) { state.hovered = null; schedule(); }" in script
     # The preview only draws: no selection, URL or history change.
     assert not re.search(r"select|history|location|remember|activate", hover)
     # Any map previews the direct neighbours; a selection keeps its own spotlight.
@@ -469,6 +475,8 @@ def test_a_press_on_a_card_pans_once_it_travels_and_otherwise_stays_a_tap() -> N
     assert "state.moved = true;" in down and "refs.stage.setPointerCapture(id)" in down
     move = script[script.index("function pointerMove(event)"):script.index("function pointerUp(event)")]
     assert "if (!state.moved) { if (Math.hypot(dx, dy) <= 8) return; grab(); }" in move
+    # A press released off the stage sends no pointerup here; the next move with no button down forgets it instead of panning.
+    assert move.index("if (!event.buttons) state.pointers.delete(event.pointerId);") < move.index("var previous")
     assert move.index("grab();") < move.index("state.pointers.set(")
     assert '!state.moved && state.selected && !event.target.closest(".bp-dag-node")) clearSelection(true)' in script
     assert "event.stopPropagation(); if (!state.moved || !event.detail) activateNode(node, false);" in script
@@ -502,7 +510,9 @@ def test_the_phone_reader_peeks_opens_to_half_or_covers_the_map() -> None:
     assert "setSheet(top < height * .225 ? 2 : top < height * .725 - 28 ? 1 : 0, state.selected);" in script
     assert 'var mapButton = button("bp-reading-map", "Map", "Show the map");' in script
     # The handle names the page with its status, and a chosen node is kept above the half sheet.
-    assert "refs.sheetHandle.replaceChildren(record && record.status ? swatch(record.status) : \"\", (currentBundle || data).title);" in script
+    assert "refs.sheetHandle.replaceChildren(record && record.status ? swatch(record.status) : \"\", title);" in script
+    # Its accessible name starts with the title it shows.
+    assert 'refs.sheetHandle.setAttribute("aria-label", title + ", reading");' in script and "Toggle mathematical reading" not in script
     assert "navigation ? drawer.clientHeight * .45 : drawer.offsetTop" in script
     assert 'navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-open") ? freeArea().band : refs.stage.clientHeight;' in script
     assert "box.y + box.h > (free.top || 0) + free.band - 12) center(node, .82);" in script
@@ -613,6 +623,13 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
     assert script.index('appendRelations("Used by", after);') < script.index('caption = "Highlight on map"')
     assert '[["All", "both", 1], ["Uses", "prerequisites", before.length], ["Used by", "dependents", after.length]]' in script
     assert "if (!entry[2]) return;" in script and "pivot.disabled" not in script
+    # Atlas cards name a neighbour by the list it sits in; rows carry the map's status dot; the kicker reads in sentence case.
+    assert 'relation === "prerequisite" ? "Uses" : relation === "dependent" ? "Used by" : ""' in script
+    assert '"Prerequisite"' not in script and '"Dependent"' not in script
+    assert "choose.prepend(swatch(related.status));" in script
+    assert ".bp-dag-relation-button .bp-dag-swatch { display: inline-block;" in style
+    assert ".bp-dag-kicker::first-letter { text-transform: uppercase; }" in style
+    assert ".bp-dag-inspector-header h2 { margin: 0; color: var(--dag-fg);" in style
     for gone in ("Direct prerequisites", "Direct dependents", '"Dependents "', '"Paths"', ".bp-dag-pivot:disabled", ".bp-dag-pivot:not([aria-pressed=true], :disabled)"):
         assert gone not in script + style, gone
     pivots = re.search(r"\.bp-dag-pivots \{([^}]*)\}", style)
@@ -647,8 +664,8 @@ def test_explorer_styles_keep_one_family_one_type_scale_and_one_micro_label() ->
     # Integrated reading and region cards add an 18px title; !important only protects it from Material.
     assert set(re.findall(r"font-size: (\d+)px(?: !important)?;", style)) <= {"11", "12", "13", "14", "16", "17", "18", "22"}
     assert set(re.findall(r"font-weight: ([^;]+);", style)) <= {"400", "600", "700"}
-    # Rail group headings and filter legends are sentence case, like every other label.
-    assert "text-transform: uppercase" not in style
+    # Rail group headings and filter legends are sentence case, like every other label; the drawer kicker capitalises only its first letter.
+    assert "text-transform: uppercase" not in style.replace(".bp-dag-kicker::first-letter { text-transform: uppercase; }", "")
     group = ".bp-dag-filter-popover legend, .bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-group h2 {"
     assert "font-size: 12px; font-weight: 600; letter-spacing: normal;" in style.split(group, 1)[1].split("}", 1)[0]
 
@@ -752,6 +769,9 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     # The density note stays, only while a shown card's real box leaves the stage or labels are hidden by zoom, as plain text.
     note = script.split("var cropped = state.active.some(function (node) {", 1)[1].split("\n    function ", 1)[0]
     assert "var box = screen(node); return box.x < 0 || box.y < 0 || box.x + box.w > refs.stage.clientWidth" in note
+    # A card under a phone's open reader is off screen too; the fit uses the same bound.
+    assert "var bottom = mapHeight();\n      var cropped" in script and "box.y + box.h > bottom;" in note
+    assert "var shown = mapHeight();" in script
     assert 'cropped ? "Showing part of the map. Drag to see more, or open "' in note and '" for all "' in note
     assert '"Zoom in to reveal "' in note and "readableCrop" not in script and "Pan or " not in script
     density = next(rule for rule in style.splitlines() if rule.startswith(".bp-dag-density {"))
@@ -760,6 +780,9 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     phones = style.split("@media (max-width: 680px) {\n", 1)[1].split("\n}", 1)[0]
     assert ".bp-dag-density { bottom: 68px; }" in phones
     assert not any(word in density for word in ("border", "shadow", "background", "blur"))
+    # In the workspace it sits a line above the map key, and under the map header while the phone reader covers the bottom.
+    assert ".bp-dag-integrated .bp-dag-density { bottom: 36px; }" in style
+    assert ".bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-compact-regions) .bp-dag-density { top: 44px; bottom: auto; }" in style
 
 
 def test_explorer_head_switches_materials_palette_from_the_trail_row() -> None:
@@ -768,8 +791,8 @@ def test_explorer_head_switches_materials_palette_from_the_trail_row() -> None:
     # Only a site whose mkdocs.yml lists palette entries renders the form, so an older dark-only site gets no button.
     assert 'var schemes = document.querySelector("[data-md-component=palette]");' in script
     assert '"Switch light or dark theme"' in script and "flip.title = themeLabel; context.appendChild(flip);" in script
-    # Material checks no radio on load, so the click targets the other scheme by name rather than :not(:checked).
-    assert 'schemes.querySelector("[data-md-color-scheme=" + (isDark() ? "default" : "slate") + "]").click();' in script
+    # It clicks Material's own toggle, the one unhidden label, which steps to the next entry of a two- or three-entry palette.
+    assert 'schemes.querySelector("label:not([hidden])").click();' in script
     assert ":checked)" not in script
     rule = next(line for line in style.splitlines() if line.startswith(".bp-dag-viewer .bp-dag-theme {"))
     assert "width: 32px; min-height: 32px;" in rule and "border: 0;" in rule
@@ -788,6 +811,11 @@ def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_und
         "border: 1px solid var(--dag-border);"
     ) in style
     assert ".bp-dag-zoom .bp-dag-button, .bp-dag-modes .bp-dag-mode-button { min-height: 30px; padding: 4px 10px; border: 0;" in style
+    # Zoom leaves with the map, and a finger, which pinches, keeps only a 44px Fit.
+    assert ".bp-dag-viewer:has(.bp-dag-stage[hidden]) .bp-dag-zoom { display: none; }" in style
+    coarse = style.split("@media (pointer: coarse) {\n", 1)[1].split("\n}", 1)[0]
+    assert ".bp-dag-zoom .bp-dag-button:not(:last-child) { display: none; }" in coarse
+    assert ".bp-dag-zoom .bp-dag-button { min-width: 44px; min-height: 44px; }" in coarse
 
 
 def test_explorer_toolbar_copy_says_what_it_searches_and_filters() -> None:
@@ -1060,12 +1088,15 @@ def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> 
     # Card and pill share one count, which leaves neutral module inventories out of the total like the hero.
     assert "if ((palette[entry[0]] || {}).neutral) return; total += entry[1];" in script
     assert 'count[0].toLocaleString() + " of " + count[1].toLocaleString() + " fully proved"' in script
-    # The pill's dot is finished green only once every target is.
-    assert 'color = colors(progress && done === total ? {status: "fully_proved"} : node);' in script
+    # The pill's dot is finished green only once every target is; as a swatch it carries both schemes' colours.
+    assert 'mark.prepend(swatch(progress && done === total ? "fully_proved" : node.status));' in script and "--dag-pill-" not in script
     # The breakdown and the overview use the card's nouns.
     assert '" items in this scope"' not in script and '"Mathematical regions"' not in script
     # The map names the selected result, and the reader shows its relations once, in the statement's own disclosure.
-    assert 'record.title + " · uses " + links.before.length + " · used by " + links.after.length' in script
+    assert 'links ? " · uses " + links.before.length + " · used by " + links.after.length : ""' in script
+    # The title is its own span, so a long one gives way before the counts.
+    assert 'refs.mapContext.replaceChildren(element("span", "", links ? record.title :' in script
+    assert ".bp-map-context > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }" in dag_viewer._STYLE
     assert '" → Result → "' not in script
     assert 'var relations = target.querySelector(".bp-dependencies"); if (relations) relations.open = true;' in script
     for gone in ("bp-reading-neighbors", "bp-reading-links", "bp-reading-related"):

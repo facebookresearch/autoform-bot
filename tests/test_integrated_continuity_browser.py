@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -242,7 +243,7 @@ def test_region_graph_first_keeps_native_reading_reopen_and_back_pane_camera(
     page.set_viewport_size({"width": width, "height": height})
     documents = _documents(page)
     _open(page, site, workspace_runtime)
-    handle = page.locator('.bp-reading-pane > button[aria-label="Toggle mathematical reading"]')
+    handle = page.locator('.bp-reading-pane > button[aria-label$=", reading"]')
     inner = page.locator(".bp-reading-pane > .bp-dag-inspector-inner")
     initial_width = page.locator(".bp-dag-stage").bounding_box()["width"]
     _focus_graph_region(page, "Geometry").press("Enter")
@@ -441,7 +442,7 @@ def test_phone_reader_opens_at_half_covers_the_body_at_full_and_peeks_with_reada
     page.set_viewport_size({"width": 390, "height": 844})
     documents = _documents(page)
     _open(page, site, workspace_runtime)
-    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    handle = page.get_by_role("button", name=re.compile(r", reading$"))
     while handle.get_attribute("aria-expanded") == "true":
         handle.click()
     _frames(page)
@@ -538,7 +539,7 @@ def test_five_authored_dependency_areas_remain_readable_reachable_and_keep_nativ
     assert all(authored_areas[edge["source"]] != authored_areas[edge["target"]] for edge in site.root_graph["edges"])
     documents = _documents(page)
     _open(page, site, workspace_runtime)
-    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    handle = page.get_by_role("button", name=re.compile(r", reading$"))
     while width <= 720 and handle.get_attribute("aria-expanded") == "true":
         handle.click()
     _frames(page)
