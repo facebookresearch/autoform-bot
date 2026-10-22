@@ -26,7 +26,9 @@ CI does. `MathJax read-back cards (Node)` downloads the npm tarball of MathJax
 3.2.2, checks its sha256, and runs `tests/test_site_mathjax_node.py` in Node
 with `AUTOFORM_REQUIRE_MATHJAX_TESTS=1`; locally those tests skip unless `node`
 is on `PATH` and `AUTOFORM_MATHJAX_DIR` names an unpacked MathJax 3.2.2
-package. `real Lean
+package. The WebKit job unpacks the same checked tarball too, for the
+explorer's typesetting test, which serves MathJax from it in place of the CDN
+and skips the same way. `real Lean
 (fixture toolchain)` builds and audits a project from the bundled Mathlib
 release and runs
 the real-Lean suites other than the skeleton suite, which `real Lean skeleton

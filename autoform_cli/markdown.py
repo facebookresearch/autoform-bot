@@ -45,7 +45,9 @@ from pymdownx.superfences import fence_div_format
 
 #: The class pymdownx.arithmatex gives each formula it finds in the site's
 #: Markdown. The page's MathJax reads these elements and no other text, so a
-#: title or the navigation shows its TeX as typed.
+#: title or the navigation shows its TeX as typed, but for the titles and
+#: summaries the dependency explorer draws in its rail and details, which it
+#: marks with this class.
 FORMULA_CLASS = "arithmatex"
 
 #: The Markdown extensions the generated `mkdocs.yml` enables, and their

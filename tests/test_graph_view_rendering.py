@@ -8,6 +8,7 @@ import pytest
 
 from autoform_cli import dag_viewer, graph_pages, status
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
+from autoform_cli.markdown import FORMULA_CLASS
 
 
 def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path: Path) -> None:
@@ -368,13 +369,16 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert 'refs.navigation = element("aside", "bp-dag-navigation")' in script
     assert 'refs.navigation.setAttribute("aria-label", "Wiki hierarchy")' in script
     assert 'renderNavigation()' in script
-    # MathJax typesets the rail and the details, which carry authored TeX, and no other container.
-    assert "if (!M || !M.typesetPromise) return;" in script
-    assert "typeset(refs.navigationInner); refs.navigationInner.textContent" in script
-    assert "typeset(refs.inspector); refs.inspectorInner.textContent" in script
-    assert script.count("typeset(refs.") == 2
-    # Relation rows that Show more appends to the details are typeset in their list.
-    assert 'more.addEventListener("click", function () { appendNextBatch(); typeset(list); });' in script
+    # The rail and the details mark the authored titles and summaries they draw with the site's formula
+    # class, and ask the site's MathJax for a pass after each render; MathJax's own typeset finds nothing.
+    assert f'var TEX = "{FORMULA_CLASS}";' in script
+    assert "window.MathJax" not in script
+    assert 'function typeset() { document.dispatchEvent(new Event("autoform:typeset")); }' in script
+    assert "typeset(); refs.navigationInner.textContent" in script
+    assert "typeset(); refs.inspectorInner.textContent" in script
+    # Relation rows that Show more appends to the details are typeset too.
+    assert 'more.addEventListener("click", function () { appendNextBatch(); typeset(); });' in script
+    assert script.count("typeset();") == 3
     assert 'refs.announcement.setAttribute("aria-live", "polite")' in script
     assert "control.dataset.autoformNodeId = node.id" in script
     assert "new ResizeObserver(resize)" in script
@@ -448,7 +452,7 @@ def test_rail_rows_show_a_status_swatch_and_a_lone_group_no_heading() -> None:
     """Leaf rows ended in status phrases of every length, and a rail of one group still named it."""
     script = dag_viewer.viewer_script()
 
-    assert 'if (groups.size > 1) section.appendChild(element("h2", "", label));' in script
+    assert 'if (groups.size > 1) section.appendChild(element("h2", TEX, label));' in script
     assert 'mark.title = statusLabel(node.status); mark.setAttribute("role", "img"); mark.setAttribute("aria-label", mark.title);' in script
     assert '(node.member_count || 0).toLocaleString() : statusLabel(node.status)' not in script
 
@@ -505,7 +509,7 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
         assert gone not in script, gone
     # Human review requires a level without authored edges to say so.
     assert '"No dependencies are authored between these topics."' in script
-    assert 'if (node.declaration) header.appendChild(element("p", "bp-dag-kicker",' in script
+    assert 'if (node.declaration) header.appendChild(element("p", "bp-dag-kicker " + TEX,' in script
     assert '[["All", "both", 1], ["Prerequisites " + beforeCount, "prerequisites", beforeCount],' in script
     pivots = re.search(r"\.bp-dag-pivots \{([^}]*)\}", style)
     assert pivots is not None and "display: flex;" in pivots.group(1) and "border: 1px solid" in pivots.group(1)
@@ -550,9 +554,9 @@ def test_explorer_names_its_scope_once_and_lists_only_its_ancestors_above_it() -
         assert retired not in script and retired not in style
     assert "Current scope" not in script and "Library atlas" not in script
     # The rail's one-line trail drops the current crumb, which the h1 right under it names.
-    rail = 'trailList(trail.slice(0, -1), "bp-dag-navigation-path")'
+    rail = 'trailList(trail.slice(0, -1), "bp-dag-navigation-path", TEX)'
     assert rail in script
-    assert script.index(rail) < script.index('element("h1", "bp-dag-navigation-title"')
+    assert script.index(rail) < script.index('element("h1", "bp-dag-navigation-title " + TEX')
     assert ":is(.bp-dag-breadcrumb, .bp-dag-navigation-path) li + li::before { content: \"/\";" in style
 
 
