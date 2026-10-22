@@ -3132,21 +3132,22 @@ def test_import_impact_refuses_a_glob_module_the_inventory_lacks(tmp_path: Path,
     command = ["work", "import-impact", "chapter/base", "Demo.Base", str(project), "--lean-root", str(root), "--json"]
 
     revision = ["work", "impact", "chapter/base", str(project), "--lean-root", str(root), "--json"]
+    closure = [*command, "--module-scope", "import-closure"]
 
     # The probe imports every glob module in the inventory, so one the
     # inventory lacks and nothing imports is never loaded; only the probe's
-    # walk of the glob directory, the same walk Lake makes, finds it. Both
-    # commands run that probe.
+    # walk of the glob directory, the same walk Lake makes, finds it. All
+    # three invocations run that probe, the import-closure scope included.
     for name, module in skipped.items():
         (aside / name).rename(root / "Demo" / name)
-        codes = [cli.main(argv) for argv in (command, revision)]
+        codes = [cli.main(argv) for argv in (command, revision, closure)]
         (root / "Demo" / name).rename(aside / name)
 
         output = capsys.readouterr()
-        assert codes == [2, 2], output.out
+        assert codes == [2, 2, 2], output.out
         assert output.out == ""
         refusal = f"error: the impact probe found root-package module {module} under glob Demo.*, "
-        assert output.err.count(refusal) == 2
+        assert output.err.count(refusal) == 3
         assert "but loaded no captured source for it" in output.err
 
     code = cli.main(command)
@@ -3183,6 +3184,16 @@ def test_import_impact_reads_modules_whose_names_need_quotes(tmp_path: Path, cap
     report = json.loads(output.out)
     assert report["affected_modules"] == ["H", "H.«a.b»"]
     assert [article["id"] for article in report["affected_articles"]] == ["chapter/stem"]
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/stem", "H.«a.b»", str(project), "--lean-root", str(root), "--json",
+         "--module-scope", "import-closure"]
+    )
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    closure = json.loads(output.out)
+    assert closure["affected_modules"] == report["affected_modules"]
+    assert closure["affected_articles"] == report["affected_articles"]
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
@@ -3223,6 +3234,81 @@ def test_import_impact_reads_a_library_nested_in_another_srcdir(tmp_path: Path, 
     report = json.loads(output.out)
     assert report["affected_modules"] == ["Demo", "Demo.Basic", "Tests"]
     assert report["affected_claim_targets"] == ["chapter/t"]
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/b", "Demo.Basic", str(project), "--lean-root", str(root), "--json",
+         "--module-scope", "import-closure"]
+    )
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    closure = json.loads(output.out)
+    assert closure["affected_modules"] == report["affected_modules"]
+    assert closure["affected_articles"] == report["affected_articles"]
+
+
+def _q_project(root: Path) -> tuple[Path, Path]:
+    """A built project: Q.Top → Q.Mid → Q.Base, and Q.Side that only the glob selects.
+
+    The root Q imports only Q.Base: `lake build Q` names the whole glob library,
+    so a closure holding the root would be as stale as Q.Side is.
+    """
+
+    lean_root = root / "lean"
+    (lean_root / "Q").mkdir(parents=True)
+    shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", lean_root / "lean-toolchain")
+    (lean_root / "lakefile.toml").write_text(
+        'name = "Q"\ndefaultTargets = ["Q"]\n\n[[lean_lib]]\nname = "Q"\nglobs = ["Q.*"]\n', encoding="utf-8"
+    )
+    for name, text in (
+        ("Q.lean", "import Q.Base\n"),
+        ("Q/Base.lean", "namespace Q\n\ndef base : Nat := 1\n\ntheorem base_eq : base = 1 := rfl\n\nend Q\n"),
+        ("Q/Mid.lean", "import Q.Base\n\nnamespace Q\n\ntheorem mid : base = 1 := base_eq\n\nend Q\n"),
+        (
+            "Q/Top.lean",
+            "/- Top module. -/\n-- comment between header tokens\nimport /- inline -/ Q.Mid\n\n"
+            "/-- Top uses mid. -/\ntheorem Q.top : Q.base = 1 := Q.mid\n",
+        ),
+        ("Q/Side.lean", "namespace Q\n\ndef side : Nat := 2\n\nend Q\n"),
+    ):
+        (lean_root / name).write_text(text, encoding="utf-8")
+    _lake_build(lean_root)
+    project = root / "roadmap"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    for name, declaration, lean in (
+        ("base.md", "definition", "Q.base"),
+        ("mid.md", "theorem", "Q.mid"),
+        ("top.md", "theorem", "Q.top"),
+        ("side.md", "definition", "Q.side"),
+    ):
+        _write_article(project, name, metadata=[f"declaration: {declaration}", "statement: formalized", f"lean: {lean}"])
+    return lean_root, project
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_import_closure_scope_matches_the_default_on_a_built_project(tmp_path: Path, capsys) -> None:
+    lean_root, project = _q_project(tmp_path)
+    base = ["work", "import-impact", "chapter/mid", "Q.Mid", str(project), "--lean-root", str(lean_root), "--json"]
+
+    reports = {}
+    for scope in ("loaded-root-library-graph", "import-closure"):
+        code = cli.main([*base, "--module-scope", scope])
+        output = capsys.readouterr()
+        assert code == 0, output.err
+        reports[scope] = json.loads(output.out)
+
+    default, closure = reports["loaded-root-library-graph"], reports["import-closure"]
+    assert closure["module_scope"] == "import-closure"
+    assert closure["affected_modules"] == default["affected_modules"] == ["Q.Mid", "Q.Top"]
+    for field in ("affected_articles", "affected_unowned_helpers", "unresolved_articles", "article_local",
+                  "affected_claim_targets", "claim_targets"):
+        assert closure[field] == default[field], field
+
+    # A stale module outside the closure stops only the default scope.
+    (lean_root / "Q" / "Side.lean").write_text("namespace Q\n\ndef side : Nat := 3\n\nend Q\n", encoding="utf-8")
+    assert cli.main([*base, "--module-scope", "import-closure"]) == 0, capsys.readouterr().err
+    capsys.readouterr()
+    assert cli.main(base) == 2
+    assert "Lean build artifacts are stale; run `lake build Q`" in capsys.readouterr().err
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
