@@ -23,7 +23,13 @@ from pathlib import Path
 from . import skeleton
 from ._tree_snapshot import TreeSnapshotError
 from .claims import author_claim_key
-from .lean import IndexedSourceSnapshot, LeanSourceError, bind_project_source_snapshot, resolve_lean_root
+from .lean import (
+    IndexedSourceSnapshot,
+    LeanSourceError,
+    bind_project_source_snapshot,
+    module_header_imports,
+    resolve_lean_root,
+)
 from .runtime import load_runtime_graph
 from .skeleton import LeanLibrary, SkeletonError, _lean_name_parts, _lean_requests, lean_libraries
 from .work import select_work_item
@@ -31,6 +37,8 @@ from .work import select_work_item
 IMPACT_SCHEMA = "autoform-impact/v1"
 MODULE_IMPORT_IMPACT_SCHEMA = "autoform-module-import-impact/v1"
 MODULE_IMPORT_SCOPE = "loaded-root-library-graph"
+IMPORT_CLOSURE_SCOPE = "import-closure"
+MODULE_SCOPES = (MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE)
 
 #: Every line the impact probe wants read back starts with this marker.
 IMPACT_MARKER = "AUTOFORM_IMPACT "
@@ -410,6 +418,64 @@ def _module_source_paths(
             paths[module] = relative
             modules_by_path[relative] = module
     return paths
+
+
+def header_graph(
+    libraries: Sequence[LeanLibrary], snapshot: IndexedSourceSnapshot
+) -> dict[str, tuple[str, ...] | None]:
+    """Map each local source module to the local modules its header imports, or ``None`` when unreadable.
+
+    Names meet by component, so ``import H.α`` is the inventory's ``H.«α»``;
+    imports of other packages' modules are left out.
+    """
+
+    paths = _module_source_paths(libraries, snapshot)
+    by_key = {_name_key(module): module for module in paths}
+    data = {path.as_posix(): contents for path, contents in snapshot.source_files}
+    graph: dict[str, tuple[str, ...] | None] = {}
+    for module, relative in paths.items():
+        imported = module_header_imports(data[relative])
+        graph[module] = (
+            None
+            if imported is None
+            else tuple(sorted({by_key[key] for name in imported if (key := _name_key(name)) in by_key}))
+        )
+    return graph
+
+
+def import_closure(
+    selected: Iterable[str],
+    graph: Mapping[str, tuple[str, ...] | None],
+    module: str,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Return the modules the selection loads and the loaded modules that import ``module``, transitively.
+
+    The importers include ``module``. A loaded module whose header is
+    unreadable could import anything, so the closure is then unknown.
+    """
+
+    loaded: set[str] = set()
+    work = list(selected)
+    while work:
+        current = work.pop()
+        if current in loaded:
+            continue
+        loaded.add(current)
+        imported = graph.get(current, ())
+        if imported is None:
+            raise ImpactError(
+                f"cannot read the import header of {current}, so the import closure is unknown; "
+                "rerun without --module-scope"
+            )
+        work.extend(imported)
+    target = next((name for name in loaded if _name_key(name) == _name_key(module)), None)
+    if target is None:
+        raise ImpactError(f"not a loaded project module: {module}")
+    users: dict[str, set[str]] = {}
+    for user in loaded:
+        for imported in graph.get(user) or ():
+            users.setdefault(imported, set()).add(user)
+    return frozenset(loaded), frozenset(_reverse_closure((target,), users))
 
 
 def _validated_module_evidence(

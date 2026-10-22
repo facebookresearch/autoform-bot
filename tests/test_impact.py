@@ -19,7 +19,9 @@ from autoform_cli.impact import (
     IMPACT_MARKER,
     IMPACT_MODULE_MARKER,
     IMPACT_SCHEMA,
+    IMPORT_CLOSURE_SCOPE,
     MODULE_IMPORT_IMPACT_SCHEMA,
+    MODULE_SCOPES,
     ConstantRecord,
     ImpactArticle,
     ImpactError,
@@ -28,6 +30,8 @@ from autoform_cli.impact import (
     compute_module_import_impact,
     format_impact,
     format_module_import_impact,
+    header_graph,
+    import_closure,
     parse_impact_output,
     parse_module_evidence,
     project_modules,
@@ -1489,6 +1493,64 @@ def test_project_modules_fail_closed(tmp_path: Path, glob: str, message: str) ->
 
     with pytest.raises(SkeletonError, match=message):
         project_modules([_library(src, glob)], snapshot)
+
+
+def test_import_closure_is_the_reverse_closure_within_the_loaded_graph() -> None:
+    graph = {
+        "Q": ("Q.Top",),
+        "Q.Top": ("Q.Mid",),
+        "Q.Mid": ("Q.Base",),
+        "Q.Base": (),
+        "Q.Side": (),
+        "Q.Dormant": ("Q.Mid",),
+    }
+
+    loaded, importers = import_closure(["Q", "Q.Side"], graph, "Q.Mid")
+
+    # Q.Dormant imports Q.Mid, but no library selects it and nothing loaded imports it.
+    assert loaded == {"Q", "Q.Top", "Q.Mid", "Q.Base", "Q.Side"}
+    assert importers == {"Q", "Q.Top", "Q.Mid"}
+    assert MODULE_SCOPES == ("loaded-root-library-graph", IMPORT_CLOSURE_SCOPE)
+
+
+def test_import_closure_matches_the_module_by_component() -> None:
+    graph = {"H": ("H.«α»",), "H.«α»": ()}
+
+    assert import_closure(["H"], graph, "H.α")[1] == {"H", "H.«α»"}
+
+
+def test_import_closure_refuses_a_module_nothing_loads() -> None:
+    with pytest.raises(ImpactError, match=r"^not a loaded project module: Q\.Dormant$"):
+        import_closure(["Q"], {"Q": (), "Q.Dormant": ()}, "Q.Dormant")
+
+
+def test_import_closure_refuses_an_unreadable_loaded_header() -> None:
+    graph = {"Q": ("Q.Odd",), "Q.Odd": None, "Q.Mid": ()}
+
+    with pytest.raises(ImpactError) as refused:
+        import_closure(["Q", "Q.Mid"], graph, "Q.Mid")
+
+    assert str(refused.value) == (
+        "cannot read the import header of Q.Odd, so the import closure is unknown; "
+        "rerun without --module-scope"
+    )
+
+
+def test_import_closure_ignores_an_unreadable_header_nothing_loads() -> None:
+    assert import_closure(["Q"], {"Q": (), "Q.Odd": None}, "Q")[1] == {"Q"}
+
+
+def test_header_graph_keeps_local_imports_in_inventory_spelling(tmp_path: Path) -> None:
+    root = tmp_path / "lean"
+    (root / "H").mkdir(parents=True)
+    (root / "lakefile.toml").write_text('name = "H"\n\n[[lean_lib]]\nname = "H"\n', encoding="utf-8")
+    (root / "H.lean").write_text("import Mathlib.Data.Nat\nimport H.α\nimport H.«a.b»\n", encoding="utf-8")
+    (root / "H" / "α.lean").write_text("module\npublic import H.«a.b»\n", encoding="utf-8")
+    (root / "H" / "a.b.lean").write_text("import H\n/- unclosed\n", encoding="utf-8")
+
+    graph = header_graph(tuple(lean_libraries(root)), snapshot_project_sources(root))
+
+    assert graph == {"H": ("H.«a.b»", "H.«α»"), "H.«α»": ("H.«a.b»",), "H.«a.b»": None}
 
 
 def test_lean_libraries_read_one_glob_or_an_array(tmp_path: Path) -> None:
