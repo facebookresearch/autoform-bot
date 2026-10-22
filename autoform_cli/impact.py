@@ -420,6 +420,14 @@ def _module_source_paths(
     return paths
 
 
+def _comparable_name(name: str) -> bool:
+    try:
+        _lean_name_parts(name)
+    except SkeletonError:
+        return False
+    return True
+
+
 def header_graph(
     libraries: Sequence[LeanLibrary], snapshot: IndexedSourceSnapshot
 ) -> dict[str, tuple[str, ...] | None]:
@@ -434,7 +442,15 @@ def header_graph(
     data = {path.as_posix(): contents for path, contents in snapshot.source_files}
     graph: dict[str, tuple[str, ...] | None] = {}
     for module, relative in paths.items():
+        if relative not in data:
+            raise ImpactError(
+                f"project module {module} has no captured source, so the import closure is unknown; "
+                "rerun without --module-scope"
+            )
         imported = module_header_imports(data[relative])
+        if imported is not None and not all(_comparable_name(name) for name in imported):
+            # A name that cannot be compared by component might be a local import.
+            imported = None
         graph[module] = (
             None
             if imported is None
@@ -454,14 +470,23 @@ def import_closure(
     unreadable could import anything, so the closure is then unknown.
     """
 
+    keys = {_name_key(name): name for name in graph}
     loaded: set[str] = set()
-    work = list(selected)
+    work: list[str] = []
+    for name in selected:
+        resolved = keys.get(_name_key(name))
+        if resolved is None:
+            raise ImpactError(
+                f"project module {name} has no captured source, so the import closure is unknown; "
+                "rerun without --module-scope"
+            )
+        work.append(resolved)
     while work:
         current = work.pop()
         if current in loaded:
             continue
         loaded.add(current)
-        imported = graph.get(current, ())
+        imported = graph[current]
         if imported is None:
             raise ImpactError(
                 f"cannot read the import header of {current}, so the import closure is unknown; "

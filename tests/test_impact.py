@@ -3258,3 +3258,31 @@ def test_the_probe_reads_a_built_project(tmp_path: Path, monkeypatch, capsys) ->
     assert box.contained
     assert box.helpers
     assert {owner for helper in box.helpers for owner in helper.owners} == {"chapter/box"}
+
+
+def test_import_closure_refuses_a_selected_module_without_a_graph_entry() -> None:
+    with pytest.raises(ImpactError) as refused:
+        import_closure(["Q", "Q.Gone"], {"Q": ()}, "Q")
+
+    assert str(refused.value) == (
+        "project module Q.Gone has no captured source, so the import closure is unknown; "
+        "rerun without --module-scope"
+    )
+
+
+def test_import_closure_resolves_a_selected_module_spelled_differently() -> None:
+    graph = {"H": ("H.«α»",), "H.«α»": ("H.«β»",), "H.«β»": ()}
+
+    loaded, importers = import_closure(["H.α"], graph, "H.β")
+
+    assert loaded == {"H.«α»", "H.«β»"}
+    assert importers == {"H.«α»", "H.«β»"}
+
+
+def test_header_graph_marks_a_module_unreadable_when_an_import_name_cannot_be_compared(tmp_path: Path) -> None:
+    root = tmp_path / "lean"
+    root.mkdir()
+    (root / "lakefile.toml").write_text('name = "H"\n\n[[lean_lib]]\nname = "H"\n', encoding="utf-8")
+    (root / "H.lean").write_text("import H.«»\n", encoding="utf-8")
+
+    assert header_graph(tuple(lean_libraries(root)), snapshot_project_sources(root)) == {"H": None}
