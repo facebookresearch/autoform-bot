@@ -205,7 +205,7 @@ jobs:
           command -v lake
       - name: Run the skeleton suite against real Lean
         run: >-
-          timeout --signal=TERM --kill-after=30s 35m uv run pytest -q
+          timeout --signal=TERM --kill-after=30s 35m uv run pytest -q --durations=60
           tests/test_skeleton.py
           tests/test_project_inspect.py::test_stale_inherited_mathlib_is_ignored_by_real_lake
         env:
