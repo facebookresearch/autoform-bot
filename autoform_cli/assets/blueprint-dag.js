@@ -9,6 +9,7 @@
   var clients = new Map();
   var clamp = function (value, low, high) { return Math.max(low, Math.min(high, value)); };
   var plural = function (count, one, many) { return count.toLocaleString() + " " + (count === 1 ? one : many); };
+  var num = function (value) { return value.toLocaleString(); };
   // The book's caption for each declaration (render.DECLARATION_LABELS), so a card reads "Definition · defined" beside "Definition 1".
   var KINDS = new Map(Object.entries({abbrev: "Abbreviation", axiom: "Axiom", class: "Class", corollary: "Corollary", def: "Definition",
     definition: "Definition", example: "Example", inductive: "Inductive", instance: "Instance", lemma: "Lemma", proposition: "Proposition",
@@ -832,7 +833,7 @@
           control.dataset.navigationNodeId = node.id;
           control.appendChild(element("span", "", node.title));
           // A scope counts its items; a leaf shows its status as a swatch, so the rows end evenly.
-          var mark = node.kind === "scope" ? element("span", "bp-dag-navigation-meta", (node.member_count || 0).toLocaleString()) : swatch(node.status);
+          var mark = node.kind === "scope" ? element("span", "bp-dag-navigation-meta", num(node.member_count || 0)) : swatch(node.status);
           if (node.kind !== "scope") { mark.title = statusLabel(node.status); mark.setAttribute("role", "img"); mark.setAttribute("aria-label", mark.title); }
           control.appendChild(mark);
           item.appendChild(control); list.appendChild(item); dom$navigationNodes.set(node.id, control);
@@ -1409,7 +1410,7 @@
       var control = button("bp-dag-node", ""); control.dataset.autoformNodeId = node.id; control.dataset.kind = node.kind || "node";
       // A topic or region names its fully proved share, which its bar cannot: statement formalized shares proved's green.
       var count = finished(node), scopeMeta = node.kind === "scope" ? node._unknownCount ? "Topic" : count[1] ?
-        count[0].toLocaleString() + " of " + count[1].toLocaleString() + " fully proved" : plural(node.member_count || 0, "article", "articles") :
+        num(count[0]) + " of " + num(count[1]) + " fully proved" : plural(node.member_count || 0, "article", "articles") :
         node.kind === "boundary" ? "External scope · open" : null;
       // ATLAS titles such as "Theorem (Crystallographic Restriction)" already name their kind, so the meta does not repeat it.
       var kind = KINDS.get((node.declaration || "").toLowerCase());
@@ -1771,7 +1772,7 @@
       var count = finished(node), done = count[0], total = count[1];
       var progress = node.kind === "scope" && total && !inventoryOnly;
       var actions = element("div", "bp-dag-actions"), mark = element("span", "bp-dag-status-pill", inventoryOnly ? "inventory only" :
-        progress ? done.toLocaleString() + " of " + total.toLocaleString() + " fully proved" : statusLabel(node.status));
+        progress ? num(done) + " of " + num(total) + " fully proved" : statusLabel(node.status));
       // The dot is the map's swatch, which carries both schemes' colours, so a theme switch needs no rebuild.
       mark.prepend(swatch(progress && done === total ? "fully_proved" : node.status)); actions.appendChild(mark);
       var href = safeHref(node.url);
@@ -1856,8 +1857,8 @@
       });
       // A count, or "N of M" while a page or a filter shows fewer.
       var shown = visible.length < nodes.length ? visible : nodes, total = navigation || shown === visible ? nodes : data.nodes;
-      dom$inventorySummary.textContent = shown.length < total.length ? shown.length.toLocaleString() + " of " +
-        total.length.toLocaleString() : plural(total.length, navigation ? ui$mode === "sources" ? "source" : articles ? "article" : "result" : atlas ? "topic" : "item",
+      dom$inventorySummary.textContent = shown.length < total.length ? num(shown.length) + " of " +
+        num(total.length) : plural(total.length, navigation ? ui$mode === "sources" ? "source" : articles ? "article" : "result" : atlas ? "topic" : "item",
           navigation ? ui$mode === "sources" ? "sources" : articles ? "articles" : "results" : atlas ? "topics" : "items");
       if (ui$query && host.getAttribute("data-catalog-src")) {
         dom$inventorySummary.appendChild(document.createTextNode(" · ")); dom$inventorySummary.appendChild(dom$wholeSearch);

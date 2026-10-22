@@ -1082,12 +1082,12 @@ def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> 
         assert _contrast(label, panel) >= 4.5 and panel != field
 
     # A topic's pill counts its finished items; a scope of module inventories still says so.
-    assert 'progress ? done.toLocaleString() + " of " + total.toLocaleString() + " fully proved" : statusLabel(node.status)' in script
+    assert 'progress ? num(done) + " of " + num(total) + " fully proved" : statusLabel(node.status)' in script
     assert "/^(fully_proved|mathlib)$/.test(entry[0])" in script
     assert 'inventoryOnly ? "inventory only" :' in script
     # Card and pill share one count, which leaves neutral module inventories out of the total like the hero.
     assert "if ((palette[entry[0]] || {}).neutral) return; total += entry[1];" in script
-    assert 'count[0].toLocaleString() + " of " + count[1].toLocaleString() + " fully proved"' in script
+    assert 'num(count[0]) + " of " + num(count[1]) + " fully proved"' in script
     # The pill's dot is finished green only once every target is; as a swatch it carries both schemes' colours.
     assert 'mark.prepend(swatch(progress && done === total ? "fully_proved" : node.status));' in script and "--dag-pill-" not in script
     # The breakdown and the overview use the card's nouns.

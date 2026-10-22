@@ -70,6 +70,7 @@ var records, navigation, calls;
 var ui$active, ui$activeDirty, ui$activeIds, ui$selected, ui$direction, ui$selectedStatuses, ui$showIsolated;
 var ui$query, ui$relationIds, ui$mode, ui$listLimit;
 var plural = (count, one, many) => count.toLocaleString() + ' ' + (count === 1 ? one : many);
+var num = (value) => value.toLocaleString();
 function leaf(id) {
   return {id, title: id, kind: 'node', status: 'planned', result: true,
     scope: 'chapter', parent: 'chapter', route: '../roadmap/chapter/index.html#' + encodeURIComponent(id)};
