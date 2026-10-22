@@ -84,13 +84,15 @@ is infeasible, pass `--module-scope import-closure`, which needs only the edited
 module's importers and what they import built. It gives the exact affected
 modules but only partial affected articles and never article locality, so treat
 every article owning a declaration in an affected module as possibly affected,
-and rerun the default scope once its build is feasible. When the run uses
-claims, follow the [import claims](references/claims.md#import-edits) from then
-on; otherwise send the lead the report's `claim_targets` and
-`affected_claim_targets` and wait for its answer, as above. Capture baseline skeleton evidence for the report's currently
-built, named affected articles. The report covers added imports, so when an edit
-removes an import, also baseline the articles of modules only that import kept
-in the build. The report's affected articles are not a lock. Do not acquire or
+include those articles wherever the steps below use the report's affected
+articles, and rerun the default scope once its build is feasible. When the run
+uses claims, follow the [import claims](references/claims.md#import-edits) from
+then on; otherwise send the lead the report's `claim_targets` and
+`affected_claim_targets` and wait for its answer, as above. Capture baseline
+skeleton evidence for the report's currently built, named affected articles.
+The report covers added imports, so when an edit removes an import, also
+baseline the articles of modules only that import kept in the build. The
+report's affected articles are not a lock. Do not acquire or
 edit them merely because they are listed; treat reported unresolved declarations
 as unknown validation scope, not proof they are unaffected. Disclosure alone is
 not a conflict or failed validation. After rebuilding, repeat the skeleton

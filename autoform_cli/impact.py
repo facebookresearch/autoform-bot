@@ -1905,6 +1905,8 @@ def format_module_import_impact(report: ModuleImportImpactReport) -> list[str]:
             if report.selected_affected
             else "none in the loaded reverse-import scope"
         )
+        if report.module_scope == IMPORT_CLOSURE_SCOPE:
+            detail += " in this module scope"
         lines.append(f"Affected built articles: {detail}.")
     if report.affected_unowned_helpers:
         lines.append("Potentially affected unowned helpers:")

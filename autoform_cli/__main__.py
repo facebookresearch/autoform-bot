@@ -289,7 +289,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=MODULE_IMPORT_SCOPE,
         help=f"{MODULE_IMPORT_SCOPE} (default) imports every root library's modules; "
         f"{IMPORT_CLOSURE_SCOPE} imports only MODULE and the modules that import it, "
-        "so only they and what they import need a fresh build",
+        "so only they and what they import need a fresh build; its affected articles "
+        "may be incomplete and its article_local is always false",
     )
     search = subparsers.add_parser(
         "search", help="find articles by title, Lean name, or statement text before adding one"

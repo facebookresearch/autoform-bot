@@ -13,7 +13,7 @@ date when the release is tagged.
   module and the modules that import it, so a large project need not build
   every root library to ask about one import (#430). Its `affected_modules`
   match the default scope's; its affected articles and helpers may be
-  incomplete, and it never reports `article_local`. The default scope is
+  incomplete, and its `article_local` is always false. The default scope is
   unchanged. The shared Lake freshness check, and `skeleton`'s stale-build
   message, now name modules as `+<module>` targets.
 
