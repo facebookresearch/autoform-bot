@@ -3929,6 +3929,8 @@ mjx-container > svg {{ max-width: none !important; }}
   color: var(--bp-muted);
 }}
 .bp-value {{ flex: 1; }}
+/* A reference breaks between entries, never inside one; a long one wraps in its own box. */
+.bp-dependency-body .bp-ref {{ display: inline-block; max-width: 100%; }}
 .bp-lean {{ font-family: {mono}; }}
 .bp-where {{ color: var(--bp-muted); }}
 .bp-missing {{ color: #b91c1c; }}
