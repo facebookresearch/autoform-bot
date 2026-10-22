@@ -1343,7 +1343,12 @@ def test_on_a_phone_the_landing_hero_opens_in_the_details_sheet(mobile_page: obj
     playwright.expect(page.locator(".bp-reading-body .bp-hero-title")).to_be_visible()
     playwright.expect(headings).to_have_count(1)
     playwright.expect(headings).to_have_text("Explorer fixture")
+    # A second tap covers the map; a third returns to the peek.
     handle.click()
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-sheet-full\b"))
+    playwright.expect(headings).to_have_count(1)
+    handle.click()
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     playwright.expect(headings).to_have_count(1)
     playwright.expect(headings).to_have_text("Explorer fixture")
 
@@ -2283,6 +2288,8 @@ def test_opening_details_keeps_the_clicked_card_under_the_pointer(desktop_page: 
     page.emulate_media(reduced_motion="reduce")
     _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
     handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    # The page opens at half; taps go on to full and back to the peek.
+    handle.click()
     handle.click()
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     node = page.locator('.bp-dag-node[data-autoform-node-id="algebra/result"]')
@@ -2292,11 +2299,13 @@ def test_opening_details_keeps_the_clicked_card_under_the_pointer(desktop_page: 
     url, history_length = page.url, page.evaluate("history.length")
     assert original is not None
     for _ in range(2):
-        handle.click()
-        playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-        _paint_frame(page)
-        opened = node.bounding_box()
-        assert opened is not None and abs(opened["y"] - original["y"]) < 2
+        # Full hides the toolbar, and the map shifts back by the head it frees.
+        for _level in ("half", "full"):
+            handle.click()
+            playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+            _paint_frame(page)
+            opened = node.bounding_box()
+            assert opened is not None and abs(opened["y"] - original["y"]) < 2
         handle.click()
         playwright.expect(handle).to_have_attribute("aria-expanded", "false")
         _paint_frame(page)
@@ -2305,6 +2314,63 @@ def test_opening_details_keeps_the_clicked_card_under_the_pointer(desktop_page: 
         assert identity.evaluate("node => node === document.querySelector('.bp-dag-node[data-autoform-node-id=\"algebra/result\"]')")
         assert page.url == url and page.evaluate("history.length") == history_length
 
+
+
+def test_a_phone_reader_opens_at_half_snaps_where_it_is_dragged_and_maps_back_from_full(
+    mobile_page: object, site_url: str,
+) -> None:
+    """The phone reader covered the map on arrival, said only "Reading", and ignored a drag on its grabber."""
+    page = _open_site(mobile_page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
+    viewer, pane, body = page.locator(".bp-dag-viewer"), page.locator(".bp-reading-pane"), page.locator(".bp-dag-body")
+    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    full = re.compile(r"\bbp-dag-sheet-full\b")
+    saved = "() => history.state.autoformNavigation.snapshot.readingOpen"
+    # Half leaves the top 45% to the map, with the selected node above the sheet.
+    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    playwright.expect(viewer).not_to_have_class(full)
+    playwright.expect(handle).to_have_text("Result")
+    playwright.expect(handle.locator(".bp-dag-swatch")).to_have_count(1)
+    _paint_frame(page)
+    sheet, area = pane.bounding_box(), body.bounding_box()
+    node = page.locator('.bp-dag-node[data-autoform-node-id="algebra/result"]').bounding_box()
+    assert sheet is not None and area is not None and node is not None
+    assert sheet["y"] == pytest.approx(area["y"] + area["height"] * .45, abs=2)
+    assert area["y"] <= node["y"] and node["y"] + node["height"] <= sheet["y"]
+    # The reader's last line can be scrolled into view at half.
+    reader = page.locator(".bp-reading-body").bounding_box()
+    assert reader is not None and reader["y"] + reader["height"] <= area["y"] + area["height"] + 1
+    history_length = page.evaluate("history.length")
+
+    def drag_to(y: float) -> None:
+        box = handle.bounding_box()
+        assert box is not None
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] / 2, y, steps=6)
+        page.mouse.up()
+        _paint_frame(page)
+
+    drag_to(area["y"] + 20)
+    playwright.expect(viewer).to_have_class(full)
+    playwright.expect(page.locator(".bp-dag-toolbar")).to_be_hidden()
+    assert page.evaluate(saved) is True
+    pill = page.get_by_role("button", name="Show the map", exact=True)
+    _assert_hit(page, pill)
+    pill.click()
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    playwright.expect(handle).to_be_focused()
+    playwright.expect(pill).to_be_hidden()
+    playwright.expect(page.locator(".bp-dag-toolbar")).to_be_visible()
+    assert page.evaluate(saved) is False
+    peek = pane.bounding_box()
+    assert peek is not None and peek["y"] == pytest.approx(area["y"] + area["height"] - 56, abs=2)
+    # A drag that stops near the middle snaps to half, and its click is not taken as a tap.
+    drag_to(area["y"] + area["height"] * .5)
+    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    playwright.expect(viewer).not_to_have_class(full)
+    drag_to(area["y"] + area["height"] - 10)
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    assert page.evaluate("history.length") == history_length
 
 
 def test_the_canvas_paints_its_labels_in_the_sites_family(desktop_page: object, count_label_site_url: str) -> None:

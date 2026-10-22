@@ -445,6 +445,38 @@ def test_a_press_on_a_card_pans_once_it_travels_and_otherwise_stays_a_tap() -> N
     assert "if (state.moved) remember();" in script[script.index("function pointerUp(event)"):]
 
 
+def test_the_phone_reader_peeks_opens_to_half_or_covers_the_map() -> None:
+    """The phone reader was a 48px "Reading" bar or covered the whole map, and only a click on it worked.
+
+    Half and full both count as open, so history keeps its readingOpen boolean.
+    """
+    script, style = _viewer_source(), dag_viewer._STYLE
+    phones = style.split("@media (max-width: 720px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
+    assert "transform: translateY(calc(100% - 56px));" in phones
+    assert ".bp-dag-viewer.bp-dag-integrated.bp-dag-sheet-open .bp-reading-pane { transform: translateY(45%); }" in phones
+    assert ".bp-dag-viewer.bp-dag-integrated.bp-dag-sheet-full .bp-reading-pane { transform: none; }" in phones
+    # At half the reader stops at the screen's bottom, so its end can be scrolled into view.
+    assert ".bp-dag-sheet-open:not(.bp-dag-sheet-full) .bp-dag-inspector-inner { height: calc(55% - 56px); }" in phones
+    assert ".bp-dag-integrated.bp-dag-sheet-full .bp-dag-toolbar { display: none; }" in phones
+    assert ".bp-dag-integrated.bp-dag-sheet-full .bp-reading-map { display: block; position: absolute;" in phones
+    assert "touch-action: none;" in next(rule for rule in phones.splitlines() if ".bp-dag-sheet-handle {" in rule)
+    # Wider screens never show the pill, even when a resized phone left the reader at full.
+    assert ".bp-reading-map { display: none; }\n@media (min-width: 721px) {" in style
+    sheet = script.split("function setSheet(open, selected) {", 1)[1].split("\n    function ", 1)[0]
+    assert 'host.classList.toggle("bp-dag-sheet-full", open > 1 || open === true && host.classList.contains("bp-dag-sheet-full"));' in sheet
+    assert "readingOpen: host.classList.contains(\"bp-dag-sheet-open\")" in script
+    # A tap cycles peek, half and full; a drag snaps to the nearest, and its click is not a second tap.
+    assert '(open + host.classList.contains("bp-dag-sheet-full") + 1) % 3 : !open' in script
+    assert "if (dragged && event.detail) return;" in script
+    assert "setSheet(top < height * .225 ? 2 : top < height * .725 - 28 ? 1 : 0, state.selected);" in script
+    assert 'var mapButton = button("bp-reading-map", "Map", "Show the map");' in script
+    # The handle names the page with its status, and a chosen node is kept above the half sheet.
+    assert "refs.sheetHandle.replaceChildren(record && record.status ? swatch(record.status) : \"\", (currentBundle || data).title);" in script
+    assert "navigation ? drawer.clientHeight * .45 : drawer.offsetTop" in script
+    assert 'navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-open") ? freeArea().band : refs.stage.clientHeight;' in script
+    assert "box.y + box.h > (free.top || 0) + free.band - 12) center(node, .82);" in script
+
+
 def test_explorer_counts_agree_with_their_nouns() -> None:
     """The rail read "1 items · 1 dependencies"."""
     script = _viewer_source()

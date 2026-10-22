@@ -300,10 +300,11 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-integrated .bp-dag-inventory-meta { font-size: 12px; color: var(--dag-muted); }
 .bp-result-summary { grid-column: 1 / -1; font-size: 13px; color: var(--dag-muted); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .bp-dag-outline-toggle { display: none; }
+.bp-reading-map { display: none; }
 @media (min-width: 721px) {
   .bp-dag-integrated.bp-dag-area-expanded:not(.bp-dag-sheet-open) .bp-dag-body { grid-template-columns: var(--dag-navigation-width) minmax(0, 1fr) 48px; }
   .bp-dag-integrated.bp-dag-area-expanded:not(.bp-dag-sheet-open) .bp-dag-inspector-inner { display: none; }
-  .bp-dag-integrated.bp-dag-area-expanded:not(.bp-dag-sheet-open) .bp-dag-sheet-handle { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 14px 10px; border: 0; background: var(--dag-panel); color: var(--dag-fg); font: inherit; font-size: 13px; font-weight: 600; writing-mode: vertical-rl; cursor: pointer; }
+  .bp-dag-integrated.bp-dag-area-expanded:not(.bp-dag-sheet-open) .bp-dag-sheet-handle { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 100%; padding: 14px 10px; border: 0; background: var(--dag-panel); color: var(--dag-fg); font: inherit; font-size: 13px; font-weight: 600; writing-mode: vertical-rl; cursor: pointer; }
 }
 @media (max-width: 1100px) {
   .bp-dag-integrated .bp-dag-body { grid-template-columns: minmax(0, 1fr) minmax(340px, 43%); }
@@ -317,12 +318,19 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 }
 @media (max-width: 720px) {
   .bp-dag-integrated .bp-dag-body { display: block; }
-  .bp-dag-integrated .bp-dag-main { position: absolute; inset: 0 0 48px; }
-  .bp-dag-integrated .bp-reading-pane { position: absolute; z-index: 12; inset: 0; height: 100%; border: 0; transform: translateY(calc(100% - 48px)); transition: transform .16s ease; }
+  .bp-dag-integrated .bp-dag-main { position: absolute; inset: 0 0 56px; }
+  /* The reader peeks 56px, opens to half with the map's top 45% above it (freeArea() uses the same 45%), or covers the map. */
+  .bp-dag-integrated .bp-reading-pane { position: absolute; z-index: 12; inset: 0; height: 100%; border: 0; transform: translateY(calc(100% - 56px)); transition: transform .16s ease; }
   .bp-dag-viewer.bp-dag-integrated .bp-reading-pane { max-height: none; max-width: none; }
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-sheet-open .bp-reading-pane { transform: none; }
-  .bp-dag-integrated .bp-dag-sheet-handle { display: block; height: 48px; min-height: 48px; padding: 12px 20px; background: var(--dag-bg); border-bottom: 1px solid var(--dag-border); border-radius: 0; }
-  .bp-dag-integrated .bp-dag-inspector-inner { height: calc(100% - 48px); }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-sheet-open .bp-reading-pane { transform: translateY(45%); }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-sheet-full .bp-reading-pane { transform: none; }
+  .bp-dag-integrated .bp-dag-sheet-handle { display: block; height: 56px; min-height: 56px; padding: 16px 20px 12px; overflow: hidden; background: var(--dag-bg); border-bottom: 1px solid var(--dag-border); border-radius: 0; text-align: left; text-overflow: ellipsis; white-space: nowrap; touch-action: none; }
+  .bp-dag-integrated .bp-dag-sheet-handle .bp-dag-swatch { display: inline-block; margin: 0 8px -1px 0; }
+  .bp-dag-integrated .bp-dag-inspector-inner { height: calc(100% - 56px); }
+  /* At half the reader ends at the screen's bottom, so its last lines can still be scrolled into view. */
+  .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-sheet-full) .bp-dag-inspector-inner { height: calc(55% - 56px); }
+  .bp-dag-integrated.bp-dag-sheet-full .bp-dag-toolbar { display: none; }
+  .bp-dag-integrated.bp-dag-sheet-full .bp-reading-map { display: block; position: absolute; z-index: 3; bottom: 16px; left: 50%; padding: 10px 24px; border: 1px solid var(--dag-overlay-border); border-radius: 999px; background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 14px; font-weight: 600; box-shadow: var(--dag-e2); transform: translateX(-50%); cursor: pointer; }
   .bp-dag-integrated .bp-reading-body { padding: 20px 22px 60px; }
   .bp-dag-integrated .bp-dag-context { padding-inline: 12px; }
   .bp-dag-integrated .bp-dag-toolbar { padding-inline: 12px; gap: 6px; }

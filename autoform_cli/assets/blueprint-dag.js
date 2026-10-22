@@ -642,6 +642,8 @@
         around.addEventListener("click", function (event) { if (event.metaKey || event.ctrlKey || event.shiftKey) return;
           event.preventDefault(); navigation.navigateNode(scope.id, {history: "push"}); }); dom$readingContext.appendChild(around);
       }
+      // The handle names the page or entry, with its status, rather than a generic "Reading".
+      dom$sheetHandle.replaceChildren(record && record.status ? swatch(record.status) : "", (currentBundle || data).title);
     }
 
     function buildShell() {
@@ -763,6 +765,9 @@
         dom$inspectorInner.appendChild(dom$readingContext);
         dom$inspectorInner.appendChild(dom$readingBody);
         navigation.bindReader(dom$readingBody);
+        // A full phone reader hides the toolbar, so a pill at the bottom drops it back to its peek.
+        var mapButton = button("bp-reading-map", "Map", "Show the map"); dom$inspector.appendChild(mapButton);
+        mapButton.addEventListener("click", function () { setSheet(false, ui$selected); dom$sheetHandle.focus(); writeLocation("replace"); });
       }
       dom$announcement = element("p", "bp-dag-sr-only"); dom$announcement.setAttribute("aria-live", "polite"); host.appendChild(dom$announcement);
       dom$ctx = dom$canvas.getContext("2d");
@@ -887,8 +892,33 @@
         dom$outlineToggle.setAttribute("aria-expanded", String(open));
         remember();
       });
-      dom$sheetHandle.addEventListener("click", function () {
-        setSheet(!host.classList.contains("bp-dag-sheet-open"), ui$selected);
+      // On a phone the handle drags the reader, which snaps to the nearest of peek, half and full.
+      var drag = null, dragged = false;
+      dom$sheetHandle.addEventListener("pointerdown", function (event) {
+        dragged = false; if (!navigation || !sheetLayout()) return;
+        drag = [event.clientY, sheetTop()];
+        dom$sheetHandle.setPointerCapture(event.pointerId);
+      });
+      dom$sheetHandle.addEventListener("pointermove", function (event) {
+        if (!drag || !dragged && Math.abs(event.clientY - drag[0]) <= 8) return;
+        dragged = true; dom$inspector.style.transition = "none";
+        dom$inspector.style.transform = "translateY(" + clamp(drag[1] + event.clientY - drag[0], 0, dom$inspector.clientHeight - 56) + "px)";
+      });
+      function sheetTop() { return dom$inspector.getBoundingClientRect().top - dom$body.getBoundingClientRect().top; }
+      function dropSheet() {
+        if (!drag) return; drag = null; if (!dragged) return;
+        var height = dom$inspector.clientHeight, top = sheetTop();
+        dom$inspector.style.transition = dom$inspector.style.transform = "";
+        // Full is at 0, half at 45% and peek 56px from the bottom; these are the midpoints between them.
+        setSheet(top < height * .225 ? 2 : top < height * .725 - 28 ? 1 : 0, ui$selected); writeLocation("replace");
+      }
+      dom$sheetHandle.addEventListener("pointerup", dropSheet); dom$sheetHandle.addEventListener("pointercancel", dropSheet);
+      dom$sheetHandle.addEventListener("click", function (event) {
+        // The drag already placed the sheet; a keyboard click has no detail.
+        if (dragged && event.detail) return;
+        var open = host.classList.contains("bp-dag-sheet-open");
+        // A tap on a phone cycles peek, half and full.
+        setSheet(navigation && sheetLayout() ? (open + host.classList.contains("bp-dag-sheet-full") + 1) % 3 : !open, ui$selected);
         if (navigation && !sheetLayout() && host.classList.contains("bp-dag-sheet-open")) {
           dom$readingBody.tabIndex = -1; dom$readingBody.focus({preventScroll: true});
         }
@@ -1124,15 +1154,17 @@
       });
       var compact = compactRegions(), pad = navigation ? 36 : 54, side = compact ? 18 : pad,
         top = compact ? 52 : pad, bottom = compact ? 44 : pad, width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
+      // A phone's open reader leaves the map only the band above it, so the map fits there.
+      var shown = navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-open") ? freeArea().band : dom$stage.clientHeight;
       var fitted = Math.min((dom$stage.clientWidth - side * 2) / width,
-        (dom$stage.clientHeight - top - bottom) / height);
+        (shown - top - bottom) / height);
       var readableFloor = navigation ? .9 : atlas ? MIN_ATLAS_SCALE : MIN_READABLE_SCALE;
       ui$readableCrop = fitted < readableFloor;
       ui$transform.scale = clamp(Math.max(fitted, readableFloor), MIN_SCALE, 1.35);
       ui$transform.x = ui$readableCrop && !compact ? pad - minX * ui$transform.scale :
         (dom$stage.clientWidth - width * ui$transform.scale) / 2 - minX * ui$transform.scale;
       ui$transform.y = ui$readableCrop ? top - minY * ui$transform.scale :
-        (dom$stage.clientHeight + top - bottom - height * ui$transform.scale) / 2 - minY * ui$transform.scale;
+        (shown + top - bottom - height * ui$transform.scale) / 2 - minY * ui$transform.scale;
       if (ui$readableCrop && navigation) center(ui$selected || nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; }) || nodes[0], readableFloor);
       schedule(); remember();
     }
@@ -1143,7 +1175,8 @@
       if (navigation && !sheetLayout()) return {band: band, left: left, right: right};
       if (host.classList.contains("bp-dag-sheet-open")) {
         var start = drawer.offsetLeft - dom$stage.parentNode.offsetLeft, end = start + drawer.offsetWidth;
-        if (sheetLayout()) band = Math.max(NODE_H, Math.min(band, drawer.offsetTop));
+        // The workspace sheet slides on a transform, so its top is the stylesheet's 45%, not offsetTop.
+        if (sheetLayout()) band = Math.max(NODE_H, Math.min(band, navigation ? drawer.clientHeight * .45 : drawer.offsetTop));
         else if (start > right - end) right = Math.max(NODE_W, Math.min(right, start));
         else left = Math.min(Math.max(0, end), right - NODE_W);
       }
@@ -1155,8 +1188,8 @@
       ui$transform.y = (free.top || 0) + free.band / 2 - (box.y + box.h / 2) * ui$transform.scale; schedule();
     }
     function centerIfHidden(node) {
-      if (!node) return; var box = screen(node);
-      if (box.x < 12 || box.y < 12 || box.x + box.w > dom$stage.clientWidth - 12 || box.y + box.h > dom$stage.clientHeight - 12) center(node, .82);
+      if (!node) return; var box = screen(node), free = freeArea();
+      if (box.x < 12 || box.y < 12 || box.x + box.w > dom$stage.clientWidth - 12 || box.y + box.h > (free.top || 0) + free.band - 12) center(node, .82);
     }
     // A click leaves the map where it is unless the details it opens cover the node; then it pans just clear.
     function reveal(node) {
@@ -1602,8 +1635,10 @@
     }
     // From 681px to 1,100px details can open the head's first row; the map shifts back by it, so nothing jumps.
     // Measure both class changes together; callers need no selection-toggle ordering rule.
+    // A phone reader also has a full position: 1 asks for half, 2 for full, and true keeps full if it is there.
     function setSheet(open, selected) {
       var top = dom$body.offsetTop; host.classList.toggle("bp-dag-sheet-open", Boolean(open));
+      host.classList.toggle("bp-dag-sheet-full", open > 1 || open === true && host.classList.contains("bp-dag-sheet-full"));
       host.classList.toggle("bp-dag-has-selection", Boolean(selected));
       ui$transform.y += top - dom$body.offsetTop; schedule();
       dom$sheetHandle.setAttribute("aria-expanded", String(Boolean(open)));

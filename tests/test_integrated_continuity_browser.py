@@ -434,7 +434,7 @@ def _horizontal_bounds(page: object, locator: object) -> dict:
     return measured
 
 
-def test_phone_reader_uses_the_full_body_with_only_a_handle_peek_and_readable_dependency_regions(
+def test_phone_reader_opens_at_half_covers_the_body_at_full_and_peeks_with_readable_dependency_regions(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:
     page, site = workspace_page, workspace_site
@@ -442,7 +442,7 @@ def test_phone_reader_uses_the_full_body_with_only_a_handle_peek_and_readable_de
     documents = _documents(page)
     _open(page, site, workspace_runtime)
     handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
-    if handle.get_attribute("aria-expanded") == "true":
+    while handle.get_attribute("aria-expanded") == "true":
         handle.click()
     _frames(page)
     page.get_by_role("button", name="Fit shown nodes", exact=True).click()
@@ -469,26 +469,44 @@ def test_phone_reader_uses_the_full_body_with_only_a_handle_peek_and_readable_de
     page.wait_for_url(site.route(_TARGET))
     assert _LAST_SENTENCE in _full_math(page).inner_text()
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-    body = _horizontal_bounds(page, page.locator(".bp-dag-body"))
-    pane = _horizontal_bounds(page, page.locator(".bp-reading-pane"))
-    inner = _horizontal_bounds(page, page.locator(".bp-reading-pane .bp-dag-inspector-inner"))
-    reader = _horizontal_bounds(page, page.locator(".bp-reading-body"))
-    _horizontal_bounds(page, page.locator(".bp-dag-head"))
-    assert pane["top"] == pytest.approx(body["top"], abs=1)
-    assert pane["height"] == pytest.approx(body["height"], abs=1)
-    assert inner["height"] == pytest.approx(body["height"] - 48, abs=2)
-    assert reader["top"] >= body["top"] + 48 - 1 and reader["bottom"] <= body["bottom"] + 1
-    assert page.locator(".bp-reading-body").evaluate("""reader => {
+
+    def measure() -> list[dict]:
+        return [_horizontal_bounds(page, page.locator(selector)) for selector in (
+            ".bp-dag-body", ".bp-reading-pane", ".bp-reading-pane .bp-dag-inspector-inner", ".bp-reading-body")]
+
+    def reader_is_hit() -> bool:
+        return page.locator(".bp-reading-body").evaluate("""reader => {
       const box = reader.getBoundingClientRect(), hit = document.elementFromPoint(box.left+box.width/2, box.top+box.height/2);
       return reader.contains(hit);
-    }""") is True
+    }""")
+
+    # A result opens at half: the map keeps the top 45% and the reader ends at the body's bottom.
+    body, pane, inner, reader = measure()
+    _horizontal_bounds(page, page.locator(".bp-dag-head"))
+    assert pane["top"] == pytest.approx(body["top"] + body["height"] * .45, abs=2)
+    assert pane["height"] == pytest.approx(body["height"], abs=1)
+    assert inner["height"] == pytest.approx(body["height"] * .55 - 56, abs=2)
+    assert reader["top"] >= pane["top"] + 56 - 1 and reader["bottom"] <= body["bottom"] + 1
+    assert reader_is_hit() is True
     assert page.evaluate("() => document.documentElement.scrollWidth <= innerWidth + 1") is True
+    # A tap covers the whole body, which takes the hidden toolbar's row.
     handle.click()
     _frames(page)
+    playwright.expect(page.locator(".bp-dag-toolbar")).to_be_hidden()
+    body, pane, inner, reader = measure()
+    assert pane["top"] == pytest.approx(body["top"], abs=1)
+    assert pane["height"] == pytest.approx(body["height"], abs=1)
+    assert inner["height"] == pytest.approx(body["height"] - 56, abs=2)
+    assert reader["top"] >= body["top"] + 56 - 1 and reader["bottom"] <= body["bottom"] + 1
+    assert reader_is_hit() is True
+    page.get_by_role("button", name="Show the map", exact=True).click()
+    _frames(page)
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    body = _horizontal_bounds(page, page.locator(".bp-dag-body"))
     closed = _horizontal_bounds(page, page.locator(".bp-reading-pane"))
     peek = max(0, min(closed["bottom"], body["bottom"]) - max(closed["top"], body["top"]))
-    assert peek == pytest.approx(48, abs=1)
-    assert handle.bounding_box()["height"] == pytest.approx(48, abs=1)
+    assert peek == pytest.approx(56, abs=1)
+    assert handle.bounding_box()["height"] == pytest.approx(56, abs=1)
     assert handle.evaluate("""element => {
       const box = element.getBoundingClientRect();
       return element.contains(document.elementFromPoint(box.left+box.width/2, box.top+box.height/2));
@@ -521,7 +539,7 @@ def test_five_authored_dependency_areas_remain_readable_reachable_and_keep_nativ
     documents = _documents(page)
     _open(page, site, workspace_runtime)
     handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
-    if width <= 720 and handle.get_attribute("aria-expanded") == "true":
+    while width <= 720 and handle.get_attribute("aria-expanded") == "true":
         handle.click()
     _frames(page)
     page.get_by_role("button", name="Fit shown nodes", exact=True).click()
