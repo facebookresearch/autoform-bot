@@ -1572,13 +1572,16 @@ def _load_impact_evidence(
     if module_scope == IMPORT_CLOSURE_SCOPE:
         _check_header_graph(module_evidence, graph)
         loaded_keys = {_name_key(name) for name in module_evidence}
-        module_of_path = {path: name for name, path in _module_source_paths(libraries, source_snapshot).items()}
+        # Under nested srcDirs one file has a module spelling per library; it is unloaded only when none is loaded.
+        spellings: dict[str, set[str]] = {}
+        for name, path in _module_source_paths(libraries, source_snapshot).items():
+            spellings.setdefault(path, set()).add(name)
 
         def out_of_scope(name: str) -> bool:
             found = source_snapshot.index.occurrences(name)
             return bool(found) and all(
-                (owner := module_of_path.get(item.path.as_posix())) is not None
-                and _name_key(owner) not in loaded_keys
+                (owners := spellings.get(item.path.as_posix()))
+                and all(_name_key(owner) not in loaded_keys for owner in owners)
                 for item in found
             )
 

@@ -2208,6 +2208,42 @@ def test_import_closure_scope_imports_only_the_module_and_its_importers(
     assert [article["id"] for article in report["unresolved_articles"]] == ["chapter/lost"]
 
 
+def test_import_closure_scope_counts_a_file_loaded_under_any_of_its_spellings(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    # Extra's srcDir "extra" sits inside Demo's, so extra/Extra.lean is spelled
+    # both `Extra` and `extra.Extra`. Lean loads it as `Extra`, so Demo.lost,
+    # declared there but not reported, is unresolved rather than out of scope.
+    root = _closure_root(tmp_path)
+    (root / "lakefile.toml").write_text(
+        'name = "Demo"\n\n[[lean_lib]]\nname = "Extra"\nsrcDir = "extra"\n\n'
+        '[[lean_lib]]\nname = "Demo"\nglobs = ["Demo.*"]\n',
+        encoding="utf-8",
+    )
+    (root / "extra").mkdir()
+    (root / "extra" / "Extra.lean").write_text("theorem Demo.lost : True := trivial\n", encoding="utf-8")
+    (root / "Demo" / "Mid.lean").write_text(
+        "import Demo.Base\nimport Extra\n\ntheorem Demo.mid : True := trivial\n", encoding="utf-8"
+    )
+    extra = ModuleEvidence("Extra", str((root / "extra" / "Extra.lean").resolve()))
+    _stub_probe(
+        monkeypatch,
+        _CLOSURE_RECORDS,
+        modules=(*_closure_evidence(root, mid_imports=("Demo.Base", "Extra")), extra),
+    )
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/mid", "Demo.Mid", str(_closure_project(tmp_path)),
+         "--lean-root", str(root), "--module-scope", "import-closure", "--json"]
+    )
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    assert [article["id"] for article in report["unresolved_articles"]] == ["chapter/lost"]
+    assert report["article_local"] is False
+
+
 def test_import_closure_scope_refuses_a_header_lean_reads_differently(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
