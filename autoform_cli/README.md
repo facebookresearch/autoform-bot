@@ -1175,21 +1175,26 @@ Lake module targets, `lake build +A.B +A.C` (the libraries that hold them when
 there are more than 50). `affected_modules` is the same in both scopes. Here a
 loaded module is one the libraries' roots and globs reach through import
 headers. Under `import-closure` the command exits 2, suggesting the default
-scope, when a loaded module's header cannot be read, when a loaded header
+scope, when a loaded module's header cannot be read; when a loaded header
 imports a module the root package can supply (a source under a library's
 `srcDir` or an OLean in its artifact directory) that the captured inventory
-lacks, such as one under a symlinked directory, when Lean's loaded graph
-differs from the headers of the modules it loaded, or when a loaded module it
-did not import declares a name prefix of an affected declaration, or of one on
-its parent chain, longer than the parent Lean found, so the default scope could
-give it another owner (a prefix the source index cannot see, such as one a
-macro generates, is not detected). A `MODULE` outside the loaded modules exits
-2 as not a loaded project module. In this scope `unresolved_articles` leaves
-out declarations the source index places only in loaded modules the scope did
-not import, which the default scope resolves. Freshness is Lake's rehash of
-this checkout's `.lake` against this checkout's sources, so a build in another
-clone or worktree does not make this one fresh. `SELECTOR` identifies the
-working article and `MODULE` the module whose effective header would change.
+lacks, such as one under a symlinked directory; when Lean's loaded graph
+differs from the headers of the modules it loaded; when a loaded module it did
+not import declares a name prefix of an affected declaration, or of one on its
+parent chain, longer than the parent Lean found, so the default scope could
+give it another owner; when such a module imports another package's module this
+scope does not load and such a declaration has a longer prefix the root sources
+do not declare (a root-package prefix the source index cannot see, such as one
+a macro generates, is not detected); or when an article names a private
+declaration this scope loaded and a module it did not import declares the same
+name, which could change what the name means. A `MODULE` outside the loaded
+modules exits 2 as not a loaded project module. In this scope
+`unresolved_articles` leaves out declarations the source index places only in
+loaded modules the scope did not import, which the default scope resolves.
+Freshness is Lake's rehash of this checkout's `.lake` against this checkout's
+sources, so a build in another clone or worktree does not make this one fresh.
+`SELECTOR` identifies the working article and `MODULE` the module whose
+effective header would change.
 Lean supplies the loaded module graph; Autoform binds every node to its captured
 root source and configured root-package artifact so dependencies cannot shadow
 it. The probe imports project modules, so run it only in a trusted checkout or

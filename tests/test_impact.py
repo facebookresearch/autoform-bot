@@ -1561,14 +1561,15 @@ def test_import_closure_looks_up_each_external_import_once(tmp_path: Path, monke
     assert looked == [str(tmp_path / "Mathlib" / "A.lean"), str(tmp_path / ".lake" / "Mathlib" / "A.olean")]
 
 
-def _parent_check(records: list[ConstantRecord], affected: tuple[str, ...]) -> None:
+def _parent_check(records: list[ConstantRecord], affected: tuple[str, ...], *, external_unloaded: bool = False) -> None:
     # Side.lean declares Foo.Bar, and only the default scope loads it.
     index = SourceIndex(Path("."), {"Foo.Bar": Declaration("Foo.Bar", Path("Side.lean"), 1, "def")}, "")
     impact_module._check_unprobed_parents(
         {record.name: record for record in records},
         affected,
-        SimpleNamespace(index=index),
+        impact_module._declarations_by_key(SimpleNamespace(index=index)),
         lambda path: path == "Side.lean",
+        external_unloaded=external_unloaded,
     )
 
 
@@ -1588,6 +1589,27 @@ def test_import_closure_checks_the_parent_chain_of_an_affected_record() -> None:
         "Foo.Bar.baz in Demo.Mid may have the parent Foo.Bar, which Side.lean declares and "
         "this scope did not load; rerun without --module-scope"
     )
+
+
+def test_import_closure_refuses_a_prefix_only_another_package_may_declare() -> None:
+    records = [ConstantRecord("Foo", "def", "Demo.Base"), ConstantRecord("Foo.Baz.qux", "theorem", "Demo.Mid", parent="Foo")]
+
+    # Without unloaded external imports, an undeclared prefix is Lean's to judge.
+    _parent_check(records, ("Demo.Mid",))
+    with pytest.raises(ImpactError) as refused:
+        _parent_check(records, ("Demo.Mid",), external_unloaded=True)
+
+    assert str(refused.value) == (
+        "Foo.Baz.qux in Demo.Mid may have the parent Foo.Baz, which a module of another package that only "
+        "the default scope loads may declare; rerun without --module-scope"
+    )
+
+
+def test_import_closure_refuses_a_record_name_it_cannot_compare() -> None:
+    odd = ConstantRecord("Foo.«a»b", "theorem", "Demo.Mid", parent="Foo")
+
+    with pytest.raises(ImpactError, match=r"^cannot compare the name of Foo\.«a»b in Demo\.Mid with its parent;"):
+        _parent_check([ConstantRecord("Foo", "def", "Demo.Base"), odd], ("Demo.Mid",))
 
 
 def test_import_closure_checks_a_private_record_by_its_source_name() -> None:
@@ -3527,8 +3549,8 @@ def test_import_closure_scope_matches_the_default_on_a_built_project(tmp_path: P
 def _prefix_project(root: Path, prefix_file: str) -> tuple[Path, Path]:
     """A built project where ``Foo.Bar.baz`` in Demo.Mid sits below ``Foo`` in Demo.Base and ``Foo.Bar`` elsewhere.
 
-    ``prefix_file`` is the file declaring ``Foo.Bar``: ``Side.lean``, a second
-    library's root, or a file no library selects.
+    ``prefix_file`` is the file declaring ``Foo.Bar``: ``Side.lean``, the root
+    of a second library, or ``Demo/Dormant.lean``, which no library selects.
     """
 
     lean_root = root / "lean"
@@ -3588,9 +3610,118 @@ def test_import_closure_scope_ignores_a_parent_only_a_dormant_file_declares(tmp_
         reports.append(json.loads(output.out))
     default, closure = reports
     assert [article["id"] for article in default["affected_articles"]] == ["chapter/sel"]
-    for field in ("affected_modules", "affected_articles", "affected_unowned_helpers", "article_local",
-                  "affected_claim_targets"):
+    for field in ("affected_modules", "affected_articles", "affected_unowned_helpers", "unresolved_articles",
+                  "article_local", "affected_claim_targets"):
         assert closure[field] == default[field], field
+
+
+def _side_project(root: Path, *, mid: str, side: str, lean: str, ext: str | None = None) -> tuple[Path, Path]:
+    """A built project: Demo → Demo.Mid → Demo.Base (``def Foo``), a library Side, and ``chapter/sel`` naming ``lean``.
+
+    Given ``ext``, Side requires the path package Ext, whose root holds it.
+    """
+
+    lean_root = root / "lean"
+    (lean_root / "Demo").mkdir(parents=True)
+    shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", lean_root / "lean-toolchain")
+    require = ""
+    if ext is not None:
+        package = root / "ext"
+        package.mkdir()
+        shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", package / "lean-toolchain")
+        (package / "lakefile.toml").write_text(
+            'name = "Ext"\ndefaultTargets = ["Ext"]\n\n[[lean_lib]]\nname = "Ext"\n', encoding="utf-8"
+        )
+        (package / "Ext.lean").write_text(ext, encoding="utf-8")
+        require = '\n[[require]]\nname = "Ext"\npath = "../ext"\n'
+    (lean_root / "lakefile.toml").write_text(
+        'name = "P"\ndefaultTargets = ["Demo", "Side"]\n\n[[lean_lib]]\nname = "Demo"\n\n'
+        f'[[lean_lib]]\nname = "Side"\n{require}',
+        encoding="utf-8",
+    )
+    for name, text in (
+        ("Demo.lean", "import Demo.Mid\n"),
+        ("Demo/Base.lean", "def Foo : Nat := 0\n"),
+        ("Demo/Mid.lean", f"import Demo.Base\n\n{mid}"),
+        ("Side.lean", side),
+    ):
+        (lean_root / name).write_text(text, encoding="utf-8")
+    if ext is not None:
+        update = subprocess.run(
+            ["lake", "update"], cwd=lean_root, capture_output=True, text=True, timeout=600, check=False
+        )
+        assert update.returncode == 0, update.stdout + update.stderr
+    _lake_build(lean_root)
+    project = root / "roadmap"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    _write_article(project, "sel.md", metadata=["declaration: definition", "statement: formalized", f"lean: {lean}"])
+    return lean_root, project
+
+
+def _closure_refusal(lean_root: Path, project: Path, capsys) -> list[str]:
+    base = ["work", "import-impact", "chapter/sel", "Demo.Mid", str(project), "--lean-root", str(lean_root)]
+    assert cli.main([*base, "--json", "--module-scope", "import-closure"]) == 2
+    output = capsys.readouterr()
+    assert output.out == ""
+    return output.err.splitlines()
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_import_closure_scope_refuses_a_private_name_a_public_one_unloaded_shadows(tmp_path: Path, capsys) -> None:
+    # The default scope resolves `foo` to Side's public foo, so Mid's private foo is an unowned helper.
+    lean_root, project = _side_project(
+        tmp_path, mid="private theorem foo : True := trivial\n", side="def foo : Nat := 1\n", lean="foo"
+    )
+    base = ["work", "import-impact", "chapter/sel", "Demo.Mid", str(project), "--lean-root", str(lean_root)]
+
+    assert cli.main([*base, "--json"]) == 0
+    default = json.loads(capsys.readouterr().out)
+    assert [helper["name"] for helper in default["affected_unowned_helpers"]] == ["_private.Demo.Mid.0.foo"]
+    assert default["article_local"] is False
+
+    assert _closure_refusal(lean_root, project, capsys) == [
+        "error: chapter/sel: lean: foo may name a declaration in Side.lean, which this scope did not load; "
+        "rerun without --module-scope"
+    ]
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_import_closure_scope_refuses_a_private_name_an_unloaded_one_repeats(tmp_path: Path, capsys) -> None:
+    lean_root, project = _side_project(
+        tmp_path, mid="private theorem foo : True := trivial\n", side="private def foo : Nat := 1\n", lean="foo"
+    )
+    base = ["work", "import-impact", "chapter/sel", "Demo.Mid", str(project), "--lean-root", str(lean_root)]
+
+    assert cli.main([*base, "--json"]) == 2
+    assert "foo names several private declarations" in capsys.readouterr().err
+
+    assert _closure_refusal(lean_root, project, capsys) == [
+        "error: chapter/sel: lean: foo may name a declaration in Side.lean, which this scope did not load; "
+        "rerun without --module-scope"
+    ]
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_import_closure_scope_refuses_a_parent_another_package_may_declare(tmp_path: Path, capsys) -> None:
+    # Only Side imports Ext, whose Foo.Bar the default scope makes Foo.Bar.baz's parent.
+    lean_root, project = _side_project(
+        tmp_path,
+        mid="theorem Foo.Bar.baz : True := trivial\n",
+        side="import Ext\n",
+        lean="Foo",
+        ext="def Foo.Bar : Nat := 1\n",
+    )
+    base = ["work", "import-impact", "chapter/sel", "Demo.Mid", str(project), "--lean-root", str(lean_root)]
+
+    assert cli.main([*base, "--json"]) == 0
+    default = json.loads(capsys.readouterr().out)
+    assert [helper["name"] for helper in default["affected_unowned_helpers"]] == ["Foo.Bar.baz"]
+    assert default["article_local"] is False
+
+    assert _closure_refusal(lean_root, project, capsys) == [
+        "error: Foo.Bar.baz in Demo.Mid may have the parent Foo.Bar, which a module of another package "
+        "that only the default scope loads may declare; rerun without --module-scope"
+    ]
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")

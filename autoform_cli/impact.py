@@ -24,6 +24,7 @@ from . import skeleton
 from ._tree_snapshot import TreeSnapshotError
 from .claims import author_claim_key
 from .lean import (
+    Declaration,
     IndexedSourceSnapshot,
     LeanSourceError,
     bind_project_source_snapshot,
@@ -554,24 +555,36 @@ def _unprobed_files(
     return unprobed
 
 
+def _declarations_by_key(snapshot: IndexedSourceSnapshot) -> dict[tuple[object, ...], list[Declaration]]:
+    """Every declaration the source index holds, by name key, so quoting does not matter."""
+
+    index = snapshot.index
+    declared: dict[tuple[object, ...], list[Declaration]] = {}
+    for name in dict.fromkeys((*index.declarations, *index.duplicates)):
+        declared.setdefault(_name_key(name), []).extend(index.occurrences(name))
+    return declared
+
+
 def _check_unprobed_parents(
     records: Mapping[str, ConstantRecord],
     affected: Iterable[str],
-    snapshot: IndexedSourceSnapshot,
+    declared: Mapping[tuple[object, ...], Sequence[Declaration]],
     unprobed: Callable[[str], bool],
+    *,
+    external_unloaded: bool,
 ) -> None:
-    """Refuse when a file only the default scope loads may give an owned record a longer parent.
+    """Refuse when a module only the default scope loads may give an owned record a longer parent.
 
     Lean's ``parent`` is the longest prefix the loaded environment declares,
     and ownership follows the ``parent`` chain of each affected record, so
-    every record on those chains is checked. A prefix the source index cannot
-    see, such as one a macro generates, is not detected.
+    every record on those chains is checked. A longer prefix is refused when
+    the source index places it in a file ``unprobed`` flags, or, given
+    ``external_unloaded`` (the default scope imports another package's module
+    this scope does not), when the source index does not declare it at all.
+    A root-package prefix the source index cannot see, such as one a macro
+    generates, is not detected.
     """
 
-    index = snapshot.index
-    declared: dict[tuple[object, ...], list[str]] = {}
-    for name in (*index.declarations, *index.duplicates):
-        declared.setdefault(_name_key(name), []).append(name)
     affected_keys = {_name_key(name) for name in affected}
     work = [record for record in records.values() if _name_key(record.module) in affected_keys]
     seen: set[str] = set()
@@ -581,30 +594,80 @@ def _check_unprobed_parents(
             continue
         seen.add(record.name)
         source = record.user_name or record.name
+        parent = records.get(record.parent) if record.parent is not None else None
+        if parent is not None:
+            work.append(parent)
         try:
             parts = _lean_name_parts(source)
-        except SkeletonError:
-            continue
-        shortest = 1
-        if record.parent is not None:
             # A private parent is a record of the same module; compare its source name.
-            parent = records.get(record.parent)
-            if parent is not None:
-                work.append(parent)
-            shortest = len(_name_key(record.parent if parent is None else parent.user_name or parent.name)) + 1
+            shortest = 1
+            if record.parent is not None:
+                shortest += len(_lean_name_parts(record.parent if parent is None else parent.user_name or parent.name))
+        except SkeletonError:
+            raise ImpactError(
+                f"cannot compare the name of {source} in {record.module} with its parent; "
+                "rerun without --module-scope"
+            ) from None
         key = _name_key(source)
         for length in range(len(parts) - 1, shortest - 1, -1):
-            for name in declared.get(key[:length], ()):
-                path = next(
-                    (item.path.as_posix() for item in index.occurrences(name) if unprobed(item.path.as_posix())),
-                    None,
+            prefix = ".".join(f"«{part}»" if quoted else part for part, quoted in parts[:length])
+            found = declared.get(key[:length], ())
+            path = next((item.path.as_posix() for item in found if unprobed(item.path.as_posix())), None)
+            if path is not None:
+                raise ImpactError(
+                    f"{source} in {record.module} may have the parent {prefix}, "
+                    f"which {path} declares and this scope did not load; rerun without --module-scope"
                 )
-                if path is not None:
-                    prefix = ".".join(f"«{part}»" if quoted else part for part, quoted in parts[:length])
-                    raise ImpactError(
-                        f"{source} in {record.module} may have the parent {prefix}, "
-                        f"which {path} declares and this scope did not load; rerun without --module-scope"
-                    )
+            if external_unloaded and not found:
+                raise ImpactError(
+                    f"{source} in {record.module} may have the parent {prefix}, which a module of another "
+                    "package that only the default scope loads may declare; rerun without --module-scope"
+                )
+
+
+def _check_unprobed_private_names(
+    records: Mapping[str, ConstantRecord],
+    articles: Iterable[ImpactArticle],
+    declared: Mapping[tuple[object, ...], Sequence[Declaration]],
+    unprobed: Callable[[str], bool],
+) -> None:
+    """Refuse when an article name this scope resolves as private may resolve otherwise by default.
+
+    An exact name wins over a private one, and a name several private
+    declarations share is refused, so a declaration the default scope loads
+    and this one did not can change what the name means.
+    """
+
+    exact = {_name_key(name) for name in records}
+    private = {_name_key(record.user_name) for record in records.values() if record.user_name is not None}
+    for article in articles:
+        for name in article.declarations:
+            key = _name_key(name)
+            if key in exact or key not in private:
+                continue
+            path = next(
+                (item.path.as_posix() for item in declared.get(key, ()) if unprobed(item.path.as_posix())), None
+            )
+            if path is not None:
+                raise ImpactError(
+                    f"{article.id}: lean: {name} may name a declaration in {path}, which this scope did not "
+                    "load; rerun without --module-scope"
+                )
+
+
+def _external_imports(
+    modules: Iterable[str], headers: Mapping[str, tuple[str, ...] | None]
+) -> set[tuple[object, ...]]:
+    """The keys of what ``modules`` import from other packages, by their headers."""
+
+    inventory = {_name_key(module) for module in headers}
+    by_key = {_name_key(module): imported for module, imported in headers.items()}
+    return {
+        key
+        for module in modules
+        for name in by_key.get(_name_key(module)) or ()
+        if (key := _name_key(name)) not in inventory
+    }
 
 
 def import_closure(
@@ -1656,6 +1719,7 @@ def _load_impact_evidence(
         importers: frozenset[str] = frozenset()
         loaded: frozenset[str] = frozenset()
         module_paths: Mapping[str, str] = {}
+        headers: Mapping[str, tuple[str, ...] | None] = {}
         if module_scope == IMPORT_CLOSURE_SCOPE:
             assert module is not None
             module_paths = _built_module_paths(libraries, source_snapshot)
@@ -1733,7 +1797,11 @@ def _load_impact_evidence(
     if module_scope == IMPORT_CLOSURE_SCOPE:
         _check_header_graph(module_evidence, graph)
         unprobed = _unprobed_files(module_paths, loaded, module_evidence)
-        _check_unprobed_parents(records, importers, source_snapshot, unprobed)
+        declared = _declarations_by_key(source_snapshot)
+        # The probe also imports the toolchain modules it needs, in both scopes.
+        external_unloaded = not _external_imports(loaded, headers) <= _external_imports(module_evidence, headers)
+        _check_unprobed_private_names(records, articles_by_id.values(), declared, unprobed)
+        _check_unprobed_parents(records, importers, declared, unprobed, external_unloaded=external_unloaded)
 
         # A name declared where neither scope loads stays unresolved, as the default scope reports it.
         def out_of_scope(name: str) -> bool:
