@@ -1005,8 +1005,13 @@ def test_decluttered_reader_keeps_native_math_anchors_leaf_navigation_and_back_p
     assert card.get_attribute("id")
     page.evaluate("() => history.back()")
     page.wait_for_url(site.route("alpha"))
+    playwright.expect(reader.locator("h1")).to_have_text(site.records["alpha"]["title"])
     page.evaluate("() => history.back()")
     page.wait_for_url(site.route("roadmap") + "#retained-section")
+    # popstate changes the URL before the bounded asynchronous reader commit.
+    # Missing catalogue nodes in the outgoing chapter must not satisfy hidden.
+    playwright.expect(reader.locator("#retained-section")).to_be_visible()
+    playwright.expect(reader.locator("#topic-catalogue + ul")).to_have_count(1)
     playwright.expect(reader.locator("#topic-catalogue + ul")).to_be_hidden()
     assert _DECLUTTER_END in reader.inner_text()
     assert documents == [site.route("roadmap")]
