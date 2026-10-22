@@ -402,18 +402,27 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert "touch-action: none; cursor: grab;" in container
     assert 'url.origin === window.location.origin' in script
     assert 'w: node.width, h: node.height' in script
-    assert 'spotlight.before.has(edge.source) && spotlight.before.has(edge.target)' in script
-    assert 'spotlight.after.has(edge.source) && spotlight.after.has(edge.target)' in script
-    # Global overview relationships remain visible; edge work still uses only
-    # incident edges of the selected node or currently visible nodes.
-    assert "if (atlas && state.selected)" in script
-    assert "(incident.get(state.selected.id) || []).forEach" in script
+    assert 'spotlight.before.has(source) && spotlight.before.has(target) ? 1' in script
+    assert 'spotlight.after.has(source) && spotlight.after.has(target) ? 2' in script
+    # The area overview and the atlas draw no links at rest; a selected, hovered
+    # or focused card shows only its own. Elsewhere edge work still uses only
+    # the incident edges of the currently visible nodes.
+    assert "subject = state.selected || quiet && state.hovered" in script
+    assert "if (atlas && subject)" in script
+    assert "(incident.get(subject.id) || []).forEach" in script
+    assert "} else if (!quiet) {" in script
     assert "visible.forEach(function (node) { (incident.get(node.id) || []).forEach" in script
+    assert "quiet && !edgeIndexes.has(route.edgeIndex)) return;" in script
+    assert "control.addEventListener(type, function () { state.hovered = index < 2 && node; schedule(); });" in script
     assert "if (!state.activeDirty) return" in script
     assert "if (query === state.searchCacheQuery) return state.searchCache" in script
     assert f'data.schema !== "{dag_viewer.SCHEMA}"' in script
     assert f'index.schema !== "{dag_viewer.SEARCH_SCHEMA}"' in script
-    assert 'ctx.fillText("×" + count' in script
+    # Counts are words on a pill, drawn only on a link the selection lights.
+    assert 'var text = count + " links"' in script and '"×" + ' not in script
+    assert "if (count > 1 && role > 0 && Math.hypot(bx - ax, by - ay) > 90) pill(" in script
+    assert "if (label && role > 0) pill(ctx, route.count," in script
+    assert 'ctx.setLineDash([6, 4])' in script and "setLineDash([5, 5])" not in script
     # Ranking matches exact names before prefixes, and statement text last.
     assert script.index("if (title === query)") < script.index("if (title.startsWith(query))")
     assert script.index("if (lean === query)") < script.index("if (lean.startsWith(query))")
@@ -861,10 +870,11 @@ def test_explorer_canvas_paints_its_labels_in_the_site_family_at_11px_or_more() 
     assert script.count('refs.ctx.font = "10px sans-serif";') == 1  # Parse probe only, never a painted label.
     assert 'family = getComputedStyle(host).fontFamily; refs.ctx.font = "11px " + family;' in script
     assert 'ctx.fillStyle = dark ? "#B0B3B8" : "#65676B"; ctx.font = "600 13px " + family;' in script
-    assert 'ctx.font = Math.max(11, 10 * state.transform.scale) + "px " + family;' in script
+    # The free-standing map paints its count pills at a fixed 13px.
+    assert 'pill(ctx, count, (ax + bx) / 2, (ay + by) / 2 + offset * 3, 1);' in script
     # The integrated router measures and paints the same 13px family; its .9 initial floor gives 11.7px.
     assert 'refs.ctx.font = "600 13px " + family;' in script
-    assert 'ctx.font = "600 " + (13 * scale) + "px " + family;' in script
+    assert 'ctx.font = "600 " + 13 * scale + "px " + family;' in script
     assert 'readableFloor = navigation ? .9 :' in script
 
 

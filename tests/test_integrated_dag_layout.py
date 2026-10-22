@@ -258,6 +258,34 @@ def test_renderer_geometry_cache_changes_only_for_captured_geometry_inputs() -> 
     """, _graph(4, [(0, 1, 3, 1), (1, 2, 0, 5)]))
 
 
+def test_lit_links_take_two_accents_and_name_their_count_on_a_pill_inside_the_reserved_label() -> None:
+    """Execute the production edge roles, styles and count pill against the router's reserved label box."""
+    _run(r"""
+      ['edgeRole','edgeStyle','pill'].forEach(name=>(0,eval)(original(name)));
+      var dark=false,family='sans-serif',isDark=()=>dark,rounded=(ctx,...box)=>ctx.calls.push(['box',...box]);
+      const fake=()=>({calls:[],setLineDash(dash){this.calls.push(['dash',dash]);},measureText(text){return {width:text.length*7*parseFloat(this.font.split(' ')[1])/13};},
+        fill(){this.calls.push(['fill',this.fillStyle]);},stroke(){this.calls.push(['stroke',this.strokeStyle]);},
+        fillText(text,x,y){this.calls.push(['text',text,this.font,this.fillStyle,x,y]);}});
+      const spotlight={before:new Set(['a','s']),after:new Set(['s','d']),nodes:new Set(['a','s','d'])};
+      assert.deepEqual([edgeRole(null,'a','d'),edgeRole(spotlight,'a','s'),edgeRole(spotlight,'s','d'),edgeRole(spotlight,'a','d')],[-1,1,2,0]);
+      const styles=()=>[-1,0,1,2].map(role=>{const ctx=fake();edgeStyle(ctx,role,role===0);
+        assert.equal(ctx.fillStyle,ctx.strokeStyle);return [ctx.globalAlpha,ctx.lineWidth,ctx.strokeStyle];});
+      assert.deepEqual(styles(),[[1,1.5,'#8A8D91'],[.08,1.5,'#8A8D91'],[1,2.5,'#0064E0'],[1,2.5,'#1C1E21']]);
+      dark=true;assert.deepEqual(styles().map(style=>style[2]),['#A8B0BB','#A8B0BB','#2D88FF','#E4E6EB']);dark=false;
+      const dashed=fake();edgeStyle(dashed,-1,true);assert.deepEqual(dashed.calls,[['dash',[6,4]]]);
+      const measure=text=>text.length*7;
+      const result=layoutGraph([{id:'a',width:200,height:100},{id:'b',width:200,height:100}],[{source:'a',target:'b',statement:29,proof:0}],'lr',measure);
+      const label=result.routes[0].label;assert.equal(label.w,Math.ceil(measure('29 links'))+12);
+      for(const scale of [1,.6]) {
+        const ctx=fake();ctx.strokeStyle='#0064E0';pill(ctx,29,(label.x+label.w/2)*scale,(label.y+label.h/2)*scale,scale);
+        const box=ctx.calls.find(call=>call[0]==='box'),text=ctx.calls.find(call=>call[0]==='text');
+        assert(box[1]>=label.x*scale-1e-9&&box[3]<=label.w*scale+1e-9&&Math.abs(box[4]-label.h*scale)<1e-9,'The pill leaves its reserved label box');
+        assert.deepEqual(ctx.calls.filter(call=>call[0]!=='box').map(call=>call.slice(0,4)),
+          [['fill','#f0f2f5'],['stroke','#0064E0'],['text','29 links','600 '+13*scale+'px sans-serif','#0064E0']]);
+      }
+    """, {})
+
+
 def test_authoritative_ids_cannot_collide_with_engine_object_prototypes() -> None:
     ids = ["__proto__", "constructor", "toString", "scope:authored", "boundary:authored", "unicode/é"]
     fixture = {

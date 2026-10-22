@@ -1872,6 +1872,14 @@ def count_label_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
 
 
 
+def _point_at_a_region_link(page: object) -> None:
+    """The area overview paints no link or count at rest; pointing at a region lights its link and count pill."""
+    _paint_frame(page)
+    assert page.evaluate("window.labelPaints.every(paint => !paint.text.endsWith(' links'))")
+    page.locator('.bp-dag-node[data-autoform-node-id^="region:"]').first.hover()
+    page.wait_for_function("window.labelPaints.some(paint => paint.text === '12 links')")
+
+
 def _record_label_paints(page: object, *, reject_family: bool) -> None:
     page.add_init_script(
         """
@@ -1956,8 +1964,8 @@ def test_canvas_label_paints_use_the_site_family_or_a_valid_fallback(
         # Material can override an inherited root custom property later.
         page.route(canonical, serif_host_before_startup)
     _open_site(page, site_url, urlsplit(canonical).path.lstrip("/"))
-    page.wait_for_function("window.labelPaints.some(paint => paint.text === '×12')")
-    painted = page.evaluate("window.labelPaints.filter(paint => paint.text === '×12').at(-1)")
+    _point_at_a_region_link(page)
+    painted = page.evaluate("window.labelPaints.filter(paint => paint.text === '12 links').at(-1)")
     family = page.locator(".bp-dag-viewer").evaluate("host => getComputedStyle(host).fontFamily")
     assert ("Plus Jakarta Sans" if reject_family else "Times New Roman") in family
     pixels = float(re.search(r"(\d+(?:\.\d+)?)px", painted["font"]).group(1))
@@ -2379,8 +2387,8 @@ def test_the_canvas_paints_its_labels_in_the_sites_family(desktop_page: object, 
     _record_label_paints(page, reject_family=False)
     canonical = _site_route(page, site_url, "roadmap")
     _open_site(page, site_url, urlsplit(canonical).path.lstrip("/"))
-    page.wait_for_function("window.labelPaints.some(paint => paint.text === '×12')")
-    painted = page.evaluate("window.labelPaints.filter(paint => paint.text === '×12').at(-1)")
+    _point_at_a_region_link(page)
+    painted = page.evaluate("window.labelPaints.filter(paint => paint.text === '12 links').at(-1)")
     family = page.locator(".bp-dag-viewer").evaluate("host => getComputedStyle(host).fontFamily")
     assert "Plus Jakarta Sans" in family and "Plus Jakarta Sans" in painted["font"]
     pixels = float(re.search(r"(\d+(?:\.\d+)?)px", painted["font"]).group(1))

@@ -112,7 +112,7 @@
     routes.sort(function (a, b) { return compare(a.source, b.source) || compare(a.target, b.target) || compare(a.kind, b.kind) || a.count - b.count; });
     routes.forEach(function (route, index) {
       route.name = String(index);
-      route.labelWidth = route.count > 1 ? Math.ceil(measureLabel ? measureLabel("×" + route.count) : (String(route.count).length + 1) * 8) + 12 : 0;
+      route.labelWidth = route.count > 1 ? Math.ceil(measureLabel ? measureLabel(route.count + " links") : (String(route.count).length + 6) * 8) + 12 : 0;
       graph.setEdge("n:" + route.source, "n:" + route.target, {width: route.labelWidth, height: route.labelWidth ? 20 : 0, labelpos: "c"}, route.name);
     });
     AutoformDagre.layout(graph);
@@ -384,7 +384,7 @@
       ui$spotlight = null, ui$navigationLimit = atlas ? 120 : 50, ui$mapAllowed = mapAllowed, ui$readableCrop = false,
       ui$introInSheet = sheetLayout(), ui$selectedStatuses = new Set(presentStatuses), ui$showIsolated = true,
       ui$transform = {x: 20, y: 20, scale: 1}, ui$reading = Boolean(firstBundle && firstBundle.readingSource),
-      ui$area = null, ui$filtersTouched = false, ui$relationIds = null,
+      ui$area = null, ui$filtersTouched = false, ui$relationIds = null, ui$hovered = null,
       ui$requestedNode = firstBundle && firstBundle.nodeId || null, ui$outlineLimit = 120;
     if (!mapAllowed) ui$mode = "list";
     var dom$announcement, dom$body, dom$breadcrumb, dom$canvas, dom$ctx, dom$density, dom$edgeFieldset, dom$empty,
@@ -586,7 +586,7 @@
     function updateProjection() {
       var projected = navigation ? neighborhood(ui$requestedNode) || regionProjection(contextGraph, ui$area) : contextGraph;
       host.classList.toggle("bp-dag-area-expanded", Boolean(navigation && ui$area));
-      adoptGraph(projected); ui$mapAllowed = mapAllowed; ui$activeDirty = true; ui$spotlight = null;
+      adoptGraph(projected); ui$mapAllowed = mapAllowed; ui$activeDirty = true; ui$spotlight = ui$hovered = null;
       overlays.forEach(function (control) { control.remove(); }); overlays.clear();
       ui$selected = byId.get(ui$requestedNode) || null;
       if (!ui$filtersTouched) ui$selectedStatuses = new Set(presentStatuses);
@@ -1211,22 +1211,22 @@
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height);
       if (atlas && !navigation) drawRegions(ctx);
       var visible = ui$active.filter(function (node) { return inViewport(screen(node), 80); });
+      // The area overview and the free-standing atlas stay quiet until a card is selected, hovered or focused; then only its own links show.
+      var quiet = navigation ? data.nodes.every(function (node) { return node._region; }) : atlas, subject = ui$selected || quiet && ui$hovered;
       var edgeIndexes = new Set();
-      if (atlas && ui$selected) {
-        (incident.get(ui$selected.id) || []).forEach(function (index) { edgeIndexes.add(index); });
-      } else {
+      if (atlas && subject) {
+        (incident.get(subject.id) || []).forEach(function (index) { edgeIndexes.add(index); });
+      } else if (!quiet) {
         visible.forEach(function (node) { (incident.get(node.id) || []).forEach(function (index) { edgeIndexes.add(index); }); });
       }
-      var spotlight = atlas && ui$selected ? atlasSpotlight() : pathSpotlight();
+      var spotlight = atlas && subject ? atlasSpotlight(subject) : pathSpotlight();
       if (navigation) {
         geometry().routes.forEach(function (route) {
-          if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target)) return;
+          if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target) || quiet && !edgeIndexes.has(route.edgeIndex)) return;
           var bounds = {x: route.bounds.x * ui$transform.scale + ui$transform.x, y: route.bounds.y * ui$transform.scale + ui$transform.y,
             w: route.bounds.w * ui$transform.scale, h: route.bounds.h * ui$transform.scale};
           if (!inViewport(bounds, 40)) return;
-          var highlighted = !spotlight || (spotlight.before.has(route.source) && spotlight.before.has(route.target)) ||
-            (spotlight.after.has(route.source) && spotlight.after.has(route.target));
-          drawRoute(ctx, route, highlighted);
+          drawRoute(ctx, route, edgeRole(spotlight, route.source, route.target));
         });
       } else edgeIndexes.forEach(function (index) {
         var edge = data.edges[index]; if (!ui$activeIds.has(edge.source) || !ui$activeIds.has(edge.target)) return;
@@ -1234,11 +1234,9 @@
         var a = screen(source), b = screen(target);
         if (!inViewport({x: Math.min(a.x, b.x), y: Math.min(a.y, b.y),
           w: Math.abs(b.x - a.x) + Math.max(a.w, b.w), h: Math.abs(b.y - a.y) + Math.max(a.h, b.h)}, 40)) return;
-        var highlighted = !spotlight ||
-          (spotlight.before.has(edge.source) && spotlight.before.has(edge.target)) ||
-          (spotlight.after.has(edge.source) && spotlight.after.has(edge.target));
-        if (edge.statement) drawEdge(ctx, a, b, false, highlighted, edge.statement, edge.proof ? -4 : 0);
-        if (edge.proof) drawEdge(ctx, a, b, true, highlighted, edge.proof, edge.statement ? 4 : 0);
+        var role = edgeRole(spotlight, edge.source, edge.target);
+        if (edge.statement) drawEdge(ctx, a, b, false, role, edge.statement, edge.proof ? -4 : 0);
+        if (edge.proof) drawEdge(ctx, a, b, true, role, edge.proof, edge.statement ? 4 : 0);
       });
       visible.forEach(function (node) { drawPlate(ctx, node, screen(node), !spotlight || spotlight.nodes.has(node.id)); });
       updateOverlays(visible, spotlight);
@@ -1259,12 +1257,28 @@
         ctx.restore();
       });
     }
-    function atlasSpotlight() {
-      var before = new Set([ui$selected.id]), after = new Set([ui$selected.id]);
-      (prerequisites.get(ui$selected.id) || []).forEach(function (id) { before.add(id); });
-      (dependents.get(ui$selected.id) || []).forEach(function (id) { after.add(id); });
+    function atlasSpotlight(node) {
+      var before = new Set([node.id]), after = new Set([node.id]);
+      (prerequisites.get(node.id) || []).forEach(function (id) { before.add(id); });
+      (dependents.get(node.id) || []).forEach(function (id) { after.add(id); });
       var nodes = new Set(before); after.forEach(function (id) { nodes.add(id); });
       return {after: after, before: before, nodes: nodes};
+    }
+    // -1 is a link at rest; under a selection 1 is on its prerequisite chain, 2 among its dependents, and 0 fades.
+    function edgeRole(spotlight, source, target) {
+      return !spotlight ? -1 : spotlight.before.has(source) && spotlight.before.has(target) ? 1 : spotlight.after.has(source) && spotlight.after.has(target) ? 2 : 0;
+    }
+    // At rest a link is a full grey line; a selection draws its prerequisites in the link blue and its dependents in the text colour.
+    function edgeStyle(ctx, role, dashed) {
+      var dark = isDark(); ctx.globalAlpha = role ? 1 : .08; ctx.lineWidth = role > 0 ? 2.5 : 1.5; if (dashed) ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = ctx.fillStyle = role > 1 ? dark ? "#E4E6EB" : "#1C1E21" : role > 0 ? dark ? "#2D88FF" : "#0064E0" : dark ? "#A8B0BB" : "#8A8D91";
+    }
+    // Only a lit link names its count, in words on a pill in the map colour.
+    function pill(ctx, count, x, y, scale) {
+      var text = count + " links", h = 20 * scale; ctx.font = "600 " + 13 * scale + "px " + family;
+      var w = ctx.measureText(text).width + 12 * scale; ctx.fillStyle = isDark() ? "#18191a" : "#f0f2f5"; ctx.lineWidth = 1;
+      rounded(ctx, x - w / 2, y - h / 2, w, h, h / 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = ctx.strokeStyle; ctx.textAlign = "center"; ctx.fillText(text, x, y + 4.5 * scale);
     }
     function rounded(ctx, x, y, w, h, radius) {
       var r = Math.min(radius, w / 2, h / 2); ctx.beginPath(); ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y);
@@ -1283,37 +1297,32 @@
       else { rounded(ctx, box.x, box.y, box.w, box.h, 7 * ui$transform.scale); ctx.fill(); ctx.stroke(); }
       ctx.restore();
     }
-    function drawEdge(ctx, a, b, dashed, highlighted, count, offset) {
+    function drawEdge(ctx, a, b, dashed, role, count, offset) {
       var horizontal = ui$orientation === "lr";
       var ax = horizontal ? a.x + a.w : a.x + a.w / 2 + offset;
       var ay = horizontal ? a.y + a.h / 2 + offset : a.y + a.h;
       var bx = horizontal ? b.x : b.x + b.w / 2 + offset;
       var by = horizontal ? b.y + b.h / 2 + offset : b.y;
-      ctx.save(); ctx.globalAlpha = highlighted ? .58 : .065; ctx.strokeStyle = isDark() ? "#a8b0bb" : "#64748b";
-      ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = highlighted ? 1.35 : 1; if (dashed) ctx.setLineDash([5, 5]);
+      ctx.save(); edgeStyle(ctx, role, dashed);
       ctx.beginPath(); ctx.moveTo(ax, ay);
       if (horizontal) { var mx = ax + (bx - ax) * .5; ctx.bezierCurveTo(mx, ay, mx, by, bx, by); }
       else { var my = ay + (by - ay) * .5; ctx.bezierCurveTo(ax, my, bx, my, bx, by); }
       ctx.stroke(); ctx.setLineDash([]);
       if (ui$transform.scale > .18) {
         ctx.beginPath();
-        if (horizontal) { ctx.moveTo(bx, by); ctx.lineTo(bx - 6, by - 3.5); ctx.lineTo(bx - 6, by + 3.5); }
-        else { ctx.moveTo(bx, by); ctx.lineTo(bx - 3.5, by - 6); ctx.lineTo(bx + 3.5, by - 6); }
+        if (horizontal) { ctx.moveTo(bx, by); ctx.lineTo(bx - 9, by - 5); ctx.lineTo(bx - 9, by + 5); }
+        else { ctx.moveTo(bx, by); ctx.lineTo(bx - 5, by - 9); ctx.lineTo(bx + 5, by - 9); }
         ctx.closePath(); ctx.fill();
       }
-      if (count > 1 && ui$transform.scale > .32) {
-        ctx.globalAlpha = highlighted ? .82 : .2; ctx.font = Math.max(11, 10 * ui$transform.scale) + "px " + family;
-        ctx.textAlign = "center"; ctx.fillText("×" + count, (ax + bx) / 2, (ay + by) / 2 - 4);
-      }
+      // The pill sits on the curve's midpoint; statement and proof copies stack theirs, and a short link has no room for one.
+      if (count > 1 && role > 0 && Math.hypot(bx - ax, by - ay) > 90) pill(ctx, count, (ax + bx) / 2, (ay + by) / 2 + offset * 3, 1);
       ctx.restore();
     }
-    function drawRoute(ctx, route, highlighted) {
+    function drawRoute(ctx, route, role) {
       var scale = ui$transform.scale, points = route.points.map(function (point) {
         return {x: point.x * scale + ui$transform.x, y: point.y * scale + ui$transform.y};
       });
-      ctx.save(); ctx.globalAlpha = highlighted ? .65 : .15; ctx.strokeStyle = isDark() ? "#a8b0bb" : "#64748b";
-      ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = highlighted ? 1.5 : 1;
-      if (route.kind === "proof") ctx.setLineDash([5, 5]);
+      ctx.save(); edgeStyle(ctx, role, route.kind === "proof");
       ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
       for (var index = 1; index < points.length - 1; index++) {
         var point = points[index], before = points[index - 1], after = points[index + 1], radius = route.radii[index] * scale;
@@ -1325,16 +1334,12 @@
       var tip = points[points.length - 1], arrow = route.arrow;
       ctx.lineTo(tip.x, tip.y); ctx.stroke(); ctx.setLineDash([]);
       ctx.beginPath(); ctx.moveTo(tip.x, tip.y);
-      ctx.lineTo(tip.x - (arrow.dx * 8 - arrow.dy * 4) * scale, tip.y - (arrow.dy * 8 + arrow.dx * 4) * scale);
-      ctx.lineTo(tip.x - (arrow.dx * 8 + arrow.dy * 4) * scale, tip.y - (arrow.dy * 8 - arrow.dx * 4) * scale);
+      ctx.lineTo(tip.x - (arrow.dx * 10 - arrow.dy * 5) * scale, tip.y - (arrow.dy * 10 + arrow.dx * 5) * scale);
+      ctx.lineTo(tip.x - (arrow.dx * 10 + arrow.dy * 5) * scale, tip.y - (arrow.dy * 10 - arrow.dx * 5) * scale);
       ctx.closePath(); ctx.fill();
-      if (route.label) {
-        var label = route.label, x = label.x * scale + ui$transform.x, y = label.y * scale + ui$transform.y;
-        ctx.globalAlpha = highlighted ? .95 : .4; ctx.fillStyle = isDark() ? "#18191a" : "#f0f2f5";
-        ctx.fillRect(x, y, label.w * scale, label.h * scale); ctx.fillStyle = ctx.strokeStyle;
-        ctx.font = "600 " + (13 * scale) + "px " + family; ctx.textAlign = "center";
-        ctx.fillText("×" + route.count, x + label.w * scale / 2, y + 14 * scale);
-      }
+      // Dagre keeps the label's box clear of cards and other routes, so the pill fills it.
+      var label = route.label;
+      if (label && role > 0) pill(ctx, route.count, (label.x + label.w / 2) * scale + ui$transform.x, (label.y + label.h / 2) * scale + ui$transform.y, scale);
       ctx.restore();
     }
 
@@ -1399,6 +1404,10 @@
       // A drag or pinch that began on the card is not a tap; a keyboard click has no detail and always opens it.
       control.addEventListener("click", function (event) { event.stopPropagation(); if (!ui$moved || !event.detail) activateNode(node, false); });
       if (!navigation) control.addEventListener("dblclick", function () { var href = safeHref(node.url); if (href) window.location.href = href; });
+      // Pointing at or focusing a card shows its links where the map is quiet at rest.
+      ["pointerenter", "focus", "pointerleave", "blur"].forEach(function (type, index) {
+        control.addEventListener(type, function () { ui$hovered = index < 2 && node; schedule(); });
+      });
       control.addEventListener("keydown", function (event) {
         if (/^Arrow(Left|Right|Up|Down)$/.test(event.key)) {
           var next = nearest(node, event.key);
