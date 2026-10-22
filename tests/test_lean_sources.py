@@ -3969,7 +3969,6 @@ def test_repository_top_level_is_unknown_when_git_prints_a_name_that_is_not_utf_
     assert repository_top_level(tmp_path) is None
 
 
-
 @pytest.mark.parametrize(
     ("source", "expected"),
     [

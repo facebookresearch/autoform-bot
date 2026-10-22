@@ -172,10 +172,7 @@ def test_import_edits_use_reported_scope_instead_of_a_blanket_ban(
     assert "advisory and does not edit authored roadmap or Lean source" in cli
     assert "freshness check may refresh build hash sidecars" in cli
     assert "`autoform-module-import-impact/v1`" in cli
-    assert (
-            "`module_scope` is the scope that ran, `loaded-root-library-graph` or `import-closure`"
-            in cli
-        )
+    assert "`module_scope` is the scope that ran, `loaded-root-library-graph` or `import-closure`" in cli
     assert "`module_claim_target`" in cli
     assert "`lean-module/<lowercase-slug>-<sha256[:16]>`" in cli
     assert "The import edit's `claim_targets` contain only the selected article" in cli

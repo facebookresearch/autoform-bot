@@ -722,8 +722,10 @@ def render_impact_probe(
     module outside ``project_modules`` whose OLean lies under ``artifact_dir``,
     or a module outside ``selected_modules``, the modules the libraries
     select, that it finds by walking a ``glob_directories`` entry. Each entry
-    is the directory of an ``M.*`` or ``M.+`` glob, with ``M`` and the glob. ``emit_module_evidence`` also
-    records every loaded project module's source, artifact and direct imports.
+    is the directory of an ``M.*`` or ``M.+`` glob, with ``M`` and the glob;
+    ``glob_directories`` requires ``selected_modules``, and rendering refuses
+    without them. ``emit_module_evidence`` also records every loaded project
+    module's source, artifact and direct imports.
     """
 
     modules = sorted(set(imports))
