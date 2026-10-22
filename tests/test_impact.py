@@ -3435,7 +3435,10 @@ def test_import_impact_reads_a_library_nested_in_another_srcdir(tmp_path: Path, 
 
 
 def _q_project(root: Path) -> tuple[Path, Path]:
-    """A built project: Q → Q.Top → Q.Mid → Q.Base, and Q.Side that only the glob selects."""
+    """A built project: Q → Q.Top → Q.Mid → Q.Base, and Q.Side that only the glob selects.
+
+    Q.Mid holds an unowned helper and an API lemma of Q.Base's ``Q.Box``.
+    """
 
     lean_root = root / "lean"
     (lean_root / "Q").mkdir(parents=True)
@@ -3445,8 +3448,18 @@ def _q_project(root: Path) -> tuple[Path, Path]:
     )
     for name, text in (
         ("Q.lean", "import Q.Top\n"),
-        ("Q/Base.lean", "namespace Q\n\ndef base : Nat := 1\n\ntheorem base_eq : base = 1 := rfl\n\nend Q\n"),
-        ("Q/Mid.lean", "import Q.Base\n\nnamespace Q\n\ntheorem mid : base = 1 := base_eq\n\nend Q\n"),
+        (
+            "Q/Base.lean",
+            "namespace Q\n\ndef base : Nat := 1\n\ntheorem base_eq : base = 1 := rfl\n\n"
+            "structure Box where\n  v : Nat\n\nend Q\n",
+        ),
+        (
+            "Q/Mid.lean",
+            "import Q.Base\n\nnamespace Q\n\ntheorem mid : base = 1 := base_eq\n\n"
+            "theorem midHelper : True := trivial\n\n"
+            "theorem Box.ext' (a b : Box) (h : a.v = b.v) : a = b := by\n  cases a; cases b; cases h; rfl\n\n"
+            "end Q\n",
+        ),
         (
             "Q/Top.lean",
             "/- Top module. -/\n-- comment between header tokens\nimport /- inline -/ Q.Mid\n\n"
@@ -3463,6 +3476,7 @@ def _q_project(root: Path) -> tuple[Path, Path]:
         ("mid.md", "theorem", "Q.mid"),
         ("top.md", "theorem", "Q.top"),
         ("side.md", "definition", "Q.side"),
+        ("box.md", "definition", "Q.Box"),
     ):
         _write_article(project, name, metadata=[f"declaration: {declaration}", "statement: formalized", f"lean: {lean}"])
     return lean_root, project
@@ -3486,6 +3500,9 @@ def test_import_closure_scope_matches_the_default_on_a_built_project(tmp_path: P
     for field in ("affected_articles", "affected_unowned_helpers", "unresolved_articles", "article_local",
                   "affected_claim_targets", "claim_targets"):
         assert closure[field] == default[field], field
+    # Q.Box lives in Q.Base, so chapter/box is affected only through Q.Box.ext' in Q.Mid.
+    assert {article["id"]: article["modules"] for article in default["affected_articles"]}["chapter/box"] == ["Q.Mid"]
+    assert [helper["name"] for helper in default["affected_unowned_helpers"]] == ["Q.midHelper"]
 
     # A stale module outside the closure stops only the default scope, though
     # the closure holds the root module named like its library.
