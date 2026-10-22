@@ -1486,9 +1486,10 @@ What an existing repository meets when it moves to this version:
    it resolved rather than the articles naming them. A `blueprint/atlas.json`
    that is not `autoform-atlas/v1`, which earlier versions ignored, now draws a
    warning from `check`, `render` and `audit`; it fails nothing.
-8. Old `dependencies/nodes/*.html` links no longer resolve: only
-   `dependencies/full.html#node=<id>` redirects, and a statement's dependency
-   link is now `<scope>.html#node=<id>`.
+8. Old `dependencies/nodes/*.html` links are not regenerated.
+   `dependencies.html#node=<id>`, nested dependency routes and
+   `dependencies/full.html#node=<id>` enter canonical article or chapter-card
+   reading through the shared client.
 9. Setup leaves an existing `mkdocs.yml` alone. A large site can add Material's
    `navigation.prune` feature by hand, as the scaffolded configuration does.
 10. A declaration whose name carries an explicit universe binder on its

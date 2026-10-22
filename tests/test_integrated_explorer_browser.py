@@ -13,7 +13,6 @@ import functools
 import hashlib
 import json
 import os
-import re
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -277,7 +276,11 @@ def _math_menu_evidence(page: object, phase: str) -> None:
         })};
     })""")
     menus = page.get_by_role("menu")
-    evidence = {"phase": phase, "frames": snapshot,
+    focused = page.evaluate("""() => {
+      const active=document.activeElement;
+      return {role:active.getAttribute('role'),text:active.textContent,class:active.className};
+    }""")
+    evidence = {"phase": phase, "frames": snapshot, "focused": focused,
                 "aria": [menus.nth(index).aria_snapshot() for index in range(menus.count())]}
     (directory / f"{stem}.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     page.screenshot(path=str(directory / f"{stem}.png"))
@@ -295,7 +298,10 @@ def _math_source(page: object, container: object, *, mathml: bool = False) -> st
         # again would target an obscured point. Use the actual posted command,
         # or open it with the menu's ordinary keyboard action.
         if not command.is_visible():
-            page.get_by_role("menuitem", name=re.compile(r"^Show Math As(?:\s*\u25ba)?$")).press("ArrowRight")
+            # Posting focuses the ROOT menu. Right from there cycles to the
+            # next equation; Down focuses its first Show Math As submenu and
+            # lets the library synchronize its internal focus before opening.
+            page.keyboard.press("ArrowDown")
         command.click()
         source = page.locator(".CtxtMenu_Info pre")
         source.wait_for(state="visible")
