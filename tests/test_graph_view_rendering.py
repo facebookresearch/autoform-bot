@@ -557,12 +557,34 @@ def test_explorer_styles_keep_one_family_one_type_scale_and_one_micro_label() ->
     style = dag_viewer._STYLE
     assert "serif" not in style.replace("sans-serif", "")
     # Integrated reading and region cards add an 18px title; !important only protects it from Material.
-    assert set(re.findall(r"font-size: (\d+)px(?: !important)?;", style)) <= {"11", "12", "13", "14", "17", "18", "22"}
+    assert set(re.findall(r"font-size: (\d+)px(?: !important)?;", style)) <= {"11", "12", "13", "14", "16", "17", "18", "22"}
     assert set(re.findall(r"font-weight: ([^;]+);", style)) <= {"400", "600", "700"}
-    uppercase = [rule.split("{")[0].strip() for rule in style.splitlines() if "text-transform: uppercase" in rule]
-    assert uppercase == [
-        ".bp-dag-filter-popover legend, .bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-group h2",
-    ]
+    # Rail group headings and filter legends are sentence case, like every other label.
+    assert "text-transform: uppercase" not in style
+    group = ".bp-dag-filter-popover legend, .bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-group h2 {"
+    assert "font-size: 12px; font-weight: 600; letter-spacing: normal;" in style.split(group, 1)[1].split("}", 1)[0]
+
+
+def test_reading_pane_sizes_put_the_statement_first() -> None:
+    """The book's rem sizes set Sources, totals and Previous/Next larger than the 17px statement in the pane."""
+    style = dag_viewer._STYLE
+    body = re.search(r"^\.bp-reading-body \{([^}]*)\}", style, re.M)
+    assert body is not None and "font-size: 16px; line-height: 1.6;" in body.group(1)
+
+    def size(selector: str) -> str:
+        rule = re.search(rf"^{re.escape(selector)} \{{ font-size: (\d+)px; \}}", style, re.M)
+        assert rule is not None, selector
+        return rule.group(1)
+
+    notes = ".bp-reading-body :is(.bp-thmnotes, .bp-meta, .bp-progress-states), .bp-reading-body details.bp-dependencies"
+    labels = (
+        ".bp-reading-body :is(.bp-thmnotes h6, .bp-key, .bp-mark, .bp-progress-kicker, "
+        ".bp-book-nav-direction, .bp-next-kicker, .bp-hero-kicker)"
+    )
+    totals = ".bp-reading-body :is(.bp-progress-total, .bp-book-nav-title, .bp-next-title)"
+    assert (size(notes), size(labels), size(totals)) == ("14", "12", "16")
+    # The workspace sets theorem statements upright; book pages keep amsthm italics.
+    assert ".bp-dag-integrated .theorem-style-plain > .bp-thmcontent { font-style: normal; }" in style
 
 
 def test_explorer_names_its_scope_once_and_lists_only_its_ancestors_above_it() -> None:

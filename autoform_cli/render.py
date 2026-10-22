@@ -3381,9 +3381,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-hero-kicker {{
   margin-top: 1.1rem;
   font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-weight: 600;
   color: var(--bp-muted);
 }}
 .md-typeset .bp-hero-title {{
@@ -3570,11 +3568,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   background: var(--bp-surface);
 }}
 .bp-progress-kicker {{
-  font-family: {mono};
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--bp-muted);
 }}
 .bp-progress-total {{ margin-top: 0.2rem; font-family: {serif}; font-size: 1.05rem; }}
@@ -3605,11 +3600,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-book-nav-link:hover {{ text-decoration: none; }}
 .bp-book-nav-next {{ margin-left: auto; text-align: right; }}
 .bp-book-nav-direction {{
-  font-family: {mono};
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
   color: var(--bp-muted);
 }}
 .bp-book-nav-title {{ margin-top: 0.15rem; font-family: {serif}; font-size: 1rem; }}
@@ -3653,9 +3645,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-next-kicker {{
   font-family: {sans};
   font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-weight: 600;
   color: var(--bp-muted);
 }}
 .bp-next-title {{ font-family: {serif}; font-size: 1.15rem; margin-top: 0.15rem; }}
@@ -3776,14 +3766,26 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-thmwrapper:hover .bp-permalink {{ opacity: 1; }}
 
-.bp-mark {{ margin-left: auto; font-weight: 400; padding-left: 1rem; }}
-.bp-mark-label {{
-  margin-left: 0.3rem;
-  font-family: {mono};
-  font-size: 0.78rem;
-  letter-spacing: 0.02em;
-  color: var(--bp-muted);
+/* The status is a pill on its own line under the title, a dot and a word
+   tinted with the status colour, as in the explorer's drawer. An empty item
+   the full width of the heading breaks the line before it, so the pill sits
+   at the left however long the title runs. */
+.bp-thmheading::after {{ content: ""; order: 1; flex-basis: 100%; }}
+.bp-mark {{
+  order: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  margin-top: 0.3rem;
+  padding: 0.1em 0.6em;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-family: {sans};
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.5;
 }}
+.bp-mark-label {{ color: var(--bp-fg); }}
 
 .bp-thmcontent {{
   font-family: {serif};
@@ -3808,9 +3810,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-thmnotes h6 {{
   font-family: {sans};
   font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  letter-spacing: normal;
   color: var(--bp-muted);
   margin: 0.5rem 0 0.15rem;
 }}
@@ -3897,10 +3898,8 @@ mjx-container > svg {{ max-width: none !important; }}
 .bp-row {{ display: flex; gap: 0.75rem; }}
 .bp-key {{
   flex: 0 0 7.5rem;
-  font-family: {mono};
   font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-weight: 600;
   color: var(--bp-muted);
 }}
 .bp-value {{ flex: 1; }}
@@ -3915,14 +3914,14 @@ mjx-container > svg {{ max-width: none !important; }}
   height: 0.6rem;
   margin-right: 0.35rem;
   border: 1px solid var(--bp-rule);
-  border-radius: 2px;
+  border-radius: 50%;
 }}
 .bp-swatch {{
   display: inline-block;
-  width: 0.9rem;
-  height: 0.9rem;
-  border: 1px solid var(--bp-rule);
-  border-radius: 3px;
+  width: 0.6rem;
+  height: 0.6rem;
+  border: 2px solid var(--bp-rule);
+  border-radius: 50%;
   vertical-align: middle;
 }}
 

@@ -1714,6 +1714,46 @@ def test_material_links_and_chrome_take_the_blueprint_blue() -> None:
         assert re.fullmatch(r"(?:\[[^\]]+\]){1,2}", bare), selector
 
 
+def test_labels_are_sentence_case_sans_and_the_status_is_a_pill_under_the_title() -> None:
+    css = render_module._stylesheet()
+
+    def rule(selector: str) -> str:
+        found = re.search(rf"(?m)^{re.escape(selector)} \{{([^}}]+)\}}", css)
+        assert found is not None, selector
+        return found.group(1)
+
+    # Small labels read as words, not as a log: no monospace, no capitals,
+    # no tracking, one weight. Monospace stays for Lean names and code.
+    for selector in (
+        ".bp-progress-kicker",
+        ".bp-book-nav-direction",
+        ".bp-key",
+        ".bp-thmnotes h6",
+        ".bp-next-kicker",
+        ".bp-hero-kicker",
+        ".bp-mark",
+    ):
+        body = rule(selector)
+        assert "{mono}" not in body and '"JetBrains Mono"' not in body, selector
+        assert "uppercase" not in body and "letter-spacing: 0." not in body, selector
+        assert "font-weight: 600;" in body, selector
+    assert "text-transform: uppercase" not in css
+    assert '.bp-lean { font-family: "JetBrains Mono"' in css
+
+    # The status sits on its own line at the left under the title, a dot and
+    # a word on a tint of the status colour, instead of at the far edge.
+    assert ".bp-thmheading::after { content: \"\"; order: 1; flex-basis: 100%; }" in css
+    mark = rule(".bp-mark")
+    assert "margin-left: auto" not in mark and "order: 2;" in mark
+    assert "border-radius: 999px;" in mark
+    assert "background: color-mix(in srgb, currentColor 12%, transparent);" in mark
+    assert rule(".bp-mark-label").strip() == "color: var(--bp-fg);"
+
+    # Status swatches are round dots, like the map's, not checkbox squares.
+    assert "border-radius: 50%;" in rule(".bp-swatch")
+    assert "border-radius: 50%;" in rule(".bp-ref::before")
+
+
 _MERMAID_HARNESS = r"""
 const fs = require("fs");
 const vm = require("vm");
