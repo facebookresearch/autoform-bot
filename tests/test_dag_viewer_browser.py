@@ -1422,7 +1422,10 @@ def test_on_a_phone_the_landing_hero_opens_in_the_details_sheet(mobile_page: obj
 
 
 def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_page: object, site_url: str) -> None:
-    """Toolbar popovers must remain on-screen and clickable over the phone's full reading pane."""
+    """Toolbar popovers must remain on-screen and clickable over the phone's reading pane.
+
+    They open over the reader at half, its default; at full the toolbar steps aside for reading.
+    """
     page = mobile_page
     def lengthen_the_index(route: object) -> None:
         index = route.fetch().json()
@@ -1437,9 +1440,6 @@ def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_pag
     playwright.expect(page.get_by_role("button", name=re.compile(r", reading$"))).to_have_attribute(
         "aria-expanded", "true"
     )
-    # The reader opens at half; one tap on its handle takes it to the full pane the popovers must cover.
-    page.locator(".bp-dag-sheet-handle").click()
-    playwright.expect(page.locator(".bp-dag-integrated")).to_have_class(re.compile(r"\bbp-dag-sheet-full\b"))
     page.locator(".bp-dag-filter-summary").tap()
     popover = page.locator(".bp-dag-filter-popover")
     playwright.expect(popover).to_be_visible()
@@ -1450,7 +1450,25 @@ def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_pag
     _assert_hit(page, popover.locator("input").first)
     search = _load_search_index(page)
     search.fill("Result")
-    assert _paints_over_the_details(page, ".bp-dag-result", ".bp-dag-search-results") is True
+    results = page.locator(".bp-dag-search-results")
+    playwright.expect(results).to_be_visible()
+    box = results.bounding_box()
+    assert box is not None
+    assert 0 <= box["x"] and box["x"] + box["width"] <= viewport["width"]
+    assert box["y"] + box["height"] <= viewport["height"]
+    _assert_hit(page, page.locator(".bp-dag-result").first)
+    # Where the results reach the half-open reader, they paint over it.
+    assert page.evaluate(
+        """() => {
+          const shown = document.querySelector('.bp-dag-search-results');
+          const r = shown.getBoundingClientRect();
+          const p = document.querySelector('.bp-reading-pane').getBoundingClientRect();
+          const top = Math.max(r.top, p.top), bottom = Math.min(r.bottom, p.bottom);
+          if (bottom - top <= 2) return "no overlap";
+          const x = (Math.max(r.left, p.left) + Math.min(r.right, p.right)) / 2;
+          return shown.contains(document.elementFromPoint(x, (top + bottom) / 2));
+        }"""
+    ) is True
 
 
 @pytest.mark.parametrize("width", (800, 1100, 1101, 1440))
