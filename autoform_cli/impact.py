@@ -442,16 +442,27 @@ def header_graph(
     return _local_header_graph(_module_headers(libraries, snapshot))
 
 
-def _module_headers(
-    libraries: Sequence[LeanLibrary], snapshot: IndexedSourceSnapshot
-) -> dict[str, tuple[str, ...] | None]:
-    """Map each local source module to every name its header imports, or ``None`` when unreadable."""
+def _built_module_paths(libraries: Sequence[LeanLibrary], snapshot: IndexedSourceSnapshot) -> dict[str, str]:
+    """Map each local source module to its source path.
 
-    # A module two libraries spell alike is the file Lake builds, the selecting library's.
-    paths = {
+    A module two libraries spell alike is the file Lake builds, the selecting library's.
+    """
+
+    return {
         **_module_source_paths(libraries, snapshot),
         **_module_source_paths(libraries, snapshot, strict=True),
     }
+
+
+def _module_headers(
+    libraries: Sequence[LeanLibrary],
+    snapshot: IndexedSourceSnapshot,
+    paths: Mapping[str, str] | None = None,
+) -> dict[str, tuple[str, ...] | None]:
+    """Map each local source module to every name its header imports, or ``None`` when unreadable."""
+
+    if paths is None:
+        paths = _built_module_paths(libraries, snapshot)
     data = {path.as_posix(): contents for path, contents in snapshot.source_files}
     headers: dict[str, tuple[str, ...] | None] = {}
     for module, relative in paths.items():
@@ -514,6 +525,28 @@ def _check_uninventoried_imports(
                     "captured source inventory lacks, so the import closure is unknown; "
                     "rerun without --module-scope"
                 )
+
+
+def _unprobed_files(
+    paths: Mapping[str, str], loaded: Iterable[str], probed: Iterable[str]
+) -> Callable[[str], bool]:
+    """Say whether a source path is a file the default scope loads but this probe did not.
+
+    Under nested srcDirs one file has a module spelling per library; it is
+    loaded when any spelling is.
+    """
+
+    spellings: dict[str, set[tuple[object, ...]]] = {}
+    for name, path in paths.items():
+        spellings.setdefault(path, set()).add(_name_key(name))
+    loaded_keys = {_name_key(name) for name in loaded}
+    probed_keys = {_name_key(name) for name in probed}
+
+    def unprobed(path: str) -> bool:
+        keys = spellings.get(path, set())
+        return bool(keys & loaded_keys) and not keys & probed_keys
+
+    return unprobed
 
 
 def import_closure(
@@ -1222,8 +1255,8 @@ def compute_module_import_impact(
     transitively, when only imports bring them in, as under a library's
     roots; this scope does not list them. It never refuses the edit merely
     because the scope is larger than one article. ``out_of_scope`` says which
-    unresolved names lie only in modules this scope did not load; those cannot
-    be affected.
+    unresolved names lie only in modules the default scope loads but this one
+    did not; those resolve there, outside the affected modules.
     """
 
     if module not in modules:
@@ -1563,9 +1596,12 @@ def _load_impact_evidence(
         selected_modules = imports
         graph: Mapping[str, tuple[str, ...] | None] = {}
         importers: frozenset[str] = frozenset()
+        loaded: frozenset[str] = frozenset()
+        module_paths: Mapping[str, str] = {}
         if module_scope == IMPORT_CLOSURE_SCOPE:
             assert module is not None
-            headers = _module_headers(libraries, source_snapshot)
+            module_paths = _built_module_paths(libraries, source_snapshot)
+            headers = _module_headers(libraries, source_snapshot, module_paths)
             graph = _local_header_graph(headers)
             loaded, importers = import_closure(selected_modules, graph, module)
             _check_uninventoried_imports(loaded, headers, libraries)
@@ -1633,24 +1669,12 @@ def _load_impact_evidence(
     out_of_scope: Callable[[str], bool] = _nothing_out_of_scope
     if module_scope == IMPORT_CLOSURE_SCOPE:
         _check_header_graph(module_evidence, graph)
-        loaded_keys = {_name_key(name) for name in module_evidence}
-        # Under nested srcDirs one file has a module spelling per library; it is unloaded only when none is loaded.
-        spellings: dict[str, set[str]] = {}
-        # A module two libraries spell alike is the file Lake builds, so overlay the strict mapping.
-        source_paths = {
-            **_module_source_paths(libraries, source_snapshot),
-            **_module_source_paths(libraries, source_snapshot, strict=True),
-        }
-        for name, path in source_paths.items():
-            spellings.setdefault(path, set()).add(name)
+        unprobed = _unprobed_files(module_paths, loaded, module_evidence)
 
+        # A name declared where neither scope loads stays unresolved, as the default scope reports it.
         def out_of_scope(name: str) -> bool:
             found = source_snapshot.index.occurrences(name)
-            return bool(found) and all(
-                (owners := spellings.get(item.path.as_posix()))
-                and all(_name_key(owner) not in loaded_keys for owner in owners)
-                for item in found
-            )
+            return bool(found) and all(unprobed(item.path.as_posix()) for item in found)
 
     return _ImpactEvidence(
         source_revision=source_revision,

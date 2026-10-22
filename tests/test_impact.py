@@ -3443,6 +3443,54 @@ def test_import_closure_scope_matches_the_default_on_a_built_project(tmp_path: P
     assert "Lean build artifacts are stale; run `lake build Q`" in capsys.readouterr().err
 
 
+def _prefix_project(root: Path, prefix_file: str) -> tuple[Path, Path]:
+    """A built project where ``Foo.Bar.baz`` in Demo.Mid sits below ``Foo`` in Demo.Base and ``Foo.Bar`` elsewhere.
+
+    ``prefix_file`` is the file declaring ``Foo.Bar``: ``Side.lean``, a second
+    library's root, or a file no library selects.
+    """
+
+    lean_root = root / "lean"
+    (lean_root / "Demo").mkdir(parents=True)
+    shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", lean_root / "lean-toolchain")
+    targets, side = ('"Demo", "Side"', '\n[[lean_lib]]\nname = "Side"\n') if prefix_file == "Side.lean" else ('"Demo"', "")
+    (lean_root / "lakefile.toml").write_text(
+        f'name = "P"\ndefaultTargets = [{targets}]\n\n[[lean_lib]]\nname = "Demo"\n{side}', encoding="utf-8"
+    )
+    for name, text in (
+        ("Demo.lean", "import Demo.Mid\n"),
+        ("Demo/Base.lean", "def Foo : Nat := 0\n"),
+        ("Demo/Mid.lean", "import Demo.Base\n\ntheorem Foo.Bar.baz : True := trivial\n"),
+        (prefix_file, "def Foo.Bar : Nat := 1\n"),
+    ):
+        (lean_root / name).write_text(text, encoding="utf-8")
+    _lake_build(lean_root)
+    project = root / "roadmap"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    for name, lean in (("sel.md", "Foo"), ("other.md", "Foo.Bar")):
+        _write_article(project, name, metadata=["declaration: definition", "statement: formalized", f"lean: {lean}"])
+    return lean_root, project
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_import_closure_scope_ignores_a_parent_only_a_dormant_file_declares(tmp_path: Path, capsys) -> None:
+    # No library selects Demo/Dormant.lean, so neither scope loads its Foo.Bar.
+    lean_root, project = _prefix_project(tmp_path, "Demo/Dormant.lean")
+    base = ["work", "import-impact", "chapter/sel", "Demo.Mid", str(project), "--lean-root", str(lean_root), "--json"]
+
+    reports = []
+    for scope in ("loaded-root-library-graph", "import-closure"):
+        code = cli.main([*base, "--module-scope", scope])
+        output = capsys.readouterr()
+        assert code == 0, output.err
+        reports.append(json.loads(output.out))
+    default, closure = reports
+    assert [article["id"] for article in default["affected_articles"]] == ["chapter/sel"]
+    for field in ("affected_modules", "affected_articles", "affected_unowned_helpers", "article_local",
+                  "affected_claim_targets"):
+        assert closure[field] == default[field], field
+
+
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_import_closure_scope_refuses_an_importer_the_inventory_skips_on_a_built_project(
     tmp_path: Path, capsys

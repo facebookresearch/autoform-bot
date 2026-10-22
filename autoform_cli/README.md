@@ -1180,7 +1180,8 @@ in its artifact directory) that the captured inventory lacks, such as one under
 a symlinked directory, or when Lean's loaded graph differs from the headers of
 the modules it loaded. A `MODULE` outside the loaded modules exits 2 as not a
 loaded project module. In this scope `unresolved_articles` leaves out
-declarations the source index places only in modules the scope did not load.
+declarations the source index places only in loaded modules the scope did not
+import, which the default scope resolves.
 Freshness is Lake's rehash of this checkout's `.lake` against this checkout's
 sources, so a build in another clone or worktree does not make this one fresh.
 `SELECTOR` identifies the working article and `MODULE` the module whose
