@@ -408,10 +408,10 @@ def test_probe_refuses_stale_artifacts_before_executing_lean(tmp_path: Path, mon
 
     monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
 
-    with pytest.raises(SkeletonError, match=r"run `lake build Skel.Main`"):
+    with pytest.raises(SkeletonError, match=r"run `lake build \+Skel.Main`"):
         run_probe(probe, tmp_path)
 
-    assert calls == [["/bin/lake", "--rehash", "--no-build", "build", "Skel.Main"]]
+    assert calls == [["/bin/lake", "--rehash", "--no-build", "build", "+Skel.Main"]]
 
 
 def test_probe_reports_a_failed_freshness_check_apart_from_stale_artifacts(
@@ -2673,7 +2673,7 @@ def test_lake_freshness_is_checked_once_before_one_probe_per_module(tmp_path: Pa
     report = extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project)
 
     assert report.clean
-    assert calls[0] == ["/bin/lake", "--rehash", "--no-build", "build", "Skel.Main", "Skel.Uses"]
+    assert calls[0] == ["/bin/lake", "--rehash", "--no-build", "build", "+Skel.Main", "+Skel.Uses"]
     # The helpers are built once, after the freshness check and before any probe.
     assert calls[1][1:4] == ["env", "lean", f"--root={Path(calls[1][-1]).parent}"]
     assert calls[1][-1].endswith("/autoform-skeleton-helper.lean")
@@ -2855,9 +2855,9 @@ def test_environmental_failures_still_abort_a_per_module_extraction(tmp_path: Pa
 
     monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", stale)
 
-    with pytest.raises(SkeletonError, match=r"build artifacts are stale; run `lake build Skel.Main Skel.Uses`"):
+    with pytest.raises(SkeletonError, match=r"build artifacts are stale; run `lake build \+Skel.Main \+Skel.Uses`"):
         extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project)
-    assert calls == [["/bin/lake", "--rehash", "--no-build", "build", "Skel.Main", "Skel.Uses"]]
+    assert calls == [["/bin/lake", "--rehash", "--no-build", "build", "+Skel.Main", "+Skel.Uses"]]
 
 
 def test_a_helper_build_that_times_out_states_its_budget_once(tmp_path: Path, monkeypatch) -> None:

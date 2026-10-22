@@ -1775,11 +1775,14 @@ def _check_artifacts_fresh(
 
     ``--rehash`` distrusts every cached ``.hash`` sidecar and hashes the inputs
     afresh; Lake has no mode that does so without rewriting those sidecars, so
-    the project's build directory must be writable.
+    the project's build directory must be writable. ``+`` names each module as
+    a module: Lake reads a bare name as a library first, so a root module named
+    like its library would check every module the library globs.
     """
 
+    targets = tuple(f"+{module}" for module in modules)
     result = _run_bounded_command(
-        [lake, "--rehash", "--no-build", "build", *modules],
+        [lake, "--rehash", "--no-build", "build", *targets],
         cwd=lean_root,
         timeout=timeout,
         context="cannot verify Lean build freshness",
@@ -1787,7 +1790,7 @@ def _check_artifacts_fresh(
     # Lake prints each target's line on stdout and only warnings and its summary on stderr.
     output = "\n".join(part for part in (result.stdout.strip(), result.stderr.strip()) if part)
     if result.returncode == _LAKE_NO_BUILD_EXIT:
-        raise SkeletonError([f"{STALE_BUILD}{shlex.join(modules)}` before {_probe_purpose(label)}\n{output}"])
+        raise SkeletonError([f"{STALE_BUILD}{shlex.join(targets)}` before {_probe_purpose(label)}\n{output}"])
     if result.returncode != 0:
         raise SkeletonError(
             [

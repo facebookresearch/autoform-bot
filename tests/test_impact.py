@@ -1262,7 +1262,7 @@ def test_impact_probe_freshness_messages_never_mention_skeletons(tmp_path: Path,
     assert issues("impact probe") == (f"{missing} running the impact probe",)
     assert issues(None) == (f"{missing} extracting skeletons",)
     (tmp_path / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
-    stale = "Lean build artifacts are stale; run `lake build Demo` before"
+    stale = "Lean build artifacts are stale; run `lake build +Demo` before"
     assert issues("impact probe") == (f"{stale} running the impact probe\nDemo is out of date",)
     assert issues(None) == (f"{stale} extracting skeletons\nDemo is out of date",)
 
@@ -2266,7 +2266,7 @@ def test_import_closure_scope_names_the_importers_to_build(tmp_path: Path, monke
     )
 
     importers = sorted(["Demo", "Demo.Base", "Demo.Mid", *chain])
-    named = " ".join(importers) if len(importers) <= 50 else "Demo"
+    named = " ".join(f"+{module}" for module in importers) if len(importers) <= 50 else "Demo"
     assert code == 2
     assert capsys.readouterr().err.splitlines() == [
         f"error: Lean build artifacts are stale; run `lake build {named}` before running the impact probe "
@@ -3247,11 +3247,7 @@ def test_import_impact_reads_a_library_nested_in_another_srcdir(tmp_path: Path, 
 
 
 def _q_project(root: Path) -> tuple[Path, Path]:
-    """A built project: Q.Top → Q.Mid → Q.Base, and Q.Side that only the glob selects.
-
-    The root Q imports only Q.Base: `lake build Q` names the whole glob library,
-    so a closure holding the root would be as stale as Q.Side is.
-    """
+    """A built project: Q → Q.Top → Q.Mid → Q.Base, and Q.Side that only the glob selects."""
 
     lean_root = root / "lean"
     (lean_root / "Q").mkdir(parents=True)
@@ -3260,7 +3256,7 @@ def _q_project(root: Path) -> tuple[Path, Path]:
         'name = "Q"\ndefaultTargets = ["Q"]\n\n[[lean_lib]]\nname = "Q"\nglobs = ["Q.*"]\n', encoding="utf-8"
     )
     for name, text in (
-        ("Q.lean", "import Q.Base\n"),
+        ("Q.lean", "import Q.Top\n"),
         ("Q/Base.lean", "namespace Q\n\ndef base : Nat := 1\n\ntheorem base_eq : base = 1 := rfl\n\nend Q\n"),
         ("Q/Mid.lean", "import Q.Base\n\nnamespace Q\n\ntheorem mid : base = 1 := base_eq\n\nend Q\n"),
         (
@@ -3298,12 +3294,13 @@ def test_import_closure_scope_matches_the_default_on_a_built_project(tmp_path: P
 
     default, closure = reports["loaded-root-library-graph"], reports["import-closure"]
     assert closure["module_scope"] == "import-closure"
-    assert closure["affected_modules"] == default["affected_modules"] == ["Q.Mid", "Q.Top"]
+    assert closure["affected_modules"] == default["affected_modules"] == ["Q", "Q.Mid", "Q.Top"]
     for field in ("affected_articles", "affected_unowned_helpers", "unresolved_articles", "article_local",
                   "affected_claim_targets", "claim_targets"):
         assert closure[field] == default[field], field
 
-    # A stale module outside the closure stops only the default scope.
+    # A stale module outside the closure stops only the default scope, though
+    # the closure holds the root module named like its library.
     (lean_root / "Q" / "Side.lean").write_text("namespace Q\n\ndef side : Nat := 3\n\nend Q\n", encoding="utf-8")
     assert cli.main([*base, "--module-scope", "import-closure"]) == 0, capsys.readouterr().err
     capsys.readouterr()

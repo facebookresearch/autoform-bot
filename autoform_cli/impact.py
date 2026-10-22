@@ -1527,8 +1527,9 @@ def _load_impact_evidence(
             if said is None:
                 raise
             if module_scope == IMPORT_CLOSURE_SCOPE and len(imports) <= _NAMED_MODULES_LIMIT:
-                # Building the importers builds everything they import, and nothing else.
-                names = shlex.join(imports)
+                # Building the importer modules builds what they import; `+` keeps Lake from reading a
+                # root module named like its library as the whole library.
+                names = shlex.join(f"+{module}" for module in imports)
             else:
                 # The probe imports every root library's modules, which can be thousands; the libraries say the same.
                 names = shlex.join(sorted({library.name for library in libraries}))
