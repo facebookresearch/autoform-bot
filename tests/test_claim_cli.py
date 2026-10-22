@@ -88,7 +88,7 @@ def test_claim_cli_refuses_live_peer_and_requires_identity(tmp_path: Path, capsy
     assert "ownership is held or unverifiable" in capsys.readouterr().out
 
     assert main(["claim", "list", "--repo", str(repo), "--scratch", str(second)]) == 1
-    assert "--worker-id" in capsys.readouterr().out
+    assert "--worker-id" in capsys.readouterr().err
 
 
 def test_claim_cli_transport_failure_is_nonzero(tmp_path: Path, capsys) -> None:
@@ -239,3 +239,96 @@ def test_claim_cli_names_a_stale_ref_lock_and_list_and_cleanup_warn_about_it(
         assert captured.out == stdout
         assert captured.err == f"warning: {described}; if no Git process is using the claim board, delete it\n"
     assert lock.exists()
+
+
+def test_claim_cli_lists_only_the_named_targets(tmp_path: Path, capsys) -> None:
+    repo = _bare_repo(tmp_path)
+    scratch = tmp_path / "scratch"
+    assert main(_args(repo, scratch, "acquire", "node-a", "node-b")) == 0
+    capsys.readouterr()
+
+    assert main(_args(repo, scratch, "list", "node-b", "node-absent")) == 0
+    captured = capsys.readouterr()
+
+    assert [lease["_key"] for lease in json.loads(captured.out)] == [author_claim_key("node-b")]
+    assert captured.err == ""
+
+
+def test_claim_cli_list_refuses_a_duplicate_target(tmp_path: Path, capsys) -> None:
+    repo = _bare_repo(tmp_path)
+
+    assert main(_args(repo, tmp_path / "scratch", "list", "node-a", "node-a")) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "error: duplicate claim target: node-a\n"
+
+
+def test_claim_cli_list_labels_a_timeout(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.ext.allow")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "always")
+    args = ["claim", "list", "--repo", "ext::sleep 30", "--worker-id", "worker-a"]
+
+    assert main([*args, "--scratch", str(tmp_path / "scratch"), "--timeout", "1"]) == 1
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+    assert captured.err == (
+        "error: timeout: no answer from the claim board within 1s while fetching the claim board\n"
+    )
+
+
+def test_claim_cli_list_labels_a_transport_failure(tmp_path: Path, capsys) -> None:
+    missing = tmp_path / "missing" / "claims.git"
+
+    assert main(_args(missing, tmp_path / "scratch", "list")) == 1
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+    assert captured.err.startswith("error: transport: ")
+
+
+def test_claim_cli_list_labels_contention(tmp_path: Path, capsys, monkeypatch) -> None:
+    def contended(self: ClaimBoard, *args: object, **kwargs: object) -> list[dict[str, object]]:
+        raise claims.ClaimContentionError("the claim board refused 3 fetches because claim refs kept moving")
+
+    monkeypatch.setattr(ClaimBoard, "list", contended)
+
+    assert main(_args(_bare_repo(tmp_path), tmp_path / "scratch", "list")) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "error: contention: the claim board refused 3 fetches because claim refs kept moving\n"
+    )
+
+
+def test_claim_cli_list_names_a_slow_step_on_stderr(tmp_path: Path, capsys, monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    def slow(self: ClaimBoard, keys: object = None, *, timeout: object = None, progress=None) -> list[object]:
+        seen.update(keys=keys, timeout=timeout)
+        progress("fetching 1 claim refs")
+        return []
+
+    monkeypatch.setattr(ClaimBoard, "list", slow)
+
+    assert main([*_args(_bare_repo(tmp_path), tmp_path / "scratch", "list", "node-a"), "--timeout", "7"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "[]\n"
+    assert captured.err == "claim list: fetching 1 claim refs...\n"
+    assert seen == {"keys": [author_claim_key("node-a")], "timeout": 7.0}
+
+
+def test_claim_cli_list_without_targets_passes_none_and_the_default_timeout(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    seen: dict[str, object] = {}
+
+    def record(self: ClaimBoard, keys: object = None, *, timeout: object = None, progress=None) -> list[object]:
+        seen.update(keys=keys, timeout=timeout)
+        return []
+
+    monkeypatch.setattr(ClaimBoard, "list", record)
+
+    assert main(_args(_bare_repo(tmp_path), tmp_path / "scratch", "list")) == 0
+    assert seen == {"keys": None, "timeout": 120.0}

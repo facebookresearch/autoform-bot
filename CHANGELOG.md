@@ -9,6 +9,15 @@ date when the release is tagged.
 
 ## Unreleased
 
+- **Claims.** `claim list TARGET...` lists only those claims, without
+  fetching or reading any other claim. `--timeout` (120 seconds by default)
+  bounds a listing, a slow step is named on stderr, and a failure goes to
+  stderr labelled `timeout:`, `contention:` or `transport:` with nothing on
+  stdout. Git no longer waits for a terminal password prompt in claim
+  commands, and a listing that runs out of time or is interrupted no longer
+  leaves its transport running. Formalize treats a labelled `claim list`
+  failure as an unreadable board, not as a board without claims (#432).
+
 ## 0.6.0 (2026-10-22)
 
 What has landed since 0.5.0, across 236 merged pull requests, grouped by
