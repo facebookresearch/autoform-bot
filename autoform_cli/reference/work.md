@@ -78,7 +78,14 @@ modules, so run them only in a trusted checkout or sandbox.
 ## Work import-impact
 
 `import-impact` is advisory and edits no authored roadmap or Lean source, though
-its Lake freshness check may refresh build hash sidecars. By default the probe
+its Lake freshness check may refresh build hash sidecars. `SELECTOR` identifies
+the working article and `MODULE` the project module whose effective header would
+change: the file that gains or loses the import, not the module it imports, so
+adding a Mathlib import is reported for the project file that adds it. Without
+`MODULE`, it is the one module that holds the article's declarations; a path in
+its place is taken as `TARGET`. A `MODULE` that is not a project module is
+refused, naming the article's module, before the freshness check and the probe.
+By default the probe
 imports every module of the root libraries, so each must be built in this
 checkout (a build in another clone or worktree does not count): a missing or
 stale build exits 2 with the `lake build` command for those libraries, how many

@@ -1571,6 +1571,7 @@ class _ImpactEvidence:
     locate: Locator
     declaration_modules: Mapping[str, str] | None = None
     module_generated: bool = False
+    module: str | None = None
 
 
 def _load_impact_evidence(
@@ -1581,10 +1582,15 @@ def _load_impact_evidence(
     timeout: float | None,
     require_modules: bool,
     require_default_declarations: bool,
-    module: str | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
+    resolve_module: Callable[[ImpactArticle, Sequence[LeanLibrary], IndexedSourceSnapshot, Collection[str]], str]
+    | None = None,
 ) -> _ImpactEvidence:
-    """Load one freshness-bound roadmap, source, module, and Lean environment."""
+    """Load one freshness-bound roadmap, source, module, and Lean environment.
+
+    ``resolve_module`` names the edited module from the source inventory alone,
+    so a wrong module is refused before the freshness check and the probe.
+    """
 
     runtime = load_runtime_graph(project_or_blueprint)
     source_revision = runtime.source_revision
@@ -1622,11 +1628,12 @@ def _load_impact_evidence(
             source_snapshot,
             strict_module_ownership=require_modules,
         )
+        module = None if resolve_module is None else resolve_module(selected, libraries, source_snapshot, local_modules)
         selected_modules = imports
         declaration_modules = None
         if module_scope == IMPORT_CLOSURE_SCOPE:
-            if module not in local_modules:
-                raise ImpactError(f"not a project module: {module}")
+            # resolve_import_module refused a module outside the project.
+            assert module is not None
             captured = dict(source_snapshot.source_files)
             # Libraries sharing a srcDir map the same files; each is read once.
             pairs = dict.fromkeys(
@@ -1720,6 +1727,7 @@ def _load_impact_evidence(
         locate=_locator(libraries, source_snapshot),
         declaration_modules=declaration_modules,
         module_generated=module_generated,
+        module=module,
     )
 
 
@@ -1762,13 +1770,17 @@ def revision_impact(
 def module_import_impact(
     project_or_blueprint: str | Path,
     selector: str,
-    module: str,
+    module: str | None = None,
     *,
     lean_root: str | Path,
     timeout: float | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
 ) -> ModuleImportImpactReport:
-    """Report, without blocking it, the reverse-import scope of an import edit."""
+    """Report, without blocking it, the reverse-import scope of an import edit.
+
+    ``module`` is the project module whose imports change; without it, the one
+    module that holds the selected article's declarations.
+    """
 
     if module_scope not in (MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE):
         raise ImpactError(f"unknown module scope: {module_scope}")
@@ -1779,15 +1791,18 @@ def module_import_impact(
         timeout=timeout,
         require_modules=True,
         require_default_declarations=False,
-        module=module,
         module_scope=module_scope,
+        resolve_module=lambda selected, libraries, snapshot, local_modules: resolve_import_module(
+            module, selected, _module_source_paths(libraries, snapshot), snapshot, local_modules
+        ),
     )
+    assert evidence.module is not None
     return compute_module_import_impact(
         evidence.records,
         evidence.modules,
         evidence.articles,
         evidence.selected,
-        module,
+        evidence.module,
         source_revision=evidence.source_revision,
         lean_source_revision=evidence.lean_source_revision,
         module_scope=module_scope,
@@ -1823,6 +1838,43 @@ def _linguist_generated(root: Path, relative: str) -> bool:
     except ValueError:  # Git printed a name that is not UTF-8
         return False
     return output is not None and output.rsplit(": ", 1)[-1] in ("set", "true")
+
+
+def resolve_import_module(
+    module: str | None,
+    selected: ImpactArticle,
+    module_paths: Mapping[str, str],
+    snapshot: IndexedSourceSnapshot,
+    local_modules: Collection[str],
+) -> str:
+    """The project module an import edit changes: ``module``, else the selected article's own module.
+
+    Workers often pass the module they mean to import; the refusal says which
+    module the argument names instead.
+    """
+
+    modules_by_path = {path: name for name, path in module_paths.items()}
+    homes = sorted(
+        {
+            modules_by_path[declaration.path.as_posix()]
+            for name in selected.declarations
+            if (declaration := snapshot.index.find(name)) is not None
+            and declaration.path.as_posix() in modules_by_path
+        }
+    )
+    usage = "MODULE is the project module whose imports change, the file that gains or loses the import"
+    if module is None:
+        if len(homes) == 1:
+            return homes[0]
+        found = f"; its declarations are in {', '.join(homes)}" if homes else ""
+        raise ImpactError(f"{usage}; pass it, since {selected.id} has no single module{found}")
+    if module not in local_modules:
+        here = f" (for {selected.id}: {homes[0]})" if len(homes) == 1 else ""
+        raise ImpactError(
+            f"{module} is not a module of this project. {usage}{here}, not the module it imports: "
+            "an import from Mathlib or another dependency is reported for the project file that adds it"
+        )
+    return module
 
 
 def _locator(
@@ -1927,7 +1979,8 @@ def format_module_import_impact(report: ModuleImportImpactReport) -> list[str]:
     ]
     if not report.selected_affected:
         lines.append(
-            "Warning: the selected article has no built declaration in this reverse-import scope."
+            "Warning: the selected article has no built declaration in this reverse-import scope; "
+            "MODULE should be the module whose imports change, usually the one holding the article's declarations."
         )
     other_articles = tuple(
         article for article in report.affected_articles if article.id != report.article.id

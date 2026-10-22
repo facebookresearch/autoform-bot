@@ -562,7 +562,7 @@ Report the coordination and review scope of an import edit without forbidding
 the edit:
 
 ```bash
-autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH [--json] [--timeout SECONDS] [--module-scope SCOPE]
+autoform work import-impact SELECTOR [MODULE] [TARGET] --lean-root PATH [--json] [--timeout SECONDS] [--module-scope SCOPE]
 ```
 
 `import-impact` is advisory and edits no authored roadmap or Lean source. By

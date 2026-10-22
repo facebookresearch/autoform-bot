@@ -2123,7 +2123,7 @@ def test_import_closure_scope_rejects_a_module_no_library_selects(tmp_path: Path
     lean_root = _closure_lean_root(tmp_path)
     _stub_probe(monkeypatch)
 
-    with pytest.raises(ImpactError, match="not a project module: Demo.Nope"):
+    with pytest.raises(ImpactError, match="Demo.Nope is not a module of this project"):
         module_import_impact(project, _BASE_ID, "Demo.Nope", lean_root=lean_root, module_scope="import-closure")
 
 
@@ -2525,7 +2525,30 @@ def test_cli_import_impact_rejects_an_unknown_module(tmp_path: Path, monkeypatch
     output = capsys.readouterr()
     assert code == 2
     assert output.out == ""
-    assert "error: not a loaded project module: Missing" in output.err
+    assert "error: Missing is not a module of this project. MODULE is the project module whose imports change" in (
+        output.err
+    )
+
+
+def test_cli_import_impact_names_the_edited_module_before_the_probe(tmp_path: Path, monkeypatch, capsys) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    calls = _stub_probe(monkeypatch, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
+
+    # The module being imported is refused before the freshness check and the probe, naming the right one.
+    code = cli.main(
+        ["work", "import-impact", _BASE_ID, "Mathlib.Order.Basic", str(project), "--lean-root", str(lean_root)]
+    )
+    output = capsys.readouterr()
+    assert code == 2 and calls == []
+    assert "Mathlib.Order.Basic is not a module of this project" in output.err
+    assert "(for chapter/base: Demo), not the module it imports" in output.err
+
+    # Without MODULE, the module that holds the article's declarations; a path in its place is the target.
+    code = cli.main(["work", "import-impact", _BASE_ID, str(project), "--lean-root", str(lean_root), "--json"])
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    assert json.loads(output.out)["module"] == "Demo"
 
 
 @pytest.mark.parametrize(
