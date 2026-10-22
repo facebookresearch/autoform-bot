@@ -994,7 +994,7 @@
       });
       return mark;
     }
-    // Only finished states are filled. Their card tints are too pale to tell from an outline at a few pixels, so small marks fill them with the stroke.
+    // States with a tinted light fill (finished, conditionally proved, not ready, inventory pending): the tints are too pale to tell from an outline at a few pixels, so small marks fill them with the stroke.
     function solid(key, color) { return ((palette[key] || palette.planned || {}).light || {}).fill === "#FFFFFF" ? color.fill : color.stroke; }
     function isDark() { return document.body.getAttribute("data-md-color-scheme") === "slate"; }
     function colors(node) {
@@ -1311,7 +1311,8 @@
       if (atlas && node.kind === "scope") {
         rounded(ctx, box.x, box.y, box.w, box.h, 14 * ui$transform.scale); ctx.fill(); ctx.stroke(); ctx.restore(); return;
       }
-      if (tiny) { ctx.fillStyle = solid(node.status, color); ctx.fillRect(box.x, box.y, Math.max(3, box.w), Math.max(3, box.h)); }
+      // A zoomed-out plate is the only status signal left, so a highlighted one is opaque: at .82 over the map neighbouring greens fell under 1.5:1.
+      if (tiny) { if (highlighted) ctx.globalAlpha = 1; ctx.fillStyle = solid(node.status, color); ctx.fillRect(box.x, box.y, Math.max(3, box.w), Math.max(3, box.h)); }
       else { rounded(ctx, box.x, box.y, box.w, box.h, 7 * ui$transform.scale); ctx.fill(); ctx.stroke(); }
       ctx.restore();
     }
@@ -1773,7 +1774,7 @@
       var count = finished(node), done = count[0], total = count[1];
       var progress = node.kind === "scope" && total && !inventoryOnly;
       var actions = element("div", "bp-dag-actions"), mark = element("span", "bp-dag-status-pill", inventoryOnly ? "inventory only" :
-        progress ? num(done) + " of " + num(total) + " fully proved" : statusLabel(node.status));
+        progress ? num(done) + " of " + num(total) + " fully proved" : node.kind === "scope" && !node._unknownCount ? "no targets" : statusLabel(node.status));
       // The dot is the map's swatch, which carries both schemes' colours, so a theme switch needs no rebuild.
       mark.prepend(swatch(progress && done === total ? "fully_proved" : node.status)); actions.appendChild(mark);
       var href = safeHref(node.url);

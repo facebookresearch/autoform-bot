@@ -3258,9 +3258,10 @@ def _stylesheet() -> str:
     Material's colour scheme attribute so the theme's own toggle drives it.
     """
     # Dependency dots and swatches are a few pixels wide and carry no word, so
-    # a finished state fills them with its stroke: the card tints are too pale
-    # to tell from an outline there. The light fill decides which states are
-    # finished, so both schemes fill the same ones.
+    # every state with a tinted light fill (the four finished states,
+    # conditionally proved, not ready and inventory pending) fills them with
+    # its stroke: the tints are too pale to tell from an outline there. The
+    # light fill decides, so both schemes fill the same states.
     def dot(state: status.State, dark: bool = False) -> str:
         fill, stroke = (state.dark_fill, state.dark_stroke) if dark else (state.fill, state.stroke)
         return f"background: {fill if state.fill == '#FFFFFF' else stroke}; border-color: {stroke};"

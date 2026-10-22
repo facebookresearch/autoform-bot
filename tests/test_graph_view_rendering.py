@@ -1082,7 +1082,9 @@ def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> 
         assert _contrast(label, panel) >= 4.5 and panel != field
 
     # A topic's pill counts its finished items; a scope of module inventories still says so.
-    assert 'progress ? num(done) + " of " + num(total) + " fully proved" : statusLabel(node.status)' in script
+    # A topic with no targets said "planned", its rolled-up status, though nothing in it is planned.
+    assert ('progress ? num(done) + " of " + num(total) + " fully proved" : '
+            'node.kind === "scope" && !node._unknownCount ? "no targets" : statusLabel(node.status)') in script
     assert "/^(fully_proved|mathlib)$/.test(entry[0])" in script
     assert 'inventoryOnly ? "inventory only" :' in script
     # Card and pill share one count, which leaves neutral module inventories out of the total like the hero.
@@ -1107,13 +1109,82 @@ def test_small_status_marks_fill_finished_states_with_the_stroke() -> None:
     """The light tints made tiny map plates, rail swatches and dependency dots of finished work vanish."""
     script = _viewer_source()
     assert 'function solid(key, color) { return ((palette[key] || palette.planned || {}).light || {}).fill === "#FFFFFF" ? color.fill : color.stroke; }' in script
-    assert 'if (tiny) { ctx.fillStyle = solid(node.status, color); ctx.fillRect(' in script
+    # At .82 over the map neighbouring finished plates fell under 1.5:1 and defined's under 3:1, so a highlighted one is opaque.
+    assert 'if (tiny) { if (highlighted) ctx.globalAlpha = 1; ctx.fillStyle = solid(node.status, color); ctx.fillRect(' in script
     assert '"-fill", solid(key, color) || "transparent");' in script
     # Against the map the zoomed-out plate of every finished state keeps 3:1, as it did before the tints.
     for state in status.STATES:
         if state.fill != "#FFFFFF":
             assert _contrast(state.stroke, "#F0F2F5") >= 3, state.key
             assert _contrast(state.dark_stroke, "#18191A") >= 3, state.key
+
+
+def _book_marks(dark: bool) -> dict[str, str]:
+    """The fill of each state's dependency dot and swatch, as the book's stylesheet emits it."""
+    marks = re.findall(
+        r"(?m)^(\[data-md-color-scheme=slate\] )?[^{\n]*\.bp-swatch-(\w+) \{ background: (#[0-9A-Fa-f]{6});",
+        render._stylesheet(),
+    )
+    return {key: colour for slate, key, colour in marks if bool(slate) == dark}
+
+
+def _mix(colour: str, base: str, share: float) -> str:
+    pairs = ((int(colour[index:index + 2], 16), int(base[index:index + 2], 16)) for index in (1, 3, 5))
+    return "#" + "".join(f"{round(a * share + b * (1 - share)):02X}" for a, b in pairs)
+
+
+def test_each_finished_status_has_its_own_small_mark_in_both_schemes() -> None:
+    """Fully proved, proved and defined shared stroke #22773A, so their dots and swatches were one colour.
+
+    In the book's dependency rows and the explorer's rail the mark is the only status signal. Light marks
+    darken towards mathlib and dark ones brighten towards it, so more finished always reads stronger.
+    """
+    finished = ("mathlib", "fully_proved", "proved", "defined")
+    assert [state.key for state in status.STATES[:4]] == list(finished)
+    style = dag_viewer._STYLE
+    assert "--dag-panel: color-mix(in srgb, var(--dag-bg) 94%, #64748b 6%);" in style
+    assert "background: color-mix(in srgb, var(--dag-link) 9%, var(--dag-bg));" in style
+    # The map and the page, then a hovered and a selected rail row, which sit on the panel and on a link-blue tint.
+    surfaces = {
+        False: ("#F0F2F5", "#FFFFFF", _mix("#64748B", "#FFFFFF", .06), _mix("#0064E0", "#FFFFFF", .09)),
+        True: ("#18191A", "#242526", _mix("#64748B", "#242526", .06), _mix("#2D88FF", "#242526", .09)),
+    }
+    for dark in (False, True):
+        book = _book_marks(dark)
+        marks = [book[key] for key in finished]
+        for (first, second), (one, other) in zip(zip(finished, finished[1:]), zip(marks, marks[1:])):
+            ratio = _contrast(one, other)
+            assert ratio >= 1.5, (first, second, dark, ratio)
+            assert (_contrast(one, "#000000") > _contrast(other, "#000000")) is dark, (first, second, dark)
+        for key, mark in zip(finished, marks):
+            assert min(_contrast(mark, surface) for surface in surfaces[dark]) >= 3, (key, dark, mark)
+
+
+def test_filled_marks_that_are_not_green_part_from_every_green_by_hue() -> None:
+    """The four greens span the lightness that keeps 3:1 on the map, so filled amber and grey marks match one.
+
+    Light defined against not ready is 1.06:1 and against inventory pending 1.02:1; dark fully proved against
+    not ready is 1.10:1. That is accepted (status.py says so), but hue must keep them apart.
+    """
+
+    def lab(colour: str) -> tuple[float, float, float]:
+        channels = [int(colour[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+        r, g, b = (c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels)
+        xyz = ((0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047, 0.2126 * r + 0.7152 * g + 0.0722 * b,
+               (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883)
+        x, y, z = (t ** (1 / 3) if t > 0.008856 else 7.787 * t + 16 / 116 for t in xyz)
+        return 116 * y - 16, 500 * (x - y), 200 * (y - z)
+
+    finished = ("mathlib", "fully_proved", "proved", "defined")
+    filled = [state.key for state in (*status.STATES, *status.INVENTORY_STATES)
+              if state.fill != "#FFFFFF" and state.key not in finished]
+    assert {"not_ready", "inventory_pending"} <= set(filled)
+    for dark in (False, True):
+        book = _book_marks(dark)
+        for key in filled:
+            for green in finished:
+                distance = sum((a - b) ** 2 for a, b in zip(lab(book[key]), lab(book[green]))) ** .5
+                assert distance >= 40, (key, green, dark, round(distance))
 
 
 def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path) -> None:
