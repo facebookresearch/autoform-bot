@@ -1170,8 +1170,8 @@ checked, and the first module Lake found unbuilt. `--module-scope
 import-closure` first reads each captured source's import header, then imports
 only `MODULE` and the loaded modules that import it, transitively; only they
 and what they import must be built, and a stale build names those modules as
-Lake module targets, `lake build +A.B +A.C` (the libraries when there are more
-than 50). `affected_modules` is the same in both scopes. Here a loaded module
+Lake module targets, `lake build +A.B +A.C` (the libraries that hold them when
+there are more than 50). `affected_modules` is the same in both scopes. Here a loaded module
 is one the libraries' roots and globs reach through import headers. Under
 `import-closure` the command exits 2, suggesting the default scope, when a
 loaded module's header cannot be read, when a loaded header imports a module

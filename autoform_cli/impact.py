@@ -1681,10 +1681,15 @@ def _load_impact_evidence(
                 # Building the importer modules builds what they import; `+` keeps Lake from reading a
                 # root module named like its library as the whole library.
                 names = shlex.join(f"+{module}" for module in imports)
+            elif module_scope == IMPORT_CLOSURE_SCOPE:
+                # Too many importers to name: the libraries that hold them build them.
+                holders = {library.name for library in libraries if any(_selects(library, name) for name in imports)}
+                names = shlex.join(sorted(holders or {library.name for library in libraries}))
             else:
                 # The probe imports every root library's modules, which can be thousands; the libraries say the same.
                 names = shlex.join(sorted({library.name for library in libraries}))
-            checked = f"{len(imports)} module{'' if len(imports) == 1 else 's'}"
+            noun = "importer module" if module_scope == IMPORT_CLOSURE_SCOPE else "module"
+            checked = f"{len(imports)} {noun}{'' if len(imports) == 1 else 's'}"
             raise SkeletonError(
                 [
                     f"{skeleton.STALE_BUILD}{names}` before running the impact probe "

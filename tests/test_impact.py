@@ -2431,6 +2431,12 @@ def test_import_closure_scope_ignores_skipped_imports_nothing_loads(tmp_path: Pa
 @pytest.mark.parametrize("count", [3, 60])
 def test_import_closure_scope_names_the_importers_to_build(tmp_path: Path, monkeypatch, capsys, count: int) -> None:
     root = _closure_root(tmp_path)
+    # A second library holds no importer, so its build is not named.
+    (root / "lakefile.toml").write_text(
+        'name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\nglobs = ["Demo.*"]\n\n[[lean_lib]]\nname = "Other"\n',
+        encoding="utf-8",
+    )
+    (root / "Other.lean").write_text("def Other.o : Nat := 3\n", encoding="utf-8")
     # Demo imports Demo.M0 … Demo.M{count-2}; each imports Demo.Base, as Demo.Mid
     # (still selected by the glob) does.
     chain = [f"Demo.M{index}" for index in range(count - 1)]
@@ -2452,7 +2458,7 @@ def test_import_closure_scope_names_the_importers_to_build(tmp_path: Path, monke
     assert code == 2
     assert capsys.readouterr().err.splitlines() == [
         f"error: Lean build artifacts are stale; run `lake build {named}` before running the impact probe "
-        f"({len(importers)} modules; Lake: ✖ [3/9] Building Demo.M0)"
+        f"({len(importers)} importer modules; Lake: ✖ [3/9] Building Demo.M0)"
     ]
 
 
