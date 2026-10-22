@@ -2701,21 +2701,14 @@ not the graph's shortened summaries.
 compatibility shells for those canonical pages, not a second viewer. They share
 the same client and a layout-free global search index, never an all-repository
 node cloud. The graph and search schemas remain `autoform-dag-view/v2` and
-`autoform-dag-search/v1`. Search records keep their existing `url` meaning and
-may additionally carry `route`, `scope`, `data_url`, `parent`, `navigation`,
-`area` and `result`; module inventories also carry `catalog: "module"`.
-`result` identifies an authored concrete declaration leaf,
-not a proof or compilation claim; containers, source tracks and inventories are
-false. Module inventory articles stay navigable in “Results & articles”, with
-neutral inventory statuses, rather than disappearing from large mathematical
-scopes or being counted as proved declarations. Optional `relations` rows are `[source_id, target_id, statement_count,
-proof_count]`. These are derived from the same captured publication as the
-reading pages and preserve authored statement/proof edge types.
+`autoform-dag-search/v1`. These viewer payloads and controller hooks are internal
+implementation details and may change; they are not a public application API.
+Containment, canonical reading routes and typed dependencies are projections
+of the captured publication. Narrative containers, source tracks and neutral
+module inventories are not claims of completed mathematical proofs.
 
-The shared reader requests formula refresh through `AutoformMath.refresh(root)`
-or a bubbling `autoform:math-refresh` event with `detail.root`. Its Promise
-settles after the controlled, coalesced pass; success is `true`, unavailable or
-unsafe input is `false`. The pinned safe MathJax configuration remains the only
+The shared reader refreshes formulas through its internal controlled,
+coalesced renderer. The pinned safe MathJax configuration remains the only
 typesetter: no arbitrary text scan or unrestricted `MathJax.typesetPromise()`
 is used. Raw marked text supplies its own source; rendered clones can reuse
 retained source only when stamped by the current runtime. Formula refresh waits

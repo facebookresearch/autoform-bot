@@ -50,20 +50,20 @@ styles are in `blueprint-dag.css`. When changing either script, install Node
 22.23.2 and run `make build-explorer`, then `make check-explorer` and
 `make test-browser`. Pinned development-only esbuild and Terser write
 `blueprint-explorer.min.js` with an exact source digest. CI checks its bytes and
-the 132 KB total client budget, including the pinned Dagre 3.1.1 / Graphlib
-4.0.5 layout engine and its MIT notice. This replaces the 72 KB reader/map
-ceiling to support dependency-driven placement, obstacle-avoiding routes and
-protected count labels; graph-node,
+the 132 KB JavaScript response budget. Main's former graph script budget was
+66,000 bytes; this response also includes integrated reading, navigation and
+bounded weighted relaxation and shared obstacle-avoiding routes; graph-node,
 payload, search, request and cache limits are unchanged. Only explicitly `$`-prefixed private properties may
 be renamed; renderer-private scene and DOM references use local variables.
 Graph/index fields, route attributes, renderer callbacks and history
 snapshot fields keep their names. Python publication ships the compiled client;
 projects consuming Autoform do not need Node or a separate application build.
-The pinned Dagre browser distribution is captured into
-`blueprint-dagre.vendor.js` during this development build. Its isolated wrapper
-and the readable book/map sources are fingerprinted together; the compiled and
-raw-source fallback clients both include the engine. Consumers require no Node,
-new script tag or runtime CDN dependency.
+The readable book/map sources are fingerprinted together. A missing, corrupt or
+stale compiled client fails publication; raw development sources are never a
+publication fallback. The bounded scene has no vendor layout dependency.
+Consumers require no Node, new script tag or runtime CDN dependency.
+The shared stylesheet is a separate
+cached response, not part of the JavaScript byte budget.
 Compression never renames public properties, assumes getters are pure, enables
 unsafe transforms, or drops console calls.
 
