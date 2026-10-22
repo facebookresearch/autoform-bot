@@ -16,7 +16,7 @@ test-browser:
 		tests/test_integrated_workspace_browser.py tests/test_integrated_continuity_browser.py
 
 build-explorer:
-	npm ci --ignore-scripts
+	npm ci --ignore-scripts --no-audit --no-fund --prefer-offline
 	npm run build:explorer
 
 check-explorer:

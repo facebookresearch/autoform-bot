@@ -20,10 +20,10 @@ from urllib.parse import unquote, urljoin, urlsplit
 
 import pytest
 
-from autoform_cli.mathjax import MATHJAX_BUNDLE
+from autoform_cli.mathjax import MATHJAX_BUNDLE, MATHJAX_VERSION
 from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
-from tests.test_integrated_explorer_browser import _PinnedRuntime, _math_source, _routes, _served, playwright
+from tests.test_integrated_explorer_browser import _PinnedRuntime, _math_menu_evidence, _math_source, _routes, _served, playwright
 
 
 _LIBRARY = "Mathematical library"
@@ -331,6 +331,75 @@ def test_wide_workspace_has_three_nonoverlapping_panes_complete_math_and_one_h1(
     assert viewer["width"] == pytest.approx(1600, abs=1) and viewer["height"] == pytest.approx(900, abs=1)
     assert _pixels(page)["painted"] > 0
     assert _math_source(page, card.locator("mjx-container").last) == _TARGET_TEX[-1]
+
+
+@pytest.mark.parametrize("width", [1280, 1600, 390])
+def test_far_right_genuine_math_menu_and_hover_submenu_stay_inside_the_workspace(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int,
+) -> None:
+    page, site = workspace_page, workspace_site
+    page.set_viewport_size({"width": width, "height": 900 if width > 720 else 844})
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _open(page, site, workspace_runtime, _TARGET)
+    _selected(page, _TARGET)
+    formula = _full_math(page).locator("mjx-container").last
+    playwright.expect(formula).to_have_attribute("display", "true")
+    assert page.evaluate("() => MathJax.version") == MATHJAX_VERSION
+    formula.scroll_into_view_if_needed()
+    _frames(page)
+    box = formula.bounding_box()
+    assert box and box["x"] + box["width"] > width - 50
+
+    def scrolls() -> dict:
+        return page.evaluate("""() => {
+          const reader = document.querySelector('.bp-reading-body');
+          return {window:[scrollX,scrollY],body:[document.body.scrollLeft,document.body.scrollTop],
+            document:[document.documentElement.scrollLeft,document.documentElement.scrollTop],
+            reader:[reader.scrollLeft,reader.scrollTop]};
+        }""")
+
+    before = scrolls()
+    # Native contextmenu on the existing complete formula block, at its
+    # rightmost interior point. No moved DOM, synthetic event or forced click.
+    formula.click(button="right", position={"x": box["width"] - 2, "y": box["height"] / 2})
+    try:
+        _math_menu_evidence(page, f"workspace-{width}-root")
+        playwright.expect(page.locator(".CtxtMenu_MenuFrame")).to_have_count(1)
+        menus = page.get_by_role("menu")
+        root = menus.first.bounding_box()
+        assert root and root["x"] >= 0 and root["y"] >= 0
+        assert root["x"] + root["width"] <= width
+        assert root["y"] + root["height"] <= page.viewport_size["height"]
+        show = page.get_by_role("menuitem", name=re.compile(r"^Show Math As(?:\s*\u25ba)?$"))
+        show.hover()
+        command = page.get_by_role("menuitem", name="TeX Commands", exact=True)
+        playwright.expect(command).to_be_visible()
+        assert menus.count() >= 2
+        _math_menu_evidence(page, f"workspace-{width}-submenu")
+        for index in range(menus.count()):
+            bounds = menus.nth(index).bounding_box()
+            assert bounds and bounds["x"] >= 0 and bounds["y"] >= 0
+            assert bounds["x"] + bounds["width"] <= width
+            assert bounds["y"] + bounds["height"] <= page.viewport_size["height"]
+        assert show.evaluate("""item => {
+          const box = item.getBoundingClientRect();
+          return item.contains(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2));
+        }""") is True
+        command.click()
+        source = page.locator(".CtxtMenu_Info pre")
+        playwright.expect(source).to_be_visible()
+        assert source.inner_text() == _TARGET_TEX[-1]
+        _math_menu_evidence(page, f"workspace-{width}-source")
+        page.get_by_role("button", name="Close Dialog Box", exact=True).click()
+    except Exception:
+        _math_menu_evidence(page, f"workspace-{width}-failed")
+        raise
+    _frames(page)
+    assert scrolls() == before
+    assert documents == [site.route(_TARGET).split("#", 1)[0]]
+    assert page.url == site.route(_TARGET)
+    assert page.evaluate("() => document === __workspaceDocument") is True
 
 
 @pytest.mark.parametrize("query", [_TARGET_TITLE, "ReaderFixture.zero_identity"])

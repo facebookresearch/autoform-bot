@@ -29,7 +29,10 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "22.23.2"
-      - run: npm ci --ignore-scripts
+      - name: Install pinned explorer compiler
+        run: |
+          timeout --signal=TERM --kill-after=30s 3m npm ci --ignore-scripts --no-audit --no-fund --prefer-offline \
+            --fetch-timeout=30000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=10000
       - run: npm run check:explorer
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:

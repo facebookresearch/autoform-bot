@@ -109,6 +109,7 @@ function install(version = "3.2.2", options = {}) {
             element.textContent = ""; element.appendChild(glyph);
           });
         }};
+      if (options.menu) doc.menu.menu = options.menu(doc);
       stats.docs.push(doc); return doc;
     },
     handleRetriesFor(callback) {
@@ -160,6 +161,64 @@ def test_safe_refresh_reads_only_canonical_sources_and_keeps_startup_empty() -> 
       assert.deepEqual(JSON.parse(JSON.stringify(stats.docs[0].options.safeOptions)),
         {allow: {URLs: "none", classes: "none", cssIDs: "none", styles: "none"}});
       assert.equal(root.querySelectorAll("mjx-container").length, 2);
+    """)
+
+
+def test_safe_doc_menu_presentation_uses_connected_metrics_and_only_own_display_methods() -> None:
+    # Run the generated production service, not a copied placement algorithm.
+    # These adapters supply menu lifecycle/metrics; genuine engine/hit tests
+    # remain in the unsuppressed, pinned WebKit workspace suite.
+    _run(r"""
+      document.documentElement = {clientWidth: 1280, clientHeight: 900};
+      class Menu {
+        constructor(width, height) {
+          this.html = new Element("div"); this.html.style = {left: "1177px", top: "840px"};
+          this.items = []; this.calls = []; this.result = Symbol("original display result");
+          // A frame offset must be corrected by a measured delta, not by
+          // treating CSS left/top as already being viewport coordinates.
+          this.html.getBoundingClientRect = () => {
+            const left = parseFloat(this.html.style.left) + 17, top = parseFloat(this.html.style.top) + 23;
+            return {left, top, width, height, right: left+width, bottom: top+height};
+          };
+        }
+        display(...args) { this.calls.push({receiver: this, args}); document.body.appendChild(this.html); return this.result; }
+        isPosted() { throw new Error("display precedes the upstream posted flag"); }
+      }
+      const original = Menu.prototype.display, root = new Menu(209, 181), unrelated = new Menu(209, 181);
+      const raw = reader("\\(x\\)"); let nextMenu = root;
+      assert.equal(await install("3.2.2", {menu: () => nextMenu}), true);
+      assert.equal(Menu.prototype.display, original); assert.equal(unrelated.display, original);
+      assert.ok(Object.hasOwn(root, "display"));
+      const wrapped = root.display;
+      assert.equal(root.display("root", 42), root.result);
+      assert.equal(root.calls[0].receiver, root); assert.deepEqual(root.calls[0].args, ["root", 42]);
+      const placed = root.html.getBoundingClientRect();
+      assert.equal(placed.left, 1066); assert.equal(placed.top, 714);
+      assert.equal(placed.right, 1275); assert.equal(placed.bottom, 895);
+
+      // A submenu created by posting is discovered on the next root display.
+      const child = new Menu(170, 90), anchor = new Element("div");
+      anchor.getBoundingClientRect = () => ({left: root.html.getBoundingClientRect().left + 2});
+      const item = {html: anchor, submenu: child}; child.anchor = item; child.baseMenu = root;
+      child.html.style.left = "1243px";
+      root.items = [item, item, {submenu: root}]; // Rediscovery is deduplicated and cycle-bounded.
+      assert.equal(child.display, original);
+      assert.equal(root.display("again"), root.result); assert.equal(root.display, wrapped);
+      assert.equal(root.calls.length, 2); assert.notEqual(child.display, original);
+      assert.equal(child.display("submenu"), child.result);
+      const flipped = child.html.getBoundingClientRect();
+      assert.equal(flipped.left, 904); assert.equal(flipped.right, 1074);
+      assert.equal(flipped.bottom, 895);
+      assert.ok(flipped.right < placed.left + placed.width/2, "submenu covers the parent's ordinary hover point");
+      assert.deepEqual(child.calls[0].args, ["submenu"]); assert.equal(child.calls[0].receiver, child);
+
+      // A missing optional menu shape leaves math and the original return usable.
+      nextMenu = {display() { return "upstream fallback"; }, items: null};
+      const next = reader("\\(next\\)");
+      assert.equal(await window.AutoformMath.refresh(next), true);
+      assert.equal(nextMenu.display(), "upstream fallback");
+      assert.equal(raw.querySelectorAll("mjx-container").length, 1);
+      assert.equal(stats.errors.length, 0); assert.equal(Menu.prototype.display, original);
     """)
 
 
