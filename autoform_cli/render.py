@@ -3167,8 +3167,12 @@ def _dependency_disclosure(
     if not rows:
         return ""
 
+    # The summary counts both directions, so a reader can tell from the closed
+    # line whether opening it is worth it.
+    uses = len(dict.fromkeys((*node.statement_dependencies, *node.proof_dependencies)))
+    label = f"Uses {uses} · Used by {len(used_by[node.id])}"
     body = _render_rows(rows, css_class="bp-dependency-body")
-    return f'<details class="bp-dependencies"><summary>Dependencies</summary>{body}</details>'
+    return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
 
 
 def _node_references(
@@ -3794,19 +3798,45 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   line-height: 1.8;
   margin: 0.6rem 0 0 2rem;
 }}
-.bp-dependencies {{
+/* Material styles every details element as a collapsible admonition: a
+   bordered box, a tinted summary and a pencil icon. This one is a quiet line
+   under each statement, so the selectors outrank Material's and take that
+   chrome off, keeping only its chevron, which turns when the line opens. */
+.md-typeset details.bp-dependencies {{
   margin: 0.65rem 0 0 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: none;
   font-family: {sans};
   font-size: 0.82rem;
   color: var(--bp-muted);
 }}
-.bp-dependencies summary {{
+.md-typeset details.bp-dependencies > summary {{
+  display: flex;
+  align-items: center;
   width: fit-content;
+  margin: 0;
+  padding: 0.2rem 0;
+  border: 0;
+  background: none;
+  font-weight: 600;
   cursor: pointer;
-  color: var(--bp-link);
   user-select: none;
 }}
-.bp-dependencies summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+.md-typeset details.bp-dependencies > summary::before {{ display: none; }}
+.md-typeset details.bp-dependencies > summary::after {{
+  position: static;
+  flex: none;
+  width: 1em;
+  height: 1em;
+  margin-left: 0.25em;
+}}
+.md-typeset details.bp-dependencies > summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+@media (pointer: coarse) {{
+  .md-typeset details.bp-dependencies > summary {{ min-height: 44px; }}
+}}
 .bp-dependency-body {{ margin-top: 0.35rem; color: var(--bp-fg); }}
 /* A formula paints only within its own band, its box plus the slack its
    glyphs need, which a negative margin gives back. Across, it paints as TeX

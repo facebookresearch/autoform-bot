@@ -643,11 +643,49 @@ def test_cross_references_point_at_anchors_on_the_chapter(tmp_path: Path) -> Non
     assert "Open dependency explorer" not in page
     assert 'data-autoform-node-id="top"' in page and 'id="top"' in page
     assert 'class="bp-reading-source"' in page and 'class="bp-dag-viewer"' in page
-    assert '<details class="bp-dependencies"><summary>Dependencies</summary>' in page
+    assert '<details class="bp-dependencies"><summary>Uses 1 · Used by 0</summary>' in page
     assert '<span class="bp-key">Statement uses</span>' in page
     assert 'href="#base">Definition 1 (Base)' in page
     assert 'href="#top">Theorem 1 (Top)' in page
     assert 'href="https://github.com/owner/repo/issues/42">#42' in page
+
+
+def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "blocker.md").write_text("---\ndeclaration: theorem\n---\n\n# Blocker\n", encoding="utf-8")
+    (roadmap / "top.md").write_text(
+        "---\ndeclaration: theorem\nlean: Project.top\n---\n\n# Top\n\nThe main result.\n\n"
+        "## Depends on\n\n- [Base](base.md)\n\n"
+        "## Proof depends on\n\n- [Base](base.md)\n- [Blocker](blocker.md)\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    top = page[page.index('id="top"'):]
+
+    # A prerequisite of both the statement and the proof is counted once, and
+    # the rows inside stay as they were.
+    assert '<details class="bp-dependencies"><summary>Uses 2 · Used by 0</summary>' in top
+    rows = top[top.index("bp-dependency-body"):top.index("</details>")]
+    keys = re.findall(r'<span class="bp-key">([^<]+)</span>', rows)
+    assert keys == ["Statement uses", "Proof uses"]
+    assert page.count("<summary>Uses 0 · Used by 1</summary>") == 2
+    assert "<summary>Dependencies</summary>" not in page
+
+    # Material draws a details element as a boxed admonition with a pencil
+    # icon; these selectors outrank its own and take that off.
+    css = render_module._stylesheet()
+    box = re.search(r"\.md-typeset details\.bp-dependencies \{([^}]+)\}", css).group(1)
+    for declaration in ("padding: 0;", "border: 0;", "box-shadow: none;", "background: none;", "color: var(--bp-muted);"):
+        assert declaration in box
+    summary = re.search(r"\.md-typeset details\.bp-dependencies > summary \{([^}]+)\}", css).group(1)
+    assert "background: none;" in summary and "padding: 0.2rem 0;" in summary
+    assert ".md-typeset details.bp-dependencies > summary::before { display: none; }" in css
+    assert re.search(r"\.md-typeset details\.bp-dependencies > summary::after \{[^}]*position: static;", css)
+    touch = re.search(r"@media \(pointer: coarse\) \{\s*([^{}]+)\{([^}]+)\}", css)
+    assert touch.group(1).strip() == ".md-typeset details.bp-dependencies > summary"
+    assert "min-height: 44px;" in touch.group(2)
 
 
 def test_overview_carries_the_counts_without_a_separate_progress_page(tmp_path: Path) -> None:
