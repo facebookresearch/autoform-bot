@@ -523,7 +523,13 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
     # Human review requires a level without authored edges to say so.
     assert '"No dependencies are authored between these topics."' in script
     assert 'if (node.declaration) header.appendChild(element("p", "bp-dag-kicker",' in script
-    assert '[["All", "both", 1], ["Prerequisites " + (path.before.size - 1), "prerequisites", path.before.size - 1]' in script
+    # The lists come first in one vocabulary; the pivots below them only steer the map, so a side without relations is left out.
+    assert 'appendRelations("Uses", before); appendRelations("Used by", after);' in script
+    assert script.index('appendRelations("Used by", after);') < script.index('caption = "Highlight on map"')
+    assert '[["All", "both", 1], ["Uses", "prerequisites", before.length], ["Used by", "dependents", after.length]]' in script
+    assert "if (!entry[2]) return;" in script and "pivot.disabled" not in script
+    for gone in ("Direct prerequisites", "Direct dependents", '"Dependents "', '"Paths"', ".bp-dag-pivot:disabled", ".bp-dag-pivot:not([aria-pressed=true], :disabled)"):
+        assert gone not in script + style, gone
     pivots = re.search(r"\.bp-dag-pivots \{([^}]*)\}", style)
     assert pivots is not None and "display: flex;" in pivots.group(1) and "border: 1px solid" in pivots.group(1)
 
@@ -936,7 +942,12 @@ def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> 
     assert 'color = colors(progress && done === total ? {status: "fully_proved"} : node);' in script
     # The breakdown and the overview use the card's nouns.
     assert '" items in this scope"' not in script and '"Mathematical regions"' not in script
-    assert '[["Uses", links.before], ["Used by", links.after]]' in script
+    # The map names the selected result, and the reader shows its relations once, in the statement's own disclosure.
+    assert 'record.title + " · uses " + links.before.length + " · used by " + links.after.length' in script
+    assert '" → Result → "' not in script
+    assert 'var relations = target.querySelector(".bp-dependencies"); if (relations) relations.open = true;' in script
+    for gone in ("bp-reading-neighbors", "bp-reading-links", "bp-reading-related"):
+        assert gone not in script and gone not in dag_viewer._STYLE, gone
 
 
 def test_small_status_marks_fill_finished_states_with_the_stroke() -> None:

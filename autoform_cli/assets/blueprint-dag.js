@@ -392,7 +392,7 @@
       dom$homeLink, dom$inspector, dom$inspectorInner, dom$inventory, dom$inventoryList, dom$inventoryRows,
       dom$inventoryScroll, dom$inventorySummary, dom$isolated, dom$listMode, dom$loadMore, dom$mapContext, dom$mapKey,
       dom$navigation, dom$navigationInner, dom$navigationNodes, dom$nodeLayer, dom$outlineToggle, dom$pageHeading,
-      dom$readingBody, dom$readingContext, dom$readingNeighbors, dom$regionsMode, dom$search, dom$searchResults,
+      dom$readingBody, dom$readingContext, dom$regionsMode, dom$search, dom$searchResults,
       dom$searchWrap, dom$sheetHandle, dom$sourcesMode, dom$stage, dom$statusFieldset, dom$statusInputs,
       dom$wholeSearch, dom$zoomIn, dom$zoomOut;
     var overlays = new Map(), scheduled = false, firstResize = true, family;
@@ -503,6 +503,8 @@
         var target = bundle.anchor && document.getElementById(bundle.anchor);
         if (target && dom$readingBody.contains(target)) {
           target.classList.add("bp-reading-current");
+          // The statement's own relations list replaces a separate strip, so it opens with the selection.
+          var relations = target.querySelector(".bp-dependencies"); if (relations) relations.open = true;
           if (!bundle.snapshot) dom$readingBody.scrollTop += target.getBoundingClientRect().top - dom$readingBody.getBoundingClientRect().top - 24;
         }
         if (bundle.focus && dom$readingBody && !bundle.snapshot) {
@@ -633,28 +635,13 @@
     }
     function renderReaderContext() {
       if (!dom$readingContext) return;
-      dom$readingContext.replaceChildren(); dom$readingNeighbors.replaceChildren();
+      dom$readingContext.replaceChildren();
       var node = ui$selected, record = records.get(currentBundle && currentBundle.nodeId || ui$requestedNode || (node && node.id)), scope = record && records.get(record.scope);
       if (scope && record.id !== scope.id) {
         var around = element("a", "bp-reading-around", "← " + scope.title); around.href = scope.route || scope.url;
         around.addEventListener("click", function (event) { if (event.metaKey || event.ctrlKey || event.shiftKey) return;
           event.preventDefault(); navigation.navigateNode(scope.id, {history: "push"}); }); dom$readingContext.appendChild(around);
       }
-      if (!record && !node) return;
-      var links = neighborIds(record ? record.id : node.id);
-      var row = element("div", "bp-reading-links");
-      [["Uses", links.before], ["Used by", links.after]].forEach(function (pair) {
-        var group = element("div", "bp-reading-related"); group.appendChild(element("strong", "", pair[0] + " · " + pair[1].length));
-        pair[1].slice(0, 5).forEach(function (id) { var related = records.get(id); if (!related) return;
-          var link = element("a", "", related.title); link.href = related.route || related.url;
-          link.addEventListener("click", function (event) { if (event.metaKey || event.ctrlKey || event.shiftKey) return;
-            event.preventDefault(); navigation.navigateNode(id, {history: "push"}); }); group.appendChild(link);
-        });
-        if (pair[1].length > 5) { var more = button("bp-dag-hidden-button", "Show all " + pair[1].length);
-          more.addEventListener("click", function () { ui$relationIds = pair[1]; setMode("list", true); }); group.appendChild(more); }
-        row.appendChild(group);
-      });
-      if (links.before.length || links.after.length) dom$readingNeighbors.appendChild(row);
     }
 
     function buildShell() {
@@ -773,10 +760,8 @@
       if (navigation) {
         dom$readingContext = element("div", "bp-reading-context");
         dom$readingBody = element("article", "bp-reading-body md-typeset");
-        dom$readingNeighbors = element("section", "bp-reading-neighbors");
         dom$inspectorInner.appendChild(dom$readingContext);
         dom$inspectorInner.appendChild(dom$readingBody);
-        dom$inspectorInner.appendChild(dom$readingNeighbors);
         navigation.bindReader(dom$readingBody);
       }
       dom$announcement = element("p", "bp-dag-sr-only"); dom$announcement.setAttribute("aria-live", "polite"); host.appendChild(dom$announcement);
@@ -1043,7 +1028,7 @@
       host.classList.toggle("bp-dag-compact-regions", compactRegions());
       if (navigation) {
         var record = records.get(currentBundle && currentBundle.nodeId), links = record && record.result && neighborIds(record.id);
-        dom$mapContext.textContent = links ? plural(links.before.length, "prerequisite", "prerequisites") + " → Result → " + plural(links.after.length, "dependent", "dependents") : ui$area || currentBundle && currentBundle.title || data.title;
+        dom$mapContext.textContent = links ? record.title + " · uses " + links.before.length + " · used by " + links.after.length : ui$area || currentBundle && currentBundle.title || data.title;
         dom$mapKey.replaceChildren();
         ["statement", "proof"].forEach(function (kind) {
           if (data.edges.some(function (edge) { return edge[kind]; })) dom$mapKey.appendChild(element("span", "bp-map-key-" + kind, kind === "proof" ? "Proof dependency" : "Statement dependency"));
@@ -1703,15 +1688,18 @@
       if (node.lean) dom$inspectorInner.appendChild(element("p", "bp-dag-lean", "Lean: " + node.lean + (node.lean_more ? " and " + node.lean_more + " more" : "")));
       if (node.summary) dom$inspectorInner.appendChild(element("p", "bp-dag-summary", node.summary));
       if (node.kind === "scope" && node.internal_dependency_count) dom$inspectorInner.appendChild(element("p", "bp-dag-overview", plural(node.internal_dependency_count, "authored dependency connects", "authored dependencies connect") + " results inside this topic."));
-      var before = prerequisites.get(node.id) || [], after = dependents.get(node.id) || [], path = pathSpotlight();
+      var before = prerequisites.get(node.id) || [], after = dependents.get(node.id) || [];
+      appendRelations("Uses", before); appendRelations("Used by", after);
+      // The pivots only change what the map highlights, so they follow the lists under their own caption and offer only sides that exist.
       if (before.length || after.length) {
-        var pivots = element("div", "bp-dag-pivots"); pivots.setAttribute("role", "group"); pivots.setAttribute("aria-label", "Paths");
-        [["All", "both", 1], ["Prerequisites " + (path.before.size - 1), "prerequisites", path.before.size - 1], ["Dependents " + (path.after.size - 1), "dependents", path.after.size - 1]].forEach(function (entry) {
-          var pivot = button("bp-dag-pivot", entry[0]); pivot.disabled = !entry[2]; pivot.setAttribute("aria-pressed", String(ui$direction === entry[1]));
+        var section = element("section", "bp-dag-section"), caption = "Highlight on map", pivots = element("div", "bp-dag-pivots");
+        section.appendChild(element("h3", "", caption)); pivots.setAttribute("role", "group"); pivots.setAttribute("aria-label", caption);
+        [["All", "both", 1], ["Uses", "prerequisites", before.length], ["Used by", "dependents", after.length]].forEach(function (entry) {
+          if (!entry[2]) return;
+          var pivot = button("bp-dag-pivot", entry[0]); pivot.setAttribute("aria-pressed", String(ui$direction === entry[1]));
           pivot.addEventListener("click", function () { setDirection(entry[1]); }); pivots.appendChild(pivot);
-        }); dom$inspectorInner.appendChild(pivots);
+        }); section.appendChild(pivots); dom$inspectorInner.appendChild(section);
       }
-      appendRelations("Direct prerequisites", before); appendRelations("Direct dependents", after);
       if (entries.length > 1 || node.member_count > 1) distribution(plural(node.member_count || 0, "article", "articles") + (node._region ? " in this area" : " in this topic"), entries.map(function (entry) { return [statusLabel(entry[0]), entry[1], entry[0]]; }));
     }
     function distribution(title, rows) {

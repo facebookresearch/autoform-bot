@@ -179,3 +179,15 @@ def test_stale_restore_ticket_cannot_reapply_old_reading_focus_or_scroll() -> No
       assert.equal(document.activeElement, dom$search);
       assert.equal(newer.heading.focuses.length, 0);
     """)
+
+
+def test_a_selected_statement_opens_its_own_relations() -> None:
+    """The reader's separate relation strip is gone; the current statement's disclosure opens instead."""
+    # The stub's querySelector matches tag names, so the disclosure is named by its selector.
+    _run(r"""
+      const page = bundle('A', null), relations = new Element('.bp-dependencies');
+      page.target.replaceChildren(relations); const ready = applyRoute(page);
+      await frame(); await ready;
+      assert(page.target.classList.contains('bp-reading-current'));
+      assert.equal(relations.open, true);
+    """)

@@ -1731,14 +1731,15 @@ def test_the_explorer_typesets_the_math_it_draws_in_its_rail_and_details(
     playwright.expect(remote).to_be_visible()
     remote.click()
     page.wait_for_url(_site_route(page, site_url, "topology/result"))
-    full_math("topology/result", 5)
-    related = page.locator(".bp-reading-neighbors").get_by_role("button", name="Show all 55", exact=True)
-    playwright.expect(related).to_be_visible()
-    related.click()
-    inventory = page.locator(".bp-dag-inventory")
-    playwright.expect(inventory).to_be_visible()
-    playwright.expect(inventory.locator(".bp-dag-inventory-row")).to_have_count(55)
-    last = inventory.locator(".bp-dag-inventory-row", has=page.get_by_text("Later 54", exact=True))
+    remote_card = full_math("topology/result", 5)
+    # The map names the selected result, and its own relations open in place of a separate strip.
+    playwright.expect(page.locator(".bp-map-context")).to_have_text("Result · uses 1 · used by 55")
+    playwright.expect(page.locator(".bp-reading-neighbors")).to_have_count(0)
+    relations = remote_card.locator("details.bp-dependencies")
+    playwright.expect(relations).to_have_attribute("open", "")
+    playwright.expect(relations.locator("summary")).to_have_text("Uses 1 · Used by 55")
+    playwright.expect(relations.locator("a.bp-ref")).to_have_count(56)
+    last = relations.get_by_role("link", name=re.compile(r"\(Later 54\)$"))
     last.scroll_into_view_if_needed()
     _assert_hit(page, last)
     last.click()
@@ -2114,9 +2115,14 @@ def test_details_read_as_mathematics_not_as_instructions(desktop_page: object, e
     playwright.expect(inspector.locator("h2")).to_have_text("Middle lemma")
     playwright.expect(inspector.locator(".bp-dag-kicker")).to_have_text("lemma")
     playwright.expect(inspector).not_to_contain_text("Path spotlight")
+    # The relation lists come first; the pivots below them only steer the map's highlight.
+    playwright.expect(inspector.locator(".bp-dag-section h3")).to_have_text(["Uses (1)", "Used by (1)", "Highlight on map"])
+    playwright.expect(inspector.get_by_role("group", name="Highlight on map")).to_have_count(1)
     pivots = inspector.locator(".bp-dag-pivot")
-    playwright.expect(pivots).to_have_text(["All", "Prerequisites 1", "Dependents 1"])
+    playwright.expect(pivots).to_have_text(["All", "Uses", "Used by"])
     playwright.expect(pivots.first).to_have_attribute("aria-pressed", "true")
+    lists = inspector.locator(".bp-dag-relation-list").last.bounding_box()
+    assert lists is not None and pivots.first.bounding_box()["y"] > lists["y"] + lists["height"]
     # One segmented control: the three pivots share a row inside one border.
     tops = {round(pivots.nth(index).bounding_box()["y"]) for index in range(3)}
     assert len(tops) == 1
