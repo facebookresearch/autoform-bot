@@ -3257,10 +3257,18 @@ def _stylesheet() -> str:
     light dimmed: it is the palette Facebook uses in dark mode, and it hangs off
     Material's colour scheme attribute so the theme's own toggle drives it.
     """
+    # Dependency dots and swatches are a few pixels wide and carry no word, so
+    # a finished state fills them with its stroke: the card tints are too pale
+    # to tell from an outline there. The light fill decides which states are
+    # finished, so both schemes fill the same ones.
+    def dot(state: status.State, dark: bool = False) -> str:
+        fill, stroke = (state.dark_fill, state.dark_stroke) if dark else (state.fill, state.stroke)
+        return f"background: {fill if state.fill == '#FFFFFF' else stroke}; border-color: {stroke};"
+
     light = "\n".join(
         f".bp-{state.key} .bp-mark {{ color: {state.stroke}; }}\n"
         f".bp-{state.key} > .bp-thmcontent {{ border-left-color: {state.stroke}; }}\n"
-        f".bp-ref-{state.key}::before, .bp-swatch-{state.key} {{ background: {state.fill}; border-color: {state.stroke}; }}"
+        f".bp-ref-{state.key}::before, .bp-swatch-{state.key} {{ {dot(state)} }}"
         for state in status.STATES
     )
     dark = "\n".join(
@@ -3269,15 +3277,15 @@ def _stylesheet() -> str:
         f"{{ border-left-color: {state.dark_stroke}; }}\n"
         f"[data-md-color-scheme=slate] .bp-ref-{state.key}::before, "
         f"[data-md-color-scheme=slate] .bp-swatch-{state.key} "
-        f"{{ background: {state.dark_fill}; border-color: {state.dark_stroke}; }}"
+        f"{{ {dot(state, dark=True)} }}"
         for state in status.STATES
     )
     # The legends beside the explorer's rings list module inventories, so
     # their swatches take the colours the explorer draws inventories in.
     inventory = "\n".join(
-        f".bp-swatch-{state.key} {{ background: {state.fill}; border-color: {state.stroke}; }}\n"
+        f".bp-swatch-{state.key} {{ {dot(state)} }}\n"
         f"[data-md-color-scheme=slate] .bp-swatch-{state.key} "
-        f"{{ background: {state.dark_fill}; border-color: {state.dark_stroke}; }}"
+        f"{{ {dot(state, dark=True)} }}"
         for state in status.INVENTORY_STATES
     )
     serif = '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
@@ -3324,12 +3332,21 @@ def _stylesheet() -> str:
    The theme sets them on body through data-md-color-primary, and the slate
    link colour through two attributes, so this selector carries two
    attributes and wins by coming later. The bp tokens already switch with
-   the scheme, so one rule covers both. */
+   the scheme, so one rule covers both. The darker and lighter shades follow,
+   or the drawer's repository strip and hover tints stay indigo. */
 [data-md-color-scheme][data-md-color-primary] {{
   --md-primary-fg-color: var(--bp-blue);
+  --md-primary-fg-color--light: color-mix(in srgb, var(--bp-blue) 80%, #FFFFFF);
+  --md-primary-fg-color--dark: color-mix(in srgb, var(--bp-blue) 80%, #000000);
   --md-accent-fg-color: var(--bp-link-hover);
+  --md-accent-fg-color--transparent: color-mix(in srgb, var(--bp-link-hover) 10%, transparent);
   --md-typeset-a-color: var(--bp-link);
 }}
+/* White on the accent is 2.1:1 in slate and 3.8:1 in light, and the
+   back-to-top button shows focus only by that fill. Slate's accent takes the
+   page's near-black text; light's button fills with the link blue. */
+[data-md-color-scheme=slate][data-md-color-accent] {{ --md-accent-bg-color: #18191A; }}
+[data-md-color-scheme=default] .md-top:is(:hover, :focus) {{ background-color: var(--bp-link); }}
 
 body {{ font-family: {sans}; color: var(--bp-fg); }}
 .md-typeset {{
@@ -3362,8 +3379,12 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   height: 3px;
   background: var(--bp-sweep);
 }}
+/* The mobile drawer's title bar and repository strip match the header:
+   white on slate's brighter blue is 3.5:1. */
 [data-md-color-scheme=slate] .md-header,
-[data-md-color-scheme=slate] .md-tabs {{ background-color: #242526; }}
+[data-md-color-scheme=slate] .md-tabs,
+[data-md-color-scheme=slate] .md-nav--primary .md-nav__title[for=__drawer],
+[data-md-color-scheme=slate] .md-nav__source {{ background-color: #242526; }}
 .md-tabs {{ border-bottom: 1px solid var(--bp-rule); }}
 .md-tabs__link {{ font-weight: 600; opacity: 0.72; }}
 .md-tabs__link--active, .md-tabs__link:hover {{ opacity: 1; }}
@@ -3839,7 +3860,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   box-shadow: none;
   background: none;
   font-family: {sans};
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   color: var(--bp-muted);
 }}
 .md-typeset details.bp-dependencies > summary {{

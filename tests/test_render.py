@@ -1267,8 +1267,10 @@ def test_the_legends_beside_the_explorer_count_what_its_rings_count(tmp_path: Pa
         assert "it records inspection, not a mathematical proof." in legend
     # A swatch without a rule renders blank.
     css = (out / "stylesheets/blueprint.css").read_text(encoding="utf-8")
+    # A filled state's dot takes its stroke; an outlined one keeps its fill.
     for state in INVENTORY_STATES:
-        assert f".bp-swatch-{state.key} {{ background: {state.fill}; border-color: {state.stroke}; }}" in css
+        background = state.fill if state.fill == "#FFFFFF" else state.stroke
+        assert f".bp-swatch-{state.key} {{ background: {background}; border-color: {state.stroke}; }}" in css
 
 
 def test_book_navigation_is_bottom_only_and_never_crosses_into_project_views(tmp_path: Path) -> None:
@@ -3302,7 +3304,8 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(
     assert re.findall(r'<span class="bp-key">([^<]+)</span>', meta) == ["Lean", "Assumes", "Discussion"]
 
     css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    assert ".bp-ref-conditional::before, .bp-swatch-conditional { background: #E9DFFC; border-color: #6B3FCF; }" in css
+    # The dot is a few pixels wide, so a finished state fills it with the stroke rather than the pale card tint.
+    assert ".bp-ref-conditional::before, .bp-swatch-conditional { background: #6B3FCF; border-color: #6B3FCF; }" in css
     assert "[data-md-color-scheme=slate] .bp-ref-conditional::before" in css
     assert ".bp-conditional .bp-mark { color: #6B3FCF; }" in css
 

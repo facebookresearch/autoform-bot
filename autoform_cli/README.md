@@ -636,7 +636,7 @@ Module inventory counts are reported separately from formalization-target
 completion. The target denominator, readiness count, declaration-kind totals,
 and the progress-state breakdowns in the book and in `autoform check` use
 non-container articles carrying `declaration`; a `catalog: module` record
-counts toward none of them. A scope's status ring and item count, and the
+counts toward none of them. A scope's status bar and item count, and the
 legend beside each dependency map, also count a leaf marked `not_ready` that
 declares nothing yet, so deferred work holds its scope open. All three also
 count every catalog, under a neutral status: `inventory checked` once the

@@ -643,7 +643,7 @@
       if (!record && !node) return;
       var links = neighborIds(record ? record.id : node.id);
       var row = element("div", "bp-reading-links");
-      [["Prerequisites", links.before], ["Used by", links.after]].forEach(function (pair) {
+      [["Uses", links.before], ["Used by", links.after]].forEach(function (pair) {
         var group = element("div", "bp-reading-related"); group.appendChild(element("strong", "", pair[0] + " · " + pair[1].length));
         pair[1].slice(0, 5).forEach(function (id) { var related = records.get(id); if (!related) return;
           var link = element("a", "", related.title); link.href = related.route || related.url;
@@ -961,16 +961,24 @@
       mark.title = entry.meaning || statusLabel(key);
       ["light", "dark"].forEach(function (scheme) {
         var color = entry[scheme] || {};
-        mark.style.setProperty("--dag-swatch-" + scheme + "-fill", color.fill || "transparent");
+        mark.style.setProperty("--dag-swatch-" + scheme + "-fill", solid(key, color) || "transparent");
         mark.style.setProperty("--dag-swatch-" + scheme + "-stroke", color.stroke || "#9ca3af");
       });
       return mark;
     }
+    // Only finished states are filled. Their card tints are too pale to tell from an outline at a few pixels, so small marks fill them with the stroke.
+    function solid(key, color) { return ((palette[key] || palette.planned || {}).light || {}).fill === "#FFFFFF" ? color.fill : color.stroke; }
     function isDark() { return document.body.getAttribute("data-md-color-scheme") === "slate"; }
     function colors(node) {
       if (node._region) return isDark() ? {fill: "#242526", stroke: "#737578", text: "#E4E6EB"} : {fill: "#FFFFFF", stroke: "#CED0D4", text: "#1C1E21"};
       var entry = palette[node.status] || palette.planned || {};
       return entry[isDark() ? "dark" : "light"] || {fill: "#fff", stroke: "#9ca3af", text: "#374151"};
+    }
+    // A scope's fully proved results of its targets. Module inventories are neutral and stay out of both counts, as in the hero's figure.
+    function finished(node) {
+      var done = 0, total = 0;
+      (node.status_counts || []).forEach(function (entry) { if ((palette[entry[0]] || {}).neutral) return; total += entry[1]; if (/^(fully_proved|mathlib)$/.test(entry[0])) done += entry[1]; });
+      return [done, total];
     }
     // A topic's or region's statuses as a progress bar, in legend order since a region merges its topics' counts as it meets them.
     function statusRing(node) {
@@ -1245,7 +1253,7 @@
       if (atlas && node.kind === "scope") {
         rounded(ctx, box.x, box.y, box.w, box.h, 14 * ui$transform.scale); ctx.fill(); ctx.stroke(); ctx.restore(); return;
       }
-      if (tiny) ctx.fillRect(box.x, box.y, Math.max(3, box.w), Math.max(3, box.h));
+      if (tiny) { ctx.fillStyle = solid(node.status, color); ctx.fillRect(box.x, box.y, Math.max(3, box.w), Math.max(3, box.h)); }
       else { rounded(ctx, box.x, box.y, box.w, box.h, 7 * ui$transform.scale); ctx.fill(); ctx.stroke(); }
       ctx.restore();
     }
@@ -1337,19 +1345,28 @@
         control.tabIndex = node.id === tabId ? 0 : -1;
       });
       dom$density.hidden = !ui$readableCrop && !(visible.length && ui$transform.scale < .34);
-      dom$density.textContent = ui$readableCrop ? "Pan or " + (navigation ? "Results" : "Contents") + " to see all " + ui$active.length + " items" :
+      dom$density.textContent = ui$readableCrop ? "Pan or " + (navigation ? "Results" : "Contents") + " to see all " + ui$active.length + (atlas ? " topics" : " articles") :
         (visible.length && ui$transform.scale < .34 ? "Zoom in to reveal " + visible.length + " node labels" : "");
     }
     function makeNodeControl(node) {
       var control = button("bp-dag-node", ""); control.dataset.autoformNodeId = node.id; control.dataset.kind = node.kind || "node";
-      var scopeMeta = node.kind === "scope" ? node._unknownCount ? "Topic" : plural(node.member_count || 0, "article", "articles") :
+      // A topic or region names its fully proved share, which its bar cannot: statement formalized shares proved's green.
+      var count = finished(node), scopeMeta = node.kind === "scope" ? node._unknownCount ? "Topic" : count[1] ?
+        count[0].toLocaleString() + " of " + count[1].toLocaleString() + " fully proved" : plural(node.member_count || 0, "article", "articles") :
         node.kind === "boundary" ? "External scope · open" : null;
-      var kind = KINDS.get((node.declaration || "").toLowerCase()), meta = scopeMeta || (kind ? kind + " · " : "") + statusLabel(node.status);
+      // ATLAS titles such as "Theorem (Crystallographic Restriction)" already name their kind, so the meta does not repeat it.
+      var kind = KINDS.get((node.declaration || "").toLowerCase());
+      if (kind && (node.title || "").indexOf(kind) === 0) kind = "";
+      var lead = node._region ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, tail = scopeMeta || statusLabel(node.status);
+      var meta = node._region || !lead ? tail : lead + " · " + tail;
       control.setAttribute("aria-label", node.title + (node.area ? ", " + node.area : "") + ", " +
         meta + (node.isolated ? ", no dependency edges in this view" : ""));
       var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : control;
       content.appendChild(element("span", "bp-dag-node-title", node.title));
-      content.appendChild(element("span", "bp-dag-node-meta", node._region ? plural(node._topics, "topic", "topics") + " · " + scopeMeta : meta));
+      // The kind word or topic count gives way first, so the status or count the line is there to show stays whole.
+      var line = content.appendChild(element("span", "bp-dag-node-meta"));
+      if (lead) line.appendChild(element("span", "", lead));
+      line.appendChild(element("span", "", (lead ? " · " : "") + tail));
       if (node._region && node.summary) content.appendChild(element("span", "bp-dag-node-summary", node.summary));
       content.appendChild(element("span", "bp-dag-node-relation", ""));
       if (content !== control) control.appendChild(content);
@@ -1657,7 +1674,7 @@
         dom$inspectorInner.appendChild(element("p", "bp-dag-overview", plural(data.nodes.length, atlas ? "topic" : "node", atlas ? "topics" : "nodes") + " · " +
           plural(data.edge_count || data.edges.length, "authored dependency", "authored dependencies") + "."));
         if (atlas && !data.edges.length) dom$inspectorInner.appendChild(element("p", "bp-dag-overview", "No dependencies are authored between these topics."));
-        if (atlas && (data.regions || []).length) distribution("Mathematical regions", data.regions.map(function (region) { return [region.label, region.count]; }));
+        if (atlas && (data.regions || []).length) distribution("Areas", data.regions.map(function (region) { return [region.label, region.count]; }));
         distribution(atlas ? "Topics by least-complete status" : "Nodes by status", presentStatuses.map(function (key) { return [statusLabel(key), statusCounts.get(key), key]; }));
         if (statusCounts.has("inventory_checked") || statusCounts.has("inventory_pending")) dom$inspectorInner.appendChild(element("p", "bp-dag-overview", "Inventory statuses are neutral: an inventory records inspection, not a mathematical proof."));
         return;
@@ -1672,10 +1689,10 @@
       }); header.appendChild(close); dom$inspectorInner.appendChild(header);
       var entries = node.status_counts || [], inventoryOnly = node.kind === "scope" && entries.length && entries.every(function (entry) { return palette[entry[0]] && palette[entry[0]].neutral; });
       // A topic's own status is its least-complete item's, so its pill counts finished items instead: "60 of 80 fully proved".
-      var done = 0, total = 0; entries.forEach(function (entry) { total += entry[1]; if (/^(fully_proved|mathlib)$/.test(entry[0])) done += entry[1]; });
+      var count = finished(node), done = count[0], total = count[1];
       var progress = node.kind === "scope" && total && !inventoryOnly;
       var actions = element("div", "bp-dag-actions"), mark = element("span", "bp-dag-status-pill", inventoryOnly ? "inventory only" :
-        progress ? done.toLocaleString() + " of " + total.toLocaleString() + " fully proved" : statusLabel(node.status)), color = colors(progress ? {status: "fully_proved"} : node);
+        progress ? done.toLocaleString() + " of " + total.toLocaleString() + " fully proved" : statusLabel(node.status)), color = colors(progress && done === total ? {status: "fully_proved"} : node);
       mark.style.setProperty("--dag-pill-fill", color.fill); mark.style.setProperty("--dag-pill-stroke", color.stroke); actions.appendChild(mark);
       var href = safeHref(node.url);
       if (href) { var open = element("a", "bp-dag-open", node.kind === "scope" || node.kind === "boundary" ? "Explore topic" : "Open article"); open.href = href; actions.appendChild(open); }
@@ -1692,7 +1709,7 @@
         }); dom$inspectorInner.appendChild(pivots);
       }
       appendRelations("Direct prerequisites", before); appendRelations("Direct dependents", after);
-      if (entries.length > 1 || node.member_count > 1) distribution(node.member_count + " items in this scope", entries.map(function (entry) { return [statusLabel(entry[0]), entry[1], entry[0]]; }));
+      if (entries.length > 1 || node.member_count > 1) distribution(plural(node.member_count || 0, "article", "articles") + (node._region ? " in this area" : " in this topic"), entries.map(function (entry) { return [statusLabel(entry[0]), entry[1], entry[0]]; }));
     }
     function distribution(title, rows) {
       var section = element("section", "bp-dag-section"), list = element("div", "bp-dag-distribution"); section.appendChild(element("h3", "", title));

@@ -624,7 +624,7 @@ def test_connected_project_maps_open_at_readable_scale(
     assert box is not None
     assert box["height"] >= 44
     density = page.locator(".bp-dag-density")
-    playwright.expect(density).to_have_text("Pan or Contents to see all 33 items")
+    playwright.expect(density).to_have_text("Pan or Contents to see all 33 articles")
     # The note is plain text at the map's bottom-left, not a bubble over the map.
     style = density.evaluate(
         "element => ['borderTopStyle', 'boxShadow', 'pointerEvents'].map(name => getComputedStyle(element)[name])"
@@ -637,7 +637,7 @@ def test_connected_project_maps_open_at_readable_scale(
     # On a phone it sat flush on the collapsed sheet's peek; it keeps 8px above it.
     page.emulate_media(reduced_motion="reduce")
     page.set_viewport_size({"width": 390, "height": 844})
-    playwright.expect(density).to_have_text("Pan or Contents to see all 33 items")
+    playwright.expect(density).to_have_text("Pan or Contents to see all 33 articles")
     note, sheet = density.bounding_box(), page.locator(".bp-dag-inspector").bounding_box()
     assert note is not None and sheet is not None
     assert abs(sheet["y"] - 8 - (note["y"] + note["height"])) < 1
@@ -689,8 +689,9 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     playwright.expect(page.locator(".bp-dag-status-pill")).to_have_text("60 of 80 fully proved")
     # A topic has no declaration, so no kicker names its kind over the title.
     playwright.expect(page.locator(".bp-dag-inspector .bp-dag-kicker")).to_have_count(0)
-    playwright.expect(page.locator(".bp-dag-inspector h3", has_text="in this scope")).to_have_text(
-        "80 items in this scope"
+    # The breakdown counts in the card's noun, not "80 items in this scope".
+    playwright.expect(page.locator(".bp-dag-inspector h3", has_text="in this topic")).to_have_text(
+        "80 articles in this topic"
     )
     playwright.expect(page.locator(".bp-dag-summary")).to_contain_text(
         "continuity, deformation, and invariants"
@@ -724,7 +725,8 @@ def test_a_view_of_topics_and_results_draws_readable_result_cards(desktop_page: 
     assert not page.locator(".bp-dag-viewer").evaluate("element => element.classList.contains('bp-dag-atlas')")
     assert title.evaluate("element => element.scrollWidth <= element.clientWidth")
     meta = page.locator('[data-autoform-node-id="topics/compactness"] .bp-dag-node-meta')
-    playwright.expect(meta).to_have_text("1 article")
+    # A topic card names its fully proved share, which its status bar cannot.
+    playwright.expect(meta).to_have_text("0 of 1 fully proved")
     # A drawn DAG counts its nodes by status; only an atlas counts topics by their least-complete item.
     playwright.expect(page.locator(".bp-dag-inspector h3")).to_have_text("Nodes by status")
     page.locator('[data-autoform-node-id="topics/library"]').click()

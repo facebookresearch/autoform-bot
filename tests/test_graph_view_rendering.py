@@ -438,7 +438,7 @@ def test_explorer_counts_agree_with_their_nouns() -> None:
 def test_card_meta_counts_items_in_a_readable_colour() -> None:
     """Topic cards read "1 item · 0 internal links" at three-quarter opacity, jargon in a faded grey."""
     script = _viewer_source()
-    assert 'var scopeMeta = node.kind === "scope" ?' in script
+    assert 'scopeMeta = node.kind === "scope" ?' in script
     # A topic counts the articles inside it, the noun the book uses for them.
     assert 'plural(node.member_count || 0, "article", "articles")' in script
     assert "internal link" not in script
@@ -472,9 +472,9 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
     script = _viewer_source()
     style = dag_viewer.render_container("graph.json")
 
-    assert 'element("span", "bp-dag-node-meta", node._region ? plural(node._topics, "topic", "topics")' in script
-    assert 'meta = scopeMeta || (kind ? kind + " · " : "") + statusLabel(node.status);' in script
-    assert ' + " · " + scopeMeta : meta));' in script
+    assert 'var lead = node._region ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, tail = scopeMeta || statusLabel(node.status);' in script
+    assert 'var meta = node._region || !lead ? tail : lead + " · " + tail;' in script
+    assert 'line.appendChild(element("span", "", (lead ? " · " : "") + tail));' in script
     assert 'element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (node.area ? " · " + node.area : ""))' in script
     assert 'element("span", "bp-dag-result-meta", match.node.area || statusLabel(match.node.status))' in script
     for gone in ("bp-dag-node-id", "bp-dag-inventory-id", "bp-dag-result-id"):
@@ -735,6 +735,7 @@ def test_explorer_elevation_is_two_shadows_and_a_selection_ring_that_keeps_the_c
         "0 0 0 2px color-mix(in srgb, var(--dag-link) 40%, transparent), var(--dag-e1)",
         "0 0 0 3px color-mix(in srgb, var(--dag-link) 18%, transparent)",
         "inset 3px 0 0 var(--dag-link)",
+        "inset 3px 0 0 var(--dag-fg)",
     }
     selected = ".bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-map), 0 0 0 4px var(--dag-fg), var(--dag-e1); }"
     assert selected in style
@@ -762,7 +763,8 @@ def test_selection_focus_and_the_current_statement_do_not_borrow_status_blue() -
     assert ".bp-dag-navigation-link:focus-visible" not in style.replace(".bp-dag-navigation-link, .bp-reading-body):focus-visible", "")
     current = re.search(r"^\.bp-reading-current \{([^}]*)\}", style, re.M)
     assert current is not None and "outline" not in current.group(1)
-    assert "box-shadow: inset 3px 0 0 var(--dag-link);" in current.group(1) and "padding: 10px 12px 10px 15px;" in current.group(1)
+    # Its bar is ink, not a second can_prove blue beside the statement's own status rule.
+    assert "box-shadow: inset 3px 0 0 var(--dag-fg);" in current.group(1) and "padding: 10px 12px 10px 15px;" in current.group(1)
 
     def mixed(colour: str, base: str, share: float) -> str:
         pairs = [(int(colour[i : i + 2], 16), int(base[i : i + 2], 16)) for i in (1, 3, 5)]
@@ -848,6 +850,16 @@ def test_card_kind_words_match_the_book_captions() -> None:
     assert kinds is not None
     assert dict(re.findall(r'(\w+): "([^"]+)"', kinds.group(1))) == render.DECLARATION_LABELS
     assert 'var kind = KINDS.get((node.declaration || "").toLowerCase())' in script
+    # An ATLAS title such as "Theorem (Crystallographic Restriction)" names its kind already.
+    assert 'if (kind && (node.title || "").indexOf(kind) === 0) kind = "";' in script
+
+
+def test_card_meta_keeps_its_status_whole() -> None:
+    """A stated theorem's card read "Theorem · statement formali…": the ellipsis took the status, not the kind."""
+    style = dag_viewer._STYLE
+    assert re.search(r"^\.bp-dag-node-meta \{ display: flex;", style, re.M)
+    assert ".bp-dag-node-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }" in style
+    assert ".bp-dag-node-meta > span + span { flex: none; }" in style
 
 
 def test_status_ring_greys_stay_apart_in_both_schemes() -> None:
@@ -866,6 +878,9 @@ def test_status_ring_greys_stay_apart_in_both_schemes() -> None:
 
 def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> None:
     """A 3px conic ring in status colours framed every topic and region card, so a mostly stated region read as done.
+
+    Statement formalized shares proved's green, so the bar alone cannot say how much is done: the
+    card's meta line names the fully proved share, as the pill does.
 
     Regions behind the cards cycled seven pastels that meant nothing, and a topic's pill named its
     least-complete item ("ready to prove") above a breakdown that was mostly fully proved.
@@ -911,6 +926,27 @@ def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> 
     assert 'progress ? done.toLocaleString() + " of " + total.toLocaleString() + " fully proved" : statusLabel(node.status)' in script
     assert "/^(fully_proved|mathlib)$/.test(entry[0])" in script
     assert 'inventoryOnly ? "inventory only" :' in script
+    # Card and pill share one count, which leaves neutral module inventories out of the total like the hero.
+    assert "if ((palette[entry[0]] || {}).neutral) return; total += entry[1];" in script
+    assert 'count[0].toLocaleString() + " of " + count[1].toLocaleString() + " fully proved"' in script
+    # The pill's dot is finished green only once every target is.
+    assert 'color = colors(progress && done === total ? {status: "fully_proved"} : node);' in script
+    # The breakdown and the overview use the card's nouns.
+    assert '" items in this scope"' not in script and '"Mathematical regions"' not in script
+    assert '[["Uses", links.before], ["Used by", links.after]]' in script
+
+
+def test_small_status_marks_fill_finished_states_with_the_stroke() -> None:
+    """The light tints made tiny map plates, rail swatches and dependency dots of finished work vanish."""
+    script = _viewer_source()
+    assert 'function solid(key, color) { return ((palette[key] || palette.planned || {}).light || {}).fill === "#FFFFFF" ? color.fill : color.stroke; }' in script
+    assert 'if (tiny) { ctx.fillStyle = solid(node.status, color); ctx.fillRect(' in script
+    assert '"-fill", solid(key, color) || "transparent");' in script
+    # Against the map the zoomed-out plate of every finished state keeps 3:1, as it did before the tints.
+    for state in status.STATES:
+        if state.fill != "#FFFFFF":
+            assert _contrast(state.stroke, "#F0F2F5") >= 3, state.key
+            assert _contrast(state.dark_stroke, "#18191A") >= 3, state.key
 
 
 def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path) -> None:

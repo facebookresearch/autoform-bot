@@ -557,7 +557,7 @@ def test_five_authored_dependency_areas_remain_readable_reachable_and_keep_nativ
     assert 280 <= stage["width"] <= width + 1
     for node in geometry:
         assert node["width"] >= 200 and node["titlePixels"] >= 15 and node["metaPixels"] >= 12
-        assert node["meta"] == "3 topics · 3 articles" and ", 3 articles" in node["aria"]
+        assert node["meta"] == "3 topics · 0 of 3 fully proved" and ", 0 of 3 fully proved" in node["aria"]
         assert node["titleFits"] and node["hit"]
         if stage["width"] <= 620:
             assert not node["sampleVisible"]

@@ -39,7 +39,7 @@ assert(kinds, 'Production kind words missing');
 const functions = [
   'element', 'button', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
   'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'calculateActive',
-  'statusLabel', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory'
+  'statusLabel', 'finished', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');
 const sandbox = {assert, URL, fixtureText}; vm.createContext(sandbox);
@@ -141,8 +141,18 @@ def test_cards_lead_with_the_books_kind_word_and_topics_keep_their_count() -> No
       // The book captions an unlisted declaration "Node", so the card adds no word; inherited names are not kinds.
       assert.equal(meta(viewNode('O', {declaration: 'noncomputable def'})), 'planned');
       assert.equal(meta(viewNode('C', {declaration: 'constructor'})), 'planned');
-      assert.equal(meta(viewNode('S', {kind: 'scope', declaration: 'theorem', member_count: 2})), '2 articles');
+      assert.equal(meta(viewNode('S', {kind: 'scope', declaration: 'theorem', member_count: 2})), '0 of 1 fully proved');
       assert(card(viewNode('T', {declaration: 'theorem'})).getAttribute('aria-label').endsWith(', Theorem · planned'));
+      // A title that already names its kind, as ATLAS's do, gets no second kind word.
+      assert.equal(meta(viewNode('Theorem (Crystallographic Restriction)', {declaration: 'theorem'})), 'planned');
+      // The kind word and the status are separate spans, so only the kind truncates.
+      assert.deepEqual(card(viewNode('K', {declaration: 'theorem'})).children[1].children.map(span => span.textContent), ['Theorem', ' · planned']);
+      // A topic counts its fully proved targets; module inventories are neutral and stay out of the total.
+      palette = {planned: {label: 'planned'}, fully_proved: {label: 'fully proved'}, inventory_checked: {label: 'inventory checked', neutral: true}};
+      const mixed = {kind: 'scope', member_count: 85, status_counts: [['fully_proved', 80], ['inventory_checked', 5]]};
+      assert.equal(meta(viewNode('M', mixed)), '80 of 80 fully proved');
+      assert.equal(meta(viewNode('I', {kind: 'scope', member_count: 5, status_counts: [['inventory_checked', 5]]})), '5 articles');
+      assert.equal(meta(viewNode('R', Object.assign({}, mixed, {_region: 'Algebra', _topics: 2}))), '2 topics · 80 of 80 fully proved');
     """)
 
 
