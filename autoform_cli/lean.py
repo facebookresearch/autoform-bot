@@ -1105,6 +1105,7 @@ def strip_lean_comments(text: str) -> str:
 #: One header name: dotted components, each a plain identifier or ``«…»``.
 _HEADER_NAME = re.compile(r"(?:«[^»\n]*»|[^\W\d][\w'!?]*)(?:\.(?:«[^»\n]*»|[^\W\d][\w'!?]*))*")
 _HEADER_KEYWORDS = frozenset({"module", "prelude", "public", "meta", "import", "all"})
+_KEYWORD_THEN_QUOTE = re.compile("(?:module|prelude|public|meta|import|all)«")
 
 
 class _UnsureHeader(Exception):
@@ -1154,7 +1155,11 @@ class _HeaderWords:
             else:
                 index += 1
         self.index = index
-        return text[start:index]
+        word = text[start:index]
+        # Lean ends a keyword at `«` and reads the quoted name as a separate word.
+        if _KEYWORD_THEN_QUOTE.match(word):
+            raise _UnsureHeader
+        return word
 
 
 def module_header_imports(data: bytes) -> tuple[str, ...] | None:

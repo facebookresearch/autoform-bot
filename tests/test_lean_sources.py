@@ -3970,7 +3970,6 @@ def test_repository_top_level_is_unknown_when_git_prints_a_name_that_is_not_utf_
 
 
 
-
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
@@ -4008,6 +4007,9 @@ def test_module_header_imports_reads_lean_s_header_grammar(source: str, expected
         b"import runtime A\n",
         b"import A-B\n",
         b"import 1A\n",
+        "import«A»\nimport B\n".encode(),
+        "module\npublic«x»\nimport A\n".encode(),
+        "import all«A»\n".encode(),
     ],
 )
 def test_module_header_imports_gives_up_when_unsure(source: bytes) -> None:
