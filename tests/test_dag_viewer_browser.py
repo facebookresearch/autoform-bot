@@ -557,8 +557,8 @@ def test_mobile_node_interaction_and_selected_sheet_collapse(mobile_page: object
 
     playwright.expect(node).to_have_attribute("data-selected", "true")
     playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text("Middle lemma")
-    # The card and the details name the status, never the internal id.
-    playwright.expect(node.locator(".bp-dag-node-meta")).to_have_text("ready to prove")
+    # The card and the details name the kind and status, never the internal id.
+    playwright.expect(node.locator(".bp-dag-node-meta")).to_have_text("Lemma · ready to prove")
     playwright.expect(page.locator(".bp-dag-inspector")).not_to_contain_text("chapter/middle")
     handle = page.locator(".bp-dag-sheet-handle")
     inspector_inner = page.locator(".bp-dag-inspector-inner")

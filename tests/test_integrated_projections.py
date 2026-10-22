@@ -34,6 +34,8 @@ function original(name) {
 }
 const constants = source.match(/\bvar NODE_W =[^;]+;/);
 assert(constants, 'Production map constants missing');
+const kinds = source.match(/\bvar KINDS =[^;]+;/);
+assert(kinds, 'Production kind words missing');
 const functions = [
   'element', 'button', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
   'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'calculateActive',
@@ -103,7 +105,7 @@ function configure(indexNodes, context, relations = []) {
 def _run(body: str, *, fixture: object = None) -> None:
     program = "var fixture = JSON.parse(fixtureText);\n" + _ENVIRONMENT + "\n"
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
-    script += "vm.runInContext(" + json.dumps('"use strict";\n') + "+constants[0]+"
+    script += "vm.runInContext(" + json.dumps('"use strict";\n') + "+constants[0]+kinds[0]+"
     script += json.dumps(program) + "+functions+" + json.dumps(body)
     script += ", sandbox, {timeout: 5000, filename: CLIENT});"
     result = subprocess.run([_NODE, "-e", script], input=json.dumps(fixture), text=True, capture_output=True, timeout=15)
@@ -127,6 +129,20 @@ def test_an_isolated_focal_result_does_not_make_connected_context_peers_isolated
       ui$showIsolated = false; ui$activeDirty = true; calculateActive();
       assert.deepEqual(ui$active.map(node => node.id).sort(), ['A', 'B']);
       assert(data.edges.every(edge => ui$activeIds.has(edge.source) && ui$activeIds.has(edge.target)));
+    """)
+
+
+def test_cards_lead_with_the_books_kind_word_and_topics_keep_their_count() -> None:
+    _run(r"""
+      palette = {planned: {label: 'planned'}, can_state: {label: 'ready to state'}}; atlas = false;
+      const card = node => makeNodeControl(node), meta = node => card(node).children[1].textContent;
+      assert.equal(meta(viewNode('D', {declaration: 'def', status: 'can_state'})), 'Definition · ready to state');
+      assert.equal(meta(viewNode('L', {declaration: 'Lemma'})), 'Lemma · planned');
+      // The book captions an unlisted declaration "Node", so the card adds no word; inherited names are not kinds.
+      assert.equal(meta(viewNode('O', {declaration: 'noncomputable def'})), 'planned');
+      assert.equal(meta(viewNode('C', {declaration: 'constructor'})), 'planned');
+      assert.equal(meta(viewNode('S', {kind: 'scope', declaration: 'theorem', member_count: 2})), '2 articles');
+      assert(card(viewNode('T', {declaration: 'theorem'})).getAttribute('aria-label').endsWith(', Theorem · planned'));
     """)
 
 

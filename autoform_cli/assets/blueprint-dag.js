@@ -9,6 +9,10 @@
   var clients = new Map();
   var clamp = function (value, low, high) { return Math.max(low, Math.min(high, value)); };
   var plural = function (count, one, many) { return count.toLocaleString() + " " + (count === 1 ? one : many); };
+  // The book's caption for each declaration (render.DECLARATION_LABELS), so a card reads "Definition · defined" beside "Definition 1".
+  var KINDS = new Map(Object.entries({abbrev: "Abbreviation", axiom: "Axiom", class: "Class", corollary: "Corollary", def: "Definition",
+    definition: "Definition", example: "Example", inductive: "Inductive", instance: "Instance", lemma: "Lemma", proposition: "Proposition",
+    structure: "Structure", theorem: "Theorem"}));
 
   function element(tag, className, text) {
     var node = document.createElement(tag);
@@ -1339,11 +1343,12 @@
       var control = button("bp-dag-node", ""); control.dataset.autoformNodeId = node.id; control.dataset.kind = node.kind || "node";
       var scopeMeta = node.kind === "scope" ? node._unknownCount ? "Topic" : plural(node.member_count || 0, "article", "articles") :
         node.kind === "boundary" ? "External scope · open" : null;
+      var kind = KINDS.get((node.declaration || "").toLowerCase()), meta = scopeMeta || (kind ? kind + " · " : "") + statusLabel(node.status);
       control.setAttribute("aria-label", node.title + (node.area ? ", " + node.area : "") + ", " +
-        (scopeMeta || statusLabel(node.status)) + (node.isolated ? ", no dependency edges in this view" : ""));
+        meta + (node.isolated ? ", no dependency edges in this view" : ""));
       var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : control;
       content.appendChild(element("span", "bp-dag-node-title", node.title));
-      content.appendChild(element("span", "bp-dag-node-meta", node._region ? plural(node._topics, "topic", "topics") + " · " + scopeMeta : scopeMeta || statusLabel(node.status)));
+      content.appendChild(element("span", "bp-dag-node-meta", node._region ? plural(node._topics, "topic", "topics") + " · " + scopeMeta : meta));
       if (node._region && node.summary) content.appendChild(element("span", "bp-dag-node-summary", node.summary));
       content.appendChild(element("span", "bp-dag-node-relation", ""));
       if (content !== control) control.appendChild(content);

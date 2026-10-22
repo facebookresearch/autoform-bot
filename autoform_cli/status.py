@@ -61,7 +61,11 @@ class State:
 #: Ordered most complete first; this is also the legend order.
 #:
 #: Only finished work is filled in; everything in progress is an outline, which
-#: keeps a chapter quiet when most of it is still open. The hues are Facebook's
+#: keeps a chapter quiet when most of it is still open. Finished fills are
+#: light tints, deepest for mathlib, so that done work does not outshout the
+#: blue a contributor can pick up next, and so that a card's title can stay in
+#: the page's ink on every fill; only the status word under the title (text)
+#: and the stroke carry the colour. The hues are Facebook's
 #: semantic set -- #31A24C green, #0064E0 blue, #F7B928 amber, #B0B3B8 grey --
 #: so that finished, actionable, blocked and untouched read at a glance without
 #: anyone learning a legend. Green tracks proof progress, blue marks what a
@@ -76,19 +80,19 @@ class State:
 #: on the page and on the explorer's map they still read as cards, and
 #: planned's grey stroke keeps 3:1 against both.
 STATES: tuple[State, ...] = (
-    State("mathlib", "in mathlib", "#1C5C33", "#134426", "#FFFFFF",
+    State("mathlib", "in mathlib", "#C6E6CF", "#134426", "#134426",
           "#10281A", "#42B72A", "#8BE78B"),
-    State("fully_proved", "fully proved", "#31A24C", "#22773A", "#FFFFFF",
+    State("fully_proved", "fully proved", "#D7EEDD", "#22773A", "#1E6B34",
           "#13301E", "#42B72A", "#8BE78B"),
-    State("proved", "proved", "#8ED4A2", "#22773A", "#0B2415",
+    State("proved", "proved", "#E5F4E9", "#22773A", "#1E6B34",
           "#122A1B", "#31A24C", "#6BD97F"),
-    State("defined", "defined", "#C3E9CE", "#22773A", "#0B2415",
+    State("defined", "defined", "#EEF8F0", "#22773A", "#1E6B34",
           "#122A1B", "#2B8F44", "#6BD97F"),
     State("conditional", "conditionally proved", "#E9DFFC", "#6B3FCF", "#2E1065",
           "#231A36", "#9F7AEA", "#D6C8FA"),
     State("can_prove", "ready to prove", "#FFFFFF", "#0064E0", "#0064E0",
           "#101F33", "#2D88FF", "#7FB8FF"),
-    State("stated", "statement formalized", "#FFFFFF", "#31A24C", "#22773A",
+    State("stated", "statement formalized", "#FFFFFF", "#2B8F44", "#22773A",
           "#242526", "#31A24C", "#E4E6EB"),
     State("can_state", "ready to state", "#FFFFFF", "#0082FB", "#0B4EA2",
           "#242526", "#2D88FF", "#E4E6EB"),

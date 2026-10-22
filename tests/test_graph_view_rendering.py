@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer, graph_pages, status
+from autoform_cli import dag_viewer, graph_pages, render, status
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
 
 
@@ -452,15 +452,10 @@ def test_card_meta_counts_items_in_a_readable_colour() -> None:
         pairs = ((int(text[index:index + 2], 16), int(fill[index:index + 2], 16)) for index in (1, 3, 5))
         return "#" + "".join(f"{round(a * weight + b * (1 - weight)):02x}" for a, b in pairs)
 
-    below = set()
+    # White on light fully proved green was 3.3:1; finished fills are tints now, so every label reads.
     for state in (*status.STATES, *status.INVENTORY_STATES):
         for text, fill in ((state.text, state.fill), (state.dark_text, state.dark_fill)):
-            if _contrast(text, fill) < 4.5:
-                # The title on this card falls short too; no mix of its colours can do better.
-                below.add(state.key)
-            else:
-                assert _contrast(mixed(text, fill), fill) >= 4.5, state.key
-    assert below == {"fully_proved"}
+            assert _contrast(mixed(text, fill), fill) >= 4.5, state.key
 
 
 def test_rail_rows_show_a_status_swatch_and_a_lone_group_no_heading() -> None:
@@ -478,7 +473,8 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
     style = dag_viewer.render_container("graph.json")
 
     assert 'element("span", "bp-dag-node-meta", node._region ? plural(node._topics, "topic", "topics")' in script
-    assert ': scopeMeta || statusLabel(node.status))' in script
+    assert 'meta = scopeMeta || (kind ? kind + " · " : "") + statusLabel(node.status);' in script
+    assert ' + " · " + scopeMeta : meta));' in script
     assert 'element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (node.area ? " · " + node.area : ""))' in script
     assert 'element("span", "bp-dag-result-meta", match.node.area || statusLabel(match.node.status))' in script
     for gone in ("bp-dag-node-id", "bp-dag-inventory-id", "bp-dag-result-id"):
@@ -815,6 +811,43 @@ def test_dark_explorer_cards_read_against_the_page_toned_map() -> None:
     assert "[data-md-color-scheme=slate] .bp-dag-open { background: #0064e0; }" in style
     assert _contrast("#FFFFFF", "#0064E0") >= 4.5
     assert _contrast("#FF7B72", surface) >= 4.5 and "--dag-error: #ff7b72;" in style
+
+
+def test_card_titles_take_the_page_ink_on_every_status_fill() -> None:
+    """Planned titles were grey and finished ones white on solid green, so the status recoloured the title."""
+    style = dag_viewer._STYLE
+    title = re.search(r"\.bp-dag-node-title \{([^}]*)\}", style)
+    assert title is not None and "color: var(--dag-fg);" in title.group(1)
+    assert "--dag-fg: var(--bp-fg, #1c1e21);" in style
+    # The book's light and slate ink, then the standalone viewer's fallback.
+    light, dark = re.findall(r"--bp-fg: (#[0-9A-Fa-f]{6});", render._stylesheet())
+    for state in (*status.STATES, *status.INVENTORY_STATES):
+        assert min(_contrast(light, state.fill), _contrast("#1C1E21", state.fill)) >= 4.5, state.key
+        assert _contrast(dark, state.dark_fill) >= 4.5, state.key
+    # Dark ink on mathlib's old solid #1C5C33 was 2.1:1; finished fills are tints that still deepen with completion.
+    greens = [next(state for state in status.STATES if state.key == key) for key in ("mathlib", "fully_proved", "proved")]
+    assert all(_contrast(state.fill, "#FFFFFF") < 1.5 for state in greens)
+    assert _contrast(greens[0].fill, "#FFFFFF") > _contrast(greens[1].fill, "#FFFFFF") > _contrast(greens[2].fill, "#FFFFFF")
+
+
+def test_status_strokes_outline_cards_on_both_maps() -> None:
+    """A tinted card is barely darker than the map, so its stroke alone has to draw the card's edge."""
+    assert "--dag-map: var(--bp-sunken, #f0f2f5);" in dag_viewer._STYLE
+    light_maps, dark_maps = ("#F0F2F5", "#FFFFFF"), ("#18191A", "#242526")
+    # Planned and the inventory greys are quiet on purpose; the ring tests keep those three apart.
+    for state in status.STATES:
+        if state.key != "planned":
+            assert min(_contrast(state.stroke, surface) for surface in (state.fill, *light_maps)) >= 3, state.key
+            assert min(_contrast(state.dark_stroke, surface) for surface in (state.dark_fill, *dark_maps)) >= 3, state.key
+
+
+def test_card_kind_words_match_the_book_captions() -> None:
+    """A card read "Base / ready to state" while the reading pane beside it said "Definition 1 (Base)"."""
+    script = _viewer_source()
+    kinds = re.search(r"var KINDS = new Map\(Object\.entries\(\{(.*?)\}\)\);", script, re.S)
+    assert kinds is not None
+    assert dict(re.findall(r'(\w+): "([^"]+)"', kinds.group(1))) == render.DECLARATION_LABELS
+    assert 'var kind = KINDS.get((node.declaration || "").toLowerCase())' in script
 
 
 def test_status_ring_greys_stay_apart_in_both_schemes() -> None:
