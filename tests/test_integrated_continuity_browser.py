@@ -7,7 +7,9 @@ publication and UI regressions, not claims of kernel verification.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import pytest
@@ -47,6 +49,59 @@ _LATE_SCOPE = _LATE_PARENT + "/chapter"
 _LATE_RESULT = _LATE_SCOPE + "/late"
 _OMITTED_TOPIC = "topic-126"
 _LATE_END = "The complete late mathematical explanation ends with this retained sentence."
+_FIVE_AREAS = ("Algebra", "Analysis", "Geometry", "Number Theory", "Foundations")
+_FIVE_TOPICS = tuple(f"topic-{number:02d}" for number in range(1, 16))
+
+
+@pytest.fixture(scope="module")
+def five_area_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_WorkspaceSite]:
+    """Independent authored areas; planned targets, no Lean proof claims."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("five-authored-areas") / "project"
+    scaffold_project(project, title="Five authored mathematical areas")
+    blueprint = project / "blueprint"
+    _write(blueprint / "README.md", "# Five authored mathematical areas\n\n- [Mathematical areas](roadmap/README.md)\n")
+    _write(blueprint / "roadmap/README.md", (
+        "# Five authored mathematical areas\n\nThese areas and modules are authored, not inferred from directory names.\n\n"
+        + "\n".join(f"- [Authored topic {number}](./{topic}/README.md)"
+                     for number, topic in enumerate(_FIVE_TOPICS, 1)) + "\n"
+    ))
+    for number, topic in enumerate(_FIVE_TOPICS):
+        area_index, slot = divmod(number, 3)
+        _write(blueprint / f"roadmap/{topic}/README.md", (
+            f"---\nnavigation: module\narea: {_FIVE_AREAS[area_index]}\n---\n\n# Authored topic {number + 1}\n\n"
+            "The area is explicit mathematical metadata.\n\n- [Planned zero identity](identity.md)\n"
+        ))
+        statement_link = "No prerequisites."
+        proof_links = ""
+        if area_index and slot == 0:
+            predecessor = _FIVE_TOPICS[(area_index - 1) * 3]
+            statement_link = f"- [Previous area's stated identity](../{predecessor}/identity.md)"
+        if area_index and slot == 1:
+            predecessor = _FIVE_TOPICS[(area_index - 1) * 3 + 2]
+            proof_links = f"\n\n## Proof depends on\n\n- [Previous area's proof input](../{predecessor}/identity.md)\n"
+        _write(blueprint / f"roadmap/{topic}/identity.md", (
+            "---\ndeclaration: theorem\nnot_ready: true\n---\n\n"
+            f"# Planned identity {number + 1}\n\nThe proposed target is $0=0$. "
+            "This fixture records an unverified roadmap target, not a completed Lean proof.\n\n"
+            "## Depends on\n\n" + statement_link + "\n" + proof_links
+        ))
+    render_site(blueprint, project / "site-src", lean_root=project)
+    configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
+    configuration["extra_javascript"] = [
+        entry for entry in configuration["extra_javascript"]
+        if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE
+    ]
+    build(configuration)
+    index_path = project / "site/dependencies/index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    records = {record["id"]: record for record in index["nodes"]}
+    root_path = index_path.parent / unquote(urlsplit(records["roadmap"]["data_url"]).path)
+    root_graph = json.loads(root_path.read_text(encoding="utf-8"))
+    with _served(project / "site") as url:
+        yield _WorkspaceSite(url, records, root_graph)
 
 
 @pytest.fixture(scope="module")
@@ -378,4 +433,82 @@ def test_phone_reader_uses_the_full_body_with_only_a_handle_peek_and_readable_fi
     assert _LAST_SENTENCE in _full_math(page).inner_text()
     assert documents == [site.route("roadmap")]
     assert page.evaluate("() => document === __workspaceDocument") is True
+    assert _pixels(page)["painted"] > 0
+
+
+@pytest.mark.parametrize(("width", "height"), [(390, 844), (1000, 900)])
+def test_five_authored_areas_fit_readably_centered_and_keep_native_region_activation(
+    workspace_page: object, five_area_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int, height: int,
+) -> None:
+    page, site = workspace_page, five_area_site
+    page.set_viewport_size({"width": width, "height": height})
+    captured = site.root_graph["nodes"]
+    assert len(captured) == 15
+    assert {node["area"] for node in captured} == set(_FIVE_AREAS)
+    expected = {area: sum(node["member_count"] for node in captured if node["area"] == area) for area in _FIVE_AREAS}
+    assert expected == dict.fromkeys(_FIVE_AREAS, 3)
+    targets = [record for record in site.records.values() if record.get("result") is True]
+    assert len(targets) == 15 and all(record["status"] == "not_ready" for record in targets)
+    assert all(node["status_counts"] == [["not_ready", 1]] for node in captured)
+    assert sum(edge["statement"] for edge in site.root_graph["edges"]) == 4
+    assert sum(edge["proof"] for edge in site.root_graph["edges"]) == 4
+    authored_areas = {node["id"]: node["area"] for node in captured}
+    assert all(authored_areas[edge["source"]] != authored_areas[edge["target"]] for edge in site.root_graph["edges"])
+    documents = _documents(page)
+    _open(page, site, workspace_runtime)
+    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    if width <= 720 and handle.get_attribute("aria-expanded") == "true":
+        handle.click()
+    _frames(page)
+    page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+    page.evaluate("() => document.fonts.ready")
+    _frames(page)
+    regions = page.locator('.bp-dag-node[data-autoform-node-id^="region:"]')
+    playwright.expect(regions).to_have_count(5)
+    playwright.expect(page.locator(".bp-dag-density")).to_be_hidden()
+    geometry = regions.evaluate_all("""nodes => nodes.map(node => {
+      const box = node.getBoundingClientRect(), title = node.querySelector('.bp-dag-node-title');
+      const meta = node.querySelector('.bp-dag-node-meta'), sample = node.querySelector('.bp-dag-node-summary');
+      const matrix = new DOMMatrix(getComputedStyle(node).transform), scale = Math.hypot(matrix.a, matrix.b);
+      return {left:box.left,right:box.right,top:box.top,bottom:box.bottom,width:box.width,
+        title:title.textContent,meta:meta.textContent,aria:node.getAttribute('aria-label'),
+        titlePixels:parseFloat(getComputedStyle(title).fontSize)*scale,
+        metaPixels:parseFloat(getComputedStyle(meta).fontSize)*scale,
+        titleFits:title.scrollWidth<=title.clientWidth+1,
+        sampleVisible:!!sample && getComputedStyle(sample).display!=='none' && sample.clientHeight>0,
+        hit:node.contains(document.elementFromPoint(box.left+box.width/2,box.top+box.height/2))};
+    })""")
+    assert {node["title"] for node in geometry} == set(_FIVE_AREAS)
+    stage = page.locator(".bp-dag-stage").bounding_box()
+    context = page.locator(".bp-map-context").bounding_box()
+    key = page.locator(".bp-map-key").bounding_box()
+    assert stage and context and key
+    assert stage["width"] == pytest.approx(390 if width == 390 else 570, abs=1)
+    for node in geometry:
+        assert node["width"] >= 280 and node["titlePixels"] >= 15 and node["metaPixels"] >= 12
+        assert node["meta"] == "3 topics · 3 items" and ", 3 items" in node["aria"]
+        assert node["titleFits"] and node["hit"] and not node["sampleVisible"]
+        assert node["left"] >= stage["x"] - 1 and node["right"] <= stage["x"] + stage["width"] + 1
+        assert (node["left"] + node["right"]) / 2 == pytest.approx(stage["x"] + stage["width"] / 2, abs=2)
+        assert node["top"] >= context["y"] + context["height"] + 8
+        assert node["bottom"] <= key["y"] - 8
+    ordered = sorted(geometry, key=lambda node: node["top"])
+    assert all(first["bottom"] + 8 <= second["top"] for first, second in zip(ordered, ordered[1:]))
+    assert _pixels(page)["painted"] > 0
+    output = os.environ.get("AUTOFORM_UI_SCREENSHOT_DIR")
+    if output:
+        directory = Path(output)
+        directory.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(directory / f"five-areas-{width}x{height}.png"))
+        report = {"viewport": [width, height], "candidate_sha": os.environ.get("AUTOFORM_CI_SOURCE_SHA"),
+                  "counts": expected, "regions": geometry, "stage": stage, "context": context, "key": key,
+                  "captured_edges": site.root_graph["edges"], "canvas": _pixels(page), "kernel_checked": False}
+        (directory / f"five-areas-{width}x{height}.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    chosen = page.locator(f'.bp-dag-node[data-autoform-node-id="region:{_FIVE_AREAS[0]}"]')
+    chosen.click()
+    playwright.expect(chosen).to_have_count(0)
+    playwright.expect(page.locator(f'.bp-dag-node[data-autoform-node-id="scope:{_FIVE_TOPICS[0]}"]')).to_be_visible()
+    assert page.url == site.route("roadmap")
+    assert page.evaluate("() => document === __workspaceDocument") is True
+    assert documents == [site.route("roadmap")]
     assert _pixels(page)["painted"] > 0

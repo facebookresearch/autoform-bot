@@ -754,7 +754,12 @@
       });
       return stops.length ? "conic-gradient(" + stops.join(",") + ")" : "var(--dag-node-stroke)";
     }
+    function compactRegions() {
+      return Boolean(navigation && atlas && !ui$area && dom$stage && dom$stage.clientWidth > 0 && dom$stage.clientWidth <= 620 &&
+        data.nodes.length && data.nodes.every(function (node) { return node._region; }));
+    }
     function world(node) {
+      if (compactRegions()) return {x: 0, y: node._index * 112, w: 312, h: 96};
       if (node._region && ui$orientation === "tb") return {x: 0, y: node._index * 164, w: node.width, h: node.height};
       if (ui$orientation === "tb" && !atlas) {
         if (node.isolated) {
@@ -782,6 +787,7 @@
     }
     function syncControls() {
       calculateActive();
+      host.classList.toggle("bp-dag-compact-regions", compactRegions());
       if (navigation) {
         var record = records.get(currentBundle && currentBundle.nodeId), links = record && record.result && neighborIds(record.id);
         dom$mapContext.textContent = links ? plural(links.before.length, "prerequisite", "prerequisites") + " → Result → " + plural(links.after.length, "dependent", "dependents") : ui$area || currentBundle && currentBundle.title || data.title;
@@ -848,6 +854,7 @@
         ui$introInSheet = !ui$introInSheet; renderNavigation(); if (!ui$selected) renderInspector(); markIntro();
       }
       if (!dom$canvas || !dom$stage.clientWidth || !dom$stage.clientHeight) return;
+      host.classList.toggle("bp-dag-compact-regions", compactRegions());
       var ratio = Math.min(2, window.devicePixelRatio || 1);
       dom$canvas.width = Math.max(1, Math.round(dom$stage.clientWidth * ratio));
       dom$canvas.height = Math.max(1, Math.round(dom$stage.clientHeight * ratio));
@@ -866,21 +873,23 @@
         minX = Math.min(minX, region.x); minY = Math.min(minY, region.y);
         maxX = Math.max(maxX, region.x + region.width); maxY = Math.max(maxY, region.y + region.height);
       });
-      var pad = navigation ? 36 : 54, width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
-      var fitted = Math.min((dom$stage.clientWidth - pad * 2) / width,
-        (dom$stage.clientHeight - pad * 2) / height);
-      var readableFloor = atlas ? MIN_ATLAS_SCALE : navigation ? 1 : MIN_READABLE_SCALE;
+      var compact = compactRegions(), pad = navigation ? 36 : 54, side = compact ? 18 : pad,
+        top = compact ? 52 : pad, bottom = compact ? 40 : pad, width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
+      var fitted = Math.min((dom$stage.clientWidth - side * 2) / width,
+        (dom$stage.clientHeight - top - bottom) / height);
+      var readableFloor = compact ? .86 : atlas ? MIN_ATLAS_SCALE : navigation ? 1 : MIN_READABLE_SCALE;
       ui$readableCrop = fitted < readableFloor;
       ui$transform.scale = clamp(Math.max(fitted, readableFloor), MIN_SCALE, 1.35);
-      ui$transform.x = ui$readableCrop ? pad - minX * ui$transform.scale :
+      ui$transform.x = ui$readableCrop && !compact ? pad - minX * ui$transform.scale :
         (dom$stage.clientWidth - width * ui$transform.scale) / 2 - minX * ui$transform.scale;
-      ui$transform.y = ui$readableCrop ? pad - minY * ui$transform.scale :
-        (dom$stage.clientHeight - height * ui$transform.scale) / 2 - minY * ui$transform.scale;
+      ui$transform.y = ui$readableCrop ? top - minY * ui$transform.scale :
+        (dom$stage.clientHeight + top - bottom - height * ui$transform.scale) / 2 - minY * ui$transform.scale;
       schedule(); remember();
     }
     // Open details cover part of the map; this is the larger part they leave, in stage pixels.
     function freeArea() {
       var band = dom$stage.clientHeight, left = 0, right = dom$stage.clientWidth, drawer = dom$inspector;
+      if (compactRegions() && (!sheetLayout() || !host.classList.contains("bp-dag-sheet-open"))) return {top: 52, band: Math.max(NODE_H, band - 92), left: 18, right: right - 18};
       if (navigation && !sheetLayout()) return {band: band, left: left, right: right};
       if (host.classList.contains("bp-dag-sheet-open")) {
         var start = drawer.offsetLeft - dom$stage.parentNode.offsetLeft, end = start + drawer.offsetWidth;
@@ -893,7 +902,7 @@
     function center(node, minimumScale) {
       if (!node) return; var box = world(node), free = freeArea(); ui$transform.scale = Math.max(ui$transform.scale, minimumScale || .82);
       ui$transform.x = (free.left + free.right) / 2 - (box.x + box.w / 2) * ui$transform.scale;
-      ui$transform.y = free.band / 2 - (box.y + box.h / 2) * ui$transform.scale; schedule();
+      ui$transform.y = (free.top || 0) + free.band / 2 - (box.y + box.h / 2) * ui$transform.scale; schedule();
     }
     function centerIfHidden(node) {
       if (!node) return; var box = screen(node);
@@ -904,7 +913,7 @@
       var box = screen(node), free = freeArea(), pad = 12;
       if (free.right < dom$stage.clientWidth && box.x + box.w > free.right) ui$transform.x += free.right - pad - box.x - box.w;
       if (free.left > 0 && box.x < free.left) ui$transform.x += free.left + pad - box.x;
-      if (free.band < dom$stage.clientHeight && box.y + box.h > free.band) ui$transform.y += free.band - pad - box.y - box.h;
+      if (free.band < dom$stage.clientHeight && box.y + box.h > (free.top || 0) + free.band) ui$transform.y += (free.top || 0) + free.band - pad - box.y - box.h;
       schedule();
     }
     function zoomAt(factor, x, y) {
@@ -1022,9 +1031,9 @@
       candidates.forEach(function (node, index) {
         var control = overlays.get(node.id);
         if (!control) { control = makeNodeControl(node); overlays.set(node.id, control); dom$nodeLayer.appendChild(control); }
-        var box = screen(node), color = colors(node);
+        var box = screen(node), size = world(node), color = colors(node);
         control.style.transform = "translate3d(" + box.x + "px," + box.y + "px,0) scale(" + ui$transform.scale + ")";
-        control.style.width = node.width + "px"; control.style.height = node.height + "px";
+        control.style.width = size.w + "px"; control.style.height = size.h + "px";
         control.style.setProperty("--dag-node-fill", color.fill); control.style.setProperty("--dag-node-stroke", color.stroke);
         control.style.setProperty("--dag-node-text", color.text); control.dataset.selected = String(node === ui$selected);
         if (atlas && node.kind === "scope") control.style.setProperty("--dag-status-ring", statusRing(node));
