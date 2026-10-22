@@ -507,19 +507,24 @@ def _check_uninventoried_imports(
 
     inventory = {_name_key(module) for module in headers}
     artifact_dir: Path | None = None
+    # Each external name is looked up once, however many loaded modules import it.
+    suppliable: dict[tuple[object, ...], bool] = {}
     for module in sorted(loaded):
         for name in headers.get(module) or ():
-            if _name_key(name) in inventory:
+            key = _name_key(name)
+            if key in inventory:
                 continue
-            # The spelled components, so `M.007` stays the file `007.lean`.
-            *package, stem = (part for part, _quoted in _lean_name_parts(name))
-            if artifact_dir is None:
-                artifact_dir = _root_artifact_dir(libraries)
-            candidates = [
-                *(library.src_dir.joinpath(*package, f"{stem}.lean") for library in libraries),
-                artifact_dir.joinpath(*package, f"{stem}.olean"),
-            ]
-            if any(os.path.lexists(path) for path in candidates):
+            if key not in suppliable:
+                # The spelled components, so `M.007` stays the file `007.lean`.
+                *package, stem = (part for part, _quoted in _lean_name_parts(name))
+                if artifact_dir is None:
+                    artifact_dir = _root_artifact_dir(libraries)
+                candidates = [
+                    *(library.src_dir.joinpath(*package, f"{stem}.lean") for library in libraries),
+                    artifact_dir.joinpath(*package, f"{stem}.olean"),
+                ]
+                suppliable[key] = any(os.path.lexists(path) for path in candidates)
+            if suppliable[key]:
                 raise ImpactError(
                     f"project module {module} imports {name}, which the root package can supply but the "
                     "captured source inventory lacks, so the import closure is unknown; "

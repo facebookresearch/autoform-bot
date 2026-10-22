@@ -1550,6 +1550,17 @@ def test_import_closure_ignores_an_unreadable_header_nothing_loads() -> None:
     assert import_closure(["Q"], {"Q": (), "Q.Odd": None}, "Q")[1] == {"Q"}
 
 
+def test_import_closure_looks_up_each_external_import_once(tmp_path: Path, monkeypatch) -> None:
+    library = LeanLibrary("Q", tmp_path, ("Q",), artifact_dir=tmp_path / ".lake")
+    headers = {"Q": ("Mathlib.A", "Q.Mid"), "Q.Mid": ("Mathlib.«A»",)}
+    looked: list[str] = []
+    monkeypatch.setattr(impact_module.os.path, "lexists", lambda path: looked.append(str(path)) or False)
+
+    impact_module._check_uninventoried_imports(["Q", "Q.Mid"], headers, (library,))
+
+    assert looked == [str(tmp_path / "Mathlib" / "A.lean"), str(tmp_path / ".lake" / "Mathlib" / "A.olean")]
+
+
 def _parent_check(records: list[ConstantRecord], affected: tuple[str, ...]) -> None:
     # Side.lean declares Foo.Bar, and only the default scope loads it.
     index = SourceIndex(Path("."), {"Foo.Bar": Declaration("Foo.Bar", Path("Side.lean"), 1, "def")}, "")
