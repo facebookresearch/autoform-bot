@@ -2342,6 +2342,35 @@ def test_a_head_without_a_textbook_link_has_no_blank_row(desktop_page: object, s
         assert after is not None and abs(after["height"] - head["height"]) < 2
 
 
+@pytest.mark.parametrize("width", (390, 1000, 1440))
+def test_the_explorer_head_follows_and_switches_the_readers_colour_scheme(
+    desktop_page: object, site_url: str, width: int
+) -> None:
+    """The site opens in the reader's setting, and the head stands in for Material's hidden sun or moon."""
+    page = desktop_page
+    page.set_viewport_size({"width": width, "height": 844})
+    page.emulate_media(color_scheme="dark", reduced_motion="reduce")
+    _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
+    body = page.locator("body")
+    playwright.expect(body).to_have_attribute("data-md-color-scheme", "slate")
+    flip = page.get_by_role("button", name="Switch light or dark theme", exact=True)
+    # It ends the trail row on every width, so it neither adds a row nor joins the wrapping toolbar.
+    playwright.expect(page.locator(".bp-dag-context > .bp-dag-theme")).to_have_count(1)
+    _assert_hit(page, flip)
+    assert flip.get_attribute("title") == "Switch light or dark theme"
+    box = flip.bounding_box()
+    assert box is not None and (box["width"], box["height"]) == (32, 32)
+    flip.click()
+    playwright.expect(body).to_have_attribute("data-md-color-scheme", "default")
+    _paint_frame(page)
+    assert _canvas_pixels(page)["painted"] > 0
+    # Material keeps the choice over the media query, on this page and the next.
+    page.reload()
+    _ready_site(page)
+    playwright.expect(body).to_have_attribute("data-md-color-scheme", "default")
+    page.get_by_role("button", name="Switch light or dark theme", exact=True).click()
+    playwright.expect(body).to_have_attribute("data-md-color-scheme", "slate")
+
 
 def test_opening_details_keeps_the_clicked_card_under_the_pointer(desktop_page: object, site_url: str) -> None:
     """Phone reading-plane toggles do not silently move the current graph camera or replace its node."""

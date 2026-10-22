@@ -762,13 +762,26 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     assert not any(word in density for word in ("border", "shadow", "background", "blur"))
 
 
+def test_explorer_head_switches_materials_palette_from_the_trail_row() -> None:
+    """The explorer hides Material's header, and with it the theme's sun or moon."""
+    script, style = _viewer_source(), dag_viewer._STYLE
+    # Only a site whose mkdocs.yml lists palette entries renders the form, so an older dark-only site gets no button.
+    assert 'var schemes = document.querySelector("[data-md-component=palette]");' in script
+    assert '"Switch light or dark theme"' in script and "flip.title = themeLabel; context.appendChild(flip);" in script
+    # Material checks no radio on load, so the click targets the other scheme by name rather than :not(:checked).
+    assert 'schemes.querySelector("[data-md-color-scheme=" + (isDark() ? "default" : "slate") + "]").click();' in script
+    assert ":checked)" not in script
+    rule = next(line for line in style.splitlines() if line.startswith(".bp-dag-viewer .bp-dag-theme {"))
+    assert "width: 32px; min-height: 32px;" in rule and "border: 0;" in rule
+
+
 def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_under_status() -> None:
     """The toolbar always counted what it showed, and the toggle for items without edges sat in it."""
     script, style = _viewer_source(), dag_viewer._STYLE
     assert "bp-dag-stats" not in script and "bp-dag-stats" not in style and '" shown"' not in script
     assert 'refs.hiddenButton.textContent = "Show " + hidden + " filtered out"; refs.hiddenButton.hidden = !hidden;' in script
     assert '"Show unlinked"' in script and "without edges" not in script
-    assert "refs.filterPopover.appendChild(fieldset); refs.filterPopover.appendChild(edges);" in script
+    assert "refs.filterPopover.append(fieldset, edges);" in script
     # Map | Contents and the zoom buttons are borderless ghost buttons inside one 1px group each.
     assert (
         ".bp-dag-zoom, .bp-dag-modes { display: inline-flex; flex: none; gap: 2px; padding: 2px; "

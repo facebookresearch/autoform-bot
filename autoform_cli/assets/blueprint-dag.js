@@ -653,6 +653,14 @@
       crumbs.setAttribute("aria-label", "Explorer context");
       crumbs.appendChild(trailList(trail.length ? trail : [{label: data.title || "Dependencies"}])); context.appendChild(crumbs);
       head.appendChild(context);
+      // The explorer hides Material's header and its sun or moon, so this clicks the theme's radio for the other scheme.
+      // Material never checks the radio it starts on, so the current scheme, not :checked, says which one that is.
+      var schemes = document.querySelector("[data-md-component=palette]");
+      if (schemes) {
+        var themeLabel = "Switch light or dark theme", flip = button("bp-dag-button bp-dag-theme", "◐", themeLabel);
+        flip.title = themeLabel; context.appendChild(flip);
+        flip.onclick = function () { schemes.querySelector("[data-md-color-scheme=" + (isDark() ? "default" : "slate") + "]").click(); };
+      }
 
       var toolbar = element("div", "bp-dag-toolbar");
       toolbar.setAttribute("role", "group"); toolbar.setAttribute("aria-label", "Dependency explorer controls");
@@ -670,7 +678,7 @@
       dom$searchResults = element("div", "bp-dag-search-results"); dom$searchResults.id = "bp-dag-search-results-" + instance;
       dom$searchResults.setAttribute("role", "region"); dom$searchResults.setAttribute("aria-label", "Search results");
       dom$searchResults.hidden = true;
-      searchWrap.appendChild(dom$search); searchWrap.appendChild(dom$searchResults); toolbar.appendChild(searchWrap);
+      searchWrap.append(dom$search, dom$searchResults); toolbar.appendChild(searchWrap);
 
       dom$filters = element("div", "bp-dag-filters");
       dom$filterSummary = button("bp-dag-filter-summary", "Filter: all statuses"); dom$filterSummary.setAttribute("aria-expanded", "false");
@@ -682,24 +690,24 @@
       dom$isolated = element("input"); dom$isolated.type = "checkbox"; isolated.appendChild(dom$isolated);
       isolated.appendChild(document.createTextNode("Show unlinked")); edges.appendChild(isolated);
       renderStatusFields();
-      dom$filterPopover.appendChild(fieldset); dom$filterPopover.appendChild(edges);
-      dom$filters.appendChild(dom$filterSummary); dom$filters.appendChild(dom$filterPopover); toolbar.appendChild(dom$filters);
+      dom$filterPopover.append(fieldset, edges);
+      dom$filters.append(dom$filterSummary, dom$filterPopover); toolbar.appendChild(dom$filters);
 
       var modes = element("div", "bp-dag-modes"); modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "Explorer view");
       dom$graphMode = button("bp-dag-mode-button", mapAllowed ? "Map" : "Map (too large)");
       dom$graphMode.disabled = !mapAllowed; dom$listMode = button("bp-dag-mode-button", "Contents");
-      modes.appendChild(dom$graphMode); modes.appendChild(dom$listMode); toolbar.appendChild(modes);
+      modes.append(dom$graphMode, dom$listMode); toolbar.appendChild(modes);
       if (navigation) {
         dom$listMode.textContent = "Results";
         dom$sourcesMode = button("bp-dag-mode-button", "Sources");
         dom$regionsMode = button("bp-dag-mode-button", "Areas");
-        modes.appendChild(dom$sourcesMode); modes.appendChild(dom$regionsMode);
+        modes.append(dom$sourcesMode, dom$regionsMode);
       }
 
       var zoomGroup = element("div", "bp-dag-zoom"); zoomGroup.setAttribute("role", "group"); zoomGroup.setAttribute("aria-label", "Zoom controls");
       dom$zoomOut = button("bp-dag-button", "−", "Zoom out"); dom$zoomIn = button("bp-dag-button", "+", "Zoom in");
       dom$fit = button("bp-dag-button", "Fit", "Fit shown nodes");
-      zoomGroup.appendChild(dom$zoomOut); zoomGroup.appendChild(dom$zoomIn); zoomGroup.appendChild(dom$fit); toolbar.appendChild(zoomGroup);
+      zoomGroup.append(dom$zoomOut, dom$zoomIn, dom$fit); toolbar.appendChild(zoomGroup);
 
       dom$hiddenButton = button("bp-dag-hidden-button", ""); toolbar.appendChild(dom$hiddenButton);
       head.appendChild(toolbar);
@@ -737,8 +745,7 @@
       }
       dom$empty = element("div", "bp-dag-empty", data.nodes.length ? "Nothing matches these filters." :
         "This roadmap has no articles yet."); dom$empty.hidden = true;
-      dom$stage.appendChild(dom$canvas); dom$stage.appendChild(dom$nodeLayer);
-      dom$stage.appendChild(dom$density); dom$stage.appendChild(dom$empty);
+      dom$stage.append(dom$canvas, dom$nodeLayer, dom$density, dom$empty);
       main.appendChild(dom$stage);
 
       dom$inventory = element("section", "bp-dag-inventory"); dom$inventory.hidden = true;
@@ -748,7 +755,7 @@
       dom$wholeSearch = button("bp-dag-whole-search", "search the whole roadmap");
       dom$inventoryScroll = element("div", "bp-dag-inventory-scroll"); dom$inventoryList = element("ul", "bp-dag-inventory-list");
       dom$inventoryScroll.appendChild(dom$inventoryList); dom$loadMore = button("bp-dag-load-more", "Show more nodes");
-      dom$inventory.appendChild(inventoryHead); dom$inventory.appendChild(dom$inventoryScroll); dom$inventory.appendChild(dom$loadMore);
+      dom$inventory.append(inventoryHead, dom$inventoryScroll, dom$loadMore);
       main.appendChild(dom$inventory); body.appendChild(main);
 
       dom$inspector = element("aside", "bp-dag-inspector bp-reading-pane"); dom$inspector.setAttribute("aria-label", navigation ? "Mathematical reading" : "Node inspector");

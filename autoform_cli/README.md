@@ -1547,6 +1547,25 @@ What an existing repository meets when it moves to this version:
     Mermaid from the CDN keeps working, and may drop that line once CI's
     `AUTOFORM_REF` includes this change: a render pinned before it needs the
     line to draw any diagram.
+14. A new project's site opens in the reader's own light or dark setting, with
+    Material's sun or moon to switch it, and the explorer's head carries the
+    same switch. Setup leaves an existing `mkdocs.yml` alone, so an existing
+    site stays dark until the `palette:` and `scheme: slate` lines under
+    `theme:` are replaced with the scaffolded pair:
+
+    ```yaml
+      palette:
+        - media: "(prefers-color-scheme: light)"
+          scheme: default
+          toggle:
+            icon: material/weather-night
+            name: Use dark theme
+        - media: "(prefers-color-scheme: dark)"
+          scheme: slate
+          toggle:
+            icon: material/weather-sunny
+            name: Use light theme
+    ```
 
 ## Validation
 

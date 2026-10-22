@@ -38,6 +38,8 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-breadcrumb [aria-current=page] { color: var(--dag-fg); font-weight: 600; }
 @media (min-width: 681px) and (max-width: 1100px) { .bp-dag-viewer:has(.bp-dag-navigation-path) .bp-dag-breadcrumb { visibility: hidden; } }
 .bp-dag-book { flex: none; color: var(--dag-link); font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+/* Material's own sun or moon sits in the header this page hides, so the trail row ends in a quiet stand-in. */
+.bp-dag-viewer .bp-dag-theme { flex: none; width: 32px; min-height: 32px; margin-left: 8px; padding: 0; border: 0; background: transparent; color: var(--dag-muted); font-size: 16px; line-height: 1; }
 .bp-dag-swatch { flex: none; width: 11px; height: 11px; border: 2px solid var(--dag-swatch-light-stroke); border-radius: 50%; background: var(--dag-swatch-light-fill); }
 [data-md-color-scheme=slate] .bp-dag-swatch { border-color: var(--dag-swatch-dark-stroke); background: var(--dag-swatch-dark-fill); }
 .bp-dag-toolbar { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 4px 16px 12px; font-size: 13px; }
