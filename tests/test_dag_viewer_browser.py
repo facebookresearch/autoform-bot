@@ -1873,22 +1873,25 @@ def count_label_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
 
 
 
-def _record_label_paints(page: object, *, reject_family: bool) -> None:
+def _observe_canvas_typography(page: object, *, reject_family: bool) -> None:
     page.add_init_script(
         """
         const rejectFamily = __REJECT_FAMILY__;
         window.labelPaints = [];
+        window.fontProbes = [];
         const prototype = CanvasRenderingContext2D.prototype;
         const paint = prototype.fillText;
         const font = Object.getOwnPropertyDescriptor(prototype, 'font');
+        Object.defineProperty(prototype, 'font', {
+          configurable: font.configurable, enumerable: font.enumerable, get: font.get,
+          set(value) {
+            const graph=this.canvas.classList.contains('bp-dag-canvas');
+            const rejected=graph && rejectFamily && String(value).includes('Plus Jakarta Sans');
+            if (!rejected) font.set.call(this, value);
+            if (graph) window.fontProbes.push({requested:String(value),actual:font.get.call(this),rejected});
+          }
+        });
         if (rejectFamily) {
-          Object.defineProperty(prototype, 'font', {
-            configurable: font.configurable, enumerable: font.enumerable, get: font.get,
-            set(value) {
-              if (String(value).includes('Plus Jakarta Sans')) return;
-              font.set.call(this, value);
-            }
-          });
           const context = HTMLCanvasElement.prototype.getContext;
           HTMLCanvasElement.prototype.getContext = function (...args) {
             const result = context.apply(this, args);
@@ -1904,6 +1907,22 @@ def _record_label_paints(page: object, *, reject_family: bool) -> None:
         };
         """.replace("__REJECT_FAMILY__", str(reject_family).lower())
     )
+
+
+def _live_card_typography(page: object) -> dict:
+    """Measure actual published DOM text, not a retired numeric Canvas label."""
+    title = page.locator(".bp-dag-node-title").first
+    playwright.expect(title).to_be_visible()
+    return title.evaluate("""node => {
+      const style=getComputedStyle(node),control=node.closest('.bp-dag-node');
+      const scale=new DOMMatrix(getComputedStyle(control).transform).a;
+      const range=document.createRange();range.selectNodeContents(node);
+      const text=node.textContent, pixels=parseFloat(style.fontSize),family=style.fontFamily;
+      const ctx=document.createElement('canvas').getContext('2d');
+      ctx.font=style.fontWeight+' '+pixels+'px '+family;
+      return {text,family,pixels,scale,width:range.getBoundingClientRect().width/scale,
+        expected:ctx.measureText(text).width};
+    }""")
 
 
 
@@ -1935,11 +1954,11 @@ def test_widening_with_the_book_focused_resizes_and_repaints_the_live_canvas(
 
 
 @pytest.mark.parametrize("reject_family", (False, True), ids=("multiword-site-font", "rejected-site-font"))
-def test_canvas_label_paints_use_the_site_family_or_a_valid_fallback(
+def test_dom_cards_keep_the_site_font_when_the_canvas_probe_accepts_or_rejects_it(
     desktop_page: object, count_label_site_url: str, reject_family: bool
 ) -> None:
     page, site_url = desktop_page, count_label_site_url
-    _record_label_paints(page, reject_family=reject_family)
+    _observe_canvas_typography(page, reject_family=reject_family)
     canonical = _site_route(page, site_url, "roadmap")
     if not reject_family:
         def serif_host_before_startup(route: object) -> None:
@@ -1957,27 +1976,22 @@ def test_canvas_label_paints_use_the_site_family_or_a_valid_fallback(
         # Material can override an inherited root custom property later.
         page.route(canonical, serif_host_before_startup)
     _open_site(page, site_url, urlsplit(canonical).path.lstrip("/"))
-    page.wait_for_function("window.labelPaints.some(paint => paint.text === '×12')")
-    painted = page.evaluate("window.labelPaints.filter(paint => paint.text === '×12').at(-1)")
+    _paint_frame(page)
+    typography = _live_card_typography(page)
     family = page.locator(".bp-dag-viewer").evaluate("host => getComputedStyle(host).fontFamily")
     assert ("Plus Jakarta Sans" if reject_family else "Times New Roman") in family
-    pixels = float(re.search(r"(\d+(?:\.\d+)?)px", painted["font"]).group(1))
-    assert pixels >= 11 and painted["font"].startswith("600 ")
-    assert ("sans-serif" if reject_family else "Times New Roman") in painted["font"]
+    assert ("Plus Jakarta Sans" if reject_family else "Times New Roman") in typography["family"]
+    assert typography["pixels"] * typography["scale"] >= 11
+    assert abs(typography["width"] - typography["expected"]) < .75
+    probes = page.evaluate("window.fontProbes")
+    candidates = [probe for probe in probes if probe["requested"].startswith("11px ") and family in probe["requested"]]
+    assert candidates
+    if reject_family:
+        assert all(probe["rejected"] and probe["actual"] == "10px sans-serif" for probe in candidates)
+    else:
+        assert all(not probe["rejected"] and "Times New Roman" in probe["actual"] for probe in candidates)
+    assert page.evaluate("window.labelPaints.some(paint => paint.text === '×12')") is False
     assert _canvas_pixels(page)["painted"] > 0
-    measured = page.evaluate(
-        """({text, family, pixels}) => {
-          const ctx = document.createElement('canvas').getContext('2d');
-          ctx.font = '600 ' + pixels + 'px ' + family;
-          const expected = ctx.measureText(text).width;
-          ctx.font = '600 ' + pixels + 'px sans-serif';
-          return {expected, generic: ctx.measureText(text).width};
-        }""",
-        {"text": painted["text"], "family": "sans-serif" if reject_family else family, "pixels": pixels},
-    )
-    assert abs(painted["width"] - measured["expected"]) < .1
-    if not reject_family:
-        assert abs(painted["width"] - measured["generic"]) > .5, "The live labels ignored the site's serif family"
 
 
 
@@ -2308,24 +2322,17 @@ def test_opening_details_keeps_the_clicked_card_under_the_pointer(desktop_page: 
 
 
 
-def test_the_canvas_paints_its_labels_in_the_sites_family(desktop_page: object, count_label_site_url: str) -> None:
-    """Verify a real routed count paint, not a scratch context or retired region-frame label."""
+def test_live_dom_labels_use_the_site_family_without_numeric_edge_labels(desktop_page: object, count_label_site_url: str) -> None:
+    """Verify actual card glyphs and weighted-edge rendering in a published consumer."""
     page, site_url = desktop_page, count_label_site_url
-    _record_label_paints(page, reject_family=False)
+    _observe_canvas_typography(page, reject_family=False)
     canonical = _site_route(page, site_url, "roadmap")
     _open_site(page, site_url, urlsplit(canonical).path.lstrip("/"))
-    page.wait_for_function("window.labelPaints.some(paint => paint.text === '×12')")
-    painted = page.evaluate("window.labelPaints.filter(paint => paint.text === '×12').at(-1)")
+    _paint_frame(page)
+    typography = _live_card_typography(page)
     family = page.locator(".bp-dag-viewer").evaluate("host => getComputedStyle(host).fontFamily")
-    assert "Plus Jakarta Sans" in family and "Plus Jakarta Sans" in painted["font"]
-    pixels = float(re.search(r"(\d+(?:\.\d+)?)px", painted["font"]).group(1))
-    assert pixels >= 11 and painted["font"].startswith("600 ")
+    assert "Plus Jakarta Sans" in family and "Plus Jakarta Sans" in typography["family"]
+    assert typography["pixels"] * typography["scale"] >= 11
+    assert abs(typography["width"] - typography["expected"]) < .75
+    assert page.evaluate("window.labelPaints.some(paint => paint.text === '×12')") is False
     assert _canvas_pixels(page)["painted"] > 0
-    expected = page.evaluate(
-        """({text, family, pixels}) => {
-          const ctx=document.createElement('canvas').getContext('2d');
-          ctx.font='600 '+pixels+'px '+family; return ctx.measureText(text).width;
-        }""",
-        {"text": painted["text"], "family": family, "pixels": pixels},
-    )
-    assert abs(painted["width"] - expected) < .1

@@ -258,6 +258,11 @@ def _focus_graph_node(page: object, target_id: str) -> object:
         page.get_by_role("button", name="Fit shown nodes", exact=True).click()
         _frames(page)
         start = page.locator('.bp-dag-node[tabindex="0"]').first
+        before_focus = start.evaluate("""node => {
+          const box=node.getBoundingClientRect(),layer=node.closest('.bp-dag-node-layer');
+          return {id:node.dataset.autoformNodeId,box:{left:box.left,top:box.top,right:box.right,bottom:box.bottom},
+            windowScroll:[scrollX,scrollY],layerScroll:layer&&[layer.scrollLeft,layer.scrollTop]};
+        }""")
         start.focus()
         for key in path:
             page.keyboard.press(key)
@@ -265,9 +270,25 @@ def _focus_graph_node(page: object, target_id: str) -> object:
         active = page.locator(".bp-dag-node:focus")
         node_id = active.get_attribute("data-autoform-node-id")
         if node_id == target_id:
-            assert active.evaluate("""node => {
-              const box=node.getBoundingClientRect();return node.contains(document.elementFromPoint(box.left+box.width/2,box.top+box.height/2));
-            }""") is True
+            diagnostic = active.evaluate("""node => {
+              function box(element) {if(!element)return null;const r=element.getBoundingClientRect();
+                return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height};}
+              const bounds=box(node),x=bounds.left+bounds.width/2,y=bounds.top+bounds.height/2,hit=document.elementFromPoint(x,y);
+              const ancestors=[];
+              for(let element=node.parentElement;element&&ancestors.length<8;element=element.parentElement) {
+                const style=getComputedStyle(element);ancestors.push({tag:element.tagName,class:element.className,
+                  box:box(element),scroll:[element.scrollLeft,element.scrollTop],overflow:[style.overflowX,style.overflowY],
+                  clipPath:style.clipPath,transform:style.transform,position:style.position});
+              }
+              const pane=document.querySelector('.bp-reading-pane'),handle=pane&&pane.querySelector('.bp-dag-sheet-handle');
+              return {hit:node.contains(hit),id:node.dataset.autoformNodeId,box:bounds,center:[x,y],
+                hitElement:hit&&{tag:hit.tagName,id:hit.id,class:hit.className},ancestors,
+                viewport:{width:innerWidth,height:innerHeight,scroll:[scrollX,scrollY],
+                  visual:window.visualViewport&&{width:window.visualViewport.width,height:window.visualViewport.height,left:window.visualViewport.offsetLeft,top:window.visualViewport.offsetTop}},
+                reading:{box:box(pane),expanded:handle&&handle.getAttribute('aria-expanded')}};
+            }""")
+            diagnostic.update(before_focus=before_focus, keys=list(path))
+            assert diagnostic["hit"] is True, json.dumps(diagnostic, indent=2)
             return active
         if node_id in visited:
             continue

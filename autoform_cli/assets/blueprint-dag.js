@@ -1384,7 +1384,13 @@
         var ab = screen(a), bb = screen(b); return ab.y - bb.y || ab.x - bb.x || a._index - b._index;
       });
       var keep = new Set(candidates.map(function (node) { return node.id; }));
-      var tabId = keep.has(focusedId) ? focusedId : ui$selected && ui$selected.id || candidates[0] && candidates[0].id;
+      var free = freeArea(), top = free.top || 0, available = candidates.find(function (node) {
+        var box = screen(node);
+        return box.x >= free.left && box.x + box.w <= free.right && box.y >= top && box.y + box.h <= top + free.band;
+      });
+      // Culling includes an 80px paint margin, not a usable keyboard viewport.
+      // Keep an owned focus while panning; otherwise start on a contained card.
+      var tabId = keep.has(focusedId) ? focusedId : available && available.id || ui$selected && ui$selected.id || candidates[0] && candidates[0].id;
       overlays.forEach(function (control, id) { if (!keep.has(id)) { control.remove(); overlays.delete(id); } });
       candidates.forEach(function (node, index) {
         var control = overlays.get(node.id);
