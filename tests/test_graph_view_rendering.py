@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer, graph_pages
+from autoform_cli import dag_viewer, graph_pages, status
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
 
 
@@ -70,7 +70,6 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
     assert payload["view"] == {
         "book": None,
         "breadcrumbs": [],
-        "kind": "full",
         "presentation": "dag",
         "summary": None,
     }
@@ -351,6 +350,9 @@ def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_pa
     assert "inventoryNodes" in script
     assert '"Include items without edges"' in script
     assert "state.showIsolated || !node.isolated || node === state.selected" in script
+    # Contents counts what it lists, and names no internals such as the map's size limit.
+    assert 'element("h2", "", "Contents")' in script
+    assert "items without edges included" not in script and "map unavailable" not in script
 
 
 def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
@@ -417,6 +419,129 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert script.index("if (lean === query)") < script.index("if (lean.startsWith(query))")
     assert script.index("if (lean.indexOf(query)") < script.index("if (summary.indexOf(query)")
     assert "terms.every(function (term) { return all.indexOf(term) >= 0; })" in script
+    # Search ranks exact, then prefix, then substring matches of title, id and Lean name, and says nothing of why.
+    assert "if (title === query) return 1; if (id === query) return 2; if (lean === query) return 3;" in script
+    assert "if (title.startsWith(query)) return 4; if (id.startsWith(query)) return 5;" in script
+    assert "if (lean.indexOf(query) >= 0) return 10; if (summary.indexOf(query) >= 0) return 11;" in script
+    assert "Exact Lean name" not in script and "bp-dag-result-reason" not in script
+
+
+def test_explorer_counts_agree_with_their_nouns() -> None:
+    """The rail read "1 items · 1 dependencies"."""
+    script = _viewer_source()
+
+    assert 'return count.toLocaleString() + " " + (count === 1 ? one : many);' in script
+    assert 'plural(data.edge_count || data.edges.length, "dependency", "dependencies")' in script
+    assert '.toLocaleString() + " dependencies"' not in script
+
+
+def test_card_meta_counts_items_in_a_readable_colour() -> None:
+    """Topic cards read "1 item · 0 internal links" at three-quarter opacity, jargon in a faded grey."""
+    script = _viewer_source()
+    assert 'var scopeMeta = node.kind === "scope" ?' in script
+    assert 'plural(node.member_count || 0, "item", "items")' in script
+    assert "internal link" not in script
+    rule = re.search(r"\.bp-dag-node-meta \{([^}]*)\}", dag_viewer._STYLE)
+    assert rule is not None and "opacity" not in rule.group(1) and "font-size: 12px" in rule.group(1)
+    share = re.search(r"color: color-mix\(in srgb, var\(--dag-node-text\) (\d+)%, var\(--dag-node-fill\)\)", rule.group(1))
+    assert share is not None
+    weight = int(share.group(1)) / 100
+
+    def mixed(text: str, fill: str) -> str:
+        pairs = ((int(text[index:index + 2], 16), int(fill[index:index + 2], 16)) for index in (1, 3, 5))
+        return "#" + "".join(f"{round(a * weight + b * (1 - weight)):02x}" for a, b in pairs)
+
+    below = set()
+    for state in (*status.STATES, *status.INVENTORY_STATES):
+        for text, fill in ((state.text, state.fill), (state.dark_text, state.dark_fill)):
+            if _contrast(text, fill) < 4.5:
+                # The title on this card falls short too; no mix of its colours can do better.
+                below.add(state.key)
+            else:
+                assert _contrast(mixed(text, fill), fill) >= 4.5, state.key
+    assert below == {"fully_proved"}
+
+
+def test_rail_rows_show_a_status_swatch_and_a_lone_group_no_heading() -> None:
+    """Leaf rows ended in status phrases of every length, and a rail of one group still named it."""
+    script = _viewer_source()
+
+    assert 'if (groups.size > 1) section.appendChild(element("h2", "", label));' in script
+    assert 'mark.title = statusLabel(node.status); mark.setAttribute("role", "img"); mark.setAttribute("aria-label", mark.title);' in script
+    assert '(node.member_count || 0).toLocaleString() : statusLabel(node.status)' not in script
+
+
+def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
+    """Cards, the details, Contents and search all printed ids such as "algebra/base" beside the titles."""
+    script = _viewer_source()
+    style = dag_viewer.render_container("graph.json")
+
+    assert 'element("span", "bp-dag-node-meta", node._region ? plural(node._topics, "topic", "topics")' in script
+    assert ': scopeMeta || statusLabel(node.status))' in script
+    assert 'element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (node.area ? " · " + node.area : ""))' in script
+    assert 'element("span", "bp-dag-result-meta", match.node.area || statusLabel(match.node.status))' in script
+    for gone in ("bp-dag-node-id", "bp-dag-inventory-id", "bp-dag-result-id"):
+        assert gone not in script and gone not in style
+
+
+def test_details_close_in_their_corner_and_space_the_status_from_the_link() -> None:
+    """The close button floated beside the kicker, the status touched Open article, and the sheet named the title twice."""
+    script, style = _viewer_source(), dag_viewer._STYLE
+
+    close = re.search(r"\.bp-dag-close \{([^}]*)\}", style)
+    assert close is not None
+    for declaration in ("position: absolute;", "top: 10px;", "right: 10px;", "width: 32px;", "height: 32px;"):
+        assert declaration in close.group(1)
+    # The header text stops short of the 32px button 10px from the edge.
+    assert ".bp-dag-inspector-header { padding-right: 32px; }" in style
+    assert "titleWrap" not in script
+    actions = re.search(r"\.bp-dag-actions \{([^}]*)\}", style)
+    assert actions is not None and "flex-wrap: wrap;" in actions.group(1) and "gap: 8px 16px;" in actions.group(1)
+    assert 'element("span", "bp-dag-status-pill",' in script
+    assert "actions.appendChild(mark);" in script and "actions.appendChild(open);" in script
+    phone = style.split("@media (max-width: 680px) {\n", 1)[1].split("\n}", 1)[0]
+    # The handle repeats the selection's title, so the sheet hides its heading but keeps it for assistive technology.
+    assert ".bp-dag-viewer.bp-dag-viewer .bp-dag-inspector-header h2 { position: absolute; width: 1px;" in phone
+    assert "padding: 10px 48px 8px 12px;" in phone
+    assert ".bp-dag-viewer:not(.bp-dag-sheet-open) .bp-dag-close { display: none; }" in phone
+
+
+def test_details_drop_instructions_and_label_paths_compactly() -> None:
+    """The drawer explained its own controls, invented a summary for topics without one and titled its pivots."""
+    script, style = _viewer_source(), dag_viewer._STYLE
+
+    for gone in (
+        "keyboard-accessible",
+        "Click a topic",
+        "This topic contains",
+        "Explore it to see",
+        "Card height shows scope",
+        "Path spotlight",
+        "All paths",
+        '"Roadmap item"',
+        '"Dependency explorer"',
+        '"Mathematics knowledge map"',
+    ):
+        assert gone not in script, gone
+    # Human review requires a level without authored edges to say so.
+    assert '"No dependencies are authored between these topics."' in script
+    assert 'if (node.declaration) header.appendChild(element("p", "bp-dag-kicker",' in script
+    assert '[["All", "both", 1], ["Prerequisites " + (path.before.size - 1), "prerequisites", path.before.size - 1]' in script
+    pivots = re.search(r"\.bp-dag-pivots \{([^}]*)\}", style)
+    assert pivots is not None and "display: flex;" in pivots.group(1) and "border: 1px solid" in pivots.group(1)
+
+
+def test_a_click_pans_its_node_clear_of_the_details_it_opens() -> None:
+    """Every other way of choosing a node placed it beside the drawer; a click left it under the drawer."""
+    script = _viewer_source()
+
+    assert "if (moveCamera) center(node, .82); else reveal(node);" in script
+    # Centring and revealing share the drawer's geometry, on either side and as the phone sheet.
+    reveal = script.split("function reveal(node) {", 1)[1].split("\n    function ", 1)[0]
+    assert "free = freeArea()" in reveal and "free = freeArea()" in script.split("function center(", 1)[1]
+    # Only a node that the details cover moves.
+    assert "box.x + box.w > free.right" in reveal and "box.x < free.left" in reveal
+    assert "box.y + box.h > (free.top || 0) + free.band" in reveal
 
 
 def test_explorer_pages_relations_and_clamps_zoom() -> None:
@@ -425,6 +550,202 @@ def test_explorer_pages_relations_and_clamps_zoom() -> None:
     assert "Math.min(visible + RELATION_PAGE, ids.length)" in script
     assert "ids.slice(visible, next)" in script
     assert "clamp(old * factor, MIN_SCALE, 4)" in script
+
+
+def test_explorer_styles_keep_one_family_one_type_scale_and_one_micro_label() -> None:
+    """The rail and drawer headings were set in Georgia, among twenty rem sizes and unloaded weights."""
+    style = dag_viewer._STYLE
+    assert "serif" not in style.replace("sans-serif", "")
+    # Integrated reading and region cards add an 18px title; !important only protects it from Material.
+    assert set(re.findall(r"font-size: (\d+)px(?: !important)?;", style)) <= {"11", "12", "13", "14", "17", "18", "22"}
+    assert set(re.findall(r"font-weight: ([^;]+);", style)) <= {"400", "600", "700"}
+    uppercase = [rule.split("{")[0].strip() for rule in style.splitlines() if "text-transform: uppercase" in rule]
+    assert uppercase == [
+        ".bp-dag-filter-popover legend, .bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-group h2",
+    ]
+
+
+def test_explorer_names_its_scope_once_and_lists_only_its_ancestors_above_it() -> None:
+    """A kind pill, a rail kicker, the h1, the trail's last crumb and a home link all named the scope or the book."""
+    script, style = _viewer_source(), dag_viewer._STYLE
+    for retired in ("bp-dag-view-kind", "bp-dag-navigation-kicker", "bp-dag-navigation-home"):
+        assert retired not in script and retired not in style
+    assert "Current scope" not in script and "Library atlas" not in script
+    # The rail's one-line trail drops the current crumb, which the h1 right under it names.
+    rail = 'trailList(trail.slice(0, -1), "bp-dag-navigation-path")'
+    assert rail in script
+    assert script.index(rail) < script.index('element("h1", "bp-dag-navigation-title"')
+    assert ":is(.bp-dag-breadcrumb, .bp-dag-navigation-path) li + li::before { content: \"/\";" in style
+
+
+def test_explorer_chrome_is_sized_in_px_not_in_materials_growing_rem() -> None:
+    """Material's root font is 20px, 22px from 1600px, so a rem rail was 407px wide at 1600 by 900."""
+    style = dag_viewer._STYLE
+    assert not re.findall(r"\d+(?:\.\d+)?rem\b", style)
+    assert "--dag-navigation-width: 288px;" in style
+    # Beside the 288px rail the 12px-inset 384px drawer leaves 405px from 1101px; below, it covers the rail.
+    assert "width: min(384px, calc(100% - 24px));" in style
+    assert "@media (max-width: 1100px) {\n  .bp-dag-viewer { --dag-navigation-width: 248px; }" in style
+    assert "left: calc(408px - var(--dag-navigation-width));" in style
+
+
+def test_explorer_head_is_one_row_where_the_rail_always_shows() -> None:
+    """Over the rail the hidden breadcrumb left a head row holding only the textbook link."""
+    style = dag_viewer._STYLE
+    one_row = style.split("@media (min-width: 1101px) {\n", 1)[1].split("\n}", 1)[0]
+    assert ".bp-dag-context { display: contents; }" in one_row
+    assert ".bp-dag-viewer:has(.bp-dag-navigation-path) .bp-dag-breadcrumb { display: none; }" in one_row
+    # The textbook link ends the row in the DOM too, so Tab follows the row instead of starting at its end.
+    assert "order:" not in one_row
+    # The landing page's trail stays beside the search, capped so that it cannot push the controls over the link.
+    assert ".bp-dag-breadcrumb { flex: 0 1 auto; max-width: 32%; }" in one_row
+    script = _viewer_source()
+    assert script.index("head.appendChild(toolbar);") < script.index("placeBook();")
+    assert "context.appendChild(bookLink)" not in script
+    # At 1,100px and below a grid draws the link at the end of the first row, under phones on a line of its own.
+    # The runtime moves it before the toolbar there, so that Tab still follows what is drawn.
+    assert 'narrow = matchMedia("(max-width: 1100px)")' in script
+    assert "head.insertBefore(bookLink, narrow.matches ? toolbar : null);" in script
+    assert 'narrow.addEventListener("change", placeBook);' in script
+    narrow = style.split("@media (max-width: 1100px) {\n", 1)[1].split("\n}", 1)[0]
+    assert ".bp-dag-book { grid-area: 1 / 2;" in narrow and ".bp-dag-toolbar { grid-column: 1 / -1; }" in narrow
+    phones = style.split("@media (max-width: 680px) {\n", 1)[1].split("\n}", 1)[0]
+    assert ".bp-dag-book { grid-area: 2 / 1;" in phones
+    # Margins, not padding, space the link, so its focus ring sits on the text.
+    assert ".bp-dag-book { grid-area: 1 / 2; align-self: center; margin-right: 16px; }" in narrow
+    assert ".bp-dag-book { grid-area: 2 / 1; justify-self: start; margin: 4px 8px 0; }" in phones
+    assert not [rule for rule in style.splitlines() if ".bp-dag-book {" in rule and "padding" in rule]
+    # Up to 1,100px open details cover the rail, so the head keeps a row where the trail then appears.
+    assert (
+        "@media (min-width: 681px) and (max-width: 1100px) { "
+        ".bp-dag-viewer:has(.bp-dag-navigation-path) .bp-dag-breadcrumb { visibility: hidden; } }"
+    ) in style
+    assert ".bp-dag-viewer.bp-dag-has-selection.bp-dag-sheet-open .bp-dag-breadcrumb { visibility: visible; }" in style
+    # A head without a textbook link has nothing for that row while the rail keeps the trail, so it collapses.
+    assert (
+        ".bp-dag-viewer:has(.bp-dag-navigation-path):not(.bp-dag-has-selection.bp-dag-sheet-open) "
+        ".bp-dag-head:not(:has(.bp-dag-book)) .bp-dag-context { display: none; }"
+    ) in style.split("@media (min-width: 681px) and (max-width: 1100px) {\n", 1)[1].split("\n}", 1)[0]
+    # That row grows the head while details open, so the map shifts back by it instead of jumping under the pointer.
+    sheet = script.split("function setSheet(open, selected) {", 1)[1].split("\n    function ", 1)[0]
+    assert 'var top = refs.body.offsetTop;' in sheet
+    assert 'host.classList.toggle("bp-dag-sheet-open", Boolean(open));' in sheet
+    assert 'host.classList.toggle("bp-dag-has-selection", Boolean(selected));' in sheet
+    assert "state.transform.y += top - refs.body.offsetTop; schedule();" in sheet
+
+
+def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() -> None:
+    """A pill over the map said to select a topic, or restated the selection the drawer and the dimming show."""
+    script, style = _viewer_source(), dag_viewer._STYLE
+    assert "bp-dag-guide" not in script and "bp-dag-guide" not in style
+    assert "dependency neighborhood" not in script
+    # The density note stays, only for a readable crop or for labels hidden by zoom, as plain text.
+    assert 'state.readableCrop ? "Pan or "' in script and '" to see all "' in script and '"Zoom in to reveal "' in script
+    density = next(rule for rule in style.splitlines() if rule.startswith(".bp-dag-density {"))
+    assert "left: 16px; bottom: 12px;" in density and "pointer-events: none;" in density
+    # On phones it clears the collapsed sheet's 52px peek and 8px inset by 8px.
+    phones = style.split("@media (max-width: 680px) {\n", 1)[1].split("\n}", 1)[0]
+    assert ".bp-dag-density { bottom: 68px; }" in phones
+    assert not any(word in density for word in ("border", "shadow", "background", "blur"))
+
+
+def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_under_status() -> None:
+    """The toolbar always counted what it showed, and the toggle for items without edges sat in it."""
+    script, style = _viewer_source(), dag_viewer._STYLE
+    assert "bp-dag-stats" not in script and "bp-dag-stats" not in style and '" shown"' not in script
+    assert 'refs.hiddenButton.textContent = "Show " + hidden + " hidden"; refs.hiddenButton.hidden = !hidden;' in script
+    assert '"Include items without edges"' in script and "Show items without edges" not in script
+    assert "refs.filterPopover.appendChild(fieldset); refs.filterPopover.appendChild(edges);" in script
+    # Map | Contents and the zoom buttons are borderless ghost buttons inside one 1px group each.
+    assert (
+        ".bp-dag-zoom, .bp-dag-modes { display: inline-flex; flex: none; gap: 2px; padding: 2px; "
+        "border: 1px solid var(--dag-border);"
+    ) in style
+    assert ".bp-dag-zoom .bp-dag-button, .bp-dag-modes .bp-dag-mode-button { min-height: 30px; padding: 4px 10px; border: 0;" in style
+
+
+def test_explorer_search_draws_its_magnifier_and_shortcut_hint_in_css() -> None:
+    """U+2315 is not in Plus Jakarta Sans and sat off the box's line, and "( / )" read as debug output."""
+    script, style = _viewer_source(), dag_viewer._STYLE
+    assert "⌕" not in style and "( / )" not in script
+    assert 'refs.search.placeholder = "Search the roadmap";' in script
+    # A currentColor square masked by an inline SVG draws the magnifier in the muted text colour.
+    assert "background: currentColor; color: var(--dag-muted);" in style
+    assert "-webkit-mask: var(--dag-magnifier) center / 14px no-repeat; mask: var(--dag-magnifier)" in style
+    assert '.bp-dag-search-wrap::after { content: "/";' in style
+    # Apart from the :has() rule, so a browser without :has() still hides the hint on focus.
+    assert ".bp-dag-search-wrap:focus-within::after { display: none; }\n" in style
+    assert "\n.bp-dag-search-wrap:has(.bp-dag-search:not(:placeholder-shown))::after { display: none; }" in style
+    phones = style.split("@media (max-width: 680px) {", 1)[1]
+    assert ".bp-dag-search-wrap::after { display: none; }" in phones
+
+
+def test_explorer_elevation_is_two_shadows_and_a_selection_ring_that_keeps_the_card_still() -> None:
+    """A selected card took a 3px border, shifting its text, and blurred panels sat on five shadows."""
+    style = dag_viewer._STYLE
+    assert "backdrop-filter" not in style
+    assert set(re.findall(r"box-shadow: ([^;]+);", style)) <= {
+        "var(--dag-e1)",
+        "var(--dag-e2)",
+        "none",
+        "0 0 0 2px var(--dag-link), var(--dag-e1)",
+        "0 0 0 2px color-mix(in srgb, var(--dag-link) 40%, transparent), var(--dag-e1)",
+        "0 0 0 3px color-mix(in srgb, var(--dag-link) 18%, transparent)",
+        "inset 3px 0 0 var(--dag-link)",
+    }
+    assert ".bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-link), var(--dag-e1); }" in style
+    assert "border-width" not in style
+
+
+def test_explorer_canvas_paints_its_labels_in_the_site_family_at_11px_or_more() -> None:
+    """Painted labels inherit the site family and are readable when the dependency map opens."""
+    script = _viewer_source()
+    assert script.count('refs.ctx.font = "10px sans-serif";') == 1  # Parse probe only, never a painted label.
+    assert 'family = getComputedStyle(host).fontFamily; refs.ctx.font = "11px " + family;' in script
+    assert 'ctx.font = "700 13px " + family;' in script
+    assert 'ctx.font = Math.max(11, 10 * state.transform.scale) + "px " + family;' in script
+    # The integrated router measures and paints the same 13px family; its .9 initial floor gives 11.7px.
+    assert 'refs.ctx.font = "600 13px " + family;' in script
+    assert 'ctx.font = "600 " + (13 * scale) + "px " + family;' in script
+    assert 'readableFloor = navigation ? .9 :' in script
+
+
+def _contrast(first: str, second: str) -> float:
+    def luminance(colour: str) -> float:
+        channels = [int(colour.lstrip("#")[index : index + 2], 16) / 255 for index in (0, 2, 4)]
+        linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    high, low = sorted((luminance(first), luminance(second)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def test_dark_explorer_cards_read_against_the_page_toned_map() -> None:
+    """Outlined cards were filled with the dark map's own #18191A, and planned's stroke had 2.1:1 against it."""
+    style = dag_viewer._STYLE
+    page, surface = "#18191A", "#242526"
+    assert "--dag-map: #18191a;" in style and ".bp-dag-main {" in style and "background: var(--dag-map); }" in style
+    assert all(state.dark_fill.upper() != page for state in (*status.STATES, *status.INVENTORY_STATES))
+    planned = next(state for state in status.STATES if state.key == "planned")
+    assert min(_contrast(planned.dark_stroke, page), _contrast(planned.dark_stroke, surface)) >= 3
+    # White on the dark link blue, #2D88FF, is 3.5:1; the Open button takes Meta blue there.
+    assert "[data-md-color-scheme=slate] .bp-dag-open { background: #0064e0; }" in style
+    assert _contrast("#FFFFFF", "#0064E0") >= 4.5
+    assert _contrast("#FF7B72", surface) >= 4.5 and "--dag-error: #ff7b72;" in style
+
+
+def test_status_ring_greys_stay_apart_in_both_schemes() -> None:
+    """Planned's dark stroke rose to #737578, 1.39:1 from inventory pending's #8A8D91, so their arcs ran together."""
+    planned = next(state for state in status.STATES if state.key == "planned")
+    greys = (planned, *status.INVENTORY_STATES)
+    # A ring runs planned, checked and pending inventory and closes, so each pair of the three can meet.
+    # 1.5:1 keeps neighbouring 3px arcs a visible step apart; the old dark pair was 1.39:1.
+    for first, second in ((0, 1), (1, 2), (0, 2)):
+        for stroke in ("stroke", "dark_stroke"):
+            ratio = _contrast(getattr(greys[first], stroke), getattr(greys[second], stroke))
+            assert ratio >= 1.5, (greys[first].key, greys[second].key, stroke, ratio)
+    for state in greys:
+        assert min(_contrast(state.dark_stroke, state.dark_fill), _contrast(state.dark_stroke, "#18191A")) >= 3, state.key
 
 
 def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path) -> None:

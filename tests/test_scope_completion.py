@@ -4,10 +4,7 @@ from pathlib import Path
 
 from autoform_cli.graph import Graph, Node
 from autoform_cli.graph_views import full_view, project_view, scope_view
-from autoform_cli.mermaid import classdef_lines, render_diagram
-from autoform_cli.status import STATES, derive
-
-GREEN = next(state for state in STATES if state.key == "fully_proved")
+from autoform_cli.status import derive
 
 
 def _graph(tmp_path: Path) -> Graph:
@@ -59,20 +56,6 @@ def test_node_level_views_draw_containers_as_scopes(tmp_path: Path) -> None:
     assert nodes["open"].kind == "scope" and not nodes["open"].complete
     assert nodes["done/sec/a"].kind == "node"
     assert nodes["done/note"].kind == "node"
-
-
-def test_complete_scopes_render_in_the_fully_proved_palette(tmp_path: Path) -> None:
-    graph = _graph(tmp_path)
-    statuses = derive(graph)
-
-    vault = render_diagram(graph, statuses, tmp_path / "blueprint" / "dependencies.md")
-    assert '["Finished chapter<br/><small>1 item · 1 fully proved</small>"]:::scope_complete' in vault
-    assert '["Open chapter<br/><small>2 items · 1 fully proved · 1 ready to prove</small>"]:::scope\n' in vault
-    assert '"Finished chapter — 1 item · 1 fully proved"' in vault
-    assert "Roadmap — ready to state" not in vault
-    assert f"classDef scope_complete fill:{GREEN.fill},stroke:{GREEN.stroke}" in vault
-    dark = "\n".join(classdef_lines(dark=True))
-    assert f"classDef scope_complete fill:{GREEN.dark_fill},stroke:{GREEN.dark_stroke}" in dark
 
 
 def test_open_work_holds_a_scope_open(tmp_path: Path) -> None:

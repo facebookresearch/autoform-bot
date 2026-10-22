@@ -42,6 +42,9 @@ theme. Each group names the pull requests to read for detail.
 - **CI audit.** The generated verify workflow checks `lean:` targets,
   non-root axioms, a kernel replay and elaboration limits, without running
   project code in its probe (#156, #190, #247, #264).
+- **Roadmap audit report.** The generated Pages workflow runs `autoform audit`
+  after `check` and lists its findings in the step's log, without failing the
+  build or stopping a deploy (#437).
 - **Statement status.** Open statements and conditional proofs (#138).
 - **Feedback.** `autoform debrief`: forms agents fill in about their work
   (#195, #414).

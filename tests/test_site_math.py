@@ -802,7 +802,7 @@ def test_only_a_file_a_browser_only_shows_is_published(tmp_path: Path, capsys: p
     site = _render(blueprint)
     assert not any((site / relative).exists() for relative in _RUNNABLE)
     assert all((site / relative).read_bytes() == content for relative, content in _SHOWN.items())
-    assert "display: none" not in (site / "stylesheets/blueprint.css").read_text(encoding="utf-8")
+    assert ".af-status" not in (site / "stylesheets/blueprint.css").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -1129,7 +1129,6 @@ _FENCE_RULE = (
         ("``` { .lean #anchor }\nx\n```", "{ .lean #anchor }"),
         ("- item\n\n    ```{.text .bp-mark}\n    x\n    ```", "{.text .bp-mark}"),
         ("> ~~~{.text .mermaid}\n> graph LR\n> ~~~", "{.text .mermaid}"),
-        # The site draws render's own graphs, of this class, with loose security.
         ("```{.text .mermaid .bp-graph}\ngraph LR\n```", "{.text .mermaid .bp-graph}"),
     ],
 )

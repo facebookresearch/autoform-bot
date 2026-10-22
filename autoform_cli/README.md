@@ -412,8 +412,8 @@ scope limits, JSON fields, nullability, and diagnostic codes.
 pairs. These are the pairs `project new` can lock offline; it does not resolve
 others, which it writes unlocked for `lake update`.
 
-Publishing a project runs four steps in order: validate, write the Mermaid
-graph into the vault, render the site source, then strict-build the site.
+Publishing a project runs four steps in order: validate, refresh the vault's
+dependency summary, render the site source, then strict-build the site.
 
 ```bash
 uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform check blueprint --lean-root .
@@ -432,8 +432,8 @@ code links (see the publication contract below). A Lake project in a
 subdirectory of the repository, such as `v1/`, is passed as `--lean-root v1`.
 Links name paths from the repository's top level, so its files link under `v1/`,
 and a blueprint beside it, such as `blueprint/`, under `blueprint/`. The
-generated `blueprint-pages.yml` passes `--lean-root .` to both commands; edit it
-to match.
+generated `blueprint-pages.yml` passes `--lean-root .` to `check`, `audit` and
+`render`; edit each to match.
 
 `dashboard` serves the exact built MkDocs site on `127.0.0.1`, choosing an
 available port unless `--port` is supplied, and adds a read-only live overlay
@@ -670,15 +670,29 @@ verify run, or its Pages run, deploys that older commit, which stays up until
 the next deploy.
 
 Publication and audit are deliberately different gates. The generated
-`blueprint-pages.yml` runs `check` and `render`; it does not run `audit`. An
-invalid coverage contract fails `render` before any output is written, but a
-valid contract with `MAPPED` rows publishes normally even though `audit` reports
-each one as a `declared-coverage-gap`. That is intended: a roadmap is published
-while it is still being decomposed, and the published `coverage.complete: false`
-is how a reader sees that. Coverage-role issues take the same path: `render`
-prints each one as a warning and publishes, and `audit` reports it. Run
-`autoform audit` in CI when you want mapped rows or role findings to block a
-merge.
+`blueprint-pages.yml` gates on `check` and `render`, and runs `audit` after
+`check` only as a report: the step lists every finding in the run's log, or
+`OK: roadmap audit passed`, and `continue-on-error` keeps a finding from failing
+the build or stopping a deploy. An invalid coverage contract fails `render`
+before any output is written, but a valid contract with `MAPPED` rows publishes
+normally even though `audit` reports each one as a `declared-coverage-gap`; a
+freshly scaffolded project's first run lists one, for the template's row. That
+is intended: a roadmap is published while it is still being decomposed, and the
+published `coverage.complete: false` is how a reader sees that. Coverage-role
+issues take the same path: `render` prints each one as a warning and publishes,
+and `audit` reports it. A project scaffolded before the report step can add it
+after `check`:
+
+```yaml
+      - name: Audit the roadmap (report only)
+        continue-on-error: true
+        run: >-
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          autoform audit blueprint --lean-root .
+```
+
+Run `autoform audit` without `continue-on-error` in your own CI when you want
+mapped rows or role findings to block a merge.
 
 Extract what a reader must trust for each formalized statement:
 
@@ -1328,11 +1342,22 @@ worktree shares and Git does not track; outside Git they fall back to
 `AUTOFORM_DEBRIEF_DIR` to an absolute path outside the Git working tree to
 choose another store.
 
-Write the Mermaid dependency graph into the vault, where Obsidian renders it:
+Refresh the vault's dependency summary, `blueprint/dependencies.md`:
 
 ```bash
 autoform-visualize blueprint
 ```
+
+The summary is plain Markdown built from the explorer's project map, so it
+reads the same in Obsidian, to an agent, and on GitHub where the repository
+tracks it (the scaffolded vault ignores it). It holds a table of statuses with
+their meanings; one row per chapter with its items, its work ready to pick up,
+and the chapters it depends on and is used by, marking a dependency only a
+proof needs; the articles themselves while the roadmap has at most 120; and how
+to open the explorer, which draws the whole graph. Its front matter carries
+`kind: graph` and `autoform_generated: true`. It replaces a missing page, one it
+wrote, or the Mermaid page earlier versions wrote, and refuses any other page
+with exit status 2.
 
 Build the publishable site source — complete mathematical reading, aggregate
 progress, statement boxes, an integrated dependency workspace, and direct links
@@ -1362,18 +1387,23 @@ shared client, with Canvas topology and semantic DOM controls, rather than
 Mermaid-sized generated diagrams. The [publication contract](#publication-contract)
 describes their schemas and navigation metadata.
 
-Authored Mermaid remains supported in the vault and book. Render
-writes no Mermaid graph of its own, so `javascripts/blueprint-mermaid.js` draws
-every ```` ```mermaid ```` diagram an article holds strictly, its labels as
-text and with no click. The explorer shows a title as typed, and a link render
+Authored Mermaid remains supported in the vault and book.
+The site draws an authored diagram in Mermaid's strict mode, with labels as
+plain text, and loads Mermaid only on a page that has one: click callbacks and
+HTML in labels do not work there, while a link to a URL does, through
+Mermaid's URL sanitizer.
+Render writes no Mermaid graph of its own, so every diagram on the site is one
+an article holds. The explorer shows a title as typed, and a link render
 writes from file and folder names, such as the book's previous and next links
 and the links between statements, is percent-encoded, so a name can make no
 link a `javascript:` URL; a Markdown link render moves keeps its decoded
 spelling and starts with `./` when its first segment, a folder's or a file's
 name, holds a colon, for the same reason. Point
 `mkdocs.yml` at `docs_dir: site-src` and enable `md_in_html` plus a
-`pymdownx.superfences` mermaid fence; see the [repository
-example](../skills/setup/assets/cabannes-thesis-project/mkdocs.yml).
+`pymdownx.superfences` mermaid fence; see the [setup
+template](templates/mkdocs.yml). The
+generated `javascripts/blueprint-mermaid.js` loads Mermaid itself, so the
+configuration lists that script but not the Mermaid library.
 
 The shared workspace replaces the `dependencies/nodes/*.html` focus pages of
 earlier sites; those obsolete per-node pages are not regenerated. Existing
@@ -1503,6 +1533,20 @@ What an existing repository meets when it moves to this version:
     `module` for a module catalog, while the schema stays
     `autoform-search/v1`: `autoform-search/v2` already names the `--library`
     output. A consumer that rejects unknown keys must accept the new one.
+12. `autoform-visualize` writes a plain-Markdown dependency summary to
+    `blueprint/dependencies.md` in place of the Mermaid graph. It replaces a
+    missing page, its own, or the Mermaid page earlier versions wrote, and
+    refuses any other page with exit status 2. Its `--link-extension` option
+    is gone: the summary is read in the vault, so its links name the Markdown
+    files.
+13. The site draws authored Mermaid diagrams in strict mode, with plain-text
+    labels, and only on pages that have one, so click callbacks and HTML in
+    labels stop working; links to URLs still work. The site no longer appends
+    the status palette's `classDef` lines, so a class such as
+    `A:::fully_proved` is no longer coloured. A `mkdocs.yml` that loads
+    Mermaid from the CDN keeps working, and may drop that line once CI's
+    `AUTOFORM_REF` includes this change: a render pinned before it needs the
+    line to draw any diagram.
 
 ## Validation
 
@@ -2102,9 +2146,10 @@ without running Lean.
 Run it in the library's CI after the build, with the same `--lib` flags, and
 pin the Autoform revision: the bytes of an index depend on it.
 
-The generator is tested on Lean 4.34.1 only and is not supported on Windows: it
-exits 2, before it runs Lean, when the package's `lean-toolchain` is not
-`leanprover/lean4:v4.34.1` or a spelling elan resolves to it, such as `v4.34.1`.
+The generator is tested on Lean 4.34.1 and 4.35.0 only and is not supported on
+Windows: it exits 2, before it runs Lean, when the package's `lean-toolchain` is
+neither `leanprover/lean4:v4.34.1` nor `leanprover/lean4:v4.35.0`, nor a spelling
+elan resolves to one of them, such as `v4.35.0`.
 The index's `package` is the name in the package's `lake-manifest.json`, else in its
 `lakefile.toml`, and the command exits 2 when neither gives one; the folder it
 is checked out in never matters.

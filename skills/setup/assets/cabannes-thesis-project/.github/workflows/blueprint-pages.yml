@@ -81,6 +81,15 @@ jobs:
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           autoform check blueprint --lean-root .
 
+      # Lists every roadmap audit finding, such as a declared coverage gap or an
+      # oversized node. It builds no Lean, and a finding never fails the build
+      # or stops a deploy: publication and audit are separate gates.
+      - name: Audit the roadmap (report only)
+        continue-on-error: true
+        run: >-
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          autoform audit blueprint --lean-root .
+
       # Writes site-src/: statement boxes, derived statuses, dependency maps,
       # and permalinks into the Lean code at this exact commit. A deploy names
       # the verified commit, since GITHUB_SHA is then main's newest one.

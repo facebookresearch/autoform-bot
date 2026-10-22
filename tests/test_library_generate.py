@@ -333,10 +333,10 @@ def test_two_modules_with_one_public_name_are_refused_with_both_named(tmp_path: 
 
 
 def test_the_verified_toolchains_are_the_one_the_probe_was_tested_on() -> None:
-    assert VERIFIED_TOOLCHAINS == ("leanprover/lean4:v4.34.1",)
+    assert VERIFIED_TOOLCHAINS == ("leanprover/lean4:v4.34.1", "leanprover/lean4:v4.35.0")
 
 
-@pytest.mark.parametrize("toolchain", ["leanprover/lean4:v4.27.0", "leanprover/lean4:v4.35.0", "leanprover/lean4:nightly-2026-01-01"])
+@pytest.mark.parametrize("toolchain", ["leanprover/lean4:v4.27.0", "leanprover/lean4:v4.36.0", "leanprover/lean4:nightly-2026-01-01"])
 def test_a_toolchain_the_probe_was_not_verified_on_is_refused_before_any_probe_runs(tmp_path: Path, toolchain: str) -> None:
     root = library(tmp_path)
     (root / "lean-toolchain").write_text(toolchain + "\n", encoding="utf-8")
@@ -346,7 +346,8 @@ def test_a_toolchain_the_probe_was_not_verified_on_is_refused_before_any_probe_r
         generate_index(root, runner=runner)
 
     assert str(refusal.value) == (
-        f"the package pins {toolchain}, but the library probe is verified only on leanprover/lean4:v4.34.1"
+        f"the package pins {toolchain}, but the library probe is verified only on "
+        "leanprover/lean4:v4.34.1, leanprover/lean4:v4.35.0"
     )
     assert runner.calls == []
 

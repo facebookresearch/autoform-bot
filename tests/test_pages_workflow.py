@@ -228,3 +228,17 @@ def test_the_workflow_run_names_the_generated_verify_workflow(pages: dict) -> No
     assert f"github.event.workflow_run.path == '{_VERIFY_PATH}'" in pages["jobs"]["build"]["if"]
     assert "push" not in pages[True]
     assert {"pull_request", "workflow_dispatch"} <= set(pages[True])
+
+
+def test_the_audit_runs_after_check_as_a_report(pages: dict) -> None:
+    """Every build runs ``autoform audit`` right after ``check``, from the same
+    pinned Autoform on the same roots. Audit exits 1 on any finding, so the step
+    continues on error: a finding never fails the build or stops a deploy (#391)."""
+
+    steps = pages["jobs"]["build"]["steps"]
+    check_at = [step["name"] for step in steps].index("Validate the theorem DAG and its declarations")
+    audit = steps[check_at + 1]
+
+    assert audit["name"] == "Audit the roadmap (report only)"
+    assert audit["run"] == steps[check_at]["run"].replace("autoform check", "autoform audit")
+    assert audit["continue-on-error"] is True and "if" not in audit

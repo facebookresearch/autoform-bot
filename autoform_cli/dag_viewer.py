@@ -375,7 +375,6 @@ def write_payload(
                 for label, url in breadcrumbs
             ],
             "book": book,
-            "kind": view.kind,
             "presentation": "atlas" if uses_atlas(view) else "dag",
             "summary": view.summary,
         },
@@ -539,18 +538,12 @@ def viewer_script() -> str:
 # would override carry a doubled .bp-dag-viewer class, and the status filter is
 # a button and popover because Material styles details and summary as an
 # admonition. The head stacks above the details drawer and the bottom sheet so
-# that neither of its popovers paints under them. At 1200px and below the
-# drawer opens over the hierarchy rail, so that a node centred beside it still
-# has room, and the covered rail leaves the tab order once the drawer has
-# slid over it, so it never goes blank first. Its h1 stays, in place and
-# transparent, so the page keeps a heading for assistive technology.
-# Above phone widths Contents then starts .8rem right of the drawer's 24.8rem
-# edge, so that no row starts under it. On phones the search box takes the
-# toolbar's first row, so the Status popover opens rightwards from the start
-# of the next. The explorer hides the page's own heading because the
-# hierarchy rail carries it; while phones hide the rail, the heading stays
-# for assistive technology as hidden text. Where the rail shows and draws
-# the trail, the head's breadcrumb is hidden so that the trail appears once.
+# that neither of its popovers paints under them. Fixed-pixel controls avoid
+# Material's changing rem scale. The legacy drawer leaves room for readable
+# nodes and hides the covered rail from the tab order; the integrated reader
+# instead shares a responsive pane with one semantic topic rail. Phones keep
+# the same Reading handle, and authored region browsing gives the map that
+# pane's width. Both clients preserve one accessible page heading.
 def _asset_text(name: str) -> str:
     """Read packaged, project-neutral viewer assets once per process."""
     return Path(__file__).with_name("assets").joinpath(name).read_text(encoding="utf-8")

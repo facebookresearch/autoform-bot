@@ -40,7 +40,7 @@ LIBRARY_MARKER = "AUTOFORM_LIBRARY "
 #: Raised by any change, here or in the probe, that can alter the bytes of an index.
 PROBE_REVISION = 1
 #: The Lean releases the probe has been run on; its use of Lean internals is checked on each.
-VERIFIED_TOOLCHAINS = ("leanprover/lean4:v4.34.1",)
+VERIFIED_TOOLCHAINS = ("leanprover/lean4:v4.34.1", "leanprover/lean4:v4.35.0")
 _LABEL = "library index probe"
 _DUPLICATE = re.compile(r"import (\S+) failed, environment already contains '([^']+)' from (\S+)")
 _NAMED = 5

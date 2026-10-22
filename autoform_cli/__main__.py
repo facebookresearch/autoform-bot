@@ -602,15 +602,16 @@ def _byte_order_mark_warnings(graph: Graph) -> list[str]:
 def _source_link_issues(graph: Graph) -> tuple[list[str], list[str]]:
     """Name each ``## Sources`` link to a local path that is not a file in the blueprint, or is hidden.
 
-    Returns the errors, then the warnings. The generated workflows run ``check``
-    but not ``audit``, and render publishes a missing or escaping target broken:
-    a page a strict MkDocs build cannot find, a repository URL that 404s for a
-    hidden note under ``sources/``, or the link's text alone. Render omits
-    hidden files, so a hidden target is refused too, unless it is a note under
-    ``sources/`` that exists. Only a repository link reaches that note, and
-    render writes one when it links the other source notes there, so it is only
-    warned about: it must be committed. Fragments and other schemes stay with
-    ``audit``, whose anchor check renders each cited note.
+    Returns the errors, then the warnings. The generated workflows gate on
+    ``check`` and run ``audit`` only as a report, and render publishes a missing
+    or escaping target broken: a page a strict MkDocs build cannot find, a
+    repository URL that 404s for a hidden note under ``sources/``, or the link's
+    text alone. Render omits hidden files, so a hidden target is refused too,
+    unless it is a note under ``sources/`` that exists. Only a repository link
+    reaches that note, and render writes one when it links the other source
+    notes there, so it is only warned about: it must be committed. Fragments and
+    other schemes stay with ``audit``, whose anchor check renders each cited
+    note.
     """
     rejected = {
         "source-not-found": "does not resolve to a file",
@@ -651,13 +652,13 @@ def _source_link_issues(graph: Graph) -> tuple[list[str], list[str]]:
 def _formalizable_container_warnings(graph: Graph) -> list[str]:
     """Name each article that sets ``declaration`` and also contains articles.
 
-    The generated workflows run ``check`` but not ``audit``, which reports these
-    as ``formalizable-container``. Nothing counts or schedules a container's own
-    declaration, yet its scope is drawn complete once its leaves are proved.
-    The site still builds, so ``check`` warns rather than fails. The message
-    names the move because deleting only ``declaration:`` silences both
-    commands, and a container left with ``lean:`` and ``statement:`` is still
-    drawn complete while its own proof is open.
+    The generated workflows gate on ``check`` and run ``audit``, which reports
+    these as ``formalizable-container``, only as a report. Nothing counts or
+    schedules a container's own declaration, yet its scope is drawn complete
+    once its leaves are proved. The site still builds, so ``check`` warns rather
+    than fails. The message names the move because deleting only
+    ``declaration:`` silences both commands, and a container left with ``lean:``
+    and ``statement:`` is still drawn complete while its own proof is open.
     """
     containers = {node.parent for node in graph.nodes.values() if node.parent is not None}
     return [

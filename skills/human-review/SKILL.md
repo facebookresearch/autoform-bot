@@ -2,7 +2,7 @@
 name: human-review
 description: >-
   Prepare and guide human inspection of an Autoform roadmap or formalization
-  through its Obsidian graph and rendered blueprint site. Use when a person wants
+  through its Obsidian vault and rendered blueprint site. Use when a person wants
   to browse, approve, reject, or discuss scope, dependencies, progress, source
   links, or Lean artifacts visually; do not substitute an autonomous agent
   verdict for the human's judgment.
@@ -18,22 +18,25 @@ derived review views.
 There is no `autoform` on `PATH` in a Lean project. Run every `autoform` and
 `autoform-visualize` command, from `<PROJECT>`, as
 `uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform` followed by its arguments
-(with `autoform-visualize` in place of `autoform` for the graph), where
-`<AUTOFORM_PLUGIN_ROOT>` is the absolute plugin root: the directory that holds
+(with `autoform-visualize` in place of `autoform` for the dependency summary),
+where `<AUTOFORM_PLUGIN_ROOT>` is the absolute plugin root: the directory that holds
 this skill's `skills/` folder, along with `pyproject.toml` and `autoform_cli/`.
 Give a subagent that root and this prefix with its task.
 
 Regenerate the review views from `<PROJECT>`: validate the blueprint, refresh
-the Mermaid graph with `autoform-visualize` so Obsidian shows current
-dependencies, render the site source, then strict-build the site. Follow the
-publication sequence in the [CLI reference](../../autoform_cli/README.md#commands),
+the dependency summary with `autoform-visualize` so the vault shows current
+statuses and chapter dependencies, render the site source, then strict-build
+the site; the interactive graph lives on the site and in `autoform dashboard`.
+Follow the publication sequence in the
+[CLI reference](../../autoform_cli/README.md#commands),
 but omit `--require-declarations`: review happens while statements are still
 unformalized, and a missing declaration is something for the reviewer to see
 rather than a reason to refuse to render.
 
 Stop on structural failures and present them before asking for mathematical
 judgment. For vault review, point the user to `blueprint/README.md`, coverage,
-chapter pages, and `blueprint/dependencies.md` in Obsidian. For browser review,
+chapter pages, and the status and chapter summary in `blueprint/dependencies.md`
+in Obsidian. For browser review,
 run `autoform dashboard <PROJECT> --site-dir site` so the same site deployed to
 GitHub Pages is served on loopback with local-only live claim badges. Provide
 the overview, including its progress summary, plus the relevant project,
@@ -41,7 +44,7 @@ chapter, nested-scope, and statement-context links. Every generated site route
 uses the same Canvas plus semantic-DOM viewer. Open its full-page route and move
 from the project's topics to a chapter, a nested scope, then a searched
 statement and its immediate dependencies. Keep the hierarchy rail visible while
-drilling, in a window wider than 1,200 px, where open details do not cover it;
+drilling, in a window wider than 1,100 px, where open details do not cover it;
 at project scale, select one topic to reveal its direct dependency neighborhood
 instead of displaying every cross-topic edge at once. Global search enters the
 statement's smallest useful scope, while breadcrumbs and Back return to the
@@ -71,8 +74,8 @@ dependency recursively and requires proofs for theorems and bodies for definitio
 target marked `mathlib: true` follows the authored status contract; the marker
 is an author assertion, not audit verification that the declaration is in
 Mathlib. Treat the percentage never as whole-source completion. Read the
-adjacent declared source coverage and its linked coverage contract before
-making scope claims. A statement-only theorem remains incomplete whether it is
+declared source coverage in its linked coverage contract before making scope
+claims. A statement-only theorem remains incomplete whether it is
 blocked or ready to prove. In a project that allows open statements, a
 conditionally proved target, whose proof rests on an open statement without a
 recorded Lean proof, is not complete either: it is never fully proved, so it

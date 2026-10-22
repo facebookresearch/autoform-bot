@@ -16,7 +16,7 @@ from dataclasses import replace
 from pathlib import Path
 from urllib.parse import quote
 
-from . import dag_viewer, mermaid
+from . import dag_viewer
 from .graph import Graph
 from .graph_views import (
     FLATTENED_ROLES,
@@ -31,10 +31,11 @@ from .graph_views import (
     project_view,
     scope_views,
 )
-from .markdown import header_title, rendered_visible_text, title_text
-from .status import NodeStatus
+from .markdown import header_title, relative_link, rendered_visible_text, title_text
+from .status import INVENTORY_STATES, MEANINGS, STATES, NodeStatus
 
 NodeLinks = Callable[[Path, Iterable[str]], Mapping[str, str]]
+
 #: The project explorer's payload and the search index, relative to the site root.
 PROJECT_PAYLOAD = "dependencies.json"
 SEARCH_INDEX = "dependencies/index.json"
@@ -249,6 +250,7 @@ def write_graph_pages(
             if group == "roadmap" and group in scope_maps
             else chapter_item_counts[f"scope:{group or 'roadmap'}"]
         )
+        subject = ROOT_GROUP_TITLE if group in {"", "roadmap"} else _dependency_subject(view)
         written.append(
             _write_page(
                 chapter_page,
@@ -257,7 +259,8 @@ def write_graph_pages(
                 book=_published_link(book_page, chapter_page),
                 statuses=_selected_statuses(graph, statuses, view, containers),
                 links=links,
-                heading=_dependency_heading(view, ROOT_GROUP_TITLE if group in {"", "roadmap"} else None),
+                title=subject,
+                heading=_dependency_heading(view, subject),
                 lead=(
                     f"This map covers {item_count} item{'s' if item_count != 1 else ''} in this chapter. "
                     "Collapsed chapter nodes stand for external prerequisites or dependents."
@@ -292,6 +295,7 @@ def write_graph_pages(
                 book=_published_link(destination / "roadmap" / scope / "README.md", scope_page),
                 statuses=_selected_statuses(graph, statuses, view, containers),
                 links=links,
+                title=_dependency_subject(view),
                 heading=_dependency_heading(view),
                 lead=(
                     "This view shows the container's direct articles. Nested containers "
@@ -336,6 +340,8 @@ def write_graph_pages(
             search_href=_search_index_link(search_index, full_page),
             # It repeats the project page's title, so site search would list both.
             searchable=False,
+            # The rail lists the ancestors above the h1, so it shows the root's title over the same
+            # heading; that crumb stays because it is the rail's only link back to the project map.
             breadcrumbs=(
                 ("Book", _published_link(book_root, full_page)),
                 (root_title, _published_link(project_page, full_page)),
@@ -371,7 +377,7 @@ def scope_page_href(
 ) -> str:
     """Link a node's scope page from *page*, selecting the node in the hash."""
     target = scope_page_path(destination, node_id, parent=parent)
-    return f"{mermaid.relative_link(target, Path(page), '.html')}#node={quote(node_id, safe='')}"
+    return f"{relative_link(target, Path(page), '.html')}#node={quote(node_id, safe='')}"
 
 
 def _write_page(
@@ -384,6 +390,7 @@ def _write_page(
     heading: str,
     lead: str,
     site_root: Path,
+    title: str | None = None,
     search_href: str,
     breadcrumbs: tuple[tuple[str, str | None], ...],
     navigation: str = "",
@@ -391,11 +398,14 @@ def _write_page(
     canonical: Path | None = None,
 ) -> Path:
     # Every projection is one payload and one explorer host, so readers get one
-    # interaction model and no second renderer can drift from it.
+    # interaction model and no second renderer can drift from it. The explorer
+    # names the page by its bare *title*, defaulting to *heading*; the suffixed
+    # heading stays in the Markdown, where it tells the browser tab and site
+    # search apart from the book page of the same name.
     payload = page.with_suffix(".json")
     dag_viewer.write_payload(
         payload,
-        replace(view, title=heading),
+        replace(view, title=title or heading),
         links=links,
         breadcrumbs=breadcrumbs,
         book=book,
@@ -403,7 +413,7 @@ def _write_page(
     explorer = dag_viewer.render_container(
         quote(payload.name),
         script_href=_viewer_script_link(page, site_root),
-        style_href=mermaid.relative_link(site_root / dag_viewer.STYLE_PATH, page, ".css"),
+        style_href=relative_link(site_root / dag_viewer.STYLE_PATH, page, ".css"),
         fallback_links=(
             (node.title, links[node.id])
             for node in view.nodes[:50]
@@ -433,7 +443,7 @@ def _write_page(
         sections.extend([navigation, ""])
     # The legend rides on the lead sentence rather than sitting under the
     # explorer: it answers a question the reader asks once, not on every page.
-    tip = mermaid.render_legend_tip(statuses, _view_inventories(view))
+    tip = render_legend_tip(statuses, _view_inventories(view))
     if canonical is not None:
         href = _published_link(canonical, page)
         reading = (
@@ -478,12 +488,14 @@ def _view_inventories(view: GraphView) -> dict[str, int]:
     return counts
 
 
-def _dependency_heading(view: GraphView, subject: str | None = None) -> str:
-    """Name an explorer page for *subject*, by default the view's scope, and for what it draws.
+def _dependency_subject(view: GraphView) -> str:
+    """Name the view's scope: the views keep their Mermaid-era "<scope> dependency map" titles."""
+    return view.title.removesuffix(" dependency map")
 
-    The views keep their Mermaid-era "<scope> dependency map" titles, so that suffix goes.
-    """
-    subject = subject or view.title.removesuffix(" dependency map")
+
+def _dependency_heading(view: GraphView, subject: str | None = None) -> str:
+    """Name an explorer page for *subject*, by default the view's scope, and for what it draws."""
+    subject = subject or _dependency_subject(view)
     return f"{subject} {'knowledge map' if dag_viewer.uses_atlas(view) else 'dependencies'}"
 
 
@@ -502,7 +514,7 @@ def _navigation(*items: tuple[str, str]) -> str:
 
 
 def _markdown_link(target: Path, page: Path) -> str:
-    return mermaid.relative_link(target, page, ".md")
+    return relative_link(target, page, ".md")
 
 
 def _published_link(target: Path, page: Path) -> str:
@@ -510,13 +522,13 @@ def _published_link(target: Path, page: Path) -> str:
     # parses, but never these, which reach the explorer as JSON.
     if target.name == "README.md":
         target = target.with_name("index.md")
-    return mermaid.relative_link(target, page, ".html")
+    return relative_link(target, page, ".html")
 
 
 def _viewer_script_link(page: Path, site_root: Path) -> str:
     """Link the viewer asset from an explicit publication root."""
 
-    return mermaid.relative_link(
+    return relative_link(
         site_root / dag_viewer.SCRIPT_PATH,
         page,
         ".js",
@@ -524,7 +536,7 @@ def _viewer_script_link(page: Path, site_root: Path) -> str:
 
 
 def _search_index_link(search_index: Path, page: Path) -> str:
-    return mermaid.relative_link(search_index, page, ".json")
+    return relative_link(search_index, page, ".json")
 
 
 def _scope_breadcrumbs(
@@ -557,11 +569,85 @@ def _scope_breadcrumbs(
     return tuple(items)
 
 
+def render_legend(
+    statuses: dict[str, NodeStatus],
+    inventories: Mapping[str, int] | None = None,
+) -> str:
+    """Return a legend covering the states actually in use.
+
+    A Markdown table put this in a bordered box with a blank first heading over
+    the swatches, and left each column to size itself against its own longest
+    cell, so the swatch, the label and the count landed in a different place in
+    every row. This is one grid instead: the cells are emitted in reading order
+    and the columns line up because the grid, not the content, sets them.
+
+    *inventories* counts module catalogs by inventory status. A legend beside
+    counts that include catalogs lists those statuses after the states.
+    """
+    inventories = inventories or {}
+    used = {status.key for status in statuses.values()}
+    rows = [state for state in STATES if state.key in used]
+    rows.extend(state for state in INVENTORY_STATES if inventories.get(state.key))
+    if not rows:
+        return ""
+    counts = {state.key: 0 for state in STATES}
+    for status in statuses.values():
+        counts[status.key] += 1
+    counts.update(inventories)
+    cells = []
+    for state in rows:
+        # Colour comes from the stylesheet, so the legend follows the theme.
+        cells.append(
+            f'<span class="bp-swatch bp-swatch-{state.key}"></span>'
+            f'<span class="bp-legend-label">{html.escape(state.label)}</span>'
+            f'<span class="bp-legend-count">{counts[state.key]}</span>'
+            f'<span class="bp-legend-meaning">{html.escape(MEANINGS[state.key])}</span>'
+        )
+    return f'<div class="bp-legend-grid">{"".join(cells)}</div>'
+
+
+def render_legend_tip(
+    statuses: dict[str, NodeStatus],
+    inventories: Mapping[str, int] | None = None,
+) -> str:
+    """The legend behind a hover icon, for pages that only occasionally need it.
+
+    A graph page carried the legend in a disclosure captioned "What the colours
+    mean", which spent a headline-sized row on a question most readers never
+    ask, on every page, under every diagram. The same content hangs off an
+    icon instead.
+
+    Pure CSS: the icon is a real button, and the note shows on ``:hover`` and
+    on ``:focus-within``, so it opens by keyboard as well as by pointer. The
+    vault's dependency summary lists the statuses in a table instead, since
+    Obsidian has no stylesheet to open the note.
+    """
+    legend = render_legend(statuses, inventories)
+    if not legend:
+        return ""
+    icon = (
+        '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">'
+        '<circle cx="8" cy="8" r="7"/>'
+        '<path d="M8 7v4.5" /><circle cx="8" cy="4.6" r="0.9" class="bp-legend-dot"/>'
+        "</svg>"
+    )
+    return (
+        '<span class="bp-legend-tip">'
+        '<button type="button" class="bp-legend-icon" aria-describedby="bp-legend-note">'
+        f'{icon}<span class="bp-visually-hidden">What the colours mean</span>'
+        "</button>"
+        f'<span class="bp-legend-note" id="bp-legend-note" role="tooltip">{legend}</span>'
+        "</span>"
+    )
+
+
 __all__ = [
     "PROJECT_PAYLOAD",
     "SEARCH_INDEX",
     "graph_page_paths",
     "publication_contexts",
+    "render_legend",
+    "render_legend_tip",
     "scope_page_href",
     "scope_page_path",
     "write_graph_pages",

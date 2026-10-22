@@ -71,7 +71,10 @@ class State:
 #: so that it cannot be mistaken for a sorry-free proof.
 #:
 #: Dark is not light dimmed: on #18191A a saturated fill closes up, so dark
-#: states are near-black panels with a bright stroke and brighter label.
+#: states are near-black panels with a bright stroke and brighter label. The
+#: outlined states take the #242526 surface, not the page's #18191A, so that
+#: on the page and on the explorer's map they still read as cards, and
+#: planned's grey stroke keeps 3:1 against both.
 STATES: tuple[State, ...] = (
     State("mathlib", "in mathlib", "#1C5C33", "#134426", "#FFFFFF",
           "#10281A", "#42B72A", "#8BE78B"),
@@ -86,13 +89,13 @@ STATES: tuple[State, ...] = (
     State("can_prove", "ready to prove", "#FFFFFF", "#0064E0", "#0064E0",
           "#101F33", "#2D88FF", "#7FB8FF"),
     State("stated", "statement formalized", "#FFFFFF", "#31A24C", "#22773A",
-          "#18191A", "#31A24C", "#E4E6EB"),
+          "#242526", "#31A24C", "#E4E6EB"),
     State("can_state", "ready to state", "#FFFFFF", "#0082FB", "#0B4EA2",
-          "#18191A", "#2D88FF", "#E4E6EB"),
+          "#242526", "#2D88FF", "#E4E6EB"),
     State("not_ready", "not ready", "#FFF3D6", "#B77900", "#5C3D00",
           "#2E2205", "#F7B928", "#FFD772"),
     State("planned", "planned", "#FFFFFF", "#CED0D4", "#65676B",
-          "#18191A", "#4E4F50", "#B0B3B8"),
+          "#242526", "#737578", "#B0B3B8"),
 )
 
 _BY_KEY = {state.key: state for state in STATES}
@@ -100,17 +103,21 @@ _BY_KEY = {state.key: state for state in STATES}
 #: Neutral statuses for module catalogs, which record inspection of existing
 #: Lean rather than formalization targets: checked once fully proved, pending
 #: until then. Each takes a grey stroke of its own, apart from planned's, so
-#: planned targets and both kinds of inventory stay apart in a status ring.
+#: planned targets and both kinds of inventory stay apart in a status ring:
+#: in each scheme any two of the three greys keep 1.5:1 between them, and
+#: on dark each keeps 3:1 against its fill and the page.
 INVENTORY_STATES: tuple[State, ...] = (
     replace(
         _BY_KEY["planned"],
         key="inventory_checked",
         label="inventory checked",
         stroke="#65676B",
-        dark_stroke="#B0B3B8",
+        dark_stroke="#C8CACE",
     ),
+    # Pending must remain a visible grey card on the light sunken map, with
+    # a label that stays readable after the metadata's muted colour mix.
     State("inventory_pending", "inventory pending", "#BDC3CB", "#85898E", "#45494F",
-          "#242526", "#8A8D91", "#B0B3B8"),
+          "#242526", "#9EA1A6", "#B0B3B8"),
 )
 
 #: What each state means, for the legends and the explorer's swatches.

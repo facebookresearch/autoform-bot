@@ -175,7 +175,9 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     chapter_payload = json.loads(
         (out / "dependencies/chapters/roadmap.json").read_text(encoding="utf-8")
     )
-    assert chapter_payload["title"] == "Top level dependencies"
+    # The explorer names the scope; the page's own H1 adds what it draws, for the tab and site search.
+    assert chapter_payload["title"] == "Top level"
+    assert "\n# Top level dependencies\n" in (out / "dependencies/chapters/roadmap.md").read_text(encoding="utf-8")
     assert chapter_payload["view"]["breadcrumbs"][-1] == {"label": "Top level", "url": None}
     full_page = (out / "dependencies/full.md").read_text(encoding="utf-8")
     assert 'data-graph-src="full.json"' in full_page
@@ -221,7 +223,7 @@ def test_the_root_explorer_takes_the_roadmap_root_title(tmp_path: Path) -> None:
     chapter_payload = json.loads((out / "dependencies/chapters/roadmap.json").read_text(encoding="utf-8"))
     assert project_payload["title"] == "Learning theory"
     assert [node["title"] for node in project_payload["nodes"]] == ["Top level"]
-    assert chapter_payload["title"] == "Top level dependencies"
+    assert chapter_payload["title"] == "Top level"
     crumbs = [crumb["label"] for crumb in chapter_payload["view"]["breadcrumbs"]]
     assert crumbs == ["Book", "Learning theory", "Top level"]
 
@@ -360,16 +362,15 @@ def test_the_site_publishes_no_second_copy_of_the_vault(tmp_path: Path) -> None:
     assert "blueprint/roadmap/top.md" in chapter
 
 
-def test_the_vault_graph_keeps_a_visible_legend(tmp_path: Path) -> None:
-    """Obsidian never loads this stylesheet, so a hover note is unreachable there."""
+def test_the_vault_summary_keeps_its_statuses_in_plain_markdown(tmp_path: Path) -> None:
+    """Obsidian never loads this stylesheet, so the site's legend markup would be inert there."""
     from autoform_cli.visualize import export_graph
 
     project = _project(tmp_path)
     document = export_graph(project / "blueprint").read_text(encoding="utf-8")
 
-    assert "bp-legend-icon" not in document
-    assert "## Legend" in document
-    assert 'class="bp-legend-grid"' in document
+    assert "| Status | Count | Meaning |" in document
+    assert "bp-legend" not in document and "<span" not in document
 
 
 def test_the_site_carries_its_own_mark(tmp_path: Path) -> None:
@@ -943,6 +944,8 @@ def test_the_module_inventory_figure_counts_inventories_and_hides_at_zero(tmp_pa
         '<div class="bp-figure-note">existing Lean modules inventoried</div>'
     ) in overview
     assert "existing Lean modules checked" not in overview
+    # The rail hides the figure and counts the inventory in its line of counts.
+    assert re.search(r'<p class="bp-hero-counts">\d+ chapters? · 1 module inventory</p>', overview)
 
 
 def test_an_unclassified_catalog_warning_names_the_contract_once(tmp_path: Path) -> None:
@@ -1070,6 +1073,34 @@ def test_the_landing_page_preserves_its_full_reading_hero_in_one_integrated_shel
     assert overview.count('class="bp-explorer-page"') == overview.count('class="bp-reading-source"') == 1
     assert 'data-page-href="index.html"' in overview
     assert (tmp_path / "out/dependencies.json").is_file()
+
+
+def test_the_rail_hero_keeps_two_figures_a_counts_line_and_the_coverage_link(tmp_path: Path) -> None:
+    """The compact hero keeps its counts and coverage in the complete reading source.
+
+    The integrated shell must not restore a second hero inside the legacy rail
+    just to retain the compact figures introduced by the standalone explorer.
+    """
+    _render(tmp_path)
+    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    assert overview.count('class="bp-reading-source"') == overview.count('class="bp-landing-intro"') == 1
+    assert 'class="bp-dag-intro bp-landing-intro"' not in overview
+    assert overview.index('class="bp-reading-source"') < overview.index('class="bp-landing-intro"')
+    intro = overview.split('class="bp-landing-intro"', 1)[1].split('class="bp-dag-viewer"', 1)[0]
+    # Every figure stays in the no-JavaScript reading source; compact presentation also gives counts in words.
+    assert intro.index("bp-hero-figures") < intro.index('<p class="bp-hero-counts">') < intro.index("bp-hero-bar")
+    counts = re.search(r'<p class="bp-hero-counts">([^<]*)</p>', intro)
+    assert counts is not None and re.fullmatch(r"\d+ chapters?( · \d+ module inventor(y|ies))?", counts.group(1))
+    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
+    assert (
+        ".bp-landing-intro.bp-landing-intro :is(\n  .bp-hero-kicker,\n  .bp-figure:nth-child(n + 3),\n"
+        "  .bp-figure-note,\n  .bp-hero-bar,\n  .bp-hero-coverage-label,\n  .bp-hero-coverage-counts\n) { display: none; }"
+    ) in css
+    # The gradient rule is the narrow hero's one accent; its figures are plain.
+    value = css.split(".bp-landing-intro.bp-landing-intro .bp-figure-value {", 1)[1].split("}", 1)[0]
+    assert "background: none;" in value and "color: var(--bp-fg);" in value
+    assert ".bp-landing-intro.bp-landing-intro .bp-hero-coverage-link { margin-left: 0; }" in css
+    assert "last-child:nth-child(odd)" not in css
 
 
 def test_the_legends_beside_the_explorer_count_what_its_rings_count(tmp_path: Path) -> None:
@@ -1559,20 +1590,142 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     assert ".navbar" not in css
     assert "data-bs-theme" not in css
 
-    # A rendered diagram cannot be restyled, so the script owns both palettes
-    # and redraws when the scheme changes.
+    # A rendered diagram cannot be restyled, so the script redraws authored
+    # diagrams in Mermaid's theme for each scheme. Generated graphs are the
+    # explorer, so it injects no status palette.
     assert '"light"' in script and '"dark"' in script
     assert "data-md-color-scheme" in script
     assert "MutationObserver" in script
-    assert "bindFunctions" in script
-    for state in STATES:
-        assert f"classDef {state.key} fill:{state.fill}," in script
-        assert f"classDef {state.key} fill:{state.dark_fill}," in script
-    # Both palettes ship: the light chapter box and the dark one.
-    assert "classDef scope fill:#EBF2FE" in script
-    assert "classDef scope fill:#1C1D1F" in script
-    assert "classDef boundary" in script
-    assert "classDef focus" in script
+    assert "classDef" not in script
+
+
+_MERMAID_HARNESS = r"""
+const fs = require("fs");
+const vm = require("vm");
+const source = fs.readFileSync(process.argv[2], "utf8");
+
+function settle() { return new Promise((resolve) => setImmediate(resolve)); }
+
+async function run(blocks, preloaded) {
+  const calls = [], injected = [], observers = [], errors = [], selectors = [];
+  let scheme = null, inFlight = 0, mostInFlight = 0;
+  const elements = blocks.map((block) => ({className: block[0], textContent: block[1], innerHTML: ""}));
+  const mermaid = {
+    initialize: (config) => calls.push(
+      ["initialize", config.securityLevel, config.htmlLabels, config.flowchart.htmlLabels, config.theme, config.secure,
+       config.startOnLoad]
+    ),
+    // A render settles on a later turn, so two drawn at once would overlap.
+    render: (id, text) => {
+      calls.push(["render", text]);
+      inFlight += 1;
+      mostInFlight = Math.max(mostInFlight, inFlight);
+      return settle().then(() => {
+        inFlight -= 1;
+        if (text.indexOf("broken") >= 0) throw new Error("parse error");
+        return {svg: "<svg>" + text + "</svg>", bindFunctions: () => calls.push(["bind"])};
+      });
+    },
+  };
+  const context = {
+    console: {error: (message) => errors.push(message)},
+    document: {
+      // Only the diagrams match, so a broader selector finds none.
+      querySelectorAll: (selector) => { selectors.push(selector); return selector === ".mermaid" ? elements : []; },
+      body: {getAttribute: () => scheme},
+      createElement: () => ({}),
+      head: {appendChild: (element) => injected.push(element)},
+    },
+    MutationObserver: function (callback) { observers.push(callback); this.observe = () => {}; },
+  };
+  if (preloaded) context.mermaid = mermaid;
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  if (!preloaded && injected.length) { context.mermaid = mermaid; injected[0].onload(); }
+  // A switch to the dark scheme while the first pass is still drawing redraws
+  // every diagram, still locked down, once that pass is done.
+  scheme = "slate";
+  observers.forEach((callback) => callback([{attributeName: "data-md-color-scheme"}]));
+  for (let turn = 0; turn < 100; turn++) await settle();
+  return {
+    calls, errors, mostInFlight, selectors,
+    sources: injected.map((element) => element.src),
+    drawn: elements.map((element) => element.innerHTML),
+  };
+}
+
+(async () => {
+  console.log(JSON.stringify({
+    none: await run([], false),
+    loaded: await run(JSON.parse(process.argv[3]), false),
+    preloaded: await run([["mermaid", "graph TD\n  c --> d"]], true),
+  }));
+})();
+"""
+
+
+def test_the_site_draws_authored_diagrams_locked_down_and_only_where_a_page_has_one(tmp_path: Path) -> None:
+    """Generated maps are the explorer, so every diagram is one an author wrote.
+
+    Strict mode drops click callbacks and labels draw as plain text, and a page
+    without a diagram never loads Mermaid, while a site configuration that
+    still loads it globally keeps working. An element of the class render once
+    gave its own graphs is drawn the same way, and no palette is added to any
+    diagram. Diagrams are drawn one at a time, a scheme change's redraw waits
+    for the pass before it, and a diagram that fails leaves the others drawn.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not available")
+    script = tmp_path / "blueprint-mermaid.js"
+    script.write_text(render_module._mermaid_script(), encoding="utf-8")
+    harness = tmp_path / "harness.js"
+    harness.write_text(_MERMAID_HARNESS, encoding="utf-8")
+    blocks = [
+        ("mermaid bp-graph", "graph LR\n  a --> b"),
+        ("mermaid", 'flowchart LR\n  A\n  click A call eval("document.title=1")'),
+        ("mermaid", "sequenceDiagram\n  A->>B: hi"),
+        ("mermaid", "graph LR\n  broken"),
+        ("mermaid", "graph TD\n  later --> drawn"),
+    ]
+
+    result = json.loads(
+        subprocess.run(
+            [node, str(harness), str(script), json.dumps(blocks)], capture_output=True, text=True, check=True
+        ).stdout
+    )
+
+    assert result["none"] == {
+        "calls": [], "errors": [], "mostInFlight": 0, "selectors": [".mermaid"], "sources": [], "drawn": []
+    }
+    loaded = result["loaded"]
+    assert loaded["selectors"] == [".mermaid"]
+    assert loaded["sources"] == [render_module.MERMAID_LIBRARY]
+    # Each diagram is drawn from its source as written, strictly and with
+    # plain-text labels that no directive can turn back into HTML, the whole
+    # light pass before the dark one.
+    secure = ["secure", "securityLevel", "startOnLoad", "maxTextSize", "suppressErrorRendering", "maxEdges", "htmlLabels"]
+    assert loaded["calls"] == [
+        call
+        for theme in ("neutral", "dark")
+        for _classes, diagram in blocks
+        for call in (
+            ["initialize", "strict", False, False, theme, secure, False],
+            ["render", diagram],
+            *([] if "broken" in diagram else [["bind"]]),
+        )
+    ]
+    assert loaded["mostInFlight"] == 1
+    assert loaded["errors"] == ["autoform: a diagram could not be drawn"] * 2
+    assert loaded["drawn"] == ["" if "broken" in diagram else f"<svg>{diagram}</svg>" for _classes, diagram in blocks]
+    preloaded = result["preloaded"]
+    assert preloaded["sources"] == []
+    assert preloaded["calls"][:3] == [
+        ["initialize", "strict", False, False, "neutral", secure, False],
+        ["render", "graph TD\n  c --> d"],
+        ["bind"],
+    ]
+    assert preloaded["drawn"] == ["<svg>graph TD\n  c --> d</svg>"]
 
 
 def test_the_generated_script_is_valid_javascript(tmp_path: Path) -> None:
@@ -1586,10 +1739,9 @@ def test_the_generated_script_is_valid_javascript(tmp_path: Path) -> None:
         assert result.returncode == 0, result.stderr
 
 
-def test_render_draws_no_graph_loose(tmp_path: Path) -> None:
+def test_render_writes_no_mermaid_graph(tmp_path: Path) -> None:
     """The explorer draws render's maps, so no page render writes holds a
-    graph of the class the site's diagram script would draw loose, and every
-    diagram on the site is drawn strictly."""
+    Mermaid graph, and every diagram on the site is one an author wrote."""
 
     _render(tmp_path)
     out = tmp_path / "out"
@@ -1599,73 +1751,6 @@ def test_render_draws_no_graph_loose(tmp_path: Path) -> None:
         assert "```mermaid" not in page, name
         assert 'class="mermaid' not in page, name
         assert 'class="bp-dag-viewer"' in page, name
-
-
-_MERMAID_HARNESS = r"""
-const fs = require("fs");
-const calls = [];
-let level = null;
-function element(classes, text) {
-  return {classes: classes, textContent: text, innerHTML: "",
-          classList: {contains: function (name) { return classes.indexOf(name) >= 0; }}};
-}
-const elements = [
-  element(["mermaid", "bp-graph"], "graph LR\n  n0"),
-  element(["mermaid"], 'flowchart LR\n  A\n  click A call eval("document.title=1")'),
-  element(["mermaid"], "sequenceDiagram\n  A->>B: hi"),
-];
-global.document = {
-  readyState: "complete",
-  body: {getAttribute: function () { return null; }},
-  querySelectorAll: function (selector) {
-    return selector === ".mermaid" ? elements : [];
-  },
-};
-global.MutationObserver = function () { this.observe = function () {}; };
-global.mermaid = {
-  initialize: function (config) { level = config.securityLevel; },
-  render: function (id, source) {
-    calls.push({level: level, source: source});
-    return Promise.resolve({svg: "<svg>" + id + "</svg>"});
-  },
-};
-eval(fs.readFileSync(process.argv[2], "utf8"));
-setTimeout(function () {
-  console.log(JSON.stringify({calls: calls, drawn: elements.map(function (e) { return e.innerHTML; })}));
-}, 0);
-"""
-
-
-def test_the_script_draws_an_authors_diagram_strictly(tmp_path: Path) -> None:
-    """Loose security, which render's graphs need for their links, runs a
-    click's call as script and draws a label's markup, so only the graphs
-    render marked are drawn loose. An author's diagram is drawn strictly,
-    and without the flowchart palette, which another kind of diagram could
-    not parse."""
-
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node is not available")
-    _render(tmp_path)
-    harness = tmp_path / "harness.js"
-    harness.write_text(_MERMAID_HARNESS, encoding="utf-8")
-
-    result = subprocess.run(
-        [node, str(harness), str(tmp_path / "out/javascripts/blueprint-mermaid.js")],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    report = json.loads(result.stdout)
-
-    assert report["drawn"] == ["<svg>bp-graph-0</svg>", "<svg>bp-graph-1</svg>", "<svg>bp-graph-2</svg>"]
-    assert [(call["level"], call["source"].split("\n")[0]) for call in report["calls"]] == [
-        ("loose", "graph LR"),
-        ("strict", "flowchart LR"),
-        ("strict", "sequenceDiagram"),
-    ]
-    assert "classDef" in report["calls"][0]["source"]
-    assert not any("classDef" in call["source"] for call in report["calls"][1:])
 
 
 @pytest.mark.parametrize("destination", ("same", "child", "parent"))
@@ -1858,13 +1943,13 @@ def test_anchored_links_resolve_only_entries_that_are_read(
         for index in range(10_000)
     }
     calls: list[tuple[Path, Path, str]] = []
-    original_relative_link = render_module.mermaid.relative_link
+    original_relative_link = render_module.relative_link
 
     def relative_link(target: Path, output: Path, extension: str) -> str:
         calls.append((target, output, extension))
         return original_relative_link(target, output, extension)
 
-    monkeypatch.setattr(render_module.mermaid, "relative_link", relative_link)
+    monkeypatch.setattr(render_module, "relative_link", relative_link)
     links = render_module._anchored_links(targets, page)
 
     assert calls == []
@@ -2788,6 +2873,8 @@ def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path
     assert index["relations"] == []
     assert not any(record["result"] for record in index["nodes"])
     assert "bp-next-target" not in overview
+    # No compact chapter counts are needed until there are mathematical scopes to browse.
+    assert "bp-hero-counts" not in overview
 
 
 def test_a_directory_link_uses_tree_even_when_the_repo_url_says_blob() -> None:
@@ -2830,17 +2917,15 @@ def test_render_leaves_html_comments_out_of_the_site_but_not_out_of_code(tmp_pat
 
 
 def _count_relative_links(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
-    """Record the target of every `mermaid.relative_link` call."""
-    from autoform_cli import mermaid
-
+    """Record the target of every `relative_link` call render makes."""
     calls: list[Path] = []
-    relative_link = mermaid.relative_link
+    relative_link = render_module.relative_link
 
     def counting(target: Path, output: Path, link_extension: str) -> str:
         calls.append(target)
         return relative_link(target, output, link_extension)
 
-    monkeypatch.setattr(mermaid, "relative_link", counting)
+    monkeypatch.setattr(render_module, "relative_link", counting)
     return calls
 
 

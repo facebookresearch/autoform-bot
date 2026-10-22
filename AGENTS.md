@@ -29,8 +29,8 @@ workflow and cross-file maintenance.
 - Markdown under `blueprint/roadmap/` is the authored roadmap and dependency
   graph. Versioned implementation handoffs live only in hidden, per-article
   files under `blueprint/.implementation-notes/`; they are not mathematics or
-  graph state. Rendered sites, Mermaid graphs, dashboards, and runtime
-  projections are derived views, not another durable scheduler or graph.
+  graph state. Rendered sites, the vault's dependency summary, dashboards, and
+  runtime projections are derived views, not another durable scheduler or graph.
 - In consumer formalization work, Lean imports are allowed. Follow Formalize's
   `autoform work import-impact` policy: baseline the affected articles and
   repeat that evidence after rebuilding, check them for active conflicts, and
