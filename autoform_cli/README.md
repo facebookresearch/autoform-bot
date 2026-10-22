@@ -1172,23 +1172,21 @@ import-closure` first reads each captured source's import header, then imports
 only `MODULE` and the loaded modules that import it, transitively; only they
 and what they import must be built, and a stale build names those modules as
 Lake module targets, `lake build +A.B +A.C` (the libraries that hold them when
-there are more than 50). `affected_modules` is the same in both scopes. Here a
-loaded module is one the libraries' roots and globs reach through import
-headers. Under `import-closure` the command exits 2, suggesting the default
-scope, when a loaded module's header cannot be read; when a loaded header
+there are more than 50). `affected_modules` is exact: the same in both scopes.
+Attribution is not: Lean names a declaration's parent and resolves private
+names within the loaded environment, so under `import-closure`
+`affected_articles`, `affected_unowned_helpers`, and `affected_claim_targets`
+may be incomplete or attributed differently, since an owner declared in a
+module the scope did not load is not seen. `article_local` is therefore always
+false there; the default scope gives the full attribution. Here a loaded module
+is one the libraries' roots and globs reach through import headers. To keep
+`affected_modules` exact, `import-closure` exits 2, suggesting the default
+scope, when a loaded module's header cannot be read, when a loaded header
 imports a module the root package can supply (a source under a library's
 `srcDir` or an OLean in its artifact directory) that the captured inventory
-lacks, such as one under a symlinked directory; when Lean's loaded graph
-differs from the headers of the modules it loaded; when a loaded module it did
-not import declares a name prefix of an affected declaration, or of one on its
-parent chain, longer than the parent Lean found, so the default scope could
-give it another owner; when such a module imports another package's module this
-scope does not load and such a declaration has a longer prefix the root sources
-do not declare (a root-package prefix the source index cannot see, such as one
-a macro generates, is not detected); or when an article names a private
-declaration this scope loaded and a module it did not import declares the same
-name, which could change what the name means. A `MODULE` outside the loaded
-modules exits 2 as not a loaded project module. In this scope
+lacks, such as one under a symlinked directory, or when Lean's loaded graph
+differs from the headers of the modules it loaded. A `MODULE` outside the
+loaded modules exits 2 as not a loaded project module. In this scope
 `unresolved_articles` leaves out declarations the source index places only in
 loaded modules the scope did not import, which the default scope resolves.
 Freshness is Lake's rehash of this checkout's `.lake` against this checkout's
@@ -1224,9 +1222,9 @@ claim target and key.
 `affected_articles` lists each article that names, or owns through the parent
 chain, a declaration in an affected module, with those `modules`;
 `selected_affected` says whether the selected article is one of them.
-`article_local` holds only when it is, `affected_claim_targets` is empty, and
-no other article has unresolved declarations, like `contained` in
-`work impact`.
+`article_local` holds only when it is, `affected_claim_targets` is empty, no
+other article has unresolved declarations, and the scope is the default, like
+`contained` in `work impact`.
 
 Imports are allowed regardless of reported breadth. Follow the
 [Formalize import workflow](../skills/formalize/SKILL.md#import-edits) for

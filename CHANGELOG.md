@@ -11,7 +11,9 @@ date when the release is tagged.
 
 - `work import-impact --module-scope import-closure` imports only the edited
   module and the modules that import it, so a large project need not build
-  every root library to ask about one import (#430). The default scope is
+  every root library to ask about one import (#430). Its `affected_modules`
+  match the default scope's; its affected articles and helpers may be
+  incomplete, and it never reports `article_local`. The default scope is
   unchanged. The shared Lake freshness check, and `skeleton`'s stale-build
   message, now name modules as `+<module>` targets.
 
