@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import autoform_cli.impact as impact_module
 import autoform_cli.lean as lean_module
 from autoform_cli import __main__ as cli, claims, runtime, skeleton
 from autoform_cli import _tree_snapshot as tree_snapshot_module
@@ -38,7 +39,7 @@ from autoform_cli.impact import (
     render_impact_probe,
     revision_impact,
 )
-from autoform_cli.lean import snapshot_project_sources
+from autoform_cli.lean import Declaration, SourceIndex, snapshot_project_sources
 from autoform_cli.skeleton import LeanLibrary, SkeletonError, lean_libraries
 from autoform_cli.work import work_context
 
@@ -1547,6 +1548,52 @@ def test_import_closure_refuses_an_unreadable_loaded_header() -> None:
 
 def test_import_closure_ignores_an_unreadable_header_nothing_loads() -> None:
     assert import_closure(["Q"], {"Q": (), "Q.Odd": None}, "Q")[1] == {"Q"}
+
+
+def _parent_check(records: list[ConstantRecord], affected: tuple[str, ...]) -> None:
+    # Side.lean declares Foo.Bar, and only the default scope loads it.
+    index = SourceIndex(Path("."), {"Foo.Bar": Declaration("Foo.Bar", Path("Side.lean"), 1, "def")}, "")
+    impact_module._check_unprobed_parents(
+        {record.name: record for record in records},
+        affected,
+        SimpleNamespace(index=index),
+        lambda path: path == "Side.lean",
+    )
+
+
+def test_import_closure_checks_the_parent_chain_of_an_affected_record() -> None:
+    # Foo.Bar.baz.qux owns through Foo.Bar.baz, which lies outside the affected
+    # modules but whose own parent the default scope may lengthen to Foo.Bar.
+    records = [
+        ConstantRecord("Foo", "def", "Demo.Base"),
+        ConstantRecord("Foo.Bar.baz", "theorem", "Demo.Mid", parent="Foo"),
+        ConstantRecord("Foo.Bar.baz.qux", "theorem", "Demo.Top", parent="Foo.Bar.baz"),
+    ]
+
+    with pytest.raises(ImpactError) as refused:
+        _parent_check(records, ("Demo.Top",))
+
+    assert str(refused.value) == (
+        "Foo.Bar.baz in Demo.Mid may have the parent Foo.Bar, which Side.lean declares and "
+        "this scope did not load; rerun without --module-scope"
+    )
+
+
+def test_import_closure_checks_a_private_record_by_its_source_name() -> None:
+    private = "_private.Demo.Mid.0"
+    hidden = ConstantRecord(f"{private}.Foo.Bar.baz", "theorem", "Demo.Mid", parent="Foo", user_name="Foo.Bar.baz")
+
+    with pytest.raises(ImpactError, match=r"^Foo\.Bar\.baz in Demo\.Mid may have the parent Foo\.Bar,"):
+        _parent_check([ConstantRecord("Foo", "def", "Demo.Base"), hidden], ("Demo.Mid",))
+
+    # Lean tried the private Foo.Bar first, and the default scope would find it too.
+    owned = ConstantRecord(
+        f"{private}.Foo.Bar.baz", "theorem", "Demo.Mid", parent=f"{private}.Foo.Bar", user_name="Foo.Bar.baz"
+    )
+    _parent_check(
+        [ConstantRecord(f"{private}.Foo.Bar", "def", "Demo.Mid", parent="Foo", user_name="Foo.Bar"), owned],
+        ("Demo.Mid",),
+    )
 
 
 def test_header_graph_keeps_local_imports_in_inventory_spelling(tmp_path: Path) -> None:
@@ -3470,6 +3517,27 @@ def _prefix_project(root: Path, prefix_file: str) -> tuple[Path, Path]:
     for name, lean in (("sel.md", "Foo"), ("other.md", "Foo.Bar")):
         _write_article(project, name, metadata=["declaration: definition", "statement: formalized", f"lean: {lean}"])
     return lean_root, project
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_import_closure_scope_refuses_a_parent_only_the_default_scope_loads(tmp_path: Path, capsys) -> None:
+    # Lean takes the longest loaded prefix as a declaration's parent, so without
+    # Side.lean Foo.Bar.baz would belong to Foo's article instead of Foo.Bar's.
+    lean_root, project = _prefix_project(tmp_path, "Side.lean")
+    base = ["work", "import-impact", "chapter/sel", "Demo.Mid", str(project), "--lean-root", str(lean_root), "--json"]
+
+    assert cli.main(base) == 0
+    default = json.loads(capsys.readouterr().out)
+    assert [article["id"] for article in default["affected_articles"]] == ["chapter/other"]
+    assert default["article_local"] is False
+
+    assert cli.main([*base, "--module-scope", "import-closure"]) == 2
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err.splitlines() == [
+        "error: Foo.Bar.baz in Demo.Mid may have the parent Foo.Bar, which Side.lean declares and "
+        "this scope did not load; rerun without --module-scope"
+    ]
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")

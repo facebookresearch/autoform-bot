@@ -549,6 +549,59 @@ def _unprobed_files(
     return unprobed
 
 
+def _check_unprobed_parents(
+    records: Mapping[str, ConstantRecord],
+    affected: Iterable[str],
+    snapshot: IndexedSourceSnapshot,
+    unprobed: Callable[[str], bool],
+) -> None:
+    """Refuse when a file only the default scope loads may give an owned record a longer parent.
+
+    Lean's ``parent`` is the longest prefix the loaded environment declares,
+    and ownership follows the ``parent`` chain of each affected record, so
+    every record on those chains is checked. A prefix the source index cannot
+    see, such as one a macro generates, is not detected.
+    """
+
+    index = snapshot.index
+    declared: dict[tuple[object, ...], list[str]] = {}
+    for name in (*index.declarations, *index.duplicates):
+        declared.setdefault(_name_key(name), []).append(name)
+    affected_keys = {_name_key(name) for name in affected}
+    work = [record for record in records.values() if _name_key(record.module) in affected_keys]
+    seen: set[str] = set()
+    while work:
+        record = work.pop()
+        if record.name in seen:
+            continue
+        seen.add(record.name)
+        source = record.user_name or record.name
+        try:
+            parts = _lean_name_parts(source)
+        except SkeletonError:
+            continue
+        shortest = 1
+        if record.parent is not None:
+            # A private parent is a record of the same module; compare its source name.
+            parent = records.get(record.parent)
+            if parent is not None:
+                work.append(parent)
+            shortest = len(_name_key(record.parent if parent is None else parent.user_name or parent.name)) + 1
+        key = _name_key(source)
+        for length in range(len(parts) - 1, shortest - 1, -1):
+            for name in declared.get(key[:length], ()):
+                path = next(
+                    (item.path.as_posix() for item in index.occurrences(name) if unprobed(item.path.as_posix())),
+                    None,
+                )
+                if path is not None:
+                    prefix = ".".join(f"«{part}»" if quoted else part for part, quoted in parts[:length])
+                    raise ImpactError(
+                        f"{source} in {record.module} may have the parent {prefix}, "
+                        f"which {path} declares and this scope did not load; rerun without --module-scope"
+                    )
+
+
 def import_closure(
     selected: Iterable[str],
     graph: Mapping[str, tuple[str, ...] | None],
@@ -1670,6 +1723,7 @@ def _load_impact_evidence(
     if module_scope == IMPORT_CLOSURE_SCOPE:
         _check_header_graph(module_evidence, graph)
         unprobed = _unprobed_files(module_paths, loaded, module_evidence)
+        _check_unprobed_parents(records, importers, source_snapshot, unprobed)
 
         # A name declared where neither scope loads stays unresolved, as the default scope reports it.
         def out_of_scope(name: str) -> bool:
