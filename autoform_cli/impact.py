@@ -439,10 +439,17 @@ def header_graph(
     imports of other packages' modules are left out.
     """
 
+    return _local_header_graph(_module_headers(libraries, snapshot))
+
+
+def _module_headers(
+    libraries: Sequence[LeanLibrary], snapshot: IndexedSourceSnapshot
+) -> dict[str, tuple[str, ...] | None]:
+    """Map each local source module to every name its header imports, or ``None`` when unreadable."""
+
     paths = _module_source_paths(libraries, snapshot)
-    by_key = {_name_key(module): module for module in paths}
     data = {path.as_posix(): contents for path, contents in snapshot.source_files}
-    graph: dict[str, tuple[str, ...] | None] = {}
+    headers: dict[str, tuple[str, ...] | None] = {}
     for module, relative in paths.items():
         if relative not in data:
             raise ImpactError(
@@ -453,12 +460,56 @@ def header_graph(
         if imported is not None and not all(_comparable_name(name) for name in imported):
             # A name that cannot be compared by component might be a local import.
             imported = None
-        graph[module] = (
-            None
-            if imported is None
-            else tuple(sorted({by_key[key] for name in imported if (key := _name_key(name)) in by_key}))
-        )
-    return graph
+        headers[module] = None if imported is None else tuple(imported)
+    return headers
+
+
+def _local_header_graph(
+    headers: Mapping[str, tuple[str, ...] | None],
+) -> dict[str, tuple[str, ...] | None]:
+    by_key = {_name_key(module): module for module in headers}
+    return {
+        module: None
+        if imported is None
+        else tuple(sorted({by_key[key] for name in imported if (key := _name_key(name)) in by_key}))
+        for module, imported in headers.items()
+    }
+
+
+def _check_uninventoried_imports(
+    loaded: Iterable[str],
+    headers: Mapping[str, tuple[str, ...] | None],
+    libraries: Sequence[LeanLibrary],
+) -> None:
+    """Refuse when a loaded header imports a module the root package can supply but the inventory lacks.
+
+    The inventory skips symlinked, ignored and nested-checkout directories, so
+    such a module is missing from the header graph, and any module it imports
+    would be missing from the importers. A name the root package cannot supply,
+    as a source under a library's ``srcDir`` or an OLean in its artifact
+    directory, is another package's.
+    """
+
+    inventory = {_name_key(module) for module in headers}
+    artifact_dir: Path | None = None
+    for module in sorted(loaded):
+        for name in headers.get(module) or ():
+            if _name_key(name) in inventory:
+                continue
+            # The spelled components, so `M.007` stays the file `007.lean`.
+            *package, stem = (part for part, _quoted in _lean_name_parts(name))
+            if artifact_dir is None:
+                artifact_dir = _root_artifact_dir(libraries)
+            candidates = [
+                *(library.src_dir.joinpath(*package, f"{stem}.lean") for library in libraries),
+                artifact_dir.joinpath(*package, f"{stem}.olean"),
+            ]
+            if any(os.path.lexists(path) for path in candidates):
+                raise ImpactError(
+                    f"project module {module} imports {name}, which the root package can supply but the "
+                    "captured source inventory lacks, so the import closure is unknown; "
+                    "rerun without --module-scope"
+                )
 
 
 def import_closure(
@@ -1508,8 +1559,10 @@ def _load_impact_evidence(
         importers: frozenset[str] = frozenset()
         if module_scope == IMPORT_CLOSURE_SCOPE:
             assert module is not None
-            graph = header_graph(libraries, source_snapshot)
-            _, importers = import_closure(selected_modules, graph, module)
+            headers = _module_headers(libraries, source_snapshot)
+            graph = _local_header_graph(headers)
+            loaded, importers = import_closure(selected_modules, graph, module)
+            _check_uninventoried_imports(loaded, headers, libraries)
             imports = tuple(sorted(importers))
         try:
             output = skeleton.run_probe(

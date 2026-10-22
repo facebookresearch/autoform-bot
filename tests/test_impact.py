@@ -2291,6 +2291,77 @@ def test_import_closure_scope_reports_an_unloaded_module_before_lake(
     assert calls == []
 
 
+def test_import_closure_scope_refuses_a_loaded_import_the_inventory_skips(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    # The inventory skips the symlinked Demo/Sym, so Demo.Sym.Y, which imports
+    # Demo.Base, is not in the header graph; the selected Demo.Side imports it.
+    root = _closure_root(tmp_path)
+    vendor = tmp_path / "vendor"
+    vendor.mkdir()
+    (vendor / "Y.lean").write_text("import Demo.Base\n", encoding="utf-8")
+    (root / "Demo" / "Sym").symlink_to(vendor, target_is_directory=True)
+    (root / "Demo" / "Side.lean").write_text("import Demo.Sym.Y\n", encoding="utf-8")
+    calls = _stub_probe(monkeypatch)
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/mid", "Demo.Base", str(_closure_project(tmp_path)),
+         "--lean-root", str(root), "--module-scope", "import-closure"]
+    )
+
+    assert code == 2
+    assert capsys.readouterr().err.splitlines() == [
+        "error: project module Demo.Side imports Demo.Sym.Y, which the root package can supply but the "
+        "captured source inventory lacks, so the import closure is unknown; rerun without --module-scope"
+    ]
+    assert calls == []
+
+
+def test_import_closure_scope_refuses_a_loaded_import_with_only_a_root_artifact(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    root = _closure_root(tmp_path)
+    artifact = root / ".lake/build/lib/lean/Demo/Gone.olean"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"")
+    (root / "Demo" / "Side.lean").write_text("import Demo.Gone\n", encoding="utf-8")
+    calls = _stub_probe(monkeypatch)
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/mid", "Demo.Base", str(_closure_project(tmp_path)),
+         "--lean-root", str(root), "--module-scope", "import-closure"]
+    )
+
+    assert code == 2
+    assert "project module Demo.Side imports Demo.Gone, which the root package can supply" in capsys.readouterr().err
+    assert calls == []
+
+
+def test_import_closure_scope_ignores_skipped_imports_nothing_loads(tmp_path: Path, monkeypatch, capsys) -> None:
+    # Demo.Dormant imports the skipped Demo.Sym.Y, but no library selects
+    # Demo.Dormant and nothing loaded imports it; Mathlib is another package's.
+    root = _closure_root(tmp_path)
+    (root / "lakefile.toml").write_text('name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\n', encoding="utf-8")
+    vendor = tmp_path / "vendor"
+    vendor.mkdir()
+    (vendor / "Y.lean").write_text("import Demo.Mid\n", encoding="utf-8")
+    (root / "Demo" / "Sym").symlink_to(vendor, target_is_directory=True)
+    (root / "Demo" / "Dormant.lean").write_text("import Demo.Sym.Y\n", encoding="utf-8")
+    (root / "Demo" / "Mid.lean").write_text(
+        "import Mathlib.Data.Nat\nimport Demo.Base\n\ntheorem Demo.mid : True := trivial\n", encoding="utf-8"
+    )
+    _stub_probe(monkeypatch, _CLOSURE_RECORDS, modules=_closure_evidence(root))
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/mid", "Demo.Mid", str(_closure_project(tmp_path)),
+         "--lean-root", str(root), "--module-scope", "import-closure", "--json"]
+    )
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    assert json.loads(output.out)["affected_modules"] == ["Demo", "Demo.Mid"]
+
+
 @pytest.mark.parametrize("count", [3, 60])
 def test_import_closure_scope_names_the_importers_to_build(tmp_path: Path, monkeypatch, capsys, count: int) -> None:
     root = _closure_root(tmp_path)
@@ -3351,6 +3422,46 @@ def test_import_closure_scope_matches_the_default_on_a_built_project(tmp_path: P
     capsys.readouterr()
     assert cli.main(base) == 2
     assert "Lean build artifacts are stale; run `lake build Q`" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_import_closure_scope_refuses_an_importer_the_inventory_skips_on_a_built_project(
+    tmp_path: Path, capsys
+) -> None:
+    # Other imports Demo.Sym.Y from the symlinked Demo/Sym, which the inventory
+    # skips; Y imports Demo.Base, so both scopes must refuse rather than leave Y out.
+    lean_root = tmp_path / "lean"
+    (lean_root / "Demo").mkdir(parents=True)
+    shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", lean_root / "lean-toolchain")
+    (lean_root / "lakefile.toml").write_text(
+        'name = "Demo"\ndefaultTargets = ["Demo"]\n\n[[lean_lib]]\nname = "Demo"\nroots = ["Demo", "Other"]\n',
+        encoding="utf-8",
+    )
+    vendor = tmp_path / "vendor" / "Sym"
+    vendor.mkdir(parents=True)
+    (lean_root / "Demo" / "Sym").symlink_to(vendor, target_is_directory=True)
+    for name, text in (
+        ("Demo.lean", "import Demo.Base\n"),
+        ("Other.lean", "import Demo.Sym.Y\n"),
+        ("Demo/Base.lean", "def Demo.Base.b : Nat := 1\n"),
+        ("Demo/Sym/Y.lean", "import Demo.Base\n\ndef Demo.Sym.y : Nat := Demo.Base.b\n"),
+    ):
+        (lean_root / name).write_text(text, encoding="utf-8")
+    _lake_build(lean_root)
+    project = tmp_path / "roadmap"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    _write_article(project, "base.md", metadata=["declaration: definition", "statement: formalized", "lean: Demo.Base.b"])
+    base = ["work", "import-impact", "chapter/base", "Demo.Base", str(project), "--lean-root", str(lean_root), "--json"]
+
+    assert cli.main(base) == 2
+    assert "captured source inventory has no such module" in capsys.readouterr().err
+    assert cli.main([*base, "--module-scope", "import-closure"]) == 2
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err.splitlines() == [
+        "error: project module Other imports Demo.Sym.Y, which the root package can supply but the "
+        "captured source inventory lacks, so the import closure is unknown; rerun without --module-scope"
+    ]
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
