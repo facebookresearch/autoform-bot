@@ -735,13 +735,49 @@ def test_explorer_elevation_is_two_shadows_and_a_selection_ring_that_keeps_the_c
         "var(--dag-e1)",
         "var(--dag-e2)",
         "none",
-        "0 0 0 2px var(--dag-link), var(--dag-e1)",
+        "0 0 0 2px var(--dag-map), 0 0 0 4px var(--dag-fg), var(--dag-e1)",
         "0 0 0 2px color-mix(in srgb, var(--dag-link) 40%, transparent), var(--dag-e1)",
         "0 0 0 3px color-mix(in srgb, var(--dag-link) 18%, transparent)",
         "inset 3px 0 0 var(--dag-link)",
     }
-    assert ".bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-link), var(--dag-e1); }" in style
+    selected = ".bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-map), 0 0 0 4px var(--dag-fg), var(--dag-e1); }"
+    assert selected in style
     assert "border-width" not in style
+
+
+def test_selection_focus_and_the_current_statement_do_not_borrow_status_blue() -> None:
+    """Selection shared ready-to-prove's blue, focus rings were about 2:1 and the rail showed focus as hover."""
+    style = dag_viewer._STYLE
+    # The selected card's ring is the text colour past a gap; blue stays a status colour.
+    assert "data-selected=true] { box-shadow: 0 0 0 2px var(--dag-link)" not in style
+    assert ".bp-dag-node[data-subdued=true] { opacity: .62; filter: saturate(.25); }" in style
+    # One solid ring for every focus-visible state, drawn inside rows and outside a card's selection ring.
+    assert "color-mix(in srgb, var(--dag-link) 45%" not in style and "52%" not in style
+    assert [rule.split(" {")[0] for rule in style.splitlines() if rule.startswith(".bp-dag-viewer") and ":focus-visible {" in rule] == [
+        ".bp-dag-viewer :is(button, a, [tabindex]):focus-visible",
+        ".bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body):focus-visible",
+        ".bp-dag-viewer .bp-dag-node:focus-visible",
+    ]
+    assert ":focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }" in style
+    assert ".bp-dag-node:focus-visible { outline-offset: 4px; }" in style
+    assert [rule for rule in style.splitlines() if "outline:" in rule and "focus-visible" in rule and "solid var(--dag-link)" not in rule] == []
+    # Hovering a rail link lights its row; focus is the ring alone.
+    assert ".bp-dag-navigation-link:hover { border-color: var(--dag-border); background: var(--dag-panel); }" in style
+    assert ".bp-dag-navigation-link:focus-visible" not in style.replace(".bp-dag-navigation-link, .bp-reading-body):focus-visible", "")
+    current = re.search(r"^\.bp-reading-current \{([^}]*)\}", style, re.M)
+    assert current is not None and "outline" not in current.group(1)
+    assert "box-shadow: inset 3px 0 0 var(--dag-link);" in current.group(1) and "padding: 10px 12px 10px 15px;" in current.group(1)
+
+    def mixed(colour: str, base: str, share: float) -> str:
+        pairs = [(int(colour[i : i + 2], 16), int(base[i : i + 2], 16)) for i in (1, 3, 5)]
+        return "#" + "".join(f"{round(c * share + b * (1 - share)):02X}" for c, b in pairs)
+
+    # --bp-link on the explorer's surfaces: page, map, panel, and the 10% and 9% current-row tints.
+    for link, page, field in (("#0064E0", "#FFFFFF", "#F0F2F5"), ("#2D88FF", "#242526", "#18191A")):
+        surfaces = (page, field, mixed(page, "#64748B", 0.94), mixed(link, page, 0.10), mixed(link, page, 0.09))
+        assert min(_contrast(link, surface) for surface in surfaces) >= 3.9, link
+        # The old ring, link at 45% over the page, measured about 2:1 against it.
+        assert _contrast(mixed(link, page, 0.45), page) < 3
 
 
 def test_explorer_canvas_paints_its_labels_in_the_site_family_at_11px_or_more() -> None:

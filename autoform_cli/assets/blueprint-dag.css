@@ -64,12 +64,14 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-viewer.bp-dag-viewer :is(.bp-dag-results, .bp-dag-relation-list, .bp-dag-inventory-list) > li { margin: 0; }
 .bp-dag-result { display: flex; align-items: baseline; width: 100%; gap: 10px; padding: 8px 9px; border: 0; border-radius: var(--dag-radius-row); background: transparent; color: var(--dag-fg); text-align: left; cursor: pointer; }
 .bp-dag-result:hover, .bp-dag-result:focus-visible { background: color-mix(in srgb, var(--dag-link) 9%, transparent); }
-.bp-dag-result:focus-visible, .bp-dag-inventory-row:focus-visible { outline: 3px solid color-mix(in srgb, var(--dag-link) 52%, transparent); outline-offset: -3px; }
 .bp-dag-result-title, .bp-dag-inventory-title { flex: 1 1 auto; min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-result-meta, .bp-dag-inventory-meta { min-width: 0; overflow: hidden; color: var(--dag-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-button, .bp-dag-filter-summary, .bp-dag-mode-button, .bp-dag-hidden-button, .bp-dag-whole-search, .bp-dag-load-more { min-height: 36px; padding: 6px 10px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-weight: 600; cursor: pointer; }
 .bp-dag-button:hover, .bp-dag-filter-summary:hover, .bp-dag-mode-button:hover, .bp-dag-load-more:hover { border-color: var(--dag-link); color: var(--dag-link); }
-.bp-dag-button:focus-visible, .bp-dag-filter-summary:focus-visible, .bp-dag-mode-button:focus-visible, .bp-dag-pivot:focus-visible, .bp-dag-node:focus-visible, .bp-dag-sheet-handle:focus-visible { outline: 3px solid color-mix(in srgb, var(--dag-link) 45%, transparent); outline-offset: 2px; }
+/* One solid ring for every control, 3.9:1 or more on every surface; rows draw it inside, where the rail or list would clip it, and cards outside their selection ring. */
+.bp-dag-viewer :is(button, a, [tabindex]):focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }
+.bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body):focus-visible { outline-offset: -2px; }
+.bp-dag-viewer .bp-dag-node:focus-visible { outline-offset: 4px; }
 .bp-dag-zoom, .bp-dag-modes { display: inline-flex; flex: none; gap: 2px; padding: 2px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); background: var(--dag-bg); }
 .bp-dag-zoom .bp-dag-button, .bp-dag-modes .bp-dag-mode-button { min-height: 30px; padding: 4px 10px; border: 0; border-radius: var(--dag-radius-row); background: transparent; color: var(--dag-muted); }
 .bp-dag-zoom .bp-dag-button:hover, .bp-dag-modes .bp-dag-mode-button:not([aria-pressed=true], :disabled):hover { background: var(--dag-panel); color: var(--dag-fg); }
@@ -103,7 +105,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-list > li { margin: 0; }
 .bp-dag-navigation-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; width: 100%; gap: 8px; min-height: 36px; padding: 7px 8px; border: 1px solid transparent; border-radius: var(--dag-radius-row); background: transparent; color: var(--dag-fg) !important; font: inherit; font-size: 13px; line-height: 1.25; text-align: left; text-decoration: none !important; cursor: pointer; }
 .bp-dag-navigation-link > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-dag-navigation-link:hover, .bp-dag-navigation-link:focus-visible { border-color: var(--dag-border); background: var(--dag-panel); }
+.bp-dag-navigation-link:hover { border-color: var(--dag-border); background: var(--dag-panel); }
 .bp-dag-navigation-link[aria-current=true] { border-color: color-mix(in srgb, var(--dag-link) 38%, var(--dag-border)); background: color-mix(in srgb, var(--dag-link) 9%, var(--dag-bg)); color: var(--dag-link) !important; }
 .bp-dag-navigation-meta { color: var(--dag-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .bp-dag-navigation-more { width: 100%; margin-top: 7px; border: 0; background: transparent; color: var(--dag-link); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
@@ -116,8 +118,9 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-node { position: absolute; top: 0; left: 0; display: grid; align-content: center; width: 196px; height: 56px; padding: 6px 10px; overflow: hidden; border: 1.5px solid var(--dag-node-stroke); border-radius: var(--dag-radius-control); background: var(--dag-node-fill); color: var(--dag-node-text); box-shadow: var(--dag-e1); text-align: left; transform-origin: 0 0; pointer-events: auto; cursor: pointer; will-change: transform; }
 .bp-dag-node-title { overflow: hidden; font-size: 14px; font-weight: 600; line-height: 1.18; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-node-meta { overflow: hidden; color: color-mix(in srgb, var(--dag-node-text) 95%, var(--dag-node-fill)); font-size: 12px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
-.bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-link), var(--dag-e1); }
-.bp-dag-node[data-subdued=true] { opacity: .42; }
+/* Selection is a neutral ring past a gap in the map colour, since blue marks cards that are ready to state or prove. Subdued cards lose colour before legibility. */
+.bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-map), 0 0 0 4px var(--dag-fg), var(--dag-e1); }
+.bp-dag-node[data-subdued=true] { opacity: .62; filter: saturate(.25); }
 .bp-dag-node[data-kind=scope] { border-radius: var(--dag-radius-panel); }
 .bp-dag-node[data-kind=boundary] { border-style: dashed; }
 .bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] { display: block; padding: 3px; border: 0; border-radius: var(--dag-radius-panel); background: var(--dag-status-ring, var(--dag-node-stroke)); text-align: left; }
@@ -265,7 +268,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-reading-body pre, .bp-reading-body table { max-width: 100%; overflow: auto; }
 .bp-reading-body img, .bp-reading-body svg { max-width: 100%; }
 .bp-reading-body .bp-node { border-radius: 8px; }
-.bp-reading-current { outline: 2px solid color-mix(in srgb, var(--dag-link) 45%, transparent); outline-offset: 5px; }
+/* The current statement takes the contents row's tint and left bar inside the column; an offset outline ran past it. */
+.bp-reading-current { padding: 10px 12px 10px 15px; border-radius: 8px; background: color-mix(in srgb, var(--dag-link) 7%, transparent); box-shadow: inset 3px 0 0 var(--dag-link); }
 .bp-reading-neighbors { grid-row: 3; padding: 12px 22px; max-height: 192px; overflow: auto; border-top: 1px solid var(--dag-border); background: var(--dag-panel); }
 .bp-reading-links { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .bp-reading-related { display: grid; align-content: start; gap: 5px; min-width: 0; font-size: 12px; }
