@@ -90,6 +90,223 @@
     })});
   }
 
+  // Pure scene geometry: the publication remains the authoritative graph.
+  function layoutGraph(nodes, edges, direction, measureLabel) {
+    var graph = new AutoformDagre.graphlib.Graph({multigraph: true}), routes = [], boxes = new Map(), labels = [], roads = [], attachments = new Map();
+    if (!nodes.length) return {nodes: boxes, routes: routes, bounds: {x: 0, y: 0, w: 1, h: 1}};
+    graph.setGraph({rankdir: direction === "tb" ? "TB" : "LR", nodesep: 96, ranksep: 144, edgesep: 32, marginx: 36, marginy: 52});
+    graph.setDefaultEdgeLabel(function () { return {}; });
+    function compare(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+    nodes.slice().sort(function (a, b) { return compare(a.id, b.id); }).forEach(function (node) {
+      graph.setNode("n:" + node.id, {width: node.width, height: node.height});
+    });
+    edges.forEach(function (edge, index) {
+      ["statement", "proof"].forEach(function (kind) {
+        if (edge[kind] > 0) routes.push({source: edge.source, target: edge.target, kind: kind, count: edge[kind], edgeIndex: index});
+      });
+    });
+    routes.sort(function (a, b) { return compare(a.source, b.source) || compare(a.target, b.target) || compare(a.kind, b.kind) || a.count - b.count; });
+    routes.forEach(function (route, index) {
+      route.name = String(index);
+      route.labelWidth = route.count > 1 ? Math.ceil(measureLabel ? measureLabel("×" + route.count) : (String(route.count).length + 1) * 8) + 12 : 0;
+      graph.setEdge("n:" + route.source, "n:" + route.target, {width: route.labelWidth, height: route.labelWidth ? 20 : 0, labelpos: "c"}, route.name);
+    });
+    AutoformDagre.layout(graph);
+    graph.nodes().forEach(function (key) {
+      var node = graph.node(key), id = key.slice(2); boxes.set(id, {id: id, x: node.x - node.width / 2, y: node.y - node.height / 2, w: node.width, h: node.height});
+    });
+    var obstacles = Array.from(boxes.values()), all = obstacles.reduce(function (points, box) {
+      return points.concat([{x: box.x, y: box.y}, {x: box.x + box.w, y: box.y + box.h}]);
+    }, []), extent = bounds(all);
+    function bounds(points) {
+      var xs = points.map(function (p) { return p.x; }), ys = points.map(function (p) { return p.y; });
+      var x = Math.min.apply(null, xs), y = Math.min.apply(null, ys);
+      return {x: x, y: y, w: Math.max.apply(null, xs) - x, h: Math.max.apply(null, ys) - y};
+    }
+    function overlap(a, b, pad) {
+      return a.x < b.x + b.w + pad && a.x + a.w > b.x - pad && a.y < b.y + b.h + pad && a.y + a.h > b.y - pad;
+    }
+    function segmentHits(a, b, box, pad) {
+      var lo = [box.x - pad, box.y - pad], hi = [box.x + box.w + pad, box.y + box.h + pad], p = [a.x, a.y], d = [b.x - a.x, b.y - a.y];
+      var enter = 0, leave = 1;
+      for (var axis = 0; axis < 2; axis++) {
+        if (Math.abs(d[axis]) < 1e-9) { if (p[axis] <= lo[axis] || p[axis] >= hi[axis]) return false; continue; }
+        var t1 = (lo[axis] - p[axis]) / d[axis], t2 = (hi[axis] - p[axis]) / d[axis];
+        enter = Math.max(enter, Math.min(t1, t2)); leave = Math.min(leave, Math.max(t1, t2));
+        if (enter >= leave - 1e-9) return false;
+      }
+      return leave > 1e-7 && enter < 1 - 1e-7;
+    }
+    function clear(points, route) {
+      return points.slice(1).every(function (point, index) {
+        return obstacles.every(function (box) { return !segmentHits(points[index], point, box, box.id === route.source || box.id === route.target ? 0 : 20); }) &&
+          labels.every(function (label) { return label === route.label || !segmentHits(points[index], point, label, 12); });
+      });
+    }
+    function simplify(points) {
+      var result = [];
+      points.forEach(function (point) {
+        var last = result[result.length - 1];
+        if (last && Math.hypot(point.x - last.x, point.y - last.y) < 1e-7) return;
+        while (result.length > 1) {
+          var a = result[result.length - 2], b = result[result.length - 1];
+          if (Math.abs((b.x - a.x) * (point.y - b.y) - (b.y - a.y) * (point.x - b.x)) > 1e-7 ||
+              (b.x - a.x) * (point.x - b.x) + (b.y - a.y) * (point.y - b.y) < 0) break;
+          result.pop();
+        }
+        result.push({x: point.x, y: point.y});
+      });
+      return result;
+    }
+    function port(box, point) {
+      var sides = [Math.abs(point.x - box.x), Math.abs(point.x - box.x - box.w), Math.abs(point.y - box.y), Math.abs(point.y - box.y - box.h)];
+      var side = sides.indexOf(Math.min.apply(null, sides)), normal = [{x: -1, y: 0}, {x: 1, y: 0}, {x: 0, y: -1}, {x: 0, y: 1}][side];
+      var x = side < 2 ? box.x + (side === 1 ? box.w : 0) : Math.max(box.x + 16, Math.min(point.x, box.x + box.w - 16));
+      var y = side >= 2 ? box.y + (side === 3 ? box.h : 0) : Math.max(box.y + 16, Math.min(point.y, box.y + box.h - 16));
+      return {point: {x: x, y: y}, stub: {x: x + normal.x * 24, y: y + normal.y * 24}};
+    }
+    function routeError(reason) { throw new Error("Dependency route: " + reason); }
+    function sharedLength(a, b, route) {
+      var dx = b.x - a.x, dy = b.y - a.y, length = Math.hypot(dx, dy); if (!length) return 0;
+      return route.points.slice(1).reduce(function (sum, d, index) {
+        var c = route.points[index], ox = d.x - c.x, oy = d.y - c.y;
+        if (Math.abs(dx * oy - dy * ox) > 1e-6 || Math.abs(dx * (c.y - a.y) - dy * (c.x - a.x)) > 1e-6) return sum;
+        var p = ((c.x - a.x) * dx + (c.y - a.y) * dy) / length, q = ((d.x - a.x) * dx + (d.y - a.y) * dy) / length;
+        return sum + Math.max(0, Math.min(length, Math.max(p, q)) - Math.max(0, Math.min(p, q)));
+      }, 0);
+    }
+    // A rectilinear visibility grid includes every obstacle boundary. A* can
+    // therefore escape to the outer corridor without a card-crossing fallback.
+    function detour(start, finish, own) {
+      var inflated = obstacles.map(function (box) { return {x: box.x - 20, y: box.y - 20, w: box.w + 40, h: box.h + 40}; });
+      labels.forEach(function (label) { if (label !== own.label) inflated.push({x: label.x - 12, y: label.y - 12, w: label.w + 24, h: label.h + 24}); });
+      function coordinates(axis, size) {
+        var values = [start[axis], finish[axis], extent[axis] - 64, extent[axis] + extent[size] + 64];
+        inflated.forEach(function (box) { values.push(box[axis], box[axis] + box[size]); });
+        roads.forEach(function (road) { if (road !== own) road.points.slice(1).forEach(function (point, index) {
+          var before = road.points[index]; if (Math.abs(point[axis] - before[axis]) < 1e-7) values.push(point[axis] - 24, point[axis], point[axis] + 24);
+        }); });
+        return Array.from(new Set(values)).sort(function (a, b) { return a - b; });
+      }
+      var xs = coordinates("x", "w"), ys = coordinates("y", "h"), nx = xs.length, ny = ys.length;
+      var xi = new Map(xs.map(function (value, index) { return [value, index]; })), yi = new Map(ys.map(function (value, index) { return [value, index]; }));
+      var blocked = new Uint8Array(nx * ny), horizontal = new Uint8Array((nx - 1) * ny), vertical = new Uint8Array(nx * (ny - 1));
+      inflated.forEach(function (box) {
+        var left = xi.get(box.x), right = xi.get(box.x + box.w), top = yi.get(box.y), bottom = yi.get(box.y + box.h);
+        for (var y = top + 1; y < bottom; y++) {
+          blocked.fill(1, y * nx + left + 1, y * nx + right);
+          horizontal.fill(1, y * (nx - 1) + left, y * (nx - 1) + right);
+        }
+        for (var row = top; row < bottom; row++) vertical.fill(1, row * nx + left + 1, row * nx + right);
+      });
+      var hcost = new Float64Array(horizontal.length), vcost = new Float64Array(vertical.length);
+      roads.forEach(function (road) { if (road !== own) road.points.slice(1).forEach(function (point, index) {
+        var before = road.points[index], x = xi.get(point.x), y = yi.get(point.y);
+        if (Math.abs(point.x - before.x) < 1e-7 && x !== undefined) {
+          for (var row = 0; row < ny - 1; row++) vcost[row * nx + x] += 24 * Math.max(0, Math.min(ys[row + 1], Math.max(point.y, before.y)) - Math.max(ys[row], Math.min(point.y, before.y)));
+        } else if (Math.abs(point.y - before.y) < 1e-7 && y !== undefined) {
+          for (var column = 0; column < nx - 1; column++) hcost[y * (nx - 1) + column] += 24 * Math.max(0, Math.min(xs[column + 1], Math.max(point.x, before.x)) - Math.max(xs[column], Math.min(point.x, before.x)));
+        }
+      }); });
+      var first = yi.get(start.y) * nx + xi.get(start.x), goal = yi.get(finish.y) * nx + xi.get(finish.x);
+      if (blocked[first] || blocked[goal]) routeError("blocked port");
+      var cost = new Float64Array(nx * ny * 3), prior = new Int32Array(cost.length), heap = [];
+      cost.fill(Infinity); prior.fill(-1); cost[first * 3] = 0;
+      function push(state, priority) {
+        var item = [priority, state], index = heap.length; heap.push(item);
+        while (index) { var parent = (index - 1) >> 1; if (heap[parent][0] <= priority) break; heap[index] = heap[parent]; index = parent; }
+        heap[index] = item;
+      }
+      function pop() {
+        var item = heap[0], last = heap.pop();
+        if (heap.length) {
+          var index = 0;
+          while (index * 2 + 1 < heap.length) {
+            var child = index * 2 + 1; if (child + 1 < heap.length && heap[child + 1][0] < heap[child][0]) child++;
+            if (heap[child][0] >= last[0]) break; heap[index] = heap[child]; index = child;
+          }
+          heap[index] = last;
+        }
+        return item;
+      }
+      function heuristic(cell) { return Math.abs(xs[cell % nx] - finish.x) + Math.abs(ys[Math.floor(cell / nx)] - finish.y); }
+      push(first * 3, heuristic(first));
+      while (heap.length) {
+        var item = pop(), state = item[1], cell = Math.floor(state / 3), from = state % 3;
+        if (item[0] > cost[state] + heuristic(cell) + 1e-7) continue;
+        if (cell === goal) {
+          var points = [];
+          for (var step = state; step >= 0; step = prior[step]) {
+            var at = Math.floor(step / 3); points.push({x: xs[at % nx], y: ys[Math.floor(at / nx)]});
+          }
+          return simplify(points.reverse());
+        }
+        var x = cell % nx, y = Math.floor(cell / nx);
+        [[x - 1, y, 1], [x + 1, y, 1], [x, y - 1, 2], [x, y + 1, 2]].forEach(function (next) {
+          var xx = next[0], yy = next[1], dir = next[2];
+          if (xx < 0 || xx >= nx || yy < 0 || yy >= ny) return;
+          var to = yy * nx + xx;
+          if (blocked[to] || (dir === 1 ? horizontal[y * (nx - 1) + Math.min(x, xx)] : vertical[Math.min(y, yy) * nx + x])) return;
+          var target = to * 3 + dir, distance = Math.abs(xs[xx] - xs[x]) + Math.abs(ys[yy] - ys[y]);
+          var congestion = dir === 1 ? hcost[y * (nx - 1) + Math.min(x, xx)] : vcost[Math.min(y, yy) * nx + x];
+          var candidate = cost[state] + distance + (from && from !== dir ? 18 : 0) + congestion;
+          if (candidate + 1e-7 < cost[target]) { cost[target] = candidate; prior[target] = state; push(target, candidate + heuristic(to)); }
+        });
+      }
+      routeError("no corridor");
+    }
+    function labelFits(label) { return obstacles.every(function (box) { return !overlap(label, box, 8); }) && labels.every(function (other) { return !overlap(label, other, 8); }); }
+    function labelAt(point, width) { return {x: point.x - width / 2, y: point.y - 10, w: width, h: 20}; }
+    routes.forEach(function (route) {
+      var output = graph.edge({v: "n:" + route.source, w: "n:" + route.target, name: route.name}), points = simplify(output.points);
+      var a = port(boxes.get(route.source), points[0]), b = port(boxes.get(route.target), points[points.length - 1]);
+      attachments.set(route, {a: a, b: b, output: output});
+      var label = null;
+      if (route.labelWidth) {
+        if (Number.isFinite(output.x)) { var hinted = labelAt(output, route.labelWidth); if (labelFits(hinted)) label = hinted; }
+        var segments = points.slice(1).map(function (point, index) { return {a: points[index], b: point, length: Math.hypot(point.x - points[index].x, point.y - points[index].y)}; }).sort(function (a, b) { return b.length - a.length; });
+        segments.some(function (segment) {
+          return [.5, .25, .75].some(function (fraction) {
+            return [-1, 1].some(function (side) {
+              if (label) return true;
+              var horizontal = Math.abs(segment.b.x - segment.a.x) >= Math.abs(segment.b.y - segment.a.y);
+              var point = {x: segment.a.x + (segment.b.x - segment.a.x) * fraction, y: segment.a.y + (segment.b.y - segment.a.y) * fraction};
+              if (horizontal) point.y += side * 18; else point.x += side * (route.labelWidth / 2 + 8);
+              var candidate = labelAt(point, route.labelWidth); if (labelFits(candidate)) { label = candidate; return true; } return false;
+            });
+          });
+        });
+        if (!label) {
+          var outside, row = labels.length;
+          do { outside = {x: extent.x + extent.w + 96, y: extent.y - 64 - row++ * 32}; label = labelAt(outside, route.labelWidth); } while (!labelFits(label));
+        }
+        labels.push(label);
+      }
+      route.points = points; route.label = label;
+    });
+    routes.forEach(function (route) {
+      var ports = attachments.get(route), a = ports.a, b = ports.b, points = route.points, label = route.label;
+      var congested = roads.some(function (road) { return points.slice(1).some(function (point, index) { return sharedLength(points[index], point, road) > 64; }); });
+      if (route.source === route.target || !clear(points, route) || congested) {
+        var center = label && {x: label.x + label.w / 2, y: label.y + label.h / 2};
+        points = simplify([a.point].concat(center ? detour(a.stub, center, route).concat(detour(center, b.stub, route).slice(1)) : detour(a.stub, b.stub, route), [b.point])); route.detoured = true;
+      }
+      if (!clear(points, route)) routeError("card intersection");
+      route.points = points; roads.push(route);
+      route.radii = points.map(function (point, index) {
+        if (!index || index === points.length - 1) return 0;
+        var before = points[index - 1], after = points[index + 1], d1 = Math.hypot(point.x - before.x, point.y - before.y), d2 = Math.hypot(after.x - point.x, after.y - point.y);
+        var radius = Math.min(8, d1 / 3, d2 / 3), p = {x: point.x - (point.x - before.x) * radius / d1, y: point.y - (point.y - before.y) * radius / d1}, q = {x: point.x + (after.x - point.x) * radius / d2, y: point.y + (after.y - point.y) * radius / d2};
+        var hull = bounds([p, point, q]); return obstacles.some(function (box) { return overlap(hull, box, 0); }) ? 0 : radius;
+      });
+      var tip = points[points.length - 1], previous = points[points.length - 2], length = Math.hypot(tip.x - previous.x, tip.y - previous.y);
+      route.arrow = {x: tip.x, y: tip.y, dx: (tip.x - previous.x) / length, dy: (tip.y - previous.y) / length};
+      route.bounds = bounds(points.concat(label ? [{x: label.x, y: label.y}, {x: label.x + label.w, y: label.y + label.h}] : []));
+    });
+    routes.forEach(function (route) { all.push({x: route.bounds.x, y: route.bounds.y}, {x: route.bounds.x + route.bounds.w, y: route.bounds.y + route.bounds.h}); });
+    return {nodes: boxes, routes: routes, bounds: bounds(all)};
+  }
+
   function mount(host, data, instance, firstBundle, navigation) {
     if (!data || data.schema !== "autoform-dag-view/v2" || !data.palette ||
         !Array.isArray(data.nodes) || !Array.isArray(data.edges)) throw new Error("unsupported graph payload");
@@ -100,7 +317,7 @@
     host.textContent = "";
     host.classList.remove("bp-dag-enhancing");
     var view, atlas, palette, byId, prerequisites, dependents, incident, statusCounts, presentStatuses;
-    var mobileIsolateBase, mapAllowed;
+    var mobileIsolateBase, mapAllowed, scene, sceneData, sceneDirection, sceneCompact, sceneFamily;
     function recordId(node) {
       return node._recordId || (records.get(node.id) === node || ["scope", "boundary"].indexOf(node.kind) < 0 ? node.id : node.id.replace(/^(scope|boundary):/, ""));
     }
@@ -121,7 +338,7 @@
       node.x = Number.isFinite(layout.x) ? layout.x : (node.column || 0) * 312;
       node.y = Number.isFinite(layout.y) ? layout.y : (node.row || 0) * 66;
       node.width = Number.isFinite(layout.width) ? layout.width : NODE_W;
-      node.height = Math.max(navigation ? 76 : NODE_H, Number.isFinite(layout.height) ? layout.height : NODE_H);
+      node.height = Math.max(navigation ? 100 : NODE_H, Number.isFinite(layout.height) ? layout.height : NODE_H);
       node.isolated = node.isolated === true;
       byId.set(node.id, node);
       prerequisites.set(node.id, []); dependents.set(node.id, []); incident.set(node.id, []);
@@ -213,10 +430,10 @@
       ui$listLimit = Math.max(LIST_PAGE, Number(saved.listLimit) || LIST_PAGE); ui$relationIds = saved.relationIds || null;
       ui$outlineLimit = Math.max(120, Number(saved.outlineLimit) || 120); renderNavigation();
       ui$direction = saved.direction || "both"; ui$query = saved.query || ""; dom$search.value = ui$query;
-      if (saved.camera) ui$transform = Object.assign({}, saved.camera);
       host.classList.toggle("bp-dag-outline-open", Boolean(saved.outlineOpen));
       if (dom$outlineToggle) dom$outlineToggle.setAttribute("aria-expanded", String(Boolean(saved.outlineOpen)));
-      ui$activeDirty = true; setSheet(saved.readingOpen !== false, ui$selected); refresh(true);
+      ui$activeDirty = true; setSheet(saved.readingOpen !== false, ui$selected); refresh(true); resize();
+      if (saved.camera) ui$transform = Object.assign({}, saved.camera);
       return readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || ticket !== restoration || (isCurrent && !isCurrent())) { if (ticket === restoration) restoring = false; resolve(); return; }
         dom$navigation.scrollTop = saved.outlineScroll || 0;
@@ -315,16 +532,14 @@
       var contextNodes = new Map(); contextGraph.nodes.forEach(function (node) { contextNodes.set(recordId(node), node); });
       if (noEdges) candidates = contextGraph.nodes.filter(function (node) { return node.map !== false && recordId(node) !== id; }).slice(0, 7).map(recordId);
       var ids = [id].concat(candidates.slice(0, MAX_MAP_NODES - 1)), known = new Set(ids);
-      var left = 0, right = 0, nodes = ids.map(function (key) {
-        var original = records.get(key) || contextNodes.get(key), column = key === id ? 1 : links.before.indexOf(key) >= 0 ? 0 : 2;
-        var row = column === 0 ? left++ : column === 2 ? right++ : 0;
+      var nodes = ids.map(function (key) {
+        var original = records.get(key) || contextNodes.get(key);
         var scoped = original.scope === original.id || original.kind === "scope" || original.kind === "boundary", exact = contextNodes.get(key);
         return Object.assign({}, exact || original, {id: key, _recordId: key, kind: original.kind === "boundary" || exact && exact.kind === "boundary" ? "boundary" : scoped ? "scope" : "node", url: original.route || original.url, isolated: noEdges && key === id,
           status_counts: scoped ? exact && exact.status_counts || [] : [[original.status, 1]],
           member_count: scoped ? exact && exact.member_count : 1, _unknownCount: scoped && !(exact && exact.member_count !== undefined),
-          layout: {x: column * 236, y: row * 114, column: column, row: row, width: 208, height: 96}});
+          layout: {width: 208, height: 100}});
       });
-      nodes[0].layout.y = (Math.max(left, right, 1) - 1) * 57;
       return Object.assign({}, contextGraph, {nodes: nodes, regions: [],
         view: Object.assign({}, contextGraph.view, {presentation: "dag"}),
         edges: (sharedIndex.relations || []).filter(function (edge) { return known.has(edge[0]) && known.has(edge[1]); }).map(function (edge) {
@@ -339,7 +554,7 @@
         groups.get(node.area).push(node); owners.set(node.id, node.area);
       });
       if (groups.size < 2 || payload.nodes.length < 12) return payload;
-      var nodes = [], links = new Map(), replacements = new Map(), slot = 0;
+      var nodes = [], links = new Map(), replacements = new Map();
       groups.forEach(function (members, area) {
         if (area === selectedArea) { members.forEach(function (node) { replacements.set(node.id, node.id); nodes.push(node); }); return; }
         var key = "region:" + area, counts = new Map();
@@ -349,7 +564,7 @@
         nodes.push({id: key, kind: "scope", title: area, area: area, _region: area, _topics: members.length, status: members[0].status,
           status_counts: Array.from(counts.entries()), member_count: members.reduce(function (sum, node) { return sum + (node.member_count === undefined ? 0 : node.member_count); }, 0),
           summary: members.slice(0, 3).map(function (node) { return node.title; }).join(" · "),
-          layout: {x: (slot % 2) * 304, y: Math.floor(slot++ / 2) * 172, width: 264, height: 136}});
+          layout: {width: 264, height: 148}});
       });
       payload.nodes.forEach(function (node) { if (!owners.has(node.id) && mapNode(node)) { replacements.set(node.id, node.id); nodes.push(node); } });
       payload.edges.forEach(function (edge) {
@@ -357,11 +572,11 @@
         var key = a + "\n" + b, found = links.get(key) || {source: a, target: b, statement: 0, proof: 0};
         found.statement += edge.statement || 0; found.proof += edge.proof || 0; links.set(key, found);
       });
-      if (selectedArea) nodes.forEach(function (node, i) { node.layout = {x: (i % 2) * 304, y: Math.floor(i / 2) * 172, width: 264, height: node._region ? 136 : 108}; });
       return Object.assign({}, payload, {nodes: nodes, edges: Array.from(links.values()), regions: []});
     }
     function updateProjection() {
       var projected = navigation ? neighborhood(ui$requestedNode) || regionProjection(contextGraph, ui$area) : contextGraph;
+      host.classList.toggle("bp-dag-area-expanded", Boolean(navigation && ui$area));
       adoptGraph(projected); ui$mapAllowed = mapAllowed; ui$activeDirty = true; ui$spotlight = null;
       overlays.forEach(function (control) { control.remove(); }); overlays.clear();
       ui$selected = byId.get(ui$requestedNode) || null;
@@ -407,6 +622,7 @@
         var more = button("bp-dag-navigation-more", "Show more topics");
         more.addEventListener("click", function () { ui$outlineLimit += 50; renderNavigation(); remember(); }); dom$navigationInner.appendChild(more);
       }
+      if (navigation.declutterReader) navigation.declutterReader(dom$readingBody, shown.map(function (node) { return node.id; }));
     }
     function renderReaderContext() {
       if (!dom$readingContext) return;
@@ -676,6 +892,9 @@
       });
       dom$sheetHandle.addEventListener("click", function () {
         setSheet(!host.classList.contains("bp-dag-sheet-open"), ui$selected);
+        if (navigation && !sheetLayout() && host.classList.contains("bp-dag-sheet-open")) {
+          dom$readingBody.tabIndex = -1; dom$readingBody.focus({preventScroll: true});
+        }
         writeLocation("replace");
       });
       dom$inspector.addEventListener("keydown", function (event) {
@@ -758,9 +977,21 @@
       return Boolean(navigation && atlas && !ui$area && dom$stage && dom$stage.clientWidth > 0 && dom$stage.clientWidth <= 620 &&
         data.nodes.length && data.nodes.every(function (node) { return node._region; }));
     }
+    function geometry() {
+      if (!navigation || !mapAllowed) return null;
+      var compact = compactRegions();
+      if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family) {
+        scene = layoutGraph(data.nodes.map(function (node) { return {id: node.id, width: compact ? 312 : node.width,
+          height: compact ? 96 : Math.max(node.height, node._region ? 148 : 100)}; }), data.edges, ui$orientation, function (text) {
+          var font = dom$ctx.font; dom$ctx.font = "600 13px " + family;
+          var width = dom$ctx.measureText(text).width; dom$ctx.font = font; return width;
+        });
+        sceneData = data; sceneDirection = ui$orientation; sceneCompact = compact; sceneFamily = family;
+      }
+      return scene;
+    }
     function world(node) {
-      if (compactRegions()) return {x: 0, y: node._index * 112, w: 312, h: 96};
-      if (node._region && ui$orientation === "tb") return {x: 0, y: node._index * 164, w: node.width, h: node.height};
+      var current = geometry(); if (current && current.nodes.has(node.id)) return current.nodes.get(node.id);
       if (ui$orientation === "tb" && !atlas) {
         if (node.isolated) {
           var mobileColumns = dom$stage.clientWidth < 540 ? 2 : 3;
@@ -869,21 +1100,28 @@
         var box = world(node); minX = Math.min(minX, box.x); minY = Math.min(minY, box.y);
         maxX = Math.max(maxX, box.x + box.w); maxY = Math.max(maxY, box.y + box.h);
       });
-      if (atlas) (data.regions || []).forEach(function (region) {
+      if (!navigation && atlas) (data.regions || []).forEach(function (region) {
         minX = Math.min(minX, region.x); minY = Math.min(minY, region.y);
         maxX = Math.max(maxX, region.x + region.width); maxY = Math.max(maxY, region.y + region.height);
+      });
+      var current = geometry();
+      if (current) current.routes.forEach(function (route) {
+        if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target)) return;
+        minX = Math.min(minX, route.bounds.x); minY = Math.min(minY, route.bounds.y);
+        maxX = Math.max(maxX, route.bounds.x + route.bounds.w); maxY = Math.max(maxY, route.bounds.y + route.bounds.h);
       });
       var compact = compactRegions(), pad = navigation ? 36 : 54, side = compact ? 18 : pad,
         top = compact ? 52 : pad, bottom = compact ? 44 : pad, width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
       var fitted = Math.min((dom$stage.clientWidth - side * 2) / width,
         (dom$stage.clientHeight - top - bottom) / height);
-      var readableFloor = compact ? .86 : atlas ? MIN_ATLAS_SCALE : navigation ? 1 : MIN_READABLE_SCALE;
+      var readableFloor = navigation ? .9 : atlas ? MIN_ATLAS_SCALE : MIN_READABLE_SCALE;
       ui$readableCrop = fitted < readableFloor;
       ui$transform.scale = clamp(Math.max(fitted, readableFloor), MIN_SCALE, 1.35);
       ui$transform.x = ui$readableCrop && !compact ? pad - minX * ui$transform.scale :
         (dom$stage.clientWidth - width * ui$transform.scale) / 2 - minX * ui$transform.scale;
       ui$transform.y = ui$readableCrop ? top - minY * ui$transform.scale :
         (dom$stage.clientHeight + top - bottom - height * ui$transform.scale) / 2 - minY * ui$transform.scale;
+      if (ui$readableCrop && navigation) center(ui$selected || nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; }) || nodes[0], readableFloor);
       schedule(); remember();
     }
     // Open details cover part of the map; this is the larger part they leave, in stage pixels.
@@ -926,7 +1164,7 @@
       calculateActive(); var ctx = dom$ctx, ratio = Math.min(2, window.devicePixelRatio || 1);
       var width = dom$stage.clientWidth, height = dom$stage.clientHeight;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height);
-      if (atlas) drawRegions(ctx);
+      if (atlas && !navigation) drawRegions(ctx);
       var visible = ui$active.filter(function (node) { return inViewport(screen(node), 80); });
       var edgeIndexes = new Set();
       if (atlas && ui$selected) {
@@ -935,7 +1173,17 @@
         visible.forEach(function (node) { (incident.get(node.id) || []).forEach(function (index) { edgeIndexes.add(index); }); });
       }
       var spotlight = atlas && ui$selected ? atlasSpotlight() : pathSpotlight();
-      edgeIndexes.forEach(function (index) {
+      if (navigation) {
+        geometry().routes.forEach(function (route) {
+          if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target)) return;
+          var bounds = {x: route.bounds.x * ui$transform.scale + ui$transform.x, y: route.bounds.y * ui$transform.scale + ui$transform.y,
+            w: route.bounds.w * ui$transform.scale, h: route.bounds.h * ui$transform.scale};
+          if (!inViewport(bounds, 40)) return;
+          var highlighted = !spotlight || (spotlight.before.has(route.source) && spotlight.before.has(route.target)) ||
+            (spotlight.after.has(route.source) && spotlight.after.has(route.target));
+          drawRoute(ctx, route, highlighted);
+        });
+      } else edgeIndexes.forEach(function (index) {
         var edge = data.edges[index]; if (!ui$activeIds.has(edge.source) || !ui$activeIds.has(edge.target)) return;
         var source = byId.get(edge.source), target = byId.get(edge.target); if (!source || !target) return;
         var a = screen(source), b = screen(target);
@@ -1012,6 +1260,36 @@
       if (count > 1 && ui$transform.scale > .32) {
         ctx.globalAlpha = highlighted ? .82 : .2; ctx.font = Math.max(11, 10 * ui$transform.scale) + "px " + family;
         ctx.textAlign = "center"; ctx.fillText("×" + count, (ax + bx) / 2, (ay + by) / 2 - 4);
+      }
+      ctx.restore();
+    }
+    function drawRoute(ctx, route, highlighted) {
+      var scale = ui$transform.scale, points = route.points.map(function (point) {
+        return {x: point.x * scale + ui$transform.x, y: point.y * scale + ui$transform.y};
+      });
+      ctx.save(); ctx.globalAlpha = highlighted ? .65 : .15; ctx.strokeStyle = isDark() ? "#a8b0bb" : "#64748b";
+      ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = highlighted ? 1.5 : 1;
+      if (route.kind === "proof") ctx.setLineDash([5, 5]);
+      ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
+      for (var index = 1; index < points.length - 1; index++) {
+        var point = points[index], before = points[index - 1], after = points[index + 1], radius = route.radii[index] * scale;
+        var d1 = Math.hypot(point.x - before.x, point.y - before.y), d2 = Math.hypot(after.x - point.x, after.y - point.y);
+        if (!radius) { ctx.lineTo(point.x, point.y); continue; }
+        ctx.lineTo(point.x - (point.x - before.x) * radius / d1, point.y - (point.y - before.y) * radius / d1);
+        ctx.quadraticCurveTo(point.x, point.y, point.x + (after.x - point.x) * radius / d2, point.y + (after.y - point.y) * radius / d2);
+      }
+      var tip = points[points.length - 1], arrow = route.arrow;
+      ctx.lineTo(tip.x, tip.y); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(tip.x, tip.y);
+      ctx.lineTo(tip.x - (arrow.dx * 8 - arrow.dy * 4) * scale, tip.y - (arrow.dy * 8 + arrow.dx * 4) * scale);
+      ctx.lineTo(tip.x - (arrow.dx * 8 + arrow.dy * 4) * scale, tip.y - (arrow.dy * 8 - arrow.dx * 4) * scale);
+      ctx.closePath(); ctx.fill();
+      if (route.label) {
+        var label = route.label, x = label.x * scale + ui$transform.x, y = label.y * scale + ui$transform.y;
+        ctx.globalAlpha = highlighted ? .95 : .4; ctx.fillStyle = isDark() ? "#18191a" : "#f0f2f5";
+        ctx.fillRect(x, y, label.w * scale, label.h * scale); ctx.fillStyle = ctx.strokeStyle;
+        ctx.font = "600 " + (13 * scale) + "px " + family; ctx.textAlign = "center";
+        ctx.fillText("×" + route.count, x + label.w * scale / 2, y + 14 * scale);
       }
       ctx.restore();
     }
@@ -1243,7 +1521,8 @@
         if (node._region) {
           navigation.checkpoint();
           var keyboard = document.activeElement && document.activeElement.dataset.autoformNodeId === node.id;
-          ui$area = node._region; ui$requestedNode = null; updateProjection(); refresh(true); fit(); writeLocation("push");
+          ui$area = node._region; ui$requestedNode = null; updateProjection(); setSheet(false, null);
+          refresh(true); firstResize = true; resize(); writeLocation("push");
           if (keyboard && ui$active.length) focusNodeControl(ui$active.find(function (item) { return item.area === ui$area && !item._region; }) || ui$active[0]); return;
         }
         navigation.navigateNode(recordId(node), {history: "push", focus: "reading"}); closeSearch(); return;
@@ -1310,7 +1589,7 @@
     }
     function syncSheetAccessibility() {
       if (!dom$inspectorInner || !dom$sheetHandle) return;
-      var collapsed = !host.classList.contains("bp-dag-sheet-open") && (!navigation || sheetLayout());
+      var collapsed = !host.classList.contains("bp-dag-sheet-open") && (!navigation || sheetLayout() || Boolean(ui$area));
       if (collapsed) {
         if (dom$inspectorInner.contains(document.activeElement)) dom$sheetHandle.focus();
         dom$inspectorInner.setAttribute("inert", ""); dom$inspectorInner.setAttribute("aria-hidden", "true");

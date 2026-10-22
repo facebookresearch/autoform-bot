@@ -244,6 +244,70 @@ def _frames(page: object) -> None:
     page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
 
 
+def _focus_graph_node(page: object, target_id: str) -> object:
+    """Reach a map control with real keys, without relying on grid coordinates."""
+    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    if page.viewport_size["width"] <= 720 and handle.get_attribute("aria-expanded") == "true":
+        handle.click()
+        _frames(page)
+    pending: list[tuple[str, ...]] = [()]
+    visited: set[str] = set()
+    while pending and len(visited) <= 32:
+        path = pending.pop(0)
+        page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+        _frames(page)
+        start = page.locator('.bp-dag-node[tabindex="0"]').first
+        start.focus()
+        for key in path:
+            page.keyboard.press(key)
+            _frames(page)
+        active = page.locator(".bp-dag-node:focus")
+        node_id = active.get_attribute("data-autoform-node-id")
+        if node_id == target_id:
+            assert active.evaluate("""node => {
+              const box=node.getBoundingClientRect();return node.contains(document.elementFromPoint(box.left+box.width/2,box.top+box.height/2));
+            }""") is True
+            return active
+        if node_id in visited:
+            continue
+        visited.add(node_id)
+        pending.extend((*path, key) for key in ("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"))
+    pytest.fail(f"Authored graph node is not keyboard-reachable: {target_id}")
+
+
+def _focus_graph_region(page: object, area: str) -> object:
+    return _focus_graph_node(page, f"region:{area}")
+
+
+def _observe_dependency_routes(page: object) -> None:
+    """Record actual native canvas strokes while leaving every rendering call intact."""
+    page.add_init_script("""(() => {
+      const prototype=CanvasRenderingContext2D.prototype, paths=new WeakMap();
+      window.__autoformCanvasRoutes=[];
+      for(const method of ['beginPath','moveTo','lineTo','quadraticCurveTo','bezierCurveTo','closePath']) {
+        const original=prototype[method];
+        prototype[method]=function(...args) {
+          if(method==='beginPath') paths.set(this,[]);
+          else if(paths.has(this)) paths.get(this).push({method,args});
+          return original.apply(this,args);
+        };
+      }
+      const clear=prototype.clearRect, stroke=prototype.stroke;
+      prototype.clearRect=function(...args) {
+        if(this.canvas.classList.contains('bp-dag-canvas')) window.__autoformCanvasRoutes=[];
+        return clear.apply(this,args);
+      };
+      prototype.stroke=function(...args) {
+        const path=paths.get(this);
+        if(this.canvas.classList.contains('bp-dag-canvas') && path && path.length &&
+            !path.some(command=>command.method==='closePath')) {
+          window.__autoformCanvasRoutes.push({commands:path.slice(), dashed:this.getLineDash().length>0});
+        }
+        return stroke.apply(this,args);
+      };
+    })();""")
+
+
 def _open(page: object, site: _WorkspaceSite, runtime: _PinnedRuntime, node_id: str = "roadmap") -> None:
     _routes(page, site.url, runtime, graph_client=True)
     page.goto(site.route(node_id))
@@ -571,9 +635,8 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
 ) -> None:
     page, site = workspace_page, workspace_site
     _open(page, site, workspace_runtime)
-    regions = page.locator('.bp-dag-node[data-autoform-node-id^="region:"]')
-    playwright.expect(regions).to_have_count(len(_AREAS))
-    assert set(regions.locator(".bp-dag-node-title").all_text_contents()) == set(_AREAS)
+    titles = {_focus_graph_region(page, area).locator(".bp-dag-node-title").inner_text() for area in _AREAS}
+    assert titles == set(_AREAS)
     assert page.locator('.bp-dag-node[data-autoform-node-id="scope:appendix-a"]').count() == 0
     page.get_by_role("button", name="Sources", exact=True).click()
     playwright.expect(page.locator(".bp-dag-inventory-head h2")).to_have_text("Source tracks")
@@ -586,8 +649,7 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
     assert not set(_SOURCE_TITLES).intersection(page.locator(".bp-dag-inventory-title").all_text_contents())
     assert "Reading note" not in page.locator(".bp-dag-inventory-title").all_text_contents()
     page.get_by_role("button", name="Regions", exact=True).click()
-    playwright.expect(regions).to_have_count(len(_AREAS))
-    page.locator('.bp-dag-node[data-autoform-node-id="region:Geometry"]').click()
+    _focus_graph_region(page, "Geometry").click()
     playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id="scope:source-notes"]')).to_be_visible()
     assert page.url == site.route("roadmap")
 
@@ -648,13 +710,12 @@ def test_zero_count_authored_region_is_visible_and_does_not_invent_one_item(
     authored = [node for node in site.root_graph["nodes"] if node.get("area") == "Unstarted mathematics"]
     assert authored and all(node["member_count"] == 0 and node["status_counts"] == [] for node in authored)
     _open(page, site, workspace_runtime)
-    region = page.locator('.bp-dag-node[data-autoform-node-id="region:Unstarted mathematics"]')
-    playwright.expect(region).to_be_visible()
+    region = _focus_graph_region(page, "Unstarted mathematics")
     assert ", 0 items" in region.get_attribute("aria-label")
     assert ", 1 item" not in region.get_attribute("aria-label")
     page.get_by_role("button", name="Results", exact=True).click()
     page.get_by_role("button", name="Regions", exact=True).click()
-    playwright.expect(region).to_be_visible()
+    _focus_graph_region(page, "Unstarted mathematics")
 
 
 def test_authored_cross_topic_proof_dependency_has_a_real_captured_area_edge(
@@ -663,8 +724,8 @@ def test_authored_cross_topic_proof_dependency_has_a_real_captured_area_edge(
     page, site = workspace_page, workspace_site
     assert {"source": "Geometry", "target": "Analysis", "statement": 0, "proof": 1} in _area_edges(site.root_graph)
     _open(page, site, workspace_runtime)
-    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id="region:Geometry"]')).to_be_visible()
-    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id="region:Analysis"]')).to_be_visible()
+    for area in ("Geometry", "Analysis"):
+        playwright.expect(_focus_graph_region(page, area)).to_be_focused()
     assert _pixels(page)["painted"] > 0
 
 
@@ -672,8 +733,10 @@ def test_isolated_focal_context_keeps_connected_peers_and_their_real_edge(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:
     page, site = workspace_page, workspace_site
+    _observe_dependency_routes(page)
     _open(page, site, workspace_runtime, _ISOLATED)
     _selected(page, _ISOLATED)
+    _focus_graph_node(page, _BASE)
     base = page.locator(f'.bp-dag-node[data-autoform-node-id="{_BASE}"]')
     main = page.locator(f'.bp-dag-node[data-autoform-node-id="{_TARGET}"]')
     playwright.expect(base).to_be_visible()
@@ -690,10 +753,28 @@ def test_isolated_focal_context_keeps_connected_peers_and_their_real_edge(
     assert page.evaluate("""([source, target]) => {
       const a = document.querySelector(source).getBoundingClientRect(), b = document.querySelector(target).getBoundingClientRect();
       const canvas = document.querySelector('.bp-dag-canvas'), bounds = canvas.getBoundingClientRect();
-      const x = Math.round(((a.right+b.left)/2 - bounds.left) * canvas.width/bounds.width);
-      const y = Math.round(((a.top+a.height/2+b.top+b.height/2)/2 - bounds.top) * canvas.height/bounds.height);
-      const pixels = canvas.getContext('2d').getImageData(x-3, y-3, 7, 7).data;
-      return Array.from(pixels).some((value, index) => index % 4 === 3 && value > 0);
+      const at=(point,box)=>point[0]>=box.left-bounds.left-1 && point[0]<=box.right-bounds.left+1 &&
+        point[1]>=box.top-bounds.top-1 && point[1]<=box.bottom-bounds.top+1;
+      const route=window.__autoformCanvasRoutes.find(route=>!route.dashed &&
+        at(route.commands[0].args,a) && at(route.commands.at(-1).args,b));
+      if(!route) return false;
+      const samples=[];let previous=route.commands[0].args;
+      for(const command of route.commands.slice(1)) {
+        const args=command.args, end=args.slice(-2);
+        for(let step=1;step<20;step++) {
+          const t=step/20;
+          if(command.method==='quadraticCurveTo') samples.push([(1-t)**2*previous[0]+2*t*(1-t)*args[0]+t*t*end[0],
+            (1-t)**2*previous[1]+2*t*(1-t)*args[1]+t*t*end[1]]);
+          else samples.push([previous[0]+t*(end[0]-previous[0]),previous[1]+t*(end[1]-previous[1])]);
+        }
+        previous=end;
+      }
+      return samples.some(point=> {
+        if(at(point,a)||at(point,b)) return false;
+        const x=Math.round(point[0]*canvas.width/bounds.width),y=Math.round(point[1]*canvas.height/bounds.height);
+        if(x<3||y<3||x+3>=canvas.width||y+3>=canvas.height) return false;
+        return Array.from(canvas.getContext('2d').getImageData(x-3,y-3,7,7).data).some((value,index)=>index%4===3&&value>0);
+      });
     }""", [f'.bp-dag-node[data-autoform-node-id="{_BASE}"]', f'.bp-dag-node[data-autoform-node-id="{_TARGET}"]']) is True
 
 
@@ -755,7 +836,10 @@ def test_rich_workspace_region_and_full_reader_screenshots(
     page, site = workspace_page, workspace_site
     page.set_viewport_size({"width": width, "height": height})
     _open(page, site, workspace_runtime)
-    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id^="region:"]')).to_have_count(len(_AREAS))
+    for area in _AREAS:
+        playwright.expect(_focus_graph_region(page, area)).to_be_focused()
+    page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+    _frames(page)
     assert _pixels(page)["painted"] > 0
     if width <= 720:
         handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
@@ -781,4 +865,129 @@ def test_rich_workspace_region_and_full_reader_screenshots(
                   "area_edges": _area_edges(site.root_graph),
                   "mathjax": page.evaluate("() => MathJax.version"), "complete_math": 5, "canvas": _pixels(page)}
         (directory / f"workspace-{width}x{height}.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    assert page.evaluate("() => document === __workspaceDocument") is True
+
+
+_DECLUTTER_END = "The complete mathematical exposition and its native section anchor are retained."
+
+
+@pytest.fixture(scope="module")
+def reader_declutter_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_WorkspaceSite]:
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("reader-declutter") / "project"
+    scaffold_project(project, title="Independent mathematical reader")
+    blueprint = project / "blueprint"
+    _write(blueprint / "README.md", "# Independent mathematical reader\n\n- [Mathematics](roadmap/README.md)\n")
+    exposition = "\n\n".join(
+        f"Paragraph {number + 1}. This is complete mathematical exposition, not a graph summary or a navigation index."
+        for number in range(8)
+    )
+    _write(blueprint / "roadmap/README.md", (
+        "# Independent mathematical reader\n\nThe scalar equality $0=0$ remains readable.\n\n"
+        "## Topic catalogue\n\n- [First mathematical topic](alpha/README.md)\n"
+        "- [Second mathematical topic](beta/README.md)\n\n"
+        "## Full exposition\n\n" + exposition + "\n\nThe equality $\\frac{0}{2}=0$ is retained.\n\n"
+        '<h2 id="sources">Sources</h2>\n<ul><li><a href="beta/index.html">Second mathematical topic</a></li></ul>\n\n'
+        '<section role="doc-bibliography"><h2 id="source-material">Source material</h2>\n'
+        '<ul><li><a href="alpha/index.html">First mathematical topic</a></li></ul></section>\n\n'
+        "## Commentary links\n\n- [First mathematical topic](alpha/README.md)\n"
+        "- This mathematical commentary is not a navigation-only link.\n\n"
+        "[Read retained exposition](#retained-section).\n\n"
+        "<h2 id=\"retained-section\">Retained mathematical section</h2>\n\n" + _DECLUTTER_END + "\n"
+    ))
+    _write(blueprint / "roadmap/alpha/README.md", (
+        "---\nnavigation: module\n---\n\n# First mathematical topic\n\n"
+        "The complete reading page includes its authored theorem.\n\n"
+        "## Reading contents\n\n- [Complete identity](identity.md)\n"
+    ))
+    _write(blueprint / "roadmap/alpha/identity.md", (
+        "---\ndeclaration: theorem\nnot_ready: true\n---\n\n# Complete identity\n\n"
+        "The complete proposed statement is $0=0$. This is a planned fixture target, not a verified Lean proof.\n\n"
+        + exposition + "\n\n## Depends on\n\nNo prerequisites.\n"
+    ))
+    _write(blueprint / "roadmap/beta/README.md", (
+        "---\nnavigation: module\n---\n\n# Second mathematical topic\n\nA complete reading note is retained.\n"
+    ))
+    render_site(blueprint, project / "site-src", lean_root=project)
+    configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
+    configuration["extra_javascript"] = [entry for entry in configuration["extra_javascript"]
+                                           if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE]
+    build(configuration)
+    index_path = project / "site/dependencies/index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    records = {record["id"]: record for record in index["nodes"]}
+    root_path = index_path.parent / unquote(urlsplit(records["roadmap"]["data_url"]).path)
+    root_graph = json.loads(root_path.read_text(encoding="utf-8"))
+    with _served(project / "site") as url:
+        yield _WorkspaceSite(url, records, root_graph)
+
+
+def test_enhanced_reader_hides_only_duplicate_scope_index_and_keeps_full_ssr_sources_and_math(
+    workspace_page: object, workspace_browser: object, reader_declutter_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    page, site = workspace_page, reader_declutter_site
+    _open(page, site, workspace_runtime)
+    reader = page.locator(".bp-reading-body > .bp-reading-source")
+    playwright.expect(reader.locator("#topic-catalogue")).to_be_hidden()
+    playwright.expect(reader.locator("#topic-catalogue + ul")).to_be_hidden()
+    playwright.expect(reader.locator("#topic-catalogue")).to_have_count(1)  # The native ID is not rewritten.
+    for node_id in ("alpha", "beta"):
+        playwright.expect(page.locator(f'.bp-dag-navigation [data-navigation-node-id="{node_id}"]')).to_be_visible()
+    playwright.expect(reader.locator("#sources")).to_be_visible()
+    playwright.expect(reader.locator("#sources + ul")).to_be_visible()
+    playwright.expect(reader.locator('[role="doc-bibliography"]')).to_be_visible()
+    playwright.expect(reader.locator("#commentary-links + ul")).to_be_visible()
+    assert _DECLUTTER_END in reader.inner_text() and len(reader.inner_text()) > 420
+    assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-reading-body'))") is True
+    playwright.expect(reader.locator(".arithmatex")).to_have_count(2)
+    playwright.expect(reader.locator("mjx-container")).to_have_count(2)
+    assert reader.locator("mjx-merror,merror").count() == 0
+    playwright.expect(reader.locator("h1")).to_have_count(1)
+    context = workspace_browser.new_context(viewport={"width": 1600, "height": 900}, java_script_enabled=False)
+    try:
+        native = context.new_page()
+        _routes(native, site.url, workspace_runtime, graph_client=True)
+        native.goto(site.route("roadmap"))
+        source = native.locator(".bp-reading-source")
+        playwright.expect(source.locator("#topic-catalogue")).to_be_visible()
+        playwright.expect(source.locator("#topic-catalogue + ul a")).to_have_count(2)
+        playwright.expect(source.locator("#topic-catalogue + ul")).to_be_visible()
+        assert _DECLUTTER_END in source.inner_text()
+        playwright.expect(source.locator(".arithmatex")).to_have_count(2)
+        playwright.expect(source.locator("mjx-container")).to_have_count(0)
+    finally:
+        context.close()
+
+
+def test_decluttered_reader_keeps_native_math_anchors_leaf_navigation_and_back_projection(
+    workspace_page: object, reader_declutter_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    page, site = workspace_page, reader_declutter_site
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _open(page, site, workspace_runtime)
+    reader = page.locator(".bp-reading-body")
+    playwright.expect(reader.locator("#topic-catalogue + ul")).to_be_hidden()
+    reader.get_by_role("link", name="Read retained exposition", exact=True).click()
+    page.wait_for_url(site.route("roadmap") + "#retained-section")
+    playwright.expect(reader.locator("#retained-section")).to_be_visible()
+    assert _DECLUTTER_END in reader.inner_text()
+    page.locator('.bp-dag-navigation [data-navigation-node-id="alpha"]').click()
+    page.wait_for_url(site.route("alpha"))
+    playwright.expect(reader.get_by_role("link", name="Complete identity", exact=True)).to_be_visible()
+    reader.get_by_role("link", name="Complete identity", exact=True).click()
+    page.wait_for_url(site.route("alpha/identity"))
+    _selected(page, "alpha/identity")
+    card = _full_math(page, "alpha/identity", 1)
+    assert "complete proposed statement" in card.inner_text() and len(card.inner_text()) > 420
+    assert card.get_attribute("id")
+    page.evaluate("() => history.back()")
+    page.wait_for_url(site.route("alpha"))
+    page.evaluate("() => history.back()")
+    page.wait_for_url(site.route("roadmap") + "#retained-section")
+    playwright.expect(reader.locator("#topic-catalogue + ul")).to_be_hidden()
+    assert _DECLUTTER_END in reader.inner_text()
+    assert documents == [site.route("roadmap")]
     assert page.evaluate("() => document === __workspaceDocument") is True

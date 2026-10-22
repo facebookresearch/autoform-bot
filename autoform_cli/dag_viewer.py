@@ -1,8 +1,9 @@
-"""Static payloads and the dependency-free Autoform graph explorer.
+"""Static payloads and the prebuilt Autoform graph explorer.
 
-The graph is laid out once, deterministically, while rendering the site. The
-browser paints topology on Canvas and places ordinary DOM controls over visible
-nodes, so a large graph remains responsive without becoming a bitmap-only UI.
+Publication supplies the authoritative topology and fallback coordinates. The
+integrated browser caches deterministic dependency-driven geometry per bounded
+projection, paints its routes on Canvas and places ordinary DOM controls over
+visible nodes, keeping the graph navigable rather than bitmap-only.
 """
 
 from __future__ import annotations
@@ -512,7 +513,7 @@ def _safe_fallback_href(value: str) -> bool:
 
 
 def viewer_script() -> str:
-    """Return the built, dependency-free browser runtime.
+    """Return the built browser runtime with its pinned layout engine.
 
     The checked-in bundle is built from readable shared modules with a pinned
     development compiler; consumers never need Node. Its fingerprint must match
@@ -558,7 +559,9 @@ def _asset_text(name: str) -> str:
 _STYLE = _asset_text("blueprint-dag.css").strip()
 
 
-_SCRIPT = _asset_text("blueprint-navigation.js") + "\n" + _asset_text("blueprint-dag.js")
+_SCRIPT = "\n".join(_asset_text(name) for name in (
+    "blueprint-dagre.vendor.js", "blueprint-navigation.js", "blueprint-dag.js",
+))
 
 
 __all__ = [

@@ -4,6 +4,8 @@
  * scope/title, snapshot, reason and isCurrent(). No math engine is owned or called here.
  * checkpoint() replaces only autoformNavigation:{version:1,url,key,snapshot}; checkpoint('push') records
  * a deliberate view/filter action without changing the canonical permalink. Snapshot fields are opaque.
+ * declutterReader(root, representedScopeIds) hides duplicated pure child-scope indexes only in the
+ * enhanced reader clone, after the renderer has supplied its actual semantic-outline coverage.
  */
 (function () {
   "use strict";
@@ -30,6 +32,7 @@
     var snapshots = new Map(), keySequence = 0, keySeed = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
     var index = null, indexPromise = null, indexController = null, indexed = new Map(), routes = new Map(), documents = new Set();
     var bound = new Map(), htmlCache = new Map(), jsonCache = new Map(), cacheBytes = 0;
+    var decluttered = new WeakMap();
     var timeout = bounded(options.timeout, 15000, 1000, 60000);
     var htmlLimit = bounded(options.htmlLimit, 8 * 1024 * 1024, 1024, 32 * 1024 * 1024);
     var jsonLimit = bounded(options.jsonLimit, 32 * 1024 * 1024, 1024, 64 * 1024 * 1024);
@@ -443,6 +446,74 @@
       return documents.has(resource(safe)) || path.indexOf(sitePrefix + "roadmap/") === 0 ||
         path === sitePrefix + "dependencies.html" || path.indexOf(sitePrefix + "dependencies/") === 0;
     }
+    function declutterReader(root, representedScopeIds) {
+      if (!root) return 0;
+      // Restore only changes this instance made. Never trust authored marker
+      // attributes or unhide something the original source deliberately hid.
+      (decluttered.get(root) || []).forEach(function (entry) { entry.node.hidden = entry.hidden; });
+      decluttered.delete(root);
+      if (disposed || !index || !current || !root.matches || !root.matches(".bp-reading-body") ||
+          !bound.has(root) || !host.contains(root) || !Array.isArray(representedScopeIds)) return 0;
+      var reading = root.querySelector(".bp-reading-source");
+      var owner = reading && indexed.get(reading.getAttribute("data-autoform-node-id"));
+      function scope(node) {
+        return node && node.kind === "scope" && node.scope === node.id && node.result !== true &&
+          ["collection", "transparent", "source"].indexOf(node.navigation) < 0;
+      }
+      if (!scope(owner) || owner.id !== current.scope) return 0;
+      var represented = new Set(representedScopeIds), changed = [], lists = 0;
+      var protectedContext = ".bp-node,.bp-thmwrapper,.bp-proof,.bp-lean-source,.footnote,.references," +
+        "[role='doc-bibliography'],[role='doc-endnotes']";
+      var protectedContent = ".arithmatex,math,mjx-container,code,pre,table,blockquote,img,svg,cite,sup," +
+        ".bp-thmwrapper,.bp-source-link,.citation,[data-cites]";
+      // These are the publisher's conventional provenance/mathematical
+      // section anchors, used only to preserve content, never to select an index.
+      var protectedAnchor = /^(?:sources?|references?|bibliograph(?:y|ies)|proof|statement|notation|depends-on)(?:-|$)/i;
+      function protectedSection(heading) {
+        if (heading.closest(protectedContext) || heading.querySelector(protectedContent)) return true;
+        var level = Number(heading.tagName.slice(1)), previous = heading;
+        while (previous) {
+          if (/^H[1-6]$/.test(previous.tagName) && Number(previous.tagName.slice(1)) <= level) {
+            if (protectedAnchor.test(previous.id || "")) return true;
+            level = Number(previous.tagName.slice(1)) - 1;
+          }
+          previous = previous.previousElementSibling;
+        }
+        return false;
+      }
+      function directChild(node) {
+        var parent = indexed.get(node.parent), seen = new Set();
+        while (parent && ["collection", "transparent"].indexOf(parent.navigation) >= 0 && !seen.has(parent.id)) {
+          seen.add(parent.id); parent = indexed.get(parent.parent);
+        }
+        return parent && parent.id === owner.id;
+      }
+      function pureList(list) {
+        if (!/^(?:UL|OL)$/.test(list.tagName) || list.hidden || !list.children.length || list.querySelector(protectedContent)) return false;
+        return Array.from(list.children).every(function (item) {
+          if (item.tagName !== "LI") return false;
+          var holder = item.children.length === 1 && item.children[0].tagName === "P" ? item.children[0] : item;
+          if (holder.children.length !== 1 || holder.children[0].tagName !== "A") return false;
+          var anchor = holder.children[0], href = link(anchor.getAttribute("href"), current.documentURL);
+          var node = href && !new URL(href).hash && routes.get(href);
+          if (!scope(node) || !represented.has(node.id) || !directChild(node) || anchor.textContent.trim() !== node.title) return false;
+          var remainder = item.cloneNode(true); remainder.querySelector("a").remove();
+          return !remainder.textContent.trim();
+        });
+      }
+      function hide(node) { changed.push({node: node, hidden: node.hidden}); node.hidden = true; }
+      reading.querySelectorAll("h2,h3,h4,h5,h6").forEach(function (heading) {
+        if (heading.hidden || protectedSection(heading)) return;
+        var block = [], next = heading.nextElementSibling, level = Number(heading.tagName.slice(1));
+        while (next && !(/^H[1-6]$/.test(next.tagName) && Number(next.tagName.slice(1)) <= level) && !next.matches(".bp-book-nav")) {
+          block.push(next); next = next.nextElementSibling;
+        }
+        if (!block.length || !block.every(pureList)) return;
+        hide(heading); block.forEach(hide); lists += block.length;
+      });
+      if (changed.length) decluttered.set(root, changed);
+      return lists;
+    }
     function bindReader(root) {
       if (!root || bound.has(root) || disposed) return;
       function click(event) {
@@ -499,12 +570,17 @@
       if (active) active.abort(); if (indexController) indexController.abort();
       if (scrollOwned && win.history.scrollRestoration === "manual") win.history.scrollRestoration = "auto";
       win.removeEventListener("popstate", popstate);
-      bound.forEach(function (listener, root) { root.removeEventListener("click", listener, true); }); bound.clear();
+      bound.forEach(function (listener, root) {
+        (decluttered.get(root) || []).forEach(function (entry) { entry.node.hidden = entry.hidden; });
+        root.removeEventListener("click", listener, true);
+      }); bound.clear();
       htmlCache.clear(); jsonCache.clear(); cacheBytes = 0; index = null; indexed.clear(); routes.clear(); documents.clear();
       snapshots.clear(); currentKey = null; current = null; initialSource = null; source = null; indexPromise = null; started = null;
+      decluttered = new WeakMap();
     }
     return {start: start, navigate: navigate, navigateNode: navigateNode, loadIndex: loadIndex,
-      getIndex: function () { return index; }, bindReader: bindReader, checkpoint: checkpoint, dispose: dispose};
+      getIndex: function () { return index; }, bindReader: bindReader, declutterReader: declutterReader,
+      checkpoint: checkpoint, dispose: dispose};
   }
 
   window.AutoformNavigation = {create: create};

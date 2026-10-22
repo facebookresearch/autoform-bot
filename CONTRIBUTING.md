@@ -50,13 +50,20 @@ styles are in `blueprint-dag.css`. When changing either script, install Node
 22.23.2 and run `make build-explorer`, then `make check-explorer` and
 `make test-browser`. Pinned development-only esbuild and Terser write
 `blueprint-explorer.min.js` with an exact source digest. CI checks its bytes and
-the 72 KB client budget. This replaces the former 66 KB graph-only ceiling to
-cover integrated reading and per-entry navigation restoration; graph-node,
+the 132 KB total client budget, including the pinned Dagre 3.1.1 / Graphlib
+4.0.5 layout engine and its MIT notice. This replaces the 72 KB reader/map
+ceiling to support dependency-driven placement, obstacle-avoiding routes and
+protected count labels; graph-node,
 payload, search, request and cache limits are unchanged. Only explicitly `$`-prefixed private properties may
 be renamed; renderer-private scene and DOM references use local variables.
 Graph/index fields, route attributes, renderer callbacks and history
 snapshot fields keep their names. Python publication ships the compiled client;
 projects consuming Autoform do not need Node or a separate application build.
+The pinned Dagre browser distribution is captured into
+`blueprint-dagre.vendor.js` during this development build. Its isolated wrapper
+and the readable book/map sources are fingerprinted together; the compiled and
+raw-source fallback clients both include the engine. Consumers require no Node,
+new script tag or runtime CDN dependency.
 Compression never renames public properties, assumes getters are pure, enables
 unsafe transforms, or drops console calls.
 

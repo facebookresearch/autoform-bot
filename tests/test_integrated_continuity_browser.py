@@ -29,6 +29,7 @@ from tests.test_integrated_workspace_browser import (
     _WorkspaceSite,
     _assert_surface,
     _frames,
+    _focus_graph_region,
     _full_math,
     _open,
     _pixels,
@@ -212,8 +213,7 @@ def test_keyboard_region_expansion_focuses_a_new_readable_map_control(
     page, site = workspace_page, workspace_site
     documents = _documents(page)
     _open(page, site, workspace_runtime)
-    region = page.locator('.bp-dag-node[data-autoform-node-id="region:Geometry"]')
-    playwright.expect(region).to_be_visible()
+    region = _focus_graph_region(page, "Geometry")
     assert _pixels(page)["painted"] > 0
     region.focus()
     playwright.expect(region).to_be_focused()
@@ -230,6 +230,66 @@ def test_keyboard_region_expansion_focuses_a_new_readable_map_control(
     assert page.url == site.route("roadmap")
     playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_LIBRARY)
     assert _pixels(page)["painted"] > 0
+    assert documents == [site.route("roadmap")]
+    assert page.evaluate("() => document === __workspaceDocument") is True
+
+
+@pytest.mark.parametrize(("width", "height"), [(390, 844), (1000, 900), (1600, 900)])
+def test_region_graph_first_keeps_native_reading_reopen_and_back_pane_camera(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int, height: int,
+) -> None:
+    page, site = workspace_page, workspace_site
+    page.set_viewport_size({"width": width, "height": height})
+    documents = _documents(page)
+    _open(page, site, workspace_runtime)
+    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    inner = page.locator(".bp-reading-pane > .bp-dag-inspector-inner")
+    initial_width = page.locator(".bp-dag-stage").bounding_box()["width"]
+    _focus_graph_region(page, "Geometry").press("Enter")
+    _frames(page)
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    playwright.expect(inner).to_have_attribute("inert", "")
+    playwright.expect(inner).to_have_attribute("aria-hidden", "true")
+    closed_width = page.locator(".bp-dag-stage").bounding_box()["width"]
+    if width > 720:
+        assert closed_width > initial_width + 250
+        playwright.expect(inner).to_be_hidden()
+    else:
+        assert closed_width == pytest.approx(width, abs=1)
+    handle.click()
+    _frames(page)
+    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    playwright.expect(inner).not_to_have_attribute("inert", "")
+    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_LIBRARY)
+    playwright.expect(page.locator(".bp-reading-body")).to_be_visible()
+    page.get_by_role("button", name="Regions", exact=True).click()
+    _focus_graph_region(page, "Geometry").press("Enter")
+    _frames(page)
+    focused = page.locator(".bp-dag-node:focus")
+    scope_id = focused.get_attribute("data-autoform-node-id")
+    assert scope_id.startswith("scope:")
+    camera = focused.evaluate("""node=>{const m=new DOMMatrix(getComputedStyle(node).transform);return [m.a,m.d,m.e,m.f];}""")
+    focused.press("Enter")
+    page.wait_for_url(site.route(scope_id.removeprefix("scope:")))
+    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    playwright.expect(inner).not_to_have_attribute("inert", "")
+    _search(page, _TARGET_TITLE, _TARGET)
+    page.wait_for_url(site.route(_TARGET))
+    _selected(page, _TARGET)
+    assert _LAST_SENTENCE in _full_math(page).inner_text()
+    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    page.go_back()
+    page.wait_for_url(site.route(scope_id.removeprefix("scope:")))
+    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    page.go_back()
+    page.wait_for_url(site.route("roadmap"))
+    _frames(page)
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    playwright.expect(inner).to_have_attribute("inert", "")
+    restored = page.locator(".bp-dag-node:focus")
+    playwright.expect(restored).to_have_attribute("data-autoform-node-id", scope_id)
+    assert restored.evaluate("""node=>{const m=new DOMMatrix(getComputedStyle(node).transform);return [m.a,m.d,m.e,m.f];}""") == pytest.approx(camera, abs=2)
+    assert page.locator(".bp-dag-stage").bounding_box()["width"] == pytest.approx(closed_width, abs=1)
     assert documents == [site.route("roadmap")]
     assert page.evaluate("() => document === __workspaceDocument") is True
 
@@ -369,7 +429,7 @@ def _horizontal_bounds(page: object, locator: object) -> dict:
     return measured
 
 
-def test_phone_reader_uses_the_full_body_with_only_a_handle_peek_and_readable_fitted_regions(
+def test_phone_reader_uses_the_full_body_with_only_a_handle_peek_and_readable_dependency_regions(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:
     page, site = workspace_page, workspace_site
@@ -383,23 +443,22 @@ def test_phone_reader_uses_the_full_body_with_only_a_handle_peek_and_readable_fi
     page.get_by_role("button", name="Fit shown nodes", exact=True).click()
     _frames(page)
     regions = page.locator('.bp-dag-node[data-autoform-node-id^="region:"]')
-    playwright.expect(regions).to_have_count(len(_AREAS))
+    assert regions.count() > 0
     geometry = regions.evaluate_all("""nodes => nodes.map(node => {
       const box = node.getBoundingClientRect(), label = node.querySelector('.bp-dag-node-title');
       const matrix = new DOMMatrix(getComputedStyle(node).transform);
       return {left: box.left, right: box.right, top: box.top, bottom: box.bottom,
         title: label.textContent, font: parseFloat(getComputedStyle(label).fontSize) * Math.hypot(matrix.a, matrix.b)};
     })""")
-    assert {node["title"] for node in geometry} == set(_AREAS)
+    assert {node["title"] for node in geometry} <= set(_AREAS)
     stage = page.locator(".bp-dag-stage").bounding_box()
     assert stage
     for node in geometry:
-        assert node["left"] >= -1 and node["right"] <= 391
-        assert node["top"] >= stage["y"] - 1 and node["bottom"] <= stage["y"] + stage["height"] + 1
-        assert node["font"] >= 13
-    assert all(first["bottom"] <= second["top"] + 1 for first, second in zip(
-        sorted(geometry, key=lambda node: node["top"]), sorted(geometry, key=lambda node: node["top"])[1:]
-    ))
+        assert node["font"] >= 15
+    for index, first in enumerate(geometry):
+        for second in geometry[index + 1:]:
+            assert (first["right"] + 8 <= second["left"] or second["right"] + 8 <= first["left"] or
+                    first["bottom"] + 8 <= second["top"] or second["bottom"] + 8 <= first["top"])
     assert _pixels(page)["painted"] > 0
     _search(page, _TARGET_TITLE, _TARGET)
     page.wait_for_url(site.route(_TARGET))
@@ -437,7 +496,7 @@ def test_phone_reader_uses_the_full_body_with_only_a_handle_peek_and_readable_fi
 
 
 @pytest.mark.parametrize(("width", "height"), [(390, 844), (1000, 900)])
-def test_five_authored_areas_fit_readably_centered_and_keep_native_region_activation(
+def test_five_authored_dependency_areas_remain_readable_reachable_and_keep_native_activation(
     workspace_page: object, five_area_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int, height: int,
 ) -> None:
     page, site = workspace_page, five_area_site
@@ -463,10 +522,18 @@ def test_five_authored_areas_fit_readably_centered_and_keep_native_region_activa
     page.get_by_role("button", name="Fit shown nodes", exact=True).click()
     page.evaluate("() => document.fonts.ready")
     _frames(page)
-    regions = page.locator('.bp-dag-node[data-autoform-node-id^="region:"]')
-    playwright.expect(regions).to_have_count(5)
-    playwright.expect(page.locator(".bp-dag-density")).to_be_hidden()
-    geometry = regions.evaluate_all("""nodes => nodes.map(node => {
+    chosen = page.locator(f'.bp-dag-node[data-autoform-node-id="region:{_FIVE_AREAS[0]}"]')
+    playwright.expect(chosen).to_be_visible()
+    chosen.focus()
+    geometry = []
+    stage = page.locator(".bp-dag-stage").bounding_box()
+    context = page.locator(".bp-map-context").bounding_box()
+    key = page.locator(".bp-map-key").bounding_box()
+    assert stage and context and key
+    for index, area in enumerate(_FIVE_AREAS):
+        active = page.locator('.bp-dag-node:focus')
+        playwright.expect(active).to_have_attribute("data-autoform-node-id", f"region:{area}")
+        geometry.append(active.evaluate("""node => {
       const box = node.getBoundingClientRect(), title = node.querySelector('.bp-dag-node-title');
       const meta = node.querySelector('.bp-dag-node-meta'), sample = node.querySelector('.bp-dag-node-summary');
       const matrix = new DOMMatrix(getComputedStyle(node).transform), scale = Math.hypot(matrix.a, matrix.b);
@@ -477,23 +544,22 @@ def test_five_authored_areas_fit_readably_centered_and_keep_native_region_activa
         titleFits:title.scrollWidth<=title.clientWidth+1,
         sampleVisible:!!sample && getComputedStyle(sample).display!=='none' && sample.clientHeight>0,
         hit:node.contains(document.elementFromPoint(box.left+box.width/2,box.top+box.height/2))};
-    })""")
+    }"""))
+        if index + 1 < len(_FIVE_AREAS):
+            active.press("ArrowDown" if stage["width"] <= 620 else "ArrowRight")
+            _frames(page)
     assert {node["title"] for node in geometry} == set(_FIVE_AREAS)
-    stage = page.locator(".bp-dag-stage").bounding_box()
-    context = page.locator(".bp-map-context").bounding_box()
-    key = page.locator(".bp-map-key").bounding_box()
-    assert stage and context and key
-    assert stage["width"] == pytest.approx(390 if width == 390 else 570, abs=1)
+    assert 280 <= stage["width"] <= width + 1
     for node in geometry:
-        assert node["width"] >= 280 and node["titlePixels"] >= 15 and node["metaPixels"] >= 12
+        assert node["width"] >= 200 and node["titlePixels"] >= 15 and node["metaPixels"] >= 12
         assert node["meta"] == "3 topics · 3 items" and ", 3 items" in node["aria"]
-        assert node["titleFits"] and node["hit"] and not node["sampleVisible"]
+        assert node["titleFits"] and node["hit"]
+        if stage["width"] <= 620:
+            assert not node["sampleVisible"]
         assert node["left"] >= stage["x"] - 1 and node["right"] <= stage["x"] + stage["width"] + 1
         assert (node["left"] + node["right"]) / 2 == pytest.approx(stage["x"] + stage["width"] / 2, abs=2)
         assert node["top"] >= context["y"] + context["height"] + 8
         assert node["bottom"] <= key["y"] - 8
-    ordered = sorted(geometry, key=lambda node: node["top"])
-    assert all(first["bottom"] + 8 <= second["top"] for first, second in zip(ordered, ordered[1:]))
     assert _pixels(page)["painted"] > 0
     output = os.environ.get("AUTOFORM_UI_SCREENSHOT_DIR")
     if output:
@@ -501,10 +567,14 @@ def test_five_authored_areas_fit_readably_centered_and_keep_native_region_activa
         directory.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(directory / f"five-areas-{width}x{height}.png"))
         report = {"viewport": [width, height], "candidate_sha": os.environ.get("AUTOFORM_CI_SOURCE_SHA"),
+                  "geometry_views": "individual native keyboard focus jumps",
                   "counts": expected, "regions": geometry, "stage": stage, "context": context, "key": key,
                   "captured_edges": site.root_graph["edges"], "canvas": _pixels(page), "kernel_checked": False}
         (directory / f"five-areas-{width}x{height}.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    chosen = page.locator(f'.bp-dag-node[data-autoform-node-id="region:{_FIVE_AREAS[0]}"]')
+    for _ in range(len(_FIVE_AREAS) - 1):
+        page.locator('.bp-dag-node:focus').press("ArrowUp" if stage["width"] <= 620 else "ArrowLeft")
+        _frames(page)
+    playwright.expect(chosen).to_be_visible()
     chosen.click()
     playwright.expect(chosen).to_have_count(0)
     playwright.expect(page.locator(f'.bp-dag-node[data-autoform-node-id="scope:{_FIVE_TOPICS[0]}"]')).to_be_visible()

@@ -6,6 +6,7 @@
     "check:explorer": "node scripts/build-explorer.mjs --check"
   },
   "devDependencies": {
+    "@dagrejs/dagre": "3.1.1",
     "esbuild": "0.28.2",
     "terser": "5.51.2"
   }

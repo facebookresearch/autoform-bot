@@ -456,9 +456,9 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
         context_links={node.id: f"chapters/chapter.html#node={node.id}" for node in nodes},
     )
 
-    # The hierarchy rail is part of the shared runtime, but the dependency-free
-    # application still stays below one small uncompressed network response.
-    assert len(dag_viewer.viewer_script().encode()) < 72_000
+    # The reader, hierarchy rail and pinned layout engine share one prebuilt
+    # response; consumers still need no application build or runtime CDN.
+    assert len(dag_viewer.viewer_script().encode()) < 132_000
     assert output.stat().st_size < 300_000
     assert search.stat().st_size < 100_000
     search_payload = json.loads(search.read_text(encoding="utf-8"))
