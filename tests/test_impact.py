@@ -1562,6 +1562,25 @@ def test_header_graph_keeps_local_imports_in_inventory_spelling(tmp_path: Path) 
     assert graph == {"H": ("H.«a.b»", "H.«α»"), "H.«α»": ("H.«a.b»",), "H.«a.b»": None}
 
 
+def test_header_graph_reads_the_file_lake_builds_for_a_module_two_libraries_spell(tmp_path: Path) -> None:
+    # Both srcDirs hold an M; only Two selects it, so Lake builds two/M.lean.
+    root = tmp_path / "lean"
+    (root / "one").mkdir(parents=True)
+    (root / "two").mkdir()
+    (root / "lakefile.toml").write_text(
+        'name = "P"\n\n[[lean_lib]]\nname = "One"\nsrcDir = "one"\nroots = ["X"]\n\n'
+        '[[lean_lib]]\nname = "Two"\nsrcDir = "two"\nroots = ["M"]\n',
+        encoding="utf-8",
+    )
+    (root / "one" / "X.lean").write_text("", encoding="utf-8")
+    (root / "one" / "M.lean").write_text("", encoding="utf-8")
+    (root / "two" / "M.lean").write_text("import X\n", encoding="utf-8")
+
+    graph = header_graph(tuple(lean_libraries(root)), snapshot_project_sources(root))
+
+    assert graph == {"M": ("X",), "X": ()}
+
+
 def test_lean_libraries_read_one_glob_or_an_array(tmp_path: Path) -> None:
     (tmp_path / "lakefile.toml").write_text(
         'name = "Demo"\nbuildDir = "output"\nleanLibDir = "compiled"\n\n'

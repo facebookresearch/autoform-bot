@@ -447,7 +447,11 @@ def _module_headers(
 ) -> dict[str, tuple[str, ...] | None]:
     """Map each local source module to every name its header imports, or ``None`` when unreadable."""
 
-    paths = _module_source_paths(libraries, snapshot)
+    # A module two libraries spell alike is the file Lake builds, the selecting library's.
+    paths = {
+        **_module_source_paths(libraries, snapshot),
+        **_module_source_paths(libraries, snapshot, strict=True),
+    }
     data = {path.as_posix(): contents for path, contents in snapshot.source_files}
     headers: dict[str, tuple[str, ...] | None] = {}
     for module, relative in paths.items():
@@ -1630,7 +1634,12 @@ def _load_impact_evidence(
         loaded_keys = {_name_key(name) for name in module_evidence}
         # Under nested srcDirs one file has a module spelling per library; it is unloaded only when none is loaded.
         spellings: dict[str, set[str]] = {}
-        for name, path in _module_source_paths(libraries, source_snapshot).items():
+        # A module two libraries spell alike is the file Lake builds, so overlay the strict mapping.
+        source_paths = {
+            **_module_source_paths(libraries, source_snapshot),
+            **_module_source_paths(libraries, source_snapshot, strict=True),
+        }
+        for name, path in source_paths.items():
             spellings.setdefault(path, set()).add(name)
 
         def out_of_scope(name: str) -> bool:
