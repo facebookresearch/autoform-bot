@@ -10,6 +10,7 @@
   var clamp = function (value, low, high) { return Math.max(low, Math.min(high, value)); };
   var plural = function (count, one, many) { return count.toLocaleString() + " " + (count === 1 ? one : many); };
   var num = function (value) { return value.toLocaleString(); };
+  var pressed = function (control, value) { control.setAttribute("aria-pressed", String(value)); };
   // The book's caption for each declaration (render.DECLARATION_LABELS), so a card reads "Definition · defined" beside "Definition 1".
   var KINDS = new Map(Object.entries({abbrev: "Abbreviation", axiom: "Axiom", class: "Class", corollary: "Corollary", def: "Definition",
     definition: "Definition", example: "Example", inductive: "Inductive", instance: "Instance", lemma: "Lemma", proposition: "Proposition",
@@ -1086,10 +1087,10 @@
         " statuses" + (ui$showIsolated ? "" : " · linked only");
       // The areas overview is the map at the root, so Map gives way to Areas there and one view reads as pressed.
       var areas = ui$mode === "graph" && !ui$area && data.nodes.some(function (node) { return node._region; });
-      dom$graphMode.setAttribute("aria-pressed", String(ui$mode === "graph" && !areas));
-      dom$listMode.setAttribute("aria-pressed", String(ui$mode === "list"));
-      if (dom$sourcesMode) dom$sourcesMode.setAttribute("aria-pressed", String(ui$mode === "sources"));
-      if (dom$regionsMode) dom$regionsMode.setAttribute("aria-pressed", String(areas));
+      pressed(dom$graphMode, ui$mode === "graph" && !areas);
+      pressed(dom$listMode, ui$mode === "list");
+      if (dom$sourcesMode) pressed(dom$sourcesMode, ui$mode === "sources");
+      if (dom$regionsMode) pressed(dom$regionsMode, areas);
       dom$stage.hidden = ui$mode !== "graph"; dom$inventory.hidden = ui$mode === "graph";
       dom$graphMode.disabled = !ui$mapAllowed;
       if (navigation) dom$inventory.querySelector("h2").textContent = ui$mode === "sources" ? "Source tracks" : "Results";
@@ -1789,7 +1790,7 @@
         section.appendChild(element("h3", "", caption)); pivots.setAttribute("role", "group"); pivots.setAttribute("aria-label", caption);
         [["All", "both", 1], ["Uses", "prerequisites", before.length], ["Used by", "dependents", after.length]].forEach(function (entry) {
           if (!entry[2]) return;
-          var pivot = button("bp-dag-pivot", entry[0]); pivot.setAttribute("aria-pressed", String(ui$direction === entry[1]));
+          var pivot = button("bp-dag-pivot", entry[0]); pressed(pivot, ui$direction === entry[1]);
           pivot.addEventListener("click", function () { setDirection(entry[1]); }); pivots.appendChild(pivot);
         }); section.appendChild(pivots); dom$inspectorInner.appendChild(section);
       }

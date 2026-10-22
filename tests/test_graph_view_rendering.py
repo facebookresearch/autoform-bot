@@ -847,8 +847,8 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     script, style = _viewer_source(), dag_viewer._STYLE
     # Areas stays: inside an area it is the way back to the overview, whose root crumb is then not a link.
     assert 'var areas = state.mode === "graph" && !state.area && data.nodes.some(function (node) { return node._region; });' in script
-    assert 'refs.graphMode.setAttribute("aria-pressed", String(state.mode === "graph" && !areas));' in script
-    assert 'if (refs.regionsMode) refs.regionsMode.setAttribute("aria-pressed", String(areas));' in script
+    assert 'pressed(refs.graphMode, state.mode === "graph" && !areas);' in script
+    assert 'if (refs.regionsMode) pressed(refs.regionsMode, areas);' in script
     assert 'refs.graphMode.setAttribute("aria-pressed", String(state.mode === "graph"));' not in script
     assert ".bp-dag-integrated .bp-dag-breadcrumb { display: block; flex: 1 1 auto; max-width: none;" in style
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li { min-width: 4em; }" in style
