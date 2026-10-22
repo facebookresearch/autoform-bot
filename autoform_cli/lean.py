@@ -1102,6 +1102,108 @@ def strip_lean_comments(text: str) -> str:
     )
 
 
+#: One header name: dotted components, each a plain identifier or ``«…»``.
+_HEADER_NAME = re.compile(r"(?:«[^»\n]*»|[^\W\d][\w'!?]*)(?:\.(?:«[^»\n]*»|[^\W\d][\w'!?]*))*")
+_HEADER_KEYWORDS = frozenset({"module", "prelude", "public", "meta", "import", "all"})
+
+
+class _UnsureHeader(Exception):
+    """The header scanner cannot be sure what Lean reads."""
+
+
+class _HeaderWords:
+    """The words of a Lean header, skipping whitespace and comments; ``None`` at the end."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.index = 0
+
+    def next(self) -> str | None:
+        text = self.text
+        while self.index < len(text):
+            if text[self.index].isspace():
+                self.index += 1
+            elif text.startswith("--", self.index):
+                newline = text.find("\n", self.index)
+                self.index = len(text) if newline < 0 else newline + 1
+            elif text.startswith(("/--", "/-!"), self.index):
+                # Lean reads a doc comment as a token, not whitespace, so it ends the header.
+                return text[self.index : self.index + 3]
+            elif text.startswith("/-", self.index):
+                depth = 1
+                index = self.index + 2
+                for pair in _COMMENT_EVENT.finditer(text, index):
+                    depth += 1 if pair.group() == "/-" else -1
+                    if not depth:
+                        self.index = pair.end()
+                        break
+                else:
+                    raise _UnsureHeader
+            else:
+                break
+        if self.index >= len(text):
+            return None
+        start = index = self.index
+        # An identifier ends where a comment starts, as Lean's token reader ends it.
+        while index < len(text) and not text[index].isspace() and not text.startswith(("--", "/-"), index):
+            if text[index] == "«":
+                close = text.find("»", index + 1)
+                if close < 0 or "\n" in text[index:close]:
+                    raise _UnsureHeader
+                index = close + 1
+            else:
+                index += 1
+        self.index = index
+        return text[start:index]
+
+
+def module_header_imports(data: bytes) -> tuple[str, ...] | None:
+    """The module names a Lean source's header imports, or ``None`` when unsure.
+
+    It reads Lean's header grammar, ``["module"] ["prelude"] import*`` with
+    ``import := ["public"] ["meta"] "import" ["all"] name``, and stops at the
+    first word that does not continue it, as ``public section`` does. Anything
+    it cannot read with certainty, such as an unclosed comment, a keyword where
+    a name belongs, or the older ``import runtime`` form, gives ``None``.
+    """
+
+    try:
+        text = data.decode("utf-8").removeprefix("﻿")
+    except UnicodeDecodeError:
+        return None
+    words = _HeaderWords(text)
+    imports: list[str] = []
+    try:
+        word = words.next()
+        if word == "module":
+            word = words.next()
+        if word == "prelude":
+            word = words.next()
+        while True:
+            # `public` and `meta` belong to the header only before `import`.
+            ahead = _HeaderWords(text)
+            ahead.index = words.index
+            following = word
+            if following == "public":
+                following = ahead.next()
+            if following == "meta":
+                following = ahead.next()
+            if following != "import":
+                return tuple(imports)
+            words.index = ahead.index
+            name = words.next()
+            if name == "all":
+                name = words.next()
+            if name is None or name in _HEADER_KEYWORDS or name == "runtime" or not _HEADER_NAME.fullmatch(name):
+                return None
+            if name.split(".")[0] in _COMMAND_HEADS:
+                return None
+            imports.append(name)
+            word = words.next()
+    except _UnsureHeader:
+        return None
+
+
 _DECLARATION_NAME = re.compile(r"(?:«[^»]*(?:»|$)|[^\s,«])+")
 
 

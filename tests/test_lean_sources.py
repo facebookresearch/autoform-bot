@@ -3969,3 +3969,46 @@ def test_repository_top_level_is_unknown_when_git_prints_a_name_that_is_not_utf_
     assert repository_top_level(tmp_path) is None
 
 
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("", ()),
+        ("def x : Nat := 1\n", ()),
+        ("import A\nimport B.C\n\ndef x := 1\n", ("A", "B.C")),
+        ("prelude\nimport Init.Core\n", ("Init.Core",)),
+        ("module\n\nprelude\npublic import A\nmeta import B\npublic meta import C\nimport all D\n", ("A", "B", "C", "D")),
+        ("module\npublic section\nimport A\n", ()),
+        ("module\nimport A\nmeta def f := 1\n", ("A",)),
+        ("module\nimport A\npublic def f := 1\n", ("A",)),
+        ("-- lead\n/- block /- nested -/ -/\nimport A -- trailing\n/-- doc -/\ntheorem t : True := trivial\n", ("A",)),
+        ("/- copyright -/\nimport A\n/- between -/ import B\n/-! doc -/\nimport C\n", ("A", "B")),
+        ("/-! doc first -/\nimport A\n", ()),
+        ("import A\n/-- doc -/\ndef x := 1\n", ("A",)),
+        ("import A.B--glued comment\nimport/-glued-/C\n", ("A.B", "C")),
+        ("import H.«a.b»\nimport H.«Basic copy»\nimport H.α\nimport H.x₁'\n", ("H.«a.b»", "H.«Basic copy»", "H.α", "H.x₁'")),
+        ("﻿import A\n", ("A",)),
+    ],
+)
+def test_module_header_imports_reads_lean_s_header_grammar(source: str, expected: tuple[str, ...]) -> None:
+    assert lean_module.module_header_imports(source.encode()) == expected
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        b"import A\n/- unclosed\n",
+        b"import\n",
+        b"import all\n",
+        b"import def\n",
+        b"import H.\xc2\n",
+        b"import H.\xabbad\n",
+        "import H.«open\n".encode(),
+        b"import runtime A\n",
+        b"import A-B\n",
+        b"import 1A\n",
+    ],
+)
+def test_module_header_imports_gives_up_when_unsure(source: bytes) -> None:
+    assert lean_module.module_header_imports(source) is None
