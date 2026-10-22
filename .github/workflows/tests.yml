@@ -171,9 +171,15 @@ jobs:
           AUTOFORM_REAL_LEAN_MATHLIB_PROJECT: ${{ runner.temp }}/autoform-created-project
 
   real-lean-skeleton:
-    name: real Lean skeleton suite (fixture toolchain)
+    name: real Lean skeleton suite (fixture toolchain, part ${{ matrix.shard }} of 3)
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    # About 14 of the suite's 300 tests take most of its 17 minutes; three
+    # jobs, each taking every third test, finish in about 6.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -207,6 +213,7 @@ jobs:
           tests/test_project_inspect.py::test_stale_inherited_mathlib_is_ignored_by_real_lake
         env:
           AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
+          AUTOFORM_TEST_SHARD: "${{ matrix.shard }}/3"
 
   real-repl:
     name: real REPL (fixture toolchain)

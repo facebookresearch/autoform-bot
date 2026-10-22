@@ -72,3 +72,21 @@ def unreadable_link(monkeypatch: pytest.MonkeyPatch) -> Callable[[Path, Path | s
         refused.update({os.fspath(link), os.path.join(os.path.realpath(link.parent), link.name)})
 
     return make
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Keep every Nth collected test when ``AUTOFORM_TEST_SHARD`` is ``i/N``.
+
+    CI splits the real-Lean skeleton suite across parallel jobs this way. Taking
+    tests round-robin in collection order spreads its few slow tests, which
+    sit next to each other, across the jobs.
+    """
+    shard = os.environ.get("AUTOFORM_TEST_SHARD")
+    if not shard:
+        return
+    index, _, total = shard.partition("/")
+    if not (index.isdigit() and total.isdigit() and int(index) < int(total)):
+        raise pytest.UsageError(f"AUTOFORM_TEST_SHARD must be i/N with 0 <= i < N, not {shard!r}")
+    kept = [item for position, item in enumerate(items) if position % int(total) == int(index)]
+    config.hook.pytest_deselected(items=[item for item in items if item not in set(kept)])
+    items[:] = kept
