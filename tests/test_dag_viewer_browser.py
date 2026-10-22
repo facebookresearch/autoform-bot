@@ -680,7 +680,7 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     )
     assert "linear-gradient" in ring
     # The bar follows the legend's state order: finished green before ready-to-prove blue.
-    assert ring.index("rgb(34, 119, 58)") < ring.index("rgb(0, 100, 224)")
+    assert ring.index("rgb(27, 91, 46)") < ring.index("rgb(0, 100, 224)")
     # The region is canvas text, which assistive technology never reads.
     assert "Geometry & Topology" in (topic.get_attribute("aria-label") or "")
     topic.click()

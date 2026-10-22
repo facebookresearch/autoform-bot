@@ -966,7 +966,7 @@
       });
       return mark;
     }
-    // Only finished states are filled. Their card tints are too pale to tell from an outline at a few pixels, so small marks fill them with the stroke.
+    // States with a tinted light fill (finished, conditionally proved, not ready, inventory pending): the tints are too pale to tell from an outline at a few pixels, so small marks fill them with the stroke.
     function solid(key, color) { return ((palette[key] || palette.planned || {}).light || {}).fill === "#FFFFFF" ? color.fill : color.stroke; }
     function isDark() { return document.body.getAttribute("data-md-color-scheme") === "slate"; }
     function colors(node) {
@@ -1695,7 +1695,7 @@
       var count = finished(node), done = count[0], total = count[1];
       var progress = node.kind === "scope" && total && !inventoryOnly;
       var actions = element("div", "bp-dag-actions"), mark = element("span", "bp-dag-status-pill", inventoryOnly ? "inventory only" :
-        progress ? done.toLocaleString() + " of " + total.toLocaleString() + " fully proved" : statusLabel(node.status)), color = colors(progress && done === total ? {status: "fully_proved"} : node);
+        progress ? done.toLocaleString() + " of " + total.toLocaleString() + " fully proved" : node.kind === "scope" && !node._unknownCount ? "no targets" : statusLabel(node.status)), color = colors(progress && done === total ? {status: "fully_proved"} : node);
       mark.style.setProperty("--dag-pill-fill", color.fill); mark.style.setProperty("--dag-pill-stroke", color.stroke); actions.appendChild(mark);
       var href = safeHref(node.url);
       if (href) { var open = element("a", "bp-dag-open", node.kind === "scope" || node.kind === "boundary" ? "Explore topic" : "Open article"); open.href = href; actions.appendChild(open); }

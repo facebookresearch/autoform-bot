@@ -65,7 +65,10 @@ class State:
 #: light tints, deepest for mathlib, so that done work does not outshout the
 #: blue a contributor can pick up next, and so that a card's title can stay in
 #: the page's ink on every fill; only the status word under the title (text)
-#: and the stroke carry the colour. The hues are Facebook's
+#: and the stroke carry the colour. A small mark of a finished state is filled
+#: with its stroke and is then the only status signal, so the four finished
+#: strokes keep 1.5:1 between neighbours: darkest for mathlib on light and
+#: brightest for it on dark, so more finished always reads stronger. The hues are Facebook's
 #: semantic set -- #31A24C green, #0064E0 blue, #F7B928 amber, #B0B3B8 grey --
 #: so that finished, actionable, blocked and untouched read at a glance without
 #: anyone learning a legend. Green tracks proof progress, blue marks what a
@@ -80,14 +83,14 @@ class State:
 #: on the page and on the explorer's map they still read as cards, and
 #: planned's grey stroke keeps 3:1 against both.
 STATES: tuple[State, ...] = (
-    State("mathlib", "in mathlib", "#C6E6CF", "#134426", "#134426",
-          "#10281A", "#42B72A", "#8BE78B"),
-    State("fully_proved", "fully proved", "#D7EEDD", "#22773A", "#1E6B34",
-          "#13301E", "#42B72A", "#8BE78B"),
-    State("proved", "proved", "#E5F4E9", "#22773A", "#1E6B34",
-          "#122A1B", "#31A24C", "#6BD97F"),
-    State("defined", "defined", "#EEF8F0", "#22773A", "#1E6B34",
-          "#122A1B", "#2B8F44", "#6BD97F"),
+    State("mathlib", "in mathlib", "#C6E6CF", "#123C20", "#134426",
+          "#10281A", "#9AF0A5", "#8BE78B"),
+    State("fully_proved", "fully proved", "#D7EEDD", "#1B5B2E", "#1E6B34",
+          "#13301E", "#37CD4B", "#8BE78B"),
+    State("proved", "proved", "#E5F4E9", "#277B3E", "#1E6B34",
+          "#122A1B", "#30A44B", "#6BD97F"),
+    State("defined", "defined", "#EEF8F0", "#349D4D", "#1E6B34",
+          "#122A1B", "#26813E", "#6BD97F"),
     State("conditional", "conditionally proved", "#E9DFFC", "#6B3FCF", "#2E1065",
           "#231A36", "#9F7AEA", "#D6C8FA"),
     State("can_prove", "ready to prove", "#FFFFFF", "#0064E0", "#0064E0",

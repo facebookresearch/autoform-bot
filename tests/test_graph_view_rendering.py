@@ -926,7 +926,9 @@ def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> 
         assert _contrast(label, panel) >= 4.5 and panel != field
 
     # A topic's pill counts its finished items; a scope of module inventories still says so.
-    assert 'progress ? done.toLocaleString() + " of " + total.toLocaleString() + " fully proved" : statusLabel(node.status)' in script
+    # A topic with no targets said "planned", its rolled-up status, though nothing in it is planned.
+    assert ('progress ? done.toLocaleString() + " of " + total.toLocaleString() + " fully proved" : '
+            'node.kind === "scope" && !node._unknownCount ? "no targets" : statusLabel(node.status)') in script
     assert "/^(fully_proved|mathlib)$/.test(entry[0])" in script
     assert 'inventoryOnly ? "inventory only" :' in script
     # Card and pill share one count, which leaves neutral module inventories out of the total like the hero.
@@ -950,6 +952,45 @@ def test_small_status_marks_fill_finished_states_with_the_stroke() -> None:
         if state.fill != "#FFFFFF":
             assert _contrast(state.stroke, "#F0F2F5") >= 3, state.key
             assert _contrast(state.dark_stroke, "#18191A") >= 3, state.key
+
+
+def _mark(state: status.State, dark: bool = False) -> str:
+    """The colour a small mark is filled with, by the rule render's dot() and the explorer's solid() share."""
+    fill, stroke = (state.dark_fill, state.dark_stroke) if dark else (state.fill, state.stroke)
+    return fill if state.fill == "#FFFFFF" else stroke
+
+
+def test_each_finished_status_has_its_own_small_mark_in_both_schemes() -> None:
+    """Fully proved, proved and defined shared stroke #22773A, so their dots and swatches were one colour.
+
+    In the book's dependency rows and the explorer's rail the mark is the only status signal. Light marks
+    darken towards mathlib and dark ones brighten towards it, so more finished always reads stronger.
+    """
+    finished = [next(state for state in status.STATES if state.key == key)
+                for key in ("mathlib", "fully_proved", "proved", "defined")]
+    assert [state.key for state in status.STATES[:4]] == [state.key for state in finished]
+    for dark in (False, True):
+        marks = [_mark(state, dark) for state in finished]
+        for (first, second), (one, other) in zip(zip(finished, finished[1:]), zip(marks, marks[1:])):
+            ratio = _contrast(one, other)
+            assert ratio >= 1.5, (first.key, second.key, dark, ratio)
+            assert (_contrast(one, "#000000") > _contrast(other, "#000000")) is dark, (first.key, second.key, dark)
+
+
+def test_filled_marks_keep_their_edge_and_label_on_every_surface() -> None:
+    """A filled mark sits on the map, the page and its own card tint, and its label sits on that tint.
+
+    Inventory pending's grey card is a grey stroke on a grey fill by design; the inventory tests cover it.
+    """
+    for state in status.STATES:
+        if state.fill == "#FFFFFF":
+            continue
+        for mark, fill, text, surfaces in (
+            (_mark(state), state.fill, state.text, ("#F0F2F5", "#FFFFFF")),
+            (_mark(state, dark=True), state.dark_fill, state.dark_text, ("#18191A", "#242526")),
+        ):
+            assert min(_contrast(mark, surface) for surface in (fill, *surfaces)) >= 3, (state.key, mark)
+            assert _contrast(text, fill) >= 4.5, (state.key, text)
 
 
 def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path) -> None:
