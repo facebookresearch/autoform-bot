@@ -9,6 +9,16 @@ from autoform_cli import dag_viewer, graph_pages
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
 
 
+def _viewer_source() -> str:
+    """Inspect readable implementation seams, not a compiler's private names.
+
+    The emitted runtime and its exact source fingerprint have separate asset
+    tests. Removing only the explicit private-property prefixes keeps these
+    control-flow checks independent of the development compiler's mangling.
+    """
+    return dag_viewer._SCRIPT.replace("refs.$", "refs.").replace("state.$", "state.")
+
+
 def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path: Path) -> None:
     nodes = tuple(
         ViewNode(
@@ -83,8 +93,10 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
     assert "innerHTML" not in script
     assert "textContent" in script
     assert "requestAnimationFrame" in script
-    assert 'statusCounts.has("inventory_pending")' in script
-    assert '"Inventory statuses are neutral:' in script
+    for inventory in ("inventory_checked", "inventory_pending"):
+        assert "it records inspection, not a mathematical proof." in payload["palette"][inventory]["meaning"]
+    assert payload["palette"]["inventory_pending"]["neutral"] is True
+    assert "mark.title = entry.meaning || statusLabel(key)" in _viewer_source()
 
 
 def test_a_view_too_large_for_the_map_gets_no_layout(tmp_path: Path) -> None:
@@ -100,7 +112,7 @@ def test_a_view_too_large_for_the_map_gets_no_layout(tmp_path: Path) -> None:
     # The runtime draws a map up to the same limit.
     assert (
         f"var NODE_W = {dag_viewer._NODE_WIDTH}, NODE_H = {dag_viewer._NODE_HEIGHT}, "
-        f"MAX_MAP_NODES = {dag_viewer.MAX_MAP_NODES}," in dag_viewer.viewer_script()
+        f"MAX_MAP_NODES = {dag_viewer.MAX_MAP_NODES}," in _viewer_source()
     )
     # An atlas that large keeps its overview's count of topics in each region.
     topics = tuple(
@@ -331,9 +343,10 @@ def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_pa
     payload = json.loads(output.read_text(encoding="utf-8"))
 
     assert {node["id"] for node in payload["nodes"] if node["isolated"]} == {"isolated"}
-    script = dag_viewer.viewer_script()
+    script = _viewer_source()
     assert "inventoryNodes" in script
-    assert '" · items without edges included"' in script
+    assert '"Include items without edges"' in script
+    assert "state.showIsolated || !node.isolated || node === state.selected" in script
 
 
 def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
@@ -346,7 +359,7 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
         ),
         fallback_total=5,
     )
-    script = dag_viewer.viewer_script()
+    script = _viewer_source()
 
     assert 'data-graph-src="unsafe%22%20data-x%3D%22oops"' in container
     assert 'src="scripts/viewer%22%20onload%3D%22oops.js"' in container
@@ -366,11 +379,13 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert 'refs.navigation = element("aside", "bp-dag-navigation")' in script
     assert 'refs.navigation.setAttribute("aria-label", "Wiki hierarchy")' in script
     assert 'renderNavigation()' in script
-    # MathJax typesets the rail and the details, which carry authored TeX, and no other container.
-    assert "if (!M || !M.typesetPromise) return;" in script
+    # Only the publisher's controlled formula service refreshes mathematics;
+    # navigation clones the complete reading source rather than graph summaries.
+    assert "typesetPromise" not in script
+    assert "window.AutoformMath.refresh(container)" in script
+    assert "window.AutoformMath.refresh(refs.readingBody)" in script
+    assert "refs.readingBody.replaceChildren(bundle.readingSource)" in script
     assert "typeset(refs.navigationInner); refs.navigationInner.textContent" in script
-    assert "typeset(refs.inspector); refs.inspectorInner.textContent" in script
-    assert script.count("typeset(refs.") == 2
     # Relation rows that Show more appends to the details are typeset in their list.
     assert 'more.addEventListener("click", function () { appendNextBatch(); typeset(list); });' in script
     assert 'refs.announcement.setAttribute("aria-live", "polite")' in script
@@ -383,19 +398,25 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert 'w: node.width, h: node.height' in script
     assert 'spotlight.before.has(edge.source) && spotlight.before.has(edge.target)' in script
     assert 'spotlight.after.has(edge.source) && spotlight.after.has(edge.target)' in script
-    assert "if (atlas && !state.selected) edgeIndexes.clear()" in script
+    # Global overview relationships remain visible; edge work still uses only
+    # incident edges of the selected node or currently visible nodes.
+    assert "if (atlas && state.selected)" in script
     assert "(incident.get(state.selected.id) || []).forEach" in script
+    assert "visible.forEach(function (node) { (incident.get(node.id) || []).forEach" in script
     assert "if (!state.activeDirty) return" in script
     assert "if (query === state.searchCacheQuery) return state.searchCache" in script
     assert f'data.schema !== "{dag_viewer.SCHEMA}"' in script
     assert f'index.schema !== "{dag_viewer.SEARCH_SCHEMA}"' in script
     assert 'ctx.fillText("×" + count' in script
-    assert "Title prefix" in script and "Id prefix" in script and "Word prefix" in script
-    assert "Exact Lean name" in script and "Statement match" in script and "All terms match" in script
+    # Ranking matches exact names before prefixes, and statement text last.
+    assert script.index("if (title === query)") < script.index("if (title.startsWith(query))")
+    assert script.index("if (lean === query)") < script.index("if (lean.startsWith(query))")
+    assert script.index("if (lean.indexOf(query)") < script.index("if (summary.indexOf(query)")
+    assert "terms.every(function (term) { return all.indexOf(term) >= 0; })" in script
 
 
 def test_explorer_pages_relations_and_clamps_zoom() -> None:
-    script = dag_viewer.viewer_script()
+    script = _viewer_source()
 
     assert "Math.min(visible + RELATION_PAGE, ids.length)" in script
     assert "ids.slice(visible, next)" in script

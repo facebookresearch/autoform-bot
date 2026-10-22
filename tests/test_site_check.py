@@ -250,8 +250,18 @@ def test_check_reports_only_the_broken_anchor_in_a_rendered_project_mkdocs_built
 
     landing = (project / "site-src/README.md").read_text(encoding="utf-8")
     assert '<div class="bp-next-target" data-autoform-node-id="ch/third">' in landing
-    # The dependency explorer selects a node from its #node= parameter, which no element is named for.
+    # The canonical theorem permalink reaches complete reading content and its
+    # graph in one shell; the old explorer is only a compatibility entrance.
     published = (project / "site/index.html").read_text(encoding="utf-8")
-    assert 'href="dependencies/chapters/ch.html#node=ch%2Fthird"' in published
+    assert 'href="roadmap/ch/index.html#third"' in published
+    assert 'class="bp-reading-source"' in published
+    assert 'class="bp-dag-viewer"' in published
+    chapter = (project / "site/roadmap/ch/index.html").read_text(encoding="utf-8")
+    assert 'id="third"' in chapter and 'data-autoform-node-id="ch/third"' in chapter
+    assert "The last result." in chapter
+    alias = (project / "site/dependencies/chapters/ch.html").read_text(encoding="utf-8")
+    assert 'data-page-href="../../roadmap/ch/index.html"' in alias
+    assert "Continue to the mathematical page" in alias
+    assert "The last result." not in alias
     assert report.pages > 0
     assert report.issues == ("roadmap/ch/index.html: #nowhere names no anchor #nowhere on roadmap/ch/index.html",)

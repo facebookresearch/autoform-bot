@@ -94,9 +94,12 @@ Autoform keeps the roadmap and dependency graph as Markdown under
 format and command contracts, or browse the
 [Cabannes thesis example](skills/setup/assets/cabannes-thesis-project/README.md).
 
-The browser publication presents large roadmaps as a full-page mathematics
-atlas: authored areas and bounded hierarchy preserve readable context, while
-dependency edges remain distinct from containment and repository provenance.
+The browser publication combines the mathematical book and dependency atlas in
+one full-page workspace. Global search opens any theorem beside its local
+dependencies; authored topic regions, source tracks and result lists provide
+other entry points. Complete published statements, proofs and citations remain
+the reading content, with dependencies distinct from containment and repository
+provenance.
 
 ## Development
 
@@ -107,7 +110,7 @@ make setup
 make lint
 make test
 make check-example
-make test-browser  # the dependency explorer in WebKit
+make test-browser  # integrated book/explorer and safe MathJax in WebKit
 ```
 
 Lean server architecture and operations are documented in

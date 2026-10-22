@@ -1433,7 +1433,7 @@ version instead of loading it. A copy edited since is replaced too, with a
 warning, since its edits are lost; move its macros to `tex-macros.json` and
 delete it.
 
-`render` writes `stylesheets/blueprint.css`, `javascripts/blueprint-mermaid.js`,
+`render` writes `stylesheets/blueprint.css`, `stylesheets/blueprint-dag.css`, `javascripts/blueprint-mermaid.js`,
 `javascripts/blueprint-live.js`, `javascripts/blueprint-dag.js`, and
 `assets/autoform.svg` over the vault's copies the same way, and writes
 `SUMMARY.md`, `structure.md`, `publication.json`, the `dependencies.md` and
@@ -2594,10 +2594,44 @@ article holds at projection time.
 
 ## Publication contract
 
-`autoform render` publishes the book, derived progress, and one dependency
-explorer as bounded project, chapter, and nested-scope projections. The legacy
-full route is a project-scale compatibility shell backed by a layout-free global
-search index, never an all-repository node cloud. Rendering never reads a
+`autoform render` publishes the book and one integrated dependency workspace as
+bounded project, chapter, and nested-scope projections. Each canonical reading
+page contains its complete captured mathematical HTML and a shared graph host.
+With JavaScript enabled, one persistent topic rail, breadcrumb, global search,
+map and reading pane navigate together; wide screens show reading beside the
+map and phones use a reading sheet. Without JavaScript, the same complete
+mathematical pages and native chapter-card anchors remain readable.
+
+Search matches titles, statements, article IDs and Lean names across the whole
+roadmap. A result opens its canonical article or chapter-card anchor directly
+and displays a bounded prerequisite/result/dependent neighborhood, including
+cross-topic edges. Results lists and source tracks are additional entry points.
+Regional overview cards aggregate only authored mathematical `area` values;
+directory names, import paths and containment never become dependency evidence.
+Back and Forward restore the reading position, map camera, filters and focus
+without reloading the document. The reading pane uses complete published HTML,
+not the graph's shortened summaries.
+
+`dependencies.html`, nested `dependencies/` pages and the legacy full route are
+compatibility shells for those canonical pages, not a second viewer. They share
+the same client and a layout-free global search index, never an all-repository
+node cloud. The graph and search schemas remain `autoform-dag-view/v2` and
+`autoform-dag-search/v1`. Search records keep their existing `url` meaning and
+may additionally carry `route`, `scope`, `data_url`, `parent`, `navigation` and
+`area`; optional `relations` rows are `[source_id, target_id, statement_count,
+proof_count]`. These are derived from the same captured publication as the
+reading pages and preserve authored statement/proof edge types.
+
+The shared reader requests formula refresh through `AutoformMath.refresh(root)`
+or a bubbling `autoform:math-refresh` event with `detail.root`. Its Promise
+settles after the controlled, coalesced pass; success is `true`, unavailable or
+unsafe input is `false`. The pinned safe MathJax configuration remains the only
+typesetter: no arbitrary text scan or unrestricted `MathJax.typesetPromise()`
+is used. Raw marked text supplies its own source; rendered clones can reuse
+retained source only when stamped by the current runtime. Formula refresh waits
+for readiness and replaces successful output without reinterpreting old glyphs.
+
+Rendering never reads a
 `graph.json` or an operational queue. Hidden files and directories, including
 `.implementation-notes`, are omitted, while a `.autoform` directory and
 symlinks, credentials, logs, provider state, and agent/task state outside hidden

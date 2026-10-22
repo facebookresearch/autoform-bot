@@ -18,8 +18,8 @@ CI (`.github/workflows/tests.yml`) runs the same four steps on Python 3.10 and
 3.13 for every pull request, for pushes to `main`, and for pushes to `scratch/`
 branches, which run CI on a branch with no pull request; a newer commit on a
 pull request cancels the older run. Five more jobs run beside it. `WebKit
-dependency explorer regressions` installs the `browser` extra and WebKit and
-runs `tests/test_dag_viewer_browser.py` with `AUTOFORM_REQUIRE_BROWSER_TESTS=1`,
+integrated book and explorer regressions` installs the `browser` extra and WebKit and
+runs the graph, integrated navigation and genuine MathJax browser suites with `AUTOFORM_REQUIRE_BROWSER_TESTS=1`,
 so a missing browser fails the job instead of skipping its tests; locally they
 skip without the extra, and `make test-browser` installs both and runs them as
 CI does. `real Lean
@@ -43,6 +43,17 @@ run only when `AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS=1` is set, as their CI job
 does; a missing toolchain or a failed download then fails them. Run
 `lake build` in `skills/setup/assets/cabannes-thesis-project` when you change
 the example's Lean sources or declarations.
+
+The book and explorer share a vanilla-JavaScript client. Its readable sources
+are `autoform_cli/assets/blueprint-navigation.js` and `blueprint-dag.js`; their
+styles are in `blueprint-dag.css`. When changing either script, install Node
+22.23.2 and run `make build-explorer`, then `make check-explorer` and
+`make test-browser`. The pinned development-only compiler writes
+`blueprint-explorer.min.js` with an exact source digest. CI checks its bytes and
+the unchanged 66 KB budget. Only explicitly `$`-prefixed private properties may
+be renamed: graph/index fields, route attributes, renderer callbacks and history
+snapshot fields keep their names. Python publication ships the compiled client;
+projects consuming Autoform do not need Node or a separate application build.
 
 `tests/test_real_repl.py` skips unless `AUTOFORM_RUN_REAL_REPL_TESTS=1`. To run
 it locally, build its fixture and install the oldest supported toolchain first:

@@ -215,13 +215,14 @@ STYLESHEET = "stylesheets/blueprint.css"
 MERMAID_SCRIPT = "javascripts/blueprint-mermaid.js"
 LIVE_SCRIPT = "javascripts/blueprint-live.js"
 DAG_SCRIPT = dag_viewer.SCRIPT_PATH
+DAG_STYLE = dag_viewer.STYLE_PATH
 LOGO = "assets/autoform.svg"
 #: The files render writes into every site, whatever the vault holds there.
-_ASSETS = (STYLESHEET, MERMAID_SCRIPT, MATHJAX_SCRIPT, LIVE_SCRIPT, DAG_SCRIPT, LOGO)
+_ASSETS = (STYLESHEET, MERMAID_SCRIPT, MATHJAX_SCRIPT, LIVE_SCRIPT, DAG_SCRIPT, DAG_STYLE, LOGO)
 #: Paths render writes at fixed places; an authored path differing only in case would collide.
 _GENERATED_PATHS = _GENERATED_ROOT_ENTRIES | set(_ASSETS)
 #: The explorer's files at paths a blueprint may already use for files of its own.
-_EXPLORER_PATHS = (graph_pages.PROJECT_PAYLOAD, DAG_SCRIPT)
+_EXPLORER_PATHS = (graph_pages.PROJECT_PAYLOAD, DAG_SCRIPT, DAG_STYLE)
 _ASSET_DIR = Path(__file__).resolve().parent / "assets"
 
 
@@ -761,9 +762,9 @@ def render_site(
 ) -> RenderReport:
     """Write deterministic, read-only projections of the Markdown blueprint.
 
-    Authored Markdown remains the only graph authority. The output joins three
-    reader surfaces over it: a book, derived progress, and a multiscale dependency
-    explorer. Publication excludes hidden and operational files, rejects symlinks,
+    Authored Markdown remains the only graph authority. Full mathematical reading,
+    derived progress, and multiscale graph navigation share one published shell.
+    Publication excludes hidden and operational files, rejects symlinks,
     and never embeds timestamps or machine-specific paths. The blueprint and the
     Lean sources are each read once, and every page, link and hash comes from
     those bytes. The site is built beside the output and swapped in whole.
@@ -1049,7 +1050,10 @@ def _render_pages(
     _append_book_navigation([p for p in book_pages if p != overview])
     structure = destination / STRUCTURE_PAGE
     structure.write_text(
-        _render_structure_page(page=structure),
+        _render_structure_page(
+            page=structure,
+            entry=destination / graph_pages.book_contents(graph, graph_views.group_nodes(graph)),
+        ),
         encoding="utf-8",
     )
     report.pages += 1
@@ -1063,8 +1067,36 @@ def _render_pages(
         statuses,
         destination,
         node_links=lambda page, node_ids: _node_links(targets, page, node_ids),
+        book_targets=targets,
     )
     report.pages += len(generated_graph_pages)
+
+    # These are the final safe pages, including generated theorem cards and
+    # their exact anchors. Never reread an authored article to build the reader.
+    contexts = graph_pages.publication_contexts(graph, destination)
+    page_contexts: dict[Path, tuple[Path, str, str | None]] = {}
+    for node_id, (page, anchor) in targets.items():
+        payload, scope = contexts[node_id]
+        if page not in page_contexts or not anchor:
+            page_contexts[page] = (payload, scope, node_id if not anchor else None)
+    canonical_pages = {
+        destination / source.relative_to(blueprint)
+        for source, content in site.files.items()
+        if isinstance(content, str) and source.suffix.lower() in PAGE_SUFFIXES
+    } | set(group_pages.values()) | {overview}
+    for page in canonical_pages:
+        if not page.is_file():
+            continue
+        payload, scope, owner = page_contexts.get(
+            page, (destination / graph_pages.PROJECT_PAYLOAD, "roadmap", None)
+        )
+        page.write_text(
+            _integrated_page(
+                page.read_text(encoding="utf-8"), page=page, destination=destination,
+                payload=payload, scope=scope, owner=owner,
+            ),
+            encoding="utf-8",
+        )
 
     for relative, contents in (
         (STYLESHEET, _stylesheet()),
@@ -1073,6 +1105,7 @@ def _render_pages(
         (MATHJAX_SCRIPT, site.script),
         (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
         (DAG_SCRIPT, dag_viewer.viewer_script()),
+        (DAG_STYLE, dag_viewer._STYLE),
         (LOGO, _logo()),
     ):
         asset = destination / relative
@@ -1080,6 +1113,37 @@ def _render_pages(
         asset.write_text(contents, encoding="utf-8")
     _write_publication_manifest(destination, graph, linker, coverage=coverage, **revisions)
     return report
+
+
+def _integrated_page(
+    text: str, *, page: Path, destination: Path, payload: Path, scope: str, owner: str | None = None,
+) -> str:
+    """Keep a complete published page readable before moving it into the shared UI.
+
+    Only generated framing is added. The header, mathematical body, statement
+    IDs, citations, status markup and shown-as-typed boxes remain verbatim.
+    """
+    lines = text.splitlines(keepends=True)
+    end = 0
+    if lines and lines[0].strip() == "---":
+        end = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
+    header, body = "".join(lines[:end]), "".join(lines[end:])
+    node = f' data-autoform-node-id="{html.escape(owner, quote=True)}"' if owner else ""
+    title = _header_title(text) or rendered_visible_text(_first_h1(text) or "") or _file_title(page)
+    explorer = dag_viewer.render_container(
+        mermaid.relative_link(payload, page, ".json"),
+        script_href=mermaid.relative_link(destination / DAG_SCRIPT, page, ".js"),
+        style_href=mermaid.relative_link(destination / DAG_STYLE, page, ".css"),
+        search_href=mermaid.relative_link(destination / graph_pages.SEARCH_INDEX, page, ".json"),
+        page_href=_as_published(mermaid.relative_link(page, page, ".html")),
+        scope=scope,
+        fallback_links=(("Read the mathematical page", "#"),),
+    )
+    return (
+        header + '\n<div class="bp-explorer-page" markdown="1">\n'
+        + f'<div class="bp-reading-source"{node} data-page-title="{html.escape(title, quote=True)}" markdown="1">\n\n'
+        + body + '\n\n</div>\n\n' + explorer + '\n</div>\n'
+    )
 
 
 def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str], frozenset[str]]:
@@ -1914,14 +1978,15 @@ STRUCTURE_PAGE = "structure.md"
 def _render_structure_page(
     *,
     page: Path,
+    entry: Path | None = None,
 ) -> str:
-    """Keep the old structure route as a bounded doorway into the explorer.
+    """Keep the old structure route as a bounded doorway into the mathematical wiki.
 
     The explorer owns hierarchy now. Republishing every source path as one raw
     HTML tree made this compatibility page larger than the rest of a small
     site, duplicated the explorer, and became unusable on repository-scale books.
     """
-    explorer = mermaid.relative_link(page.parent / "dependencies.md", page, ".md")
+    explorer = mermaid.relative_link(entry or page.parent / "dependencies.md", page, ".md")
     return "\n".join(
         [
             "---",
@@ -1934,10 +1999,10 @@ def _render_structure_page(
             "",
             "# Browse the roadmap",
             "",
-            "The dependency explorer presents the authored hierarchy and its mathematical",
+            "The mathematical wiki presents the authored hierarchy and its mathematical",
             "relations without flattening the repository into a file listing.",
             "",
-            f"[Open the roadmap explorer]({explorer})",
+            f"[Open the mathematical wiki]({explorer})",
             "",
         ]
     )
@@ -1949,7 +2014,7 @@ def _render_summary_nav(
     destination: Path,
     overview: Path,
 ) -> str:
-    """Write the site nav as Markdown so the Book tab holds real chapters.
+    """Write one mathematical site nav with the book's real chapters.
 
     mkdocs.yml cannot know a project's chapters, and hand-listing them would be
     the second navigation manifest the roadmap skill forbids. mkdocs-literate-nav
@@ -1966,7 +2031,7 @@ def _render_summary_nav(
         "---",
         "",
         f"- [Home]({overview.relative_to(destination).as_posix()})",
-        "- Book",
+        "- Mathematics",
     ]
     for page in book_pages:
         if page == overview:
@@ -1984,12 +2049,6 @@ def _render_summary_nav(
     if coverage.is_file():
         title = title_text(_first_h1(coverage.read_text(encoding="utf-8")) or "Coverage")
         lines.append(f"    - [{title}](coverage/README.md)")
-    lines.extend(
-        [
-            "- Graph",
-            "    - [Dependency explorer](dependencies.md)",
-        ]
-    )
     return "\n".join(lines) + "\n"
 
 def _render_landing_page(
@@ -2006,11 +2065,9 @@ def _render_landing_page(
 ) -> str:
     """The landing page: what this is, how far it has got, and what is next.
 
-    Once the roadmap has articles to draw, the page is the full-page project
-    explorer, on the payload dependencies.md mounts, and the hero opens the
-    explorer's hierarchy rail (its details sheet on phones) in place of the
-    explorer's own title. The page then has one heading, and the map has the
-    rest of the window.
+    Its complete generated hero and next result remain reading content. The
+    shared project graph shell is attached only after all pages are final,
+    so landing pages and mathematical chapters use the same viewer once.
     """
     body = _document_body(text)
     heading = _first_h1(text) or ""
@@ -2054,17 +2111,11 @@ def _render_landing_page(
             if book == Path("README.md")
             else '<a class="bp-intro-book" href="'
             + html.escape(_as_published(mermaid.relative_link(destination / book, page, ".html")), quote=True)
-            + '">Read the book</a>'
+            + '">Explore all mathematics</a>'
         )
-        explorer = dag_viewer.render_container(
-            graph_pages.PROJECT_PAYLOAD,
-            script_href=mermaid.relative_link(destination / DAG_SCRIPT, page, ".js"),
-            fallback_links=(("Open the dependency explorer", "dependencies.html"),),
-            fallback_total=1,
-            search_href=graph_pages.SEARCH_INDEX,
-            intro=f'<div class="bp-dag-intro bp-landing-intro">{hero}{book_link}{next_up}</div>',
-        )
-        return "\n".join([*front, "  - footer", "---", "", explorer]).rstrip() + "\n"
+        # The shared shell is attached after all full reading content is final.
+        reading = f'<div class="bp-landing-intro">{hero}{book_link}{next_up}</div>'
+        return "\n".join([*front, "  - footer", "---", "", reading]).rstrip() + "\n"
     # A roadmap without articles has nothing to explore, so the hero stands
     # over its status breakdown.
     breakdown = mermaid.render_legend(
@@ -2939,7 +2990,6 @@ def _render_environment(
     )
 
     code_links, implementation_rows, linked, unresolved = _lean_presentation(node, linker)
-    context_link = _graph_context_link(node, page=page, destination=destination)
     source_link = _vault_source_link(node, repo_root=repo_root, linker=linker)
     meta_rows = implementation_rows
     if node_status.key == "conditional":
@@ -2982,7 +3032,6 @@ def _render_environment(
         f'<span class="bp-thmlabel">{html.escape(number)}</span>'
         f'<span class="bp-thmtitle">{html.escape(node.title)}</span>'
         f"{code_links}"
-        f"{context_link}"
         f"{source_link}"
         f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}">#</a>'
         f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}">'
@@ -3088,22 +3137,6 @@ def _vault_source_link(node: Node, *, repo_root: Path, linker) -> str:
     )
     return (
         f'<a class="bp-source-link" href="{html.escape(href, quote=True)}" '
-        f'aria-label="{label}" title="{label}">{icon}</a>'
-    )
-
-
-def _graph_context_link(node: Node, *, page: Path, destination: Path) -> str:
-    """Link a textbook statement to its hash-focused dependency explorer."""
-    href = graph_pages.scope_page_href(destination, node.id, page, parent=node.parent)
-    label = html.escape(f"Open dependency explorer for {node.title}", quote=True)
-    icon = (
-        '<svg class="bp-context-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
-        '<circle cx="6" cy="12" r="2.25"/><circle cx="18" cy="6" r="2.25"/>'
-        '<circle cx="18" cy="18" r="2.25"/><path d="m8 11 7.8-4M8 13l7.8 4"/>'
-        "</svg>"
-    )
-    return (
-        f'<a class="bp-context-link" href="{html.escape(href, quote=True)}" '
         f'aria-label="{label}" title="{label}">{icon}</a>'
     )
 
@@ -3676,24 +3709,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   stroke-linecap: round;
   stroke-linejoin: round;
 }}
-.bp-context-link {{
-  display: inline-flex;
-  align-items: center;
-  margin-left: 0.3rem;
-  color: var(--bp-muted);
-  text-decoration: none;
-}}
-.bp-context-link:visited {{ color: var(--bp-muted); }}
-.bp-context-link:hover, .bp-context-link:visited:hover {{ color: var(--bp-link-hover); text-decoration: none; }}
-.bp-context-icon {{
-  width: 1rem;
-  height: 1rem;
-  fill: var(--bp-surface);
-  stroke: currentColor;
-  stroke-width: 1.7;
-  stroke-linecap: round;
-}}
-
 .bp-permalink {{
   margin-left: 0.5rem;
   font-family: {mono};

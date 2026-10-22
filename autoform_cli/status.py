@@ -109,7 +109,7 @@ INVENTORY_STATES: tuple[State, ...] = (
         stroke="#65676B",
         dark_stroke="#B0B3B8",
     ),
-    State("inventory_pending", "inventory pending", "#F0F2F5", "#8A8D91", "#65676B",
+    State("inventory_pending", "inventory pending", "#BDC3CB", "#85898E", "#45494F",
           "#242526", "#8A8D91", "#B0B3B8"),
 )
 
