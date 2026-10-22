@@ -426,6 +426,25 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert "Exact Lean name" not in script and "bp-dag-result-reason" not in script
 
 
+def test_a_press_on_a_card_pans_once_it_travels_and_otherwise_stays_a_tap() -> None:
+    """A press on a card was dropped, so a drag or pinch over the cards, most of a phone's map, did nothing.
+
+    Capturing the pointer on the press would send a tap's click to the stage, so the card would never open.
+    """
+    script = _viewer_source()
+    down = script[script.index("function pointerDown(event)"):script.index("function pinchState()")]
+    assert ".bp-dag-node" not in down and "setPointerCapture" not in down.split("function grab()")[0]
+    assert "if (state.pointers.size === 2) { state.pinch = pinchState(); grab(); }" in down
+    assert "state.moved = true;" in down and "refs.stage.setPointerCapture(id)" in down
+    move = script[script.index("function pointerMove(event)"):script.index("function pointerUp(event)")]
+    assert "if (!state.moved) { if (Math.hypot(dx, dy) <= 8) return; grab(); }" in move
+    assert move.index("grab();") < move.index("state.pointers.set(")
+    assert '!state.moved && state.selected && !event.target.closest(".bp-dag-node")) clearSelection(true)' in script
+    assert "event.stopPropagation(); if (!state.moved || !event.detail) activateNode(node, false);" in script
+    # A tap leaves the history to the card it opens; only a pan or pinch checkpoints the camera.
+    assert "if (state.moved) remember();" in script[script.index("function pointerUp(event)"):]
+
+
 def test_explorer_counts_agree_with_their_nouns() -> None:
     """The rail read "1 items · 1 dependencies"."""
     script = _viewer_source()

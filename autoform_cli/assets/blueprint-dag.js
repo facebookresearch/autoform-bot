@@ -1363,7 +1363,8 @@
       if (node._region && node.summary) content.appendChild(element("span", "bp-dag-node-summary", node.summary));
       content.appendChild(element("span", "bp-dag-node-relation", ""));
       if (content !== control) control.appendChild(content);
-      control.addEventListener("click", function (event) { event.stopPropagation(); activateNode(node, false); });
+      // A drag or pinch that began on the card is not a tap; a keyboard click has no detail and always opens it.
+      control.addEventListener("click", function (event) { event.stopPropagation(); if (!ui$moved || !event.detail) activateNode(node, false); });
       if (!navigation) control.addEventListener("dblclick", function () { var href = safeHref(node.url); if (href) window.location.href = href; });
       control.addEventListener("keydown", function (event) {
         if (/^Arrow(Left|Right|Up|Down)$/.test(event.key)) {
@@ -1392,28 +1393,35 @@
       return best;
     }
 
+    // A press on a card stays a tap until it travels 8px or a second finger lands. Only then does the stage
+    // take the pointers, since a captured press would send the tap's click to the stage instead of the card.
     function pointerDown(event) {
-      if (event.target.closest && event.target.closest(".bp-dag-node")) return;
-      ui$pointers.set(event.pointerId, {x: event.clientX, y: event.clientY, type: event.pointerType});
-      ui$moved = false; dom$stage.setPointerCapture(event.pointerId); dom$stage.dataset.dragging = "true";
-      if (ui$pointers.size === 2) ui$pinch = pinchState();
+      ui$pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
+      if (ui$pointers.size === 1) ui$moved = false;
+      if (ui$pointers.size === 2) { ui$pinch = pinchState(); grab(); }
+    }
+    function grab() {
+      ui$moved = true; dom$stage.dataset.dragging = "true";
+      ui$pointers.forEach(function (_, id) { dom$stage.setPointerCapture(id); });
     }
     function pinchState() {
       var points = Array.from(ui$pointers.values()), dx = points[1].x - points[0].x, dy = points[1].y - points[0].y;
       return {distance: Math.max(1, Math.hypot(dx, dy)), x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2};
     }
     function pointerMove(event) {
-      if (!ui$pointers.has(event.pointerId)) return;
-      var previous = ui$pointers.get(event.pointerId); ui$pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
+      var previous = ui$pointers.get(event.pointerId);
+      if (!previous) return;
+      var dx = event.clientX - previous.x, dy = event.clientY - previous.y;
+      // The press point stays put until the 8px crossing, so the first pan step carries the whole way travelled.
+      if (!ui$moved) { if (Math.hypot(dx, dy) <= 8) return; grab(); }
+      ui$pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
       if (ui$pointers.size === 1) {
-        var dx = event.clientX - previous.x, dy = event.clientY - previous.y;
-        if (Math.abs(dx) + Math.abs(dy) > 1) ui$moved = true;
         ui$transform.x += dx; ui$transform.y += dy; schedule();
       } else if (ui$pointers.size === 2) {
         var next = pinchState(), rect = dom$stage.getBoundingClientRect();
         ui$transform.x += next.x - ui$pinch.x; ui$transform.y += next.y - ui$pinch.y;
         zoomAt(next.distance / ui$pinch.distance, next.x - rect.left, next.y - rect.top);
-        ui$pinch = next; ui$moved = true;
+        ui$pinch = next;
       }
     }
     function pointerUp(event) {
@@ -1421,8 +1429,10 @@
       var wasSingle = ui$pointers.size === 1; ui$pointers.delete(event.pointerId);
       if (ui$pointers.size < 2) ui$pinch = null;
       if (!ui$pointers.size) dom$stage.dataset.dragging = "false";
-      if (event.type === "pointerup" && wasSingle && !ui$moved && ui$selected) clearSelection(true);
-      remember();
+      // A tap on a card leaves the selection to the card's click.
+      if (event.type === "pointerup" && wasSingle && !ui$moved && ui$selected && !event.target.closest(".bp-dag-node")) clearSelection(true);
+      // Only a pan or pinch moved the camera; a card's tap records its own history.
+      if (ui$moved) remember();
     }
 
     function searchScore(node, query) {

@@ -815,6 +815,40 @@ def test_isolated_focal_context_keeps_connected_peers_and_their_real_edge(
     }""", [f'.bp-dag-node[data-autoform-node-id="{_BASE}"]', f'.bp-dag-node[data-autoform-node-id="{_TARGET}"]']) is True
 
 
+def test_a_drag_from_a_map_card_pans_and_keeps_the_reading_and_a_tap_opens_it(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    page, site = workspace_page, workspace_site
+    _open(page, site, workspace_runtime, _TARGET)
+    _selected(page, _TARGET)
+    card = _focus_graph_node(page, _BASE)
+    url = page.url
+    before = card.bounding_box()
+    stage = page.locator(".bp-dag-stage").bounding_box()
+    assert before and stage
+    x, y = before["x"] + before["width"] / 2, before["y"] + before["height"] / 2
+    # Drag towards the middle of the map, so the card stays in view for the tap.
+    dx = 40 if x < stage["x"] + stage["width"] / 2 else -40
+    dy = 30 if y < stage["y"] + stage["height"] / 2 else -30
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + dx, y + dy, steps=5)
+    page.mouse.up()
+    _frames(page)
+    after = card.bounding_box()
+    assert after
+    assert abs(after["x"] - before["x"] - dx) < 1 and abs(after["y"] - before["y"] - dy) < 1
+    _selected(page, _TARGET)
+    assert page.url == url
+
+    page.mouse.move(x + dx, y + dy)
+    page.mouse.down()
+    page.mouse.move(x + dx + 3, y + dy + 4, steps=2)
+    page.mouse.up()
+    page.wait_for_url(site.route(_BASE))
+    _selected(page, _BASE)
+
+
 def test_native_reader_and_library_links_remain_soft_navigation(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:

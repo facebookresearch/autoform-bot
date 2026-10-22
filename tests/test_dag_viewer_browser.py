@@ -908,6 +908,44 @@ def test_a_plain_wheel_pans_the_full_page_explorer(desktop_page: object, explore
     assert 1.0 < node.evaluate(scale) / unzoomed < 1.1
 
 
+def test_a_drag_that_starts_on_a_card_pans_and_a_tap_still_opens_it(desktop_page: object, explorer_url: str) -> None:
+    """Presses on cards were ignored by the map, so on a phone, where cards cover most of it, a drag did nothing."""
+    page = desktop_page
+    _open_ready(page, explorer_url)
+    node = page.locator('[data-autoform-node-id="chapter/middle"]')
+    frames = "() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))"
+    page.evaluate(frames)
+    hit = """node => {
+      const box = node.getBoundingClientRect();
+      return node.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+    }"""
+    assert node.evaluate(hit) is True
+    before = node.bounding_box()
+    assert before is not None
+    x, y = before["x"] + before["width"] / 2, before["y"] + before["height"] / 2
+
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 60, y + 40, steps=6)
+    page.mouse.up()
+    page.evaluate(frames)
+    after = node.bounding_box()
+    assert after is not None
+    # The first step past 8px carries the whole way travelled, so the card ends under the pointer.
+    assert abs(after["x"] - before["x"] - 60) < 1 and abs(after["y"] - before["y"] - 40) < 1
+    playwright.expect(node).to_have_attribute("data-selected", "false")
+    assert "node=" not in page.url
+
+    # A press that wobbles less than 8px is still a tap.
+    assert node.evaluate(hit) is True
+    page.mouse.move(x + 60, y + 40)
+    page.mouse.down()
+    page.mouse.move(x + 64, y + 43, steps=2)
+    page.mouse.up()
+    playwright.expect(node).to_have_attribute("data-selected", "true")
+    assert "node=chapter%2Fmiddle" in page.url
+
+
 def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_url: str) -> None:
     page = desktop_page
     _open_ready(page, explorer_url)
