@@ -39,6 +39,8 @@ MODULE_IMPORT_IMPACT_SCHEMA = "autoform-module-import-impact/v1"
 MODULE_IMPORT_SCOPE = "loaded-root-library-graph"
 IMPORT_CLOSURE_SCOPE = "import-closure"
 MODULE_SCOPES = (MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE)
+#: The most importer modules a stale-build message names before it names libraries instead.
+_NAMED_MODULES_LIMIT = 50
 
 #: Every line the impact probe wants read back starts with this marker.
 IMPACT_MARKER = "AUTOFORM_IMPACT "
@@ -503,6 +505,22 @@ def import_closure(
     return frozenset(loaded), frozenset(_reverse_closure((target,), users))
 
 
+def _check_header_graph(
+    modules: Mapping[str, ModuleEvidence], graph: Mapping[str, tuple[str, ...] | None]
+) -> None:
+    """Refuse unless each loaded module's header imports exactly what Lean loaded for it."""
+
+    headers = {_name_key(name): imported for name, imported in graph.items()}
+    for name, evidence in sorted(modules.items()):
+        parsed = headers.get(_name_key(name))
+        loaded = sorted(evidence.direct_local_imports)
+        if parsed is None or {_name_key(item) for item in parsed} != {_name_key(item) for item in loaded}:
+            raise ImpactError(
+                f"Lean loaded {name} with local imports {loaded} but its header imports "
+                f"{list(parsed or [])}; rerun without --module-scope"
+            )
+
+
 def _validated_module_evidence(
     text: str,
     *,
@@ -640,15 +658,16 @@ def render_impact_probe(
     artifact_dir: Path | None = None,
     glob_directories: Iterable[tuple[Path, str, str]] = (),
     emit_module_evidence: bool = False,
+    selected_modules: Iterable[str] = (),
 ) -> str:
     """Render the Lean program that records every project-local constant.
 
     Given ``artifact_dir``, the root package's Lean artifact directory, the
     probe refuses a root-package module the captured inventory lacks: a loaded
     module outside ``project_modules`` whose OLean lies under ``artifact_dir``,
-    or a module the probe did not load that it finds by walking a
-    ``glob_directories`` entry. Each entry is the directory of an ``M.*`` or
-    ``M.+`` glob, with ``M`` and the glob. ``emit_module_evidence`` also
+    or a module outside ``selected_modules``, the modules the libraries
+    select, that it finds by walking a ``glob_directories`` entry. Each entry
+    is the directory of an ``M.*`` or ``M.+`` glob, with ``M`` and the glob. ``emit_module_evidence`` also
     records every loaded project module's source, artifact and direct imports.
     """
 
@@ -669,6 +688,7 @@ def render_impact_probe(
         output_env=skeleton.PROBE_OUTPUT_ENV,
         output_limit=skeleton.DEFAULT_PROBE_OUTPUT_LIMIT,
         project_modules=_lean_requests(tuple(sorted(set(project_modules)))),
+        selected_modules=_lean_requests(tuple(sorted(set(selected_modules)))),
     )
 
 
@@ -888,6 +908,7 @@ class ModuleImportImpactReport:
     affected_unowned_helpers: tuple[ModuleImpactedHelper, ...]
     affected_claim_targets: tuple[str, ...]
     claim_targets: tuple[str, ...]
+    module_scope: str = MODULE_IMPORT_SCOPE
 
     @property
     def selected_affected(self) -> bool:
@@ -928,7 +949,7 @@ class ModuleImportImpactReport:
             "lean_source_revision": self.lean_source_revision,
             "build_revision": self.build_revision,
             "module_graph_revision": self.module_graph_revision,
-            "module_scope": MODULE_IMPORT_SCOPE,
+            "module_scope": self.module_scope,
             "article": {
                 "id": self.article.id,
                 "article_id": self.article.article_id,
@@ -1117,6 +1138,10 @@ def compute_impact(
     )
 
 
+def _nothing_out_of_scope(name: str) -> bool:
+    return False
+
+
 def compute_module_import_impact(
     records: Mapping[str, ConstantRecord],
     modules: Mapping[str, ModuleEvidence],
@@ -1126,6 +1151,8 @@ def compute_module_import_impact(
     *,
     source_revision: str,
     lean_source_revision: str = "",
+    module_scope: str = MODULE_IMPORT_SCOPE,
+    out_of_scope: Callable[[str], bool] = _nothing_out_of_scope,
 ) -> ModuleImportImpactReport:
     """Return the reverse-import scope of changing ``module`` imports.
 
@@ -1134,7 +1161,9 @@ def compute_module_import_impact(
     can affect. Removing an import can also drop modules from the build,
     transitively, when only imports bring them in, as under a library's
     roots; this scope does not list them. It never refuses the edit merely
-    because the scope is larger than one article.
+    because the scope is larger than one article. ``out_of_scope`` says which
+    unresolved names lie only in modules this scope did not load; those cannot
+    be affected.
     """
 
     if module not in modules:
@@ -1156,7 +1185,7 @@ def compute_module_import_impact(
         for declaration in article.declarations:
             resolved = resolve(declaration, f"{article.id}: lean: ")
             if resolved is None:
-                if not article.mathlib:
+                if not article.mathlib and not out_of_scope(declaration):
                     unresolved_names.append(declaration)
             else:
                 resolved_names.append(resolved)
@@ -1224,6 +1253,7 @@ def compute_module_import_impact(
         affected_unowned_helpers=affected_helpers,
         affected_claim_targets=affected_claim_targets,
         claim_targets=claim_targets,
+        module_scope=module_scope,
     )
 
 
@@ -1416,6 +1446,9 @@ class _ImpactEvidence:
     records: Mapping[str, ConstantRecord]
     modules: Mapping[str, ModuleEvidence]
     locate: Locator
+    out_of_scope: Callable[[str], bool] = _nothing_out_of_scope
+    #: Under the import-closure scope, the modules the probe imported (inventory spelling).
+    importers: frozenset[str] = frozenset()
 
 
 def _load_impact_evidence(
@@ -1426,6 +1459,8 @@ def _load_impact_evidence(
     timeout: float | None,
     require_modules: bool,
     require_default_declarations: bool,
+    module: str | None = None,
+    module_scope: str = MODULE_IMPORT_SCOPE,
 ) -> _ImpactEvidence:
     """Load one freshness-bound roadmap, source, module, and Lean environment."""
 
@@ -1465,6 +1500,14 @@ def _load_impact_evidence(
             source_snapshot,
             strict_module_ownership=require_modules,
         )
+        selected_modules = imports
+        graph: Mapping[str, tuple[str, ...] | None] = {}
+        importers: frozenset[str] = frozenset()
+        if module_scope == IMPORT_CLOSURE_SCOPE:
+            assert module is not None
+            graph = header_graph(libraries, source_snapshot)
+            _, importers = import_closure(selected_modules, graph, module)
+            imports = tuple(sorted(importers))
         try:
             output = skeleton.run_probe(
                 render_impact_probe(
@@ -1473,6 +1516,7 @@ def _load_impact_evidence(
                     artifact_dir=_root_artifact_dir(libraries),
                     glob_directories=_glob_directories(libraries),
                     emit_module_evidence=require_modules,
+                    selected_modules=selected_modules,
                 ),
                 root,
                 timeout=skeleton.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
@@ -1482,8 +1526,12 @@ def _load_impact_evidence(
             said = skeleton.stale_build_said(error)
             if said is None:
                 raise
-            # The probe imports every root library's modules, which can be thousands; the libraries say the same.
-            names = shlex.join(sorted({library.name for library in libraries}))
+            if module_scope == IMPORT_CLOSURE_SCOPE and len(imports) <= _NAMED_MODULES_LIMIT:
+                # Building the importers builds everything they import, and nothing else.
+                names = shlex.join(imports)
+            else:
+                # The probe imports every root library's modules, which can be thousands; the libraries say the same.
+                names = shlex.join(sorted({library.name for library in libraries}))
             checked = f"{len(imports)} module{'' if len(imports) == 1 else 's'}"
             raise SkeletonError(
                 [
@@ -1519,6 +1567,19 @@ def _load_impact_evidence(
             snapshot=source_snapshot,
             required_modules=required_modules,
         )
+    out_of_scope: Callable[[str], bool] = _nothing_out_of_scope
+    if module_scope == IMPORT_CLOSURE_SCOPE:
+        _check_header_graph(module_evidence, graph)
+        loaded_keys = {_name_key(name) for name in module_evidence}
+        module_of_path = {path: name for name, path in _module_source_paths(libraries, source_snapshot).items()}
+
+        def out_of_scope(name: str) -> bool:
+            found = source_snapshot.index.occurrences(name)
+            return bool(found) and all(
+                (owner := module_of_path.get(item.path.as_posix())) is not None
+                and _name_key(owner) not in loaded_keys
+                for item in found
+            )
 
     return _ImpactEvidence(
         source_revision=source_revision,
@@ -1528,6 +1589,8 @@ def _load_impact_evidence(
         records=records,
         modules=module_evidence,
         locate=_locator(libraries, source_snapshot),
+        out_of_scope=out_of_scope,
+        importers=importers,
     )
 
 
@@ -1574,6 +1637,7 @@ def module_import_impact(
     *,
     lean_root: str | Path,
     timeout: float | None = None,
+    module_scope: str = MODULE_IMPORT_SCOPE,
 ) -> ModuleImportImpactReport:
     """Report, without blocking it, the reverse-import scope of an import edit."""
 
@@ -1584,8 +1648,10 @@ def module_import_impact(
         timeout=timeout,
         require_modules=True,
         require_default_declarations=False,
+        module=module,
+        module_scope=module_scope,
     )
-    return compute_module_import_impact(
+    report = compute_module_import_impact(
         evidence.records,
         evidence.modules,
         evidence.articles,
@@ -1593,7 +1659,17 @@ def module_import_impact(
         module,
         source_revision=evidence.source_revision,
         lean_source_revision=evidence.lean_source_revision,
+        module_scope=module_scope,
+        out_of_scope=evidence.out_of_scope,
     )
+    if module_scope == IMPORT_CLOSURE_SCOPE and (
+        {_name_key(name) for name in report.affected_modules} != {_name_key(name) for name in evidence.importers}
+    ):
+        raise ImpactError(
+            "Lean's module graph and the module headers disagree on what imports "
+            f"{module}; rerun without --module-scope"
+        )
+    return report
 
 
 def _locator(
@@ -1689,7 +1765,7 @@ def format_module_import_impact(report: ModuleImportImpactReport) -> list[str]:
         f"Lean source revision: {report.lean_source_revision or 'unbound'}",
         f"Lean build revision: {report.build_revision}",
         f"Module graph revision: {report.module_graph_revision}",
-        f"Module scope: {MODULE_IMPORT_SCOPE}",
+        f"Module scope: {report.module_scope}",
         f"Module claim target: {report.module_claim_target} (key {report.module_claim_key})",
         "Affected project modules: " + ", ".join(report.affected_modules),
         "Removing an import can also drop modules that only imports bring into the build; "

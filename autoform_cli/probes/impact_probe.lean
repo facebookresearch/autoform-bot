@@ -141,6 +141,8 @@ set_option maxHeartbeats 0 in
 run_cmd do
   let projectModules : Std.HashSet Name :=
     Std.HashSet.ofList (← AutoformImpact.requestedNames {project_modules}).toList
+  let selectedModules : Std.HashSet Name :=
+    Std.HashSet.ofList (← AutoformImpact.requestedNames {selected_modules}).toList
   let env ← getEnv
   -- `env.header` is slow to reach from the interpreted probe, so module names
   -- are read once.
@@ -148,6 +150,7 @@ run_cmd do
   let moduleOf (n : Name) : Option Name :=
     (env.getModuleIdxFor? n).map fun idx => moduleNames[idx.toNat]!
   let isLocalModule (m : Name) : Bool := projectModules.contains m
+  let isSelectedModule (m : Name) : Bool := selectedModules.contains m
   let isLocal (n : Name) : Bool := (moduleOf n).any isLocalModule
   -- Records go to the file the CLI names: a command's stdout is buffered into
   -- one message, and any other write could split a record.
@@ -158,15 +161,16 @@ run_cmd do
     -- A root-package module the inventory missed gets no records, so what it
     -- uses and imports would silently drop out of the scope. Lake builds every
     -- module an `M.*` or `M.+` glob finds by this same walk of the live tree,
-    -- imported or not. This probe imports every glob module the inventory
-    -- holds, so one it did not load is one the inventory missed (even if
-    -- another srcDir holds a file of that name).
+    -- imported or not, so one the libraries' captured selection lacks is one
+    -- the inventory missed (even if another srcDir holds a file of that name).
+    -- The walk is compared with that selection, so the probe need not import
+    -- every glob module.
     if {check_inventory} then
       let artifactDir := (← IO.FS.realPath {artifact_dir}).components
       for (dir, base, glob) in (← AutoformImpact.globDirectories {glob_directories}) do
         if (← dir.isDir) then
           Lean.forEachModuleInDir dir fun sub => do
-            unless (env.getModuleIdx? (base ++ sub)).isSome do
+            unless isSelectedModule (base ++ sub) do
               throwError m!"the impact probe found root-package module {{base ++ sub}} under glob {{glob}}, \
                 but loaded no captured source for it: the source inventory skips nested Git checkouts, \
                 ignored directories such as `build`, and symlinked directories"

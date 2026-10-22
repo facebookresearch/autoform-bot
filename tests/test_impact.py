@@ -2142,6 +2142,153 @@ def test_cli_import_impact_text_report_lists_each_section(tmp_path: Path, monkey
     assert calls[0]["timeout"] == 30
 
 
+def _closure_root(tmp_path: Path) -> Path:
+    """A stub Lean root: Demo imports Demo.Mid, which imports Demo.Base; Demo.Side stands apart."""
+
+    root = tmp_path / "lean"
+    (root / "Demo").mkdir(parents=True)
+    (root / "lakefile.toml").write_text(
+        'name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\nglobs = ["Demo.*"]\n', encoding="utf-8"
+    )
+    for name, text in (
+        ("Demo.lean", "import Demo.Mid\n"),
+        ("Demo/Mid.lean", "import Demo.Base\n\ntheorem Demo.mid : True := trivial\n"),
+        ("Demo/Base.lean", "def Demo.base : Nat := 1\n"),
+        ("Demo/Side.lean", "def Demo.side : Nat := 2\n"),
+    ):
+        (root / name).write_text(text, encoding="utf-8")
+    return root
+
+
+def _closure_evidence(root: Path, *, mid_imports: tuple[str, ...] = ("Demo.Base",)) -> tuple[ModuleEvidence, ...]:
+    """What Lean reports after importing Demo and Demo.Mid."""
+
+    def evidence(module: str, *imports: str) -> ModuleEvidence:
+        source = root.joinpath(*module.split(".")).with_suffix(".lean").resolve()
+        return ModuleEvidence(module, str(source), imports)
+
+    return (evidence("Demo", "Demo.Mid"), evidence("Demo.Mid", *mid_imports), evidence("Demo.Base"))
+
+
+def _closure_project(tmp_path: Path) -> Path:
+    project = tmp_path / "project"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    for name, lean in (("mid.md", "Demo.mid"), ("side.md", "Demo.side"), ("lost.md", "Demo.lost")):
+        _write_article(project, name, metadata=["declaration: theorem", "statement: formalized", f"lean: {lean}"])
+    return project
+
+
+_CLOSURE_RECORDS = [
+    _payload("Demo.base", kind="def", module="Demo.Base"),
+    _payload("Demo.mid", module="Demo.Mid"),
+]
+
+
+def test_import_closure_scope_imports_only_the_module_and_its_importers(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    root = _closure_root(tmp_path)
+    project = _closure_project(tmp_path)
+    calls = _stub_probe(monkeypatch, _CLOSURE_RECORDS, modules=_closure_evidence(root))
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/mid", "Demo.Mid", str(project),
+         "--lean-root", str(root), "--module-scope", "import-closure", "--json"]
+    )
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    assert report["module_scope"] == "import-closure"
+    assert report["affected_modules"] == ["Demo", "Demo.Mid"]
+    (call,) = calls
+    assert str(call["probe"]).startswith("import Demo\nimport Demo.Mid\n-- Autoform impact probe.")
+    # Demo.side lives in Demo.Side, which this scope does not load, so it is
+    # out of scope; Demo.lost is in no source, so its scope stays unknown.
+    assert [article["id"] for article in report["unresolved_articles"]] == ["chapter/lost"]
+
+
+def test_import_closure_scope_refuses_a_header_lean_reads_differently(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    root = _closure_root(tmp_path)
+    project = _closure_project(tmp_path)
+    _stub_probe(monkeypatch, _CLOSURE_RECORDS, modules=_closure_evidence(root, mid_imports=()))
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/mid", "Demo.Mid", str(project),
+         "--lean-root", str(root), "--module-scope", "import-closure"]
+    )
+
+    output = capsys.readouterr()
+    assert code == 2
+    assert output.err.splitlines() == [
+        "error: Lean loaded Demo.Mid with local imports [] but its header imports ['Demo.Base']; "
+        "rerun without --module-scope"
+    ]
+
+
+def test_import_closure_scope_reports_an_unloaded_module_before_lake(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    root = _closure_root(tmp_path)
+    (root / "Demo" / "Dormant.lean").write_text("import Demo.Mid\n", encoding="utf-8")
+    (root / "lakefile.toml").write_text('name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\n', encoding="utf-8")
+    calls = _stub_probe(monkeypatch)
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/mid", "Demo.Side", str(_closure_project(tmp_path)),
+         "--lean-root", str(root), "--module-scope", "import-closure"]
+    )
+
+    assert code == 2
+    assert capsys.readouterr().err.splitlines() == ["error: not a loaded project module: Demo.Side"]
+    assert calls == []
+
+
+@pytest.mark.parametrize("count", [3, 60])
+def test_import_closure_scope_names_the_importers_to_build(tmp_path: Path, monkeypatch, capsys, count: int) -> None:
+    root = _closure_root(tmp_path)
+    # Demo imports Demo.M0 … Demo.M{count-2}; each imports Demo.Base, as Demo.Mid
+    # (still selected by the glob) does.
+    chain = [f"Demo.M{index}" for index in range(count - 1)]
+    (root / "Demo.lean").write_text("".join(f"import {module}\n" for module in chain), encoding="utf-8")
+    for module in chain:
+        (root / "Demo" / f"{module.split('.')[1]}.lean").write_text("import Demo.Base\n", encoding="utf-8")
+    stale = SkeletonError(
+        ["Lean build artifacts are stale; run `lake build x` before running the impact probe\n✖ [3/9] Building Demo.M0"]
+    )
+    _stub_probe(monkeypatch, error=stale)
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/mid", "Demo.Base", str(_closure_project(tmp_path)),
+         "--lean-root", str(root), "--module-scope", "import-closure"]
+    )
+
+    importers = sorted(["Demo", "Demo.Base", "Demo.Mid", *chain])
+    named = " ".join(importers) if len(importers) <= 50 else "Demo"
+    assert code == 2
+    assert capsys.readouterr().err.splitlines() == [
+        f"error: Lean build artifacts are stale; run `lake build {named}` before running the impact probe "
+        f"({len(importers)} modules; Lake: ✖ [3/9] Building Demo.M0)"
+    ]
+
+
+def test_default_module_scope_is_unchanged(tmp_path: Path, monkeypatch, capsys) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    _stub_probe(monkeypatch, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
+    argv = ["work", "import-impact", _BASE_ID, "Demo", str(project), "--lean-root", str(lean_root)]
+
+    assert cli.main([*argv, "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["module_scope"] == "loaded-root-library-graph"
+    assert cli.main(argv) == 0
+    assert "Module scope: loaded-root-library-graph" in capsys.readouterr().out.splitlines()
+    with pytest.raises(SystemExit) as invalid:
+        cli.main([*argv, "--module-scope", "everything"])
+    assert invalid.value.code == 2
+
+
 def test_cli_declaration_flag_replaces_the_article_s_names(tmp_path: Path, monkeypatch, capsys) -> None:
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _stub_lean_root(tmp_path)
