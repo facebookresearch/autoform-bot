@@ -2,7 +2,7 @@
  * create({host,onCommit,captureState,restoreState,onIndex,onError}) keeps one renderer-owned shell.
  * onCommit receives a detached readingSource, canonical url, resolved graph/dataURL, nodeId/anchor,
  * scope/title, snapshot, reason and isCurrent(). No math engine is owned or called here.
- * checkpoint() replaces only autoformNavigation:{version:1,url,snapshot}; checkpoint('push') records
+ * checkpoint() replaces only autoformNavigation:{version:1,url,key,snapshot}; checkpoint('push') records
  * a deliberate view/filter action without changing the canonical permalink. Snapshot fields are opaque.
  */
 (function () {
@@ -25,7 +25,8 @@
     var initialScope = attribute(host, initialPage, "data-scope-id") || null;
     var initialTitle = source && source.getAttribute("data-page-title") ||
       initialPage && initialPage.getAttribute("data-page-title") || doc.title || "Mathematics";
-    var disposed = false, started = null, epoch = 0, active = null, current = null;
+    var disposed = false, started = null, epoch = 0, active = null, current = null, currentKey = null;
+    var snapshots = new Map(), keySequence = 0, keySeed = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
     var index = null, indexPromise = null, indexController = null, indexed = new Map(), routes = new Map(), documents = new Set();
     var bound = new Map(), htmlCache = new Map(), jsonCache = new Map(), cacheBytes = 0;
     var timeout = bounded(options.timeout, 15000, 1000, 60000);
@@ -98,7 +99,7 @@
         var oldest = cache.keys().next().value; cacheBytes -= cache.get(oldest).bytes; cache.delete(oldest);
       }
       while (cacheBytes > cacheLimit) {
-        var victim = htmlCache.size ? htmlCache : jsonCache, id = victim.keys().next().value;
+        var victim = htmlCache.size ? htmlCache : jsonCache.size ? jsonCache : snapshots, id = victim.keys().next().value;
         cacheBytes -= victim.get(id).bytes; victim.delete(id);
       }
     }
@@ -323,16 +324,50 @@
       }
       throw new Error("Too many canonical reading redirects");
     }
-    function historyState(snapshot, url) {
+    function newKey() { return keySeed + "-" + (++keySequence).toString(36); }
+    function entryState() {
+      var entry = win.history.state && win.history.state[HISTORY_KEY];
+      return entry && entry.version === 1 ? entry : null;
+    }
+    function entryKey(entry, url) {
+      return entry && entry.url === url && typeof entry.key === "string" && entry.key ? entry.key : newKey();
+    }
+    function copyState(snapshot) {
+      return typeof structuredClone === "function" ? structuredClone(snapshot) :
+        snapshot == null ? snapshot : JSON.parse(JSON.stringify(snapshot));
+    }
+    function remember(key, snapshot) {
+      if (!key) return;
+      cacheDelete(snapshots, key);
+      var serialized;
+      try {
+        serialized = JSON.stringify(snapshot, function (name, value) {
+          var original = this[name], prototype = original && typeof original === "object" && Object.getPrototypeOf(original);
+          // Unmeasurable opaque values still live in browser history; never retain an unbounded clone.
+          if (prototype && prototype !== Object.prototype && !Array.isArray(original)) throw new Error();
+          return value;
+        });
+      } catch (_error) { return; }
+      if (typeof serialized !== "string") return;
+      var bytes = new TextEncoder().encode(serialized).byteLength;
+      if (bytes > 256 * 1024) return;
+      // Snapshots share the existing total byte budget with HTML/JSON and keep only 32 recent entries.
+      cachePut(snapshots, key, {snapshot: copyState(snapshot), bytes: bytes}, 32);
+    }
+    function outgoing() {
+      if (!current) return null;
+      var snapshot = capture(); remember(currentKey, snapshot); return snapshot;
+    }
+    function historyState(snapshot, url, key) {
       var entry = Object.assign({}, win.history.state || {});
-      entry[HISTORY_KEY] = {version: 1, url: url, snapshot: snapshot}; return entry;
+      entry[HISTORY_KEY] = {version: 1, url: url, key: key, snapshot: snapshot}; return entry;
     }
     function capture() {
       return typeof options.captureState === "function" ? options.captureState() : null;
     }
     function saveCurrent() {
       if (!current || current.url !== win.location.href) return;
-      try { win.history.replaceState(historyState(capture(), current.url), "", current.url); }
+      try { win.history.replaceState(historyState(outgoing(), current.url, currentKey), "", current.url); }
       catch (error) { report(error, current.url); }
     }
     // Snapshots are renderer-owned data. The router owns only the versioned
@@ -341,22 +376,26 @@
       if (disposed || !current || current.url !== win.location.href) return null;
       var mode = method === "push" ? "pushState" : "replaceState";
       try {
-        var snapshot = capture(); win.history[mode](historyState(snapshot, current.url), "", current.url); return snapshot;
+        var snapshot = capture(), key = method === "push" ? newKey() : currentKey;
+        win.history[mode](historyState(snapshot, current.url, key), "", current.url);
+        currentKey = key; remember(key, snapshot); return snapshot;
       }
       catch (error) { report(error, current.url); return null; }
     }
     async function commit(bundle, navigation, request) {
       assertAlive(request);
       var method = navigation.history === undefined ? "push" : navigation.history;
+      var push = method !== false && method !== "none" && method !== "replace" && bundle.url !== win.location.href;
+      var key = navigation.entryKey || (push ? newKey() : currentKey || entryKey(entryState(), win.location.href));
       if (method !== false && method !== "none") {
         saveCurrent();
-        var state = historyState(bundle.snapshot, bundle.url);
-        win.history[method === "replace" || bundle.url === win.location.href ? "replaceState" : "pushState"](state, "", bundle.url);
+        var state = historyState(bundle.snapshot, bundle.url, key);
+        win.history[push ? "pushState" : "replaceState"](state, "", bundle.url);
       } else if (bundle.url !== win.location.href) {
         // Replace an old explorer alias, never add an entry during a history restoration.
-        win.history.replaceState(historyState(bundle.snapshot, bundle.url), "", bundle.url);
+        win.history.replaceState(historyState(bundle.snapshot, bundle.url, key), "", bundle.url);
       }
-      current = bundle;
+      current = bundle; currentKey = key;
       await options.onCommit(bundle); assertAlive(request);
       bound.forEach(function (listener, root) {
         if (root.isConnected === false) { root.removeEventListener("click", listener, true); bound.delete(root); }
@@ -416,7 +455,12 @@
     }
     function popstate() {
       if (disposed || !internal(win.location.href)) return;
-      var entry = win.history.state && win.history.state[HISTORY_KEY];
+      // The browser has already changed location, but the mounted DOM still belongs to the outgoing
+      // entry. Capture it by its stored key; never rewrite the destination URL to save that state.
+      try { outgoing(); } catch (error) { report(error, current && current.url); }
+      var entry = entryState(), key = entryKey(entry, win.location.href);
+      var cached = cacheGet(snapshots, key), snapshot = cached ? copyState(cached.snapshot) : entry && entry.snapshot;
+      win.history.replaceState(historyState(snapshot, win.location.href, key), "", win.location.href);
       var url = new URL(win.location.href);
       if (current && resource(current.url) === resource(url.href) && url.hash && !routes.has(url.href) &&
           !new URLSearchParams(url.hash.slice(1)).has("node")) {
@@ -424,22 +468,23 @@
         // not discard the selected theorem or replace its full reading pane.
         var request = fresh(), anchor;
         try { anchor = decodeURIComponent(url.hash.slice(1)); } catch (_error) { anchor = url.hash.slice(1); }
-        current.url = url.href; current.anchor = anchor; current.isCurrent = function () { return alive(request); };
+        currentKey = key; current.url = url.href; current.anchor = anchor; current.isCurrent = function () { return alive(request); };
         host.removeAttribute("aria-busy");
-        if (entry && entry.version === 1 && entry.snapshot && typeof options.restoreState === "function") {
-          Promise.resolve(options.restoreState(entry.snapshot, current)).catch(function (error) { report(error, url.href); });
+        if (snapshot && typeof options.restoreState === "function") {
+          Promise.resolve(options.restoreState(snapshot, current)).catch(function (error) { report(error, url.href); });
         }
         return;
       }
-      navigate(win.location.href, {history: "none", snapshot: entry && entry.version === 1 ? entry.snapshot : null, reason: "popstate"});
+      navigate(win.location.href, {history: "none", entryKey: key, snapshot: snapshot, reason: "popstate"});
     }
     function start() {
       if (started) return started;
       if (disposed) return Promise.resolve(null);
       win.addEventListener("popstate", popstate);
       if (source) bindReader(source);
-      var entry = win.history.state && win.history.state[HISTORY_KEY];
-      started = run(initialURL, {history: "replace", snapshot: entry && entry.version === 1 ? entry.snapshot : null, reason: "start"}, true);
+      var entry = entryState();
+      started = run(initialURL, {history: "replace", entryKey: entryKey(entry, initialURL),
+        snapshot: entry && entry.snapshot, reason: "start"}, true);
       return started;
     }
     function dispose() {
@@ -450,7 +495,7 @@
       win.removeEventListener("popstate", popstate);
       bound.forEach(function (listener, root) { root.removeEventListener("click", listener, true); }); bound.clear();
       htmlCache.clear(); jsonCache.clear(); cacheBytes = 0; index = null; indexed.clear(); routes.clear(); documents.clear();
-      current = null; initialSource = null; source = null; indexPromise = null; started = null;
+      snapshots.clear(); currentKey = null; current = null; initialSource = null; source = null; indexPromise = null; started = null;
     }
     return {start: start, navigate: navigate, navigateNode: navigateNode, loadIndex: loadIndex,
       getIndex: function () { return index; }, bindReader: bindReader, checkpoint: checkpoint, dispose: dispose};

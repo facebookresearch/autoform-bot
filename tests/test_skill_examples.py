@@ -81,13 +81,24 @@ def test_generated_site_docs_describe_one_multiscale_explorer(repo_root: Path) -
         for relative in ("autoform_cli/README.md", "skills/human-review/SKILL.md")
     )
 
-    assert "Every generated site projection uses the same" in cli
+    assert "one full-viewport reading/map workspace" in cli
     assert "Authored Mermaid remains supported in the vault and book" in cli
-    assert (
-        "That index, `dependencies/index.json`, the project payload `dependencies.json`, and every other payload "
-        "under `dependencies/` are internal to the bundled viewer, and their schemas may change"
-    ) in cli
+    assert "Their JSON projections and layout-free `dependencies/index.json` use the same shared client" in cli
+    assert "`autoform-dag-view/v2` and `autoform-dag-search/v1`" in cli
     assert "Every generated site route uses the same" in review
+
+
+def test_integrated_landing_retains_authored_title_with_generated_hide_metadata(tmp_path: Path) -> None:
+    from autoform_cli.render import _integrated_page
+
+    page = _integrated_page(
+        '---\ntitle: "Authored mathematical library"\nhide:\n  - navigation\n---\n'
+        '<div><h1>Authored mathematical library</h1></div>\n',
+        page=tmp_path / "README.md", destination=tmp_path,
+        payload=tmp_path / "dependencies.json", scope="roadmap",
+    )
+    assert 'data-page-title="Authored mathematical library"' in page
+    assert 'data-page-title="Index"' not in page
 
 
 def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -> None:

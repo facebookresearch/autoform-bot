@@ -29,10 +29,10 @@ def test_explorer_bundle_digest_matches_exact_readable_source_bytes() -> None:
     )
 
 
-def test_explorer_bundle_keeps_the_existing_budget_and_has_no_source_maps_or_local_paths() -> None:
+def test_explorer_bundle_keeps_the_integrated_client_budget_and_has_no_source_maps_or_local_paths() -> None:
     bundled = _BUNDLE.read_bytes()
     bundled.decode("utf-8")
-    assert len(bundled) < 66_000
+    assert len(bundled) < 72_000
     assert b"sourceMappingURL=" not in bundled
     assert str(_ROOT).encode("utf-8") not in bundled
     assert b"/Users/" not in bundled and b"/home/runner/" not in bundled
@@ -69,6 +69,7 @@ def test_explorer_mangles_only_explicitly_private_refs_and_keeps_public_contract
         b"autoform-dag-search/v1",
         b"autoform-dag-view/v2",
         b"autoformNavigation",
+        b".key",
         b"data-page-href",
         b"data-page-title",
         b"data-graph-src",

@@ -13,7 +13,7 @@ test-browser:
 	uv run --extra dev --extra browser playwright install webkit
 	AUTOFORM_REQUIRE_BROWSER_TESTS=1 uv run --extra dev --extra browser pytest -q \
 		tests/test_dag_viewer_browser.py tests/test_integrated_explorer_browser.py \
-		tests/test_integrated_workspace_browser.py
+		tests/test_integrated_workspace_browser.py tests/test_integrated_continuity_browser.py
 
 build-explorer:
 	npm ci --ignore-scripts

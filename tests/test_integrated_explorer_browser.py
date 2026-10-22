@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import json
 import os
+import re
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -43,6 +45,7 @@ _ALGEBRA_TEX = (
     r"\overline{AB}=\sqrt{2}",
 )
 _TOPOLOGY_TEX = (r"\stolen+\RR", r"\lim_{n\to\infty}x_n=x")
+_MATH_EVIDENCE = 0
 
 
 class _QuietHandler(SimpleHTTPRequestHandler):
@@ -253,15 +256,50 @@ def _wait_reader(page: object, title: str, tex: tuple[str, ...]) -> object:
     return reader
 
 
+def _math_menu_evidence(page: object, phase: str) -> None:
+    """Record actual menu geometry/accessibility without replacing its behavior."""
+    output = os.environ.get("AUTOFORM_UI_SCREENSHOT_DIR")
+    if not output:
+        return
+    global _MATH_EVIDENCE
+    _MATH_EVIDENCE += 1
+    directory = Path(output)
+    directory.mkdir(parents=True, exist_ok=True)
+    stem = f"math-menu-{_MATH_EVIDENCE:03d}-{phase}"
+    snapshot = page.locator(".CtxtMenu_MenuFrame").evaluate_all("""frames => frames.map(frame => {
+      const box = frame.getBoundingClientRect();
+      return {html: frame.outerHTML.slice(0, 20000), rect: {x:box.x,y:box.y,width:box.width,height:box.height},
+        items: Array.from(frame.querySelectorAll('[role]')).map(item => {
+          const rect = item.getBoundingClientRect(), style = getComputedStyle(item);
+          return {role:item.getAttribute('role'), label:item.getAttribute('aria-label'), text:item.textContent,
+            rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height}, display:style.display,visibility:style.visibility,
+            stacking:document.elementsFromPoint(rect.x+rect.width/2,rect.y+rect.height/2).slice(0,5).map(node => node.tagName+'.'+node.className)};
+        })};
+    })""")
+    menus = page.get_by_role("menu")
+    evidence = {"phase": phase, "frames": snapshot,
+                "aria": [menus.nth(index).aria_snapshot() for index in range(menus.count())]}
+    (directory / f"{stem}.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+    page.screenshot(path=str(directory / f"{stem}.png"))
+
+
 def _math_source(page: object, container: object, *, mathml: bool = False) -> str:
     container.click(button="right")
-    page.get_by_role("menuitem", name="Show Math As", exact=True).hover()
-    page.get_by_role("menuitem", name="MathML Code" if mathml else "Original Form", exact=True).click()
-    source = page.locator(".CtxtMenu_Info pre")
-    source.wait_for(state="visible")
-    text = source.inner_text()
-    page.locator(".CtxtMenu_InfoClose").click()
-    return text
+    try:
+        _math_menu_evidence(page, "opened")
+        # MathJax 3.2.2's submenu appends a visible pointer to its accessible
+        # name. Posting also changes Original Form to the input's TeX Commands.
+        page.get_by_role("menuitem", name=re.compile(r"^Show Math As(?:\s*\u25ba)?$")).hover()
+        page.get_by_role("menuitem", name="MathML Code" if mathml else "TeX Commands", exact=True).click()
+        source = page.locator(".CtxtMenu_Info pre")
+        source.wait_for(state="visible")
+        text = source.inner_text()
+        _math_menu_evidence(page, "source")
+        page.get_by_role("button", name="Close Dialog Box", exact=True).click()
+        return text
+    except Exception:
+        _math_menu_evidence(page, "failed")
+        raise
 
 
 def _navigate(page: object, url: str) -> None:

@@ -83,7 +83,8 @@ function setup(extra = {}) {
     get state() { return entries[pointer].state; }, get length() { return entries.length; },
     replaceState(value, _title, url) { entries[pointer] = {url,state:structuredClone(value)}; win.location.href = url; },
     pushState(value, _title, url) { entries.splice(pointer+1); entries.push({url,state:structuredClone(value)}); pointer++; win.location.href=url; },
-    back() { pointer--; win.location.href=entries[pointer].url; if (listeners.has('popstate')) listeners.get('popstate')(); }
+    back() { pointer--; win.location.href=entries[pointer].url; if (listeners.has('popstate')) listeners.get('popstate')(); },
+    forward() { pointer++; win.location.href=entries[pointer].url; if (listeners.has('popstate')) listeners.get('popstate')(); }
   };
   const contents = new Map([
     [absolute('dependencies/index.json'),index()], [absolute('dependencies.json'),graph],
@@ -102,7 +103,7 @@ function setup(extra = {}) {
     onCommit(bundle){commits.push(bundle); if(extra.commit) return extra.commit(bundle);},onError(error){errors.push(error);},
     captureState(){return structuredClone(state);}, restoreState(saved,bundle){state=structuredClone(saved);restored.push(saved);
       if(extra.restore) return extra.restore(saved,bundle);},
-    htmlEntries:extra.htmlEntries || 8,jsonEntries:16});
+    htmlEntries:extra.htmlEntries || 8,jsonEntries:16,cacheBytes:extra.cacheBytes});
   return {nav,win,commits,errors,restored,fetches,contents,reply,initial,listeners,
     state(value){state=value;},getState(){return state;}};
 }
@@ -166,6 +167,70 @@ def test_checkpoint_and_back_restore_opaque_shell_state_without_new_urls() -> No
       // A deliberate action after Back truncates the forward branch before adding its entry.
       assert.equal(app.win.history.length,before); assert.equal(app.win.location.href,url);
       app.nav.dispose();
+    """)
+
+
+def test_back_then_forward_captures_outgoing_edits_without_waiting_for_a_checkpoint() -> None:
+    _run(r"""
+      const app=setup(); await app.nav.start(); await app.nav.navigateNode('a');
+      app.state({mode:'sources',camera:{x:12,y:24,scale:1.2},readingScroll:80,outlineOpen:false});
+      await app.nav.navigateNode('b');
+      const bKey=app.win.history.state.autoformNavigation.key,length=app.win.history.length;
+      const edited={mode:'list',camera:{x:190,y:-55,scale:.9},readingScroll:340,outlineScroll:120,
+        query:'changed before Back',outlineOpen:true};
+      app.state(edited); // No checkpoint, timeout or new explicit route before native Back.
+      app.win.history.back();
+      assert.equal(app.win.location.href,absolute('roadmap/a.html#theorem-a'));
+      await until(()=>app.commits.at(-1).nodeId==='a' && app.getState().mode==='sources');
+      assert.equal(app.getState().readingScroll,80);
+      const aKey=app.win.history.state.autoformNavigation.key; assert.notEqual(aKey,bKey);
+      app.win.history.forward();
+      assert.equal(app.win.location.href,absolute('roadmap/b.html#theorem-b'));
+      await until(()=>app.commits.at(-1).nodeId==='b' && app.getState().query===edited.query);
+      assert.deepEqual(app.getState(),edited);
+      assert.equal(app.win.history.state.autoformNavigation.key,bKey);
+      assert.equal(app.win.history.state.material,'preserved'); assert.equal(app.win.history.length,length);
+      app.nav.dispose();
+    """)
+
+
+def test_distinct_same_url_views_restore_by_entry_key_not_url() -> None:
+    _run(r"""
+      const app=setup(); app.state({mode:'graph',area:null,camera:{x:20,y:20,scale:1}});
+      await app.nav.start(); const url=app.win.location.href,firstKey=app.win.history.state.autoformNavigation.key;
+      app.state({mode:'graph',area:'Geometry',camera:{x:40,y:60,scale:.8}});
+      app.nav.checkpoint('push');
+      const secondKey=app.win.history.state.autoformNavigation.key,length=app.win.history.length;
+      assert.notEqual(firstKey,secondKey); assert.equal(app.win.location.href,url);
+      const edited={mode:'graph',area:'Geometry',camera:{x:100,y:200,scale:1.3},readingScroll:90,outlineOpen:true};
+      app.state(edited); app.win.history.back();
+      await until(()=>app.getState().area===null);
+      assert.equal(app.win.location.href,url); assert.equal(app.win.history.state.autoformNavigation.key,firstKey);
+      app.win.history.forward(); await until(()=>app.getState().camera.x===100);
+      assert.deepEqual(app.getState(),edited); assert.equal(app.win.location.href,url);
+      assert.equal(app.win.history.state.autoformNavigation.key,secondKey);
+      assert.equal(app.win.history.length,length); assert.equal(app.win.history.state.material,'preserved');
+      app.nav.dispose();
+    """)
+
+
+def test_snapshot_byte_bounds_evict_without_empty_cache_errors_and_fall_back_to_history() -> None:
+    _run(r"""
+      const tiny=setup({cacheBytes:1024}); await tiny.nav.start();
+      for (let n=0;n<6;n++) {tiny.state({step:n,padding:'x'.repeat(650)}); assert(tiny.nav.checkpoint('push'));}
+      tiny.win.history.back(); await until(()=>tiny.getState().step===4);
+      assert.equal(tiny.errors.length,0); tiny.nav.dispose();
+
+      const app=setup(); await app.nav.start(); await app.nav.navigateNode('a'); await app.nav.navigateNode('b');
+      app.state({mode:'recent bounded edit',readingScroll:71}); app.win.history.back();
+      await until(()=>app.commits.at(-1).nodeId==='a');
+      app.win.history.forward(); await until(()=>app.getState().mode==='recent bounded edit');
+      // An oversized outgoing snapshot must not retain a previous cache value or exceed the byte cap.
+      app.state({mode:'oversized',padding:'x'.repeat(300000)}); app.win.history.back();
+      await until(()=>app.commits.at(-1).nodeId==='a');
+      app.win.history.forward(); await until(()=>app.commits.at(-1).nodeId==='b');
+      assert.equal(app.getState().mode,'recent bounded edit'); assert.equal(app.getState().readingScroll,71);
+      assert.equal(app.errors.length,0); app.nav.dispose();
     """)
 
 
@@ -280,7 +345,8 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
         assert(following); return viewer.slice(start+4,start+4+following.index).trim();
       }
       const hooks={},app=setup(hooks),calls=[];
-      let alive=true,readingReady=Promise.resolve(),restoration=0,currentBundle,contextGraph,trail,firstResize;
+      let alive=true,readingReady=Promise.resolve(),restoration=0,currentBundle,contextGraph,trail,firstResize,
+        restoring=false,checkpointTimer;
       let release,mathReady; function deferMath() { mathReady=new Promise(resolve=>{release=resolve;}); }
       const window=app.win,document=app.initial.doc,host=app.initial.host;
       window.AutoformMath={refresh(){return mathReady;}};

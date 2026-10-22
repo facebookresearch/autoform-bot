@@ -458,7 +458,7 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
 
     # The hierarchy rail is part of the shared runtime, but the dependency-free
     # application still stays below one small uncompressed network response.
-    assert len(dag_viewer.viewer_script().encode()) < 66_000
+    assert len(dag_viewer.viewer_script().encode()) < 72_000
     assert output.stat().st_size < 300_000
     assert search.stat().st_size < 100_000
     search_payload = json.loads(search.read_text(encoding="utf-8"))

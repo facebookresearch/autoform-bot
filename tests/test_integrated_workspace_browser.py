@@ -653,13 +653,13 @@ def test_delayed_math_readiness_cannot_restore_an_older_native_section_after_bac
     page.evaluate("() => window.__workspaceDocument = document")
     body = page.locator(".bp-reading-body")
     body.get_by_role("link", name="Read the independent identity", exact=True).click()
-    page.wait_for_url(site.route(_ISOLATED))
+    page.wait_for_url(site.route(_ISOLATED), wait_until="domcontentloaded")
     _selected(page, _ISOLATED)
     body.get_by_role("link", name="Read the complete zero identity", exact=True).click()
-    page.wait_for_url(site.route(_TARGET))
+    page.wait_for_url(site.route(_TARGET), wait_until="domcontentloaded")
     _selected(page, _TARGET)
     page.evaluate("() => history.back()")
-    page.wait_for_url(site.route(_ISOLATED))
+    page.wait_for_url(site.route(_ISOLATED), wait_until="domcontentloaded")
     _selected(page, _ISOLATED)
     assert held
     for route in held:

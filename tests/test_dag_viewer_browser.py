@@ -620,7 +620,7 @@ def test_connected_project_maps_open_at_readable_scale(
     assert box is not None
     assert box["height"] >= 44
     density = page.locator(".bp-dag-density")
-    playwright.expect(density).to_contain_text("Readable window")
+    playwright.expect(density).to_have_text("Pan or Contents to see all 33 items")
     # The note is plain text at the map's bottom-left, not a bubble over the map.
     style = density.evaluate(
         "element => ['borderTopStyle', 'boxShadow', 'pointerEvents'].map(name => getComputedStyle(element)[name])"
@@ -633,7 +633,7 @@ def test_connected_project_maps_open_at_readable_scale(
     # On a phone it sat flush on the collapsed sheet's peek; it keeps 8px above it.
     page.emulate_media(reduced_motion="reduce")
     page.set_viewport_size({"width": 390, "height": 844})
-    playwright.expect(density).to_contain_text("Readable window")
+    playwright.expect(density).to_have_text("Pan or Contents to see all 33 items")
     note, sheet = density.bounding_box(), page.locator(".bp-dag-inspector").bounding_box()
     assert note is not None and sheet is not None
     assert abs(sheet["y"] - 8 - (note["y"] + note["height"])) < 1
@@ -950,7 +950,7 @@ def test_a_search_result_in_this_view_selects_the_drawn_node(desktop_page: objec
         assert stage["y"] <= box["y"] and box["y"] + box["height"] <= stage["y"] + stage["height"]
         assert page.locator(".bp-dag-node").count() > 1
         playwright.expect(page.get_by_role("link", name="Open article")).to_have_attribute(
-            "href", f"articles.html#{node_id}"
+            "href", f"{explorer_url}/articles.html#{node_id}"
         )
 
 
@@ -1594,7 +1594,9 @@ def _assert_site_chrome_is_reachable(page: object) -> None:
     for chrome in (
         page.locator(".md-header"),
         page.get_by_role("heading", level=1),
-        page.locator(".bp-reading-source").get_by_role("link", name="Base", exact=True).first,
+        page.get_by_role("navigation", name="Blueprint chapters", exact=True).get_by_role(
+            "link", name="Next Topology", exact=True
+        ),
     ):
         playwright.expect(chrome).to_be_visible()
         chrome.click(trial=True, timeout=5_000)

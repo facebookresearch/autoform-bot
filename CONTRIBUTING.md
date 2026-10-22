@@ -50,7 +50,9 @@ styles are in `blueprint-dag.css`. When changing either script, install Node
 22.23.2 and run `make build-explorer`, then `make check-explorer` and
 `make test-browser`. Pinned development-only esbuild and Terser write
 `blueprint-explorer.min.js` with an exact source digest. CI checks its bytes and
-the unchanged 66 KB budget. Only explicitly `$`-prefixed private properties may
+the 72 KB client budget. This replaces the former 66 KB graph-only ceiling to
+cover integrated reading and per-entry navigation restoration; graph-node,
+payload, search, request and cache limits are unchanged. Only explicitly `$`-prefixed private properties may
 be renamed; renderer-private scene and DOM references use local variables.
 Graph/index fields, route attributes, renderer callbacks and history
 snapshot fields keep their names. Python publication ships the compiled client;

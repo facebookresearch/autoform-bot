@@ -1130,7 +1130,8 @@ def _integrated_page(
         end = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
     header, body = "".join(lines[:end]), "".join(lines[end:])
     node = f' data-autoform-node-id="{html.escape(owner, quote=True)}"' if owner else ""
-    title = _header_title(text) or rendered_visible_text(_first_h1(text) or "") or _file_title(page)
+    title_header = "".join(lines[:2]) + "---\n" if end else text
+    title = _header_title(title_header) or rendered_visible_text(_first_h1(text) or "") or _file_title(page)
     explorer = dag_viewer.render_container(
         mermaid.relative_link(payload, page, ".json"),
         script_href=mermaid.relative_link(destination / DAG_SCRIPT, page, ".js"),

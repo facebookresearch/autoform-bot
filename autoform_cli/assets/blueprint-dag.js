@@ -58,7 +58,7 @@
           if (client) client.showError(error);
           else {
             host.classList.remove("bp-dag-enhancing"); document.body.classList.remove("bp-dag-app-page");
-            if (loading) { loading.textContent = "The interactive map is unavailable. The complete mathematical page remains readable."; loading.classList.add("bp-dag-error"); }
+            if (loading) { loading.textContent = "The interactive map is unavailable: " + error.message + ". The complete mathematical page remains readable."; loading.classList.add("bp-dag-error"); }
           }
         }
       });
@@ -94,7 +94,7 @@
     if (!data || data.schema !== "autoform-dag-view/v2" || !data.palette ||
         !Array.isArray(data.nodes) || !Array.isArray(data.edges)) throw new Error("unsupported graph payload");
     var contextGraph = data, sharedIndex = null, records = new Map(), currentBundle = firstBundle;
-    var alive = true, cleanup = [], observers = [], frame = 0, readingReady = Promise.resolve(), restoration = 0;
+    var alive = true, cleanup = [], observers = [], frame = 0, readingReady = Promise.resolve(), restoration = 0, checkpointTimer = 0, restoring = false;
     var intro = host.querySelector(".bp-dag-intro"), introHeading = intro && intro.querySelector("h1");
     var introTitle = introHeading ? introHeading.textContent.trim() : ""; if (intro) intro.remove();
     host.textContent = "";
@@ -163,7 +163,7 @@
       ui$spotlight = null, ui$navigationLimit = atlas ? 120 : 50, ui$mapAllowed = mapAllowed, ui$readableCrop = false,
       ui$introInSheet = sheetLayout(), ui$selectedStatuses = new Set(presentStatuses), ui$showIsolated = true,
       ui$transform = {x: 20, y: 20, scale: 1}, ui$reading = Boolean(firstBundle && firstBundle.readingSource),
-      ui$area = null, ui$filtersTouched = false, ui$relationIds = null, ui$requestedNode = null;
+      ui$area = null, ui$filtersTouched = false, ui$relationIds = null, ui$requestedNode = null, ui$outlineLimit = 120;
     if (!mapAllowed) ui$mode = "list";
     var dom$announcement, dom$body, dom$breadcrumb, dom$canvas, dom$ctx, dom$density, dom$edgeFieldset, dom$empty,
       dom$error, dom$filterPopover, dom$filterSummary, dom$filters, dom$fit, dom$graphMode, dom$hiddenButton,
@@ -187,6 +187,10 @@
     function globalListen(target, type, handler, options) {
       target.addEventListener(type, handler, options); cleanup.push(function () { target.removeEventListener(type, handler, options); });
     }
+    function remember() {
+      if (!navigation || restoring) return;
+      clearTimeout(checkpointTimer); checkpointTimer = setTimeout(function () { if (alive && !restoring) navigation.checkpoint(); }, 80);
+    }
 
     function captureState() {
       var active = document.activeElement, key = active === dom$search ? "search" : active && active.dataset.autoformNodeId;
@@ -195,11 +199,11 @@
         query: ui$query, area: ui$area, readingOpen: host.classList.contains("bp-dag-sheet-open"), focus: key,
         readingScroll: dom$readingBody ? dom$readingBody.scrollTop : 0, outlineScroll: dom$navigation.scrollTop,
         inventoryScroll: dom$inventoryScroll.scrollTop, listLimit: ui$listLimit, relationIds: ui$relationIds,
-        outlineOpen: host.classList.contains("bp-dag-outline-open")};
+        outlineOpen: host.classList.contains("bp-dag-outline-open"), outlineLimit: ui$outlineLimit};
     }
     function restoreState(saved, bundle) {
       if (!saved) return;
-      var ticket = ++restoration, isCurrent = bundle && bundle.isCurrent;
+      var ticket = ++restoration, isCurrent = bundle && bundle.isCurrent; restoring = true; clearTimeout(checkpointTimer);
       ui$filtersTouched = true; ui$area = saved.area || null;
       ui$requestedNode = saved.requestedNode === undefined ? saved.node || null : saved.requestedNode;
       updateProjection(); ui$selected = saved.node && byId.get(saved.node) || null;
@@ -207,19 +211,20 @@
       ui$mode = ["graph", "list", "sources", "regions"].indexOf(saved.mode) >= 0 ? saved.mode : "graph";
       if (ui$mode === "graph" && !mapAllowed) ui$mode = "list";
       ui$listLimit = Math.max(LIST_PAGE, Number(saved.listLimit) || LIST_PAGE); ui$relationIds = saved.relationIds || null;
+      ui$outlineLimit = Math.max(120, Number(saved.outlineLimit) || 120); renderNavigation();
       ui$direction = saved.direction || "both"; ui$query = saved.query || ""; dom$search.value = ui$query;
       if (saved.camera) ui$transform = Object.assign({}, saved.camera);
       host.classList.toggle("bp-dag-outline-open", Boolean(saved.outlineOpen));
       if (dom$outlineToggle) dom$outlineToggle.setAttribute("aria-expanded", String(Boolean(saved.outlineOpen)));
       ui$activeDirty = true; setSheet(saved.readingOpen !== false, ui$selected); refresh(true);
       return readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
-        if (!alive || ticket !== restoration || (isCurrent && !isCurrent())) { resolve(); return; }
+        if (!alive || ticket !== restoration || (isCurrent && !isCurrent())) { if (ticket === restoration) restoring = false; resolve(); return; }
         dom$navigation.scrollTop = saved.outlineScroll || 0;
         if (dom$readingBody) dom$readingBody.scrollTop = saved.readingScroll || 0;
         dom$inventoryScroll.scrollTop = saved.inventoryScroll || 0;
         var chosen = saved.focus === "search" ? dom$search : overlays.get(saved.focus);
         if (chosen) chosen.focus({preventScroll: true});
-        resolve();
+        restoring = false; resolve();
       }); }); });
     }
     function showError(error) {
@@ -240,7 +245,7 @@
     function applyRoute(bundle) {
       var isCurrent = bundle.isCurrent;
       if (!alive || (isCurrent && !isCurrent())) return;
-      restoration++; currentBundle = bundle; contextGraph = bundle.graph; ui$area = null; ui$requestedNode = bundle.nodeId || null;
+      restoration++; restoring = false; clearTimeout(checkpointTimer); currentBundle = bundle; contextGraph = bundle.graph; ui$area = null; ui$requestedNode = bundle.nodeId || null;
       document.title = bundle.title; dom$error.hidden = true;
       ui$filtersTouched = false; ui$relationIds = null;
       ui$query = ""; dom$search.value = ""; closeSearch();
@@ -315,9 +320,9 @@
         return Object.assign({}, exact || original, {id: key, _recordId: key, kind: original.kind === "boundary" || exact && exact.kind === "boundary" ? "boundary" : scoped ? "scope" : "node", url: original.route || original.url, isolated: noEdges && key === id,
           status_counts: scoped ? exact && exact.status_counts || [] : [[original.status, 1]],
           member_count: scoped ? exact && exact.member_count : 1, _unknownCount: scoped && !(exact && exact.member_count !== undefined),
-          layout: {x: column * 288, y: row * 94, column: column, row: row, width: 232, height: 76}});
+          layout: {x: column * 236, y: row * 114, column: column, row: row, width: 208, height: 96}});
       });
-      nodes[0].layout.y = (Math.max(left, right, 1) - 1) * 47;
+      nodes[0].layout.y = (Math.max(left, right, 1) - 1) * 57;
       return Object.assign({}, contextGraph, {nodes: nodes, regions: [],
         view: Object.assign({}, contextGraph.view, {presentation: "dag"}),
         edges: (sharedIndex.relations || []).filter(function (edge) { return known.has(edge[0]) && known.has(edge[1]); }).map(function (edge) {
@@ -339,7 +344,7 @@
         members.forEach(function (node) { replacements.set(node.id, key); (node.status_counts || []).forEach(function (pair) {
           counts.set(pair[0], (counts.get(pair[0]) || 0) + pair[1]);
         }); });
-        nodes.push({id: key, kind: "scope", title: area, area: area, _region: area, status: members[0].status,
+        nodes.push({id: key, kind: "scope", title: area, area: area, _region: area, _topics: members.length, status: members[0].status,
           status_counts: Array.from(counts.entries()), member_count: members.reduce(function (sum, node) { return sum + (node.member_count === undefined ? 0 : node.member_count); }, 0),
           summary: members.slice(0, 3).map(function (node) { return node.title; }).join(" · "),
           layout: {x: (slot % 2) * 304, y: Math.floor(slot++ / 2) * 156, width: 264, height: 120}});
@@ -380,8 +385,10 @@
         dom$homeLink.title = root.title; dom$homeLink.setAttribute("aria-label", "Open " + root.title);
       }
       var visible = scopes.filter(function (node) { var parent = semanticParent(node); return !parent || (root && parent === root.id) || chain.has(parent); });
+      var required = new Set(Array.from(chain).slice(0, ui$outlineLimit)), slots = Math.max(0, ui$outlineLimit - required.size);
+      var shown = visible.filter(function (node) { return required.has(node.id) || slots-- > 0; });
       var list = element("ul", "bp-dag-navigation-list");
-      visible.slice(0, 120).forEach(function (node) {
+      shown.forEach(function (node) {
         if (root && node.id === root.id) return;
         var item = element("li"), link = element("a", "bp-dag-navigation-link", node.title);
         link.href = node.route || node.url; link.title = node.title; link.dataset.navigationNodeId = node.id;
@@ -394,6 +401,10 @@
         });
       });
       dom$navigationInner.appendChild(element("h2", "bp-outline-label", "Topics")); dom$navigationInner.appendChild(list);
+      if (shown.length < visible.length) {
+        var more = button("bp-dag-navigation-more", "Show more topics");
+        more.addEventListener("click", function () { ui$outlineLimit += 50; renderNavigation(); remember(); }); dom$navigationInner.appendChild(more);
+      }
     }
     function renderReaderContext() {
       if (!dom$readingContext) return;
@@ -479,9 +490,9 @@
       dom$error = element("div", "bp-dag-error"); dom$error.setAttribute("role", "alert"); dom$error.hidden = true; head.appendChild(dom$error);
       // Tab follows where the head draws the link: after the controls in one row, before them in the grid.
       var book = safeHref(view.book);
-      if (book) {
+      if (book || navigation) {
         var bookLink = element("a", "bp-dag-book", "Open the textbook page"), narrow = matchMedia("(max-width: 1100px)");
-        bookLink.href = book;
+        bookLink.href = book || currentBundle.url;
         if (navigation) {
           bookLink.textContent = "Library"; context.insertBefore(bookLink, crumbs);
           dom$homeLink = bookLink;
@@ -622,6 +633,7 @@
         ui$query = dom$search.value.trim(); ui$searchLimit = 12; ui$listLimit = LIST_PAGE;
         if (ui$mode === "list") closeSearch(); else renderSearch();
         renderInventory(true); if (ui$query) ensureGlobalSearch();
+        remember();
       });
       dom$search.addEventListener("keydown", function (event) {
         if (event.key === "Escape") { closeSearch(); return; }
@@ -658,6 +670,7 @@
       if (dom$outlineToggle) dom$outlineToggle.addEventListener("click", function () {
         var open = !host.classList.contains("bp-dag-outline-open"); host.classList.toggle("bp-dag-outline-open", open);
         dom$outlineToggle.setAttribute("aria-expanded", String(open));
+        remember();
       });
       dom$sheetHandle.addEventListener("click", function () {
         setSheet(!host.classList.contains("bp-dag-sheet-open"), ui$selected);
@@ -671,7 +684,7 @@
       dom$stage.addEventListener("wheel", function (event) {
         var zoom = event.ctrlKey || event.metaKey, pixels = event.deltaMode === 1 ? 25 : 1;
         event.preventDefault();
-        if (!zoom) { ui$transform.x -= event.deltaX * pixels; ui$transform.y -= event.deltaY * pixels; schedule(); return; }
+        if (!zoom) { ui$transform.x -= event.deltaX * pixels; ui$transform.y -= event.deltaY * pixels; schedule(); remember(); return; }
         var rect = dom$stage.getBoundingClientRect();
         zoomAt(clamp(Math.exp(-event.deltaY * pixels * .002), .5, 2), event.clientX - rect.left, event.clientY - rect.top);
       }, {passive: false});
@@ -692,6 +705,7 @@
       if (window.ResizeObserver) { var ro = new ResizeObserver(resize); ro.observe(dom$stage); observers.push(ro); }
       else globalListen(window, "resize", resize);
       globalListen(window, "resize", syncSheetAccessibility);
+      if (navigation) [dom$readingBody, dom$navigation, dom$inventoryScroll].forEach(function (pane) { pane.addEventListener("scroll", remember); });
       var theme = new MutationObserver(schedule); theme.observe(document.body, {attributes: true, attributeFilter: ["data-md-color-scheme"]}); observers.push(theme);
       if (dom$homeLink) dom$homeLink.addEventListener("click", function (event) {
         if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -739,6 +753,7 @@
       return stops.length ? "conic-gradient(" + stops.join(",") + ")" : "var(--dag-node-stroke)";
     }
     function world(node) {
+      if (node._region && ui$orientation === "tb") return {x: 0, y: node._index * 146, w: node.width, h: node.height};
       if (ui$orientation === "tb" && !atlas) {
         if (node.isolated) {
           var mobileColumns = dom$stage.clientWidth < 540 ? 2 : 3;
@@ -767,7 +782,7 @@
       calculateActive();
       if (navigation) {
         var record = records.get(currentBundle && currentBundle.nodeId), links = record && record.result && neighborIds(record.id);
-        dom$mapContext.textContent = links ? links.before.length + " prerequisites → Result → " + links.after.length + " dependents" : ui$area || currentBundle && currentBundle.title || data.title;
+        dom$mapContext.textContent = links ? plural(links.before.length, "prerequisite", "prerequisites") + " → Result → " + plural(links.after.length, "dependent", "dependents") : ui$area || currentBundle && currentBundle.title || data.title;
         dom$mapKey.replaceChildren();
         ["statement", "proof"].forEach(function (kind) {
           if (data.edges.some(function (edge) { return edge[kind]; })) dom$mapKey.appendChild(element("span", "bp-map-key-" + kind, kind === "proof" ? "Proof dependency" : "Statement dependency"));
@@ -849,17 +864,17 @@
         minX = Math.min(minX, region.x); minY = Math.min(minY, region.y);
         maxX = Math.max(maxX, region.x + region.width); maxY = Math.max(maxY, region.y + region.height);
       });
-      var pad = 54, width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
+      var pad = navigation ? 36 : 54, width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
       var fitted = Math.min((dom$stage.clientWidth - pad * 2) / width,
         (dom$stage.clientHeight - pad * 2) / height);
-      var readableFloor = atlas ? MIN_ATLAS_SCALE : MIN_READABLE_SCALE;
+      var readableFloor = atlas ? MIN_ATLAS_SCALE : navigation ? 1 : MIN_READABLE_SCALE;
       ui$readableCrop = fitted < readableFloor;
       ui$transform.scale = clamp(Math.max(fitted, readableFloor), MIN_SCALE, 1.35);
       ui$transform.x = ui$readableCrop ? pad - minX * ui$transform.scale :
         (dom$stage.clientWidth - width * ui$transform.scale) / 2 - minX * ui$transform.scale;
       ui$transform.y = ui$readableCrop ? pad - minY * ui$transform.scale :
         (dom$stage.clientHeight - height * ui$transform.scale) / 2 - minY * ui$transform.scale;
-      schedule();
+      schedule(); remember();
     }
     // Open details cover part of the map; this is the larger part they leave, in stage pixels.
     function freeArea() {
@@ -889,7 +904,7 @@
     function zoomAt(factor, x, y) {
       var old = ui$transform.scale, next = clamp(old * factor, MIN_SCALE, 4);
       ui$transform.x = x - (x - ui$transform.x) * next / old;
-      ui$transform.y = y - (y - ui$transform.y) * next / old; ui$transform.scale = next; schedule();
+      ui$transform.y = y - (y - ui$transform.y) * next / old; ui$transform.scale = next; schedule(); remember();
     }
 
     function draw() {
@@ -988,12 +1003,15 @@
 
     function updateOverlays(visible, spotlight) {
       var candidates = ui$transform.scale >= .34 ? visible.slice() : [];
+      var focusedId = document.activeElement && document.activeElement.dataset.autoformNodeId, focused = byId.get(focusedId);
+      if (focused && ui$activeIds.has(focusedId) && candidates.indexOf(focused) < 0) candidates.push(focused);
       if (ui$selected && ui$activeIds.has(ui$selected.id) && candidates.indexOf(ui$selected) < 0) candidates.push(ui$selected);
       candidates.sort(function (a, b) {
         if (a === ui$selected) return -1; if (b === ui$selected) return 1;
         var ab = screen(a), bb = screen(b); return ab.y - bb.y || ab.x - bb.x || a._index - b._index;
       });
       var keep = new Set(candidates.map(function (node) { return node.id; }));
+      var tabId = keep.has(focusedId) ? focusedId : ui$selected && ui$selected.id || candidates[0] && candidates[0].id;
       overlays.forEach(function (control, id) { if (!keep.has(id)) { control.remove(); overlays.delete(id); } });
       candidates.forEach(function (node, index) {
         var control = overlays.get(node.id);
@@ -1013,7 +1031,7 @@
         var relationLabel = control.querySelector(".bp-dag-node-relation");
         if (relationLabel) relationLabel.textContent = relation === "prerequisite" ? "Prerequisite" : relation === "dependent" ? "Dependent" : "";
         control.dataset.subdued = String(Boolean(spotlight && !spotlight.nodes.has(node.id)));
-        control.tabIndex = node === ui$selected || (!ui$selected && index === 0) ? 0 : -1;
+        control.tabIndex = node.id === tabId ? 0 : -1;
       });
       dom$density.hidden = !ui$readableCrop && !(visible.length && ui$transform.scale < .34);
       dom$density.textContent = ui$readableCrop ? "Pan or " + (navigation ? "Results" : "Contents") + " to see all " + ui$active.length + " items" :
@@ -1027,7 +1045,8 @@
         (scopeMeta || statusLabel(node.status)) + (node.isolated ? ", no dependency edges in this view" : ""));
       var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : control;
       content.appendChild(element("span", "bp-dag-node-title", node.title));
-      content.appendChild(element("span", "bp-dag-node-meta", node._region && node.summary ? node.summary : scopeMeta || statusLabel(node.status)));
+      content.appendChild(element("span", "bp-dag-node-meta", node._region ? plural(node._topics, "topic", "topics") + " · " + scopeMeta : scopeMeta || statusLabel(node.status)));
+      if (node._region && node.summary) content.appendChild(element("span", "bp-dag-node-summary", node.summary));
       content.appendChild(element("span", "bp-dag-node-relation", ""));
       if (content !== control) control.appendChild(content);
       control.addEventListener("click", function (event) { event.stopPropagation(); activateNode(node, false); });
@@ -1089,6 +1108,7 @@
       if (ui$pointers.size < 2) ui$pinch = null;
       if (!ui$pointers.size) dom$stage.dataset.dragging = "false";
       if (event.type === "pointerup" && wasSingle && !ui$moved && ui$selected) clearSelection(true);
+      remember();
     }
 
     function searchScore(node, query) {
@@ -1205,7 +1225,12 @@
     }
     function activateNode(node, moveCamera) {
       if (navigation) {
-        if (node._region) { ui$area = node._region; ui$requestedNode = null; updateProjection(); refresh(true); fit(); writeLocation("push"); return; }
+        if (node._region) {
+          navigation.checkpoint();
+          var keyboard = document.activeElement && document.activeElement.dataset.autoformNodeId === node.id;
+          ui$area = node._region; ui$requestedNode = null; updateProjection(); refresh(true); fit(); writeLocation("push");
+          if (keyboard && ui$active.length) focusNodeControl(ui$active.find(function (item) { return item.area === ui$area && !item._region; }) || ui$active[0]); return;
+        }
         navigation.navigateNode(recordId(node), {history: "push", focus: "reading"}); closeSearch(); return;
       }
       var local = byId.get(node.id); if (local) node = local;
@@ -1228,7 +1253,7 @@
     }
     function focusNodeControl(node) {
       requestAnimationFrame(function () { requestAnimationFrame(function () {
-        var control = overlays.get(node.id); if (control) control.focus(); else dom$sheetHandle.focus();
+        var control = overlays.get(node.id); if (control) control.focus(); else dom$sheetHandle.focus(); remember(); schedule();
       }); });
     }
 
@@ -1241,9 +1266,10 @@
       if (historyMode) writeLocation(historyMode); if (moveCamera) center(node, .82); else reveal(node);
     }
     function clearSelection(updateHistory, returnFocus) {
+      if (navigation && updateHistory) navigation.checkpoint();
       var refit = ui$direction !== "both", cleared = ui$selected;
       ui$selected = null; ui$direction = "both"; ui$activeDirty = true; ui$spotlight = null;
-      ui$requestedNode = null;
+      if (!navigation) ui$requestedNode = null;
       setSheet(navigation && !sheetLayout(), null);
       syncNavigationSelection(); renderInspector(); renderInventory(false); if (refit) requestAnimationFrame(fit); else schedule();
       if (updateHistory) writeLocation("push");
@@ -1295,7 +1321,7 @@
       dom$statusInputs.forEach(function (input, key) { if (input.checked) ui$selectedStatuses.add(key); });
       if (ui$selected && !ui$selectedStatuses.has(ui$selected.status)) {
         ui$selected = null; ui$direction = "both"; ui$spotlight = null;
-        ui$requestedNode = null;
+        if (!navigation) ui$requestedNode = null;
         setSheet(navigation && !sheetLayout(), null);
         dom$announcement.textContent = "Selection cleared because its status is hidden.";
       }
@@ -1475,7 +1501,7 @@
 
     syncControls();
     return {ready: readingReady, applyRoute: applyRoute, useIndex: useIndex, captureState: captureState, restoreState: restoreState, showError: showError,
-      dispose: function () { alive = false; cancelAnimationFrame(frame); cleanup.forEach(function (close) { close(); });
+      dispose: function () { alive = false; clearTimeout(checkpointTimer); cancelAnimationFrame(frame); cleanup.forEach(function (close) { close(); });
         observers.forEach(function (observer) { observer.disconnect(); }); if (navigation) navigation.dispose(); }};
   }
 
