@@ -115,14 +115,14 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-canvas, .bp-dag-node-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
 .bp-dag-canvas { display: block; min-height: 0; touch-action: auto; background: transparent; }
 .bp-dag-node-layer { overflow: hidden; pointer-events: none; }
-.bp-dag-node { position: absolute; top: 0; left: 0; display: grid; align-content: center; width: 196px; height: 56px; padding: 6px 10px; overflow: hidden; border: 1.5px solid var(--dag-node-stroke); border-radius: var(--dag-radius-control); background: var(--dag-node-fill); color: var(--dag-node-text); box-shadow: var(--dag-e1); text-align: left; transform-origin: 0 0; pointer-events: auto; cursor: pointer; will-change: transform; }
+.bp-dag-node { position: absolute; top: 0; left: 0; display: grid; align-content: center; width: 196px; height: 56px; padding: 6px 10px; overflow: hidden; border: 1.5px solid var(--dag-node-stroke); border-radius: var(--dag-radius-control); background: var(--dag-node-fill); color: var(--dag-node-text); box-shadow: var(--dag-e1); text-align: left; transform-origin: 0 0; pointer-events: auto; cursor: pointer; will-change: transform; transition: opacity .15s ease, filter .15s ease; }
 .bp-dag-node-title { overflow: hidden; color: var(--dag-fg); font-size: 14px; font-weight: 600; line-height: 1.18; text-overflow: ellipsis; white-space: nowrap; }
 /* Cards scale with the map; the meta line grows against that factor so it renders at 11px or more down to the zoom floors. */
 .bp-dag-node-meta { display: flex; overflow: hidden; color: color-mix(in srgb, var(--dag-node-text) 95%, var(--dag-node-fill)); font-size: clamp(12px, calc(11px / var(--dag-k, 1)), 17px); line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 /* A kind word or topic count leads the status or count; the lead truncates first, so the status stays whole. */
 .bp-dag-node-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 .bp-dag-node-meta > span + span { flex: none; }
-/* Selection is a neutral ring past a gap in the map colour, since blue marks cards that are ready to state or prove. Subdued cards lose colour before legibility. */
+/* Selection is a neutral ring past a gap in the map colour, since blue marks cards that are ready to state or prove. Subdued cards lose colour before legibility, fading in briefly under a hover preview or a selection. */
 .bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-map), 0 0 0 4px var(--dag-fg), var(--dag-e1); }
 .bp-dag-node[data-subdued=true] { opacity: .62; filter: saturate(.25); }
 .bp-dag-node[data-kind=scope] { border-radius: var(--dag-radius-panel); }
@@ -235,7 +235,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .bp-dag-inspector { transition: none; }
-  .bp-dag-node { will-change: auto; }
+  .bp-dag-node { will-change: auto; transition: none; }
 }
 
 /* One book and map workspace. The source remains readable until enhancement succeeds. */

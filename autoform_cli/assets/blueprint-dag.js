@@ -395,7 +395,7 @@
       dom$readingBody, dom$readingContext, dom$regionsMode, dom$search, dom$searchResults,
       dom$searchWrap, dom$sheetHandle, dom$sourcesMode, dom$stage, dom$statusFieldset, dom$statusInputs,
       dom$wholeSearch, dom$zoomIn, dom$zoomOut;
-    var overlays = new Map(), scheduled = false, firstResize = true, family;
+    var overlays = new Map(), scheduled = false, firstResize = true, family, hoverTimer;
     var trail = Array.isArray(view.breadcrumbs) ? view.breadcrumbs : [];
     host.classList.toggle("bp-dag-integrated", Boolean(navigation));
 
@@ -1095,10 +1095,7 @@
     }
     function pathSpotlight() {
       if (!ui$selected) return null;
-      if (ui$spotlight) return ui$spotlight;
-      var before = collect(ui$selected.id, prerequisites), after = collect(ui$selected.id, dependents);
-      var nodes = new Set(before); after.forEach(function (id) { nodes.add(id); });
-      ui$spotlight = {after: after, before: before, nodes: nodes}; return ui$spotlight;
+      return ui$spotlight || (ui$spotlight = spotlightOf(collect(ui$selected.id, prerequisites), collect(ui$selected.id, dependents)));
     }
     function calculateActive() {
       if (!ui$activeDirty) return;
@@ -1218,14 +1215,15 @@
       if (atlas && !navigation) drawRegions(ctx);
       var visible = ui$active.filter(function (node) { return inViewport(screen(node), 80); });
       // The area overview and the free-standing atlas stay quiet until a card is selected, hovered or focused; then only its own links show.
-      var quiet = navigation ? data.nodes.every(function (node) { return node._region; }) : atlas, subject = ui$selected || quiet && ui$hovered;
+      var quiet = navigation ? data.nodes.every(function (node) { return node._region; }) : atlas, subject = ui$selected || ui$hovered;
       var edgeIndexes = new Set();
       if (atlas && subject) {
         (incident.get(subject.id) || []).forEach(function (index) { edgeIndexes.add(index); });
       } else if (!quiet) {
         visible.forEach(function (node) { (incident.get(node.id) || []).forEach(function (index) { edgeIndexes.add(index); }); });
       }
-      var spotlight = atlas && subject ? atlasSpotlight(subject) : pathSpotlight();
+      // A hovered card previews its direct neighbours on any map; a selection keeps its own spotlight.
+      var spotlight = (atlas || !ui$selected) && subject ? atlasSpotlight(subject) : pathSpotlight();
       if (navigation) {
         geometry().routes.forEach(function (route) {
           if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target) || quiet && !edgeIndexes.has(route.edgeIndex)) return;
@@ -1264,9 +1262,9 @@
       });
     }
     function atlasSpotlight(node) {
-      var before = new Set([node.id]), after = new Set([node.id]);
-      (prerequisites.get(node.id) || []).forEach(function (id) { before.add(id); });
-      (dependents.get(node.id) || []).forEach(function (id) { after.add(id); });
+      return spotlightOf(new Set([node.id].concat(prerequisites.get(node.id) || [])), new Set([node.id].concat(dependents.get(node.id) || [])));
+    }
+    function spotlightOf(before, after) {
       var nodes = new Set(before); after.forEach(function (id) { nodes.add(id); });
       return {after: after, before: before, nodes: nodes};
     }
@@ -1416,9 +1414,13 @@
       // A drag or pinch that began on the card is not a tap; a keyboard click has no detail and always opens it.
       control.addEventListener("click", function (event) { event.stopPropagation(); if (!ui$moved || !event.detail) activateNode(node, false); });
       if (!navigation) control.addEventListener("dblclick", function () { var href = safeHref(node.url); if (href) window.location.href = href; });
-      // Pointing at or focusing a card shows its links where the map is quiet at rest.
+      // Resting a mouse on a card for 120 ms, or focusing it, previews its neighbours without selecting it; touch has no hover.
+      // Moving straight onto another card hands over after its delay instead of flashing the whole map back.
       ["pointerenter", "focus", "pointerleave", "blur"].forEach(function (type, index) {
-        control.addEventListener(type, function () { ui$hovered = index < 2 && node; schedule(); });
+        control.addEventListener(type, function (event) {
+          clearTimeout(hoverTimer);
+          if (index || event.pointerType !== "touch") hoverTimer = setTimeout(function () { ui$hovered = index < 2 && node; schedule(); }, index ? 0 : 120);
+        });
       });
       control.addEventListener("keydown", function (event) {
         if (/^Arrow(Left|Right|Up|Down)$/.test(event.key)) {

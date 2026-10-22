@@ -954,6 +954,52 @@ def test_a_drag_that_starts_on_a_card_pans_and_a_tap_still_opens_it(desktop_page
     assert "node=chapter%2Fmiddle" in page.url
 
 
+def test_resting_the_mouse_on_a_card_previews_its_neighbours_without_selecting_it(
+    desktop_page: object, explorer_url: str
+) -> None:
+    """Nothing on the map reacted before a click, so seeing what a card links to meant opening it."""
+    page = desktop_page
+    _open_ready(page, explorer_url)
+    foundation = page.locator('[data-autoform-node-id="chapter/foundation"]')
+    middle = page.locator('[data-autoform-node-id="chapter/middle"]')
+    target = page.locator('[data-autoform-node-id="chapter/target"]')
+    url, length = page.url, page.evaluate("history.length")
+    # A touch has no hover, so it previews nothing.
+    page.evaluate(
+        """() => new Promise(done => {
+          document.querySelector('[data-autoform-node-id="chapter/foundation"]')
+            .dispatchEvent(new PointerEvent("pointerenter", {pointerType: "touch"}));
+          setTimeout(done, 300);
+        })"""
+    )
+    playwright.expect(target).to_have_attribute("data-subdued", "false")
+    # A mouse previews only after it rests on the card, not as it passes over.
+    waited = page.evaluate(
+        """() => new Promise(done => {
+          const target = document.querySelector('[data-autoform-node-id="chapter/target"]'), start = performance.now();
+          new MutationObserver(() => { if (target.dataset.subdued === "true") done(performance.now() - start); })
+            .observe(target, {attributes: true, attributeFilter: ["data-subdued"]});
+          document.querySelector('[data-autoform-node-id="chapter/foundation"]')
+            .dispatchEvent(new PointerEvent("pointerenter", {pointerType: "mouse"}));
+        })"""
+    )
+    assert waited >= 110
+    foundation.dispatch_event("pointerleave")
+    playwright.expect(target).to_have_attribute("data-subdued", "false")
+
+    foundation.hover()
+    # Its direct dependent stays at full strength; a card two links away fades with the rest.
+    playwright.expect(target).to_have_attribute("data-subdued", "true")
+    playwright.expect(middle).to_have_attribute("data-subdued", "false")
+    playwright.expect(foundation).to_have_attribute("data-subdued", "false")
+    playwright.expect(foundation).to_have_attribute("data-selected", "false")
+    assert page.url == url and page.evaluate("history.length") == length
+    # Leaving the card restores the map.
+    page.mouse.move(1, 1)
+    playwright.expect(target).to_have_attribute("data-subdued", "false")
+    playwright.expect(middle).to_have_attribute("data-subdued", "false")
+
+
 def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_url: str) -> None:
     page = desktop_page
     _open_ready(page, explorer_url)

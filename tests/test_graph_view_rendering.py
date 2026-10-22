@@ -410,13 +410,12 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     # The area overview and the atlas draw no links at rest; a selected, hovered
     # or focused card shows only its own. Elsewhere edge work still uses only
     # the incident edges of the currently visible nodes.
-    assert "subject = state.selected || quiet && state.hovered" in script
+    assert "subject = state.selected || state.hovered" in script
     assert "if (atlas && subject)" in script
     assert "(incident.get(subject.id) || []).forEach" in script
     assert "} else if (!quiet) {" in script
     assert "visible.forEach(function (node) { (incident.get(node.id) || []).forEach" in script
     assert "quiet && !edgeIndexes.has(route.edgeIndex)) return;" in script
-    assert "control.addEventListener(type, function () { state.hovered = index < 2 && node; schedule(); });" in script
     assert "if (!state.activeDirty) return" in script
     assert "if (query === state.searchCacheQuery) return state.searchCache" in script
     assert f'data.schema !== "{dag_viewer.SCHEMA}"' in script
@@ -436,6 +435,26 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert "if (title.startsWith(query)) return 4; if (id.startsWith(query)) return 5;" in script
     assert "if (lean.indexOf(query) >= 0) return 10; if (summary.indexOf(query) >= 0) return 11;" in script
     assert "Exact Lean name" not in script and "bp-dag-result-reason" not in script
+
+
+def test_resting_a_mouse_on_a_card_previews_its_neighbours_without_selecting_it() -> None:
+    """Nothing on the map reacted before a click, so seeing what a card links to meant opening it."""
+    script = _viewer_source()
+    start = script.index('["pointerenter", "focus", "pointerleave", "blur"].forEach')
+    hover = script[start:script.index('control.addEventListener("keydown"', start)]
+    # A mouse waits 120 ms; focus and leaving act on the next tick, and a touch, which has no hover, sets nothing.
+    assert "clearTimeout(hoverTimer);" in hover
+    assert 'if (index || event.pointerType !== "touch") hoverTimer = setTimeout(function () { state.hovered = index < 2 && node; schedule(); }, index ? 0 : 120);' in hover
+    # The preview only draws: no selection, URL or history change.
+    assert not re.search(r"select|history|location|remember|activate", hover)
+    # Any map previews the direct neighbours; a selection keeps its own spotlight.
+    assert "var spotlight = (atlas || !state.selected) && subject ? atlasSpotlight(subject) : pathSpotlight();" in script
+    assert "return state.spotlight || (state.spotlight = spotlightOf(collect(state.selected.id, prerequisites), collect(state.selected.id, dependents)));" in script
+    # The cards fade briefly, and not at all for a reader who asks for reduced motion.
+    style = dag_viewer._STYLE
+    assert "will-change: transform; transition: opacity .15s ease, filter .15s ease; }" in style
+    reduced = style[style.index("@media (prefers-reduced-motion: reduce) {"):]
+    assert ".bp-dag-node { will-change: auto; transition: none; }" in reduced[:reduced.index("\n}")]
 
 
 def test_a_press_on_a_card_pans_once_it_travels_and_otherwise_stays_a_tap() -> None:
