@@ -20,8 +20,9 @@
   }
 
   function activity(payload) {
-    // The landing page's introduction moves into the explorer's rail or sheet, and the panel moves with it.
-    var landing = document.querySelector(".bp-dag-intro") || document.querySelector(".bp-landing");
+    // The panel joins the landing page's introduction, which the reader shows in its reading pane or sheet:
+    // .bp-landing-intro on a page with chapters, .bp-landing on one without.
+    var landing = document.querySelector(".bp-landing-intro") || document.querySelector(".bp-landing");
     if (!landing) return;
     var panel = document.getElementById("bp-live-activity");
     if (!panel) {

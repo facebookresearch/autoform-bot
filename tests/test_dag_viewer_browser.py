@@ -1276,6 +1276,21 @@ def test_the_published_landing_page_is_one_full_page_explorer_opened_by_its_hero
     playwright.expect(page.locator("#bp-live-activity")).to_have_count(0)
 
 
+def test_the_dashboard_live_panel_joins_the_landing_introduction(desktop_page: object, site_url: str) -> None:
+    """Under the dashboard, live.json answers and its claims list in the landing page's introduction."""
+    page = _open_site(desktop_page, site_url, "index.html")
+    claims = {"claims": [{"node_id": "algebra", "title": "Algebra", "owner": "a tester", "note": ""}]}
+    page.route(
+        "**/__autoform/live.json",
+        lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(claims)),
+    )
+    page.reload()
+    _ready_site(page)
+    panel = page.locator(".bp-reading-body .bp-landing-intro #bp-live-activity")
+    playwright.expect(panel).to_have_count(1)
+    playwright.expect(panel).to_contain_text("a tester")
+
+
 def test_on_a_phone_the_landing_hero_opens_in_the_details_sheet(mobile_page: object, site_url: str) -> None:
     """A collapsed phone reader remains named; opening it reveals the same authored landing content."""
     page = _open_site(mobile_page, site_url, "index.html")

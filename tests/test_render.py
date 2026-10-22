@@ -1553,6 +1553,26 @@ def test_authored_mermaid_survives_while_generated_graph_pages_use_the_explorer(
     assert all("```mermaid" not in page.read_text(encoding="utf-8") for page in graph_pages)
 
 
+def test_the_live_panel_finds_its_anchor_on_the_landing_page(tmp_path: Path) -> None:
+    """The dashboard's live panel joins the landing page's introduction. #442
+    renamed that wrapper and the panel silently stopped appearing, so each kind
+    of landing page must carry one of the classes blueprint-live.js looks for."""
+    from autoform_cli.scaffold import scaffold_project
+
+    live = (Path(__file__).resolve().parent.parent / "autoform_cli/assets/blueprint-live.js").read_text(encoding="utf-8")
+    lookup = live.split("function activity", 1)[1].split("if (!landing)", 1)[0]
+    anchors = re.findall(r'querySelector\("\.([\w-]+)"\)', lookup)
+    assert anchors
+
+    _render(tmp_path)
+    empty = tmp_path / "empty"
+    scaffold_project(empty / "project", title="Empty")
+    render_site(empty / "project/blueprint", empty / "out")
+    for landing in (tmp_path / "out/README.md", empty / "out/README.md"):
+        text = landing.read_text(encoding="utf-8")
+        assert any(f'class="{anchor}"' in text for anchor in anchors), (landing, anchors)
+
+
 def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     _render(tmp_path)
     css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
