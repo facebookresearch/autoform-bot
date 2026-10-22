@@ -854,7 +854,7 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li { min-width: 4em; }" in style
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:has(.bp-dag-sr-only) { flex: none; min-width: 0; }" in style
     tablet = style.split("@media (max-width: 1100px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
-    assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: 160px; }" in tablet and "100%" not in tablet
+    assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: 240px; }" in tablet and "100%" not in tablet
     # Topics was a few px above Status in the same row.
     assert ".bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; align-items: center; }" in tablet
     phones = style.split("@media (max-width: 720px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]

@@ -61,7 +61,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-search-wrap:focus-within::after { display: none; }
 .bp-dag-search-wrap:has(.bp-dag-search:not(:placeholder-shown))::after { display: none; }
 .bp-dag-search:focus { border-color: var(--dag-link); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dag-link) 18%, transparent); }
-.bp-dag-search-results { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; right: 0; max-height: min(432px, 60vh); overflow: auto; padding: 6px; border: 1px solid var(--dag-overlay-border); border-radius: var(--dag-radius-panel); background: var(--dag-bg); box-shadow: var(--dag-e2); }
+.bp-dag-search-results { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; right: 0; max-height: min(432px, 60vh); overflow: auto; padding: 6px; border: 1px solid var(--dag-overlay-border); border-radius: var(--dag-radius-panel); background: var(--dag-bg); box-shadow: var(--dag-e2); min-width: min(576px, calc(100vw - 24px)); }
 .bp-dag-viewer.bp-dag-viewer :is(.bp-dag-results, .bp-dag-relation-list, .bp-dag-inventory-list) { display: block; margin: 0; padding: 0; list-style: none; }
 .bp-dag-viewer.bp-dag-viewer :is(.bp-dag-results, .bp-dag-relation-list, .bp-dag-inventory-list) > li { margin: 0; }
 .bp-dag-result { display: flex; align-items: baseline; width: 100%; gap: 10px; padding: 8px 9px; border: 0; border-radius: var(--dag-radius-row); background: transparent; color: var(--dag-fg); text-align: left; cursor: pointer; }
@@ -328,7 +328,7 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated.bp-dag-outline-open .bp-dag-navigation { display: block; position: absolute; z-index: 18; inset: 0 auto 0 0; width: 264px; box-shadow: var(--dag-e2); }
   .bp-dag-integrated .bp-dag-toolbar { flex-wrap: wrap; }
   /* Topics, search, filter, views and zoom share one row on a tablet; search wraps only when it would drop under 160px. */
-  .bp-dag-integrated .bp-dag-search-wrap { flex-basis: 160px; }
+  .bp-dag-integrated .bp-dag-search-wrap { flex-basis: 240px; }
 }
 @media (max-width: 720px) {
   .bp-dag-integrated .bp-dag-body { display: block; }

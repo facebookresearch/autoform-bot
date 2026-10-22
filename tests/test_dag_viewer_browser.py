@@ -1437,6 +1437,9 @@ def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_pag
     playwright.expect(page.get_by_role("button", name=re.compile(r", reading$"))).to_have_attribute(
         "aria-expanded", "true"
     )
+    # The reader opens at half; one tap on its handle takes it to the full pane the popovers must cover.
+    page.locator(".bp-dag-sheet-handle").click()
+    playwright.expect(page.locator(".bp-dag-integrated")).to_have_class(re.compile(r"\bbp-dag-sheet-full\b"))
     page.locator(".bp-dag-filter-summary").tap()
     popover = page.locator(".bp-dag-filter-popover")
     playwright.expect(popover).to_be_visible()
