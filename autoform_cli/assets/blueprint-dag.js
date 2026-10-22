@@ -874,7 +874,7 @@
         maxX = Math.max(maxX, region.x + region.width); maxY = Math.max(maxY, region.y + region.height);
       });
       var compact = compactRegions(), pad = navigation ? 36 : 54, side = compact ? 18 : pad,
-        top = compact ? 52 : pad, bottom = compact ? 40 : pad, width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
+        top = compact ? 52 : pad, bottom = compact ? 44 : pad, width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
       var fitted = Math.min((dom$stage.clientWidth - side * 2) / width,
         (dom$stage.clientHeight - top - bottom) / height);
       var readableFloor = compact ? .86 : atlas ? MIN_ATLAS_SCALE : navigation ? 1 : MIN_READABLE_SCALE;
@@ -889,7 +889,7 @@
     // Open details cover part of the map; this is the larger part they leave, in stage pixels.
     function freeArea() {
       var band = dom$stage.clientHeight, left = 0, right = dom$stage.clientWidth, drawer = dom$inspector;
-      if (compactRegions() && (!sheetLayout() || !host.classList.contains("bp-dag-sheet-open"))) return {top: 52, band: Math.max(NODE_H, band - 92), left: 18, right: right - 18};
+      if (compactRegions() && (!sheetLayout() || !host.classList.contains("bp-dag-sheet-open"))) return {top: 52, band: Math.max(NODE_H, band - 96), left: 18, right: right - 18};
       if (navigation && !sheetLayout()) return {band: band, left: left, right: right};
       if (host.classList.contains("bp-dag-sheet-open")) {
         var start = drawer.offsetLeft - dom$stage.parentNode.offsetLeft, end = start + drawer.offsetWidth;

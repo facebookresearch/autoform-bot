@@ -273,11 +273,12 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-map-key { position: absolute; z-index: 4; right: 20px; bottom: 14px; display: flex; gap: 14px; color: var(--dag-muted); font-size: 11px; pointer-events: none; }
 .bp-map-key span::before { content: ""; display: inline-block; width: 22px; margin: 0 6px 3px 0; border-top: 2px solid currentColor; }
 .bp-map-key .bp-map-key-proof::before { border-top-style: dashed; }
-.bp-dag-compact-regions :is(.bp-dag-canvas, .bp-dag-node-layer) { clip-path: inset(52px 0 40px); }
+.bp-dag-compact-regions :is(.bp-dag-canvas, .bp-dag-node-layer) { clip-path: inset(52px 0 44px); }
 .bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-core { padding: 10px 14px; }
 .bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: 4px; font-size: 14px; white-space: nowrap; }
 .bp-dag-compact-regions .bp-dag-node .bp-dag-node-summary { display: none; }
 .bp-dag-compact-regions .bp-map-context { top: 8px; left: 18px; right: 18px; line-height: 1.4; }
+.bp-dag-compact-regions .bp-map-key { line-height: 1.2; }
 .bp-dag-compact-regions .bp-dag-density { top: 31px; bottom: auto; left: 18px; max-width: calc(100% - 36px); line-height: 1.2; }
 .bp-dag-integrated .bp-dag-inventory { left: 0 !important; }
 .bp-dag-integrated .bp-dag-inventory-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 16px; padding: 14px 16px; }
