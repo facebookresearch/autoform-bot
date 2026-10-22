@@ -3288,6 +3288,17 @@ def _stylesheet() -> str:
   --bp-violet: #9B6BFF;
   --bp-magenta: #FF6B9D;
 }}
+/* Material's own tokens take the same blue, so its links, breadcrumbs and
+   Previous/Next match the explorer instead of the theme's default indigo.
+   The theme sets them on body through data-md-color-primary, and the slate
+   link colour through two attributes, so this selector carries two
+   attributes and wins by coming later. The bp tokens already switch with
+   the scheme, so one rule covers both. */
+[data-md-color-scheme][data-md-color-primary] {{
+  --md-primary-fg-color: var(--bp-blue);
+  --md-accent-fg-color: var(--bp-link-hover);
+  --md-typeset-a-color: var(--bp-link);
+}}
 
 body {{ font-family: {sans}; color: var(--bp-fg); }}
 .md-typeset {{

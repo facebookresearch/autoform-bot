@@ -1599,6 +1599,34 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     assert "classDef" not in script
 
 
+def test_material_links_and_chrome_take_the_blueprint_blue() -> None:
+    material = pytest.importorskip("material")
+    css = render_module._stylesheet()
+    rule = re.search(r"\[data-md-color-scheme\]\[data-md-color-primary\] \{([^}]+)\}", css)
+
+    # One rule over the scheme-switching bp tokens, so breadcrumbs, book
+    # links and Previous/Next use the explorer's blue in both schemes.
+    assert rule is not None
+    assert "--md-primary-fg-color: var(--bp-blue);" in rule.group(1)
+    assert "--md-accent-fg-color: var(--bp-link-hover);" in rule.group(1)
+    assert "--md-typeset-a-color: var(--bp-link);" in rule.group(1)
+    assert css.index("[data-md-color-scheme=slate] {") < rule.start()
+
+    # The rule wins on order alone, so it must match body, and no rule in
+    # Material's palette may set these tokens with more than two attributes
+    # (a :not() counts as the attribute inside it).
+    templates = Path(material.__file__).parent / "templates"
+    assert "data-md-color-primary=" in (templates / "base.html").read_text(encoding="utf-8")
+    (palette,) = (templates / "assets/stylesheets").glob("palette.*.min.css")
+    tokens = re.compile(r"--md-(?:primary-fg|accent-fg|typeset-a)-color:")
+    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", palette.read_text(encoding="utf-8"))
+    selectors = [s for selector, body in rules if tokens.search(body) for s in selector.split(",")]
+    assert selectors
+    for selector in selectors:
+        bare = re.sub(r":not\((\[[^\]]+\])\)", r"\1", selector.strip())
+        assert re.fullmatch(r"(?:\[[^\]]+\]){1,2}", bare), selector
+
+
 _MERMAID_HARNESS = r"""
 const fs = require("fs");
 const vm = require("vm");
