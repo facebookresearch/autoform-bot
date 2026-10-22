@@ -123,8 +123,10 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-node[data-subdued=true] { opacity: .62; filter: saturate(.25); }
 .bp-dag-node[data-kind=scope] { border-radius: var(--dag-radius-panel); }
 .bp-dag-node[data-kind=boundary] { border-style: dashed; }
-.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] { display: block; padding: 3px; border: 0; border-radius: var(--dag-radius-panel); background: var(--dag-status-ring, var(--dag-node-stroke)); text-align: left; }
-.bp-dag-node-core { display: grid; align-content: center; width: 100%; height: 100%; padding: 12px 16px; border-radius: calc(var(--dag-radius-panel) - 3px); background: var(--dag-node-fill); color: var(--dag-node-text); }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] { display: block; padding: 0; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-panel); background: var(--dag-node-fill); text-align: left; }
+.bp-dag-node-core { display: grid; align-content: center; width: 100%; height: 100%; padding: 12px 16px; color: var(--dag-node-text); }
+/* Topic and region cards are laid out at a fixed height that a two-line title can fill, so their status bar sits in the bottom padding. */
+.bp-dag-node-core::after { content: ""; position: absolute; right: 16px; bottom: 6px; left: 16px; height: 4px; border-radius: 2px; background: var(--dag-status-ring, var(--dag-border)); }
 .bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] .bp-dag-node-title { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: 7px; white-space: normal; }
 .bp-dag-viewer.bp-dag-atlas .bp-dag-node-title { font-size: 17px; }

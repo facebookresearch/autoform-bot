@@ -107,7 +107,7 @@ _BY_KEY = {state.key: state for state in STATES}
 #: Neutral statuses for module catalogs, which record inspection of existing
 #: Lean rather than formalization targets: checked once fully proved, pending
 #: until then. Each takes a grey stroke of its own, apart from planned's, so
-#: planned targets and both kinds of inventory stay apart in a status ring:
+#: planned targets and both kinds of inventory stay apart in a status bar:
 #: in each scheme any two of the three greys keep 1.5:1 between them, and
 #: on dark each keeps 3:1 against its fill and the page.
 INVENTORY_STATES: tuple[State, ...] = (

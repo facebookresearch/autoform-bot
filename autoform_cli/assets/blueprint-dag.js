@@ -972,15 +972,17 @@
       var entry = palette[node.status] || palette.planned || {};
       return entry[isDark() ? "dark" : "light"] || {fill: "#fff", stroke: "#9ca3af", text: "#374151"};
     }
+    // A topic's or region's statuses as a progress bar, in legend order since a region merges its topics' counts as it meets them.
     function statusRing(node) {
-      var entries = (node.status_counts || []).filter(function (entry) { return entry[1] > 0; });
+      var order = Object.keys(palette), entries = (node.status_counts || []).filter(function (entry) { return entry[1] > 0; })
+        .sort(function (a, b) { return order.indexOf(a[0]) - order.indexOf(b[0]); });
       var total = entries.reduce(function (sum, entry) { return sum + entry[1]; }, 0), cursor = 0, stops = [];
       entries.forEach(function (entry) {
         var color = (palette[entry[0]] || palette.planned || {})[isDark() ? "dark" : "light"] || {};
-        var end = cursor + entry[1] / Math.max(1, total) * 360;
-        stops.push((color.stroke || "#9ca3af") + " " + cursor + "deg " + end + "deg"); cursor = end;
+        var end = cursor + entry[1] / Math.max(1, total) * 100;
+        stops.push((color.stroke || "#9ca3af") + " " + cursor + "% " + end + "%"); cursor = end;
       });
-      return stops.length ? "conic-gradient(" + stops.join(",") + ")" : "var(--dag-node-stroke)";
+      return stops.length ? "linear-gradient(90deg," + stops.join(",") + ")" : "var(--dag-node-stroke)";
     }
     function compactRegions() {
       return Boolean(navigation && atlas && !ui$area && dom$stage && dom$stage.clientWidth > 0 && dom$stage.clientWidth <= 620 &&
@@ -1207,19 +1209,18 @@
       visible.forEach(function (node) { drawPlate(ctx, node, screen(node), !spotlight || spotlight.nodes.has(node.id)); });
       updateOverlays(visible, spotlight);
     }
+    // Every region takes the panel, rule and muted text of the book's tokens: colour on the map means status, so regions part by space and label.
     function drawRegions(ctx) {
-      var regionColors = isDark() ?
-        ["#17233a", "#24203b", "#16312d", "#332719", "#2d1f2a", "#1d2d3a", "#2c2b20"] :
-        ["#eaf1fb", "#f0ebfb", "#e8f5f0", "#fbf2df", "#f8eaf0", "#e8f3f8", "#f4f2df"];
-      (data.regions || []).forEach(function (region, index) {
+      var dark = isDark();
+      (data.regions || []).forEach(function (region) {
         var box = {x: region.x * ui$transform.scale + ui$transform.x,
           y: region.y * ui$transform.scale + ui$transform.y,
           w: region.width * ui$transform.scale, h: region.height * ui$transform.scale};
         if (!inViewport(box, 60)) return;
-        ctx.save(); ctx.fillStyle = regionColors[index % regionColors.length];
-        ctx.strokeStyle = isDark() ? "#35435c" : "#b9c7da"; ctx.lineWidth = 1.2;
+        ctx.save(); ctx.fillStyle = dark ? "#282A2C" : "#F6F7F8";
+        ctx.strokeStyle = dark ? "#3E4042" : "#CED0D4"; ctx.lineWidth = 1;
         rounded(ctx, box.x, box.y, box.w, box.h, 18); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = isDark() ? "#d9e3f2" : "#30445f"; ctx.font = "700 13px " + family;
+        ctx.fillStyle = dark ? "#B0B3B8" : "#65676B"; ctx.font = "600 13px " + family;
         ctx.textAlign = "left"; ctx.fillText(region.label + " · " + region.count, box.x + 13, box.y + 21);
         ctx.restore();
       });
@@ -1670,7 +1671,11 @@
         var chosen = ui$mode === "list" ? dom$inventoryRows.get(node.id) : overlays.get(node.id); if (chosen) chosen.focus();
       }); header.appendChild(close); dom$inspectorInner.appendChild(header);
       var entries = node.status_counts || [], inventoryOnly = node.kind === "scope" && entries.length && entries.every(function (entry) { return palette[entry[0]] && palette[entry[0]].neutral; });
-      var actions = element("div", "bp-dag-actions"), mark = element("span", "bp-dag-status-pill", inventoryOnly ? "inventory only" : statusLabel(node.status)), color = colors(node);
+      // A topic's own status is its least-complete item's, so its pill counts finished items instead: "60 of 80 fully proved".
+      var done = 0, total = 0; entries.forEach(function (entry) { total += entry[1]; if (/^(fully_proved|mathlib)$/.test(entry[0])) done += entry[1]; });
+      var progress = node.kind === "scope" && total && !inventoryOnly;
+      var actions = element("div", "bp-dag-actions"), mark = element("span", "bp-dag-status-pill", inventoryOnly ? "inventory only" :
+        progress ? done.toLocaleString() + " of " + total.toLocaleString() + " fully proved" : statusLabel(node.status)), color = colors(progress ? {status: "fully_proved"} : node);
       mark.style.setProperty("--dag-pill-fill", color.fill); mark.style.setProperty("--dag-pill-stroke", color.stroke); actions.appendChild(mark);
       var href = safeHref(node.url);
       if (href) { var open = element("a", "bp-dag-open", node.kind === "scope" || node.kind === "boundary" ? "Explore topic" : "Open article"); open.href = href; actions.appendChild(open); }

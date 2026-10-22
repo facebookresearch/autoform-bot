@@ -662,7 +662,7 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     playwright.expect(navigation).to_contain_text("Geometry & Topology")
     playwright.expect(page.locator(".bp-dag-inspector")).to_be_hidden()
     # The closed drawer still holds the overview. Topics count once, by their least-complete item,
-    # unlike the rings' items, and each status row carries the swatch and meaning the hidden page legend held.
+    # unlike the bars' items, and each status row carries the swatch and meaning the hidden page legend held.
     playwright.expect(page.locator(".bp-dag-inspector h3", has_text="status")).to_have_text(
         "Topics by least-complete status"
     )
@@ -673,14 +673,20 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     topic_box = topic.bounding_box()
     assert topic_box is not None and topic_box["height"] >= 62 and topic_box["width"] >= 150
     assert "50%" not in topic.evaluate("element => getComputedStyle(element).borderRadius")
-    ring = topic.evaluate("element => getComputedStyle(element).backgroundImage")
-    assert "conic-gradient" in ring
-    # The ring follows the legend's state order: finished green before ready-to-prove blue.
+    # A neutral 1px frame; the statuses are a bar inside the card, not a ring around it.
+    assert topic.evaluate("element => getComputedStyle(element).borderTopWidth") == "1px"
+    ring = topic.evaluate(
+        "element => getComputedStyle(element.querySelector('.bp-dag-node-core'), '::after').backgroundImage"
+    )
+    assert "linear-gradient" in ring
+    # The bar follows the legend's state order: finished green before ready-to-prove blue.
     assert ring.index("rgb(34, 119, 58)") < ring.index("rgb(0, 100, 224)")
     # The region is canvas text, which assistive technology never reads.
     assert "Geometry & Topology" in (topic.get_attribute("aria-label") or "")
     topic.click()
     playwright.expect(page.locator(".bp-dag-inspector h2")).to_have_text("Topology")
+    # A topic's pill counts its finished items, not its least-complete item's "ready to prove".
+    playwright.expect(page.locator(".bp-dag-status-pill")).to_have_text("60 of 80 fully proved")
     # A topic has no declaration, so no kicker names its kind over the title.
     playwright.expect(page.locator(".bp-dag-inspector .bp-dag-kicker")).to_have_count(0)
     playwright.expect(page.locator(".bp-dag-inspector h3", has_text="in this scope")).to_have_text(

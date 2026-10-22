@@ -781,7 +781,7 @@ def test_explorer_canvas_paints_its_labels_in_the_site_family_at_11px_or_more() 
     script = _viewer_source()
     assert script.count('refs.ctx.font = "10px sans-serif";') == 1  # Parse probe only, never a painted label.
     assert 'family = getComputedStyle(host).fontFamily; refs.ctx.font = "11px " + family;' in script
-    assert 'ctx.font = "700 13px " + family;' in script
+    assert 'ctx.fillStyle = dark ? "#B0B3B8" : "#65676B"; ctx.font = "600 13px " + family;' in script
     assert 'ctx.font = Math.max(11, 10 * state.transform.scale) + "px " + family;' in script
     # The integrated router measures and paints the same 13px family; its .9 initial floor gives 11.7px.
     assert 'refs.ctx.font = "600 13px " + family;' in script
@@ -854,14 +854,63 @@ def test_status_ring_greys_stay_apart_in_both_schemes() -> None:
     """Planned's dark stroke rose to #737578, 1.39:1 from inventory pending's #8A8D91, so their arcs ran together."""
     planned = next(state for state in status.STATES if state.key == "planned")
     greys = (planned, *status.INVENTORY_STATES)
-    # A ring runs planned, checked and pending inventory and closes, so each pair of the three can meet.
-    # 1.5:1 keeps neighbouring 3px arcs a visible step apart; the old dark pair was 1.39:1.
+    # A status bar runs planned, checked and pending inventory, so with one of them absent the other two meet.
+    # 1.5:1 keeps neighbouring segments a visible step apart; the old dark pair was 1.39:1.
     for first, second in ((0, 1), (1, 2), (0, 2)):
         for stroke in ("stroke", "dark_stroke"):
             ratio = _contrast(getattr(greys[first], stroke), getattr(greys[second], stroke))
             assert ratio >= 1.5, (greys[first].key, greys[second].key, stroke, ratio)
     for state in greys:
         assert min(_contrast(state.dark_stroke, state.dark_fill), _contrast(state.dark_stroke, "#18191A")) >= 3, state.key
+
+
+def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> None:
+    """A 3px conic ring in status colours framed every topic and region card, so a mostly stated region read as done.
+
+    Regions behind the cards cycled seven pastels that meant nothing, and a topic's pill named its
+    least-complete item ("ready to prove") above a breakdown that was mostly fully proved.
+    """
+    script, style = _viewer_source(), dag_viewer._STYLE
+    card = re.search(r"^\.bp-dag-viewer\.bp-dag-atlas \.bp-dag-node\[data-kind=scope\] \{([^}]*)\}", style, re.M)
+    assert card is not None
+    for declaration in ("padding: 0;", "border: 1px solid var(--dag-border);", "background: var(--dag-node-fill);"):
+        assert declaration in card.group(1)
+    assert "dag-status-ring" not in card.group(1)
+    bar = re.search(r"^\.bp-dag-node-core::after \{([^}]*)\}", style, re.M)
+    assert bar is not None and "background: var(--dag-status-ring, var(--dag-border));" in bar.group(1)
+    # The bar sits in the bottom padding of every card size, so it adds no height and meets no text.
+    bottom = int(re.search(r"bottom: (\d+)px;", bar.group(1)).group(1))
+    height = int(re.search(r"height: (\d+)px;", bar.group(1)).group(1))
+    paddings = re.findall(r"\.bp-dag-node-core \{[^}]*?padding: (\d+)px", style)
+    assert paddings and bottom + height <= min(map(int, paddings)), paddings
+    assert "conic-gradient" not in script
+    assert '"linear-gradient(90deg," + stops.join(",") + ")"' in script
+    assert 'stops.push((color.stroke || "#9ca3af") + " " + cursor + "% " + end + "%");' in script
+    # Regions merge their topics' counts in the order they meet them; the bar keeps the legend's.
+    assert ".sort(function (a, b) { return order.indexOf(a[0]) - order.indexOf(b[0]); });" in script
+
+    # Every region is the book's panel with a rule and a muted label; no hue competes with status.
+    assert "regionColors" not in script
+    assert 'ctx.fillStyle = dark ? "#282A2C" : "#F6F7F8";' in script
+    assert 'ctx.strokeStyle = dark ? "#3E4042" : "#CED0D4"; ctx.lineWidth = 1;' in script
+
+    def mixed(colour: str, base: str, share: float) -> str:
+        pairs = [(int(colour[i : i + 2], 16), int(base[i : i + 2], 16)) for i in (1, 3, 5)]
+        return "#" + "".join(f"{round(c * share + b * (1 - share)):02X}" for c, b in pairs)
+
+    # The panel is --dag-panel over each scheme's --bp-surface; the rule and label are --bp-rule and --bp-muted.
+    for surface, panel, rule, label, field in (
+        ("#FFFFFF", "#F6F7F8", "#CED0D4", "#65676B", "#F0F2F5"),
+        ("#242526", "#282A2C", "#3E4042", "#B0B3B8", "#18191A"),
+    ):
+        assert mixed(surface, "#64748B", 0.94) == panel
+        assert f"--bp-rule: {rule};" in render._stylesheet() and f"--bp-muted: {label};" in render._stylesheet()
+        assert _contrast(label, panel) >= 4.5 and panel != field
+
+    # A topic's pill counts its finished items; a scope of module inventories still says so.
+    assert 'progress ? done.toLocaleString() + " of " + total.toLocaleString() + " fully proved" : statusLabel(node.status)' in script
+    assert "/^(fully_proved|mathlib)$/.test(entry[0])" in script
+    assert 'inventoryOnly ? "inventory only" :' in script
 
 
 def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path) -> None:
